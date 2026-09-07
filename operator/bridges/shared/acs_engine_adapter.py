@@ -154,6 +154,23 @@ _FALLBACK_MAX_PER_DAY = 50
 # msvcrt.locking range lock on Windows) for cross-process safety.
 _FALLBACK_COUNT_LOCK = threading.Lock()
 
+# ── Bounded counter locking (never hang an operator request) ────────────
+# The flock() below used to be a plain ``flock(LOCK_EX)`` with no timeout, on
+# the console ACS submit path (routes/compute.py). A wedged holder hung the
+# request forever.
+#
+# This site DEGRADES rather than refuses, and that is deliberate: this counter
+# is the documented fail-OPEN backstop for how many degraded fallback runs a
+# tenant may make per UTC day ("the cap is a backstop, not a security
+# boundary" — every operational error here already returns ``(True, -1)``). It
+# guards no consent, role, quota-entitlement or other compliance decision, so
+# letting one run through when the counter file is momentarily contended costs
+# at most one extra fallback run and is strictly better than hanging the
+# operator's submit. The degrade is now EXPLICIT and logged instead of being
+# swallowed by the broad ``except Exception`` at the bottom.
+# Deadline semantics follow core.infinite_session.event_store.
+LOCK_TIMEOUT_SECONDS = 2.0
+
 
 def _fallback_quota_ok(tenant_id: str) -> "tuple[bool, int]":
     """Increment + check the per-UTC-day fallback counter. Returns
@@ -181,8 +198,21 @@ def _fallback_quota_ok(tenant_id: str) -> "tuple[bool, int]":
                         log.warning("acs quota fallback: msvcrt lock unavailable "
                                     "— relying on in-process lock only")
                 else:
-                    import fcntl  # noqa: PLC0415
-                    fcntl.flock(_lf, fcntl.LOCK_EX)
+                    from _bounded_lock import (  # noqa: PLC0415
+                        LockBusy as _LockBusy,
+                        acquire_exclusive as _acquire_exclusive,
+                    )
+                    try:
+                        _acquire_exclusive(
+                            _lf, "acs fallback counter", timeout=LOCK_TIMEOUT_SECONDS
+                        )
+                    except _LockBusy:
+                        log.warning(
+                            "acs quota fallback: counter lock busy after %.1fs — "
+                            "allowing this run uncounted (documented fail-open backstop)",
+                            LOCK_TIMEOUT_SECONDS,
+                        )
+                        return True, -1
                     _locked = True
                 cur = {}
                 if path.exists():

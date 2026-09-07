@@ -74,6 +74,7 @@ AST and rejects forbidden imports.
 from __future__ import annotations
 
 from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on Windows
+from _bounded_lock import LockBusy as EngineSwitchLockBusy, acquire_exclusive as _acquire_exclusive
 import json
 import os
 import re
@@ -264,17 +265,30 @@ def _load_store(path: Path) -> dict[str, Any] | None:
         return None
 
 
+# ── Bounded store locking (never hang an operator request) ──────────────
+# ``_save_store`` used to take a plain ``flock(LOCK_EX)`` with no timeout on
+# PUT /settings/engine-pref/{chat_key}. A wedged holder hung that console
+# request forever. It REFUSES at the deadline (the route maps it to 503):
+# a PUT that answers 200 without persisting would report a preference the
+# next request does not see.
+LOCK_TIMEOUT_SECONDS = 2.0
+
+
 def _save_store(path: Path, data: dict[str, Any]) -> None:
+    """Atomically write the store. BOUNDED lock; raises EngineSwitchLockBusy."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_suffix(path.suffix + ".lock")
     fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_exclusive(fd, "engine preference store", timeout=LOCK_TIMEOUT_SECONDS)
+        locked = True
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
         os.replace(tmp, path)
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        if locked:
+            fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 

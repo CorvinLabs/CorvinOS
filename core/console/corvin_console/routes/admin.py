@@ -114,6 +114,7 @@ try:
         LifecycleDisabled,
         PluginLifecycle,
         RegistryCorrupt,
+        RegistryLockBusy,
         TenantRegistry,
     )
 
@@ -593,6 +594,16 @@ def _schema_detail(exc: Exception) -> str:
 
 def _mutation_error(exc: Exception) -> HTTPException:
     """Map a lifecycle exception to a status code without leaking internals."""
+    # A wedged registry lock is an AVAILABILITY failure, not a client error:
+    # nothing was written, and a retry is the correct next step. 503, matching
+    # ``infinite_session_api``'s ``transaction_lock_busy`` and
+    # ``routes/workflows.py``'s ``lock_busy``. Placed FIRST because
+    # RegistryLockBusy derives from TimeoutError/OSError and would otherwise
+    # reach the 500 fallback.
+    if isinstance(exc, RegistryLockBusy):
+        return HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="lock_busy"
+        )
     if isinstance(exc, LifecycleDisabled):
         # 409, not 403: the caller is authorised, the installation is in a state
         # that does not accept the change.  A 500 here would read as a bug.

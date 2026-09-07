@@ -68,6 +68,7 @@ Design notes
 from __future__ import annotations
 
 from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on Windows
+from _bounded_lock import LockBusy as QuotaLockBusy, acquire_exclusive as _acquire_exclusive
 import json
 import os
 import threading
@@ -201,12 +202,25 @@ def _load_store(path: Path) -> dict[str, dict]:
         return {}
 
 
+# ── Bounded store locking (never hang an operator request) ──────────────
+# ``_save_store`` used to take a plain ``flock(LOCK_EX)`` with no timeout on
+# the L20 quota path (bridge message accounting, ``/quota``). A wedged holder
+# hung it forever. It now REFUSES at the deadline rather than degrading: a
+# quota write that silently did not land under-counts usage, i.e. it hands the
+# user free messages — a busy lock may never become an implicit allow.
+# Deadline + refusal semantics follow core.infinite_session.event_store.
+LOCK_TIMEOUT_SECONDS = 2.0
+
+
 def _save_store(path: Path, data: dict[str, dict]) -> None:
+    """Atomically write the store. BOUNDED lock; raises QuotaLockBusy."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_suffix(path.suffix + ".lock")
     fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_exclusive(fd, "quota store", timeout=LOCK_TIMEOUT_SECONDS)
+        locked = True
         tmp = path.with_suffix(path.suffix + ".tmp")
         # Create with 0o600 before writing — avoids world-readable window.
         tmp_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -216,7 +230,8 @@ def _save_store(path: Path, data: dict[str, dict]) -> None:
             os.close(tmp_fd)
         os.replace(tmp, path)
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        if locked:
+            fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 

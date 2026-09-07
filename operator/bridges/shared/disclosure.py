@@ -76,6 +76,7 @@ Design notes
 from __future__ import annotations
 
 from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on Windows
+from _bounded_lock import LockBusy as DisclosureLockBusy, acquire_exclusive as _acquire_exclusive
 import json
 import os
 import re
@@ -291,12 +292,30 @@ def _load_store(path: Path) -> dict[str, dict]:
 
 _SAVE_RETRY_DELAYS = (0.1, 0.3, 1.0)  # V-004: seconds between write retries
 
+# ── Bounded store locking (never hang an operator request) ──────────────
+# The flock() below used to be a plain ``flock(LOCK_EX)`` with no timeout on
+# the L19 bot-disclosure path (EU AI Act Art. 50), which every first message
+# from a new uid traverses. A wedged holder hung it forever.
+#
+# It REFUSES at the deadline (``DisclosureLockBusy``) and is NOT fed into the
+# OSError retry ladder below: the bounded acquire already waited
+# LOCK_TIMEOUT_SECONDS, so retrying it four times would put a ~9 s stall back
+# on the same request path. Refusing is also the compliance-correct direction:
+# ``mark_seen`` must never report success without persisting, or the operator
+# would be told the disclosure card was recorded when it was not. The
+# disclosure GATE (``has_seen``) reads without any lock, so a busy lock can
+# never suppress a card.
+# Deadline + refusal semantics follow core.infinite_session.event_store.
+LOCK_TIMEOUT_SECONDS = 2.0
+
 
 def _save_store(path: Path, data: dict[str, dict]) -> None:
     """Atomically write the disclosure store.
 
     V-004/V-011: Retries on OSError up to 3 times (delays 0.1 / 0.3 / 1.0 s).
     On all retries exhausted raises OSError so the caller can queue a retry.
+    A BUSY LOCK is not an OSError to retry — it raises
+    :class:`DisclosureLockBusy` straight to the caller.
     """
     import logging as _log_ds
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -305,8 +324,10 @@ def _save_store(path: Path, data: dict[str, dict]) -> None:
     for attempt, delay in enumerate((*_SAVE_RETRY_DELAYS, None)):
         try:
             fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+            locked = False
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                _acquire_exclusive(fd, "disclosure store", timeout=LOCK_TIMEOUT_SECONDS)
+                locked = True
                 tmp = path.with_suffix(path.suffix + ".tmp")
                 # Create with 0o600 before writing — avoids world-readable window.
                 tmp_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -317,8 +338,11 @@ def _save_store(path: Path, data: dict[str, dict]) -> None:
                 os.replace(tmp, path)
                 return  # success
             finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                if locked:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
                 os.close(fd)
+        except DisclosureLockBusy:
+            raise  # refuse immediately — do NOT re-wait the deadline 4x
         except OSError as exc:
             last_exc = exc
             _log_ds.getLogger("corvin.disclosure").warning(

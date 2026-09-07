@@ -48,6 +48,33 @@ router = APIRouter(prefix="/settings/engine-pref", tags=["console-engine-pref"])
 
 _CONSOLE_CHANNEL = "console"
 
+
+def _refuse_lock_busy(rec: session_auth.SessionRecord, action: str, chat_key: str) -> HTTPException:
+    """Turn an ``engine_switch`` busy store lock into a clean, audited 503.
+
+    ``engine_switch._save_store`` used to take an UNBOUNDED ``flock(LOCK_EX)``,
+    so a wedged holder hung this request forever. It is bounded now and raises
+    :class:`engine_switch.EngineSwitchLockBusy`; 503 (not 500) because nothing
+    was written and a retry is the correct client behaviour — same mapping as
+    ``routes/workflows.py`` and ``infinite_session_api``. Content-free record:
+    action + chat key only.
+    """
+    try:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action=action,
+            target_kind="chat_session",
+            target_id=chat_key,
+            reason="lock_busy",
+        )
+    except Exception:  # noqa: BLE001 - the refusal must not depend on the audit sink
+        pass
+    return HTTPException(
+        status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="lock_busy",
+    )
+
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 def _corvin_home() -> Path:
@@ -143,8 +170,13 @@ def set_engine_pref(
     engine_id = spec["engine"]
     model = body.model or spec.get("model")
 
-    from .engine import _ENGINE_METADATA, _engine_meta_fallback  # noqa: PLC0415
-    _meta = _ENGINE_METADATA.get(engine_id) or _engine_meta_fallback(engine_id)
+    # ``_engine_meta_fallback`` was deleted from routes/engine.py by 243690e8
+    # ("rewrite engine.py for Claude Code only") but the import here was left
+    # behind, so EVERY PUT to this route answered 500 at this line. An engine
+    # the metadata table does not describe is not a known OS-capable engine —
+    # fail closed on the empty dict rather than invent a permissive fallback.
+    from .engine import _ENGINE_METADATA  # noqa: PLC0415
+    _meta = _ENGINE_METADATA.get(engine_id) or {}
     if not _meta.get("os_capable", False):
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -154,12 +186,15 @@ def set_engine_pref(
             ),
         )
 
-    _es.set_preference(
-        _CONSOLE_CHANNEL, chat_key,
-        engine=engine_id,
-        model=model,
-        uid=_rec.sid_fingerprint,
-    )
+    try:
+        _es.set_preference(
+            _CONSOLE_CHANNEL, chat_key,
+            engine=engine_id,
+            model=model,
+            uid=_rec.sid_fingerprint,
+        )
+    except _es.EngineSwitchLockBusy:
+        raise _refuse_lock_busy(_rec, "engine_pref_set", chat_key) from None
 
     try:
         console_audit.action_performed(
@@ -190,7 +225,10 @@ def clear_engine_pref(
     _csrf: Annotated[None, Depends(require_csrf)],
 ) -> EnginePrefResponse:
     """Clear per-chat engine override — revert to tenant default."""
-    _es.clear_preference(_CONSOLE_CHANNEL, chat_key, uid=_rec.sid_fingerprint)
+    try:
+        _es.clear_preference(_CONSOLE_CHANNEL, chat_key, uid=_rec.sid_fingerprint)
+    except _es.EngineSwitchLockBusy:
+        raise _refuse_lock_busy(_rec, "engine_pref_cleared", chat_key) from None
 
     try:
         console_audit.action_performed(

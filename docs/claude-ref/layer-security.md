@@ -681,8 +681,12 @@ themselves grants consent via a slash-command. Three modes:
 Single JSON file per (channel, chat) at
 `<corvin_home>/global/consent/<safe_channel>__<safe_chat>.json`.
 Concurrent writes are serialised with a `.lock` sidecar
-(`fcntl.flock`). Expired `time_bounded` entries are pruned lazily on
-every read.
+(`fcntl.flock`, BOUNDED at `consent.LOCK_TIMEOUT_SECONDS` = 2 s). `grant` /
+`revoke` REFUSE with `ConsentLockBusy` at the deadline — a busy lock may never
+look like a successful grant. Expired `time_bounded` entries are pruned lazily
+on every read; that prune's *persist* is the one best-effort write here and it
+DEGRADES on a busy lock, which is safe because `is_granted` decides from the
+pruned in-memory snapshot and therefore still denies the expired uid.
 
 Every grant / revoke / drop / expiry / consume-time-drift emits a
 `consent.*` event into the unified hash chain at
@@ -1161,3 +1165,45 @@ case drives the REAL router through `TestClient` with a REAL console session
 file description**, asserts 503 (or the in-band 503 frame) within the deadline,
 and pairs each with a lock-free positive control proving the bounded lock is
 still a real mutex.
+
+### Console hardening — round 3b: the shared registries and the plugin registry (2026-09-07)
+
+Nine more unbounded `flock(LOCK_EX)` calls sat one import away from the same
+request paths — in the `operator/bridges/shared/` registries the console routes
+and the bridge message path use, and in the plugin registry. They are bounded
+now through the ONE shared helper `operator/bridges/shared/_bounded_lock.py`
+(`LockBusy(TimeoutError)`, `acquire_exclusive(fd, what, *, timeout)`); each
+module keeps its own patchable `LOCK_TIMEOUT_SECONDS` (2 s) and its own alias
+for the exception.
+
+**The judgement at each site is REFUSE vs DEGRADE, and for anything guarding
+compliance state a busy lock may never become an implicit allow.**
+
+| Where | Reached from | At the deadline |
+|---|---|---|
+| `consent.py::_locked_update` | `grant()` / `revoke()` — bridge slash commands, `ops/launcher` compliance CLI | **REFUSE** (`ConsentLockBusy`). A busy lock must not look like a successful grant, and a revoke that did not land must reach the caller. |
+| `consent.py::_save_store` | the lazy expiry-prune persist inside `is_granted()` (adapter message path, L38 receiver) | **DEGRADE**, and it is NOT retried by `_save_store_with_retry` (re-waiting the deadline 3× would put a multi-second stall back on the decision path). Safe by construction: `is_granted` decides from the **pruned in-memory snapshot**, so an unpersisted prune still denies the expired uid. |
+| `quota.py::_save_store` | `record()` / `set_limit()` / `reset()` / `get_usage()` roll-persist | **REFUSE** (`QuotaLockBusy`). A dropped quota write under-counts usage — i.e. hands the user free messages. `check()`, the gate itself, takes no lock and therefore never blocks. |
+| `roles.py::_save_store` | `grant()` / `revoke()` / `leave()` | **REFUSE** (`RolesLockBusy`) — roles are an authorisation mechanism. `effective_role()` takes no lock. |
+| `disclosure.py::_save_store` | `mark_seen()` / `join()` (L19, EU AI Act Art. 50) | **REFUSE** (`DisclosureLockBusy`), raised **before** the `OSError` retry ladder so the deadline is not re-waited 4× (~9 s) on a request path. `has_seen()` — the gate — takes no lock, so a busy lock can never suppress a card. |
+| `engine_switch.py::_save_store` | `PUT /v1/console/settings/engine-pref/{chat_key}` | **REFUSE** → route answers **503 `lock_busy`** + content-free `console.action_failed`. (`DELETE` clears by `unlink` and takes no lock.) |
+| `a2a_invite_registry.py::InviteRegistry._save` | `POST /remote-trigger/pair/cli-invite`, `POST .../cli-accept`, `DELETE .../invites/{ikey}` | **REFUSE** → **503 `lock_busy`**. The lock also MOVED: it used to be taken on the freshly created `.tmp` file — which nobody else had open, so it serialised nothing — and now sits on a stable `invites.json.lock` sidecar. |
+| `a2a_friendship.py::config_file_lock` | `POST /remote-trigger/pair/friendship/set-url`, relay ack handler | **REFUSE** (`FriendshipLockBusy`) → **503**. The module's documented "advisory fail-soft" still covers a lock that cannot be **obtained** (exotic FS, container); a **contended** lock is the opposite case — another writer is mid RMW on the peer URL that decides where A2A tasks are relayed, and continuing unlocked is exactly the lost update the lock exists to prevent. Locks already taken for earlier dirs are released on the way out. |
+| `acs_engine_adapter.py::_fallback_quota_ok` | `POST /v1/console/compute/...` ACS submit | **DEGRADE** to `(True, -1)`, logged. This is the module's documented fail-OPEN daily backstop counter ("the cap is a backstop, not a security boundary" — every operational error already returns `(True, -1)`); it guards no consent, role or entitlement decision, so one uncounted fallback run beats hanging the submit. |
+| `core/plugins/corvin_plugins/state.py::registry_mutation` | every `PluginLifecycle` transition — `POST /v1/console/plugins/{id}/{enable,disable,settings}`, the ADR-0239 admin plane, marketplace install | **REFUSE** (`RegistryLockBusy`) → **503 `lock_busy`** via `_mutation_error()` in both `routes/plugins.py` and `routes/admin.py`. BOTH layers are bounded: the in-process `_MUTATION_LOCK` now uses `acquire(timeout=…)` too. Proceeding without the lock is the lost update it exists to prevent (12 concurrent installs once left 2 records on disk). |
+
+Regression tests: `core/console/tests/test_route_lock_nonblocking_registries.py`
+(real router + real session + wedged lock → 503, each with a lock-free positive
+control, plus proof the refusal left the guarded state unchanged) and
+`operator/bridges/shared/test_registry_lock_nonblocking.py` (direct bounded-wait
+tests for the sites that are only reachable in-process; every compliance site
+asserts the busy path granted nothing, and every gate — `quota.check`,
+`roles.effective_role`, `disclosure.has_seen` — is proven to take no lock at
+all).
+
+Unrelated bug found and fixed on the way: `routes/engine_pref.py` still imported
+`_engine_meta_fallback` from `routes/engine.py`, which commit `243690e8` deleted
+— so **every** `PUT /v1/console/settings/engine-pref/{chat_key}` answered 500 at
+that line. An engine the metadata table does not describe is now simply not
+OS-capable (422), fail-closed, instead of resolving through an invented
+permissive fallback.
