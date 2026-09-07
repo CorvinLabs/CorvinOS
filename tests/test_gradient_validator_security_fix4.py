@@ -496,5 +496,227 @@ class TestGradientValidatorIntegration:
         assert stats['num_validation_failures'] == 1
 
 
+class TestGradientValidatorNormalizationBypassFix:
+    """
+    Test Case 6: Normalization Bypass Prevention (Fix #4 Round 2)
+
+    Tests specifically for floating-point precision errors that could allow
+    gradients to escape bounds when using direct comparison.
+
+    The vulnerability: `clipped_value != grad_value` fails for values very
+    close to the clipping boundary due to floating-point precision.
+
+    The fix: Use `math.isclose(clipped_value, grad_value, rel_tol=1e-9, abs_tol=1e-12)`
+    to detect clipping with epsilon-based tolerance.
+    """
+
+    def test_extreme_small_value_near_zero(self):
+        """
+        ATTACK: Extremely small gradient near zero boundary
+
+        Test Input: gradient = 1e-15 (subnormal), max_gradient = 1.0
+        Expected: Detected as clipped only if it crosses precision boundary
+
+        This tests that the tolerance check doesn't miss tiny adjustments.
+        """
+        validator = GradientValidator(max_gradient=1.0)
+
+        gradients = {
+            'L1_subnormal': {'grad': 1e-15, 'contributors': []},
+            'L2_zero_like': {'grad': 1e-16, 'contributors': []},
+        }
+
+        result = validator.validate_and_clip_gradients(gradients, batch_id='subnormal_test')
+
+        assert result.is_valid
+        # These should not be clipped (both under max_gradient = 1.0)
+        assert not result.clipped_gradients['L1_subnormal']['was_clipped']
+        assert not result.clipped_gradients['L2_zero_like']['was_clipped']
+        assert result.num_clipped == 0
+
+    def test_extreme_large_value_1e308(self):
+        """
+        ATTACK: Extremely large gradient at system limit
+
+        Test Input: gradient ≈ 1e308 (near float64 max), max_gradient = 1.0
+        Expected: Clipped to 1.0
+
+        This tests that clipping is detected at system boundaries.
+        """
+        validator = GradientValidator(max_gradient=1.0)
+
+        # Use near-max float64 value
+        huge_value = 1e308
+
+        gradients = {
+            'L1_huge': {'grad': huge_value, 'contributors': []},
+        }
+
+        result = validator.validate_and_clip_gradients(gradients, batch_id='huge_value_test')
+
+        assert result.is_valid
+        assert result.clipped_gradients['L1_huge']['grad'] == 1.0
+        assert result.clipped_gradients['L1_huge']['was_clipped']
+        assert result.num_clipped == 1
+
+    def test_precision_boundary_at_clip_limit(self):
+        """
+        ATTACK: Value extremely close to clip boundary (but should be clipped)
+
+        Test Input: gradient = max_gradient + 1e-9 (just barely over limit)
+        Expected: Detected as clipped
+
+        This is the critical test: direct comparison would miss this due to
+        floating-point rounding, but math.isclose() with abs_tol=1e-12 catches it.
+        """
+        validator = GradientValidator(max_gradient=1.0)
+
+        # Create a value just barely over the limit
+        slightly_over = 1.0 + 1e-9
+
+        gradients = {
+            'L1_just_over': {'grad': slightly_over, 'contributors': []},
+        }
+
+        result = validator.validate_and_clip_gradients(gradients, batch_id='boundary_test')
+
+        assert result.is_valid
+        # Should be clipped to 1.0
+        assert result.clipped_gradients['L1_just_over']['grad'] == 1.0
+        assert result.clipped_gradients['L1_just_over']['was_clipped']
+        assert result.num_clipped == 1
+
+    def test_precision_boundary_multiple_cases(self):
+        """
+        ATTACK: Multiple precision boundary violations
+
+        Test Input: Multiple gradients at various boundaries
+        Expected: All detected as clipped using epsilon tolerance
+        """
+        validator = GradientValidator(max_gradient=10.0)
+
+        gradients = {
+            'positive_boundary': {'grad': 10.0 + 1e-10, 'contributors': []},
+            'negative_boundary': {'grad': -10.0 - 1e-10, 'contributors': []},
+            'just_inside_pos': {'grad': 10.0 - 1e-10, 'contributors': []},
+            'just_inside_neg': {'grad': -10.0 + 1e-10, 'contributors': []},
+            'well_inside': {'grad': 5.0, 'contributors': []},
+        }
+
+        result = validator.validate_and_clip_gradients(gradients, batch_id='multi_boundary')
+
+        assert result.is_valid
+
+        # Positive boundary should be clipped
+        assert result.clipped_gradients['positive_boundary']['was_clipped']
+        assert result.clipped_gradients['positive_boundary']['grad'] == 10.0
+
+        # Negative boundary should be clipped
+        assert result.clipped_gradients['negative_boundary']['was_clipped']
+        assert result.clipped_gradients['negative_boundary']['grad'] == -10.0
+
+        # Just inside should NOT be clipped
+        assert not result.clipped_gradients['just_inside_pos']['was_clipped']
+        assert not result.clipped_gradients['just_inside_neg']['was_clipped']
+
+        # Well inside should NOT be clipped
+        assert not result.clipped_gradients['well_inside']['was_clipped']
+
+        # Total clipped count: 2
+        assert result.num_clipped == 2
+
+    def test_normalization_bypass_attack_simulation(self):
+        """
+        FULL ATTACK: Simulate complete normalization bypass attempt
+
+        Attack Pattern:
+          1. Crafted gradient just barely exceeds bounds
+          2. Floating-point precision allows it to escape with direct comparison
+          3. Weight update pushed out of bounds
+
+        Expected Outcome:
+          - Detection works with epsilon-based tolerance
+          - Audit event logs the clipping
+          - Gradient never escapes bounds
+        """
+        audit = MockAuditBackend()
+        validator = GradientValidator(max_gradient=1.0, audit_backend=audit, tenant_id='attack_sim')
+
+        # Crafted attack: gradient just barely over limit
+        attack_value = 1.0 + 1e-10
+
+        gradients = {
+            'attacked_loop': {'grad': attack_value, 'contributors': []},
+        }
+
+        # Validation must detect this
+        result = validator.validate_and_clip_gradients(gradients, batch_id='attack_simulation')
+
+        # PROOF: Gradient is clipped
+        assert result.is_valid
+        assert result.clipped_gradients['attacked_loop']['grad'] == 1.0
+        assert result.clipped_gradients['attacked_loop']['was_clipped']
+
+        # PROOF: Audit event shows clipping
+        assert len(audit.events) == 1
+        audit_event = audit.events[0]
+        assert audit_event['event_type'] == 'gradient_clipped'
+        assert audit_event['num_clipped'] == 1
+        assert audit_event['severity'] == 'warning'
+
+        # PROOF: Attack prevented - weights cannot exceed bounds
+        final_weight = 0.0 + result.clipped_gradients['attacked_loop']['grad']
+        assert final_weight == 1.0
+        assert final_weight <= validator.max_gradient
+
+    def test_subnormal_number_handling(self):
+        """
+        EDGE CASE: Subnormal (denormalized) floating-point numbers
+
+        Test Input: Subnormal gradient values (very close to zero)
+        Expected: Correctly identified as not clipped
+
+        Subnormals test precision handling at the lower bound.
+        """
+        validator = GradientValidator(max_gradient=1.0)
+
+        # Smallest positive normal float64
+        smallest_normal = 2.2250738585072014e-308
+
+        gradients = {
+            'normal_boundary': {'grad': smallest_normal, 'contributors': []},
+            'subnormal': {'grad': smallest_normal / 1e10, 'contributors': []},
+        }
+
+        result = validator.validate_and_clip_gradients(gradients, batch_id='subnormal_test')
+
+        assert result.is_valid
+        # Neither should be clipped (both < max_gradient)
+        assert not result.clipped_gradients['normal_boundary']['was_clipped']
+        assert not result.clipped_gradients['subnormal']['was_clipped']
+        assert result.num_clipped == 0
+
+    def test_negative_subnormal_handling(self):
+        """
+        EDGE CASE: Negative subnormal numbers
+
+        Test Input: Negative subnormal gradients
+        Expected: Correctly handled symmetrically with positive subnormals
+        """
+        validator = GradientValidator(max_gradient=1.0)
+
+        smallest_normal = 2.2250738585072014e-308
+
+        gradients = {
+            'neg_subnormal': {'grad': -smallest_normal / 1e10, 'contributors': []},
+        }
+
+        result = validator.validate_and_clip_gradients(gradients, batch_id='neg_subnormal_test')
+
+        assert result.is_valid
+        assert not result.clipped_gradients['neg_subnormal']['was_clipped']
+        assert result.num_clipped == 0
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

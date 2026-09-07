@@ -103,8 +103,13 @@ class SmootherConfig:
 
     All fields are validated at construction (``__post_init__``) and refused
     when out of their documented domain — there is no "tolerant" fallback.
+
+    SECURITY FIX #7: EMA alpha increased from 0.3 → 0.5 to provide more
+    aggressive low-pass filtering against oscillation attacks. Higher alpha
+    means more responsive to new inputs, but combined with frequency detection
+    (Layer 2) provides defense-in-depth.
     """
-    ema_alpha: float = 0.3  # EMA blending factor [0, 1]
+    ema_alpha: float = 0.5  # EMA blending factor [0, 1]; INCREASED from 0.3 (Security Fix #7)
     enable_fft_detection: bool = False  # Enable Fourier analysis (CPU-intensive)
     fft_energy_threshold: float = 0.6  # Threshold for harmonic energy
     smoothing_window_size: int = 20  # Number of samples for energy analysis

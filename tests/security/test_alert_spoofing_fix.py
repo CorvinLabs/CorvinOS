@@ -335,6 +335,150 @@ class TestAlertSecurityIntegration:
         assert pending[0].status == "pending"
 
 
+class TestFixRound2NonceUniqueness:
+    """Fix #11 Round 2: Verify nonce uniqueness across consecutive alert signings.
+
+    Problem: Nonce caching bug allowed same nonce to be used for multiple alerts.
+    Solution: Generate fresh nonce per alert using uuid4() + timestamp.
+
+    This test ensures that 100 consecutive alert signings all produce unique nonces,
+    preventing replay attacks.
+    """
+
+    @pytest.fixture
+    def manager(self):
+        """Create alert manager."""
+        return AlertPolicyManager(tenant_id="_default", signing_key="fix_r2_test_key")
+
+    def test_100_consecutive_alerts_have_unique_nonces(self, manager):
+        """All 100 consecutive alerts MUST have unique nonces.
+
+        This is the core requirement for Fix #11 Round 2: generate fresh nonce
+        per alert (not per batch). Even in a tight loop, each alert gets a
+        different nonce.
+        """
+        nonces = []
+        signatures = []
+
+        # Sign 100 consecutive alerts
+        for i in range(100):
+            alert_sig = manager._sign_alert(
+                alert_id=f"unique_nonce_test_{i}",
+                metric_name="loss_total",
+                metric_value=0.02 + (i * 0.0001),  # Vary slightly
+                threshold=0.01,
+            )
+            nonces.append(alert_sig.nonce)
+            signatures.append(alert_sig)
+
+        # Verify all nonces are unique
+        assert len(nonces) == 100, "Should have 100 nonces"
+        assert len(set(nonces)) == 100, f"All nonces must be unique, got {len(set(nonces))} unique out of {len(nonces)}"
+
+        # Verify no duplicates
+        duplicates = [n for n in nonces if nonces.count(n) > 1]
+        assert len(duplicates) == 0, f"Found duplicate nonces: {set(duplicates)}"
+
+    def test_nonce_format_includes_uuid_and_timestamp(self, manager):
+        """Nonce format: uuid4_hex + underscore + timestamp_us."""
+        alert_sig = manager._sign_alert(
+            alert_id="format_test",
+            metric_name="loss_total",
+            metric_value=0.02,
+            threshold=0.01,
+        )
+
+        # Nonce should contain UUID (hex) and timestamp (digits)
+        parts = alert_sig.nonce.split("_")
+        assert len(parts) == 2, f"Nonce should be 'uuid_timestamp', got: {alert_sig.nonce}"
+
+        uuid_part = parts[0]
+        timestamp_part = parts[1]
+
+        # UUID part should be 32 hex chars
+        assert len(uuid_part) == 32, f"UUID part should be 32 chars, got {len(uuid_part)}"
+        assert all(c in "0123456789abcdef" for c in uuid_part), f"UUID should be hex: {uuid_part}"
+
+        # Timestamp part should be all digits (microseconds)
+        assert timestamp_part.isdigit(), f"Timestamp should be digits: {timestamp_part}"
+        assert len(timestamp_part) > 10, f"Timestamp should be at least 10 digits (seconds): {timestamp_part}"
+
+    def test_nonce_prevents_replay_across_batch(self, manager):
+        """Once a nonce is verified, replaying with the same nonce is rejected.
+
+        Test scenario:
+        1. Sign multiple alerts in a batch
+        2. Verify the first alert (consumes nonce)
+        3. Try to re-verify the same alert (should be rejected as replay)
+        """
+        # Sign two alerts
+        alert_sig_1 = manager._sign_alert(
+            alert_id="batch_test_1",
+            metric_name="loss_total",
+            metric_value=0.02,
+            threshold=0.01,
+        )
+        alert_sig_2 = manager._sign_alert(
+            alert_id="batch_test_2",
+            metric_name="loss_total",
+            metric_value=0.025,
+            threshold=0.01,
+        )
+
+        # Verify they have different nonces
+        assert alert_sig_1.nonce != alert_sig_2.nonce, "Each alert should have unique nonce"
+
+        # Verify the first alert
+        is_valid, reason = manager.verify_alert_signature(alert_sig_1)
+        assert is_valid is True, f"First verification should succeed: {reason}"
+
+        # Try to re-verify the same alert (replay attack)
+        is_valid_replay, reason_replay = manager.verify_alert_signature(alert_sig_1)
+        assert is_valid_replay is False, "Replay of same nonce should be rejected"
+        assert "replay" in reason_replay.lower(), f"Should mention replay: {reason_replay}"
+
+        # Verify the second alert should still work (different nonce)
+        is_valid_2, reason_2 = manager.verify_alert_signature(alert_sig_2)
+        assert is_valid_2 is True, f"Second alert with different nonce should succeed: {reason_2}"
+
+    def test_rate_limit_and_nonce_both_unique_in_batch(self, manager):
+        """Integration test: All 100 alerts have unique nonces AND pass rate limiting."""
+        policy = manager.add_policy(
+            alert_type=AlertType.LOSS_DIVERGENCE,
+            threshold=0.01,
+            level=AlertLevel.WARNING,
+        )
+
+        nonces = []
+        verified_count = 0
+
+        # Fire many alerts and verify each gets unique nonce + verification
+        for i in range(100):
+            alert_sig = manager._sign_alert(
+                alert_id=f"batch_rate_limit_{i}",
+                metric_name="loss_total",
+                metric_value=0.015,  # Above threshold
+                threshold=0.01,
+            )
+
+            # Track nonce
+            nonces.append(alert_sig.nonce)
+
+            # Rate limit should allow (different policy tracking)
+            rate_ok, rate_msg = manager.check_rate_limit(policy.policy_id)
+            if rate_ok:
+                # Verify signature
+                is_valid, reason = manager.verify_alert_signature(alert_sig)
+                if is_valid:
+                    verified_count += 1
+
+        # All 100 should have unique nonces
+        assert len(set(nonces)) == 100, f"Expected 100 unique nonces, got {len(set(nonces))}"
+
+        # Some should have verified successfully (those not rate-limited)
+        assert verified_count > 0, f"Expected at least some alerts to verify, got {verified_count}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
