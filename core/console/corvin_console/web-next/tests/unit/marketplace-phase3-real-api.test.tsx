@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, expect, vi, beforeEach, afterEach } from 'vitest'
 /**
  * Unit Tests: Marketplace Panel Phase 3 Week 1 — Real Job API Wiring
  * Tests: POST /api/v1/marketplace/plugins/{id}/install + GET progress polling (mocked)
@@ -60,11 +60,10 @@ describe('Marketplace Panel - Phase 3 Real API', () => {
     })
 
     // Mock useProgressPolling hook
-    const mockStartPolling = vi.fn()
     vi.spyOn(useProgressPollingModule, 'useProgressPolling').mockReturnValue({
       status: null,
       stopPolling: vi.fn(),
-    } as any)
+    } as unknown as ReturnType<typeof useProgressPollingModule.useProgressPolling>)
 
     // Mock POST install endpoint
     ;vi.mocked(fetch).mockResolvedValueOnce({
@@ -188,7 +187,7 @@ describe('Marketplace Panel - Phase 3 Real API', () => {
     mockUseProgressPolling.mockReturnValue({
       status: null,
       stopPolling: vi.fn(),
-    } as any)
+    } as unknown as ReturnType<typeof useProgressPollingModule.useProgressPolling>)
 
     render(
       <QueryClientProvider client={queryClient}>

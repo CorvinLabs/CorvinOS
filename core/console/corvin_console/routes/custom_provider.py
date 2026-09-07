@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import sys
 import httpx
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -20,6 +22,7 @@ from pydantic import BaseModel, Field
 from .. import auth as session_auth
 from ..deps import require_csrf
 from ..audit import _emit
+from .datasources_http import _UnsafeUrl, _as_ip, _ip_is_blocked
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
@@ -94,6 +97,71 @@ class CreateProviderRequest(BaseModel):
 
 
 
+# ── SSRF / egress guard for operator-supplied provider endpoints ─────────────
+#
+# ``test-api`` fetches a fully operator-supplied URL server-side and reflects the
+# response; ``create`` persists that URL as a provider the RAG layer will call
+# later. Same failure class as datasources_http (CON-DS-V2-02): without a guard
+# the console can be pointed at a cloud metadata service (169.254.169.254) or at
+# an internal-only LAN host and used to read what comes back.
+#
+# DECISION — loopback is ALLOWED, everything else non-public is BLOCKED:
+# the primary reason this panel exists is a local model/RAG server (Ollama on
+# :11434, LM Studio, vLLM, a local search index) running on the SAME host as the
+# console, and the console itself is the operator's own machine (local-login is
+# loopback-gated). Blocking 127.0.0.1/::1/localhost would break the feature's
+# main use case while protecting nothing the operator does not already own.
+# Non-loopback private ranges (10/8, 172.16/12, 192.168/16, fc00::/7), link-local
+# + every cloud IMDS shape, reserved/multicast and the blocked hostnames stay
+# refused, fail-closed, exactly as in datasources_http. Redirects are never
+# followed (a public URL that 302s to a blocked target must not be fetched).
+# Residual (documented): DNS rebinding after the pre-fetch resolve; httpx does
+# not pin the connect IP the way datasources_http's urllib opener does.
+
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+_LOOPBACK_NAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
+
+
+def _assert_provider_endpoint_allowed(url: str) -> None:
+    """Raise :class:`_UnsafeUrl` unless ``url`` targets loopback or a public host."""
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise _UnsafeUrl("endpoint is unparseable") from exc
+    if (parts.scheme or "").lower() not in _ALLOWED_SCHEMES:
+        raise _UnsafeUrl("scheme not allowed (http/https only)")
+    try:
+        host = (parts.hostname or "").strip().lower()
+    except ValueError as exc:
+        raise _UnsafeUrl("endpoint has an invalid host") from exc
+    if not host:
+        raise _UnsafeUrl("endpoint has no host")
+    if host in _LOOPBACK_NAMES:
+        return  # same-host model server (Ollama & co.) — see DECISION above
+    lit = _as_ip(host)
+    if lit is not None:
+        if lit.is_loopback:
+            return
+        if _ip_is_blocked(lit):
+            raise _UnsafeUrl("endpoint IP is private/link-local/metadata/reserved")
+        return
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise _UnsafeUrl("endpoint host does not resolve") from exc
+    addrs = [info[4][0] for info in infos if info and len(info) > 4 and info[4]]
+    if not addrs:
+        raise _UnsafeUrl("endpoint host resolves to no address")
+    for addr in addrs:
+        ip = _as_ip(str(addr))
+        if ip is None:
+            raise _UnsafeUrl("endpoint host resolves to an unusable address")
+        if ip.is_loopback:
+            continue
+        if _ip_is_blocked(ip):
+            raise _UnsafeUrl("endpoint host resolves to a private/link-local/metadata address")
+
+
 # ── API Connectivity Testing ───────────────────────────────
 
 @router.post("/test-api")
@@ -133,6 +201,11 @@ async def test_api_connectivity(
         if not endpoint:
             return {"status": "failed", "error": "No endpoint provided"}
 
+        try:
+            _assert_provider_endpoint_allowed(endpoint)
+        except _UnsafeUrl as exc:
+            return {"status": "failed", "error": f"endpoint blocked: {exc}"}
+
         # Build headers
         headers = {"Content-Type": "application/json"}
         if auth_type == "bearer-token":
@@ -155,7 +228,7 @@ async def test_api_connectivity(
 
         # Make request
         MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MB limit
-        async with httpx.AsyncClient(timeout=timeout_ms / 1000.0) as client:
+        async with httpx.AsyncClient(timeout=timeout_ms / 1000.0, follow_redirects=False) as client:
             if method == "POST":
                 response = await client.post(endpoint, json=body, headers=headers)
             else:
@@ -281,6 +354,10 @@ async def create_custom_provider(
     # work, via the SHARED single-source gate also used by rag_hub.import_provider
     # so the two write paths into tenant_global_dir(tid)/rag cannot drift.
     _tid = _session.tenant_id
+    try:
+        _assert_provider_endpoint_allowed(req.endpoint.strip())
+    except _UnsafeUrl as exc:
+        raise HTTPException(status_code=400, detail=f"endpoint blocked: {exc}")
     from ._rag_license_gate import enforce_rag_providers_max  # noqa: PLC0415
 
     enforce_rag_providers_max(

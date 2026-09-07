@@ -1056,7 +1056,7 @@ function AcsEmptyState({ onViewOs }: { onViewOs: () => void }) {
   const delegationEnabled = q.data?.delegation_enabled ?? false;
   const workerEngineSet = !!q.data?.default_worker_engine;
 
-  let headline = "No worker-engine (ACS) runs in this session";
+  const headline = "No worker-engine (ACS) runs in this session";
   let detail = "This chat ran on the OS engine only.";
   let hint: React.ReactNode = null;
 
@@ -1345,8 +1345,14 @@ function DebugLogPanel({ sid }: { sid: string }) {
   });
 
   // Merge backend events with frontend in-memory log
-  const feEvents = React.useMemo(() => chatDebugLog(sid), [sid, q.dataUpdatedAt]);
-  const beEvents: object[] = q.data?.events ?? [];
+  // Re-read the in-memory FE log whenever the backend query refreshes, so the
+  // merged view below advances in lock-step with the server side.
+  const dataUpdatedAt = q.dataUpdatedAt;
+  const feEvents = React.useMemo(() => {
+    void dataUpdatedAt;
+    return chatDebugLog(sid);
+  }, [sid, dataUpdatedAt]);
+  const beEvents = React.useMemo<object[]>(() => q.data?.events ?? [], [q.data]);
   // Backend events are the source of truth; frontend adds WS-side events
   // not visible on the server (ws.open, ws.close, msg.send, stream.*)
   const all = React.useMemo(() => {

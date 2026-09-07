@@ -4,7 +4,10 @@ import reactPlugin from 'eslint-plugin-react';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
 
 export default [
-  { ignores: ['dist', 'node_modules', 'coverage', '.next'] },
+  // Build outputs: `dist/` is the live bundle, `dist.next/` / `dist.prev/` are the
+  // swap + rollback copies scripts/console-deploy.sh keeps next to it. Linting them
+  // reported ~900 minified-bundle "errors" and buried the real source problems.
+  { ignores: ['dist', 'dist.next', 'dist.prev', 'node_modules', 'coverage', '.next', 'playwright-report', 'test-results'] },
   {
     files: ['**/*.{js,jsx,ts,tsx}'],
     languageOptions: {

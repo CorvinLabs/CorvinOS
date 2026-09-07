@@ -66,23 +66,27 @@ const zTurn = z.object({
 // reason, hash, top_score, ts, …) is treated as absent rather than tripping strict
 // z.string()/z.number(). Fields the schema declares `.nullable()` still accept null,
 // so dropping their null is equally fine (undefined ⊆ nullable-optional).
-function dropNulls(o: any): void {
+type Loose = Record<string, unknown>;
+function dropNulls(o: unknown): void {
   if (!o || typeof o !== "object") return;
-  for (const k of Object.keys(o)) if (o[k] === null) delete o[k];
+  const rec = o as Loose;
+  for (const k of Object.keys(rec)) if (rec[k] === null) delete rec[k];
 }
 function scrubTraces(raw: unknown): unknown {
-  const r = raw as any;
+  const r = raw as { sessions?: unknown } | null;
   if (!r || typeof r !== "object" || !Array.isArray(r.sessions)) return raw;
-  for (const sg of r.sessions) {
-    for (const t of sg?.turns ?? []) {
+  for (const sg of r.sessions as (Loose | null)[]) {
+    const turns = Array.isArray(sg?.turns) ? (sg.turns as Loose[]) : [];
+    for (const t of turns) {
       dropNulls(t);
       if (t.turn_id == null) t.turn_id = "?";
       if (!Array.isArray(t.stages)) t.stages = [];
-      for (const s of t.stages) {
+      for (const s of t.stages as Loose[]) {
         dropNulls(s);
         if (s.stage == null) s.stage = "?";
         if (s.status == null) s.status = "unknown";
-        for (const src of s.sources ?? []) {
+        const sources = Array.isArray(s.sources) ? (s.sources as Loose[]) : [];
+        for (const src of sources) {
           dropNulls(src);
           if (src.id == null) src.id = "?";
         }

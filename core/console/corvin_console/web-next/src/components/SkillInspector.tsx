@@ -16,8 +16,8 @@ interface SkillInspectorProps {
   confidenceScore?: number
   lastExecuted?: string
   executionCount?: number
-  metrics?: Record<string, any>
-  recentEvents?: any[]
+  metrics?: Record<string, unknown>
+  recentEvents?: Record<string, unknown>[]
 }
 
 export function SkillInspector({

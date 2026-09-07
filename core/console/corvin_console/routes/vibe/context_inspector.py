@@ -1,6 +1,9 @@
 """Context Inspector API — visualize HybridContextModel layers for a task.
 
-Endpoint: GET /v1/vibe/task/<task_id>/context-layers
+Endpoints (all session-authenticated, tenant from the session record):
+  GET /v1/console/vibe/health
+  GET /v1/console/vibe/tasks/list
+  GET /v1/console/vibe/task/<task_id>/context-layers
 
 Returns the 4-layer breakdown:
   - original: immutable base (Phase 3 snapshots)
@@ -8,9 +11,8 @@ Returns the 4-layer breakdown:
   - injected: new context added in this turn
   - merged: final state (conflicts resolved)
 
-Loads real data from:
-  - Audit chain: find task + context events
-  - HybridContextModel: reconstruct layer state
+Loads real data from the tenant's audit chain under ``CORVIN_HOME``
+(``forge.paths.tenant_global_dir`` — never ``Path.home()/".corvin"``).
 """
 
 from __future__ import annotations
@@ -23,93 +25,29 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ... import _bootstrap
 from ... import auth as session_auth
 from ...deps import require_session
 
-# Optional: HybridContextModel types (may not be available in all environments)
-try:
-    from core.learning.hybrid_context import HybridContextModel, ImmutableContextBase, InjectedLayer
-except ImportError:
-    HybridContextModel = None  # type: ignore
-    ImmutableContextBase = None  # type: ignore
-    InjectedLayer = None  # type: ignore
+_forge_paths = _bootstrap.forge_paths
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/vibe", tags=["vibe"])
 
 
-@router.get("/health", summary="Debug: Check if vibe module is loaded")
-async def health_check():
-    """Simple health check — no auth required."""
+def _audit_chain_path(tenant_id: str) -> Path:
+    """The tenant's core audit chain, resolved under ``CORVIN_HOME``."""
+    return _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+
+
+@router.get("/health", summary="Check that the vibe module is mounted")
+async def health_check(
+    rec: session_auth.SessionRecord = Depends(require_session),
+) -> Dict[str, str]:
+    """Module liveness for the Vibe panel. Session-gated like every other
+    console route (adversarial review 2026-09-07: it was unauthenticated)."""
     return {"status": "ok", "module": "vibe_context_inspector", "version": "2.0"}
-
-
-@router.get("/tasks/debug", summary="Debug: List tasks without auth")
-async def debug_list_tasks():
-    """Debug endpoint — lists tasks from audit chain without requiring auth."""
-    try:
-        # Search both locations
-        chain_paths = [
-            audit_chain_path("_default"),
-            Path.home() / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl",
-        ]
-
-        seen_tasks = {}
-        found_paths = []
-
-        for chain_path in chain_paths:
-            if not chain_path.exists():
-                continue
-
-            found_paths.append(str(chain_path))
-            with chain_path.open("r") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        event = json.loads(line)
-                        task_id = event.get("task_id")
-                        if task_id and task_id not in seen_tasks:
-                            seen_tasks[task_id] = {
-                                "task_id": task_id,
-                                "timestamp": event.get("timestamp_utc", ""),
-                                "event_type": event.get("event_type", "unknown"),
-                            }
-                    except json.JSONDecodeError:
-                        pass
-
-        if not found_paths:
-            return {
-                "status": "error",
-                "message": "Audit chain not found in any location",
-                "checked_paths": [
-                    str(audit_chain_path("_default")),
-                    str(Path.home() / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"),
-                ]
-            }
-
-        # Sort by timestamp descending
-        tasks = sorted(
-            seen_tasks.values(),
-            key=lambda x: x.get("timestamp", ""),
-            reverse=True
-        )
-
-        return {
-            "status": "ok",
-            "chain_paths": found_paths,
-            "total_tasks": len(seen_tasks),
-            "tasks": tasks[:20],
-            "latest_task_id": tasks[0]["task_id"] if tasks else None
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "type": type(e).__name__
-        }
 
 
 class ContextLayer(BaseModel):
@@ -139,12 +77,6 @@ class TaskListResponse(BaseModel):
     latest_task_id: Optional[str] = None
 
 
-def _get_tenant_home(tenant_id: str) -> Path:
-    """Get tenant home directory."""
-    from forge.tenants import tenant_home
-    return Path(tenant_home(tenant_id))
-
-
 @router.get(
     "/tasks/list",
     response_model=TaskListResponse,
@@ -164,13 +96,8 @@ async def list_tasks(
     tenant_id = rec.tenant_id
 
     try:
-        # Search both locations: repo .corvin + home .corvin
-        chain_paths = [
-            audit_chain_path(tenant_id),  # Repo path
-            Path.home() / ".corvin" / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl",  # Home path
-        ]
+        chain_paths = [_audit_chain_path(tenant_id)]
 
-        # Read audit chain from both locations
         seen_tasks = {}
         for chain_path in chain_paths:
             if not chain_path.exists():
@@ -210,9 +137,9 @@ async def list_tasks(
             latest_task_id=latest_task_id
         )
 
-    except Exception as e:
+    except OSError as e:
         logger.error(f"Error listing tasks: {e}", exc_info=True)
-        return TaskListResponse(tasks=[], total=0, latest_task_id=None)
+        raise HTTPException(status_code=500, detail="failed to read audit chain")
 
 
 def _load_context_from_audit(tenant_id: str, task_id: str) -> Dict[str, Any]:
@@ -222,11 +149,7 @@ def _load_context_from_audit(tenant_id: str, task_id: str) -> Dict[str, Any]:
     Groups by event_type to reconstruct 4-layer model.
     """
     try:
-        # Try both paths: repo .corvin first, then home .corvin
-        chain_paths = [
-            audit_chain_path(tenant_id),  # Repo path
-            Path.home() / ".corvin" / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl",  # Home path
-        ]
+        chain_paths = [_audit_chain_path(tenant_id)]
 
         task_events = []
         for chain_path in chain_paths:
@@ -408,4 +331,4 @@ async def get_task_context_layers(
 
     except Exception as e:
         logger.error(f"Error fetching context layers for task {task_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve context layers: {str(e)}")
+        raise HTTPException(status_code=500, detail="failed to retrieve context layers")

@@ -29,7 +29,6 @@ test.describe('Marketplace Phase 3 - Real Job API', () => {
 
     await page.route('/api/v2/marketplace/install/*/progress', route => {
       // Simulate progress: each call returns incremented progress
-      const progress = Math.min(100, 20 + Math.random() * 60)
       route.continue()
       // In real: return { progress, step, status, eta_seconds, error: null }
     })

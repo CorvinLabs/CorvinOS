@@ -26,6 +26,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage, ActivityFeedPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage,
+  InfiniteSessionDashboard,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -97,6 +98,7 @@ export const PANELS: ConsolePanel[] = [
   rc("vibe-engineering", "Vibe Dashboard", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Vibe Dashboard", icon: "TrendingUp", group: "vibe" } }),
   rc("learning-dashboard", "Learning Dashboard", LearningDashboard as unknown as typeof DashboardPage, { nav: { label: "Learning Dashboard", icon: "Brain", group: "observability" } }),
   rc("world-map", "World Map", WorldMapPanel as unknown as typeof DashboardPage, { nav: { label: "World Map", icon: "Globe", group: "observability" } }),
+  rc("infinite-session", "Session Manager", InfiniteSessionDashboard as unknown as typeof DashboardPage, { nav: { label: "Session Manager", icon: "RefreshCw", group: "observability" } }),
   rc("dashboard", "Dashboard", DashboardPage),
   rc("settings", "Settings", SettingsPage),
   rc("engines", "AI Engines", EnginesPage),
@@ -228,7 +230,7 @@ export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
     }
     if (p.element.kind === "plugin-inspector") {
       // ADR-0561 P3: Generic plugin panel (config + audit + enable/disable)
-      const pluginElement = p.element as any;
+      const pluginElement = p.element as { kind: "plugin-inspector"; plugin_id: string };
       return (
         <Route key={p.id} path={p.route}
           element={
@@ -244,7 +246,7 @@ export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
     }
     if (p.element.kind === "skill-inspector") {
       // ADR-0561 P3: Generic skill panel (learning + audit + config)
-      const skillElement = p.element as any;
+      const skillElement = p.element as { kind: "skill-inspector"; skill_id: string };
       return (
         <Route key={p.id} path={p.route}
           element={

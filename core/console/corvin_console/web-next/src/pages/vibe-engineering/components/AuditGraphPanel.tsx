@@ -14,8 +14,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-// @ts-ignore - react-cytoscapejs has no type definitions
-import CytoscapeComponent from 'react-cytoscapejs'
+import CytoscapeComponent from 'react-cytoscapejs' // typed in src/types/react-cytoscapejs.d.ts
+import type cytoscape from 'cytoscape'
 
 interface GraphNode {
   id: string
@@ -23,7 +23,7 @@ interface GraphNode {
   ts: number
   severity: string
   run_id: string
-  details: Record<string, any>
+  details: Record<string, unknown>
 }
 
 interface GraphEdge {
@@ -67,7 +67,7 @@ function AuditGraphPanel() {
   const [tooltip, setTooltip] = useState<TooltipState>({ visible: false, x: 0, y: 0, nodeId: '' })
   const [darkMode, setDarkMode] = useState(false)
   const [filterEventType, setFilterEventType] = useState<string>('')
-  const cyRef = useRef(null)
+  const cyRef = useRef<cytoscape.Core | null>(null)
 
   // Detect dark mode from system
   useEffect(() => {
@@ -326,10 +326,10 @@ function AuditGraphPanel() {
               style={{ width: '100%', height: '100%', backgroundColor: darkMode ? '#0f172a' : '#f9fafb' }}
               layout={layout}
               stylesheet={stylesheet}
-              cy={(cy: any) => {
+              cy={(cy: cytoscape.Core) => {
                 cyRef.current = cy
                 // Mouse events
-                cy.on('mouseover', 'node', (e: any) => {
+                cy.on('mouseover', 'node', (e: cytoscape.EventObject) => {
                   const node = e.target
                   const rect = node.renderedBoundingBox()
                   const nodeData = data.nodes.find(n => n.id === node.id())

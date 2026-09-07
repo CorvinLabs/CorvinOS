@@ -19,11 +19,10 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, MapPin, TrendingDown, Activity, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Eye, EyeOff } from 'lucide-react';
 import { api } from '@/lib/api/client';
-import { useAuth } from '@/lib/auth';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -50,15 +49,9 @@ interface InstanceLocation {
   status: "active" | "converged" | "stale" | "unknown";
 }
 
-interface GridCell {
-  grid_cell_id: string;
-  lat: number;
-  lon: number;
-  count: number;
-  avg_loss: number;
-  status: string;
-  instances: string[];
-}
+// Detail endpoint: the location plus whatever per-instance extras the backend adds.
+type DetailedInstance = InstanceLocation & Record<string, unknown>;
+
 
 interface MapData {
   instances: InstanceLocation[];
@@ -140,14 +133,13 @@ interface DetailPaneProps {
 
 const DetailPane: React.FC<DetailPaneProps> = ({ instance, onClose }) => {
   const [loading, setLoading] = useState(false);
-  const [detailed, setDetailed] = useState<any>(null);
+  const [detailed, setDetailed] = useState<DetailedInstance | null>(null);
 
   useEffect(() => {
     setLoading(true);
-    api
-      .get(`/api/world-map/instances/${instance.instance_id}`)
+    api<DetailedInstance>(`/api/world-map/instances/${instance.instance_id}`)
       .then((res) => setDetailed(res))
-      .catch((err) => {
+      .catch((err: unknown) => {
         console.error("Failed to fetch instance detail:", err);
         setDetailed(null);
       })
@@ -286,7 +278,6 @@ const DetailPane: React.FC<DetailPaneProps> = ({ instance, onClose }) => {
 // ============================================================================
 
 export const WorldMapPanel: React.FC = () => {
-  const { session } = useAuth();
   const [mapData, setMapData] = useState<MapData | null>(null);
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -301,8 +292,8 @@ export const WorldMapPanel: React.FC = () => {
       try {
         setLoading(true);
         const [instances, summaryData] = await Promise.all([
-          api.get('/api/world-map/instances'),
-          api.get('/api/world-map/summary'),
+          api<MapData>('/api/world-map/instances'),
+          api<SummaryData>('/api/world-map/summary'),
         ]);
         setMapData(instances);
         setSummary(summaryData);

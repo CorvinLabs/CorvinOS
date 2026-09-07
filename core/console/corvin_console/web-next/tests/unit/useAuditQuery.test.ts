@@ -9,7 +9,7 @@
  * - Event filtering
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   AnyAuditEvent,
   SkillExecutedEvent,
@@ -151,9 +151,10 @@ describe('getEventLabel', () => {
 
 describe('verifyHashChain', () => {
   it('should verify valid hash chain', async () => {
+    // Chain order (oldest first): each prev_hash equals the previous hash.
     const events: AnyAuditEvent[] = [
-      mockDecisionEvent,
       mockContextSnapshotEvent,
+      mockDecisionEvent,
       mockLearningEvent,
       mockSkillExecutedEvent,
     ];
@@ -220,7 +221,7 @@ describe('filterAuditEvents', () => {
     expect(filtered.length).toBeGreaterThan(0);
     filtered.forEach((event) => {
       if (event.type === 'skill_executed' || event.type === 'learning_event' || event.type === 'decision') {
-        expect((event as any).skill_id).toBe('os.delegation_router');
+        expect(event.skill_id).toBe('os.delegation_router');
       }
     });
   });

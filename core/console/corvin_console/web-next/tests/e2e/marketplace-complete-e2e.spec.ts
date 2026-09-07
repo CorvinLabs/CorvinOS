@@ -12,14 +12,12 @@
  */
 
 import { test, expect } from '@playwright/test'
-import path from 'path'
 
 // Test data
 const VALID_PUBLIC_REPO = 'https://github.com/anthropics/Corvin-Marketplace'
 const VALID_PRIVATE_REPO = 'https://github.com/shumway/private-extensions'
 const INVALID_REPO_URL = 'not-a-valid-url'
 const MALFORMED_REPO_URL = 'https://github.com/invalid'
-const GITHUB_TOKEN = process.env.GITHUB_TEST_TOKEN || 'ghp_test_token_placeholder'
 
 test.describe.serial('Marketplace Custom Repositories - Complete E2E', () => {
   // Global setup: navigate to marketplace
@@ -52,7 +50,7 @@ test.describe.serial('Marketplace Custom Repositories - Complete E2E', () => {
   // ============================================================================
   // PHASE 1: LIST REPOSITORIES (Endpoint 1 — GET)
   // ============================================================================
-  test('ENDPOINT 1: list repositories returns empty initially', async ({ page, context }) => {
+  test('ENDPOINT 1: list repositories returns empty initially', async ({ page }) => {
     // Navigate to Custom Repos tab
     const customReposTab = page.locator('[role="tab"]', { hasText: /Custom/i })
     if (await customReposTab.count() > 0) {
@@ -534,7 +532,7 @@ test.describe.serial('Marketplace Custom Repositories - Complete E2E', () => {
     await page.context().setOffline(false)
   })
 
-  test('handle malformed API responses', async ({ page, context }) => {
+  test('handle malformed API responses', async ({ page }) => {
     // Intercept and break response
     await page.route('/api/v1/marketplace/custom-repositories', route => {
       route.abort('failed')

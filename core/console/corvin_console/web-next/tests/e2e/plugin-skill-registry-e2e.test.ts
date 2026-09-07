@@ -189,8 +189,8 @@ describe("Plugin + Skill Auto-Registration E2E", () => {
     };
 
     // Verify all panel types are present
-    const pluginPanels = manifest.panels.filter((p: any) => p.kind === "plugin");
-    const skillPanels = manifest.panels.filter((p: any) => p.kind === "skill");
+    const pluginPanels = manifest.panels.filter((p) => p.kind === "plugin");
+    const skillPanels = manifest.panels.filter((p) => p.kind === "skill");
 
     expect(pluginPanels).toHaveLength(1);
     expect(skillPanels).toHaveLength(1);
@@ -199,10 +199,10 @@ describe("Plugin + Skill Auto-Registration E2E", () => {
     expect(manifest.nav_groups).toHaveLength(3);
 
     // Verify navgroup items reference correct panels
-    const pluginGroup = manifest.nav_groups.find((g: any) => g.id === "plugins");
+    const pluginGroup = manifest.nav_groups.find((g) => g.id === "plugins");
     expect(pluginGroup.items[0].panel_id).toBe("plugin-example");
 
-    const skillGroup = manifest.nav_groups.find((g: any) => g.id === "build");
+    const skillGroup = manifest.nav_groups.find((g) => g.id === "build");
     expect(skillGroup.items[0].panel_id).toBe("skill-os-example");
   });
 });

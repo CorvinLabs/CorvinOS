@@ -178,7 +178,7 @@ class TestRegistryMerge:
     def test_registry_as_dict_exposes_the_live_source(self) -> None:
         d = engine_models.registry_as_dict(force_reload=True)
         assert d["claude_code"]["live_models"] == {"provider": "anthropic", "prefix": ""}
-        assert d["hermes"]["live_models"] is None
+        assert d["codex_cli"]["live_models"] is None
 
     def test_merged_models_pass_tier_validation(self) -> None:
         """resolve_model_for_workload validates against load_registry() — a

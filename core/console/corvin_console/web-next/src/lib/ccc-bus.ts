@@ -52,13 +52,15 @@ export function subscribeCCCEvents(
 }
 
 /** React hook: subscribe to CCC events for one entity type. */
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export function useCCCEvents(entityType: string, fn: CCCListener): void {
+  // The subscription is keyed on entityType only; the listener is read through a
+  // ref so a caller may pass an inline closure without re-subscribing each render.
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
   useEffect(() => {
-    const unsub = subscribeCCCEvents(entityType, fn);
+    const unsub = subscribeCCCEvents(entityType, (evt) => fnRef.current(evt));
     return unsub;
-    // fn is expected to be stable (useCallback or defined outside)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityType]);
 }

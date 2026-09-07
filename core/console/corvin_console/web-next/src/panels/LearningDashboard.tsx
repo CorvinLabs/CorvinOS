@@ -294,7 +294,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                         The system has optimized your configuration through {configVersions.length} iterations:
                       </p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {configVersions.slice(-3).map((v, idx) => (
+                        {configVersions.slice(-3).map((v) => (
                           <div key={v.version_id} style={{ fontSize: '14px', color: PALETTE.surface.muted, display: 'flex', justifyContent: 'space-between' }}>
                             <span>{v.version_id}: {v.change_reason}</span>
                             <span style={{ color: PALETTE.status.good, fontWeight: 600 }}>+{v.improvement_pct.toFixed(1)}%</span>
@@ -426,7 +426,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
               />
               <select
                 value={feedbackQuality}
-                onChange={e => setFeedbackQuality(e.target.value as any)}
+                onChange={e => setFeedbackQuality(e.target.value as typeof feedbackQuality)}
                 className="px-3 py-2 border rounded"
               >
                 <option value="excellent">Excellent</option>

@@ -170,10 +170,11 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     // token threaded down from useAuth.
     const { ttsBlob } = await import('@/lib/api');
     // 4th/5th arg: session id (ADR-0194 voice archive) + AbortSignal
-    // (Stop/supersede releases the server TTS slot, 2026-07-17).
+    // (Stop/supersede releases the server TTS slot, 2026-07-17); 6th arg is
+    // the `systemGenerated` flag, absent for an assistant reply.
     await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
       'Hallo, wie geht es dir heute?', 'de', 'test-csrf',
-      expect.anything(), expect.any(AbortSignal),
+      expect.anything(), expect.any(AbortSignal), undefined,
     ));
 
     // VoicePlaybackChip renders the "Speaking · DE" control while playing.
@@ -196,7 +197,7 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     const lastCall = vi.mocked(ttsBlob).mock.calls.at(-1);
     expect(lastCall).toEqual([
       'Hallo, wie geht es dir heute?', 'de', 'test-csrf',
-      'sid-voice-1', expect.any(AbortSignal),
+      'sid-voice-1', expect.any(AbortSignal), undefined,
     ]);
 
     // Replaying re-enters the "playing" state through the same real chip.
@@ -479,9 +480,11 @@ describe('SetupGate WelcomeStep voice wiring (real components)', () => {
     await waitFor(() => expect(runWelcomeCheck).toHaveBeenCalledWith('test-csrf'));
     // Welcome greeting has no session yet → sid is undefined; the AbortSignal
     // rides on every playTts since the Stop/supersede fetch-abort fix.
+    // 6th arg: the greeting is system-generated (not an assistant reply), which
+    // the TTS route audits as such.
     await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
       'Hallo, ich bin Corvin.', 'de', 'test-csrf',
-      undefined, expect.any(AbortSignal),
+      undefined, expect.any(AbortSignal), true,
     ));
 
     // Autoplay was blocked -> the "Tap to hear Corvin" banner is shown.

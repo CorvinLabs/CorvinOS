@@ -78,7 +78,7 @@ describe('useVoicePlayback — gesture-unlock must not clobber real/blocked play
   });
 
   it('still primes the element on a genuine first gesture when nothing is loaded yet', async () => {
-    const { result } = renderHook(() => useVoicePlayback('csrf-token'));
+    renderHook(() => useVoicePlayback('csrf-token'));
 
     // No playTts() has ever run — a plain, unrelated first click anywhere
     // on the page must still perform the priming play/pause cycle.

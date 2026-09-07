@@ -248,7 +248,6 @@ export function BrowserPage() {
       input.removeEventListener("keyup", onKeyUp);
       if (holdTimer !== null) clearTimeout(holdTimer);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordAndTranscribe, stopSpeaking]);
 
   // ── Computed helpers ─────────────────────────────────────────────────────
@@ -543,7 +542,6 @@ export function BrowserPage() {
         <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
           {/* Live browser frame */}
           <div className="relative rounded border border-border bg-slate-900 min-h-[420px] flex items-center justify-center overflow-hidden">
-            {/* eslint-disable-next-line jsx-a11y/alt-text */}
             <img ref={frameRef} alt="live browser view"
               className={`max-w-full transition-opacity ${frameOk ? "opacity-100" : "opacity-0"}`}
               onLoad={() => setFrameOk(true)} onError={() => setFrameOk(false)} />

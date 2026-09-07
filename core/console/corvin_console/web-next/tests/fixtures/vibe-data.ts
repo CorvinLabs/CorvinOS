@@ -1,3 +1,4 @@
+import type { Page, Route } from "@playwright/test";
 /**
  * Mock Vibe Engineering data for E2E tests (Phase 4 k=3)
  *
@@ -98,9 +99,9 @@ export const MOCK_VIBE_DATA = {
  * Setup Playwright route interception for Vibe Engineering API
  * Call this in test.beforeEach() to mock all /vibe-engineering/state calls
  */
-export async function setupVibeDataMock(page: any) {
+export async function setupVibeDataMock(page: Page) {
   // Intercept and respond with mock data (do not abort; fulfill instead)
-  await page.route("**/v1/console/vibe-engineering/state", (route: any) => {
+  await page.route("**/v1/console/vibe-engineering/state", (route: Route) => {
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -112,8 +113,8 @@ export async function setupVibeDataMock(page: any) {
 /**
  * Setup route to simulate network errors (for error-handling tests)
  */
-export async function setupVibeDataErrorMock(page: any, statusCode: number = 500) {
-  await page.route("**/v1/console/vibe-engineering/state", (route: any) => {
+export async function setupVibeDataErrorMock(page: Page, statusCode: number = 500) {
+  await page.route("**/v1/console/vibe-engineering/state", (route: Route) => {
     route.fulfill({
       status: statusCode,
       contentType: "application/json",
@@ -125,8 +126,8 @@ export async function setupVibeDataErrorMock(page: any, statusCode: number = 500
 /**
  * Setup route to simulate slow network (for timeout/loading state tests)
  */
-export async function setupVibeDataSlowMock(page: any, delayMs: number = 3000) {
-  await page.route("**/v1/console/vibe-engineering/state", async (route: any) => {
+export async function setupVibeDataSlowMock(page: Page, delayMs: number = 3000) {
+  await page.route("**/v1/console/vibe-engineering/state", async (route: Route) => {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     route.fulfill({
       status: 200,

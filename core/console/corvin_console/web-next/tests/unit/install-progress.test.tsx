@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, expect, vi, beforeEach } from 'vitest'
 /**
  * Unit Tests: InstallProgress Component
  * Phase 2 Week 2 — Task #6
@@ -49,10 +49,8 @@ describe('InstallProgress Component', () => {
         onComplete={mockOnComplete}
       />
     )
-    // 5 step indicators (flex divs)
-    const progressBar = screen.getByTestId('progress-bar')
-    const parent = progressBar.closest('.mb-4')?.previousElementSibling
-    // Verify step indicator structure exists
+    // Progress bar + step indicator structure exist
+    expect(screen.getByTestId('progress-bar')).toBeInTheDocument()
     expect(screen.getByTestId('install-progress-modal')).toBeInTheDocument()
   })
 
@@ -101,7 +99,7 @@ describe('InstallProgress Component', () => {
   })
 
   test('close button is disabled during installation', () => {
-    const { rerender } = render(
+    render(
       <InstallProgress
         extensionId="test-ext"
         extensionName="Test Ext"

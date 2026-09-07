@@ -91,6 +91,30 @@ import {
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
 
+// ── Web Speech API (not in lib.dom for the prefixed Chrome/Edge implementation) ──
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0?: { transcript: string };
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+}
+interface SpeechRecognitionErrorLike {
+  error?: string;
+}
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorLike) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
 /**
  * Detect the language of a text for TTS playback and return a BCP-47 code.
  *
@@ -1379,15 +1403,18 @@ function ChatPane({
   const mediaRef = React.useRef<MediaRecorder | null>(null);
   const chunksRef = React.useRef<Blob[]>([]);
   // Holds a live SpeechRecognition instance when the Web Speech API path is active.
-  const recognitionRef = React.useRef<any>(null);
+  const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null);
 
   const startRecording = async () => {
     // Prefer the browser's built-in Web Speech API: works on Chrome and Edge
     // without any API key (audio goes to Google/Microsoft, no user credential
     // required).  Falls back to MediaRecorder → Python STT for Firefox or if
     // the browser API errors out.
-    const SpeechRecognitionImpl =
-      (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+    const w = window as Window & {
+      SpeechRecognition?: SpeechRecognitionCtor;
+      webkitSpeechRecognition?: SpeechRecognitionCtor;
+    };
+    const SpeechRecognitionImpl = w.SpeechRecognition ?? w.webkitSpeechRecognition;
 
     if (SpeechRecognitionImpl) {
       try {
@@ -1400,7 +1427,7 @@ function ChatPane({
         recognition.continuous = true;        // don't stop on a speech pause
         recognition.interimResults = false;
         recognition.lang = navigator.language || "de-DE";
-        recognition.onresult = (event: any) => {
+        recognition.onresult = (event: SpeechRecognitionEventLike) => {
           // Append only the NEW final results (event.resultIndex forward) so the
           // accumulator survives the auto-restarts below without duplicating.
           for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -1413,7 +1440,7 @@ function ChatPane({
           const acc = sttAccumRef.current.trim();
           setInputRef.current(base ? `${base} ${acc}` : acc);
         };
-        recognition.onerror = (ev: any) => {
+        recognition.onerror = (ev: SpeechRecognitionErrorLike) => {
           // A permissions/service error is terminal; a 'no-speech'/'aborted' during
           // the hold is not — let onend decide whether to restart.
           if (ev?.error === "not-allowed" || ev?.error === "service-not-allowed") {
@@ -1475,7 +1502,7 @@ function ChatPane({
     if (recognitionRef.current) {
       // Signal the release FIRST so onend finalizes instead of auto-restarting.
       sttStoppingRef.current = true;
-      try { recognitionRef.current.stop(); } catch (_e) {}
+      try { recognitionRef.current.stop(); } catch (_e) { /* already ended */ }
       recognitionRef.current = null;
     } else {
       mediaRef.current?.stop();

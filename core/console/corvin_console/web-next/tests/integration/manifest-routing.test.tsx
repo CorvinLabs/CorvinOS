@@ -2,10 +2,6 @@
  * Integration test: Manifest + Fallback Panel Routing (ADR-0561 Phase 2)
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { BrowserRouter } from "react-router-dom";
-import * as React from "react";
-import type { PanelDescriptor } from "@/adapters/capabilities";
 
 // Mock the useConsoleManifest hook
 vi.mock("@/adapters/capabilities", () => ({
@@ -55,12 +51,12 @@ describe("Manifest + Fallback Panel Routing", () => {
     };
 
     vi.mocked(useConsoleManifest).mockReturnValue({
-      data: mockManifest as any,
+      data: mockManifest,
       isLoading: false,
       isError: false,
       error: null,
       status: "success",
-    } as any);
+    } as unknown as ReturnType<typeof useConsoleManifest>);
 
     expect(mockManifest.panels).toBeDefined();
     expect(mockManifest.panels).toHaveLength(1);
@@ -76,7 +72,7 @@ describe("Manifest + Fallback Panel Routing", () => {
       isError: true,
       error: new Error("Manifest fetch failed"),
       status: "error",
-    } as any);
+    } as unknown as ReturnType<typeof useConsoleManifest>);
 
     // When manifest is null/error, fallback to registry routes
     expect(useConsoleManifest().data).toBeNull();

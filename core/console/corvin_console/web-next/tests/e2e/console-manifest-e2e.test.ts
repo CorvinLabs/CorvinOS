@@ -10,7 +10,7 @@
  *
  * This test runs against a running console backend (or mock server).
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect } from "vitest";
 
 // Note: Full E2E test would require:
 // - Running backend server with /v1/console/manifest endpoint
@@ -213,11 +213,6 @@ describe("Console Manifest E2E Pipeline", () => {
     expect(manifest1.hash).not.toBe(manifest2.hash);
 
     // Same structure → same hash (for caching efficiency)
-    const manifest3 = {
-      panels: [{ id: "dashboard" }, { id: "settings" }],
-      nav_groups: [{ id: "primary" }],
-      hash: "hash3", // Should be same as manifest2 if content is identical
-    };
     // In real implementation, hash is computed from panels + nav_groups
     // (ignoring timestamp and hash field itself)
   });

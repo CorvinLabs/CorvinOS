@@ -67,14 +67,11 @@ async function screenshot(page: Page, name: string) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function getCsrf(page: Page): Promise<string> {
-  const resp = await page.request.get(`${API_BASE}/auth/whoami`);
-  expect(resp.status()).toBe(200);
-  const body = await resp.json();
-  return body.csrf_token as string;
-}
+interface NerveFiber { fiber_id: string; [k: string]: unknown }
+interface NerveSignal { fiber_id: string; severity: string; message?: string; [k: string]: unknown }
+interface NerveScanBody { fibers: NerveFiber[]; signals: NerveSignal[]; [k: string]: unknown }
 
-async function nerveScan(page: Page): Promise<any> {
+async function nerveScan(page: Page): Promise<NerveScanBody> {
   // Nerve scan runs 6 fibers synchronously; under parallel test load the
   // gateway thread-pool can take up to 30 s — use an explicit timeout.
   const resp = await page.request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 90_000 });
@@ -82,7 +79,7 @@ async function nerveScan(page: Page): Promise<any> {
   return resp.json();
 }
 
-async function nerveRepair(page: Page, csrf: string, dry_run = true): Promise<any> {
+async function nerveRepair(page: Page, csrf: string, dry_run = true): Promise<Record<string, unknown>> {
   const resp = await page.request.post(`${API_BASE}/aco/nerve/repair`, {
     data: { dry_run },
     headers: { "X-CSRF-Token": csrf },
@@ -165,7 +162,7 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
     const page = await ctx.newPage();
     try {
       const body = await nerveScan(page);
-      const fiberIds = (body.fibers as any[]).map((f) => f.fiber_id);
+      const fiberIds = (body.fibers as NerveFiber[]).map((f) => f.fiber_id);
       for (const expected of EXPECTED_FIBERS) {
         expect(fiberIds, `Missing fiber: ${expected}`).toContain(expected);
       }
@@ -182,7 +179,7 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
     const page = await ctx.newPage();
     try {
       const body = await nerveScan(page);
-      const installSignals = (body.signals as any[]).filter(
+      const installSignals = (body.signals as NerveSignal[]).filter(
         (s) => s.fiber_id === "install.deps"
       );
       const critical = installSignals.filter((s) => s.severity === "CRITICAL");
@@ -203,10 +200,10 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
       const body = await nerveScan(page);
       // AuditChainFiber may return 0 signals on a healthy system (no signals = OK).
       // Fiber must be registered regardless.
-      const fiberIds = (body.fibers as any[]).map((f) => f.fiber_id);
+      const fiberIds = (body.fibers as NerveFiber[]).map((f) => f.fiber_id);
       expect(fiberIds).toContain("l16.audit_chain");
       // If signals exist, they must have the right fiber_id
-      const auditSignals = (body.signals as any[]).filter(
+      const auditSignals = (body.signals as NerveSignal[]).filter(
         (s) => s.fiber_id === "l16.audit_chain"
       );
       for (const sig of auditSignals) {
@@ -224,7 +221,7 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
     const page = await ctx.newPage();
     try {
       const body = await nerveScan(page);
-      const fiberIds = (body.fibers as any[]).map((f) => f.fiber_id);
+      const fiberIds = (body.fibers as NerveFiber[]).map((f) => f.fiber_id);
       expect(fiberIds).toContain("l16.compliance");
     } finally {
       await page.close();
@@ -238,11 +235,11 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
     try {
       const body = await nerveScan(page);
       // aco.engine fiber must be registered in Tier-0
-      const fiberIds = (body.fibers as any[]).map((f) => f.fiber_id);
+      const fiberIds = (body.fibers as NerveFiber[]).map((f) => f.fiber_id);
       expect(fiberIds).toContain("aco.engine");
       // EngineFiber emits 0 signals when engine is healthy (no signal = OK).
       // If signals exist, validate their shape and ensure none are CRITICAL.
-      const engineSignals = (body.signals as any[]).filter(
+      const engineSignals = (body.signals as NerveSignal[]).filter(
         (s) => s.fiber_id === "aco.engine"
       );
       const criticals = engineSignals.filter((s) => s.severity === "CRITICAL");
@@ -306,7 +303,7 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
         // Log but don't fail — CRITICAL signals are real findings
         console.warn(
           `[nerve-e2e] ${criticalCount} CRITICAL signal(s) found:`,
-          (body.signals as any[])
+          (body.signals as NerveSignal[])
             .filter((s) => s.severity === "CRITICAL")
             .map((s) => `${s.fiber_id}: ${s.message}`)
         );
@@ -331,7 +328,7 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
         "data",
         "repair_hint",
       ];
-      for (const sig of body.signals as any[]) {
+      for (const sig of body.signals as NerveSignal[]) {
         for (const field of requiredFields) {
           expect(
             sig,
@@ -403,7 +400,7 @@ test.describe("ADR-0177 — Engine Detection via NerveFiber", () => {
     const page = await ctx2.newPage();
     try {
       const body = await nerveScan(page);
-      const fiberIds = (body.fibers as any[]).map((f) => f.fiber_id);
+      const fiberIds = (body.fibers as NerveFiber[]).map((f) => f.fiber_id);
       expect(fiberIds).toContain("aco.engine");
     } finally {
       await page.close();
@@ -416,7 +413,7 @@ test.describe("ADR-0177 — Engine Detection via NerveFiber", () => {
       const body = await nerveScan(page);
       // EngineFiber emits 0 signals when engine is healthy (no signal = OK)
       // If it does emit, it must not be CRITICAL (engine running = no hard failure)
-      const engineCritical = (body.signals as any[]).filter(
+      const engineCritical = (body.signals as NerveSignal[]).filter(
         (s) => s.fiber_id === "aco.engine" && s.severity === "CRITICAL"
       );
       expect(
@@ -459,7 +456,7 @@ test.describe("ADR-0177 — Fresh-Install Scenario", () => {
     const resp = await request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 90_000 });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
-    const installSignals = (body.signals as any[]).filter(
+    const installSignals = (body.signals as NerveSignal[]).filter(
       (s) => s.fiber_id === "install.deps"
     );
     const critical = installSignals.filter((s) => s.severity === "CRITICAL");

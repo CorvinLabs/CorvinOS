@@ -173,7 +173,7 @@ def _manager_for_tenant(tenant_id: str) -> Optional[CheckpointManager]:
     if CheckpointManager is None:
         return None
     checkpoint_dir = _forge_paths.tenant_home(tenant_id) / "vibe" / "checkpoints"
-    return CheckpointManager(checkpoint_dir=checkpoint_dir)
+    return CheckpointManager(checkpoint_dir=checkpoint_dir, tenant_id=tenant_id)
 
 
 def get_task_graph(task_id: str, manager: Optional[CheckpointManager]) -> Optional[TaskGraph]:

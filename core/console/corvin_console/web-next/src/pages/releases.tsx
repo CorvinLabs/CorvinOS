@@ -9,7 +9,7 @@
  * - Breaking change tracking
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Package, Plus } from 'lucide-react'
 
 interface Release {
@@ -32,12 +32,17 @@ export default function ReleaseManagerPanel({ skillId }: { skillId?: string } = 
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [changelog, setChangelog] = useState<string | null>(null)
 
-  // Load releases on mount
-  useEffect(() => {
-    fetchReleases()
+  const fetchNextVersion = useCallback(async (type: string) => {
+    try {
+      const response = await fetch(`/api/console/releases/${skillId}/next-version?bump=${type}`)
+      const data = await response.json()
+      setNextVersion(data.next_version)
+    } catch (error) {
+      console.error('Failed to fetch next version:', error)
+    }
   }, [skillId])
 
-  const fetchReleases = async () => {
+  const fetchReleases = useCallback(async () => {
     try {
       const response = await fetch(`/api/console/releases/${skillId}`)
       const data = await response.json()
@@ -52,17 +57,12 @@ export default function ReleaseManagerPanel({ skillId }: { skillId?: string } = 
     } catch (error) {
       console.error('Failed to fetch releases:', error)
     }
-  }
+  }, [skillId, fetchNextVersion])
 
-  const fetchNextVersion = async (type: string) => {
-    try {
-      const response = await fetch(`/api/console/releases/${skillId}/next-version?bump=${type}`)
-      const data = await response.json()
-      setNextVersion(data.next_version)
-    } catch (error) {
-      console.error('Failed to fetch next version:', error)
-    }
-  }
+  // Load releases on mount / when the skill changes
+  useEffect(() => {
+    fetchReleases()
+  }, [fetchReleases])
 
   const fetchChangelog = async () => {
     try {

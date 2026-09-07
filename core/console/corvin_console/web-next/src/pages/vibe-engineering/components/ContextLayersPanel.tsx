@@ -8,13 +8,13 @@
  * - Dark/light mode support
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Copy, ChevronDown, ChevronUp, Search, RefreshCw } from 'lucide-react';
 
 interface ContextLayer {
   name: string;
   version: string;
-  data: Record<string, any>;
+  data: Record<string, unknown>;
   timestamp_utc: string;
   hash: string;
   lom?: string;
@@ -204,14 +204,7 @@ export const ContextLayersPanel: React.FC = () => {
     loadAvailableTasks();
   }, []);
 
-  // Auto-load context when taskId changes (only after initial setup)
-  useEffect(() => {
-    if (taskId && autoLoadDone) {
-      fetchContextLayers();
-    }
-  }, [taskId, autoLoadDone]);
-
-  const fetchContextLayers = async () => {
+  const fetchContextLayers = useCallback(async () => {
     if (!taskId.trim()) {
       setError('No task selected');
       setLoading(false);
@@ -237,7 +230,14 @@ export const ContextLayersPanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [taskId]);
+
+  // Auto-load context when taskId changes (only after initial setup)
+  useEffect(() => {
+    if (taskId && autoLoadDone) {
+      fetchContextLayers();
+    }
+  }, [taskId, autoLoadDone, fetchContextLayers]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {

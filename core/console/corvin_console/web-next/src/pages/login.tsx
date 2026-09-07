@@ -2,7 +2,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 // PublicLayout, CorvinMark: temporary fallback (ADR-0561: landing/login to be redesigned)
 const PublicLayout = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-const CorvinMark = (props: any) => <div {...props}>🔷</div>;
+const CorvinMark = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props}>🔷</div>;
 
 export function LoginPage() {
   React.useEffect(() => {

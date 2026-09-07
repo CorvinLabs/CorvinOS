@@ -2,8 +2,21 @@ import { useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { ChevronDown, ChevronUp, Code } from 'lucide-react';
 
+interface DebugEvent {
+  seq?: number;
+  event?: string;
+  persona?: string;
+  engine?: string;
+}
+
 interface DebugPanelProps {
-  data: any;
+  data?: {
+    debug?: {
+      events_count?: number;
+      latest_event?: unknown;
+      all_events?: DebugEvent[];
+    };
+  } | null;
 }
 
 export function DebugPanel({ data }: DebugPanelProps) {
@@ -61,7 +74,7 @@ export function DebugPanel({ data }: DebugPanelProps) {
           <div className="max-h-48 overflow-y-auto border border-yellow-400/20 rounded p-2 bg-black/20">
             <p className="text-xs font-mono font-bold mb-2">All Events:</p>
             <div className="space-y-1">
-              {all_events?.slice(0, 20).map((e: any, i: number) => (
+              {all_events?.slice(0, 20).map((e, i) => (
                 <div key={i} className="text-[9px] font-mono p-1 bg-secondary/20 rounded">
                   <span className="text-yellow-600">[{e.seq || i}]</span>{' '}
                   <span className="text-blue-400">{e.event}</span>{' '}

@@ -47,6 +47,7 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useVoicePlayback } from "@/lib/useVoicePlayback";
+import { renderInlineMarkup } from "@/lib/inline-markup";
 import { DiscordSetupDialog } from "@/components/DiscordSetupDialog";
 import { TelegramSetupDialog } from "@/components/TelegramSetupDialog";
 
@@ -879,17 +880,9 @@ function BridgeGuidePanel({ channel }: { channel: string }) {
             <span className="flex h-4 w-4 flex-none items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent mt-px">
               {i + 1}
             </span>
-            <span
-              className="leading-relaxed"
-              dangerouslySetInnerHTML={{
-                __html: step
-                  .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-                  .replace(
-                    /`(.+?)`/g,
-                    "<code class='font-mono bg-muted/80 px-1 rounded text-[10px]'>$1</code>",
-                  ),
-              }}
-            />
+            <span className="leading-relaxed">
+              {renderInlineMarkup(step, "font-mono bg-muted/80 px-1 rounded text-[10px]")}
+            </span>
           </li>
         ))}
       </ol>

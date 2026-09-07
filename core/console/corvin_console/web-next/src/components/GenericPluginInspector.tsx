@@ -16,9 +16,9 @@ interface GenericPluginInspectorProps {
   version: string
   enabled: boolean
   onToggleEnabled: (enabled: boolean) => void
-  config?: Record<string, any>
-  onConfigChange?: (delta: Record<string, any>) => void
-  auditEvents?: any[]
+  config?: Record<string, unknown>
+  onConfigChange?: (delta: Record<string, unknown>) => void
+  auditEvents?: Record<string, unknown>[]
 }
 
 export function GenericPluginInspector({
