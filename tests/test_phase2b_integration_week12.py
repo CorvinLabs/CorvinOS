@@ -121,14 +121,32 @@ class TestMultiBatchConvergence:
 
         losses = []
 
-        for batch_idx in range(5):
-            task_batch = [
-                {'confidence_score': 0.5 + batch_idx*0.05, 'tokens_used': 500 - batch_idx*20, 'latency_seconds': 3.0 - batch_idx*0.2, 'task_type': 'test', 'routed_engine': 'opus', 'budget_allocated': 1000},
-            ]
+        # Deterministic by construction. The original drew ONE sample per batch
+        # from an unseeded np.random.rand(), so the "trajectory" was five coin
+        # flips and the assertion below failed at random — it tested the RNG,
+        # not the optimizer (2026-09-07 review). Each batch now carries
+        # BATCH_N samples of which exactly round(correct_rate * BATCH_N) are
+        # correct, so an improving correct-rate must show up as a falling loss.
+        BATCH_N = 20
 
+        for batch_idx in range(5):
             correct_rate = 0.5 + batch_idx * 0.1
-            outcomes = [{'correct': True, 'engine_correct': True}] if np.random.rand() < correct_rate else [{'correct': False, 'engine_correct': False}]
-            feedback = [{'timestamp': datetime.now().isoformat(), 'is_valid': True}] if outcomes[0]['correct'] else [None]
+            n_correct = round(correct_rate * BATCH_N)
+
+            task_batch = [
+                {'confidence_score': 0.5 + batch_idx*0.05, 'tokens_used': 500 - batch_idx*20,
+                 'latency_seconds': 3.0 - batch_idx*0.2, 'task_type': 'test',
+                 'routed_engine': 'opus', 'budget_allocated': 1000}
+                for _ in range(BATCH_N)
+            ]
+            outcomes = [
+                {'correct': i < n_correct, 'engine_correct': i < n_correct}
+                for i in range(BATCH_N)
+            ]
+            feedback = [
+                {'timestamp': datetime.now().isoformat(), 'is_valid': True} if i < n_correct else None
+                for i in range(BATCH_N)
+            ]
 
             loss = optimizer.compute_batch_loss(task_batch, outcomes, feedback)
             losses.append(loss.L_total)
