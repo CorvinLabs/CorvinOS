@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -357,24 +358,65 @@ class TestWorkflowCheckpointHandler(unittest.TestCase):
         self.assertEqual(h.layer_id, "L-workflow-checkpoints")
 
 
-# ── L7 + L24 stubs ───────────────────────────────────────────────────
+# ── L7 + L24 (real purges since R4-F4) + the identity-mapping base ──────
 
 
 class TestStubHandlers(unittest.TestCase):
+    """R4-F4 rewrite: these two asserted the handlers returned the STUB TEXT
+    ("not yet implemented"), which is what ``COVERED_DIRS`` was simultaneously
+    claiming was covered — a subject-named file in ``skill-forge``/``skills``/
+    ``global/data`` survived a ``completed`` erasure. The handlers now purge for
+    real, so the assertions pin the purge instead of the excuse."""
 
-    def test_l7_returns_skipped_with_documented_reason(self):
-        h = L7SkillForgeHandler()
-        r = h.purge("user_42", "er-test")
-        self.assertEqual(r.status, LayerStatus.SKIPPED)
-        self.assertIn("not yet implemented", r.reason)
+    def _home(self):
+        import os
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="er-l7l24-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        old = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = tmp
+        self.addCleanup(lambda: os.environ.__setitem__("CORVIN_HOME", old)
+                        if old is not None else os.environ.pop("CORVIN_HOME", None))
+        return Path(tmp) / "tenants" / "_default"
+
+    def test_l7_erases_a_subject_named_skill_and_keeps_others(self):
+        t = self._home()
+        (t / "skill-forge" / "skills").mkdir(parents=True)
+        (t / "skills").mkdir(parents=True)
+        (t / "skill-forge" / "user_42.json").write_text(json.dumps({"user_id": "user_42"}))
+        (t / "skills" / "s.json").write_text(json.dumps({"created_by": "user_42"}))
+        (t / "skills" / "keep.json").write_text(json.dumps({"created_by": "user_99"}))
+
+        r = L7SkillForgeHandler(tenant_id="_default").purge("user_42", "er-test")
+        self.assertEqual(r.status, LayerStatus.APPLIED, r.reason)
         self.assertEqual(r.layer_id, "L7-skill-forge")
+        self.assertFalse((t / "skill-forge" / "user_42.json").exists())
+        self.assertFalse((t / "skills" / "s.json").exists())
+        self.assertTrue((t / "skills" / "keep.json").exists())
 
-    def test_l24_returns_skipped_with_documented_reason(self):
-        h = L24DataSnapshotHandler()
-        r = h.purge("user_42", "er-test")
+    def test_l7_reports_store_absent_when_nothing_is_installed(self):
+        self._home()
+        r = L7SkillForgeHandler(tenant_id="_default").purge("user_42", "er-test")
         self.assertEqual(r.status, LayerStatus.SKIPPED)
-        self.assertIn("not yet implemented", r.reason)
+        self.assertEqual(r.code, "store_absent")
+
+    def test_l24_erases_a_snapshot_manifest_naming_the_subject(self):
+        t = self._home()
+        (t / "global" / "data").mkdir(parents=True)
+        (t / "global" / "data" / "snap.json").write_text(json.dumps({"chat_key": "user_42"}))
+        (t / "global" / "data" / "keep.json").write_text(json.dumps({"chat_key": "user_99"}))
+
+        r = L24DataSnapshotHandler(tenant_id="_default").purge("user_42", "er-test")
+        self.assertEqual(r.status, LayerStatus.APPLIED, r.reason)
         self.assertEqual(r.layer_id, "L24-data-snapshot")
+        self.assertFalse((t / "global" / "data" / "snap.json").exists())
+        self.assertTrue((t / "global" / "data" / "keep.json").exists())
+
+    def test_l24_reports_store_absent_when_no_snapshots_exist(self):
+        self._home()
+        r = L24DataSnapshotHandler(tenant_id="_default").purge("user_42", "er-test")
+        self.assertEqual(r.status, LayerStatus.SKIPPED)
+        self.assertEqual(r.code, "store_absent")
 
     def test_identity_mapping_base_warns_when_unconfigured(self):
         h = IdentityMappingHandlerBase()

@@ -29,8 +29,10 @@ Subject_id resolution policy:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -620,80 +622,69 @@ class WebChatHandler:
         )
 
 
-# ── L7 skill-forge handler (stub) ───────────────────────────────────
+# ── L7 skill-forge handler ──────────────────────────────────────────
 
 
 @dataclass
 class L7SkillForgeHandler:
-    """L7 skill-forge erasure.
+    """GDPR Art. 17 erasure for user-scope skills (R4-F4).
 
-    User-scope skills under ``<corvin_home>/<scope>/skill-forge/``
-    are persona-aware. A full purge needs:
+    Until 2026-09-07 this returned ``SKIPPED / not_applicable`` without looking
+    at the filesystem, while ``COVERED_DIRS`` claimed ``skill-forge`` and
+    ``skills`` were covered — so a skill file named after the subject, or a
+    registry entry naming them as its author, survived an erasure the
+    orchestrator then reported as ``completed``. A claim backed by a permanent
+    no-op is worse than no claim: it converts a documented gap into a passing
+    coverage assertion.
 
-      1. Map subject_id → user-scope workspace path via the operator's
-         identity mapping (the identity-mapping handler's job).
-      2. Walk the workspace, remove every skill file, prune the
-         slot-mirror copy under ``operator/skill-forge/skills/dyn/``.
-      3. Emit the per-skill ``skill.removed`` audit event for each.
-
-    This default implementation reports SKIPPED with a clear reason —
-    operators ship a real handler in the L7 follow-up commit.
+    Roots: ``<tenant>/skill-forge``, ``<tenant>/skills``,
+    ``<tenant>/global/skill-forge``, ``<tenant>/global/skills`` and
+    ``<tenant>/_shared`` (the migrated ``~/.claude/skills`` copy). Attribution
+    is the documented generic rule — see :func:`_purge_path`. ``skills_registry.json``
+    and ``registry.yaml``-adjacent JSON registries are rewritten entry-wise, so
+    one author's skills go without taking another's with them.
     """
     layer_id: str = "L7-skill-forge"
     tenant_id: str = "_default"
-    reason: str = (
-        "L7 user-scope skill purge not yet implemented. "
-        "Operators with custom user-scope skills should ship a real handler "
-        "that maps subject_id to the user-scope workspace path."
-    )
+
+    def _roots(self) -> list[Path]:
+        home = _tenant_home(self.tenant_id)
+        return [home / "skill-forge", home / "skills", home / "_shared",
+                _tenant_global(self.tenant_id) / "skill-forge",
+                _tenant_global(self.tenant_id) / "skills"]
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
-        return ErasureLayerResult(
-            layer_id=self.layer_id,
-            status=LayerStatus.SKIPPED,
-            count=0,
-            reason=self.reason,
-            code=ReasonCode.NOT_APPLICABLE.value,
-        )
+        return _purge_roots(self.layer_id, self._roots(), subject_id,
+                            store="user-scope skill", item="skill artefact")
 
 
-# ── L24 data-snapshot handler (stub) ────────────────────────────────
+# ── L24 data-snapshot handler ───────────────────────────────────────
 
 
 @dataclass
 class L24DataSnapshotHandler:
-    """L24 large-data snapshot erasure.
+    """GDPR Art. 17 erasure for L24 large-data snapshots (R4-F4).
 
-    Data snapshots under ``<tenant>/global/data/`` carry metadata that
-    *may* reference the subject. A full purge needs:
+    Same defect as :class:`L7SkillForgeHandler`: ``COVERED_DIRS`` claimed
+    ``global/data`` while this returned ``SKIPPED / not_applicable`` without a
+    filesystem call, so a snapshot manifest naming the subject survived a
+    ``completed`` erasure.
 
-      1. Walk every snapshot manifest under ``data/``.
-      2. Match snapshot metadata against the subject (operator-chosen
-         match field — typically ``chat_key`` or a custom subject_id
-         column in ``data_policy.yaml``).
-      3. Unregister + remove matched snapshots.
-
-    Snapshots are PII-redacted at creation per the L24 design, so the
-    primary leak vector is the metadata table. Default handler reports
-    SKIPPED with a documented reason; real handler ships with the L24
-    follow-up commit.
+    Snapshots are PII-redacted at creation per the L24 design, so the leak
+    vector is the manifest metadata — which is exactly what the generic
+    attribution rule (:func:`_purge_path`) reaches: a manifest whose identity
+    field is the subject, a snapshot directory named after them, or a registry
+    entry keyed on them.
     """
     layer_id: str = "L24-data-snapshot"
     tenant_id: str = "_default"
-    reason: str = (
-        "L24 snapshot purge not yet implemented. "
-        "Operators with data-policy.yaml that carries subject identifiers "
-        "should ship a real handler keyed off the configured identity_field."
-    )
+
+    def _roots(self) -> list[Path]:
+        return [_tenant_global(self.tenant_id) / "data"]
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
-        return ErasureLayerResult(
-            layer_id=self.layer_id,
-            status=LayerStatus.SKIPPED,
-            count=0,
-            reason=self.reason,
-            code=ReasonCode.NOT_APPLICABLE.value,
-        )
+        return _purge_roots(self.layer_id, self._roots(), subject_id,
+                            store="data snapshot", item="snapshot record")
 
 
 # ── Identity-mapping handler base class ──────────────────────────────
@@ -1485,64 +1476,138 @@ class InfiniteSessionHandler:
 # is worse than an outright failure, which at least tells the operator to act.
 
 
-def _purge_json_tree(root: Path, subject_id: str, *,
-                     match_dir_name: bool = True) -> int:
-    """Delete files/dirs under ``root`` attributed to ``subject_id``.
+def _record_names_subject(rec: Any, subject_id: str) -> bool:
+    """True when the record's OWN top-level identity field is the subject.
 
-    Three attribution routes, the same set the infinite-session handler uses:
-    a directory NAMED after the subject, a FILE named after the subject
-    (:func:`_name_names_subject` — token-bounded, never a bare substring), and a
-    JSON/JSONL payload naming it under a known identity key
-    (:data:`_SUBJECT_KEYS`). JSONL files are rewritten line-wise so one subject's
-    lines go without destroying another's, and every rewrite goes through
-    :func:`_atomic_replace_text` so a crash mid-erasure cannot leave a truncated
-    store behind.
+    Distinct from :func:`_mentions_subject`, which is true for a mention at any
+    depth. The difference decides whether a stored document IS the subject's
+    record (delete the whole file) or merely CONTAINS one among several
+    (filter the container — deleting it would erase other people's data, which
+    is its own Art. 5 breach).
+    """
+    if not isinstance(rec, dict):
+        return False
+    return any(k in _SUBJECT_KEYS and isinstance(v, str) and v == subject_id
+               for k, v in rec.items())
+
+
+def _purge_json_document(f: Path, subject_id: str) -> int:
+    """Purge one ``.json`` file. Returns the number of records removed.
+
+    Container-aware (R4-F1): a whole-file delete is only correct when the file
+    IS the subject's record. An aggregate document — a list of runs, a
+    ``{id: record}`` registry, a SCIM user directory — holds many subjects, and
+    deleting it to erase one person destroys the others' data. Those are
+    rewritten entry-wise instead, atomically.
+    """
+    data = _load_json(f)
+    if isinstance(data, list):
+        kept = [e for e in data if not _mentions_subject(e, subject_id)]
+        n = len(data) - len(kept)
+        if not n:
+            return 0
+        if kept:
+            _atomic_replace_text(f, json.dumps(kept, ensure_ascii=False) + "\n")
+        else:
+            f.unlink()
+        return n
+    if isinstance(data, dict):
+        if _record_names_subject(data, subject_id):
+            f.unlink()
+            return 1
+        drop = [k for k, v in data.items()
+                if isinstance(v, (dict, list)) and _mentions_subject(v, subject_id)]
+        if drop:
+            if len(drop) == len(data):
+                f.unlink()
+                return 1
+            for k in drop:
+                data.pop(k, None)
+            _atomic_replace_text(f, json.dumps(data, ensure_ascii=False) + "\n")
+            return len(drop)
+        if _mentions_subject(data, subject_id):
+            f.unlink()
+            return 1
+    return 0
+
+
+def _purge_jsonl_file(f: Path, subject_id: str) -> int:
+    """Drop every JSONL line naming the subject; keep the rest. Atomic."""
+    kept: list[str] = []
+    hit = 0
+    try:
+        lines = f.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return 0
+    for line in lines:
+        rec = None
+        if line.strip():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                rec = None
+        if rec is not None and _mentions_subject(rec, subject_id):
+            hit += 1
+            continue
+        kept.append(line)
+    if hit:
+        _atomic_replace_text(f, "\n".join(kept) + ("\n" if kept else ""))
+    return hit
+
+
+def _purge_path(target: Path, subject_id: str, *, match_dir_name: bool = True) -> int:
+    """Purge one tenant-home ENTRY — a directory tree or a single file.
+
+    The three attribution routes are the documented Art. 17 rule for every
+    generic store: a DIRECTORY named after the subject, a FILE named after the
+    subject (:func:`_name_names_subject` — token-bounded, never a bare
+    substring, and now for ANY suffix: ``<subject>.md`` and ``<subject>.db``
+    are that person's data exactly as ``<subject>.json`` is), and a JSON/JSONL
+    PAYLOAD naming the subject under a known identity key
+    (:data:`_SUBJECT_KEYS`). Content that carries NONE of those is NOT guessed
+    at — a substring hunt over free text deletes other people's records — and a
+    store where no route can ever apply belongs in
+    :data:`UNATTRIBUTABLE_DIRS`, where the orchestrator reports it as
+    ``not_erasable`` instead of counting it silently as completed.
     """
     import shutil
 
-    removed = 0
-    if not root.is_dir():
+    if target.is_file():
+        if _name_names_subject(target.name, subject_id):
+            target.unlink()
+            return 1
+        if target.suffix == ".json":
+            return _purge_json_document(target, subject_id)
+        if target.suffix == ".jsonl":
+            return _purge_jsonl_file(target, subject_id)
         return 0
+    if not target.is_dir():
+        return 0
+
+    removed = 0
     if match_dir_name:
-        for d in list(root.rglob("*")):
+        for d in list(target.rglob("*")):
             if d.is_dir() and _name_names_subject(d.name, subject_id):
                 shutil.rmtree(d, ignore_errors=False)
                 removed += 1
-    for f in sorted(root.rglob("*")):
-        if not f.is_file() or f.suffix not in (".json", ".jsonl"):
+    for f in sorted(target.rglob("*")):
+        if not f.is_file():
             continue
-        # A FILENAME naming the subject attributes the file just as a payload
-        # field does — otherwise ``<subject>.json`` survived a COMPLETED erasure.
         if _name_names_subject(f.name, subject_id):
             f.unlink()
             removed += 1
             continue
         if f.suffix == ".json":
-            if _mentions_subject(_load_json(f), subject_id):
-                f.unlink()
-                removed += 1
-            continue
-        kept: list[str] = []
-        hit = 0
-        try:
-            lines = f.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            rec = None
-            if line.strip():
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    rec = None
-            if rec is not None and _mentions_subject(rec, subject_id):
-                hit += 1
-                continue
-            kept.append(line)
-        if hit:
-            _atomic_replace_text(f, "\n".join(kept) + ("\n" if kept else ""))
-            removed += hit
+            removed += _purge_json_document(f, subject_id)
+        elif f.suffix == ".jsonl":
+            removed += _purge_jsonl_file(f, subject_id)
     return removed
+
+
+def _purge_json_tree(root: Path, subject_id: str, *,
+                     match_dir_name: bool = True) -> int:
+    """Backwards-compatible alias of :func:`_purge_path` for a directory root."""
+    return _purge_path(root, subject_id, match_dir_name=match_dir_name)
 
 
 def _result(layer_id: str, t0: float, removed: int, *, absent: bool,
@@ -1565,6 +1630,45 @@ def _result(layer_id: str, t0: float, removed: int, *, absent: bool,
         reason=applied_reason.format(n=removed), code=ReasonCode.DELETED.value,
         duration_ms=ms,
     )
+
+
+def _entry_path(tenant_id: str, entry: str) -> Path:
+    """Resolve a registry entry name (``"files"`` / ``"global/acs"``) to a path.
+
+    The registries below name tenant-home ENTRIES, not absolute paths, because
+    the coverage guard compares them against what the writers create under a
+    throwaway home — the same vocabulary on both sides or the comparison is
+    meaningless.
+    """
+    if entry.startswith("global/"):
+        return _tenant_global(tenant_id) / entry[len("global/"):]
+    return _tenant_home(tenant_id) / entry
+
+
+def _purge_roots(layer_id: str, roots: "list[Path]", subject_id: str, *,
+                 store: str, item: str, match_dir_name: bool = True
+                 ) -> ErasureLayerResult:
+    """Run the documented attribution rule over several roots as ONE layer."""
+    t0 = time.time()
+    present = [r for r in roots if r.exists()]
+    if not present:
+        return _result(layer_id, t0, 0, absent=True,
+                       absent_reason=f"{store} store absent",
+                       empty_reason="", applied_reason="")
+    removed = 0
+    try:
+        for r in present:
+            removed += _purge_path(r, subject_id, match_dir_name=match_dir_name)
+    except Exception as exc:  # noqa: BLE001
+        return ErasureLayerResult(
+            layer_id=layer_id, status=LayerStatus.FAILED, count=removed,
+            reason=f"{store} purge error: {type(exc).__name__}: {str(exc)[:200]}",
+            code=ReasonCode.STORE_ERROR.value,
+            duration_ms=int((time.time() - t0) * 1000),
+        )
+    return _result(layer_id, t0, removed, absent=False, absent_reason="",
+                   empty_reason=f"no {item} matched subject",
+                   applied_reason=f"removed {{n}} {item}(s) for subject")
 
 
 @dataclass
@@ -1735,12 +1839,250 @@ class DatasourceConnectionHandler:
                        applied_reason="removed {n} datasource connection(s)")
 
 
-#: Coverage map (F-A9 guard): which directory under ``<tenant_home>`` (or
-#: ``<tenant_home>/global``) each real handler claims. ``tests/security/
-#: test_erasure_coverage_guard.py`` boots the writers it can reach into a temp
-#: home and fails on any created directory that no handler claims and that is
-#: not on the explicit content-free exemption list — so a new persistent store
-#: cannot ship without an Art. 17 path.
+# ── R4-F1: stores the round-2 guard could not see ────────────────────────────
+#
+# The round-2 guard enumerated only the directories created by the five writers
+# its author imported, so two live personal-data stores — the CEL anchor store
+# (the operator's own conversation text) and the tenant-global ACS run index
+# (which names the subject's session) — never appeared in its universe and the
+# orchestrator reported ``completed`` with both intact. The guard now derives
+# its universe from the repo source (see
+# ``tests/security/test_erasure_coverage_guard.py``), and every store it finds
+# is classified below.
+
+
+def _cel_safe_key(session_key: str) -> str:
+    """Mirror ``operator/context_engineering/anchor.py::_safe_key``.
+
+    The CEL anchor store is ``cel_anchors/<safe_key(session_key)>.jsonl`` — the
+    session key with every character outside ``[A-Za-z0-9_.-]`` replaced by
+    ``_``. An Art. 17 subject_id may legally contain ``:`` (``web:<sid>``), so
+    matching the raw id against the filename finds nothing; the transform has to
+    be applied on this side too. Duplicated rather than imported for the same
+    reason ``_tenant_global`` duplicates the resolver: this module is loaded
+    from the bridges sys.path, where ``operator.context_engineering`` is not
+    importable.
+    """
+    s = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_key or "")).strip("_")
+    if not s:
+        return "_nosession"
+    if len(s) > 100:
+        digest = hashlib.sha1(str(session_key).encode("utf-8")).hexdigest()[:12]
+        s = s[:80] + "_" + digest
+    return s
+
+
+@dataclass
+class CELAnchorHandler:
+    """GDPR Art. 17 erasure for the CEL load-bearing-anchor store (R4-F1).
+
+    ``operator/context_engineering/anchor.py::_store_path`` writes
+    ``<tenant>/cel_anchors/<safe_key>.jsonl`` on every turn where the
+    ``cel_load_bearing_anchor`` flag is on (it is, in the live capability
+    snapshot). Each line is ``{"id", "kind", "text", "added_at", "hash"}`` and
+    ``text`` is the user's VERBATIM sentence — the review's reproduction found
+    ``"my phone is 0170-… and I live in …"`` still on disk after a ``completed``
+    erasure.
+
+    Attribution is the file NAME: the store is per-session and the entries carry
+    no identity field of their own, so both the raw subject_id and its
+    ``_safe_key`` transform are matched. Documented explicitly because it is the
+    ONLY route here — there is nothing in a fact entry to key on.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-cel-anchors"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "cel_anchors"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="CEL anchor store absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        try:
+            safe = _cel_safe_key(subject_id)
+            for f in sorted(root.glob("*.jsonl")):
+                if f.stem == safe or _name_names_subject(f.name, subject_id):
+                    f.unlink()
+                    removed += 1
+            removed += _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"CEL anchor purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no CEL anchor store matched subject",
+                       applied_reason="removed {n} CEL anchor store(s) for subject")
+
+
+def _path_value_names_subject(obj: Any, subject_id: str, depth: int = 0) -> bool:
+    """True when any string in ``obj`` is a PATH with the subject as a segment.
+
+    ``<tenant>/global/acs/runs/<rid>/manifest.json`` attributes its run through
+    ``"run_dir": ".../sessions/web:<sid>/acs/runs/<rid>"`` — a filesystem path,
+    not an identity field, so :func:`_mentions_subject` walks straight past it.
+    Segment-bounded (``split("/")``), never a bare substring.
+    """
+    if depth > 8:
+        return False
+    if isinstance(obj, str):
+        if "/" not in obj:
+            return False
+        return any(_name_names_subject(seg, subject_id)
+                   for seg in obj.split("/") if seg)
+    if isinstance(obj, dict):
+        return any(_path_value_names_subject(v, subject_id, depth + 1)
+                   for v in obj.values())
+    if isinstance(obj, list):
+        return any(_path_value_names_subject(v, subject_id, depth + 1) for v in obj)
+    return False
+
+
+@dataclass
+class ACSGlobalIndexHandler:
+    """GDPR Art. 17 erasure for the tenant-global ACS run index (R4-F1).
+
+    ``chat_runtime.py`` and ``acs_engine_adapter.py`` mirror every ACS run into
+    ``<tenant>/global/acs/runs/<run_id>/manifest.json``. :class:`ACSTraceHandler`
+    erases the SESSION-scoped run data this index points at; the index itself was
+    unclaimed, so after an erasure it still named ``sessions/<subject>/acs/…``
+    — and the quota-fallback branch additionally writes the delegate's whole
+    ``output/`` working tree under the same run directory, which survived
+    untouched.
+
+    A run is the subject's when its manifest names them under an identity key OR
+    when any path value in it has the subject as a segment
+    (:func:`_path_value_names_subject`) — the shape the live install actually has.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-acs-index"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_global(self.tenant_id) / "acs"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="global ACS index absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        try:
+            import shutil
+            runs = root / "runs"
+            if runs.is_dir():
+                for run_dir in sorted(p for p in runs.iterdir() if p.is_dir()):
+                    docs = [_load_json(f) for f in run_dir.glob("*.json")]
+                    if any(d is not None and (_mentions_subject(d, subject_id)
+                                              or _path_value_names_subject(d, subject_id))
+                           for d in docs):
+                        shutil.rmtree(run_dir, ignore_errors=False)
+                        removed += 1
+            removed += _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"ACS index purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no ACS run matched subject",
+                       applied_reason="removed {n} ACS run record(s) for subject")
+
+
+@dataclass
+class TenantStoreHandler:
+    """Data-driven Art. 17 handler for a declared group of tenant-home stores.
+
+    One class instead of fifteen near-identical ones: every store below is
+    erased by the SAME documented attribution rule (:func:`_purge_path`), so the
+    only thing that differs is which entries the layer claims. Grouping keeps the
+    per-layer trail readable — a reader sees ``L-user-content skipped
+    store_empty`` rather than ten separate lines — while the coverage guard still
+    proves each individual entry erases a planted subject file.
+    """
+    layer_id: str
+    entries: tuple
+    store: str
+    item: str
+    tenant_id: str = "_default"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        roots = [_entry_path(self.tenant_id, e) for e in self.entries]
+        return _purge_roots(self.layer_id, roots, subject_id,
+                            store=self.store, item=self.item)
+
+
+@dataclass
+class UnattributableStoreHandler:
+    """Report — never silently pass — stores that CANNOT be erased per subject.
+
+    ``UNATTRIBUTABLE_DIRS`` holds live stores that carry personal data but no
+    per-subject attribution of any kind: no directory name, no file name, no
+    identity field. An Art. 17 request cannot select one person's records out of
+    them, and a substring hunt over free text would delete other people's.
+
+    The failure mode this exists to prevent is the one the review found: the
+    orchestrator returning ``completed`` — a signed statement that the data is
+    gone — while the store stands. When such a store is present and non-empty
+    this layer returns ``SKIPPED`` with the controlled code ``not_erasable``, so
+    the operator sees it in the trail and on the audit chain and can act
+    (retention / TTL / a real attribution key) instead of believing the erasure
+    was total.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-unattributable-stores"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        standing: list[str] = []
+        for entry in sorted(UNATTRIBUTABLE_DIRS):
+            path = _entry_path(self.tenant_id, entry)
+            try:
+                if path.is_dir() and any(path.rglob("*")):
+                    standing.append(entry)
+                elif path.is_file() and path.stat().st_size > 0:
+                    standing.append(entry)
+            except OSError:
+                continue
+        ms = int((time.time() - t0) * 1000)
+        if not standing:
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+                reason="no unattributable store holds data",
+                code=ReasonCode.STORE_ABSENT.value, duration_ms=ms,
+            )
+        return ErasureLayerResult(
+            layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+            reason=("stores hold personal data with NO per-subject attribution and "
+                    "were NOT erased: " + ", ".join(standing)),
+            code=ReasonCode.NOT_ERASABLE.value, duration_ms=ms,
+        )
+
+
+#: Coverage map: which tenant-home ENTRY each real handler claims.
+#:
+#: ``tests/security/test_erasure_coverage_guard.py`` derives the set of entries
+#: the product's writers create from the REPO SOURCE (an AST scan for
+#: ``tenant_home()/…``, ``tenant_global_dir()/…``, ``corvin_home()/"tenants"/…``)
+#: and from booting the writers it can reach, then fails on any entry that
+#: appears in neither this map nor :data:`NON_PERSONAL_DIRS` nor
+#: :data:`UNATTRIBUTABLE_DIRS`. That universe is mechanical: unlike the round-2
+#: version it cannot be satisfied by a hand-written list of imports.
+#:
+#: An entry here is a PROMISE, checked by
+#: ``TestEveryCoveredEntryActuallyErases``: a subject-named record planted in
+#: that entry must be gone after the real chain runs. A claim backed by a
+#: permanent ``SKIPPED / not_applicable`` stub — which is what ``skill-forge``,
+#: ``skills`` and ``global/data`` were until 2026-09-07 — now fails the guard.
+#:
+#: What the promise covers is the documented attribution rule of
+#: :func:`_purge_path` (directory name · file name · JSON/JSONL identity field),
+#: NOT "every byte in the directory": free text that names nobody is left alone
+#: on purpose, because guessing deletes other subjects' data.
 COVERED_DIRS: dict[str, frozenset[str]] = {
     "L28-recall":            frozenset({"global/memory"}),
     "L28.2-user-model":      frozenset({"global/memory"}),
@@ -1752,28 +2094,122 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L42-org":               frozenset({"global/orgs"}),
     "L-workflow-checkpoints": frozenset({"workflow_runs"}),
     "L163-ulo":              frozenset({"global/ulo"}),
-    "L-learning":            frozenset({"learning", "experiments"}),
+    "L-learning":            frozenset({"learning"}),
     "L-infinite-session":    frozenset({"infinite_session", "sessions"}),
     # R2-A7 — stores that had no Art. 17 path at all until 2026-09-07.
     "L-workflows":               frozenset({"workflows"}),
     "L-browser":                 frozenset({"browser"}),
     "L-vibe-checkpoints":        frozenset({"vibe"}),
     "L-datasource-connections":  frozenset({"datasource_connections"}),
-    "L7-skill-forge":        frozenset({"skill-forge", "skills"}),
+    # R4-F4 — were claimed by permanent no-op stubs; now real purges.
+    "L7-skill-forge":        frozenset({"skill-forge", "skills", "_shared",
+                                        "global/skill-forge", "global/skills"}),
     "L24-data-snapshot":     frozenset({"global/data"}),
+    # R4-F1 — the two stores the round-2 guard could not see.
+    "L-cel-anchors":         frozenset({"cel_anchors"}),
+    "L-acs-index":           frozenset({"global/acs"}),
+    # R4-F1 — the remaining live stores the review listed for triage.
+    "L-tenant-memory":       frozenset({"memory"}),
+    "L-bridge-runtime":      frozenset({"bridges"}),
+    "L-user-content":        frozenset({"files", "artifacts", "global/artifacts",
+                                        "packages", "backups", "idea-pipeline",
+                                        "plugin-builder", "measurement-week",
+                                        "git_sync_repo", "cross_device"}),
+    "L-compute-runs":        frozenset({"compute", "global/compute"}),
+    "L-gateway-runs":        frozenset({"global/gateway"}),
+    "L-rag":                 frozenset({"global/rag", "global/rag_hub"}),
+    "L-flows":               frozenset({"global/flows", "global/workflows"}),
+    "L-space":               frozenset({"global/space"}),
+    "L-incidents":           frozenset({"global/incidents"}),
+    "L-identity-directory":  frozenset({"global/scim"}),
+    "L-activity-log":        frozenset({"global/chat_activity.jsonl"}),
+    "L-voice":               frozenset({"voice"}),
+    # R4-F1/F4: the format-specific handlers above own the sqlite tables and the
+    # file shapes they were written for; this layer runs the generic attribution
+    # rule over the SAME roots, so a record those narrower rules do not look at
+    # — the exact shape R4-F4 found surviving under a claimed directory — cannot
+    # survive a "completed" erasure either. ``experiments`` was claimed by
+    # ``L-learning``, whose handler only ever opens ``<tenant>/learning``.
+    "L-store-sweep":         frozenset({"learning", "experiments", "global/memory",
+                                        "global/grants", "global/orgs",
+                                        "global/social", "global/web_chat",
+                                        "workflow_runs"}),
+    "L-tenant-registries":   frozenset({
+        "agents", "extensions", "custom-layers", "github-dlq",
+        "global/concepts", "global/connectors", "global/console_panels",
+        "global/datasources", "global/engines", "global/bridges",
+        "global/mcp-tools", "global/proactive_ratelimit",
+        "global/proactive_quiet_hours", "global/tde",
+        "global/browser_attach_consent.json", "global/ce_stage_grades.json",
+        "global/connectors.json", "global/connector_vault.json",
+        "global/custom_layers.json", "global/delegation_budget.json",
+    }),
 }
 
-#: Directories a writer may create under the tenant home that hold NO personal
-#: data by construction (content-free chains, key material, config, code).
+#: Entries a writer may create under the tenant home that hold NO personal data
+#: by construction (content-free chains, key material, config, generated code).
+#: Exempting an entry here is a claim about its CONTENT — state the reason, and
+#: state it honestly: this list is the only way out of the coverage guard.
 NON_PERSONAL_DIRS: dict[str, str] = {
     "global/forge":    "hash-chained audit trail — content-free by the ADR-0129 floor, immutable (GDPR Art. 17(3)(b))",
     "audit.jsonl":     "core hash chain — content-free, immutable",
+    "global/audit.jsonl": "tenant hash chain — content-free, immutable",
     "keys":            "instance/crypto key material, no subject data",
+    "global/agent":    "BYOK instance keypair, no subject data",
     "global/erasure":  "erasure trail files (0600) — the record OF erasure",
     "forge":           "generated tools (code), no subject data",
     "plugins":         "plugin state/config, no subject data",
     "global/tenant.corvin.yaml": "operator config",
+    "tenant.corvin.yaml": "operator config",
+    "global/audit_layers": "ADR-0124 audit-layer configuration, no subject data",
+    "global/auth":     "OIDC issuer trust (issuer URLs + JWKS) — relying-party config, no subject records",
+    "cowork":          "persona definitions/cache — operator config, no subject data",
+    "datasource_adapters": "exported AWP datasource adapter code, no subject data",
+    "compute_backends": "exported AWP compute backend code, no subject data",
+    "federated-models": "model artefacts (weights/metadata), no subject data",
+    "global/compute_settings.json": "operator compute limits, no subject data",
+    "global/imagegen-disclosure.json": "EU AI Act disclosure state (per-tenant flag), no subject data",
+    "global/model_catalog_cache.json": "upstream model catalogue cache, no subject data",
+    "global/features.json": "console feature-flag overlay — operator config, no subject data",
+    ".wf_create.lock": "advisory lock file, no content",
 }
+
+#: Entries that DO hold personal data but carry no per-subject attribution.
+#: :class:`UnattributableStoreHandler` reports each one that is present and
+#: non-empty as ``SKIPPED / not_erasable`` so the orchestrator never says
+#: "completed" over a store it did not touch. Moving an entry here is an
+#: admission, not an exemption — it belongs in COVERED_DIRS the moment the
+#: writer gains an identity field or a subject-derived filename.
+UNATTRIBUTABLE_DIRS: dict[str, str] = {
+    "global/acs_tmp": (
+        "acs_runtime.py writes the assembled system prompt to an mkstemp-named "
+        ".corvin-sysprompt-*.txt before spawning the engine. Plain text, no "
+        "identity field, no subject-derived name, and stale files survive the "
+        "spawn — attribution is impossible; the fix is a TTL sweep at the writer."
+    ),
+}
+
+
+#: ``(layer_id, store-name, item-name)`` for every claim group served by the
+#: generic :class:`TenantStoreHandler`. The entries themselves come from
+#: :data:`COVERED_DIRS`, so the map and the chain cannot drift apart — a claim
+#: without a handler (or a handler without a claim) fails the coverage guard.
+_GENERIC_STORE_LAYERS: tuple[tuple[str, str, str], ...] = (
+    ("L-tenant-memory",      "tenant memory",        "memory record"),
+    ("L-bridge-runtime",     "bridge runtime",       "bridge runtime file"),
+    ("L-user-content",       "user content",         "user content item"),
+    ("L-compute-runs",       "compute run",          "compute run record"),
+    ("L-gateway-runs",       "gateway run",          "gateway run record"),
+    ("L-rag",                "RAG index",            "RAG record"),
+    ("L-flows",              "flow",                 "flow record"),
+    ("L-space",              "space profile",        "space record"),
+    ("L-incidents",          "incident",             "incident record"),
+    ("L-identity-directory", "identity directory",   "directory entry"),
+    ("L-activity-log",       "chat activity log",    "activity entry"),
+    ("L-voice",              "voice runtime",        "voice record"),
+    ("L-tenant-registries",  "tenant registry",      "registry entry"),
+    ("L-store-sweep",        "layer store",          "stored record"),
+)
 
 
 # ── default chain factory ────────────────────────────────────────────
@@ -1820,10 +2256,21 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         BrowserSessionHandler(tenant_id=tenant_id),         # browser/sessions/<id>/
         VibeCheckpointHandler(tenant_id=tenant_id),         # vibe/checkpoints/*.json
         DatasourceConnectionHandler(tenant_id=tenant_id),   # datasource_connections/
-        L7SkillForgeHandler(tenant_id=tenant_id),
-        L24DataSnapshotHandler(tenant_id=tenant_id),
+        L7SkillForgeHandler(tenant_id=tenant_id),          # R4-F4: was a no-op stub
+        L24DataSnapshotHandler(tenant_id=tenant_id),        # R4-F4: was a no-op stub
+        # R4-F1: stores the round-2 guard's writer list could not see.
+        CELAnchorHandler(tenant_id=tenant_id),              # cel_anchors/
+        ACSGlobalIndexHandler(tenant_id=tenant_id),         # global/acs/runs/
         IdentityMappingHandlerBase(),
     ]
+    # R4-F1: the remaining live tenant-home stores, all erased by the same
+    # documented attribution rule — one data-driven handler per claim group.
+    chain.extend(
+        TenantStoreHandler(layer_id=lid, entries=tuple(sorted(COVERED_DIRS[lid])),
+                           store=store, item=item, tenant_id=tenant_id)
+        for lid, store, item in _GENERIC_STORE_LAYERS
+    )
+    chain.append(UnattributableStoreHandler(tenant_id=tenant_id))
     if _ulo_handler is not None:
         chain.append(_ulo_handler)
     return chain

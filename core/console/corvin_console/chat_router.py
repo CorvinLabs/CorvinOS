@@ -202,6 +202,10 @@ async def _route_erasure(
             status="error", message=f"Erasure failed: {type(exc).__name__}",
         )
     overall = result.overall_status.value
+    # sys.path for the bridges package is already set up by _execute_erasure above.
+    from erasure_orchestrator import (  # type: ignore[import-not-found]
+        _derive_reason_code,
+    )
     return ActionResult(
         action_id=action_id,
         entity_type="erasure_request",
@@ -214,7 +218,14 @@ async def _route_erasure(
             "status": overall,
             "erasure_id": result.request.request_id,
             "layers": [
-                {"layer_id": r.layer_id, "status": r.status.value, "count": r.count}
+                # R4-F1: the controlled reason CODE travels with the layer result.
+                # Without it "skipped" is unreadable — the operator cannot tell
+                # "the store was absent" from "the store holds personal data that
+                # carries no per-subject attribution and was NOT erased"
+                # (``not_erasable``). Closed vocabulary (``ReasonCode``), never
+                # the free-form reason, which may carry paths/exception text.
+                {"layer_id": r.layer_id, "status": r.status.value, "count": r.count,
+                 "code": _derive_reason_code(r.status, r.code)}
                 for r in result.per_layer
             ],
         },

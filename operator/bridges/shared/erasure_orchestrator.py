@@ -120,6 +120,14 @@ class ReasonCode(str, Enum):
     STORE_ABSENT = "store_absent"       # SKIPPED — store/file/dir not present
     STORE_EMPTY = "store_empty"         # SKIPPED — store present but nothing matched
     NOT_APPLICABLE = "not_applicable"   # SKIPPED — documented stub / no concrete handler
+    NOT_ERASABLE = "not_erasable"       # SKIPPED — store holds personal data that
+    #                                     carries NO per-subject attribution, so an
+    #                                     Art. 17 request cannot select the subject's
+    #                                     records out of it. Reported explicitly (R4-F1)
+    #                                     rather than folded into a silent COMPLETED:
+    #                                     the operator must see that a store was left
+    #                                     standing and act (retention/TTL) instead of
+    #                                     holding a signed statement that says "gone".
     STORE_ERROR = "store_error"         # FAILED — handler raised / infra error
     HANDLER_CONTRACT_ERROR = "handler_contract_error"  # FAILED — bad return / mis-attribution
 

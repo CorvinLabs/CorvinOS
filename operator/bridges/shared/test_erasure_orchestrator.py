@@ -686,10 +686,14 @@ class TestReasonCodeControlledVocabulary(unittest.TestCase):
         self.assertIn("is locked", layer["reason"])
 
     def test_all_handler_reason_codes_are_controlled(self):
+        # ``not_erasable`` added 2026-09-07 (R4-F1): a store that holds personal
+        # data but carries NO per-subject attribution must be reportable. Before
+        # it existed such a store was folded into a silent COMPLETED — a signed
+        # statement that the data was gone, over data still on disk.
         self.assertEqual(
             _REASON_CODES,
             frozenset({"deleted", "store_absent", "store_empty",
-                       "not_applicable", "store_error",
+                       "not_applicable", "not_erasable", "store_error",
                        "handler_contract_error"}),
         )
 
