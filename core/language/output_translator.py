@@ -36,8 +36,8 @@ class TranslationMethod(str, Enum):
 class TranslationRequest:
     """Immutable translation request."""
     source_text: str
-    source_lang: str = "en"  # Skills always English
     target_lang: str
+    source_lang: str = "en"  # Skills always English
     context: Optional[str] = None  # "skill_output" | "summary" | etc.
 
 
