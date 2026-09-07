@@ -283,6 +283,32 @@ def _remember_channel(channel: str | None) -> None:
         _auto_channel_cache = channel
 
 
+# Hard ceiling on ONE human-in-the-loop confirmation (ADR-0182/0183 gate).
+#
+# ``confirm_fn`` is an INJECTED callable, not code this class owns. The console's
+# own broker (``BrowserSessionManager._confirm``) already caps its own wait at
+# ``manager._CONFIRM_TIMEOUT_S`` (120 s) and fail-closed-declines on timeout — but
+# nothing structurally forces an injected broker to have a deadline at all, and a
+# broker that never resolves (a torn-down manager whose ``_Live`` was popped
+# before ``_drain_pending`` ran, a REST approver whose tab went away, a
+# third-party embedder) would park click()/key()/select()/drag()/navigate()
+# FOREVER — the session, and the operator action behind it, wedged with no error.
+# That is the availability-defect shape this repo has repeatedly found in
+# unbounded waits, so the deadline lives at the gate, not only in one caller.
+#
+# Deliberately LONGER than the broker's own 120 s so the normal path is
+# unchanged: the broker still decides (approve / fail-closed decline) and this
+# only fires when the broker itself never answers. Read at call time so a test
+# can monkeypatch it down.
+CONFIRM_TIMEOUT_S = 150.0
+
+
+class ConfirmTimeout(BrowserActionError):
+    """The human-in-the-loop confirm broker did not answer within
+    ``CONFIRM_TIMEOUT_S``. Fail-closed: the action is refused, exactly like an
+    explicit decline — a confirmation that never arrives is never an approval."""
+
+
 class StaleMarkError(BrowserActionError):
     """Raised when the live element at ``[index]`` no longer matches the
     ``Mark`` captured at the last ``observe()`` (ADR-0183 S1 stale-mark
@@ -890,6 +916,35 @@ class BrowserSession:
                 f"blocked: session is paused / under user take-over ({action})")
 
     # ── shared sensitivity + egress gates (used by every commit-capable action) ─
+    async def _await_confirm(
+        self, *, action: str, host: str, role: str, name: str,
+        index: int | None = None, reason: str,
+    ) -> bool:
+        """Await the injected confirm broker under a HARD deadline.
+
+        The single place any ``confirm_fn`` is awaited. On timeout the action is
+        refused (``ConfirmTimeout``), never approved, and the refusal is written
+        to the audit chain + the live action log with ``reason`` so an operator
+        can tell "nobody answered" apart from "somebody declined". See
+        ``CONFIRM_TIMEOUT_S`` for why the deadline lives here.
+        """
+        if self._confirm is None:             # every caller checks; fail-closed anyway
+            raise BrowserActionError(
+                f"{action} on '{name}' blocked: no confirmation channel")
+        try:
+            return await asyncio.wait_for(
+                self._confirm(action=action, host=host, role=role, name=name),
+                timeout=CONFIRM_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                              attach=self._attach_tag, action=action, host=host, role=role,
+                              index=index, ok=False, extra={"reason": reason})
+            self._emit(action, index=index, role=role, name=name, ok=False, reason=reason)
+            raise ConfirmTimeout(
+                f"{action} on '{name}' blocked: no answer from the confirmation "
+                f"channel within {CONFIRM_TIMEOUT_S:.0f}s") from None
+
     async def _confirm_sensitive_or_raise(
         self, action: str, *, host: str, role: str = "", name: str = "",
         url: str = "", form_sensitive: bool = False, index: int | None = None,
@@ -911,7 +966,8 @@ class BrowserSession:
                        reason="no_confirm_broker")
             raise BrowserActionError(
                 f"sensitive {action} on '{name}' blocked: no confirmation channel")
-        approved = await self._confirm(action=action, host=host, role=role, name=name)
+        approved = await self._await_confirm(action=action, host=host, role=role, name=name,
+                                             index=index, reason="confirm_timeout_sensitive")
         if not approved:
             _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action=action, host=host, role=role, index=index, ok=False,
@@ -985,7 +1041,9 @@ class BrowserSession:
             return
         # SECURITY: pass the HOST only, never the full URL — a full URL can carry a
         # ?token=/reset secret and the live action-log + audit trail are host-only.
-        approved = await self._confirm(action=action, host=landing, role="navigation", name=landing)
+        approved = await self._await_confirm(action=action, host=landing, role="navigation",
+                                             name=landing, index=index,
+                                             reason="confirm_timeout_cross_host")
         if not approved:
             async with self._page_lock:
                 with contextlib.suppress(Exception):
@@ -1068,8 +1126,9 @@ class BrowserSession:
                     # and the pending() payload, and a full URL can carry a
                     # ?token=/reset secret. The audit trail is already host-only
                     # (below); the live view must not leak more than the audit trail.
-                    approved = await self._confirm(action="navigate", host=decision.host,
-                                                   role="navigation", name=decision.host)
+                    approved = await self._await_confirm(
+                        action="navigate", host=decision.host, role="navigation",
+                        name=decision.host, reason="confirm_timeout_cross_host")
                     if not approved:
                         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                                           action="navigate", host=decision.host, ok=False,

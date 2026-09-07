@@ -105,3 +105,47 @@ def _isolate_environ():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+# A THIRD pollution channel, and the only one that can wedge the whole run:
+# process-global attributes of *stdlib* modules.
+#
+# Eight console test modules fake out subprocess spawning with
+# ``self.cr.asyncio.create_subprocess_exec = _fake_spawn``. ``self.cr`` is
+# ``corvin_console.chat_runtime`` and ``self.cr.asyncio`` IS the stdlib
+# ``asyncio`` module object — so that line rebinds the spawner PROCESS-WIDE, for
+# every later test in the run, and only ``test_delegation_routing_e2e.py``
+# restores it. The consequence is not a wrong assertion but a HANG: Playwright
+# starts its node driver through ``asyncio.create_subprocess_exec``, so once a
+# quota/house-rules/TDE test has run, ``test_browser_automation.py``'s
+# ``BrowserSession.start()`` gets a MagicMock instead of a driver and awaits a
+# pipe that nobody will ever write to — forever. That is exactly how the console
+# suite stopped completing (2026-09-07): green in isolation, wedged at ~15% in a
+# full run, and immune to ``--timeout`` styles that only interrupt the main
+# thread's own frame.
+#
+# Restoring here fixes the class in ONE place instead of eight, and keeps it
+# fixed for the ninth module that copies the pattern.
+_TRACKED_STDLIB_ATTRS = (
+    ("asyncio", "create_subprocess_exec"),
+    ("asyncio", "create_subprocess_shell"),
+    ("subprocess", "Popen"),
+    ("subprocess", "run"),
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_stdlib_spawners():
+    """Snapshot + restore the process-global spawn entry points around each test."""
+    import importlib
+
+    saved = []
+    for mod_name, attr in _TRACKED_STDLIB_ATTRS:
+        mod = importlib.import_module(mod_name)
+        saved.append((mod, attr, getattr(mod, attr)))
+    try:
+        yield
+    finally:
+        for mod, attr, original in saved:
+            if getattr(mod, attr, None) is not original:
+                setattr(mod, attr, original)

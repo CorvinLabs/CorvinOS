@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import http.server
+import os
 import socketserver
 import tempfile
 import threading
@@ -20,6 +21,10 @@ import pytest
 
 from corvin_console.browser import check_egress
 from corvin_console.browser.compliance import is_sensitive
+
+# Every await in these E2E tests carries this deadline. A test that can
+# block forever is a test that hides the bug it was meant to catch.
+_E2E_STEP_TIMEOUT_S = 60.0
 
 # ── Set-of-Marks + compliance units (no browser needed) ──────────────────────
 
@@ -212,49 +217,203 @@ def test_sensitive_v2_checkout_e2e():
     _t.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
         async def run():
-            import sys as _sys, time as _time
-            _t0 = _time.monotonic()
-            def _log(m):
-                print(f"[DBG {_time.monotonic()-_t0:7.2f}] {m}", file=_sys.stderr, flush=True)
-            _log("enter run()")
             from corvin_console.browser import BrowserSessionManager, BrowserActionError
             home = Path(tempfile.mkdtemp())
             mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
                                         allowlist_resolver=lambda t: (None, None))
-            _log("mgr built")
             sid = await mgr.create("_default", headless=True)
-            _log("created %s" % sid)
             s = mgr.session("_default", sid)
-            _log("start()...")
-            await s._ensure_started()
-            _log("started")
-            obs = await s.navigate(f"http://127.0.0.1:{port}/checkout")
-            _log("navigate done")
+            # EVERY await here carries an explicit deadline. A bare `await` in a
+            # test is how a wedged browser driver stayed invisible: this file was
+            # green alone and hung the WHOLE console suite forever in a full run
+            # (a leaked `asyncio.create_subprocess_exec` fake from an earlier test
+            # module — see conftest._isolate_stdlib_spawners). A regression must
+            # fail loudly with a named step, never block CI.
+            obs = await asyncio.wait_for(
+                s.navigate(f"http://127.0.0.1:{port}/checkout"), timeout=_E2E_STEP_TIMEOUT_S)
             continue_btn = next(m.index for m in obs.marks if m.name == "Continue")
-            _log("navigated, marks=%r" % ([ (m.index,m.role,m.name) for m in obs.marks ],))
 
             async def decline():
-                for i in range(60):
+                """Wait for click() to park its confirm, then decline it."""
+                deadline = asyncio.get_running_loop().time() + _E2E_STEP_TIMEOUT_S
+                while asyncio.get_running_loop().time() < deadline:
                     p = mgr.pending("_default", sid)
                     if p:
-                        _log("pending found after %d polls: %r" % (i, p))
-                        mgr.resolve_confirm("_default", sid, p[0]["id"], False)
+                        assert mgr.resolve_confirm("_default", sid, p[0]["id"], False)
                         return
                     await asyncio.sleep(0.05)
-                _log("decline GAVE UP, no pending")
+                raise AssertionError(
+                    "click() never parked a human-in-the-loop confirm within "
+                    f"{_E2E_STEP_TIMEOUT_S}s — the /checkout URL signal did not "
+                    "make the ambiguous 'Continue' button sensitive")
 
             task = asyncio.ensure_future(s.click(continue_btn))
-            await decline()
-            _log("awaiting task")
-            with pytest.raises(BrowserActionError):
-                await task   # blocked: /checkout path made the ambiguous button sensitive
-            _log("task raised OK")
-            await mgr.close("_default", sid)
-            _log("closed")
+            try:
+                await asyncio.wait_for(decline(), timeout=_E2E_STEP_TIMEOUT_S + 5)
+                with pytest.raises(BrowserActionError):
+                    # blocked: /checkout path made the ambiguous button sensitive
+                    await asyncio.wait_for(task, timeout=_E2E_STEP_TIMEOUT_S)
+            finally:
+                task.cancel()
+            await asyncio.wait_for(mgr.close("_default", sid), timeout=_E2E_STEP_TIMEOUT_S)
 
         asyncio.run(run())
     finally:
         httpd.shutdown()
+
+
+def test_confirm_broker_that_never_answers_is_bounded(monkeypatch):
+    """A confirm broker that never resolves must NOT wedge the session forever.
+
+    ``confirm_fn`` is injected, so nothing structurally guarantees the caller
+    put a deadline on it (the console's own broker does; a torn-down manager, a
+    REST approver whose tab vanished, or an embedder need not). The gate itself
+    therefore bounds the wait at ``session.CONFIRM_TIMEOUT_S`` and refuses —
+    fail-closed: a confirmation that never arrives is never an approval.
+
+    Drives the REAL boundary: a real headless Chromium on a real /checkout page,
+    through ``BrowserSession.click()``.
+    """
+    import http.server as _h
+    import socketserver as _s
+    import threading as _t
+
+    from corvin_console.browser import ConfirmTimeout
+    from corvin_console.browser import session as _sess_mod
+
+    html = (b"<!doctype html><html><body>"
+            b'<button id="c">Continue</button></body></html>')
+
+    class _H(_h.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html)
+
+        def log_message(self, *a):
+            pass
+
+    _s.TCPServer.allow_reuse_address = True
+    httpd = _s.TCPServer(("127.0.0.1", 0), _H)
+    port = httpd.server_address[1]
+    _t.Thread(target=httpd.serve_forever, daemon=True).start()
+    # Shrink the production ceiling for the test; the mechanism under test is
+    # "there IS a ceiling", not its numeric value.
+    monkeypatch.setattr(_sess_mod, "CONFIRM_TIMEOUT_S", 1.5)
+    actions: list[dict] = []
+    audit: list[dict] = []
+    try:
+        async def run():
+            from corvin_console.browser import BrowserSession
+
+            async def _never_answers(*, action, host, role, name):
+                await asyncio.Event().wait()      # the wedged-broker shape
+                return True                       # pragma: no cover
+
+            s = BrowserSession("s-timeout", "_default",
+                               home=Path(tempfile.mkdtemp()),
+                               allowlist=None, forbidden=None,
+                               audit_fn=lambda **kw: audit.append(kw),
+                               confirm_fn=_never_answers,
+                               on_action=actions.append, headless=True)
+            try:
+                obs = await asyncio.wait_for(
+                    s.navigate(f"http://127.0.0.1:{port}/checkout"),
+                    timeout=_E2E_STEP_TIMEOUT_S)
+                idx = next(m.index for m in obs.marks if m.name == "Continue")
+                with pytest.raises(ConfirmTimeout):
+                    # Generous outer deadline: the point is that the GATE times
+                    # out at 1.5s, not that pytest eventually kills the run.
+                    await asyncio.wait_for(s.click(idx), timeout=_E2E_STEP_TIMEOUT_S)
+            finally:
+                await asyncio.wait_for(s.close(), timeout=_E2E_STEP_TIMEOUT_S)
+
+        asyncio.run(run())
+    finally:
+        httpd.shutdown()
+
+    # The refusal is on the audit chain and in the live action log, and is
+    # distinguishable from a human decline.
+    assert any(a.get("details", {}).get("reason") == "confirm_timeout_sensitive"
+               or a.get("reason") == "confirm_timeout_sensitive" for a in audit), audit
+    assert any(r.get("reason") == "confirm_timeout_sensitive" for r in actions), actions
+
+
+@pytest.mark.live
+@pytest.mark.skipif(os.environ.get("CLAUDE_LIVE_E2E") != "1",
+                    reason="live-LLM E2E — opt in with CLAUDE_LIVE_E2E=1")
+def test_live_agent_sensitive_click_hits_the_bounded_confirm_gate(monkeypatch):
+    """LIVE: the REAL `claude -p` planner drives the browser agent, its planned
+    click on a /checkout page hits the human-in-the-loop gate, the confirm
+    broker never answers, and the gate refuses on the deadline instead of
+    wedging the agent loop forever.
+
+    Exercises the whole chain end to end: real Chromium -> real Set-of-Marks ->
+    real LLM planner subprocess -> BrowserSession sensitivity gate ->
+    CONFIRM_TIMEOUT_S backstop -> BrowserAgent error recovery.
+    """
+    import http.server as _h
+    import socketserver as _s
+    import threading as _t
+
+    from corvin_console.browser.agent import BrowserAgent
+    from corvin_console.browser import BrowserSession
+    from corvin_console.browser import session as _sess_mod
+
+    html = (b"<!doctype html><html><body><h1>Checkout</h1>"
+            b'<button id="c">Continue</button></body></html>')
+
+    class _H(_h.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html)
+
+        def log_message(self, *a):
+            pass
+
+    _s.TCPServer.allow_reuse_address = True
+    httpd = _s.TCPServer(("127.0.0.1", 0), _H)
+    port = httpd.server_address[1]
+    _t.Thread(target=httpd.serve_forever, daemon=True).start()
+    monkeypatch.setattr(_sess_mod, "CONFIRM_TIMEOUT_S", 3.0)
+    steps: list[dict] = []
+    try:
+        async def run():
+            async def _never_answers(*, action, host, role, name):
+                await asyncio.Event().wait()      # the wedged-broker shape
+                return True                       # pragma: no cover
+
+            s = BrowserSession("s-live", "_default", home=Path(tempfile.mkdtemp()),
+                               allowlist=None, forbidden=None,
+                               confirm_fn=_never_answers, headless=True)
+            try:
+                await asyncio.wait_for(
+                    s.navigate(f"http://127.0.0.1:{port}/checkout"),
+                    timeout=_E2E_STEP_TIMEOUT_S)
+                agent = BrowserAgent(s, max_steps=1, on_step=steps.append)
+                return await asyncio.wait_for(
+                    agent.run("Click the button labelled Continue."),
+                    timeout=180)
+            finally:
+                await asyncio.wait_for(s.close(), timeout=_E2E_STEP_TIMEOUT_S)
+
+        result = asyncio.run(run())
+    finally:
+        httpd.shutdown()
+
+    plans = [r.get("plan") for r in steps if r.get("action") == "agent_step"]
+    errors = [r.get("error", "") for r in steps if r.get("action") == "agent_error"]
+    # The real planner subprocess ran and produced a real plan.
+    assert plans, f"real claude planner produced no step: {steps}"
+    assert result.get("reason") != "planner transport failed", result
+    assert "planner" not in " ".join(errors).lower(), errors
+    # It chose the click, and the click was refused on the confirm deadline —
+    # not approved, and not left hanging.
+    assert "click" in plans, plans
+    assert any("confirmation channel" in e for e in errors), (errors, plans)
 
 
 # ── live E2E with a real browser ─────────────────────────────────────────────

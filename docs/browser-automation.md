@@ -70,6 +70,16 @@ Browser-page UI, which apply regardless of which caller drives them.
   Enter/Space or a `select`/`drag` on a payment/credential form** require your
   explicit confirmation in the live view. No confirm channel → the action is
   blocked (fail-closed).
+- **Bounded confirmation** — a parked confirm never waits forever. The console's
+  broker declines after 120 s (`manager._CONFIRM_TIMEOUT_S`), and the gate itself
+  refuses after `session.CONFIRM_TIMEOUT_S` (150 s) with `ConfirmTimeout` — a
+  `BrowserActionError` subclass — if the confirm channel never answers at all
+  (a torn-down session, an approver whose tab went away, an embedder that wired
+  its own `confirm_fn` with no deadline). Fail-closed: a confirmation that never
+  arrives is never an approval, and the refusal is audited with reason
+  `confirm_timeout_sensitive` / `confirm_timeout_cross_host` so an operator can
+  tell "nobody answered" apart from "somebody declined". A browser action can
+  therefore never wedge the console.
 - **Sandbox** — the Chromium renderer sandbox is ON by default (it loads
   untrusted pages). Only disable it on a sandbox-incapable host via
   `CORVIN_BROWSER_NO_SANDBOX=1`.

@@ -81,6 +81,13 @@ class VibeEngineeringP1Test(unittest.TestCase):
             proc.stderr = MagicMock()
             proc.stderr.read = AsyncMock(return_value=b"")
             return proc
+        # Save + restore: create_subprocess_exec is an attribute of the stdlib
+        # asyncio module object, so this rebinds the spawner PROCESS-WIDE. Without
+        # cleanup it stays _fake_spawn for every later test in the run — which is
+        # what wedged the console suite (Playwright launches its node driver via
+        # asyncio.create_subprocess_exec and then awaits a pipe forever).
+        self.addCleanup(setattr, self.cr.asyncio, "create_subprocess_exec",
+                        self.cr.asyncio.create_subprocess_exec)
         self.cr.asyncio.create_subprocess_exec = _fake_spawn  # type: ignore[attr-defined]
 
     def _system_prompt_text(self) -> str:
