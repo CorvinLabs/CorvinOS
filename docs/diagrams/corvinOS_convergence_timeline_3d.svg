@@ -1,0 +1,127 @@
+<svg viewBox="0 0 1400 600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+
+    <filter id="shadow3d">
+      <feDropShadow dx="4" dy="8" stdDeviation="6" flood-opacity="0.3"/>
+    </filter>
+
+    <linearGradient id="gradQuality" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#1f6feb"/>
+      <stop offset="50%" style="stop-color:#79c0ff"/>
+      <stop offset="100%" style="stop-color:#56d364"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1400" height="600" fill="url(#bgGrad)"/>
+
+  <!-- Title -->
+  <text x="700" y="40" font-size="32" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+    Learning Convergence Timeline
+  </text>
+
+  <!-- Y-axis label -->
+  <text x="30" y="200" font-size="12" fill="#8b949e" text-anchor="end" writing-mode="tb">Quality Score</text>
+  <line x1="50" y1="80" x2="50" y2="480" stroke="#30363d" stroke-width="2"/>
+
+  <!-- X-axis -->
+  <line x1="50" y1="480" x2="1350" y2="480" stroke="#30363d" stroke-width="2"/>
+  <text x="700" y="520" font-size="12" fill="#8b949e" text-anchor="middle">Time (Weeks + Feedback Samples)</text>
+
+  <!-- Grid lines and labels -->
+  <line x1="50" y1="100" x2="1350" y2="100" stroke="#30363d" stroke-width="1" opacity="0.3"/>
+  <text x="45" y="105" font-size="11" fill="#8b949e" text-anchor="end">1.0</text>
+
+  <line x1="50" y1="200" x2="1350" y2="200" stroke="#30363d" stroke-width="1" opacity="0.3"/>
+  <text x="45" y="205" font-size="11" fill="#8b949e" text-anchor="end">0.90</text>
+
+  <line x1="50" y1="300" x2="1350" y2="300" stroke="#30363d" stroke-width="1" opacity="0.3"/>
+  <text x="45" y="305" font-size="11" fill="#8b949e" text-anchor="end">0.80</text>
+
+  <line x1="50" y1="400" x2="1350" y2="400" stroke="#30363d" stroke-width="1" opacity="0.3"/>
+  <text x="45" y="405" font-size="11" fill="#8b949e" text-anchor="end">0.70</text>
+
+  <!-- Week markers -->
+  <line x1="300" y1="470" x2="300" y2="490" stroke="#30363d" stroke-width="1"/>
+  <text x="300" y="510" font-size="11" fill="#8b949e" text-anchor="middle">Week 1</text>
+
+  <line x1="550" y1="470" x2="550" y2="490" stroke="#30363d" stroke-width="1"/>
+  <text x="550" y="510" font-size="11" fill="#8b949e" text-anchor="middle">Week 2</text>
+
+  <line x1="800" y1="470" x2="800" y2="490" stroke="#30363d" stroke-width="1"/>
+  <text x="800" y="510" font-size="11" fill="#8b949e" text-anchor="middle">Week 3</text>
+
+  <line x1="1050" y1="470" x2="1050" y2="490" stroke="#30363d" stroke-width="1"/>
+  <text x="1050" y="510" font-size="11" fill="#8b949e" text-anchor="middle">Week 4+</text>
+
+  <!-- Learning curve (oscillating then converging) -->
+  <path d="M 100 350 Q 150 280 200 320 Q 250 260 300 310 Q 350 240 400 290 Q 450 230 500 280 Q 550 220 600 250 Q 700 200 800 200 Q 900 200 1000 200 Q 1100 200 1200 200 Q 1250 200 1300 200"
+        stroke="url(#gradQuality)" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+  <!-- Shaded area under curve -->
+  <path d="M 100 350 Q 150 280 200 320 Q 250 260 300 310 Q 350 240 400 290 Q 450 230 500 280 Q 550 220 600 250 Q 700 200 800 200 Q 900 200 1000 200 Q 1100 200 1200 200 Q 1250 200 1300 200 L 1300 480 L 100 480 Z"
+        fill="url(#gradQuality)" opacity="0.2"/>
+
+  <!-- Phase annotations -->
+  <!-- Phase 1: Learning -->
+  <g filter="url(#shadow3d)">
+    <rect x="100" y="30" width="200" height="50" rx="8" fill="#1f6feb" stroke="#79c0ff" stroke-width="1"/>
+    <text x="200" y="45" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Phase 1: Learning</text>
+    <text x="200" y="62" font-size="9" fill="#e6edf3" text-anchor="middle">(0–500 samples)</text>
+  </g>
+
+  <!-- Phase 2: Convergence -->
+  <g filter="url(#shadow3d)">
+    <rect x="500" y="30" width="200" height="50" rx="8" fill="#f0883e" stroke="#fb8500" stroke-width="1"/>
+    <text x="600" y="45" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Phase 2: Convergence</text>
+    <text x="600" y="62" font-size="9" fill="#e6edf3" text-anchor="middle">(500–1000 samples)</text>
+  </g>
+
+  <!-- Phase 3: Stable -->
+  <g filter="url(#shadow3d)">
+    <rect x="900" y="30" width="200" height="50" rx="8" fill="#56d364" stroke="#7ee787" stroke-width="1"/>
+    <text x="1000" y="45" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Phase 3: Stable</text>
+    <text x="1000" y="62" font-size="9" fill="#e6edf3" text-anchor="middle">(1000+ samples)</text>
+  </g>
+
+  <!-- Key metrics boxes -->
+  <!-- Box 1: Week 1 -->
+  <g filter="url(#shadow3d)">
+    <rect x="180" y="300" width="140" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+    <text x="250" y="320" font-size="10" fill="#8b949e" text-anchor="middle">Week 1</text>
+    <text x="250" y="340" font-size="11" fill="#56d364" text-anchor="middle" font-weight="bold">Quality: 0.78</text>
+    <text x="250" y="358" font-size="9" fill="#e6edf3" text-anchor="middle">Δ +5%</text>
+    <text x="250" y="375" font-size="9" fill="#8b949e" text-anchor="middle">Still learning</text>
+  </g>
+
+  <!-- Box 2: Week 2-3 -->
+  <g filter="url(#shadow3d)">
+    <rect x="650" y="150" width="140" height="90" rx="8" fill="#0a3622" stroke="#238636" stroke-width="2"/>
+    <text x="720" y="170" font-size="10" fill="#56d364" text-anchor="middle" font-weight="bold">Convergence</text>
+    <text x="720" y="190" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="bold">Quality: 0.85</text>
+    <text x="720" y="208" font-size="9" fill="#e6edf3" text-anchor="middle">Δ +1%</text>
+    <text x="720" y="225" font-size="9" fill="#8b949e" text-anchor="middle">Weights stable</text>
+  </g>
+
+  <!-- Box 3: Week 4+ -->
+  <g filter="url(#shadow3d)">
+    <rect x="1100" y="150" width="140" height="90" rx="8" fill="#0a3622" stroke="#238636" stroke-width="2"/>
+    <text x="1170" y="170" font-size="10" fill="#56d364" text-anchor="middle" font-weight="bold">Stable</text>
+    <text x="1170" y="190" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="bold">Quality: 0.85</text>
+    <text x="1170" y="208" font-size="9" fill="#e6edf3" text-anchor="middle">Δ ~0%</text>
+    <text x="1170" y="225" font-size="9" fill="#8b949e" text-anchor="middle">Converged</text>
+  </g>
+
+  <!-- Bottom stats -->
+  <g filter="url(#shadow3d)">
+    <rect x="100" y="530" width="1200" height="50" rx="8" fill="#0a3622" stroke="#238636" stroke-width="2"/>
+
+    <text x="300" y="560" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="bold">Start: 0.78</text>
+    <text x="550" y="560" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="bold">End: 0.85</text>
+    <text x="800" y="560" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="bold">Total: +7% improvement</text>
+    <text x="1100" y="560" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="bold">Permanent</text>
+  </g>
+</svg>
