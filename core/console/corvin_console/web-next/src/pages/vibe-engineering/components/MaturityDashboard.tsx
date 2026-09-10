@@ -8,12 +8,13 @@
  * Test data only (Phase 1). Phase 2 wires to live_measurements/ data source.
  */
 
-import React, { useMemo } from 'react';
-import { TrendingUp } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
 import { ScoreHeader } from './maturity/ScoreHeader';
 import { HexagonRadar } from './maturity/HexagonRadar';
 import { TierBreakdown } from './maturity/TierBreakdown';
 import { MaturityData, LoopScores } from './maturity/types';
+import { useLiveMaturityData, type TimeWindow } from '../hooks/useLiveMaturityData';
 
 // Hardcoded test data (Phase 1)
 const SAMPLE_LOOP_DATA: LoopScores = {
@@ -36,14 +37,65 @@ const SAMPLE_LOOP_DATA: LoopScores = {
 };
 
 export function MaturityDashboard() {
-  const data = useMemo(() => computeMaturityScore(SAMPLE_LOOP_DATA), []);
+  const [window, setWindow] = useState<TimeWindow>('7d');
+  const { loopScores, loading, error, lastUpdated, refresh } = useLiveMaturityData({ window });
+
+  // Use live data if available, fallback to sample data
+  const loopData = loopScores || SAMPLE_LOOP_DATA;
+  const data = useMemo(() => computeMaturityScore(loopData), [loopData]);
 
   return (
     <div className="space-y-6 p-6">
+      {/* Time Window Controls + Refresh */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2">
+          {(['today', '7d', '30d', '90d'] as TimeWindow[]).map((w) => (
+            <button
+              key={w}
+              onClick={() => setWindow(w)}
+              className={`px-3 py-1 rounded text-sm font-medium transition-all ${
+                window === w
+                  ? 'bg-[#58A6FF] text-[#0D1117]'
+                  : 'bg-[#30363D] text-[#C9D1D9] hover:bg-[#3d444d]'
+              }`}
+            >
+              {w === 'today' ? '24h' : w}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={refresh}
+          disabled={loading}
+          className="flex items-center gap-2 px-3 py-1 rounded bg-[#30363D] text-[#C9D1D9] hover:bg-[#3d444d] disabled:opacity-50 transition-all"
+        >
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+      </div>
+
+      {/* Error Alert */}
+      {error && (
+        <div className="bg-[#3d1f1a] border border-[#F85149] rounded p-4 flex items-center gap-3">
+          <AlertCircle size={18} className="text-[#F85149] flex-shrink-0" />
+          <div className="text-sm text-[#F85149]">{error}</div>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {loading && !loopScores && (
+        <div className="text-center py-12">
+          <div className="inline-flex items-center gap-2 text-[#8B949E]">
+            <RefreshCw size={16} className="animate-spin" />
+            <span>Loading live maturity data...</span>
+          </div>
+        </div>
+      )}
+
       {/* Score Header */}
-      <ScoreHeader data={data} />
+      {loopScores && <ScoreHeader data={data} />}
 
       {/* Hexagon Radar + Trend */}
+      {loopScores && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
@@ -82,11 +134,13 @@ export function MaturityDashboard() {
           </div>
         </div>
       </div>
+      )}
 
       {/* Tier Breakdown */}
-      <TierBreakdown loopScores={SAMPLE_LOOP_DATA} />
+      {loopScores && <TierBreakdown loopScores={loopScores} />}
 
       {/* Meta Loop Detail */}
+      {loopScores && (
       <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
         <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
           Meta Loop — Hyperparameter Tuning
@@ -116,7 +170,7 @@ export function MaturityDashboard() {
         <ul className="space-y-3 text-sm text-[#8B949E]">
           <li className="flex gap-3">
             <span className="text-[#F85149] flex-shrink-0">1.</span>
-            <span>Workflow Loop (6.8) is bottleneck — focus on this</span>
+            <span>Workflow Loop ({loopScores.workflow.toFixed(1)}) is bottleneck — focus on this</span>
           </li>
           <li className="flex gap-3">
             <span className="text-[#F85149] flex-shrink-0">2.</span>
@@ -128,6 +182,7 @@ export function MaturityDashboard() {
           </li>
         </ul>
       </div>
+      )}
     </div>
   );
 }
