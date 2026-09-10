@@ -32,17 +32,7 @@ CorvinOS solves **three problems at once:**
 
 ## 🏗️ What Makes It Different
 
-```
-Traditional AI System          CorvinOS
-═══════════════════════════════════════════════════════════════
-Request → Claude → Response    Request → Router → Skill → LLM → Learn
-          (always)                        (chooses)       (measures)
-                                                          (improves)
-
-Cost: 100%                      Cost: 40% (routing saves 60%)
-Learning: None                  Learning: Continuous (6 dimensions)
-Audit Trail: No                 Audit Trail: Hash-chained, GDPR-compliant
-```
+![CorvinOS vs Traditional Systems](/docs/diagrams/corvinOS_complete_system_3d.svg)
 
 ---
 

@@ -1,0 +1,239 @@
+<svg viewBox="0 0 1600 1200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+
+    <filter id="shadow3d" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="6" dy="12" stdDeviation="10" flood-opacity="0.5" flood-color="#000000"/>
+    </filter>
+
+    <!-- Layer gradients -->
+    <linearGradient id="layer1-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3fb950"/>
+      <stop offset="100%" style="stop-color:#1a6f34"/>
+    </linearGradient>
+
+    <linearGradient id="layer2-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#238636"/>
+      <stop offset="100%" style="stop-color:#0d3622"/>
+    </linearGradient>
+
+    <linearGradient id="layer3-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1f6feb"/>
+      <stop offset="100%" style="stop-color:#0969da"/>
+    </linearGradient>
+
+    <linearGradient id="layer4-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#79c0ff"/>
+      <stop offset="100%" style="stop-color:#54aeff"/>
+    </linearGradient>
+
+    <linearGradient id="flow-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff"/>
+      <stop offset="50%" style="stop-color:#79c0ff"/>
+      <stop offset="100%" style="stop-color:#b1bac4"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="1200" fill="url(#bgGrad)"/>
+
+  <!-- Title -->
+  <text x="800" y="50" font-size="40" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+    CorvinOS Complete System Architecture
+  </text>
+
+  <!-- Request enters from left -->
+  <g filter="url(#shadow3d)">
+    <circle cx="80" cy="300" r="50" fill="#ff9940" stroke="#fb8500" stroke-width="3"/>
+    <polygon points="70,300 90,290 90,310" fill="#ffffff"/>
+    <text x="80" y="380" font-size="12" font-weight="bold" fill="#e6edf3" text-anchor="middle">User</text>
+    <text x="80" y="397" font-size="11" fill="#8b949e" text-anchor="middle">Request</text>
+  </g>
+
+  <!-- Arrow to Layer 1 -->
+  <line x1="130" y1="300" x2="220" y2="300" stroke="url(#flow-grad)" stroke-width="4" stroke-linecap="round" marker-end="url(#arrowFlow)"/>
+
+  <!-- LAYER 1: DataHub -->
+  <g filter="url(#shadow3d)">
+    <!-- Box with 3D -->
+    <rect x="220" y="210" width="300" height="180" rx="15" fill="url(#layer1-grad)" stroke="#7ee787" stroke-width="2"/>
+    <polygon points="220,210 230,200 530,200 520,210" fill="#0d1117" opacity="0.3"/>
+
+    <text x="370" y="240" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 1: DataHub</text>
+    <text x="370" y="260" font-size="11" fill="#e6edf3" text-anchor="middle">Unified Ingestion + Quality</text>
+
+    <!-- Sources -->
+    <circle cx="260" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
+    <text x="260" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">Mem</text>
+
+    <circle cx="310" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
+    <text x="310" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">RAG</text>
+
+    <circle cx="360" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
+    <text x="360" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">MCP</text>
+
+    <circle cx="410" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
+    <text x="410" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">File</text>
+
+    <text x="370" y="360" font-size="10" fill="#7ee787" text-anchor="middle" font-weight="bold">DataManifest</text>
+  </g>
+
+  <!-- Arrow down -->
+  <line x1="370" y1="390" x2="370" y2="450" stroke="#3fb950" stroke-width="4" stroke-linecap="round" marker-end="url(#arrowGreen)"/>
+
+  <!-- LAYER 2: Creator 2.0 -->
+  <g filter="url(#shadow3d)">
+    <!-- Box with 3D -->
+    <rect x="220" y="450" width="300" height="180" rx="15" fill="url(#layer2-grad)" stroke="#56d364" stroke-width="2"/>
+    <polygon points="220,450 230,440 530,440 520,450" fill="#0d1117" opacity="0.3"/>
+
+    <text x="370" y="480" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 2: Creator 2.0</text>
+    <text x="370" y="500" font-size="11" fill="#e6edf3" text-anchor="middle">12-Phase Generation</text>
+
+    <!-- Phases -->
+    <circle cx="260" cy="550" r="12" fill="#1f6feb" stroke="#79c0ff" stroke-width="1"/>
+    <text x="260" y="555" font-size="9" fill="#ffffff" text-anchor="middle">0</text>
+
+    <circle cx="290" cy="545" r="10" fill="#0a3622" stroke="#56d364" stroke-width="1"/>
+    <circle cx="320" cy="545" r="10" fill="#0a3622" stroke="#56d364" stroke-width="1"/>
+    <circle cx="350" cy="545" r="10" fill="#0a3622" stroke="#56d364" stroke-width="1"/>
+
+    <text x="370" y="600" font-size="10" fill="#56d364" text-anchor="middle" font-weight="bold">6D Loss Vector</text>
+  </g>
+
+  <!-- Arrow down -->
+  <line x1="370" y1="630" x2="370" y2="690" stroke="#238636" stroke-width="4" stroke-linecap="round" marker-end="url(#arrowLayer2)"/>
+
+  <!-- LAYER 3: Learning Daemon -->
+  <g filter="url(#shadow3d)">
+    <!-- Box with 3D -->
+    <rect x="220" y="690" width="300" height="180" rx="15" fill="url(#layer3-grad)" stroke="#79c0ff" stroke-width="2"/>
+    <polygon points="220,690 230,680 530,680 520,690" fill="#0d1117" opacity="0.3"/>
+
+    <text x="370" y="720" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 3: Daemon</text>
+    <text x="370" y="740" font-size="11" fill="#e6edf3" text-anchor="middle">Learning + Optimization</text>
+
+    <!-- Process flow -->
+    <text x="260" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Feedback</text>
+    <text x="310" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Attribution</text>
+    <text x="360" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Update</text>
+    <text x="410" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Converge</text>
+
+    <text x="370" y="820" font-size="10" fill="#79c0ff" text-anchor="middle" font-weight="bold">&lt;500 samples</text>
+  </g>
+
+  <!-- Arrow down -->
+  <line x1="370" y1="870" x2="370" y2="930" stroke="#1f6feb" stroke-width="4" stroke-linecap="round" marker-end="url(#arrowLayer3)"/>
+
+  <!-- LAYER 4: Dashboard -->
+  <g filter="url(#shadow3d)">
+    <!-- Box with 3D -->
+    <rect x="220" y="930" width="300" height="120" rx="15" fill="url(#layer4-grad)" stroke="#54aeff" stroke-width="2"/>
+    <polygon points="220,930 230,920 530,920 520,930" fill="#0d1117" opacity="0.3"/>
+
+    <text x="370" y="960" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 4: Dashboard</text>
+    <text x="370" y="1010" font-size="10" fill="#e6edf3" text-anchor="middle">Audit • Lifecycle • Compliance Export</text>
+  </g>
+
+  <!-- Result box (right side) -->
+  <g filter="url(#shadow3d)">
+    <rect x="650" y="210" width="300" height="840" rx="20" fill="#0a3622" stroke="#238636" stroke-width="3"/>
+    <polygon points="650,210 665,195 950,195 935,210" fill="#0d1117" opacity="0.3"/>
+
+    <!-- Title -->
+    <text x="800" y="250" font-size="14" font-weight="bold" fill="#56d364" text-anchor="middle">Key Metrics</text>
+
+    <!-- Metric 1: Cost -->
+    <g>
+      <rect x="670" y="280" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="800" y="305" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Monthly Cost</text>
+      <text x="800" y="330" font-size="20" fill="#56d364" text-anchor="middle" font-weight="bold">$4,320</text>
+      <text x="800" y="347" font-size="9" fill="#8b949e" text-anchor="middle">(80% savings)</text>
+    </g>
+
+    <!-- Metric 2: Quality -->
+    <g>
+      <rect x="670" y="375" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="800" y="400" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Quality Score</text>
+      <text x="800" y="425" font-size="20" fill="#79c0ff" text-anchor="middle" font-weight="bold">0.92</text>
+      <text x="800" y="442" font-size="9" fill="#8b949e" text-anchor="middle">(92% optimized)</text>
+    </g>
+
+    <!-- Metric 3: Convergence -->
+    <g>
+      <rect x="670" y="470" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="800" y="495" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Convergence Time</text>
+      <text x="800" y="520" font-size="20" fill="#f0883e" text-anchor="middle" font-weight="bold">2-3 weeks</text>
+      <text x="800" y="537" font-size="9" fill="#8b949e" text-anchor="middle">(&lt;500 samples)</text>
+    </g>
+
+    <!-- Metric 4: Learning -->
+    <g>
+      <rect x="670" y="565" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="800" y="590" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Continuous Learning</text>
+      <text x="800" y="615" font-size="20" fill="#7ee787" text-anchor="middle" font-weight="bold">Forever</text>
+      <text x="800" y="632" font-size="9" fill="#8b949e" text-anchor="middle">(+2-5% per cycle)</text>
+    </g>
+
+    <!-- Metric 5: Audit -->
+    <g>
+      <rect x="670" y="660" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="800" y="685" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Audit Trail</text>
+      <text x="800" y="710" font-size="20" fill="#d2a8ff" text-anchor="middle" font-weight="bold">Immutable</text>
+      <text x="800" y="727" font-size="9" fill="#8b949e" text-anchor="middle">(GDPR Compliant)</text>
+    </g>
+
+    <!-- Status -->
+    <rect x="670" y="755" width="260" height="65" rx="10" fill="#0a4620" stroke="#3fb950" stroke-width="2"/>
+    <text x="800" y="785" font-size="12" font-weight="bold" fill="#7ee787" text-anchor="middle">✓ Production Ready</text>
+    <text x="800" y="808" font-size="10" fill="#56d364" text-anchor="middle">Self-optimizing system</text>
+  </g>
+
+  <!-- Feedback loop (right side, curved) -->
+  <g opacity="0.6">
+    <!-- Curved arrow from Layer 4 back up to Layer 3 -->
+    <path d="M 520 900 Q 600 600 520 400" stroke="#d2a8ff" stroke-width="3" fill="none" stroke-dasharray="5,5" marker-end="url(#arrowFeedback)"/>
+    <text x="570" y="650" font-size="11" fill="#d2a8ff" font-weight="bold" font-style="italic">Feedback Loop</text>
+    <text x="570" y="668" font-size="10" fill="#8b949e">(Continuous)</text>
+  </g>
+
+  <!-- Bottom info box -->
+  <g filter="url(#shadow3d)">
+    <rect x="100" y="1050" width="1400" height="110" rx="15" fill="#0a3622" stroke="#238636" stroke-width="2"/>
+
+    <text x="800" y="1080" font-size="13" font-weight="bold" fill="#56d364" text-anchor="middle">How It Works</text>
+
+    <text x="120" y="1110" font-size="12" fill="#e6edf3">
+      Request → DataHub ingests context (quality checked) → Creator generates skill in 12 phases → Skill executes
+    </text>
+
+    <text x="120" y="1130" font-size="12" fill="#e6edf3">
+      → Learning Daemon measures outcomes → Weights optimize via feedback → Convergence reached → Better routing
+    </text>
+
+    <text x="120" y="1150" font-size="12" fill="#e6edf3">
+      → Dashboard shows progress → Operator sees complete audit trail → Loop continues automatically
+    </text>
+  </g>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowFlow" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
+      <polygon points="0,0 12,6 0,12" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
+      <polygon points="0,0 12,6 0,12" fill="#3fb950"/>
+    </marker>
+    <marker id="arrowLayer2" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
+      <polygon points="0,0 12,6 0,12" fill="#238636"/>
+    </marker>
+    <marker id="arrowLayer3" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
+      <polygon points="0,0 12,6 0,12" fill="#1f6feb"/>
+    </marker>
+    <marker id="arrowFeedback" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
+      <polygon points="0,0 12,6 0,12" fill="#d2a8ff"/>
+    </marker>
+  </defs>
+</svg>
