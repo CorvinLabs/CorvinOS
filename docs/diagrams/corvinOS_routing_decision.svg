@@ -1,0 +1,112 @@
+<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark background -->
+  <rect width="1000" height="700" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="500" y="40" font-size="28" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+    CorvinOS Routing Decision Tree
+  </text>
+
+  <!-- Root node -->
+  <circle cx="500" cy="100" r="45" fill="#238636" stroke="#2ea043" stroke-width="2"/>
+  <text x="500" y="110" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">
+    Request
+  </text>
+
+  <!-- Arrow down -->
+  <line x1="500" y1="145" x2="500" y2="185" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Decision node -->
+  <rect x="420" y="185" width="160" height="60" rx="5" fill="#1f6feb" stroke="#79c0ff" stroke-width="2"/>
+  <text x="500" y="215" font-size="12" fill="#ffffff" text-anchor="middle">
+    Does CorvinOS know
+  </text>
+  <text x="500" y="235" font-size="12" fill="#ffffff" text-anchor="middle">
+    this task?
+  </text>
+
+  <!-- Yes branch -->
+  <line x1="420" y1="215" x2="300" y2="270" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+  <text x="340" y="240" font-size="12" fill="#3fb950" font-weight="bold">YES</text>
+
+  <!-- No branch -->
+  <line x1="580" y1="215" x2="700" y2="270" stroke="#f85149" stroke-width="2" marker-end="url(#arrowhead-red)"/>
+  <text x="660" y="240" font-size="12" fill="#f85149" font-weight="bold">NO</text>
+
+  <!-- Left branch: YES -->
+  <rect x="210" y="270" width="180" height="60" rx="5" fill="#238636" stroke="#3fb950" stroke-width="2"/>
+  <text x="300" y="295" font-size="12" fill="#ffffff" text-anchor="middle">
+    Use learned routing
+  </text>
+  <text x="300" y="315" font-size="12" fill="#ffffff" text-anchor="middle">
+    rule from weights
+  </text>
+
+  <!-- Right branch: NO -->
+  <rect x="610" y="270" width="180" height="60" rx="5" fill="#6e40c9" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="700" y="295" font-size="12" fill="#ffffff" text-anchor="middle">
+    Use feedback from
+  </text>
+  <text x="700" y="315" font-size="12" fill="#ffffff" text-anchor="middle">
+    past similar cases
+  </text>
+
+  <!-- Left outcomes -->
+  <line x1="300" y1="330" x2="250" y2="370" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+  <circle cx="200" cy="420" r="40" fill="#238636" stroke="#3fb950" stroke-width="2"/>
+  <text x="200" y="425" font-size="11" fill="#ffffff" text-anchor="middle">Haiku</text>
+  <text x="200" y="437" font-size="9" fill="#b1bac4" text-anchor="middle">(cheap)</text>
+
+  <line x1="300" y1="330" x2="300" y2="370" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+  <circle cx="300" cy="420" r="40" fill="#1f6feb" stroke="#79c0ff" stroke-width="2"/>
+  <text x="300" y="425" font-size="11" fill="#ffffff" text-anchor="middle">Sonnet</text>
+  <text x="300" y="437" font-size="9" fill="#b1bac4" text-anchor="middle">(balanced)</text>
+
+  <line x1="300" y1="330" x2="350" y2="370" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+  <circle cx="400" cy="420" r="40" fill="#0969da" stroke="#54aeff" stroke-width="2"/>
+  <text x="400" y="425" font-size="11" fill="#ffffff" text-anchor="middle">Opus</text>
+  <text x="400" y="437" font-size="9" fill="#b1bac4" text-anchor="middle">(powerful)</text>
+
+  <!-- Right outcomes -->
+  <line x1="700" y1="330" x2="650" y2="370" stroke="#d2a8ff" stroke-width="2" marker-end="url(#arrowhead-purple)"/>
+  <circle cx="600" cy="420" r="40" fill="#6e40c9" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="600" y="425" font-size="11" fill="#ffffff" text-anchor="middle">Best fit</text>
+  <text x="600" y="437" font-size="9" fill="#b1bac4" text-anchor="middle">(Opus)</text>
+
+  <!-- Result boxes -->
+  <rect x="120" y="520" width="160" height="100" rx="5" fill="#161b22" stroke="#238636" stroke-width="2"/>
+  <text x="200" y="545" font-size="11" font-weight="bold" fill="#3fb950" text-anchor="middle">✓ Cheap</text>
+  <text x="200" y="565" font-size="11" font-weight="bold" fill="#3fb950" text-anchor="middle">✓ Fast</text>
+  <text x="200" y="585" font-size="11" font-weight="bold" fill="#3fb950" text-anchor="middle">✓ Good enough</text>
+
+  <rect x="320" y="520" width="160" height="100" rx="5" fill="#161b22" stroke="#1f6feb" stroke-width="2"/>
+  <text x="400" y="545" font-size="11" font-weight="bold" fill="#79c0ff" text-anchor="middle">✓ Balanced cost</text>
+  <text x="400" y="565" font-size="11" font-weight="bold" fill="#79c0ff" text-anchor="middle">✓ Good quality</text>
+  <text x="400" y="585" font-size="11" font-weight="bold" fill="#79c0ff" text-anchor="middle">✓ Reliable</text>
+
+  <rect x="520" y="520" width="160" height="100" rx="5" fill="#161b22" stroke="#0969da" stroke-width="2"/>
+  <text x="600" y="545" font-size="11" font-weight="bold" fill="#54aeff" text-anchor="middle">✓ High quality</text>
+  <text x="600" y="565" font-size="11" font-weight="bold" fill="#54aeff" text-anchor="middle">✓ Complex tasks</text>
+  <text x="600" y="585" font-size="11" font-weight="bold" fill="#54aeff" text-anchor="middle">✓ Fallback</text>
+
+  <rect x="720" y="520" width="160" height="100" rx="5" fill="#161b22" stroke="#6e40c9" stroke-width="2"/>
+  <text x="800" y="545" font-size="11" font-weight="bold" fill="#d2a8ff" text-anchor="middle">✓ First time</text>
+  <text x="800" y="565" font-size="11" font-weight="bold" fill="#d2a8ff" text-anchor="middle">✓ Safe choice</text>
+  <text x="800" y="585" font-size="11" font-weight="bold" fill="#d2a8ff" text-anchor="middle">✓ Learn for next</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#f85149"/>
+    </marker>
+    <marker id="arrowhead-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#d2a8ff"/>
+    </marker>
+  </defs>
+</svg>
