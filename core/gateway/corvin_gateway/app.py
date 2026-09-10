@@ -58,7 +58,9 @@ def _tripwire_assert_all() -> None:
     try:
         from corvin_compliance_reports.tripwire import assert_all
     except ImportError:
-        compliance_root = _REPO_ROOT / "core" / "compliance"
+        _app_file = Path(__file__).resolve()
+        _corvin_root = _app_file.parent.parent.parent.parent
+        compliance_root = _corvin_root / "core" / "compliance"
         if compliance_root.is_dir() and str(compliance_root) not in sys.path:
             sys.path.append(str(compliance_root))
         from corvin_compliance_reports.tripwire import assert_all
