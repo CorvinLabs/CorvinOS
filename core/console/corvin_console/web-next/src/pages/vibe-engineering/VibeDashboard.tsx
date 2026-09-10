@@ -38,7 +38,7 @@ const LoadingFallback = () => (
 );
 
 export function VibeDashboard() {
-  const [activeTab, setActiveTab] = useState<'maturity' | 'summary' | 'patterns' | 'config' | 'preferences'>('maturity');
+  const [activeTab, setActiveTab] = useState<'maturity' | 'summary' | 'patterns'>('maturity');
 
   return (
     <>
@@ -58,10 +58,8 @@ export function VibeDashboard() {
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {[
             { id: 'maturity', label: '📊 Maturity Metrics', icon: '📊' },
-            { id: 'summary', label: '📝 Summary', icon: '📝' },
-            { id: 'patterns', label: '📊 Patterns', icon: '📊' },
-            { id: 'config', label: '⚙️ Config', icon: '⚙️' },
-            { id: 'preferences', label: '👤 Preferences', icon: '👤' },
+            { id: 'summary', label: '📈 Summary', icon: '📈' },
+            { id: 'patterns', label: '🔍 Patterns', icon: '🔍' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -100,16 +98,6 @@ export function VibeDashboard() {
         {activeTab === 'patterns' && (
           <div className="p-6 text-muted-foreground">
             <p>Patterns coming soon...</p>
-          </div>
-        )}
-        {activeTab === 'config' && (
-          <div className="p-6 text-muted-foreground">
-            <p>Config coming soon...</p>
-          </div>
-        )}
-        {activeTab === 'preferences' && (
-          <div className="p-6 text-muted-foreground">
-            <p>Preferences coming soon...</p>
           </div>
         )}
       </div>
