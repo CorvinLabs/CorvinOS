@@ -122,6 +122,7 @@ from .routes import (
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
+    deprecated_api_metrics as deprecated_api_metrics_route,
     world_map as world_map_route,
     infinite_session_api as infinite_session_route,
     method_discovery_api as method_discovery_api_route,
@@ -166,6 +167,7 @@ from .routes import (
     models as models_route,
     talent as talent_route,
     vibe_engineering as vibe_engineering_route,
+    api_vibe_maturity as api_vibe_maturity_route,
     # ADR-0357 P3 — versioned capability manifest (shell renders nav from it)
     capabilities as capabilities_route,
     # ADR-0366 — AI-generated Console panels
@@ -201,11 +203,13 @@ router.include_router(skills_monitoring_route.router, tags=["console-skills-moni
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
+router.include_router(deprecated_api_metrics_route.router, tags=["console-deprecated-api-metrics"])
 router.include_router(world_map_route.router, tags=["console-world-map"])
 router.include_router(infinite_session_route.router, tags=["console-infinite-session"])
 router.include_router(method_discovery_api_route.router, tags=["console-method-discovery"])
 router.include_router(l5_metrics_route.router, tags=["console-l5-metrics"])
 router.include_router(vibe_route.router, tags=["console-vibe"])
+router.include_router(api_vibe_maturity_route.router, tags=["console-vibe-maturity"])
 router.include_router(memory.router, tags=["console-memory"])
 # Phase D — realtime SSE streams
 router.include_router(streams.router, tags=["console-streams"])
