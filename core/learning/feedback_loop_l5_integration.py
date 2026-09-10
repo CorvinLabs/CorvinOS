@@ -180,6 +180,7 @@ class L5FeedbackLoopIntegrator:
         ema_smoothed: Optional[float] = None,
         ema_confidence: Optional[float] = None,
         config_history: Optional[List[float]] = None,
+        prev_config_hash: Optional[str] = None,
     ) -> L5PipelineResult:
         """
         Run feedback through complete L5 pipeline (k=1 → k=5).
@@ -194,6 +195,7 @@ class L5FeedbackLoopIntegrator:
             ema_smoothed: EMA-smoothed delta from k=1 (optional, computed if None)
             ema_confidence: EMA confidence from k=1 (optional, computed if None)
             config_history: Recent config values for stability assessment (optional)
+            prev_config_hash: SHA256 of PREVIOUS config (for traceability; ADR-0616, GDPR Art. 30). If None, audit trail is queried (fallback).
 
         Returns:
             L5PipelineResult with full decision chain
@@ -396,11 +398,12 @@ class L5FeedbackLoopIntegrator:
                 requires_operator_approval=True,
             )
 
-            # Request approval with real config hashes for traceability
+            # Request approval with real config hashes for traceability (ADR-0616, GDPR Art. 30)
+            actual_prev_hash = prev_config_hash if prev_config_hash else self._query_previous_config_hash(result.skill_id, result.metric_name)
             record, auto_approved = self.approval_gate.request_approval(
                 drift_alert,
                 confidence=confidence,
-                prev_config_hash="0" * 64,  # TODO: Get from Skill state; hardcoded for now
+                prev_config_hash=actual_prev_hash,  # Real hash from Skill state or audit trail
                 next_config_hash=config_hash,  # Use real hash provided by caller
             )
 
@@ -704,6 +707,46 @@ class L5FeedbackLoopIntegrator:
         except Exception as e:
             logger.critical(f"[L5 Integrator] Audit-first constraint violated: {e}")
             raise RuntimeError(f"Revoke audit failed: {e}")
+
+    # ========== Helper Methods ==========
+
+    def _query_previous_config_hash(self, skill_id: str, metric_name: str) -> str:
+        """Query audit trail for the PREVIOUS config hash (before latest change).
+
+        Falls back to None if not found. Used for GDPR Art. 30 traceability when
+        prev_config_hash is not passed explicitly by caller (ADR-0616).
+
+        Args:
+            skill_id: Skill being optimized
+            metric_name: Metric name
+
+        Returns:
+            SHA256 hex string of previous config, or "0"*64 if not found (safe fallback)
+        """
+        try:
+            if not self.audit_backend:
+                return "0" * 64  # Safe fallback when audit not available
+
+            # Query audit trail for most recent skill_config_updated event
+            events = self.audit_backend.query_events(
+                tenant_id=self.tenant_id,
+                event_type="skill_config_updated",
+                limit=1,
+            )
+
+            if events and len(events) > 0:
+                latest_event = events[0]
+                # Extract prev_config_hash from event payload (if present)
+                if "prev_config_hash" in latest_event:
+                    return latest_event["prev_config_hash"]
+                # Fallback: use the config_hash from the event as prev for next iteration
+                if "config_hash" in latest_event:
+                    return latest_event["config_hash"]
+
+            return "0" * 64  # Safe fallback (signals "unknown previous state")
+        except Exception as e:
+            logger.warning(f"[L5] Failed to query previous config hash: {e}, falling back to 0*64")
+            return "0" * 64
 
     # ========== Observability ==========
 
