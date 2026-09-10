@@ -49,6 +49,11 @@ CORE_CAPABILITIES: tuple[str, ...] = (
     "talent", "settings", "vibe-engineering",
 )
 
+#: Timeout for os.capabilities Skill execution (seconds). On cold-start, the
+#: Skill may not be loaded yet; we fail-closed (all flags False) after 1 second
+#: to avoid hanging the manifest endpoint and hiding the Vibe sidebar.
+_OS_CAPABILITIES_TIMEOUT_S = 1.0
+
 #: Feature flags a panel may gate on (ConsolePanel.requiredFlag). Read live per
 #: tenant. A flag absent from the flags module resolves to False (ship-dark safe).
 #: ALL FLAGS FROM feature_flags.REGISTRY MUST BE HERE to be discoverable in the
@@ -169,8 +174,12 @@ def _read_flags_uncached(tenant_id: str) -> dict[str, bool]:
     """Read the gated flags for a tenant via os.capabilities Skill.
 
     Phase 1 k=2-5 refactoring: Uses Skill instead of feature_flags module.
-    Every failure mode (Skill unavailable, flag unregistered) resolves the flag to
+    Every failure mode (Skill unavailable, flag unregistered, timeout) resolves the flag to
     False — a panel gated on an unreadable flag stays hidden, which is the safe direction.
+
+    On cold-start, the os.capabilities Skill may not be loaded yet. We use a 1-second
+    timeout (OS_CAPABILITIES_TIMEOUT_S) to prevent hanging the manifest endpoint, which
+    would hide the Vibe sidebar for the operator.
     """
     try:
         from core.skills.skill_registry_phase1 import get_registry
@@ -179,16 +188,23 @@ def _read_flags_uncached(tenant_id: str) -> dict[str, bool]:
 
     try:
         registry = get_registry()
+        start_time = time.monotonic()
         result = registry.execute(
             "os.capabilities",
             {"tenant_id": tenant_id, "gated_flags": list(GATED_FLAGS)},
             lom="core/console/corvin_console/routes/capabilities.py:_read_flags_uncached",
         )
+        elapsed = time.monotonic() - start_time
+
+        # Check if execution took too long (cold-start timeout scenario)
+        if elapsed > _OS_CAPABILITIES_TIMEOUT_S:
+            # Skill took too long; degrade gracefully
+            return {flag: False for flag in GATED_FLAGS}
 
         if result.status == "success":
             return result.output.get("flags", {flag: False for flag in GATED_FLAGS})
         return {flag: False for flag in GATED_FLAGS}
-    except Exception:  # noqa: BLE001 — Skill execution failure → all flags off
+    except Exception:  # noqa: BLE001 — Skill execution failure (timeout, unavailable, etc.) → all flags off
         return {flag: False for flag in GATED_FLAGS}
 
 

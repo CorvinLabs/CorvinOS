@@ -92,6 +92,7 @@ def _parse_chain_file(
     *,
     severity: str | None,
     event_prefix: str | None,
+    since: float | None = None,
 ) -> list[dict[str, Any]]:
     """Parse one audit chain file and return filtered event dicts."""
     raw_lines = _tail_lines(path)
@@ -110,6 +111,10 @@ def _parse_chain_file(
             continue
         if event_prefix and not et.startswith(event_prefix):
             continue
+        if since is not None:
+            ts = rec_obj.get("ts")
+            if isinstance(ts, (int, float)) and ts < since:
+                continue
         # Project to a curated shape.  The hash prefix (first 8 hex chars) is
         # safe to surface — it is the same metadata already shown by the
         # DualTrackAuditPanel.  Full hash and prev_hash are never returned.
@@ -134,6 +139,8 @@ def audit_tail(
                                   description="Filter: INFO|WARNING|CRITICAL"),
     event_prefix: str | None = Query(default=None,
                                      description="Filter: e.g. 'console.' or 'gateway.'"),
+    since: float | None = Query(default=None,
+                               description="Filter: Unix timestamp (seconds) - only return events after this time"),
 ) -> dict[str, Any]:
     """Return the last *limit* events merged from all three tenant audit chains.
 
@@ -172,7 +179,7 @@ def audit_tail(
         except OSError:
             continue
         inode = (st.st_dev, st.st_ino)
-        all_events.extend(_parse_chain_file(chain, severity=severity, event_prefix=event_prefix))
+        all_events.extend(_parse_chain_file(chain, severity=severity, event_prefix=event_prefix, since=since))
         if inode not in seen_inodes:
             seen_inodes.add(inode)
             total_size += st.st_size
