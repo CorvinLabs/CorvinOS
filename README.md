@@ -11,6 +11,27 @@
 
 ---
 
+## 📖 **START HERE: Complete CorvinOS Explained**
+
+> **New:** Full documentation with diagrams, no jargon, storytelling approach.
+
+**[👉 Read: CorvinOS Explained — Full Guide](./README_CORVINVS_EXPLAINED.md)**
+
+This comprehensive guide covers:
+- ✅ **Conceptual Overview** — What is an OS? Why AI needs one.
+- ✅ **Token Economy** — How intelligent routing saves 60–80% of costs
+- ✅ **4-Layer Architecture** — DataHub → Creator → Daemon → Dashboard (Forge 2.0)
+- ✅ **Learning Loops** — 6D Loss Vector, convergence guarantee in 500 samples
+- ✅ **Beautiful Diagrams** — Dark Mode SVGs for every concept
+- ✅ **Complete System Flow** — Request-to-learning cycle, step-by-step
+
+**Other resources:**
+- [Quick Reference](./docs/QUICK_REFERENCE.md) — One-page cheat sheet
+- [Technical Deep Dive](./docs/SYSTEM_OVERVIEW_COMPLETE.md) — Math, convergence proofs, GDPR compliance
+- [Forge 2.0 Deployment Status](./FORGE_2_0_LIVE.md) — Live production system
+
+---
+
 ## What is CorvinOS?
 
 **CorvinOS is a self-learning, auditable operating system for AI agents.** It's built on three load-bearing principles:
