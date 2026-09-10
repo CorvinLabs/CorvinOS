@@ -3,10 +3,10 @@
   <rect width="1000" height="900" fill="#0d1117"/>
 
   <!-- Title -->
-  <text x="500" y="40" font-size="28" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+  <text x="500" y="40" font-size="40" font-weight="bold" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">
     CorvinOS 6D Loss Vector Hexagon
   </text>
-  <text x="500" y="70" font-size="14" fill="#8b949e" text-anchor="middle">
+  <text x="500" y="70" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">
     Six dimensions of quality. Fill the hexagon to optimize.
   </text>
 
@@ -36,67 +36,67 @@
 
   <!-- Vertex 1: Data Quality (Top) -->
   <circle cx="500" cy="100" r="50" fill="#3fb950" stroke="#7ee787" stroke-width="3"/>
-  <text x="500" y="95" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">88%</text>
-  <text x="500" y="115" font-size="11" fill="#ffffff" text-anchor="middle">Data Quality</text>
+  <text x="500" y="95" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">88%</text>
+  <text x="500" y="115" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Data Quality</text>
   <line x="500" y="150" x2="500" y2="200" stroke="#3fb950" stroke-width="2" stroke-dasharray="3,3" opacity="0.5"/>
 
   <!-- Vertex 2: Generation Quality (Top Right) -->
   <circle cx="700" cy="200" r="50" fill="#238636" stroke="#56d364" stroke-width="3"/>
-  <text x="700" y="195" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">92%</text>
-  <text x="750" y="215" font-size="11" fill="#ffffff" text-anchor="middle">Generation</text>
-  <text x="750" y="230" font-size="11" fill="#ffffff" text-anchor="middle">Quality</text>
+  <text x="700" y="195" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">92%</text>
+  <text x="750" y="215" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Generation</text>
+  <text x="750" y="230" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Quality</text>
 
   <!-- Vertex 3: Efficiency (Bottom Right) -->
   <circle cx="750" cy="400" r="50" fill="#79c0ff" stroke="#54aeff" stroke-width="3"/>
-  <text x="750" y="395" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">95%</text>
-  <text x="820" y="415" font-size="11" fill="#ffffff" text-anchor="middle">Efficiency</text>
-  <text x="820" y="430" font-size="11" fill="#ffffff" text-anchor="middle">(Cost/Speed)</text>
+  <text x="750" y="395" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">95%</text>
+  <text x="820" y="415" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Efficiency</text>
+  <text x="820" y="430" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">(Cost/Speed)</text>
 
   <!-- Vertex 4: User Satisfaction (Bottom Left) -->
   <circle cx="500" cy="600" r="50" fill="#1f6feb" stroke="#79c0ff" stroke-width="3"/>
-  <text x="500" y="595" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">88%</text>
-  <text x="500" y="615" font-size="11" fill="#ffffff" text-anchor="middle">User</text>
-  <text x="500" y="630" font-size="11" fill="#ffffff" text-anchor="middle">Satisfaction</text>
+  <text x="500" y="595" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">88%</text>
+  <text x="500" y="615" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">User</text>
+  <text x="500" y="630" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Satisfaction</text>
 
   <!-- Vertex 5: Learning Health (Bottom Left) -->
   <circle cx="250" cy="400" r="50" fill="#d2a8ff" stroke="#f0883e" stroke-width="3"/>
-  <text x="250" y="395" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">90%</text>
-  <text x="170" y="415" font-size="11" fill="#ffffff" text-anchor="middle">Learning</text>
-  <text x="170" y="430" font-size="11" fill="#ffffff" text-anchor="middle">Loop Health</text>
+  <text x="250" y="395" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">90%</text>
+  <text x="170" y="415" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Learning</text>
+  <text x="170" y="430" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Loop Health</text>
 
   <!-- Vertex 6: System Health (Top Left) -->
   <circle cx="200" cy="200" r="50" fill="#54aeff" stroke="#54aeff" stroke-width="3"/>
-  <text x="200" y="195" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">98%</text>
-  <text x="130" y="215" font-size="11" fill="#ffffff" text-anchor="middle">System</text>
-  <text x="130" y="230" font-size="11" fill="#ffffff" text-anchor="middle">Health</text>
+  <text x="200" y="195" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">98%</text>
+  <text x="130" y="215" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">System</text>
+  <text x="130" y="230" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Health</text>
 
   <!-- Center text: Overall quality -->
   <circle cx="500" cy="350" r="70" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
-  <text x="500" y="335" font-size="16" font-weight="bold" fill="#3fb950" text-anchor="middle">
+  <text x="500" y="335" font-size="20" font-weight="bold" fill="#3fb950" text-anchor="middle" letter-spacing="0.5">
     Overall
   </text>
-  <text x="500" y="360" font-size="24" font-weight="bold" fill="#7ee787" text-anchor="middle">
+  <text x="500" y="360" font-size="28" font-weight="bold" fill="#7ee787" text-anchor="middle" letter-spacing="0.5">
     0.90
   </text>
-  <text x="500" y="380" font-size="12" fill="#8b949e" text-anchor="middle">
+  <text x="500" y="380" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">
     90% Quality
   </text>
 
   <!-- Legend -->
-  <text x="50" y="750" font-size="14" font-weight="bold" fill="#e6edf3">How to Read:</text>
+  <text x="50" y="750" font-size="14" font-weight="bold" fill="#e6edf3" letter-spacing="0.5">How to Read:</text>
 
   <rect x="50" y="770" width="870" height="110" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1"/>
 
-  <text x="70" y="795" font-size="12" fill="#8b949e">
+  <text x="70" y="795" font-size="12" fill="#8b949e" letter-spacing="0.5">
     Each vertex represents one quality dimension (0-100%). The larger the filled hexagon, the higher the overall quality.
   </text>
-  <text x="70" y="820" font-size="12" fill="#8b949e">
+  <text x="70" y="820" font-size="12" fill="#8b949e" letter-spacing="0.5">
     CorvinOS measures all 6 dimensions simultaneously. A "full" hexagon means balanced excellence across all areas.
   </text>
-  <text x="70" y="845" font-size="12" fill="#8b949e">
+  <text x="70" y="845" font-size="12" fill="#8b949e" letter-spacing="0.5">
     Overall Quality = 1.0 - mean(loss_vector). Higher is better. Target: 0.95+ (95% quality).
   </text>
 
   <!-- Metrics table below -->
-  <text x="50" y="880" font-size="12" font-weight="bold" fill="#e6edf3">Current Metrics:</text>
+  <text x="50" y="880" font-size="12" font-weight="bold" fill="#e6edf3" letter-spacing="0.5">Current Metrics:</text>
 </svg>

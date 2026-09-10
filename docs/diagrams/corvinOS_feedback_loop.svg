@@ -3,7 +3,7 @@
   <rect width="1200" height="1000" fill="#0d1117"/>
 
   <!-- Title -->
-  <text x="600" y="40" font-size="28" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+  <text x="600" y="40" font-size="40" font-weight="bold" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">
     CorvinOS Feedback Loop: From Execution to Learning
   </text>
 
@@ -20,31 +20,31 @@
   <!-- Step 1: Skill Executes -->
   <g id="step1">
     <circle cx="150" cy="150" r="50" fill="#238636" stroke="#56d364" stroke-width="3"/>
-    <text x="150" y="145" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">1</text>
-    <text x="150" y="160" font-size="11" fill="#ffffff" text-anchor="middle">Execution</text>
+    <text x="150" y="145" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">1</text>
+    <text x="150" y="160" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Execution</text>
   </g>
-  <text x="150" y="220" font-size="12" fill="#8b949e" text-anchor="middle">Skill processes</text>
-  <text x="150" y="237" font-size="12" fill="#8b949e" text-anchor="middle">real user request</text>
+  <text x="150" y="220" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Skill processes</text>
+  <text x="150" y="237" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">real user request</text>
 
   <!-- Step 2: Measure Quality -->
   <g id="step2">
     <circle cx="400" cy="150" r="50" fill="#1f6feb" stroke="#79c0ff" stroke-width="3"/>
-    <text x="400" y="145" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">2</text>
-    <text x="400" y="160" font-size="11" fill="#ffffff" text-anchor="middle">Quality</text>
+    <text x="400" y="145" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">2</text>
+    <text x="400" y="160" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Quality</text>
   </g>
   <line x1="200" y1="150" x2="350" y2="150" stroke="#58a6ff" stroke-width="3" marker-end="url(#arrowCircle)"/>
-  <text x="400" y="220" font-size="12" fill="#8b949e" text-anchor="middle">Check: format,</text>
-  <text x="400" y="237" font-size="12" fill="#8b949e" text-anchor="middle">latency, errors</text>
+  <text x="400" y="220" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Check: format,</text>
+  <text x="400" y="237" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">latency, errors</text>
 
   <!-- Step 3: User Feedback -->
   <g id="step3">
     <circle cx="650" cy="150" r="50" fill="#d2a8ff" stroke="#f0883e" stroke-width="3"/>
-    <text x="650" y="145" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">3</text>
-    <text x="650" y="160" font-size="11" fill="#ffffff" text-anchor="middle">Feedback</text>
+    <text x="650" y="145" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">3</text>
+    <text x="650" y="160" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Feedback</text>
   </g>
   <line x1="450" y1="150" x2="600" y2="150" stroke="#58a6ff" stroke-width="3" marker-end="url(#arrowCircle)"/>
-  <text x="650" y="220" font-size="12" fill="#8b949e" text-anchor="middle">User rates:</text>
-  <text x="650" y="237" font-size="12" fill="#8b949e" text-anchor="middle">"Great!"  +0.95</text>
+  <text x="650" y="220" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">User rates:</text>
+  <text x="650" y="237" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">"Great!"  +0.95</text>
 
   <!-- Arrow down to next row -->
   <line x1="150" y1="270" x2="150" y2="330" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowCircle)"/>
@@ -54,20 +54,20 @@
   <!-- Step 4: Attribution -->
   <g id="step4">
     <rect x="50" y="330" width="600" height="150" rx="8" fill="#161b22" stroke="#6e40c9" stroke-width="2"/>
-    <text x="70" y="355" font-size="14" font-weight="bold" fill="#d2a8ff">Step 4: Attribution (Causal Graph)</text>
-    <text x="70" y="380" font-size="11" fill="#8b949e">Which data sources contributed to this good result?</text>
+    <text x="70" y="355" font-size="14" font-weight="bold" fill="#d2a8ff" letter-spacing="0.5">Step 4: Attribution (Causal Graph)</text>
+    <text x="70" y="380" font-size="14" fill="#8b949e" letter-spacing="0.5">Which data sources contributed to this good result?</text>
 
     <rect x="90" y="395" width="130" height="40" rx="4" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
-    <text x="155" y="417" font-size="10" fill="#ffffff" text-anchor="middle">Memory:Tier2</text>
-    <text x="155" y="430" font-size="9" fill="#8b949e" text-anchor="middle">+0.12 credit</text>
+    <text x="155" y="417" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Memory:Tier2</text>
+    <text x="155" y="430" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">+0.12 credit</text>
 
     <rect x="240" y="395" width="130" height="40" rx="4" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
-    <text x="305" y="417" font-size="10" fill="#ffffff" text-anchor="middle">RAG:Embeddings</text>
-    <text x="305" y="430" font-size="9" fill="#8b949e" text-anchor="middle">+0.08 credit</text>
+    <text x="305" y="417" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">RAG:Embeddings</text>
+    <text x="305" y="430" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">+0.08 credit</text>
 
     <rect x="390" y="395" width="130" height="40" rx="4" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
-    <text x="455" y="417" font-size="10" fill="#ffffff" text-anchor="middle">Files</text>
-    <text x="455" y="430" font-size="9" fill="#8b949e" text-anchor="middle">+0.02 credit</text>
+    <text x="455" y="417" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Files</text>
+    <text x="455" y="430" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">+0.02 credit</text>
   </g>
 
   <!-- Arrow down -->
@@ -76,24 +76,24 @@
   <!-- Step 5: Weight Update -->
   <g id="step5">
     <rect x="50" y="540" width="600" height="140" rx="8" fill="#161b22" stroke="#238636" stroke-width="2"/>
-    <text x="70" y="565" font-size="14" font-weight="bold" fill="#3fb950">Step 5: Weight Update (Gradient Descent)</text>
-    <text x="70" y="590" font-size="11" fill="#8b949e">Increase weights for sources that helped</text>
+    <text x="70" y="565" font-size="14" font-weight="bold" fill="#3fb950" letter-spacing="0.5">Step 5: Weight Update (Gradient Descent)</text>
+    <text x="70" y="590" font-size="14" fill="#8b949e" letter-spacing="0.5">Increase weights for sources that helped</text>
 
     <rect x="90" y="605" width="130" height="50" rx="4" fill="#0a3622" stroke="#238636" stroke-width="1" stroke-dasharray="2,2"/>
-    <text x="155" y="625" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">Before:</text>
-    <text x="155" y="640" font-size="10" fill="#56d364" text-anchor="middle">Memory:0.50</text>
+    <text x="155" y="625" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Before:</text>
+    <text x="155" y="640" font-size="18" fill="#56d364" text-anchor="middle" letter-spacing="0.5">Memory:0.50</text>
 
-    <text x="240" y="620" font-size="16" fill="#3fb950" text-anchor="middle" font-weight="bold">+0.01</text>
-    <text x="240" y="650" font-size="9" fill="#8b949e" text-anchor="middle">(learning_rate</text>
-    <text x="240" y="662" font-size="9" fill="#8b949e" text-anchor="middle">× credit)</text>
+    <text x="240" y="620" font-size="20" fill="#3fb950" text-anchor="middle" font-weight="bold" letter-spacing="0.5">+0.01</text>
+    <text x="240" y="650" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">(learning_rate</text>
+    <text x="240" y="662" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">× credit)</text>
 
     <rect x="310" y="605" width="130" height="50" rx="4" fill="#0a3622" stroke="#238636" stroke-width="1" stroke-dasharray="2,2"/>
-    <text x="375" y="625" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">After:</text>
-    <text x="375" y="640" font-size="10" fill="#7ee787" text-anchor="middle">Memory:0.51</text>
+    <text x="375" y="625" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">After:</text>
+    <text x="375" y="640" font-size="18" fill="#7ee787" text-anchor="middle" letter-spacing="0.5">Memory:0.51</text>
 
     <rect x="530" y="605" width="100" height="50" rx="4" fill="#0a3622" stroke="#238636" stroke-width="1" stroke-dasharray="2,2"/>
-    <text x="580" y="625" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">Iteration:</text>
-    <text x="580" y="640" font-size="10" fill="#56d364" text-anchor="middle">1 of N</text>
+    <text x="580" y="625" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Iteration:</text>
+    <text x="580" y="640" font-size="18" fill="#56d364" text-anchor="middle" letter-spacing="0.5">1 of N</text>
   </g>
 
   <!-- Arrow down -->
@@ -102,11 +102,11 @@
   <!-- Step 6: Convergence -->
   <g id="step6">
     <rect x="50" y="740" width="600" height="120" rx="8" fill="#0a3622" stroke="#3fb950" stroke-width="2"/>
-    <text x="70" y="765" font-size="14" font-weight="bold" fill="#3fb950">Step 6: Convergence Check</text>
-    <text x="70" y="790" font-size="11" fill="#8b949e">After 500 samples: weights stabilize</text>
+    <text x="70" y="765" font-size="14" font-weight="bold" fill="#3fb950" letter-spacing="0.5">Step 6: Convergence Check</text>
+    <text x="70" y="790" font-size="14" fill="#8b949e" letter-spacing="0.5">After 500 samples: weights stabilize</text>
 
-    <text x="90" y="815" font-size="10" fill="#56d364" font-weight="bold">✓ Weights not changing (&lt; ε)</text>
-    <text x="90" y="838" font-size="10" fill="#56d364" font-weight="bold">✓ System is optimized for this task</text>
+    <text x="90" y="815" font-size="14" fill="#56d364" font-weight="bold" letter-spacing="0.5">✓ Weights not changing (&lt; ε)</text>
+    <text x="90" y="838" font-size="14" fill="#56d364" font-weight="bold" letter-spacing="0.5">✓ System is optimized for this task</text>
   </g>
 
   <!-- Arrow right to next generation -->
@@ -115,45 +115,45 @@
   <!-- Step 7: Next Generation -->
   <g id="step7">
     <circle cx="900" cy="800" r="60" fill="#238636" stroke="#56d364" stroke-width="3"/>
-    <text x="900" y="790" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">Next</text>
-    <text x="900" y="808" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">Generation</text>
+    <text x="900" y="790" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Next</text>
+    <text x="900" y="808" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Generation</text>
   </g>
-  <text x="900" y="880" font-size="12" fill="#8b949e" text-anchor="middle">Uses learned weights</text>
-  <text x="900" y="897" font-size="12" fill="#8b949e" text-anchor="middle">Quality improves 2-5%</text>
+  <text x="900" y="880" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Uses learned weights</text>
+  <text x="900" y="897" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Quality improves 2-5%</text>
 
   <!-- Arrow back to start (loop) -->
   <path d="M 960 800 Q 1050 500 150 280" stroke="#3fb950" stroke-width="2" fill="none" stroke-dasharray="5,5" marker-end="url(#arrowSuccess)"/>
-  <text x="1100" y="550" font-size="12" fill="#3fb950" font-weight="bold">Loop</text>
-  <text x="1100" y="567" font-size="12" fill="#3fb950" font-weight="bold">Continues</text>
+  <text x="1100" y="550" font-size="12" fill="#3fb950" font-weight="bold" letter-spacing="0.5">Loop</text>
+  <text x="1100" y="567" font-size="12" fill="#3fb950" font-weight="bold" letter-spacing="0.5">Continues</text>
 
   <!-- Right side: Timeline -->
   <g id="timeline">
-    <text x="750" y="150" font-size="14" font-weight="bold" fill="#e6edf3">Timeline Example</text>
+    <text x="750" y="150" font-size="14" font-weight="bold" fill="#e6edf3" letter-spacing="0.5">Timeline Example</text>
 
     <!-- Week 1 -->
     <rect x="720" y="170" width="480" height="80" rx="4" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-    <text x="740" y="195" font-size="11" font-weight="bold" fill="#8b949e">Week 1 (0 feedback):</text>
-    <text x="740" y="215" font-size="10" fill="#ffffff">Weights: equal (no learning)</text>
-    <text x="740" y="232" font-size="10" fill="#ffffff">Quality: 0.78 (baseline)</text>
+    <text x="740" y="195" font-size="14" font-weight="bold" fill="#8b949e" letter-spacing="0.5">Week 1 (0 feedback):</text>
+    <text x="740" y="215" font-size="14" fill="#ffffff" letter-spacing="0.5">Weights: equal (no learning)</text>
+    <text x="740" y="232" font-size="14" fill="#ffffff" letter-spacing="0.5">Quality: 0.78 (baseline)</text>
 
     <!-- Week 2 -->
     <rect x="720" y="270" width="480" height="100" rx="4" fill="#161b22" stroke="#238636" stroke-width="1"/>
-    <text x="740" y="295" font-size="11" font-weight="bold" fill="#3fb950">Week 2 (500 feedback):</text>
-    <text x="740" y="315" font-size="10" fill="#ffffff">Memory: +0.15 (more useful)</text>
-    <text x="740" y="332" font-size="10" fill="#ffffff">RAG: +0.10 (helpful)</text>
-    <text x="740" y="349" font-size="10" fill="#ffffff">Quality: 0.84 (+6%) ✓</text>
+    <text x="740" y="295" font-size="14" font-weight="bold" fill="#3fb950" letter-spacing="0.5">Week 2 (500 feedback):</text>
+    <text x="740" y="315" font-size="14" fill="#ffffff" letter-spacing="0.5">Memory: +0.15 (more useful)</text>
+    <text x="740" y="332" font-size="14" fill="#ffffff" letter-spacing="0.5">RAG: +0.10 (helpful)</text>
+    <text x="740" y="349" font-size="14" fill="#ffffff" letter-spacing="0.5">Quality: 0.84 (+6%) ✓</text>
 
     <!-- Week 3 -->
     <rect x="720" y="390" width="480" height="100" rx="4" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
-    <text x="740" y="415" font-size="11" font-weight="bold" fill="#56d364">Week 3 (1000 feedback):</text>
-    <text x="740" y="435" font-size="10" fill="#ffffff">Convergence reached</text>
-    <text x="740" y="452" font-size="10" fill="#ffffff">Weights stable (no more changes)</text>
-    <text x="740" y="469" font-size="10" fill="#56d364" font-weight="bold">Quality: 0.85 (permanent)</text>
+    <text x="740" y="415" font-size="14" font-weight="bold" fill="#56d364" letter-spacing="0.5">Week 3 (1000 feedback):</text>
+    <text x="740" y="435" font-size="14" fill="#ffffff" letter-spacing="0.5">Convergence reached</text>
+    <text x="740" y="452" font-size="14" fill="#ffffff" letter-spacing="0.5">Weights stable (no more changes)</text>
+    <text x="740" y="469" font-size="14" fill="#56d364" font-weight="bold" letter-spacing="0.5">Quality: 0.85 (permanent)</text>
   </g>
 
   <!-- Bottom note -->
   <rect x="50" y="920" width="1100" height="50" rx="4" fill="#0a3622" stroke="#3fb950" stroke-width="1"/>
-  <text x="600" y="945" font-size="11" fill="#56d364" text-anchor="middle" font-weight="bold">
+  <text x="600" y="945" font-size="18" fill="#56d364" text-anchor="middle" font-weight="bold" letter-spacing="0.5">
     This loop repeats forever. CorvinOS never stops learning.
   </text>
 </svg>
