@@ -8,11 +8,16 @@ Enables Brain subsystem to:
 This is the integration point between:
 - WorkflowExecutor (Phase 2) — publishes workflow.* events to ContextBus
 - Brain subsystems — subscribe to workflow events and update strategy
+
+⚠️ DEPRECATED (ADR-0538 Phase A): This module is being replaced by ACP Skills:
+- Workflow optimization → `os.workflow_optimizer` Skill (ADR-0532 Phase 2)
+- See docs/deprecated/CONTEXT_V1_MIGRATION.md for migration path.
 """
 
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Dict, List
 
@@ -64,6 +69,11 @@ class WorkflowBridge:
             execution_context: ExecutionContext v2 (from Brain)
             context_bus: ContextBus instance for event pub/sub
         """
+        _log.warning(
+            "WorkflowBridge is deprecated (ADR-0538 Phase A). "
+            "Use os.workflow_optimizer Skill (ADR-0532 Phase 2) instead. "
+            "See docs/deprecated/CONTEXT_V1_MIGRATION.md"
+        )
         self.execution_context = execution_context
         self.context_bus = context_bus
         self.guidance_registry: Dict[str, WorkflowGuidance] = {}

@@ -3,9 +3,15 @@
 Maintains task context stack for nested/parallel task handling.
 
 ADR-0353: Task Context Tracking
+
+⚠️ DEPRECATED (ADR-0538 Phase A): This module is being replaced by ACP Skills:
+- Context tracking → `os.context_adapter` Skill (ADR-0532)
+- Decision history → ADR-0314 Learning Infrastructure
+- See docs/deprecated/CONTEXT_V1_MIGRATION.md for migration path.
 """
 
 import logging
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List
@@ -59,6 +65,11 @@ class TaskContextTracker:
 
     def __init__(self):
         """Initialize task context tracker."""
+        logger.warning(
+            "TaskContextTracker is deprecated (ADR-0538 Phase A). "
+            "Use ACP Skills (os.context_adapter) instead. "
+            "See docs/deprecated/CONTEXT_V1_MIGRATION.md"
+        )
         self.context_stack: List[TaskContext] = []
         self.context_history: dict[str, TaskContext] = {}
         self.metrics = ContextMetrics()
@@ -173,6 +184,11 @@ class SafetyValidator:
         Args:
             context_tracker: TaskContextTracker instance
         """
+        logger.warning(
+            "SafetyValidator is deprecated (ADR-0538 Phase A). "
+            "Use L44 house_rules_enforcer and ACP Skills instead. "
+            "See docs/deprecated/CONTEXT_V1_MIGRATION.md"
+        )
         self.context_tracker = context_tracker
         self.confirmations_pending: dict[str, bool] = {}
 

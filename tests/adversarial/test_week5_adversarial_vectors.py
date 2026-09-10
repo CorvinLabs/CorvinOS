@@ -6,6 +6,8 @@ from core.voice.routing import MidstreamRouter
 from core.voice.channel import VoiceChannelCoordinator, QuestionQueue, UserQuestion
 from core.brain.task_context_tracker import TaskContextTracker, SafetyValidator, TaskContext
 
+pytestmark = pytest.mark.deprecated(reason="Uses deprecated core.brain subsystem (ADR-0538 Phase A)")
+
 
 class TestAdversarialVectors:
     """Test all 7 adversarial attack vectors."""

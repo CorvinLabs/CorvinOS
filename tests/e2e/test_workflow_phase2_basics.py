@@ -12,6 +12,7 @@ Run: python3 tests/e2e/test_workflow_phase2_basics.py
 
 import asyncio
 import unittest
+import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock
 from pathlib import Path
 import sys
@@ -32,6 +33,8 @@ from core.context_engineering.execution_context import (
 )
 from core.context_engineering.context_bus import ContextBus
 from core.brain.workflow_bridge import WorkflowBridge
+
+pytestmark = pytest.mark.deprecated(reason="Uses deprecated core.brain subsystem (ADR-0538 Phase A)")
 
 
 class MockDAGRunner:
