@@ -38,8 +38,6 @@ const LoadingFallback = () => (
 );
 
 export function VibeDashboard() {
-  const [activeTab, setActiveTab] = useState<'maturity' | 'summary' | 'patterns'>('maturity');
-
   return (
     <>
       <style>{`
@@ -52,56 +50,11 @@ export function VibeDashboard() {
           background-color: rgb(13, 17, 23 / var(--tw-bg-opacity)) !important;
         }
       `}</style>
-    <div data-testid="learning-dashboard-panel" style={{ backgroundColor: PALETTE.surface.dark, minHeight: '100vh', color: PALETTE.surface.text }} className="!bg-[#0D1117] dark:!bg-[#0D1117]">
-      {/* Tab Navigation */}
-      <div style={{ borderBottom: `1px solid ${PALETTE.surface.border}`, marginBottom: '24px', backgroundColor: PALETTE.surface.dark }}>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {[
-            { id: 'maturity', label: '📊 Maturity Metrics', icon: '📊' },
-            { id: 'summary', label: '📈 Summary', icon: '📈' },
-            { id: 'patterns', label: '🔍 Patterns', icon: '🔍' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as typeof activeTab)}
-              style={{
-                padding: '12px 16px',
-                fontWeight: 500,
-                fontSize: '14px',
-                whiteSpace: 'nowrap',
-                transition: 'all 0.2s',
-                borderBottom: activeTab === tab.id ? `2px solid #4ECDC4` : 'none',
-                color: activeTab === tab.id ? '#4ECDC4' : PALETTE.surface.muted,
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-              }}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+      <div data-testid="learning-dashboard-panel" style={{ backgroundColor: PALETTE.surface.dark, minHeight: '100vh', color: PALETTE.surface.text }} className="!bg-[#0D1117] dark:!bg-[#0D1117]">
+        <Suspense fallback={<LoadingFallback />}>
+          <MaturityDashboard />
+        </Suspense>
       </div>
-
-      {/* Tab Content */}
-      <div>
-        {activeTab === 'maturity' && (
-          <Suspense fallback={<LoadingFallback />}>
-            <MaturityDashboard />
-          </Suspense>
-        )}
-        {activeTab === 'summary' && (
-          <div className="p-6 text-muted-foreground">
-            <p>Summary coming soon...</p>
-          </div>
-        )}
-        {activeTab === 'patterns' && (
-          <div className="p-6 text-muted-foreground">
-            <p>Patterns coming soon...</p>
-          </div>
-        )}
-      </div>
-    </div>
     </>
   );
 }
