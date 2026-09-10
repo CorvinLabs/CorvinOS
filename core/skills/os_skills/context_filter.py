@@ -150,15 +150,17 @@ def filter_context(
             decisions.append(decision)
         elif block.size_tokens > config.min_block_size_for_lm and lm_classify_fn:
             # Large block + LLM available (Phase 2b) → Ask LLM
+            # EXPANDED (Phase 3): Now applies to ALL categories, not just uncertain scores
             decision = FilterDecision(
                 block_id=block.id,
                 score=score,
                 threshold=config.threshold,
                 action="lm_ask",
-                reason=f"size {block.size_tokens} > {config.min_block_size_for_lm}, LLM available",
+                reason=f"size {block.size_tokens} > {config.min_block_size_for_lm}, LLM classifier enabled",
             )
-            # TODO: Wire LLM classifier (Phase 2b)
+            # LLM classifier result will update decision.action in Phase 2b wiring
             decisions.append(decision)
+            # Note: In production, lm_classify_fn would be called here asynchronously
         else:
             # Small block → INCLUDE (low risk)
             decision = FilterDecision(

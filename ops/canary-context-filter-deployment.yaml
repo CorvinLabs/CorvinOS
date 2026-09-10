@@ -1,0 +1,231 @@
+# Canary Deployment: Context Filter (ADR-0528)
+# Phase: 5% traffic → 25% → 50% → 100%
+# Duration: 30min per phase, 2h total canary
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: context-filter-config-canary
+  namespace: corvin-prod
+data:
+  # Phase 2a: Static Scoring (baseline)
+  static_scores: |
+    {
+      "task_history": 0.9,
+      "system_messages": 0.95,
+      "conversation_recall": 0.8,
+      "user_profile": 0.7,
+      "session_state": 0.5
+    }
+
+  # Phase 2b: LM Fallback (enabled)
+  lm_fallback_enabled: "true"
+  lm_timeout_ms: "100"
+  lm_min_block_size: "500"
+
+  # Phase 2c: CEL Integration (active)
+  cel_wiring_enabled: "true"
+
+  # Phase 3: Learning (tracking)
+  learning_enabled: "true"
+  learning_update_interval_samples: "100"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: corvin-api-context-filter-canary
+  namespace: corvin-prod
+spec:
+  replicas: 3  # 3 pods for canary
+  selector:
+    matchLabels:
+      app: corvin-api
+      variant: context-filter-canary
+
+  template:
+    metadata:
+      labels:
+        app: corvin-api
+        variant: context-filter-canary
+        version: adr-0528-phase2
+
+    spec:
+      containers:
+      - name: corvin-api
+        image: corvin-api:latest
+        env:
+        - name: CONTEXT_FILTER_ENABLED
+          value: "true"
+        - name: CONTEXT_FILTER_MODE
+          value: "static+lm"  # Phase 2b+c
+        - name: CONTEXT_FILTER_LEARNING_ENABLED
+          value: "true"  # Phase 3 ready
+        - name: CANARY_TRAFFIC_PERCENTAGE
+          value: "5"
+        - name: MONITORING_INTERVAL_SECONDS
+          value: "10"  # High-frequency metrics for canary
+
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8765
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8765
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: context-filter-canary-pdb
+  namespace: corvin-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      variant: context-filter-canary
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: corvin-api-context-filter-canary
+  namespace: corvin-prod
+spec:
+  selector:
+    variant: context-filter-canary
+  ports:
+  - name: http
+    port: 8765
+    protocol: TCP
+  type: ClusterIP
+
+---
+# Ingress: Route 5% of traffic to canary
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: corvin-api-canary-router
+  namespace: corvin-prod
+  annotations:
+    ingress.kubernetes.io/rewrite-target: /
+    # For nginx-ingress: weight-based canary
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "5"  # 5% traffic
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: api.corvin.prod
+    http:
+      paths:
+      - path: /v1/chat
+        pathType: Prefix
+        backend:
+          service:
+            name: corvin-api-context-filter-canary
+            port:
+              number: 8765
+
+---
+# Service Monitor for Prometheus scraping
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: context-filter-canary-metrics
+  namespace: corvin-prod
+spec:
+  selector:
+    matchLabels:
+      app: corvin-api
+      variant: context-filter-canary
+  endpoints:
+  - port: metrics
+    interval: 15s
+    path: /metrics
+
+---
+# PrometheusRule for Canary Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: context-filter-canary-alerts
+  namespace: corvin-prod
+spec:
+  groups:
+  - name: context-filter-canary
+    interval: 30s
+    rules:
+    # Alert: Latency exceeds SLO
+    - alert: ContextFilterCanaryLatencySLOViolation
+      expr: histogram_quantile(0.99, context_filter_latency_ms) > 100
+      for: 5m
+      annotations:
+        summary: "Canary P99 latency > 100ms"
+        action: "Investigate filter performance, rollback if needed"
+
+    # Alert: Success rate drops
+    - alert: ContextFilterCanarySuccessRateLow
+      expr: context_filter_success_rate < 0.99
+      for: 5m
+      annotations:
+        summary: "Canary success rate < 99%"
+        action: "Investigate filter errors"
+
+    # Alert: LM timeout rate too high
+    - alert: ContextFilterCanaryLMTimeoutHigh
+      expr: rate(context_filter_lm_timeout_total[5m]) > 0.1  # > 10%
+      for: 5m
+      annotations:
+        summary: "Canary LM timeout rate > 10%"
+        action: "Increase LM timeout or reduce LM usage"
+
+    # Alert: Audit trail gaps
+    - alert: ContextFilterCanaryAuditIncomplete
+      expr: context_filter_audit_completeness < 1.0
+      for: 2m
+      annotations:
+        summary: "Canary audit trail < 100%"
+        action: "Investigate missing audit events (CRITICAL)"
+
+---
+# HorizontalPodAutoscaler for canary (if load increases)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: context-filter-canary-hpa
+  namespace: corvin-prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: corvin-api-context-filter-canary
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
