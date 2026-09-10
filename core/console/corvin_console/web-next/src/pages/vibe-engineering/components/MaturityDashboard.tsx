@@ -15,6 +15,8 @@ import { HexagonRadar } from './maturity/HexagonRadar';
 import { TierBreakdown } from './maturity/TierBreakdown';
 import { HoverDetails } from './maturity/HoverDetails';
 import { AnomalyAlerts } from './maturity/AnomalyAlerts';
+import { SummaryTab } from './maturity/SummaryTab';
+import { PatternsTab } from './maturity/PatternsTab';
 import { MaturityData, LoopScores } from './maturity/types';
 import { useLiveMaturityData, type TimeWindow } from '../hooks/useLiveMaturityData';
 
@@ -38,9 +40,12 @@ const SAMPLE_LOOP_DATA: LoopScores = {
   meta_convergence: 8.1,
 };
 
+type DashboardTab = 'radar' | 'summary' | 'patterns';
+
 export function MaturityDashboard() {
   const [windowPref, setWindow] = useState<TimeWindow>('7d');
   const [selectedLoop, setSelectedLoop] = useState<{ name: string; key: string } | null>(null);
+  const [activeTab, setActiveTab] = useState<DashboardTab>('radar');
   const { loopScores, loading, error, lastUpdated, refresh } = useLiveMaturityData({ window: windowPref });
 
   // Use live data if available, fallback to sample data
@@ -60,7 +65,7 @@ export function MaturityDashboard() {
               key={w}
               onClick={() => setWindow(w)}
               className={`px-3 py-1 rounded text-sm font-medium transition-all ${
-                window === w
+                windowPref === w
                   ? 'bg-[#58A6FF] text-[#0D1117]'
                   : 'bg-[#30363D] text-[#C9D1D9] hover:bg-[#3d444d]'
               }`}
@@ -100,97 +105,141 @@ export function MaturityDashboard() {
       {/* Score Header */}
       {loopScores && <ScoreHeader data={data} />}
 
-      {/* Hexagon Radar + Trend */}
+      {/* Tab Navigation */}
       {loopScores && (
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-            <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
-              Learning Loops — 9D Maturity Radar (click loop for details)
-            </h3>
-            <HexagonRadar
-              loopScores={loopData}
-              onLoopClick={(name, key) => setSelectedLoop({ name, key })}
-            />
-          </div>
+        <div className="flex gap-2 border-b border-[#30363D]">
+          <button
+            onClick={() => setActiveTab('radar')}
+            className={`px-4 py-2 text-sm font-medium transition-all ${
+              activeTab === 'radar'
+                ? 'border-b-2 border-[#58A6FF] text-[#58A6FF]'
+                : 'text-[#8B949E] hover:text-[#C9D1D9]'
+            }`}
+          >
+            📊 Hexagon Radar
+          </button>
+          <button
+            onClick={() => setActiveTab('summary')}
+            className={`px-4 py-2 text-sm font-medium transition-all ${
+              activeTab === 'summary'
+                ? 'border-b-2 border-[#58A6FF] text-[#58A6FF]'
+                : 'text-[#8B949E] hover:text-[#C9D1D9]'
+            }`}
+          >
+            📈 Summary
+          </button>
+          <button
+            onClick={() => setActiveTab('patterns')}
+            className={`px-4 py-2 text-sm font-medium transition-all ${
+              activeTab === 'patterns'
+                ? 'border-b-2 border-[#58A6FF] text-[#58A6FF]'
+                : 'text-[#8B949E] hover:text-[#C9D1D9]'
+            }`}
+          >
+            🔍 Patterns
+          </button>
         </div>
-
-        {/* Trend Card */}
-        <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6 flex flex-col justify-between">
-          <div>
-            <h4 className="text-xs font-semibold text-[#8B949E] uppercase mb-4">Trend</h4>
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-baseline gap-2 mb-1">
-                  <span className="text-2xl font-bold text-[#58A6FF]">+0.3</span>
-                  <span className="text-xs text-[#8B949E]">last 7 days</span>
-                </div>
-                <div className="w-full bg-[#0D1117] rounded h-2">
-                  <div className="bg-gradient-to-r from-[#58A6FF] to-[#79C0FF] h-2 rounded" style={{ width: '75%' }}></div>
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-[#8B949E] mb-1">Projected (30 days)</div>
-                <div className="text-xl font-bold text-[#79C0FF]">8.2/10</div>
-              </div>
-            </div>
-          </div>
-          <div className="mt-6 pt-6 border-t border-[#30363D]">
-            <div className="flex items-center gap-2 text-xs text-[#8B949E]">
-              <TrendingUp size={14} />
-              <span>Stable trajectory</span>
-            </div>
-          </div>
-        </div>
-      </div>
       )}
 
-      {/* Tier Breakdown */}
-      {loopScores && <TierBreakdown loopScores={loopScores} />}
+      {/* Tab Content */}
+      {activeTab === 'radar' && loopScores && (
+        <>
+          {/* Hexagon Radar + Tier Breakdown + Meta + Recommendations */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
+                <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
+                  Learning Loops — 9D Maturity Radar (click loop for details)
+                </h3>
+                <HexagonRadar
+                  loopScores={loopData}
+                  onLoopClick={(name, key) => setSelectedLoop({ name, key })}
+                />
+              </div>
+            </div>
 
-      {/* Meta Loop Detail */}
-      {loopScores && (
-      <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-        <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
-          Meta Loop — Hyperparameter Tuning
-        </h3>
-        <div className="grid grid-cols-3 gap-4">
-          <div className="space-y-2">
-            <div className="text-xs text-[#8B949E] uppercase">Convergence Rate</div>
-            <div className="text-lg font-semibold text-[#79C0FF]">0.87</div>
-            <div className="text-xs text-[#3FB950]">Excellent</div>
+            {/* Trend Card */}
+            <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6 flex flex-col justify-between">
+              <div>
+                <h4 className="text-xs font-semibold text-[#8B949E] uppercase mb-4">Trend</h4>
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-baseline gap-2 mb-1">
+                      <span className="text-2xl font-bold text-[#58A6FF]">+0.3</span>
+                      <span className="text-xs text-[#8B949E]">last 7 days</span>
+                    </div>
+                    <div className="w-full bg-[#0D1117] rounded h-2">
+                      <div className="bg-gradient-to-r from-[#58A6FF] to-[#79C0FF] h-2 rounded" style={{ width: '75%' }}></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-[#8B949E] mb-1">Projected (30 days)</div>
+                    <div className="text-xl font-bold text-[#79C0FF]">8.2/10</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-6 pt-6 border-t border-[#30363D]">
+                <div className="flex items-center gap-2 text-xs text-[#8B949E]">
+                  <TrendingUp size={14} />
+                  <span>Stable trajectory</span>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="space-y-2">
-            <div className="text-xs text-[#8B949E] uppercase">Drift</div>
-            <div className="text-lg font-semibold text-[#79C0FF]">0.12</div>
-            <div className="text-xs text-[#3FB950]">Minimal</div>
-          </div>
-          <div className="space-y-2">
-            <div className="text-xs text-[#8B949E] uppercase">Prediction Accuracy</div>
-            <div className="text-lg font-semibold text-[#79C0FF]">92.3%</div>
-            <div className="text-xs text-[#3FB950]">Highly accurate</div>
-          </div>
-        </div>
-      </div>
 
-      {/* Recommendations */}
-      <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-        <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">💡 Recommendations</h3>
-        <ul className="space-y-3 text-sm text-[#8B949E]">
-          <li className="flex gap-3">
-            <span className="text-[#F85149] flex-shrink-0">1.</span>
-            <span>Workflow Loop ({loopScores.workflow.toFixed(1)}) is bottleneck — focus on this</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-[#F85149] flex-shrink-0">2.</span>
-            <span>Skills config drift detected — rebalance weights</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-[#3FB950] flex-shrink-0">3.</span>
-            <span>Meta-loop converging well — stable trajectory</span>
-          </li>
-        </ul>
-      </div>
+          <TierBreakdown loopScores={loopScores} />
+
+          <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
+            <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
+              Meta Loop — Hyperparameter Tuning
+            </h3>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <div className="text-xs text-[#8B949E] uppercase">Convergence Rate</div>
+                <div className="text-lg font-semibold text-[#79C0FF]">0.87</div>
+                <div className="text-xs text-[#3FB950]">Excellent</div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs text-[#8B949E] uppercase">Drift</div>
+                <div className="text-lg font-semibold text-[#79C0FF]">0.12</div>
+                <div className="text-xs text-[#3FB950]">Minimal</div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs text-[#8B949E] uppercase">Prediction Accuracy</div>
+                <div className="text-lg font-semibold text-[#79C0FF]">92.3%</div>
+                <div className="text-xs text-[#3FB950]">Highly accurate</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
+            <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">💡 Recommendations</h3>
+            <ul className="space-y-3 text-sm text-[#8B949E]">
+              <li className="flex gap-3">
+                <span className="text-[#F85149] flex-shrink-0">1.</span>
+                <span>Workflow Loop ({loopScores.workflow.toFixed(1)}) is bottleneck — focus on this</span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-[#F85149] flex-shrink-0">2.</span>
+                <span>Skills config drift detected — rebalance weights</span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-[#3FB950] flex-shrink-0">3.</span>
+                <span>Meta-loop converging well — stable trajectory</span>
+              </li>
+            </ul>
+          </div>
+        </>
+      )}
+
+      {/* Summary Tab */}
+      {activeTab === 'summary' && loopScores && (
+        <SummaryTab loopScores={loopData} lastUpdated={lastUpdated} />
+      )}
+
+      {/* Patterns Tab */}
+      {activeTab === 'patterns' && loopScores && (
+        <PatternsTab loopScores={loopData} />
       )}
 
       {/* Hover Details Modal */}

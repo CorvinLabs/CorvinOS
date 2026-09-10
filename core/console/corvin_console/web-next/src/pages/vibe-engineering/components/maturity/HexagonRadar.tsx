@@ -44,7 +44,7 @@ const OUTER_RADIUS = 150;
 const INNER_RADIUS = 100;
 const RING_STEP = 30;
 
-export function HexagonRadar({ loopScores }: HexagonRadarProps) {
+export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
   const data = useMemo(() => ({
     tier1: TIER1_LOOPS.map((loop) => ({
       label: loop.label,
@@ -168,7 +168,7 @@ export function HexagonRadar({ loopScores }: HexagonRadarProps) {
                   fill={color}
                   opacity="0.8"
                   style={{ cursor: 'pointer' }}
-                  onClick={() => props.onLoopClick?.(loop.label, `tier1_${i}`)}
+                  onClick={() => onLoopClick?.(loop.label, `tier1_${i}`)}
                 />
 
                 {/* Label background */}
