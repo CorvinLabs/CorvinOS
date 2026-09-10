@@ -9,6 +9,7 @@ Implements:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 from core.skills.manifest_v2 import SkillManifestV2
@@ -106,9 +107,20 @@ class ForgeSkillValidator:
 
         # Layer 2: Integrity check
         try:
-            # For now, skip integrity check (would compare stored hash)
-            # In production, this would verify manifest hasn't been modified
-            logger.debug(f"Skipping integrity check for {skill_id} (placeholder)")
+            stored_hash = self._load_manifest_hash(skill_id, manifest.version)
+            if stored_hash is None:
+                logger.warning(f"No stored hash for {skill_id}; skipping integrity (first-time load)")
+            else:
+                self.sig_validator.validate_manifest_integrity(manifest, stored_hash, tenant_id)
+                self._log_audit(
+                    event_type="manifest_integrity_verified",
+                    details={
+                        "skill_id": skill_id,
+                        "skill_version": manifest.version,
+                    },
+                    user_id=user.user_id,
+                    tenant_id=tenant_id,
+                )
         except ManifestTamperedError as e:
             self._log_audit(
                 event_type="skill_load_failed",
@@ -177,6 +189,26 @@ class ForgeSkillValidator:
         )
 
         return manifest
+
+    def _load_manifest_hash(self, skill_id: str, version: str) -> Optional[str]:
+        """Load stored hash of a published manifest from registry.
+
+        Args:
+            skill_id: Skill ID
+            version: Skill version (semver)
+
+        Returns:
+            Stored SHA256 hash (hex string) if found, None otherwise
+        """
+        try:
+            # Hash stored in marketplace registry during publish
+            hash_dir = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "skill_registry_hashes"
+            hash_file = hash_dir / f"{skill_id}_{version}.sha256"
+            if hash_file.exists():
+                return hash_file.read_text().strip()
+        except Exception as e:
+            logger.warning(f"Failed to load hash for {skill_id}:{version}: {e}")
+        return None
 
     def _log_audit(
         self,
