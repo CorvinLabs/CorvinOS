@@ -191,6 +191,14 @@ def legacy_audit_chains(tenant_id: str) -> dict[str, Path]:
     canonical chain superseded.
     """
     validate_tenant_id(tenant_id)
+    # NOT listed here: the pre-J.1.4a chains beside the anchor key
+    # (``<voice_config_dir>/audit.jsonl`` and ``<voice_config_dir>/forge/audit.jsonl``).
+    # They hold real dormant ``bridge.*`` records, but they are governed by
+    # ``VOICE_CONFIG_DIR``/``XDG_CONFIG_HOME``, NOT by ``CORVIN_HOME`` — listing
+    # them here made this function escape the runtime-root sandbox, so a test
+    # that isolates ``CORVIN_HOME`` would seam-link the OPERATOR's real chains
+    # (it did, once, on 2026-09-07). Reaching those two is a migration/forensics
+    # task, not a boot-time one. See ADR-0654.
     root = corvin_home()
     tenant = tenant_home(tenant_id)
     return {

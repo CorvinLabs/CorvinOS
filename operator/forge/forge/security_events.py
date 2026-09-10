@@ -1384,22 +1384,36 @@ def record_chain_supersession(
                 return None  # one file, two names (the ADR-0007 compat symlink)
         except OSError:
             pass
-        size, records = _chain_stats(superseded)
-        if size == 0 or records == 0:
+        try:
+            if superseded.stat().st_size == 0:
+                return None
+        except OSError:
             return None
         tail = _read_chain_tail(superseded) or ""
-        genesis = _chain_identity(superseded) or ""
         sup_key = chain_path_key(superseded)
         can_key = chain_path_key(canonical)
 
-        # Idempotence: the sibling's identity record remembers the seam we wrote
-        # for it. Re-seam only when its tail has MOVED since (a writer we have
-        # not converged yet is still appending there — worth recording again).
+        # Idempotence FIRST, and deliberately before any O(n) work. The sibling's
+        # identity record remembers the seam we wrote for it; re-seam only when
+        # its tail has MOVED since (a writer we have not converged yet is still
+        # appending there — worth recording again).
+        #
+        # ``_chain_stats`` counts records by reading the whole file. On the
+        # maintainer install the largest sibling is 315 MB, and this runs from
+        # the BOOT tripwire — computing it before the idempotence check would
+        # add a 315 MB read to every single boot, forever, to re-derive a number
+        # that has not changed. That is exactly the unbounded O(n) boot cost the
+        # ADR-0640 R4 prefix witness exists to remove; do not reintroduce it.
         existing = _read_chain_path_record(superseded) or {}
         prior = existing.get("superseded_by")
         if isinstance(prior, dict) and prior.get("canonical_key") == can_key \
                 and prior.get("tail") == tail:
             return None
+
+        size, records = _chain_stats(superseded)
+        if size == 0 or records == 0:
+            return None
+        genesis = _chain_identity(superseded) or ""
 
         rec = write_event(
             canonical, CHAIN_SEAM_EVENT, severity="WARNING",
