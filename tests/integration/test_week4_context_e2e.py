@@ -3,6 +3,8 @@
 import pytest
 from core.brain.task_context_tracker import TaskContextTracker, TaskContext, TaskStatus, SafetyValidator
 
+pytestmark = pytest.mark.deprecated(reason="Uses deprecated core.brain subsystem (ADR-0538 Phase A)")
+
 
 class TestWeek4ContextTracking:
     """Test task context tracking end-to-end."""
