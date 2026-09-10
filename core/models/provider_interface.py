@@ -26,6 +26,15 @@ class ModelResponse:
     cost_usd: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class HealthCheckResult:
+    """Result of provider health check."""
+    healthy: bool
+    message: str
+    latency_ms: float = 0.0
+    available_models: List[str] = None
+
+
 class ModelProvider(ABC):
     """Abstract base for model providers."""
 
@@ -35,6 +44,11 @@ class ModelProvider(ABC):
     @abstractmethod
     async def check_availability(self, model: str) -> bool:
         """Check if model is available."""
+        pass
+
+    @abstractmethod
+    async def health_check(self) -> HealthCheckResult:
+        """Health check for provider (ADR-0643)."""
         pass
 
     @abstractmethod

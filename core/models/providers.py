@@ -3,10 +3,12 @@ Model Provider Implementations (ADR-0607)
 OpenAI, Ollama, OpenRouter
 """
 
+import asyncio
 import aiohttp
 import logging
+import time
 from typing import List, Dict
-from .provider_interface import ModelProvider, ModelProviderConfig, ModelResponse
+from .provider_interface import ModelProvider, ModelProviderConfig, ModelResponse, HealthCheckResult
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,56 @@ class OpenAIProvider(ModelProvider):
         """Check if model exists in OpenAI."""
         # In real impl: call /models endpoint
         return model in ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+
+    async def health_check(self) -> HealthCheckResult:
+        """Health check for OpenAI API (ADR-0643)."""
+        if not self.config.api_key:
+            return HealthCheckResult(
+                healthy=False,
+                message="API key not configured",
+                latency_ms=0.0,
+            )
+
+        try:
+            start = time.time()
+            url = "https://api.openai.com/v1/models"
+            headers = {"Authorization": f"Bearer {self.config.api_key}"}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=self.config.timeout_s),
+                ) as resp:
+                    latency_ms = (time.time() - start) * 1000
+
+                    if resp.status != 200:
+                        return HealthCheckResult(
+                            healthy=False,
+                            message=f"API returned {resp.status}",
+                            latency_ms=latency_ms,
+                        )
+
+                    data = await resp.json()
+                    models = [m.get("id") for m in data.get("data", [])]
+                    return HealthCheckResult(
+                        healthy=True,
+                        message="OpenAI API is healthy",
+                        latency_ms=latency_ms,
+                        available_models=models,
+                    )
+        except asyncio.TimeoutError:
+            return HealthCheckResult(
+                healthy=False,
+                message=f"Health check timeout (>{self.config.timeout_s}s)",
+                latency_ms=self.config.timeout_s * 1000,
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                healthy=False,
+                message=f"Health check failed: {e}",
+                latency_ms=0.0,
+            )
 
     async def invoke(
         self,
@@ -79,6 +131,48 @@ class OllamaProvider(ModelProvider):
         # In real impl: query Ollama /api/tags
         return True  # Assume available for now
 
+    async def health_check(self) -> HealthCheckResult:
+        """Health check for Ollama local service (ADR-0643)."""
+        base_url = self.config.base_url or "http://localhost:11434"
+        url = f"{base_url}/api/tags"
+
+        try:
+            start = time.time()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=self.config.timeout_s),
+                ) as resp:
+                    latency_ms = (time.time() - start) * 1000
+
+                    if resp.status != 200:
+                        return HealthCheckResult(
+                            healthy=False,
+                            message=f"Ollama returned {resp.status}",
+                            latency_ms=latency_ms,
+                        )
+
+                    data = await resp.json()
+                    models = [m.get("name") for m in data.get("models", [])]
+                    return HealthCheckResult(
+                        healthy=True,
+                        message="Ollama is healthy",
+                        latency_ms=latency_ms,
+                        available_models=models,
+                    )
+        except asyncio.TimeoutError:
+            return HealthCheckResult(
+                healthy=False,
+                message=f"Ollama health check timeout (>{self.config.timeout_s}s)",
+                latency_ms=self.config.timeout_s * 1000,
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                healthy=False,
+                message=f"Ollama health check failed (is it running?): {e}",
+                latency_ms=0.0,
+            )
+
     async def invoke(
         self,
         model: str,
@@ -130,6 +224,56 @@ class OpenRouterProvider(ModelProvider):
         """Check if model available on OpenRouter."""
         # In real impl: call OpenRouter /models
         return True  # Assume available
+
+    async def health_check(self) -> HealthCheckResult:
+        """Health check for OpenRouter API (ADR-0643)."""
+        if not self.config.api_key:
+            return HealthCheckResult(
+                healthy=False,
+                message="API key not configured",
+                latency_ms=0.0,
+            )
+
+        try:
+            start = time.time()
+            url = "https://openrouter.ai/api/v1/models"
+            headers = {"Authorization": f"Bearer {self.config.api_key}"}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=self.config.timeout_s),
+                ) as resp:
+                    latency_ms = (time.time() - start) * 1000
+
+                    if resp.status != 200:
+                        return HealthCheckResult(
+                            healthy=False,
+                            message=f"OpenRouter returned {resp.status}",
+                            latency_ms=latency_ms,
+                        )
+
+                    data = await resp.json()
+                    models = [m.get("id") for m in data.get("data", [])]
+                    return HealthCheckResult(
+                        healthy=True,
+                        message="OpenRouter is healthy",
+                        latency_ms=latency_ms,
+                        available_models=models,
+                    )
+        except asyncio.TimeoutError:
+            return HealthCheckResult(
+                healthy=False,
+                message=f"OpenRouter health check timeout (>{self.config.timeout_s}s)",
+                latency_ms=self.config.timeout_s * 1000,
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                healthy=False,
+                message=f"OpenRouter health check failed: {e}",
+                latency_ms=0.0,
+            )
 
     async def invoke(
         self,
