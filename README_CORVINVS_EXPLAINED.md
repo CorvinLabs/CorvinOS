@@ -228,9 +228,9 @@ These 4 layers work together to turn raw requests into optimized, auditable deci
 
 ## 2️⃣ Token Economy {#token-economy}
 
-### Visual: The Routing Decision Tree
+### Visual: Complete Request Flow Through All 10 Steps
 
-![Routing Decision Tree](/docs/diagrams/corvinOS_routing_decision.svg)
+![Request Flow Through CorvinOS](/docs/diagrams/corvinOS_request_flow_3d.svg)
 
 ### The Problem: Token Waste
 
@@ -673,6 +673,10 @@ Step 6: Convergence
 ```
 
 ---
+
+### Visual: Learning Convergence Timeline
+
+![Convergence Timeline](/docs/diagrams/corvinOS_convergence_timeline_3d.svg)
 
 ### Real Example: Customer Support Skill
 
