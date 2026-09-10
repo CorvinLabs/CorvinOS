@@ -13,6 +13,8 @@ import { TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
 import { ScoreHeader } from './maturity/ScoreHeader';
 import { HexagonRadar } from './maturity/HexagonRadar';
 import { TierBreakdown } from './maturity/TierBreakdown';
+import { HoverDetails } from './maturity/HoverDetails';
+import { AnomalyAlerts } from './maturity/AnomalyAlerts';
 import { MaturityData, LoopScores } from './maturity/types';
 import { useLiveMaturityData, type TimeWindow } from '../hooks/useLiveMaturityData';
 
@@ -37,8 +39,9 @@ const SAMPLE_LOOP_DATA: LoopScores = {
 };
 
 export function MaturityDashboard() {
-  const [window, setWindow] = useState<TimeWindow>('7d');
-  const { loopScores, loading, error, lastUpdated, refresh } = useLiveMaturityData({ window });
+  const [windowPref, setWindow] = useState<TimeWindow>('7d');
+  const [selectedLoop, setSelectedLoop] = useState<{ name: string; key: string } | null>(null);
+  const { loopScores, loading, error, lastUpdated, refresh } = useLiveMaturityData({ window: windowPref });
 
   // Use live data if available, fallback to sample data
   const loopData = loopScores || SAMPLE_LOOP_DATA;
@@ -46,6 +49,9 @@ export function MaturityDashboard() {
 
   return (
     <div className="space-y-6 p-6">
+      {/* Anomaly Alerts */}
+      {loopScores && <AnomalyAlerts windowSeconds={300} />}
+
       {/* Time Window Controls + Refresh */}
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
@@ -100,9 +106,12 @@ export function MaturityDashboard() {
         <div className="lg:col-span-2">
           <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
             <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
-              Learning Loops — 9D Maturity Radar
+              Learning Loops — 9D Maturity Radar (click loop for details)
             </h3>
-            <HexagonRadar loopScores={SAMPLE_LOOP_DATA} />
+            <HexagonRadar
+              loopScores={loopData}
+              onLoopClick={(name, key) => setSelectedLoop({ name, key })}
+            />
           </div>
         </div>
 
@@ -182,6 +191,15 @@ export function MaturityDashboard() {
           </li>
         </ul>
       </div>
+      )}
+
+      {/* Hover Details Modal */}
+      {selectedLoop && (
+        <HoverDetails
+          loopName={selectedLoop.name}
+          loopKey={selectedLoop.key}
+          onClose={() => setSelectedLoop(null)}
+        />
       )}
     </div>
   );
