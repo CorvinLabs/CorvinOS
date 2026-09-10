@@ -202,6 +202,8 @@ Quality improves 2–5% per cycle
 
 ## Real-World ROI
 
+![Cost vs. Quality Pareto Frontier](/docs/diagrams/corvinOS_cost_quality_pareto_3d.svg)
+
 **30-day CorvinOS deployment:**
 
 | Metric | Before | After | Change |
@@ -210,6 +212,13 @@ Quality improves 2–5% per cycle
 | Quality score | 88% | 92% | **+4%** ✓ |
 | System tuning | Manual (monthly) | Automatic | **Time saved** ⏱️ |
 | Audit trail | Sparse | Complete | **Compliant** 🔐 |
+
+**Why both happen at once:**
+- **All Opus** (traditional): Expensive ($90k/month), high quality (95%) but wasteful
+- **All Haiku** (too cheap): Cheap ($0.4k/month) but terrible quality (72%)
+- **CorvinOS** (learned optimal): Cheap ($3.6k/month) AND high quality (92%) ✓
+
+CorvinOS learns YOUR optimal point on the Pareto frontier — the sweet spot where you save the most without losing quality.
 
 **Break-even:** 2–3 weeks. Pays for itself instantly.
 

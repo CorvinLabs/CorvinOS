@@ -1,0 +1,168 @@
+<svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+
+    <filter id="shadow3d">
+      <feDropShadow dx="5" dy="10" stdDeviation="8" flood-opacity="0.4"/>
+    </filter>
+
+    <linearGradient id="gradRed" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f85149"/>
+      <stop offset="100%" style="stop-color:#da3633"/>
+    </linearGradient>
+
+    <linearGradient id="gradGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#56d364"/>
+      <stop offset="100%" style="stop-color:#238636"/>
+    </linearGradient>
+
+    <linearGradient id="gradYellow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f0883e"/>
+      <stop offset="100%" style="stop-color:#e0771f"/>
+    </linearGradient>
+
+    <linearGradient id="curveGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f85149" />
+      <stop offset="50%" style="stop-color:#56d364" />
+      <stop offset="100%" style="stop-color:#f0883e" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1400" height="900" fill="url(#bgGrad)"/>
+
+  <!-- Title -->
+  <text x="700" y="50" font-size="32" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+    Cost vs. Quality Trade-off: The Pareto Frontier
+  </text>
+  <text x="700" y="80" font-size="13" fill="#8b949e" text-anchor="middle">
+    Where does your system live? CorvinOS finds the sweet spot.
+  </text>
+
+  <!-- Y-axis (Cost) -->
+  <line x1="120" y1="750" x2="120" y2="100" stroke="#30363d" stroke-width="3"/>
+  <text x="50" y="420" font-size="14" fill="#8b949e" text-anchor="middle" transform="rotate(-90 50 420)" font-weight="bold">
+    Monthly Cost ($1000s)
+  </text>
+
+  <!-- X-axis (Accuracy) -->
+  <line x1="120" y1="750" x2="1300" y2="750" stroke="#30363d" stroke-width="3"/>
+  <text x="700" y="810" font-size="14" fill="#8b949e" text-anchor="middle" font-weight="bold">
+    Accuracy / Quality %
+  </text>
+
+  <!-- Y-axis labels -->
+  <text x="100" y="755" font-size="12" fill="#8b949e" text-anchor="end">0%</text>
+  <line x1="110" y1="750" x2="130" y2="750" stroke="#30363d" stroke-width="2"/>
+
+  <text x="100" y="555" font-size="12" fill="#8b949e" text-anchor="end">$50</text>
+  <line x1="110" y1="550" x2="130" y2="550" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+
+  <text x="100" y="355" font-size="12" fill="#8b949e" text-anchor="end">$100</text>
+  <line x1="110" y1="350" x2="130" y2="350" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+
+  <text x="100" y="155" font-size="12" fill="#8b949e" text-anchor="end">$150</text>
+  <line x1="110" y1="150" x2="130" y2="150" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+
+  <!-- X-axis labels -->
+  <text x="200" y="780" font-size="12" fill="#8b949e" text-anchor="middle">75%</text>
+  <line x1="200" y1="745" x2="200" y2="755" stroke="#30363d" stroke-width="2"/>
+
+  <text x="550" y="780" font-size="12" fill="#8b949e" text-anchor="middle">85%</text>
+  <line x1="550" y1="745" x2="550" y2="755" stroke="#30363d" stroke-width="2"/>
+
+  <text x="900" y="780" font-size="12" fill="#8b949e" text-anchor="middle">90%</text>
+  <line x1="900" y1="745" x2="900" y2="755" stroke="#30363d" stroke-width="2"/>
+
+  <text x="1200" y="780" font-size="12" fill="#8b949e" text-anchor="middle">95%</text>
+  <line x1="1200" y1="745" x2="1200" y2="755" stroke="#30363d" stroke-width="2"/>
+
+  <!-- Grid lines (faint) -->
+  <line x1="120" y1="550" x2="1300" y2="550" stroke="#30363d" stroke-width="1" opacity="0.2"/>
+  <line x1="120" y1="350" x2="1300" y2="350" stroke="#30363d" stroke-width="1" opacity="0.2"/>
+
+  <!-- Pareto frontier curve (quality vs cost) -->
+  <path d="M 200 150 Q 400 200 550 350 Q 750 500 900 550 Q 1050 600 1200 680"
+        stroke="url(#curveGradient)" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.8"/>
+
+  <!-- Shaded area under curve (inefficient zone) -->
+  <path d="M 200 150 Q 400 200 550 350 Q 750 500 900 550 Q 1050 600 1200 680 L 1200 750 L 200 750 Z"
+        fill="url(#curveGradient)" opacity="0.1"/>
+
+  <!-- Point 1: All Opus (expensive, high quality) -->
+  <g filter="url(#shadow3d)">
+    <circle cx="900" cy="150" r="40" fill="url(#gradRed)" stroke="#f85149" stroke-width="3"/>
+    <polygon points="900,150 915,145 920,165 905,160" fill="#8b0000" opacity="0.3"/>
+
+    <text x="900" y="150" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold" dy="0.3em">All Opus</text>
+
+    <text x="900" y="240" font-size="11" fill="#f85149" text-anchor="middle" font-weight="bold">$90k/month</text>
+    <text x="900" y="258" font-size="10" fill="#e6edf3" text-anchor="middle">Quality: 95%</text>
+    <text x="900" y="273" font-size="9" fill="#8b949e" text-anchor="middle">Wasteful: overkill</text>
+  </g>
+
+  <!-- Point 2: CorvinOS (sweet spot) -->
+  <g filter="url(#shadow3d)">
+    <circle cx="550" cy="350" r="50" fill="url(#gradGreen)" stroke="#56d364" stroke-width="4"/>
+    <polygon points="550,350 570,340 570,370 550,360" fill="#0d3622" opacity="0.3"/>
+
+    <text x="550" y="345" font-size="12" fill="#ffffff" text-anchor="middle" font-weight="bold">CorvinOS</text>
+    <text x="550" y="360" font-size="12" fill="#ffffff" text-anchor="middle" font-weight="bold">SWEET SPOT</text>
+
+    <text x="550" y="430" font-size="11" fill="#56d364" text-anchor="middle" font-weight="bold">$3.6k/month</text>
+    <text x="550" y="448" font-size="10" fill="#e6edf3" text-anchor="middle">Quality: 92%</text>
+    <text x="550" y="463" font-size="9" fill="#7ee787" text-anchor="middle">Optimal: learns best distribution</text>
+  </g>
+
+  <!-- Point 3: All Haiku (cheap, low quality) -->
+  <g filter="url(#shadow3d)">
+    <circle cx="200" cy="680" r="40" fill="url(#gradYellow)" stroke="#f0883e" stroke-width="3"/>
+    <polygon points="200,680 215,675 220,695 205,690" fill="#8b4513" opacity="0.3"/>
+
+    <text x="200" y="680" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold" dy="0.3em">All Haiku</text>
+
+    <text x="200" y="760" font-size="11" fill="#f0883e" text-anchor="middle" font-weight="bold">$0.4k/month</text>
+    <text x="200" y="778" font-size="10" fill="#e6edf3" text-anchor="middle">Quality: 72%</text>
+    <text x="200" y="793" font-size="9" fill="#8b949e" text-anchor="middle">Too cheap: poor quality</text>
+  </g>
+
+  <!-- Annotations -->
+  <!-- Arrow from All Opus to CorvinOS -->
+  <path d="M 880 190 Q 750 270 590 310" stroke="#56d364" stroke-width="2" stroke-dasharray="5,5" fill="none" marker-end="url(#arrowGreen)"/>
+  <text x="750" y="240" font-size="11" fill="#56d364" font-weight="bold" font-style="italic">Save 80% cost</text>
+  <text x="750" y="255" font-size="11" fill="#56d364" font-weight="bold" font-style="italic">Gain 4% quality</text>
+
+  <!-- Text box: The frontier -->
+  <g filter="url(#shadow3d)">
+    <rect x="1050" y="150" width="280" height="150" rx="12" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+
+    <text x="1070" y="175" font-size="12" font-weight="bold" fill="#e6edf3">The Pareto Frontier</text>
+
+    <text x="1070" y="200" font-size="10" fill="#8b949e">Every point on this curve</text>
+    <text x="1070" y="218" font-size="10" fill="#8b949e">is Pareto-optimal:</text>
+
+    <text x="1070" y="240" font-size="10" fill="#79c0ff">✓ To get cheaper,</text>
+    <text x="1070" y="255" font-size="10" fill="#79c0ff">you lose quality</text>
+
+    <text x="1070" y="277" font-size="10" fill="#56d364">✓ CorvinOS lands</text>
+    <text x="1070" y="292" font-size="10" fill="#56d364">in the best region</text>
+  </g>
+
+  <!-- Bottom: The key insight -->
+  <g filter="url(#shadow3d)">
+    <rect x="120" y="820" width="1180" height="60" rx="12" fill="#0a3622" stroke="#238636" stroke-width="2"/>
+
+    <text x="710" y="850" font-size="12" fill="#7ee787" text-anchor="middle" font-weight="bold">
+      CorvinOS doesn't sacrifice quality for cost. It LEARNS the best balance FOR YOUR DATA.
+    </text>
+  </g>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
+      <polygon points="0,0 12,6 0,12" fill="#56d364"/>
+    </marker>
+  </defs>
+</svg>

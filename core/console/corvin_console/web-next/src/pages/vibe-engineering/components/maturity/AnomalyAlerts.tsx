@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, AlertCircle, CheckCircle, X } from 'lucide-react';
+import { AlertTriangle, AlertCircle, X } from 'lucide-react';
 
 export interface Anomaly {
   id: string;
@@ -72,12 +72,7 @@ export function AnomalyAlerts({ windowSeconds = 300 }: AnomalyAlertsProps) {
   }
 
   if (anomalies.length === 0) {
-    return (
-      <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-lg p-4 flex items-center gap-3">
-        <CheckCircle size={18} className="text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
-        <span className="text-sm text-emerald-600 dark:text-emerald-400">All systems nominal — no anomalies detected</span>
-      </div>
-    );
+    return null;
   }
 
   return (
