@@ -11,8 +11,6 @@ import { ChunkErrorBoundary } from "@/components/error-boundary";
 import {
   LandingPage,
   LoginPage,
-  PersonaDetailPage,
-  PersonasListPage,
   ChatPage,
   WorkflowsListPage,
   WorkflowEditorPage,
@@ -153,8 +151,6 @@ export default function App() {
             }
           >
             <Route index element={<Navigate to="/app/chat" replace />} />
-            <Route path="personas" element={<PersonasListPage />} />
-            <Route path="personas/:name" element={<PersonaDetailPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
             {/* ADR-0561 Phase 2: panels render from backend manifest + fallback registry.
