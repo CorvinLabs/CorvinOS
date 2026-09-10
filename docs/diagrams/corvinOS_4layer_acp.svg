@@ -1,0 +1,196 @@
+<svg viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark background -->
+  <rect width="1200" height="900" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="600" y="40" font-size="28" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+    CorvinOS: 4-Layer Agentic Control Plane (ACP)
+  </text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowDown" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
+      <polygon points="0,0 10,5 0,10" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrowRight" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
+      <polygon points="0,0 10,5 0,10" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <!-- LAYER 1: DataHub -->
+  <g id="layer1">
+    <!-- Container -->
+    <rect x="50" y="100" width="1100" height="150" rx="8" fill="#161b22" stroke="#238636" stroke-width="3"/>
+
+    <!-- Title -->
+    <text x="70" y="130" font-size="18" font-weight="bold" fill="#3fb950">Layer 1: DataHub Skill</text>
+    <text x="70" y="155" font-size="12" fill="#8b949e">Unified data ingestion + quality scoring + security scanning</text>
+
+    <!-- Input sources -->
+    <rect x="70" y="170" width="80" height="50" rx="4" fill="#1f6feb" stroke="#79c0ff" stroke-width="2"/>
+    <text x="110" y="200" font-size="11" fill="#ffffff" text-anchor="middle">Memory</text>
+
+    <rect x="170" y="170" width="80" height="50" rx="4" fill="#1f6feb" stroke="#79c0ff" stroke-width="2"/>
+    <text x="210" y="200" font-size="11" fill="#ffffff" text-anchor="middle">RAG</text>
+
+    <rect x="270" y="170" width="80" height="50" rx="4" fill="#1f6feb" stroke="#79c0ff" stroke-width="2"/>
+    <text x="310" y="200" font-size="11" fill="#ffffff" text-anchor="middle">MCP</text>
+
+    <rect x="370" y="170" width="80" height="50" rx="4" fill="#1f6feb" stroke="#79c0ff" stroke-width="2"/>
+    <text x="410" y="200" font-size="11" fill="#ffffff" text-anchor="middle">Files</text>
+
+    <!-- Processing -->
+    <line x1="110" y1="170" x2="550" y2="140" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowDown)"/>
+    <line x1="210" y1="170" x2="550" y2="140" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowDown)"/>
+    <line x1="310" y1="170" x2="550" y2="140" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowDown)"/>
+    <line x1="410" y1="170" x2="550" y2="140" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowDown)"/>
+
+    <!-- Processing box -->
+    <rect x="500" y="170" width="140" height="50" rx="4" fill="#238636" stroke="#56d364" stroke-width="2"/>
+    <text x="570" y="192" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Process</text>
+    <text x="570" y="207" font-size="9" fill="#ffffff" text-anchor="middle">Scan + Score</text>
+
+    <!-- Output -->
+    <rect x="850" y="170" width="200" height="50" rx="4" fill="#3fb950" stroke="#7ee787" stroke-width="2"/>
+    <text x="950" y="192" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">DataManifest</text>
+    <text x="950" y="207" font-size="9" fill="#ffffff" text-anchor="middle">documents[] + quality_score</text>
+
+    <line x1="640" y1="195" x2="850" y2="195" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowRight)"/>
+  </g>
+
+  <!-- Arrow between Layer 1 and 2 -->
+  <line x1="600" y1="250" x2="600" y2="300" stroke="#58a6ff" stroke-width="3" marker-end="url(#arrowDown)"/>
+
+  <!-- LAYER 2: Creator -->
+  <g id="layer2">
+    <!-- Container -->
+    <rect x="50" y="300" width="1100" height="150" rx="8" fill="#161b22" stroke="#1f6feb" stroke-width="3"/>
+
+    <!-- Title -->
+    <text x="70" y="330" font-size="18" font-weight="bold" fill="#79c0ff">Layer 2: Creator 2.0 Skill</text>
+    <text x="70" y="355" font-size="12" fill="#8b949e">12-phase generation with loss tracking + phase gates</text>
+
+    <!-- Phases -->
+    <g id="phases">
+      <circle cx="100" cy="395" r="20" fill="#0969da" stroke="#54aeff" stroke-width="2"/>
+      <text x="100" y="402" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">0</text>
+
+      <circle cx="140" cy="380" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="140" y="386" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">2</text>
+
+      <circle cx="175" cy="375" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="175" y="381" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">3</text>
+
+      <circle cx="210" cy="380" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="210" y="386" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">4</text>
+
+      <circle cx="245" cy="395" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="245" y="401" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">5</text>
+
+      <circle cx="280" cy="415" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="280" y="421" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">6</text>
+
+      <circle cx="315" cy="430" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="315" y="436" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">7</text>
+
+      <circle cx="350" cy="440" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="350" y="446" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">8</text>
+
+      <text x="390" y="440" font-size="10" fill="#8b949e">...</text>
+
+      <circle cx="430" cy="440" r="18" fill="#0969da" stroke="#54aeff" stroke-width="1"/>
+      <text x="430" y="446" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">10</text>
+    </g>
+
+    <!-- 6D Loss Vector -->
+    <rect x="550" y="370" width="400" height="70" rx="4" fill="#0a3622" stroke="#238636" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="750" y="390" font-size="11" font-weight="bold" fill="#3fb950" text-anchor="middle">6D Loss Vector</text>
+    <text x="750" y="410" font-size="9" fill="#8b949e" text-anchor="middle">data_quality, generation_quality, user_satisfaction, efficiency,</text>
+    <text x="750" y="425" font-size="9" fill="#8b949e" text-anchor="middle">learning_loop_health, system_health</text>
+  </g>
+
+  <!-- Arrow between Layer 2 and 3 -->
+  <line x1="600" y1="450" x2="600" y2="500" stroke="#58a6ff" stroke-width="3" marker-end="url(#arrowDown)"/>
+
+  <!-- LAYER 3: Learning Daemon -->
+  <g id="layer3">
+    <!-- Container -->
+    <rect x="50" y="500" width="1100" height="150" rx="8" fill="#161b22" stroke="#d2a8ff" stroke-width="3"/>
+
+    <!-- Title -->
+    <text x="70" y="530" font-size="18" font-weight="bold" fill="#d2a8ff">Layer 3: Learning Daemon</text>
+    <text x="70" y="555" font-size="12" fill="#8b949e">Event-driven optimizer + causal graph + weight learning</text>
+
+    <!-- Feedback events -->
+    <rect x="100" y="575" width="110" height="50" rx="4" fill="#6e40c9" stroke="#d2a8ff" stroke-width="2"/>
+    <text x="155" y="597" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Feedback</text>
+    <text x="155" y="612" font-size="9" fill="#ffffff" text-anchor="middle">Events</text>
+
+    <!-- Process -->
+    <line x1="210" y1="600" x2="270" y2="600" stroke="#d2a8ff" stroke-width="2" marker-end="url(#arrowRight)"/>
+
+    <rect x="270" y="575" width="110" height="50" rx="4" fill="#6e40c9" stroke="#d2a8ff" stroke-width="2"/>
+    <text x="325" y="592" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Causal</text>
+    <text x="325" y="607" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Graph</text>
+
+    <!-- Process -->
+    <line x1="380" y1="600" x2="440" y2="600" stroke="#d2a8ff" stroke-width="2" marker-end="url(#arrowRight)"/>
+
+    <rect x="440" y="575" width="110" height="50" rx="4" fill="#6e40c9" stroke="#d2a8ff" stroke-width="2"/>
+    <text x="495" y="597" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Weight</text>
+    <text x="495" y="612" font-size="9" fill="#ffffff" text-anchor="middle">Learning</text>
+
+    <!-- Convergence -->
+    <line x1="550" y1="600" x2="610" y2="600" stroke="#d2a8ff" stroke-width="2" marker-end="url(#arrowRight)"/>
+
+    <rect x="610" y="570" width="150" height="60" rx="4" fill="#238636" stroke="#56d364" stroke-width="2"/>
+    <text x="685" y="590" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Convergence</text>
+    <text x="685" y="608" font-size="9" fill="#8b949e" text-anchor="middle">&lt;500 samples</text>
+
+    <!-- Trigger regeneration -->
+    <line x1="760" y1="600" x2="820" y2="600" stroke="#238636" stroke-width="2" marker-end="url(#arrowRight)"/>
+
+    <rect x="820" y="570" width="220" height="60" rx="4" fill="#3fb950" stroke="#7ee787" stroke-width="2"/>
+    <text x="930" y="590" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Trigger Next Generation</text>
+    <text x="930" y="608" font-size="9" fill="#ffffff" text-anchor="middle">(Use optimized weights)</text>
+  </g>
+
+  <!-- Arrow between Layer 3 and 4 -->
+  <line x1="600" y1="650" x2="600" y2="700" stroke="#58a6ff" stroke-width="3" marker-end="url(#arrowDown)"/>
+
+  <!-- LAYER 4: Dashboard -->
+  <g id="layer4">
+    <!-- Container -->
+    <rect x="50" y="700" width="1100" height="130" rx="8" fill="#161b22" stroke="#79c0ff" stroke-width="3"/>
+
+    <!-- Title -->
+    <text x="70" y="730" font-size="18" font-weight="bold" fill="#79c0ff">Layer 4: Learning Dashboard</text>
+    <text x="70" y="755" font-size="12" fill="#8b949e">Operator visibility + audit chain + compliance export</text>
+
+    <!-- Dashboard sections -->
+    <rect x="100" y="770" width="130" height="40" rx="4" fill="#1f6feb" stroke="#54aeff" stroke-width="1"/>
+    <text x="165" y="795" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Skill Lifecycle</text>
+
+    <rect x="260" y="770" width="130" height="40" rx="4" fill="#1f6feb" stroke="#54aeff" stroke-width="1"/>
+    <text x="325" y="795" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Audit Chain</text>
+
+    <rect x="420" y="770" width="130" height="40" rx="4" fill="#1f6feb" stroke="#54aeff" stroke-width="1"/>
+    <text x="485" y="795" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Learning Progress</text>
+
+    <rect x="580" y="770" width="130" height="40" rx="4" fill="#1f6feb" stroke="#54aeff" stroke-width="1"/>
+    <text x="645" y="795" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Convergence Status</text>
+
+    <rect x="740" y="770" width="130" height="40" rx="4" fill="#1f6feb" stroke="#54aeff" stroke-width="1"/>
+    <text x="805" y="795" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Compliance Export</text>
+
+    <rect x="900" y="770" width="130" height="40" rx="4" fill="#1f6feb" stroke="#54aeff" stroke-width="1"/>
+    <text x="965" y="795" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">Cost Trends</text>
+  </g>
+
+  <!-- Legend -->
+  <g id="legend">
+    <text x="50" y="860" font-size="12" font-weight="bold" fill="#e6edf3">Key Points:</text>
+    <text x="50" y="880" font-size="11" fill="#8b949e">• Each layer is a Skill (composable, independent, auditable)</text>
+    <text x="550" y="880" font-size="11" fill="#8b949e">• Data flows down; feedback loops back</text>
+  </g>
+</svg>
