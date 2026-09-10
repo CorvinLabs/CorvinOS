@@ -44,7 +44,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { RouteErrorBoundary } from "@/components/error-boundary";
-import { ConsoleAssistant } from "@/components/assistant/ConsoleAssistant";
 import { useAuth } from "@/lib/auth";
 import { useSettingsStream } from "@/hooks/use-settings-stream";
 import { useBuildFreshness } from "@/hooks/use-build-freshness";
@@ -460,7 +459,6 @@ export function AppLayout() {
     }
     return gated;
   }, [capabilityManifest, consoleManifest, aiPanels]);
-  const [assistantOpen, setAssistantOpen] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   useSettingsStream();
   // Closes the third cache layer: an open tab keeps running the bundle it booted
@@ -603,7 +601,6 @@ export function AppLayout() {
         </main>
       </div>
     </div>
-    <RouteErrorBoundary label="assistant"><ConsoleAssistant open={assistantOpen} onClose={() => setAssistantOpen(false)} /></RouteErrorBoundary>
     </>
   );
 }
