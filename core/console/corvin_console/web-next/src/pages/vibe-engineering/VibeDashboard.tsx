@@ -19,6 +19,7 @@
 
 import { Suspense, useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { MaturityDashboard } from './components/MaturityDashboard';
 
 const PALETTE = {
   surface: {
@@ -85,8 +86,32 @@ export function VibeDashboard() {
       </div>
 
       {/* Tab Content */}
-      <div className="p-6 text-muted-foreground">
-        <p>Dashboard content coming soon...</p>
+      <div>
+        {activeTab === 'maturity' && (
+          <Suspense fallback={<LoadingFallback />}>
+            <MaturityDashboard />
+          </Suspense>
+        )}
+        {activeTab === 'summary' && (
+          <div className="p-6 text-muted-foreground">
+            <p>Summary coming soon...</p>
+          </div>
+        )}
+        {activeTab === 'patterns' && (
+          <div className="p-6 text-muted-foreground">
+            <p>Patterns coming soon...</p>
+          </div>
+        )}
+        {activeTab === 'config' && (
+          <div className="p-6 text-muted-foreground">
+            <p>Config coming soon...</p>
+          </div>
+        )}
+        {activeTab === 'preferences' && (
+          <div className="p-6 text-muted-foreground">
+            <p>Preferences coming soon...</p>
+          </div>
+        )}
       </div>
     </div>
     </>
