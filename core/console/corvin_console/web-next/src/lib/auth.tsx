@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, logout as apiLogout, setOn401Handler, setOnCsrfErrorHandler, whoami, type WhoamiResponse } from "@/lib/api";
+import { ApiError, setOn401Handler, setOnCsrfErrorHandler, whoami, logout as apiLogout, type WhoamiResponse } from "@/lib/api";
 
 interface AuthContextValue {
   status: "loading" | "anonymous" | "authenticated";

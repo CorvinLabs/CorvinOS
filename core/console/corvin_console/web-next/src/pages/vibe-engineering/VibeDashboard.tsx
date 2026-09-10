@@ -19,10 +19,7 @@
 
 import { Suspense, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import MaturityDashboard from './components/LearningDashboard';
-import MethodDiscoveryDashboard from '@/panels/LearningDashboard';
 
-// Same PALETTE as LearningDashboard & Maturity Metrics
 const PALETTE = {
   surface: {
     dark: '#0D1117',
@@ -88,20 +85,9 @@ export function VibeDashboard() {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'maturity' && (
-        <Suspense fallback={<LoadingFallback />}>
-          <MaturityDashboard />
-        </Suspense>
-      )}
-
-      {activeTab !== 'maturity' && (
-        <Suspense fallback={<LoadingFallback />}>
-          <MethodDiscoveryDashboard
-            activeTab={activeTab as 'summary' | 'patterns' | 'config' | 'preferences'}
-            hideTabNavigation={true}
-          />
-        </Suspense>
-      )}
+      <div className="p-6 text-muted-foreground">
+        <p>Dashboard content coming soon...</p>
+      </div>
     </div>
     </>
   );

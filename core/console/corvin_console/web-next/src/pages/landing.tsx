@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { landingPersonas, type LandingPersona } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { landingPersonas, type LandingPersona } from "@/lib/api";
 
 // PublicLayout temporary fallback (ADR-0561: landing/login pages to be redesigned)
 const PublicLayout = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
