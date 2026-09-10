@@ -577,20 +577,6 @@ export function AppLayout() {
           </div>
           <div className="flex items-center gap-2">
             <EngineChip />
-            <button
-              onClick={() => setAssistantOpen((v) => !v)}
-              aria-label="Corvin Assistant"
-              title="Corvin Assistant"
-              className={cn(
-                "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-all",
-                assistantOpen
-                  ? "border-accent/50 bg-accent/10 text-accent"
-                  : "border-border bg-muted/30 text-muted-foreground hover:border-accent/30 hover:bg-muted/50 hover:text-foreground",
-              )}
-            >
-              <CorvinMarkSmall className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline font-medium">Assistant</span>
-            </button>
             <ThemeToggle />
           </div>
         </header>
