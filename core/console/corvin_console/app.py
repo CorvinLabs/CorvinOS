@@ -665,6 +665,13 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=app_lifespan,
     )
+
+    # CRITICAL FIX #3: Add routing disclosure headers middleware (EU AI Act Art. 50)
+    # This middleware adds X-Routed-By, X-User-Tier, X-Routing-Confidence, etc. headers
+    # to all responses, disclosing the AI routing decision to the user.
+    from .middleware.routing_disclosure_headers import RoutingDisclosureHeadersMiddleware
+    _app.add_middleware(RoutingDisclosureHeadersMiddleware)
+
     _app.include_router(router)  # All API routes (includes /vibe-engineering/*)
     mount_static(_app, url_prefix="/console")  # SPA at /console/
     return _app
