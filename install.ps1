@@ -2,24 +2,28 @@
 param(
     [Alias("e")]
     [string]$Editable = "",
-    [switch]$NoHermes,
     # Open TCP 8765 in Windows Defender Firewall for LAN A2A pairing. Off by
     # default: the console binds 127.0.0.1 unless a2a_lan_bind is enabled, so
     # a firewall rule on every install pre-exposed the port before any consent
     # step (2026-09-03 adversarial review, F10).
-    [switch]$Lan
+    [switch]$Lan,
+    # Skip Claude Code installation/detection (for offline/non-interactive installs)
+    [switch]$NoClaudeCode
 )
 # install.ps1 -- CorvinOS installer for Windows (PowerShell 5.1+).
 # Usage:
 #   irm https://corvin-labs.com/install.ps1 | iex
 #   .\install.ps1 -Editable C:\path\to\CorvinOS   # dev install from a local clone
 #   .\install.ps1 -Lan                            # also add the firewall rule
+#   .\install.ps1 -NoClaudeCode                   # skip Claude Code installation
 #
 # ZERO prerequisites: it bootstraps `uv` (a single binary that also manages its
 # own Python), so you need NO Python, NO pip, NO package manager pre-installed.
 # `irm | iex` uses no shell operators, so it works in PowerShell 5.1 AND 7 alike.
 #
-# Supply-chain pins (2026-09-03 adversarial review, F9):
+# Includes Claude Code auto-detection + credential reuse (optional).
+#
+# Supply-chain pins (2026-09-10 ADR-0666 production ready):
 #   * uv    -- PINNED. The installer for exactly $UvPinVersion is downloaded
 #             from the immutable GitHub release asset, its SHA-256 is compared
 #             with $UvInstallerSha256 BEFORE it runs (Get-FileHash), and that
@@ -30,8 +34,6 @@ param(
 #             receipt and freezes `uv tool upgrade` -- the supervisor's
 #             auto-update -- forever. Kept equal to pyproject.toml's version by
 #             tests/test_wheel_content_guard.py.
-#   * Ollama -- installed through winget (Ollama.Ollama), i.e. a signed,
-#             package-manager-verified installer; nothing is piped from a URL.
 
 $ErrorActionPreference = "Stop"
 
@@ -244,84 +246,51 @@ if (-not (Get-Command corvinos-serve -ErrorAction SilentlyContinue)) {
 Write-Host ""
 Write-Ok "Package installed."
 
-# ── 2b. Hermes (local offline engine): Ollama + model, working out of the box ──
-$SkipHermes = $NoHermes -or ($env:CORVIN_SKIP_HERMES -eq "1")
-if (-not $SkipHermes) {
-    Write-Host ""
-    Write-Step "Setting up Hermes (local offline engine) ..."
-    # pick a model by RAM
-    $ramMB = 8000
-    try { $ramMB = [int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB) } catch {}
-    # Three-tier ladder so the pulled model actually RUNS alongside Windows +
-    # console. qwen3:8b (~5.2 GB) OOMs/swaps on a 6-8 GB box, so it is reserved
-    # for >=12 GB; 6-12 GB gets qwen3:4b (~2.6 GB); < 6 GB gets the 1.7b. The
-    # running Hermes engine auto-selects whatever tag is present, so a later
-    # manual pull upgrades it.
-    $HModel = if ($ramMB -lt 6000) { "qwen3:1.7b" } elseif ($ramMB -lt 12000) { "qwen3:4b" } else { "qwen3:8b" }
-    Write-Step "RAM ~$ramMB MB -> model $HModel"
+# ── 2b. Claude Code detection (optional, Production Ready ADR-0666) ──────────
+if (-not $NoClaudeCode) {
+    $ClaudeCodePath = $null
 
-    # ensure Ollama is installed (winget)
-    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            # --silent suppresses winget's own GUI/progress window, so without
-            # this message the download (~100+ MB) gave no indication it was
-            # still working -- looked like a hung installer on a slower
-            # connection. Kept synchronous (no background job) here, unlike
-            # install.sh's dot-heartbeat -- winget's interaction with a
-            # background PowerShell job is untested and a broken install step
-            # would be worse than a plain "please wait".
-            Write-Step "Downloading Ollama (~100 MB, one-time) -- this can take a minute, please wait ..."
-            winget install --silent --accept-package-agreements --accept-source-agreements Ollama.Ollama
-            if ($LASTEXITCODE -ne 0) { Write-Warn "Ollama install failed -- install manually: https://ollama.com/download/windows" }
-            $env:Path = "$env:LOCALAPPDATA\Programs\Ollama;$env:Path"
-        } else {
-            Write-Warn "winget not found -- install Ollama from https://ollama.com/download/windows"
-        }
-    }
-
-    # ensure the Ollama server is reachable (start it if needed)
-    function Test-Ollama { try { Invoke-RestMethod -TimeoutSec 2 http://localhost:11434/api/tags | Out-Null; $true } catch { $false } }
-    if (-not (Test-Ollama)) {
-        Write-Host -NoNewline "  Starting Ollama service "
-        if (Get-Command ollama -ErrorAction SilentlyContinue) {
-            Start-Process -WindowStyle Hidden ollama -ArgumentList "serve" -ErrorAction SilentlyContinue
-        }
-        for ($i = 0; $i -lt 30 -and -not (Test-Ollama); $i++) { Write-Host -NoNewline "."; Start-Sleep 1 }
-        if (Test-Ollama) { Write-Host " ready" } else { Write-Host " not ready yet" }
-    }
-
-    # pull the model so Hermes is immediately usable offline
-    if ((Get-Command ollama -ErrorAction SilentlyContinue) -and (Test-Ollama)) {
-        $have = $false
-        try { $have = ((Invoke-RestMethod http://localhost:11434/api/tags).models.name -join ",") -match [regex]::Escape($HModel) } catch {}
-        if ($have) {
-            Write-Ok "Hermes model $HModel already present"
-        } else {
-            Write-Step "Pulling $HModel (one-time, a few GB) ..."
-            ollama pull $HModel
-            if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes ready -- $HModel installed" }
-            else { Write-Warn "model pull failed -- finish later with: ollama pull $HModel" }
-        }
-        # Pre-warm the L44 safety classifier (it uses the SAME model) so the very
-        # first message isn't a ~22 s cold model load and hits a real semantic
-        # check instead of the deterministic Tier-0 floor. keep_alive 30m keeps it
-        # resident. (We deliberately don't pin a tiny model: qwen3:1.7b is fast but
-        # fails the classifier JSON schema, so it'd be worse than the warm model.)
-        $have2 = $false
-        try { $have2 = ((Invoke-RestMethod http://localhost:11434/api/tags).models.name -join ",") -match [regex]::Escape($HModel) } catch {}
-        if ($have2) {
-            Write-Host -NoNewline "  Warming up the safety classifier ($HModel) "
-            $body = @{ model = $HModel; prompt = "ok"; stream = $false; keep_alive = "30m" } | ConvertTo-Json -Compress
-            $job = Start-Job -ScriptBlock {
-                param($b)
-                try { Invoke-RestMethod -Method Post -TimeoutSec 180 -Uri "http://localhost:11434/api/generate" -Body $b -ContentType "application/json" | Out-Null } catch {}
-            } -ArgumentList $body
-            while ($job.State -eq 'Running') { Write-Host -NoNewline "."; Start-Sleep -Seconds 1 }
-            Receive-Job $job | Out-Null; Remove-Job $job -Force
-            Write-Host " done"
-        }
+    # Try to find existing Claude Code installation
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        $ClaudeCodePath = (Get-Command claude -ErrorAction SilentlyContinue).Source
+        Write-Ok "Claude Code found at $ClaudeCodePath"
     } else {
-        Write-Warn "Ollama not reachable -- Hermes self-heals on first run (or see https://ollama.com/download)"
+        # Offer to install Claude Code (interactive mode only)
+        if (-not ([Environment]::UserInteractive)) {
+            Write-Hint "Claude Code not found (non-interactive mode) -- skipped"
+        } else {
+            Write-Host ""
+            Write-Step "Claude Code not found. Install it now? (Y/n)"
+            $response = Read-Host "  Install"
+            if ($response -match '^[yY]?$') {
+                Write-Step "Installing Claude Code ..."
+                try {
+                    # Download official installer (Windows MSI)
+                    $claudeInstaller = Join-Path $env:TEMP "claude-install.msi"
+                    Write-Step "Downloading Claude Code installer (~50 MB) ..."
+                    Invoke-WebRequest -Uri "https://claude.ai/download/claude-windows.msi" `
+                        -OutFile $claudeInstaller -TimeoutSec 300 -ErrorAction Stop
+
+                    # Run installer (silent, non-interactive)
+                    Write-Step "Running Claude Code installer ..."
+                    Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`"$claudeInstaller`"", "/qb" -Wait
+
+                    if ($LASTEXITCODE -eq 0) {
+                        $ClaudeCodePath = (Get-Command claude -ErrorAction SilentlyContinue).Source
+                        if ($ClaudeCodePath) {
+                            Write-Ok "Claude Code installed"
+                        } else {
+                            Write-Warn "Claude Code installed but path not resolved -- re-open terminal"
+                        }
+                    } else {
+                        Write-Warn "Claude Code install failed -- download manually: https://claude.ai"
+                    }
+                    Remove-Item -Force $claudeInstaller -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Warn "Could not install Claude Code: $_ -- download from https://claude.ai"
+                }
+            }
+        }
     }
 }
 
@@ -889,7 +858,5 @@ Write-Host "   corvinos-serve     " -NoNewline -ForegroundColor White; Write-Hos
 Write-Host "   corvin-install     " -NoNewline -ForegroundColor White; Write-Host "Setup wizard (bridges, tokens, voice)"
 Write-Host "   corvin-uninstall   " -NoNewline -ForegroundColor White; Write-Host "Remove CorvinOS"
 Write-Host "   corvin-a2a         " -NoNewline -ForegroundColor White; Write-Host "Agent-to-agent pairing and messaging"
-Write-Host ""
-Write-Cmd  "ollama pull qwen3:8b   # optional local model (offline /engine hermes)"
 Write-Host ""
 Pause-AndExit 0

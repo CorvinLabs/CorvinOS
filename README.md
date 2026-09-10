@@ -4,6 +4,48 @@
 
 ---
 
+## ⚡ Quick Start (2 minutes)
+
+### Installation
+
+**All platforms (macOS, Linux, Windows):**
+
+```bash
+# macOS / Linux
+curl -fsSL https://corvin-labs.com/install.sh | sh
+
+# Windows (PowerShell)
+irm https://corvin-labs.com/install.ps1 | iex
+```
+
+**From a local checkout:**
+
+```bash
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
+bash install.sh --editable .
+
+# or on Windows:
+.\install.ps1 -Editable .\
+```
+
+**What happens:**
+1. ✅ Bootstraps a fresh Python environment (no system Python required)
+2. ✅ Installs CorvinOS + voice models (STT + TTS, offline)
+3. ✅ Auto-detects & installs Claude Code (if not already present)
+4. ✅ Starts the console → browser opens to `http://localhost:8765/console/`
+5. ✅ Ready to use — no onboarding, no setup screens
+
+**Advanced options:**
+
+```bash
+bash install.sh --lan                    # Allow pairing over LAN
+bash install.sh --no-claude-code         # Skip Claude Code installation
+bash install.sh --preset minimal         # Lightweight setup (console only)
+```
+
+---
+
 ## The Problem We Solve
 
 You use AI for important work. But three problems plague every AI system:
