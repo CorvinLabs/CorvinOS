@@ -17,7 +17,6 @@ import { HoverDetails } from './maturity/HoverDetails';
 import { AnomalyAlerts } from './maturity/AnomalyAlerts';
 import { SummaryTab } from './maturity/SummaryTab';
 import { PatternsTab } from './maturity/PatternsTab';
-import { DeprecatedApiTab } from './deprecated-api/DeprecatedApiTab';
 import { MaturityData, LoopScores } from './maturity/types';
 import { useLiveMaturityData, type TimeWindow } from '../hooks/useLiveMaturityData';
 
@@ -41,7 +40,7 @@ const SAMPLE_LOOP_DATA: LoopScores = {
   meta_convergence: 8.1,
 };
 
-type DashboardTab = 'radar' | 'summary' | 'patterns' | 'deprecated-api';
+type DashboardTab = 'radar' | 'summary' | 'patterns';
 
 export function MaturityDashboard() {
   const [windowPref, setWindow] = useState<TimeWindow>('7d');
@@ -138,16 +137,6 @@ export function MaturityDashboard() {
             }`}
           >
             🔍 Patterns
-          </button>
-          <button
-            onClick={() => setActiveTab('deprecated-api')}
-            className={`px-4 py-2 text-sm font-medium transition-all ${
-              activeTab === 'deprecated-api'
-                ? 'border-b-2 border-accent text-accent'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            ⚠️ Deprecated APIs
           </button>
         </div>
       )}
@@ -251,11 +240,6 @@ export function MaturityDashboard() {
       {/* Patterns Tab */}
       {activeTab === 'patterns' && loopScores && (
         <PatternsTab loopScores={loopData} />
-      )}
-
-      {/* Deprecated API Tab */}
-      {activeTab === 'deprecated-api' && (
-        <DeprecatedApiTab />
       )}
 
       {/* Hover Details Modal */}
