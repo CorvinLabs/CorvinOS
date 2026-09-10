@@ -92,7 +92,7 @@ export interface ChatMessage {
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
         "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
-        "engine_progress" | "notice";
+        "engine_progress" | "notice" | "language";
   /** `notice` only: which runtime message this is ("quota_fallback",
    *  "acs_fallback", "artifacts_truncated"). Rendered as a distinct chip so a
    *  degrade is never mistaken for part of the model's answer. */

@@ -109,55 +109,77 @@ def _detect_script_language(text: str) -> Optional[str]:
     return None
 
 
+# Function-word inventories used for Latin-script scoring.
+_GERMAN_WORDS_RE = re.compile(
+    r"\b(die|der|das|und|in|ist|zu|bei|mit|auf|vom|den|des|"
+    r"ein|eine|einen|einem|keinen|jede|jeden|jedem|"
+    r"nicht|sie|er|es|ich|wir|du|mein|dein|sein|ihr|unser)\b"
+)
+_ENGLISH_WORDS_RE = re.compile(
+    r"\b(the|and|or|is|in|to|of|for|with|be|at|by|from|"
+    r"not|but|this|that|a|an|as|have|has|do|does|can|"
+    r"will|would|should|could|may|might|must|shall|get|make)\b"
+)
+
+# Minimum number of function-word hits before word-level scoring may decide.
+# Two is the smallest count that can still express dominance over the other
+# language ("Das ist ..." / "This is ..."), and short turns are the common
+# case in chat — a floor of three silently sent every short German sentence
+# to the English fallback.
+_MIN_WORD_HITS = 2
+
+# Below this length there is not enough text for word-level scoring to mean
+# anything. Diacritic evidence is checked BEFORE this gate, because it is
+# decisive at any length.
+_MIN_SCORING_LENGTH = 10
+
+
 def _detect_latin_language(text: str) -> Optional[str]:
     """Detect language from Latin text (German, English, French, etc.).
 
     Uses character and word-level heuristics.
     Returns BCP-47 code or None if too ambiguous.
     """
-    if not text or len(text) < 10:
+    if not text:
         return None
 
     # Sample ~300 chars for scoring
     sample = text[:300].lower()
 
-    # German-specific characters (ä ö ü ß)
-    german_chars = len(re.findall(r'[äöüß]', sample))
-    if german_chars >= 2:
+    german_chars = len(re.findall(r"[äöüß]", sample))
+    german_words = len(_GERMAN_WORDS_RE.findall(sample))
+    english_words = len(_ENGLISH_WORDS_RE.findall(sample))
+
+    # German diacritics are strong evidence and are weighed BEFORE the
+    # minimum-length gate: "äöüß" is decisive in four characters, while word
+    # scoring genuinely needs a sentence. A single umlaut is enough — but only
+    # while English function words do not outnumber German ones, so that an
+    # English sentence carrying a loanword or proper noun ("The Zürich office
+    # is open") is not misread as German.
+    if german_chars >= 1 and german_words >= english_words:
         return "de"
 
-    # German words (common)
-    german_words = len(re.findall(
-        r'\b(die|der|das|und|in|ist|zu|bei|mit|auf|vom|den|des|'
-        r'ein|eine|einen|einen|einem|keinen|jede|jeden|jedem|'
-        r'nicht|sie|er|es|ich|wir|du|ich|mein|dein|sein|ihr|unser)\b',
-        sample
-    ))
-    english_words = len(re.findall(
-        r'\b(the|and|or|is|in|to|of|for|with|be|at|by|from|'
-        r'not|but|this|that|a|an|as|have|has|do|does|can|'
-        r'will|would|should|could|may|might|must|shall|get|make)\b',
-        sample
-    ))
+    if len(text) < _MIN_SCORING_LENGTH:
+        return None
 
-    # If German words >> English words, it's German
-    if german_words > english_words and german_words >= 3:
+    # If German words dominate, it's German
+    if german_words > english_words and german_words >= _MIN_WORD_HITS:
         return "de"
 
-    # If English words >> German words, it's English
-    if english_words > german_words and english_words >= 3:
+    # If English words dominate, it's English
+    if english_words > german_words and english_words >= _MIN_WORD_HITS:
         return "en"
 
     # French
-    if re.search(r'\b(le|la|les|de|du|un|une|et|est|que|qui|avec)\b', sample):
+    if re.search(r"\b(le|la|les|de|du|un|une|et|est|que|qui|avec)\b", sample):
         return "fr"
 
     # Spanish
-    if re.search(r'\b(el|la|los|las|de|un|una|y|es|que|por|con)\b', sample):
+    if re.search(r"\b(el|la|los|las|de|un|una|y|es|que|por|con)\b", sample):
         return "es"
 
     # Italian
-    if re.search(r'\b(il|la|di|da|un|una|e|è|per|che|che|con)\b', sample):
+    if re.search(r"\b(il|la|di|da|un|una|e|è|per|che|con)\b", sample):
         return "it"
 
     return None

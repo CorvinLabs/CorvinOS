@@ -209,6 +209,9 @@ from . import feature_flags as _feature_flags  # noqa: E402  — ship-dark regis
 from .execution_context import (  # noqa: E402
     ExecutionContextBuilder, EngineId, DelegationMode, detect_model_source,
 )
+from .language_resolution import (  # noqa: E402  — ADR-0650 Phase 4 turn language
+    load_profile_language, resolve_turn_language, store_language_context_in_metadata,
+)
 
 # Canonical bridge audit chain (L16) — os_turn.* traceability for web turns
 # (EU AI Act Art. 12/13). Best-effort import mirroring the `_cowork is not
@@ -531,6 +534,11 @@ class WebChatSession:
     title: str = ""
     turn_count: int = 0
     workdir: Path = field(default_factory=Path)
+    # ADR-0650 Phase 4 — the language decision for the turn currently in flight.
+    # Transient per-turn state, deliberately NOT persisted in the session meta
+    # (_session_from_meta rebuilds every field explicitly): the resolver runs
+    # once per turn and must never carry a stale decision across turns.
+    language_context: dict[str, Any] | None = field(default=None, repr=False)
 
     @property
     def chat_key(self) -> str:
@@ -3409,6 +3417,15 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
     assistant's reply was already streamed back."""
     path = _turns_path(sess.tenant_id, sess.sid)
     payload = {"role": role, "ts": time.time(), "parts": parts}
+    # ADR-0650 Phase 4 — attach the turn's resolved language to EVERY persisted
+    # turn. Done here rather than threaded through the ~20 _append_turn call
+    # sites so the early-exit paths (gate refusals, engine errors, quota
+    # notices) carry it too: the Voice Summary reads the last turn, and a
+    # refusal spoken in the wrong language is exactly the failure the resolver
+    # exists to prevent.
+    _lang_ctx = getattr(sess, "language_context", None)
+    if _lang_ctx:
+        payload["language_context"] = _lang_ctx
     if voice_key_hint:
         payload["voice_key"] = voice_key_hint
     if tde_progress:
@@ -4682,6 +4699,27 @@ async def stream_turn(
         yield {"type": "error", "message": "empty prompt"}
         yield {"type": "done"}
         return
+
+    # ADR-0650 Phase 4 — resolve THE language for this turn, once, before any
+    # work happens. Priority is Profile > Input > Response > system default;
+    # the profile is canonical, so a user who configured Deutsch keeps Deutsch
+    # even on an English prompt. The decision is stashed on the session (read
+    # by _append_turn for every persisted turn) and emitted on the stream so
+    # the client and the Voice Summary use the same value the backend chose.
+    # Best-effort: a resolver failure must never cost the user their turn.
+    sess.language_context = None
+    try:
+        _lang_ctx = resolve_turn_language(
+            user_text=prompt,
+            response_text="",  # not produced yet; profile/input decide the turn
+            profile_lang=load_profile_language(sess.tenant_id),
+        )
+        _lang_meta: dict[str, Any] = {}
+        store_language_context_in_metadata(_lang_meta, _lang_ctx)
+        sess.language_context = _lang_meta["language_context"]
+        yield {"type": "language", **_lang_meta["language_context"]}
+    except Exception:  # noqa: BLE001 — language is advisory, never turn-fatal
+        _log.debug("language resolution failed for this turn", exc_info=True)
 
     # M4 (ADR-0170) — drain compute-task inbox before processing the new turn
     # so background results surface at the next user interaction, not delayed.
