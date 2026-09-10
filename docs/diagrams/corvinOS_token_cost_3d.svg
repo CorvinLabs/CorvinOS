@@ -28,10 +28,10 @@
   <rect width="1400" height="900" fill="url(#bg3d)"/>
 
   <!-- Title -->
-  <text x="700" y="50" font-size="36" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+  <text x="700" y="50" font-size="48" font-weight="bold" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">
     Token Cost Comparison
   </text>
-  <text x="700" y="80" font-size="14" fill="#8b949e" text-anchor="middle">
+  <text x="700" y="80" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">
     How CorvinOS routing saves 80% of costs
   </text>
 
@@ -39,27 +39,27 @@
   <g filter="url(#shadow3d)">
     <rect x="1050" y="100" width="300" height="200" rx="15" fill="#161b22" stroke="#30363d" stroke-width="2"/>
 
-    <text x="1070" y="130" font-size="13" font-weight="bold" fill="#e6edf3">Model Costs:</text>
+    <text x="1070" y="130" font-size="13" font-weight="bold" fill="#e6edf3" letter-spacing="0.5">Model Costs:</text>
 
     <!-- Haiku -->
     <rect x="1070" y="150" width="20" height="20" rx="3" fill="url(#grad-green)"/>
-    <text x="1100" y="165" font-size="12" fill="#e6edf3">Haiku: $0.00080/token</text>
+    <text x="1100" y="165" font-size="12" fill="#e6edf3" letter-spacing="0.5">Haiku: $0.00080/token</text>
 
     <!-- Sonnet -->
     <rect x="1070" y="185" width="20" height="20" rx="3" fill="url(#grad-yellow)"/>
-    <text x="1100" y="200" font-size="12" fill="#e6edf3">Sonnet: $0.003/token</text>
+    <text x="1100" y="200" font-size="12" fill="#e6edf3" letter-spacing="0.5">Sonnet: $0.003/token</text>
 
     <!-- Opus -->
     <rect x="1070" y="220" width="20" height="20" rx="3" fill="url(#grad-red)"/>
-    <text x="1100" y="235" font-size="12" fill="#e6edf3">Opus: $0.015/token</text>
+    <text x="1100" y="235" font-size="12" fill="#e6edf3" letter-spacing="0.5">Opus: $0.015/token</text>
 
     <!-- Savings -->
     <rect x="1050" y="270" width="300" height="2" fill="#56d364" opacity="0.5"/>
-    <text x="1070" y="295" font-size="12" font-weight="bold" fill="#56d364">CorvinOS Savings: 80%</text>
+    <text x="1070" y="295" font-size="12" font-weight="bold" fill="#56d364" letter-spacing="0.5">CorvinOS Savings: 80%</text>
   </g>
 
   <!-- Bar chart section -->
-  <text x="80" y="150" font-size="14" font-weight="bold" fill="#e6edf3">Monthly Cost: 1000 requests × 1500 tokens</text>
+  <text x="80" y="150" font-size="14" font-weight="bold" fill="#e6edf3" letter-spacing="0.5">Monthly Cost: 1000 requests × 1500 tokens</text>
 
   <!-- Bar 1: All Opus -->
   <g filter="url(#shadow3d)">
@@ -67,14 +67,14 @@
     <rect x="100" y="200" width="80" height="500" rx="10" fill="url(#grad-red)" stroke="#f85149" stroke-width="2"/>
     <polygon points="100,200 110,190 190,190 180,200" fill="#8b0000" opacity="0.3"/>
 
-    <text x="140" y="730" font-size="12" font-weight="bold" fill="#f85149" text-anchor="middle">All Opus</text>
-    <text x="140" y="750" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">$22,500</text>
-    <text x="140" y="770" font-size="11" fill="#8b949e" text-anchor="middle">/month</text>
+    <text x="140" y="730" font-size="18" font-weight="bold" fill="#f85149" text-anchor="middle" letter-spacing="0.5">All Opus</text>
+    <text x="140" y="750" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">$22,500</text>
+    <text x="140" y="770" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">/month</text>
   </g>
 
   <!-- Arrow down -->
   <line x1="250" y1="400" x2="350" y2="400" stroke="#58a6ff" stroke-width="3" marker-end="url(#arrowBlue)"/>
-  <text x="300" y="385" font-size="12" fill="#58a6ff" text-anchor="middle" font-weight="bold">With CorvinOS</text>
+  <text x="300" y="385" font-size="18" fill="#58a6ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">With CorvinOS</text>
 
   <!-- Bar 2: Optimized routing -->
   <g filter="url(#shadow3d)">
@@ -82,48 +82,48 @@
     <g>
       <rect x="400" y="200" width="48" height="300" rx="8" fill="url(#grad-green)" stroke="#56d364" stroke-width="2"/>
       <polygon points="400,200 406,192 454,192 448,200" fill="#0d3622" opacity="0.3"/>
-      <text x="424" y="490" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">60%</text>
-      <text x="424" y="505" font-size="9" fill="#8b949e" text-anchor="middle">Haiku</text>
+      <text x="424" y="490" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">60%</text>
+      <text x="424" y="505" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Haiku</text>
     </g>
 
     <!-- 30% Sonnet -->
     <g>
       <rect x="456" y="200" width="48" height="225" rx="8" fill="url(#grad-yellow)" stroke="#f0883e" stroke-width="2"/>
       <polygon points="456,200 462,192 510,192 504,200" fill="#8b4513" opacity="0.3"/>
-      <text x="480" y="415" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">30%</text>
-      <text x="480" y="430" font-size="9" fill="#8b949e" text-anchor="middle">Sonnet</text>
+      <text x="480" y="415" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">30%</text>
+      <text x="480" y="430" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Sonnet</text>
     </g>
 
     <!-- 10% Opus -->
     <g>
       <rect x="512" y="200" width="48" height="75" rx="8" fill="url(#grad-red)" stroke="#f85149" stroke-width="2"/>
       <polygon points="512,200 518,192 566,192 560,200" fill="#8b0000" opacity="0.3"/>
-      <text x="536" y="260" font-size="10" fill="#ffffff" text-anchor="middle" font-weight="bold">10%</text>
-      <text x="536" y="275" font-size="9" fill="#8b949e" text-anchor="middle">Opus</text>
+      <text x="536" y="260" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">10%</text>
+      <text x="536" y="275" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Opus</text>
     </g>
 
-    <text x="480" y="730" font-size="12" font-weight="bold" fill="#56d364" text-anchor="middle">CorvinOS</text>
-    <text x="480" y="750" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">$4,320</text>
-    <text x="480" y="770" font-size="11" fill="#8b949e" text-anchor="middle">/month</text>
+    <text x="480" y="730" font-size="18" font-weight="bold" fill="#56d364" text-anchor="middle" letter-spacing="0.5">CorvinOS</text>
+    <text x="480" y="750" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">$4,320</text>
+    <text x="480" y="770" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">/month</text>
   </g>
 
   <!-- Savings box -->
   <g filter="url(#shadow3d)">
     <rect x="650" y="250" width="300" height="200" rx="15" fill="#0a3622" stroke="#238636" stroke-width="2"/>
 
-    <text x="800" y="290" font-size="16" font-weight="bold" fill="#56d364" text-anchor="middle">
+    <text x="800" y="290" font-size="20" font-weight="bold" fill="#56d364" text-anchor="middle" letter-spacing="0.5">
       Monthly Savings
     </text>
 
-    <text x="800" y="330" font-size="28" font-weight="bold" fill="#7ee787" text-anchor="middle">
+    <text x="800" y="330" font-size="40" font-weight="bold" fill="#7ee787" text-anchor="middle" letter-spacing="0.5">
       $18,180
     </text>
 
-    <text x="800" y="365" font-size="13" fill="#ffffff" text-anchor="middle" font-weight="bold">
+    <text x="800" y="365" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">
       81% Cost Reduction
     </text>
 
-    <text x="800" y="395" font-size="12" fill="#8b949e" text-anchor="middle">
+    <text x="800" y="395" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">
       Break-even: ~2 weeks
     </text>
   </g>
@@ -133,26 +133,26 @@
     <rect x="100" y="820" width="1200" height="50" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
 
     <circle cx="150" cy="845" r="12" fill="#56d364" stroke="#7ee787" stroke-width="2"/>
-    <text x="150" y="850" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Day 1</text>
-    <text x="150" y="865" font-size="9" fill="#8b949e" text-anchor="middle">Deploy</text>
+    <text x="150" y="850" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Day 1</text>
+    <text x="150" y="865" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Deploy</text>
 
     <line x1="200" y1="845" x2="350" y2="845" stroke="#56d364" stroke-width="2" opacity="0.5"/>
 
     <circle cx="400" cy="845" r="12" fill="#f0883e" stroke="#fb8500" stroke-width="2"/>
-    <text x="400" y="850" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Week 1</text>
-    <text x="400" y="865" font-size="9" fill="#8b949e" text-anchor="middle">Learning</text>
+    <text x="400" y="850" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Week 1</text>
+    <text x="400" y="865" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Learning</text>
 
     <line x1="450" y1="845" x2="600" y2="845" stroke="#f0883e" stroke-width="2" opacity="0.5"/>
 
     <circle cx="650" cy="845" r="12" fill="#79c0ff" stroke="#54aeff" stroke-width="2"/>
-    <text x="650" y="850" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Week 2-3</text>
-    <text x="650" y="865" font-size="9" fill="#8b949e" text-anchor="middle">Convergence</text>
+    <text x="650" y="850" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Week 2-3</text>
+    <text x="650" y="865" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Convergence</text>
 
     <line x1="700" y1="845" x2="1050" y2="845" stroke="#79c0ff" stroke-width="2" opacity="0.5"/>
 
     <circle cx="1100" cy="845" r="12" fill="#56d364" stroke="#7ee787" stroke-width="2"/>
-    <text x="1100" y="850" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="bold">Stable</text>
-    <text x="1100" y="865" font-size="9" fill="#8b949e" text-anchor="middle">Optimized</text>
+    <text x="1100" y="850" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Stable</text>
+    <text x="1100" y="865" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Optimized</text>
   </g>
 
   <!-- Arrow markers -->

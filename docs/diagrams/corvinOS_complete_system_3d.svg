@@ -40,7 +40,7 @@
   <rect width="1600" height="1200" fill="url(#bgGrad)"/>
 
   <!-- Title -->
-  <text x="800" y="50" font-size="40" font-weight="bold" fill="#e6edf3" text-anchor="middle">
+  <text x="800" y="50" font-size="44" font-weight="bold" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">
     CorvinOS Complete System Architecture
   </text>
 
@@ -48,8 +48,8 @@
   <g filter="url(#shadow3d)">
     <circle cx="80" cy="300" r="50" fill="#ff9940" stroke="#fb8500" stroke-width="3"/>
     <polygon points="70,300 90,290 90,310" fill="#ffffff"/>
-    <text x="80" y="380" font-size="12" font-weight="bold" fill="#e6edf3" text-anchor="middle">User</text>
-    <text x="80" y="397" font-size="11" fill="#8b949e" text-anchor="middle">Request</text>
+    <text x="80" y="380" font-size="18" font-weight="bold" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">User</text>
+    <text x="80" y="397" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Request</text>
   </g>
 
   <!-- Arrow to Layer 1 -->
@@ -61,23 +61,23 @@
     <rect x="220" y="210" width="300" height="180" rx="15" fill="url(#layer1-grad)" stroke="#7ee787" stroke-width="2"/>
     <polygon points="220,210 230,200 530,200 520,210" fill="#0d1117" opacity="0.3"/>
 
-    <text x="370" y="240" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 1: DataHub</text>
-    <text x="370" y="260" font-size="11" fill="#e6edf3" text-anchor="middle">Unified Ingestion + Quality</text>
+    <text x="370" y="240" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Layer 1: DataHub</text>
+    <text x="370" y="260" font-size="18" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">Unified Ingestion + Quality</text>
 
     <!-- Sources -->
     <circle cx="260" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
-    <text x="260" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">Mem</text>
+    <text x="260" y="315" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Mem</text>
 
     <circle cx="310" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
-    <text x="310" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">RAG</text>
+    <text x="310" y="315" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">RAG</text>
 
     <circle cx="360" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
-    <text x="360" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">MCP</text>
+    <text x="360" y="315" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">MCP</text>
 
     <circle cx="410" cy="310" r="15" fill="#79c0ff" stroke="#54aeff" stroke-width="1"/>
-    <text x="410" y="315" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="bold">File</text>
+    <text x="410" y="315" font-size="18" fill="#ffffff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">File</text>
 
-    <text x="370" y="360" font-size="10" fill="#7ee787" text-anchor="middle" font-weight="bold">DataManifest</text>
+    <text x="370" y="360" font-size="18" fill="#7ee787" text-anchor="middle" font-weight="bold" letter-spacing="0.5">DataManifest</text>
   </g>
 
   <!-- Arrow down -->
@@ -89,18 +89,18 @@
     <rect x="220" y="450" width="300" height="180" rx="15" fill="url(#layer2-grad)" stroke="#56d364" stroke-width="2"/>
     <polygon points="220,450 230,440 530,440 520,450" fill="#0d1117" opacity="0.3"/>
 
-    <text x="370" y="480" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 2: Creator 2.0</text>
-    <text x="370" y="500" font-size="11" fill="#e6edf3" text-anchor="middle">12-Phase Generation</text>
+    <text x="370" y="480" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Layer 2: Creator 2.0</text>
+    <text x="370" y="500" font-size="18" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">12-Phase Generation</text>
 
     <!-- Phases -->
     <circle cx="260" cy="550" r="12" fill="#1f6feb" stroke="#79c0ff" stroke-width="1"/>
-    <text x="260" y="555" font-size="9" fill="#ffffff" text-anchor="middle">0</text>
+    <text x="260" y="555" font-size="18" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">0</text>
 
     <circle cx="290" cy="545" r="10" fill="#0a3622" stroke="#56d364" stroke-width="1"/>
     <circle cx="320" cy="545" r="10" fill="#0a3622" stroke="#56d364" stroke-width="1"/>
     <circle cx="350" cy="545" r="10" fill="#0a3622" stroke="#56d364" stroke-width="1"/>
 
-    <text x="370" y="600" font-size="10" fill="#56d364" text-anchor="middle" font-weight="bold">6D Loss Vector</text>
+    <text x="370" y="600" font-size="18" fill="#56d364" text-anchor="middle" font-weight="bold" letter-spacing="0.5">6D Loss Vector</text>
   </g>
 
   <!-- Arrow down -->
@@ -112,16 +112,16 @@
     <rect x="220" y="690" width="300" height="180" rx="15" fill="url(#layer3-grad)" stroke="#79c0ff" stroke-width="2"/>
     <polygon points="220,690 230,680 530,680 520,690" fill="#0d1117" opacity="0.3"/>
 
-    <text x="370" y="720" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 3: Daemon</text>
-    <text x="370" y="740" font-size="11" fill="#e6edf3" text-anchor="middle">Learning + Optimization</text>
+    <text x="370" y="720" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Layer 3: Daemon</text>
+    <text x="370" y="740" font-size="18" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">Learning + Optimization</text>
 
     <!-- Process flow -->
-    <text x="260" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Feedback</text>
-    <text x="310" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Attribution</text>
-    <text x="360" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Update</text>
-    <text x="410" y="780" font-size="9" fill="#79c0ff" text-anchor="middle" font-weight="bold">Converge</text>
+    <text x="260" y="780" font-size="18" fill="#79c0ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Feedback</text>
+    <text x="310" y="780" font-size="18" fill="#79c0ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Attribution</text>
+    <text x="360" y="780" font-size="18" fill="#79c0ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Update</text>
+    <text x="410" y="780" font-size="18" fill="#79c0ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Converge</text>
 
-    <text x="370" y="820" font-size="10" fill="#79c0ff" text-anchor="middle" font-weight="bold">&lt;500 samples</text>
+    <text x="370" y="820" font-size="18" fill="#79c0ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">&lt;500 samples</text>
   </g>
 
   <!-- Arrow down -->
@@ -133,8 +133,8 @@
     <rect x="220" y="930" width="300" height="120" rx="15" fill="url(#layer4-grad)" stroke="#54aeff" stroke-width="2"/>
     <polygon points="220,930 230,920 530,920 520,930" fill="#0d1117" opacity="0.3"/>
 
-    <text x="370" y="960" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Layer 4: Dashboard</text>
-    <text x="370" y="1010" font-size="10" fill="#e6edf3" text-anchor="middle">Audit • Lifecycle • Compliance Export</text>
+    <text x="370" y="960" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">Layer 4: Dashboard</text>
+    <text x="370" y="1010" font-size="18" fill="#e6edf3" text-anchor="middle" letter-spacing="0.5">Audit • Lifecycle • Compliance Export</text>
   </g>
 
   <!-- Result box (right side) -->
@@ -143,77 +143,77 @@
     <polygon points="650,210 665,195 950,195 935,210" fill="#0d1117" opacity="0.3"/>
 
     <!-- Title -->
-    <text x="800" y="250" font-size="14" font-weight="bold" fill="#56d364" text-anchor="middle">Key Metrics</text>
+    <text x="800" y="250" font-size="18" font-weight="bold" fill="#56d364" text-anchor="middle" letter-spacing="0.5">Key Metrics</text>
 
     <!-- Metric 1: Cost -->
     <g>
       <rect x="670" y="280" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-      <text x="800" y="305" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Monthly Cost</text>
-      <text x="800" y="330" font-size="20" fill="#56d364" text-anchor="middle" font-weight="bold">$4,320</text>
-      <text x="800" y="347" font-size="9" fill="#8b949e" text-anchor="middle">(80% savings)</text>
+      <text x="800" y="305" font-size="18" fill="#e6edf3" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Monthly Cost</text>
+      <text x="800" y="330" font-size="24" fill="#56d364" text-anchor="middle" font-weight="bold" letter-spacing="0.5">$4,320</text>
+      <text x="800" y="347" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">(80% savings)</text>
     </g>
 
     <!-- Metric 2: Quality -->
     <g>
       <rect x="670" y="375" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-      <text x="800" y="400" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Quality Score</text>
-      <text x="800" y="425" font-size="20" fill="#79c0ff" text-anchor="middle" font-weight="bold">0.92</text>
-      <text x="800" y="442" font-size="9" fill="#8b949e" text-anchor="middle">(92% optimized)</text>
+      <text x="800" y="400" font-size="18" fill="#e6edf3" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Quality Score</text>
+      <text x="800" y="425" font-size="24" fill="#79c0ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">0.92</text>
+      <text x="800" y="442" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">(92% optimized)</text>
     </g>
 
     <!-- Metric 3: Convergence -->
     <g>
       <rect x="670" y="470" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-      <text x="800" y="495" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Convergence Time</text>
-      <text x="800" y="520" font-size="20" fill="#f0883e" text-anchor="middle" font-weight="bold">2-3 weeks</text>
-      <text x="800" y="537" font-size="9" fill="#8b949e" text-anchor="middle">(&lt;500 samples)</text>
+      <text x="800" y="495" font-size="18" fill="#e6edf3" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Convergence Time</text>
+      <text x="800" y="520" font-size="24" fill="#f0883e" text-anchor="middle" font-weight="bold" letter-spacing="0.5">2-3 weeks</text>
+      <text x="800" y="537" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">(&lt;500 samples)</text>
     </g>
 
     <!-- Metric 4: Learning -->
     <g>
       <rect x="670" y="565" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-      <text x="800" y="590" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Continuous Learning</text>
-      <text x="800" y="615" font-size="20" fill="#7ee787" text-anchor="middle" font-weight="bold">Forever</text>
-      <text x="800" y="632" font-size="9" fill="#8b949e" text-anchor="middle">(+2-5% per cycle)</text>
+      <text x="800" y="590" font-size="18" fill="#e6edf3" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Continuous Learning</text>
+      <text x="800" y="615" font-size="24" fill="#7ee787" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Forever</text>
+      <text x="800" y="632" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">(+2-5% per cycle)</text>
     </g>
 
     <!-- Metric 5: Audit -->
     <g>
       <rect x="670" y="660" width="260" height="70" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-      <text x="800" y="685" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">Audit Trail</text>
-      <text x="800" y="710" font-size="20" fill="#d2a8ff" text-anchor="middle" font-weight="bold">Immutable</text>
-      <text x="800" y="727" font-size="9" fill="#8b949e" text-anchor="middle">(GDPR Compliant)</text>
+      <text x="800" y="685" font-size="18" fill="#e6edf3" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Audit Trail</text>
+      <text x="800" y="710" font-size="24" fill="#d2a8ff" text-anchor="middle" font-weight="bold" letter-spacing="0.5">Immutable</text>
+      <text x="800" y="727" font-size="18" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">(GDPR Compliant)</text>
     </g>
 
     <!-- Status -->
     <rect x="670" y="755" width="260" height="65" rx="10" fill="#0a4620" stroke="#3fb950" stroke-width="2"/>
-    <text x="800" y="785" font-size="12" font-weight="bold" fill="#7ee787" text-anchor="middle">✓ Production Ready</text>
-    <text x="800" y="808" font-size="10" fill="#56d364" text-anchor="middle">Self-optimizing system</text>
+    <text x="800" y="785" font-size="18" font-weight="bold" fill="#7ee787" text-anchor="middle" letter-spacing="0.5">✓ Production Ready</text>
+    <text x="800" y="808" font-size="18" fill="#56d364" text-anchor="middle" letter-spacing="0.5">Self-optimizing system</text>
   </g>
 
   <!-- Feedback loop (right side, curved) -->
   <g opacity="0.6">
     <!-- Curved arrow from Layer 4 back up to Layer 3 -->
     <path d="M 520 900 Q 600 600 520 400" stroke="#d2a8ff" stroke-width="3" fill="none" stroke-dasharray="5,5" marker-end="url(#arrowFeedback)"/>
-    <text x="570" y="650" font-size="11" fill="#d2a8ff" font-weight="bold" font-style="italic">Feedback Loop</text>
-    <text x="570" y="668" font-size="10" fill="#8b949e">(Continuous)</text>
+    <text x="570" y="650" font-size="14" fill="#d2a8ff" font-weight="bold" font-style="italic" letter-spacing="0.5">Feedback Loop</text>
+    <text x="570" y="668" font-size="14" fill="#8b949e" letter-spacing="0.5">(Continuous)</text>
   </g>
 
   <!-- Bottom info box -->
   <g filter="url(#shadow3d)">
     <rect x="100" y="1050" width="1400" height="110" rx="15" fill="#0a3622" stroke="#238636" stroke-width="2"/>
 
-    <text x="800" y="1080" font-size="13" font-weight="bold" fill="#56d364" text-anchor="middle">How It Works</text>
+    <text x="800" y="1080" font-size="18" font-weight="bold" fill="#56d364" text-anchor="middle" letter-spacing="0.5">How It Works</text>
 
-    <text x="120" y="1110" font-size="12" fill="#e6edf3">
+    <text x="120" y="1110" font-size="12" fill="#e6edf3" letter-spacing="0.5">
       Request → DataHub ingests context (quality checked) → Creator generates skill in 12 phases → Skill executes
     </text>
 
-    <text x="120" y="1130" font-size="12" fill="#e6edf3">
+    <text x="120" y="1130" font-size="12" fill="#e6edf3" letter-spacing="0.5">
       → Learning Daemon measures outcomes → Weights optimize via feedback → Convergence reached → Better routing
     </text>
 
-    <text x="120" y="1150" font-size="12" fill="#e6edf3">
+    <text x="120" y="1150" font-size="12" fill="#e6edf3" letter-spacing="0.5">
       → Dashboard shows progress → Operator sees complete audit trail → Loop continues automatically
     </text>
   </g>
