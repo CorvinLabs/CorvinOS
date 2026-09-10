@@ -212,9 +212,5 @@ export const ReleasesPage = React.lazy(() =>
   import("@/pages/releases").then((m) => ({ default: m.default }))
 );
 
-export const InfiniteSessionDashboard = React.lazy(() =>
-  import("@/pages/infinite-session-dashboard").then((m) => ({ default: m.InfiniteSessionDashboard }))
-);
-
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
