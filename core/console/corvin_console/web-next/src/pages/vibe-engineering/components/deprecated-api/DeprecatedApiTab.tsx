@@ -18,6 +18,7 @@ import { MetricsGraph } from './MetricsGraph';
 import { ApiBreakdown } from './ApiBreakdown';
 import { ErrorGauge } from './ErrorGauge';
 import { BaselineReport } from './BaselineReport';
+import { Button } from '@/components/ui/button';
 
 export function DeprecatedApiTab() {
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -30,42 +31,38 @@ export function DeprecatedApiTab() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-[#C9D1D9]">Deprecated API Monitoring</h2>
-          <p className="text-xs text-[#8B949E] mt-1">Week 5 baseline: Track legacy API usage during Phase B cleanup</p>
+          <h2 className="text-lg font-semibold text-foreground">Deprecated API Monitoring</h2>
+          <p className="text-xs text-muted-foreground mt-1">Week 5 baseline: Track legacy API usage during Phase B cleanup</p>
         </div>
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-xs text-[#8B949E] cursor-pointer hover:text-[#C9D1D9]">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground">
             <input
               type="checkbox"
               checked={autoRefresh}
               onChange={(e) => setAutoRefresh(e.target.checked)}
-              className="rounded"
+              className="rounded accent-accent"
             />
             Auto-refresh
           </label>
-          <button
-            onClick={refresh}
-            disabled={loading}
-            className="flex items-center gap-2 px-3 py-1 rounded bg-[#30363D] text-[#C9D1D9] hover:bg-[#3d444d] disabled:opacity-50 transition-all"
-          >
+          <Button variant="secondary" size="sm" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             Refresh
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Error Alert */}
       {error && (
-        <div className="bg-[#3d1f1a] border border-[#F85149] rounded p-4 flex items-center gap-3">
-          <AlertCircle size={18} className="text-[#F85149] flex-shrink-0" />
-          <div className="text-sm text-[#F85149]">{error}</div>
+        <div className="bg-destructive/10 border border-destructive/40 rounded p-4 flex items-center gap-3">
+          <AlertCircle size={18} className="text-destructive flex-shrink-0" />
+          <div className="text-sm text-destructive">{error}</div>
         </div>
       )}
 
       {/* Loading State */}
       {loading && !metrics && (
         <div className="text-center py-12">
-          <div className="inline-flex items-center gap-2 text-[#8B949E]">
+          <div className="inline-flex items-center gap-2 text-muted-foreground">
             <Loader2 size={16} className="animate-spin" />
             <span>Loading deprecated API metrics...</span>
           </div>
@@ -77,45 +74,45 @@ export function DeprecatedApiTab() {
         <>
           {/* Top Row: Status + Summary Stats */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-4">
-              <div className="text-xs text-[#8B949E] uppercase mb-2">Status</div>
+            <div className="bg-card border border-border rounded-lg p-4">
+              <div className="text-xs text-muted-foreground uppercase mb-2">Status</div>
               <StatusBadge status={metrics.status} />
             </div>
 
-            <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-4">
-              <div className="text-xs text-[#8B949E] uppercase mb-2">Calls/Min</div>
-              <div className="text-2xl font-bold text-[#79C0FF]">
+            <div className="bg-card border border-border rounded-lg p-4">
+              <div className="text-xs text-muted-foreground uppercase mb-2">Calls/Min</div>
+              <div className="text-2xl font-bold text-accent">
                 {metrics.total_calls_per_minute.toFixed(2)}
               </div>
-              <div className="text-xs text-[#8B949E] mt-1">SLO: &lt;10/min</div>
+              <div className="text-xs text-muted-foreground mt-1">SLO: &lt;10/min</div>
             </div>
 
-            <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-4">
-              <div className="text-xs text-[#8B949E] uppercase mb-2">Error Rate</div>
-              <div className="text-2xl font-bold text-[#F85149]">
+            <div className="bg-card border border-border rounded-lg p-4">
+              <div className="text-xs text-muted-foreground uppercase mb-2">Error Rate</div>
+              <div className="text-2xl font-bold text-destructive">
                 {metrics.total_error_rate_pct.toFixed(2)}%
               </div>
-              <div className="text-xs text-[#8B949E] mt-1">SLO: &lt;1%</div>
+              <div className="text-xs text-muted-foreground mt-1">SLO: &lt;1%</div>
             </div>
 
-            <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-4">
-              <div className="text-xs text-[#8B949E] uppercase mb-2">Skill Availability</div>
-              <div className="text-2xl font-bold text-[#3FB950]">
+            <div className="bg-card border border-border rounded-lg p-4">
+              <div className="text-xs text-muted-foreground uppercase mb-2">Skill Availability</div>
+              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
                 {metrics.skill_availability_pct.toFixed(2)}%
               </div>
-              <div className="text-xs text-[#8B949E] mt-1">Target: 99%</div>
+              <div className="text-xs text-muted-foreground mt-1">Target: 99%</div>
             </div>
           </div>
 
           {/* Middle Row: Graph + Error Gauge */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="lg:col-span-2 bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-              <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">Call Rate (Past 24h)</h3>
+            <div className="lg:col-span-2 bg-card border border-border rounded-lg p-6">
+              <h3 className="text-sm font-semibold mb-4 text-foreground">Call Rate (Past 24h)</h3>
               <MetricsGraph metrics={metrics} />
             </div>
 
-            <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-              <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">Error Rate Distribution</h3>
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h3 className="text-sm font-semibold mb-4 text-foreground">Error Rate Distribution</h3>
               <ErrorGauge errorRate={metrics.total_error_rate_pct} />
             </div>
           </div>

@@ -112,7 +112,7 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
       <div className="flex justify-center">
         <svg width={CANVAS_SIZE} height={CANVAS_SIZE} viewBox={`0 0 ${CANVAS_SIZE} ${CANVAS_SIZE}`}>
           {/* Background grid rings */}
-          <g stroke="#30363D" strokeWidth="1" fill="none" opacity="0.5">
+          <g stroke="hsl(var(--border))" strokeWidth="1" fill="none" opacity="0.5">
             {ringPoints.map((ring, i) => (
               <polygon
                 key={`ring-${i}`}
@@ -141,7 +141,7 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
           <polygon
             points={outerHexPoints.map((p) => `${p[0]},${p[1]}`).join(' ')}
             fill="none"
-            stroke="#30363D"
+            stroke="hsl(var(--border))"
             strokeWidth="2"
             opacity="0.5"
           />
@@ -149,7 +149,7 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
           <polygon
             points={innerHexPoints.map((p) => `${p[0]},${p[1]}`).join(' ')}
             fill="none"
-            stroke="#30363D"
+            stroke="hsl(var(--border))"
             strokeWidth="1"
             opacity="0.3"
           />
@@ -179,8 +179,8 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
                     width="80"
                     height="24"
                     rx="4"
-                    fill="#0D1117"
-                    stroke="#30363D"
+                    fill="hsl(var(--background))"
+                    stroke="hsl(var(--border))"
                     strokeWidth="1"
                   />
                   <text
@@ -189,7 +189,7 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
                     textAnchor="middle"
                     fontSize="11"
                     fontWeight="600"
-                    fill="#C9D1D9"
+                    fill="hsl(var(--foreground))"
                   >
                     {loop.value.toFixed(1)}
                   </text>
@@ -214,8 +214,8 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
             cx={CENTER_X}
             cy={CENTER_Y}
             r="40"
-            fill="#0D1117"
-            stroke="#30363D"
+            fill="hsl(var(--background))"
+            stroke="hsl(var(--border))"
             strokeWidth="2"
           />
 
@@ -225,7 +225,7 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
             textAnchor="middle"
             fontSize="20"
             fontWeight="700"
-            fill="#58A6FF"
+            fill="hsl(var(--accent))"
           >
             {(data.meta / 10 * 100).toFixed(0)}%
           </text>
@@ -235,7 +235,7 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
             y={CENTER_Y + 12}
             textAnchor="middle"
             fontSize="10"
-            fill="#8B949E"
+            fill="hsl(var(--muted-foreground))"
           >
             Meta: {data.meta.toFixed(1)}
           </text>
@@ -246,14 +246,14 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 text-xs w-full">
         {/* Tier 1 */}
         <div className="space-y-2">
-          <div className="font-semibold text-[#8B949E] uppercase">Tier 1: Core</div>
+          <div className="font-semibold text-muted-foreground uppercase">Tier 1: Core</div>
           {data.tier1.map((loop, i) => (
             <div key={`legend1-${i}`} className="flex items-center gap-2">
               <div
                 className="w-2 h-2 rounded-full"
                 style={{ backgroundColor: getScoreColor(loop.value) }}
               />
-              <span className="text-[#C9D1D9]">
+              <span className="text-foreground">
                 {loop.label}: <span className="font-semibold">{loop.value.toFixed(1)}</span>
               </span>
             </div>
@@ -262,14 +262,14 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
 
         {/* Tier 2 */}
         <div className="space-y-2">
-          <div className="font-semibold text-[#8B949E] uppercase">Tier 2: Infra</div>
+          <div className="font-semibold text-muted-foreground uppercase">Tier 2: Infra</div>
           {data.tier2.map((loop, i) => (
             <div key={`legend2-${i}`} className="flex items-center gap-2">
               <div
                 className="w-2 h-2 rounded-full"
                 style={{ backgroundColor: getScoreColor(loop.value) }}
               />
-              <span className="text-[#C9D1D9]">
+              <span className="text-foreground">
                 {loop.label}: <span className="font-semibold">{loop.value.toFixed(1)}</span>
               </span>
             </div>
@@ -278,7 +278,7 @@ export function HexagonRadar({ loopScores, onLoopClick }: HexagonRadarProps) {
 
         {/* Color scale */}
         <div className="space-y-2">
-          <div className="font-semibold text-[#8B949E] uppercase">Score Scale</div>
+          <div className="font-semibold text-muted-foreground uppercase">Score Scale</div>
           <div className="space-y-1 text-xs">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded" style={{ backgroundColor: 'hsl(0, 100%, 50%)' }} />

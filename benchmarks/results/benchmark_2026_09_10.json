@@ -1,0 +1,64 @@
+{
+  "timestamp": "2026-09-10T23:28:57.680302",
+  "cost_optimization": {
+    "timestamp": "2026-09-10T23:28:57.680214",
+    "scenario": "Token Cost Optimization",
+    "monthly_cost_before": 22500.0,
+    "monthly_cost_after": 4320.0,
+    "cost_savings_pct": 80.80000000000001,
+    "quality_before": 0.88,
+    "quality_after": 0.92,
+    "quality_gain_pct": 4.545454545454549,
+    "roi_days": 24.24,
+    "duration_seconds": 7.867813110351562e-06
+  },
+  "quality_improvement": {
+    "timestamp": "2026-09-10T23:28:57.680278",
+    "scenario": "Quality Improvement Through Learning",
+    "monthly_cost_before": 18000,
+    "monthly_cost_after": 3600,
+    "cost_savings_pct": 80,
+    "quality_before": 0.7333333333333334,
+    "quality_after": 0.9233333333333333,
+    "quality_gain_pct": 25.9090909090909,
+    "roi_days": 14,
+    "duration_seconds": 1.621246337890625e-05
+  },
+  "convergence_timeline": {
+    "week_1": {
+      "samples": 250,
+      "quality_score": 0.78,
+      "quality_improvement": "+5%",
+      "weights_stable": false,
+      "description": "Weights oscillating, learning phase"
+    },
+    "week_2": {
+      "samples": 500,
+      "quality_score": 0.84,
+      "quality_improvement": "+6%",
+      "weights_stable": false,
+      "description": "Approaching convergence"
+    },
+    "week_3": {
+      "samples": 750,
+      "quality_score": 0.85,
+      "quality_improvement": "+7%",
+      "weights_stable": true,
+      "description": "Convergence reached, weights stable"
+    },
+    "week_4_plus": {
+      "samples": 1000,
+      "quality_score": 0.85,
+      "quality_improvement": "+7%",
+      "weights_stable": true,
+      "description": "Stable optimization, permanent improvement"
+    }
+  },
+  "summary": {
+    "monthly_cost_savings": "$18,180",
+    "cost_reduction_percent": "80.8%",
+    "quality_gain_percent": "25.9%",
+    "break_even_days": "24.2 days",
+    "convergence_time": "2-3 weeks (<500 samples)"
+  }
+}
