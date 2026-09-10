@@ -90,7 +90,7 @@ export const PANELS: ConsolePanel[] = [
   // pages/vibe-engineering.tsx (the retired Context Pipeline page), shadowed the
   // directory — file beats directory in module resolution — so this import
   // silently loaded the old page and the Dashboard was unreachable.
-  rc("vibe-engineering", "Vibe Dashboard", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Vibe Dashboard", icon: "TrendingUp", group: "vibe" } }),
+  rc("vibe-engineering", "Learnings", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain" } }),
   rc("dashboard", "Dashboard", DashboardPage),
   rc("settings", "Settings", SettingsPage),
   rc("engines", "AI Engines", EnginesPage),
