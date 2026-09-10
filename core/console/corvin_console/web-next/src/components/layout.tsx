@@ -171,7 +171,8 @@ const NAV_GROUPS: NavGroup[] = [
     id: "intelligence",
     label: "Assistant",
     items: [
-      { to: "/app/engines",  label: "AI Engine", icon: Cpu },
+      { to: "/app/engines",        label: "AI Engine",    icon: Cpu },
+      { to: "/app/engine-config",  label: "Engine Config", icon: Settings },
       { to: "/app/browser",  label: "Browser",   icon: Globe },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },

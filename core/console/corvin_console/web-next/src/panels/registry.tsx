@@ -23,7 +23,7 @@ import {
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage, ActivityFeedPage,
-  GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage,
+  GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -40,6 +40,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   DashboardPage,
   SettingsPage,
   EnginesPage,
+  EngineConfigPage,
   BrowserPage,
   ComputePage,
   BridgesPage,
@@ -94,6 +95,7 @@ export const PANELS: ConsolePanel[] = [
   rc("dashboard", "Dashboard", DashboardPage),
   rc("settings", "Settings", SettingsPage),
   rc("engines", "AI Engines", EnginesPage),
+  rc("engine-config", "Engine Config", EngineConfigPage, { nav: { label: "Engine Config", icon: "" } }),
   rc("browser", "Browser", BrowserPage),
   rc("compute", "Compute", ComputePage),
   rc("bridges", "Bridges", BridgesPage),
