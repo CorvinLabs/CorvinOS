@@ -41,13 +41,7 @@ export const ActivityFeedPage = React.lazy(() =>
   import("@/pages/activity").then((m) => ({ default: m.ActivityFeedPage }))
 );
 
-export const PersonasListPage = React.lazy(() =>
-  import("@/pages/personas").then((m) => ({ default: m.PersonasListPage }))
-);
 
-export const PersonaDetailPage = React.lazy(() =>
-  import("@/pages/personas").then((m) => ({ default: m.PersonaDetailPage }))
-);
 
 export const BridgesPage = React.lazy(() =>
   import("@/pages/bridges").then((m) => ({ default: m.BridgesPage }))
