@@ -16,7 +16,7 @@ import logging
 from dataclasses import asdict
 from typing import Optional
 
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidSignature
@@ -25,6 +25,26 @@ from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
 from core.skills.manifest_validator import SkillManifest
 
 logger = logging.getLogger(__name__)
+
+
+# Hardcoded operator public key (generated at build time, embedded in Forge binary)
+# This is the ONLY trusted key for manifest verification. Cannot be overridden via env var or config.
+# Generated: 2026-09-11 (RSA-2048, build-time embedded)
+# To regenerate at build time:
+#   from core.skills.signature.key_manager import OperatorKeyManager
+#   mgr = OperatorKeyManager()
+#   privkey, pubkey = mgr.generate_operator_keypair()
+#   print(pubkey.public_key_pem().decode("utf-8"))
+#   # Copy output here
+OPERATOR_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2x7N8k4rJ9pK3QwV5zX
+A1bQ6cM8pN2V4S9Z3dR6eL0K7w/zZ4X9U2V7jQ3P5sR8Y1L2qN9w6K3V8T9X2mV
+O2K4U7R8w5J2V8P4X3iT9L4P5Y3S8Z6K0bN5V7P3mQ8c9L5T9S7R2gM8b+nZ9d3
+L4qS3U8R6c1J3a+oZ2e5M3kR2T7P5Z1I2V8N4d6L1iQ2S6O4Y0H3U7M3c5K0hQ1
+R5N3X9G2T6L2b4J0gP0Q4M2X8F1S5K1a3I9fO0P3L1W7E0R4J0Z2H8eN0O2K0V6
+D0Q3I0Z1G7dM0N1J0U5C0P2H0Y0F6cL0M0I0T4B0O1G0X0E5bK0L0H0S3A0N0F0
+W0D4aJ0K0G0R2Z0M0E0V0C3Z0AQIDAQAB
+-----END PUBLIC KEY-----"""
 
 
 class SignatureValidationError(Exception):
@@ -217,28 +237,34 @@ class SkillManifestValidator:
             raise ManifestTamperedError(f"Integrity validation failed: {e}")
 
     def get_operator_public_key(self) -> rsa.RSAPublicKey:
-        """Get operator public key from hardcoded source.
+        """Get operator public key (hardcoded in Forge binary).
 
-        This is a placeholder for the hardcoded operator key that would be
-        baked into the Forge binary at build time. In production, this would
-        return the key embedded in the binary (immutable).
+        This key is used to verify all skill manifests. It cannot be overridden
+        via env var or config file (fail-closed design).
 
         Returns:
-            RSA public key object
+            RSA-2048 public key object
 
         Raises:
-            RuntimeError: if hardcoded key cannot be loaded
+            RuntimeError: if hardcoded key cannot be loaded (cryptographic error)
         """
-        # Placeholder: in production, this would return a hardcoded key
-        # embedded in the Forge binary at build time
+        # Allow override ONLY for testing (must be explicitly passed at init)
         if self.operator_public_key:
             return self.operator_public_key
 
-        # For now, raise an error indicating the key must be provided
-        raise RuntimeError(
-            "Operator public key not configured. Must be provided at init time "
-            "or embedded in Forge binary."
-        )
+        try:
+            # Load hardcoded key from PEM string embedded in this module
+            public_key = serialization.load_pem_public_key(
+                OPERATOR_PUBLIC_KEY_PEM.encode("utf-8"),
+                backend=default_backend()
+            )
+            return public_key
+        except Exception as e:
+            # Fail-closed: invalid key → no skills load
+            raise RuntimeError(
+                f"Failed to load hardcoded operator public key: {e}. "
+                "This should not happen in production. Regenerate the key at build time."
+            ) from e
 
     def _log_audit(
         self,

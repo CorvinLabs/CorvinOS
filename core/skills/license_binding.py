@@ -9,11 +9,18 @@ Implements:
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 from dataclasses import dataclass, asdict
 from typing import Optional
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.exceptions import InvalidSignature
+
 from core.skills.manifest_v2 import SkillManifestV2, LicenseBindingMetadata
+from core.skills.signature.validator import ManifestTamperedError
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
 
 logger = logging.getLogger(__name__)
@@ -136,33 +143,86 @@ class LicenseBindingValidator:
     def validate_binding_signature(
         self,
         manifest: SkillManifestV2,
-        operator_public_key,
+        operator_public_key: rsa.RSAPublicKey,
         tenant_id: str = "_default"
     ) -> bool:
-        """Validate license binding signature (future use).
-
-        Currently a placeholder for RSA signature verification.
+        """Verify license binding is signed by operator (not tamperable).
 
         Args:
-            manifest: SkillManifestV2 with binding
-            operator_public_key: RSA public key for verification
-            tenant_id: Tenant scope
+            manifest: Skill manifest with license_binding field
+            operator_public_key: Operator's RSA public key (for verification)
+            tenant_id: Tenant ID for audit logging
 
         Returns:
-            True if signature is valid, False otherwise
+            True if signature valid, False if invalid
+
+        Raises:
+            ManifestTamperedError: if signature verification fails
         """
         if not manifest.license_binding:
-            return True  # No binding = auto-pass
+            # No license binding = no signature check needed
+            return True
 
-        # TODO: Implement RSA signature verification
-        # For now, just log that we skipped it
-        self._log_audit(
-            event_type="license_signature_validation_skipped",
-            details={"skill_id": manifest.skill_id},
-            tenant_id=tenant_id,
-        )
+        binding = manifest.license_binding
 
-        return True
+        try:
+            # Reconstruct the data that was signed
+            # (same as what signer did: skill_id + version + tier + timestamp)
+            data_to_verify = (
+                f"{manifest.skill_id}|{manifest.version}|{binding.required_tier}|{binding.timestamp}"
+            ).encode("utf-8")
+
+            # Decode the signature from base64
+            signature_bytes = base64.b64decode(binding.operator_signature)
+
+            # Verify using operator's public key
+            operator_public_key.verify(
+                signature_bytes,
+                data_to_verify,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+
+            # Signature valid!
+            self._log_audit(
+                event_type="license_binding_signature_valid",
+                details={
+                    "skill_id": manifest.skill_id,
+                    "required_tier": binding.required_tier
+                },
+                tenant_id=tenant_id
+            )
+            return True
+
+        except InvalidSignature:
+            # Signature didn't match → tampering detected
+            self._log_audit(
+                event_type="license_binding_signature_invalid",
+                details={
+                    "skill_id": manifest.skill_id,
+                    "reason": "RSA signature verification failed"
+                },
+                severity="warning",
+                tenant_id=tenant_id
+            )
+            raise ManifestTamperedError(
+                f"License binding signature invalid for {manifest.skill_id}. "
+                "This manifest may have been tampered with."
+            ) from None
+        except Exception as e:
+            # Other crypto errors → fail-closed
+            self._log_audit(
+                event_type="license_binding_verification_error",
+                details={"skill_id": manifest.skill_id, "error": str(e)},
+                severity="error",
+                tenant_id=tenant_id
+            )
+            raise ManifestTamperedError(
+                f"License binding signature verification failed: {e}"
+            ) from e
 
     def _log_audit(
         self,
