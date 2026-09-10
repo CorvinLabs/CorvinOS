@@ -167,29 +167,6 @@ export const VoicePage = () => (
   </div>
 );
 
-export const EnginesPage = () => (
-  <div>
-    <h1>AI Engines</h1>
-    <div>
-      <div role="option" data-testid="engine-claude">
-        <span data-testid="engine-claude-name">Claude Code (Local)</span>
-        <span data-testid="engine-claude-status">Status: Active</span>
-        <button>Select</button>
-      </div>
-      <div role="option" data-testid="engine-hermes">
-        <span data-testid="engine-hermes-name">Hermes (Local Ollama)</span>
-        <span data-testid="engine-hermes-status">Status: Available</span>
-        <button>Select</button>
-      </div>
-      <div role="option" data-testid="engine-opencode">
-        <span data-testid="engine-opencode-name">OpenCodeEngine</span>
-        <span data-testid="engine-opencode-status">Status: Available</span>
-        <button>Select</button>
-      </div>
-    </div>
-  </div>
-);
-
 export const BridgesPage = () => (
   <div>
     <h1>Bridges & Channels</h1>

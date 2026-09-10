@@ -12,9 +12,13 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Github, CheckCircle, AlertCircle, Loader, Trash2 } from 'lucide-react'
+import { Github, CheckCircle2, AlertCircle, Loader2, Trash2, Eye, EyeOff, Lock } from 'lucide-react'
 import { fetchConsoleJson, fetchConsoleApi } from '@/lib/api-utils'
 import { useAuth } from '@/lib/auth'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 interface GitHubStatus {
   connected: boolean
@@ -167,13 +171,13 @@ export default function GitHubIntegrationPanel() {
 
   const getStatusIcon = () => {
     if (status.connected) {
-      return <CheckCircle className="text-green-500" size={24} />
+      return <CheckCircle2 className="text-emerald-600 dark:text-emerald-400" size={24} />
     } else if (error || verifyResult?.details?.status === 'error') {
-      return <AlertCircle className="text-red-500" size={24} />
+      return <AlertCircle className="text-destructive" size={24} />
     } else if (isVerifying) {
-      return <Loader className="text-blue-500 animate-spin" size={24} />
+      return <Loader2 className="text-accent animate-spin" size={24} />
     } else {
-      return <Github className="text-slate-400" size={24} />
+      return <Github className="text-muted-foreground" size={24} />
     }
   }
 
@@ -181,11 +185,11 @@ export default function GitHubIntegrationPanel() {
     if (status.connected) {
       return (
         <div>
-          <p className="font-semibold text-green-500">✓ Connected</p>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Repo: <code className="bg-slate-100 dark:bg-slate-900 px-2 py-1 rounded">{status.url}</code>
+          <p className="font-semibold text-emerald-600 dark:text-emerald-400">✓ Connected</p>
+          <p className="text-sm text-muted-foreground">
+            Repo: <code className="bg-muted px-2 py-1 rounded">{status.url}</code>
           </p>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             Last verified: {status.last_verified ? new Date(status.last_verified).toLocaleString() : 'Never'}
           </p>
         </div>
@@ -193,189 +197,186 @@ export default function GitHubIntegrationPanel() {
     } else if (error) {
       return (
         <div>
-          <p className="font-semibold text-red-500">✗ Connection Failed</p>
-          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+          <p className="font-semibold text-destructive">✗ Connection Failed</p>
+          <p className="text-sm text-destructive">{error}</p>
         </div>
       )
     } else if (isVerifying) {
-      return <p className="font-semibold text-blue-500">Verifying...</p>
+      return <p className="font-semibold text-accent">Verifying...</p>
     } else {
-      return <p className="text-slate-500">Not connected</p>
+      return <p className="text-muted-foreground">Not connected</p>
     }
   }
 
   return (
     <div className="max-w-2xl mx-auto">
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
-          {getStatusIcon()}
-          <div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white">GitHub Integration</h2>
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              Connect your tenant to a GitHub repository for synchronized learning
-            </p>
-          </div>
-        </div>
-
-        {/* Status Display */}
-        <div className="mb-6 p-4 bg-slate-50 dark:bg-slate-900/30 rounded-lg border border-slate-200 dark:border-slate-700">
-          {getStatusText()}
-        </div>
-
-        {/* Sync Status Details */}
-        {status.connected && (
-          <div className="mb-6 space-y-2 text-sm">
-            <div className="flex justify-between items-center">
-              <span className="text-slate-600 dark:text-slate-400">Auto-Sync:</span>
-              <span className={`font-semibold ${status.auto_sync ? 'text-green-600' : 'text-slate-500'}`}>
-                {status.auto_sync ? '✓ Enabled' : 'Disabled'}
-              </span>
+      <Card>
+        <CardContent className="p-6">
+          {/* Header */}
+          <div className="flex items-center gap-3 mb-6">
+            {getStatusIcon()}
+            <div>
+              <h2 className="text-xl font-bold text-foreground">GitHub Integration</h2>
+              <p className="text-sm text-muted-foreground">
+                Connect your tenant to a GitHub repository for synchronized learning
+              </p>
             </div>
-            {status.last_sync && (
+          </div>
+
+          {/* Status Display */}
+          <div className="mb-6 p-4 bg-muted/40 rounded-lg border border-border">
+            {getStatusText()}
+          </div>
+
+          {/* Sync Status Details */}
+          {status.connected && (
+            <div className="mb-6 space-y-2 text-sm">
               <div className="flex justify-between items-center">
-                <span className="text-slate-600 dark:text-slate-400">Last Sync:</span>
-                <span className="text-slate-900 dark:text-white">
-                  {new Date(status.last_sync).toLocaleString()}
+                <span className="text-muted-foreground">Auto-Sync:</span>
+                <span className={status.auto_sync ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'font-semibold text-muted-foreground'}>
+                  {status.auto_sync ? '✓ Enabled' : 'Disabled'}
                 </span>
               </div>
-            )}
-            {status.sync_status && (
-              <div className="flex justify-between items-center">
-                <span className="text-slate-600 dark:text-slate-400">Sync Status:</span>
-                <span className={`font-semibold ${status.sync_status === 'success' ? 'text-green-600' : 'text-yellow-600'}`}>
-                  {status.sync_status}
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Connection Form */}
-        <div className="space-y-4">
-          {/* URL Input */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-              GitHub Repository URL
-            </label>
-            <input
-              type="text"
-              value={url || status.url || ''}
-              onChange={handleUrlChange}
-              placeholder="https://github.com/owner/repo"
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500"
-              disabled={status.connected && !isDirty}
-            />
-            <p className="text-xs text-slate-500 mt-1">
-              Required: https://github.com/owner/repo
-            </p>
-          </div>
-
-          {/* Token Input */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-              GitHub Personal Access Token (Optional)
-            </label>
-            <div className="relative">
-              <input
-                type={showToken ? 'text' : 'password'}
-                value={token}
-                onChange={(e) => {
-                  setToken(e.target.value)
-                  setIsDirty(true)
-                  setError(null)
-                }}
-                placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500"
-                autoComplete="off"
-                spellCheck="false"
-              />
-              <button
-                onClick={() => setShowToken(!showToken)}
-                className="absolute right-3 top-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-              >
-                {showToken ? '✕' : '•'}
-              </button>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">
-              For higher API rate limits. Token is stored securely and never logged.
-            </p>
-          </div>
-
-          {/* Verification Result */}
-          {verifyResult && verifyResult.details && (
-            <div className={`p-4 rounded-lg border ${
-              verifyResult.connected
-                ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-                : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-            }`}>
-              <div className="space-y-2">
-                <p className={`font-semibold ${verifyResult.connected ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
-                  {verifyResult.connected ? '✓ Connected Successfully' : '✗ Connection Failed'}
-                </p>
-                {verifyResult.details?.repo_name && (
-                  <p className="text-sm text-slate-600 dark:text-slate-400">
-                    Repository: <strong>{verifyResult.details.repo_name}</strong>
-                  </p>
-                )}
-                {verifyResult.details?.repo_description && (
-                  <p className="text-sm text-slate-600 dark:text-slate-400">
-                    {verifyResult.details.repo_description}
-                  </p>
-                )}
-                {verifyResult.details?.repo_private && (
-                  <p className="text-xs text-slate-500">🔒 Private repository</p>
-                )}
-                <p className="text-xs text-slate-500">
-                  API Rate Limit: {verifyResult.details?.rate_limit} remaining
-                </p>
-              </div>
+              {status.last_sync && (
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Last Sync:</span>
+                  <span className="text-foreground">
+                    {new Date(status.last_sync).toLocaleString()}
+                  </span>
+                </div>
+              )}
+              {status.sync_status && (
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Sync Status:</span>
+                  <span className={status.sync_status === 'success' ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'font-semibold text-amber-600 dark:text-amber-400'}>
+                    {status.sync_status}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Action Buttons */}
-          <div className="flex gap-3 pt-4">
-            {!status.connected ? (
-              <button
-                onClick={handleVerify}
-                disabled={isVerifying || !url}
-                className={`flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium transition ${
-                  isVerifying || !url
-                    ? 'opacity-50 cursor-not-allowed'
-                    : 'hover:bg-blue-700'
-                }`}
-              >
-                {isVerifying ? 'Verifying...' : 'Connect Repository'}
-              </button>
-            ) : (
-              <>
-                <button
-                  onClick={handleDisconnect}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition"
-                >
-                  <Trash2 size={18} />
-                  Disconnect
-                </button>
-                <button
-                  onClick={handleVerify}
-                  disabled={isVerifying}
-                  className="flex-1 px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-medium hover:bg-slate-300 dark:hover:bg-slate-600 transition"
-                >
-                  {isVerifying ? 'Verifying...' : 'Verify Connection'}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
+          {/* Connection Form */}
+          <div className="space-y-4">
+            {/* URL Input */}
+            <div className="space-y-2">
+              <Label htmlFor="gh-url">GitHub Repository URL</Label>
+              <Input
+                id="gh-url"
+                type="text"
+                value={url || status.url || ''}
+                onChange={handleUrlChange}
+                placeholder="https://github.com/owner/repo"
+                disabled={status.connected && !isDirty}
+              />
+              <p className="text-xs text-muted-foreground">
+                Required: https://github.com/owner/repo
+              </p>
+            </div>
 
-        {/* Footer Info */}
-        <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700">
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            💡 When connected, your tenant will automatically sync skills and learning data with the GitHub repository.
-            This enables cross-device learning synchronization.
-          </p>
-        </div>
-      </div>
+            {/* Token Input */}
+            <div className="space-y-2">
+              <Label htmlFor="gh-repo-token">GitHub Personal Access Token (Optional)</Label>
+              <div className="relative">
+                <Input
+                  id="gh-repo-token"
+                  type={showToken ? 'text' : 'password'}
+                  value={token}
+                  onChange={(e) => {
+                    setToken(e.target.value)
+                    setIsDirty(true)
+                    setError(null)
+                  }}
+                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  autoComplete="off"
+                  spellCheck="false"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowToken(!showToken)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                For higher API rate limits. Token is stored securely and never logged.
+              </p>
+            </div>
+
+            {/* Verification Result */}
+            {verifyResult && verifyResult.details && (
+              <div className={
+                verifyResult.connected
+                  ? "p-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10"
+                  : "p-4 rounded-lg border border-destructive/40 bg-destructive/10"
+              }>
+                <div className="space-y-2">
+                  <p className={verifyResult.connected ? "font-semibold text-emerald-700 dark:text-emerald-400" : "font-semibold text-destructive"}>
+                    {verifyResult.connected ? '✓ Connected Successfully' : '✗ Connection Failed'}
+                  </p>
+                  {verifyResult.details?.repo_name && (
+                    <p className="text-sm text-muted-foreground">
+                      Repository: <strong className="text-foreground">{verifyResult.details.repo_name}</strong>
+                    </p>
+                  )}
+                  {verifyResult.details?.repo_description && (
+                    <p className="text-sm text-muted-foreground">
+                      {verifyResult.details.repo_description}
+                    </p>
+                  )}
+                  {verifyResult.details?.repo_private && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Lock size={12} />Private repository
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    API Rate Limit: {verifyResult.details?.rate_limit} remaining
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex gap-3 pt-4">
+              {!status.connected ? (
+                <Button
+                  variant="accent"
+                  className="flex-1"
+                  onClick={handleVerify}
+                  disabled={isVerifying || !url}
+                >
+                  {isVerifying ? 'Verifying...' : 'Connect Repository'}
+                </Button>
+              ) : (
+                <>
+                  <Button variant="destructive" onClick={handleDisconnect}>
+                    <Trash2 size={18} />
+                    Disconnect
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="flex-1"
+                    onClick={handleVerify}
+                    disabled={isVerifying}
+                  >
+                    {isVerifying ? 'Verifying...' : 'Verify Connection'}
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Footer Info */}
+          <div className="mt-6 pt-4 border-t border-border">
+            <p className="text-xs text-muted-foreground">
+              When connected, your tenant will automatically sync skills and learning data with the GitHub repository.
+              This enables cross-device learning synchronization.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

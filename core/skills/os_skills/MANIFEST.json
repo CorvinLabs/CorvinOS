@@ -1,0 +1,132 @@
+{
+  "name": "os-skills-unified-forge",
+  "description": "Unified Skill/Tool creation with learning loops: DataHub + Creator 2.0 + Learning Daemon",
+  "version": "2.0.0",
+  "status": "production",
+  "skills": [
+    {
+      "id": "os.data_hub",
+      "name": "DataHub Skill",
+      "description": "Unified data ingestion + quality scoring + security scanning",
+      "version": "1.0.0",
+      "entry_point": "data_hub.skill:DataHubSkill",
+      "capabilities": [
+        "memory_ingestion",
+        "rag_ingestion",
+        "mcp_ingestion",
+        "file_ingestion",
+        "security_scanning",
+        "quality_scoring"
+      ],
+      "dependencies": [],
+      "audit_events": [
+        "datahub_manifest_created",
+        "datahub_security_scan_complete",
+        "datahub_quality_score_computed"
+      ]
+    },
+    {
+      "id": "os.skill_tool_creator",
+      "name": "Skill/Tool Creator 2.0",
+      "description": "12-phase generation with learning instrumentation (skills + tools)",
+      "version": "2.0.0",
+      "entry_point": "skill_tool_creator.skill:SkillToolCreatorSkill",
+      "capabilities": [
+        "skill_generation",
+        "tool_generation",
+        "phase_execution",
+        "loss_tracking",
+        "learning_event_emission"
+      ],
+      "dependencies": ["os.data_hub"],
+      "audit_events": [
+        "phase_0_completed",
+        "phase_2_completed",
+        "phase_3_completed",
+        "phase_4_completed",
+        "phase_5_completed",
+        "phase_6_completed",
+        "phase_7_completed",
+        "phase_8_completed",
+        "phase_9_completed",
+        "phase_10_completed"
+      ]
+    },
+    {
+      "id": "os.learning_daemon",
+      "name": "Learning Daemon",
+      "description": "Event-driven background optimizer with causal graph learning",
+      "version": "1.0.0",
+      "entry_point": "background.learning_daemon:DataHubLearningDaemon",
+      "capabilities": [
+        "weight_learning",
+        "causal_graph_tracking",
+        "regeneration_scheduling",
+        "convergence_detection"
+      ],
+      "dependencies": ["os.skill_tool_creator"],
+      "audit_events": [
+        "weights_updated",
+        "regeneration_queued",
+        "convergence_detected",
+        "causal_attribution_computed"
+      ]
+    },
+    {
+      "id": "os.learning_dashboard",
+      "name": "Learning Dashboard",
+      "description": "Console UI for skill lifecycle, audit trail, and GDPR compliance",
+      "version": "1.0.0",
+      "entry_point": "console.routes.learning_dashboard:LearningDashboardAPI",
+      "capabilities": [
+        "skill_lifecycle_view",
+        "audit_chain_verification",
+        "compliance_export",
+        "learning_metrics_dashboard"
+      ],
+      "dependencies": ["os.learning_daemon"],
+      "audit_events": [
+        "dashboard_access",
+        "audit_chain_verified",
+        "compliance_report_generated"
+      ]
+    }
+  ],
+  "architecture": {
+    "layers": [
+      {
+        "name": "Layer 1: DataHub Ingestion",
+        "skill": "os.data_hub",
+        "purpose": "Unified data source ingestion with quality scoring and security scanning"
+      },
+      {
+        "name": "Layer 2: Skill/Tool Generation",
+        "skill": "os.skill_tool_creator",
+        "purpose": "12-phase generation with learning instrumentation and loss tracking"
+      },
+      {
+        "name": "Layer 3: Autonomous Learning",
+        "skill": "os.learning_daemon",
+        "purpose": "Event-driven daemon that learns which data sources work best"
+      },
+      {
+        "name": "Layer 4: Operator Dashboard",
+        "skill": "os.learning_dashboard",
+        "purpose": "Console UI for lifecycle visibility, audit trail, and compliance"
+      }
+    ],
+    "learning_loop": {
+      "feedback_sources": ["real_skill_execution", "user_ratings", "error_tracking"],
+      "optimization_targets": ["datahub_weights", "generation_strategy", "phase_parameters"],
+      "convergence_signal": "weight_stabilization",
+      "audit_trail": "immutable_hash_chained_events"
+    }
+  },
+  "compliance": {
+    "gdpr_article_30": "Immutable audit trail for all automated decisions",
+    "gdpr_article_32": "Hash-chained event log with external witness (RFC 3161)",
+    "eu_ai_act": "Transparency: all generation decisions logged with data source attribution",
+    "phase": "production",
+    "launch_date": "2026-09-10"
+  }
+}

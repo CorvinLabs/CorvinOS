@@ -44,8 +44,8 @@ CONTRACT_VERSION = "1"
 #: P7 derives this from the plugin loader.
 CORE_CAPABILITIES: tuple[str, ...] = (
     "dashboard", "sessions", "audit", "tasks", "personas", "engines",
-    "bridges", "voice", "forge", "skills", "packages", "cowork", "ldd",
-    "compliance", "files", "memory", "compute", "browser", "space",
+    "bridges", "voice", "forge", "skills", "packages", "ldd",
+    "compliance", "files", "memory", "compute", "space",
     "talent", "settings", "vibe-engineering",
 )
 

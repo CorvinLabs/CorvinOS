@@ -10,8 +10,11 @@
  */
 
 import { useState, useEffect, useRef } from 'react'
-import { Zap, CheckCircle, AlertCircle, Loader, RotateCw, Pause, Play } from 'lucide-react'
+import { Zap, CheckCircle2, AlertCircle, Loader2, RotateCw, Pause, Play } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface SyncEvent {
   event: string
@@ -162,13 +165,13 @@ export default function SyncMonitorPanel() {
 
   const getStatusIcon = () => {
     if (isSyncing) {
-      return <Loader className="text-blue-500 animate-spin" size={24} />
+      return <Loader2 className="h-6 w-6 text-accent animate-spin" />
     } else if (lastSyncResult?.event === 'sync_completed') {
-      return <CheckCircle className="text-green-500" size={24} />
+      return <CheckCircle2 className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
     } else if (error) {
-      return <AlertCircle className="text-red-500" size={24} />
+      return <AlertCircle className="h-6 w-6 text-destructive" />
     } else {
-      return <Zap className="text-slate-400" size={24} />
+      return <Zap className="h-6 w-6 text-muted-foreground" />
     }
   }
 
@@ -192,150 +195,145 @@ export default function SyncMonitorPanel() {
     }
   }
 
+  const eventPanelClass = (event: string) =>
+    cn(
+      "p-3 rounded-lg border text-sm",
+      event === 'sync_completed' && "border-emerald-500/30 bg-emerald-500/10",
+      event === 'sync_failed' && "border-destructive/40 bg-destructive/10",
+      event === 'sync_started' && "border-accent/30 bg-accent/10",
+      event !== 'sync_completed' && event !== 'sync_failed' && event !== 'sync_started' && "border-border bg-muted/30",
+    )
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Live Status */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            {getStatusIcon()}
-            <div>
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Sync Monitor</h2>
-              <p className="text-sm text-slate-600 dark:text-slate-400">{getStatusText()}</p>
-            </div>
-          </div>
-
-          {/* Connection Status */}
-          <div className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
-            <span className="text-sm text-slate-600 dark:text-slate-400">
-              {connected ? 'Connected' : 'Disconnected'}
-            </span>
-          </div>
-        </div>
-
-        {/* Error Display */}
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
-          </div>
-        )}
-
-        {/* Worker Status */}
-        {workerStatus && (
-          <div className="space-y-3 mb-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-slate-50 dark:bg-slate-900/30 p-3 rounded">
-                <p className="text-xs text-slate-600 dark:text-slate-400">Status</p>
-                <p className={`font-semibold ${workerStatus.running ? 'text-green-600' : 'text-slate-600'}`}>
-                  {workerStatus.running ? '✓ Running' : 'Stopped'}
-                </p>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-900/30 p-3 rounded">
-                <p className="text-xs text-slate-600 dark:text-slate-400">Interval</p>
-                <p className="font-semibold text-slate-900 dark:text-white">
-                  {workerStatus.interval_seconds}s
-                </p>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-900/30 p-3 rounded">
-                <p className="text-xs text-slate-600 dark:text-slate-400">Syncs</p>
-                <p className="font-semibold text-slate-900 dark:text-white">
-                  {workerStatus.sync_count} success / {workerStatus.error_count} errors
-                </p>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-900/30 p-3 rounded">
-                <p className="text-xs text-slate-600 dark:text-slate-400">Last Sync</p>
-                <p className="font-semibold text-slate-900 dark:text-white text-xs">
-                  {workerStatus.last_sync
-                    ? formatTimestamp(workerStatus.last_sync)
-                    : 'Never'}
-                </p>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {getStatusIcon()}
+              <div>
+                <CardTitle>Sync Monitor</CardTitle>
+                <CardDescription>{getStatusText()}</CardDescription>
               </div>
             </div>
 
-            {/* Worker Controls */}
-            <div className="flex gap-2">
-              {!workerStatus.running ? (
-                <button
-                  onClick={handleStartWorker}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition"
-                >
-                  <Play size={18} />
-                  Start Worker
-                </button>
-              ) : (
-                <button
-                  onClick={handleStopWorker}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition"
-                >
-                  <Pause size={18} />
-                  Stop Worker
-                </button>
-              )}
-              <button
-                onClick={fetchWorkerStatus}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-medium hover:bg-slate-300 dark:hover:bg-slate-600 transition"
-              >
-                <RotateCw size={18} />
-                Refresh
-              </button>
+            {/* Connection Status */}
+            <div className="flex items-center gap-2">
+              <div className={cn("w-2.5 h-2.5 rounded-full", connected ? "bg-emerald-500" : "bg-destructive")} />
+              <span className="text-sm text-muted-foreground">
+                {connected ? 'Connected' : 'Disconnected'}
+              </span>
             </div>
           </div>
-        )}
-      </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Error Display */}
+          {error && (
+            <div className="p-3 rounded-lg border border-destructive/40 bg-destructive/10">
+              <p className="text-sm text-destructive">{error}</p>
+            </div>
+          )}
+
+          {/* Worker Status */}
+          {workerStatus && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-muted/40 p-3 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  <p className={cn("font-semibold", workerStatus.running ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
+                    {workerStatus.running ? '✓ Running' : 'Stopped'}
+                  </p>
+                </div>
+                <div className="bg-muted/40 p-3 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Interval</p>
+                  <p className="font-semibold text-foreground">
+                    {workerStatus.interval_seconds}s
+                  </p>
+                </div>
+                <div className="bg-muted/40 p-3 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Syncs</p>
+                  <p className="font-semibold text-foreground">
+                    {workerStatus.sync_count} success / {workerStatus.error_count} errors
+                  </p>
+                </div>
+                <div className="bg-muted/40 p-3 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Last Sync</p>
+                  <p className="font-semibold text-foreground text-xs">
+                    {workerStatus.last_sync
+                      ? formatTimestamp(workerStatus.last_sync)
+                      : 'Never'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Worker Controls */}
+              <div className="flex gap-2">
+                {!workerStatus.running ? (
+                  <Button variant="accent" onClick={handleStartWorker}>
+                    <Play size={16} />
+                    Start Worker
+                  </Button>
+                ) : (
+                  <Button variant="destructive" onClick={handleStopWorker}>
+                    <Pause size={16} />
+                    Stop Worker
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={fetchWorkerStatus}>
+                  <RotateCw size={16} />
+                  Refresh
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Event Log */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        <h3 className="font-bold text-slate-900 dark:text-white mb-4">Sync Events (Last 50)</h3>
-
-        {events.length === 0 ? (
-          <p className="text-sm text-slate-500 text-center py-8">No events yet. Waiting for sync activity...</p>
-        ) : (
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {events.map((event, idx) => (
-              <div
-                key={idx}
-                className={`p-3 rounded border text-sm ${
-                  event.event === 'sync_completed'
-                    ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-                    : event.event === 'sync_failed'
-                    ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-                    : event.event === 'sync_started'
-                    ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
-                    : 'bg-slate-50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-700'
-                }`}
-              >
-                <div className="flex justify-between items-start">
-                  <span className="font-semibold">
-                    {event.event === 'sync_started' && '🔄 Sync Started'}
-                    {event.event === 'sync_completed' && '✓ Sync Completed'}
-                    {event.event === 'sync_failed' && '✗ Sync Failed'}
-                    {event.event === 'connected' && '✓ Connected'}
-                    {event.event === 'status_updated' && 'Status Updated'}
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    {formatTimestamp(event.timestamp)}
-                  </span>
-                </div>
-
-                {event.details && Object.keys(event.details).length > 0 && (
-                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-2">
-                    {JSON.stringify(event.details, null, 2)
-                      .split('\n')
-                      .slice(0, 3)
-                      .join('\n')}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Sync Events (Last 50)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {events.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No events yet. Waiting for sync activity...</p>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {events.map((event, idx) => (
+                <div key={idx} className={eventPanelClass(event.event)}>
+                  <div className="flex justify-between items-start">
+                    <span className="font-semibold text-foreground">
+                      {event.event === 'sync_started' && '🔄 Sync Started'}
+                      {event.event === 'sync_completed' && '✓ Sync Completed'}
+                      {event.event === 'sync_failed' && '✗ Sync Failed'}
+                      {event.event === 'connected' && '✓ Connected'}
+                      {event.event === 'status_updated' && 'Status Updated'}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatTimestamp(event.timestamp)}
+                    </span>
                   </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+
+                  {event.details && Object.keys(event.details).length > 0 && (
+                    <div className="text-xs text-muted-foreground mt-2">
+                      {JSON.stringify(event.details, null, 2)
+                        .split('\n')
+                        .slice(0, 3)
+                        .join('\n')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Info */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-        <p className="text-sm text-blue-700 dark:text-blue-400">
-          💡 The sync worker automatically uploads your skills to GitHub every 5 minutes. You can start/stop it
+      <div className="rounded-lg border border-border bg-muted/30 p-4">
+        <p className="text-sm text-muted-foreground">
+          The sync worker automatically uploads your skills to GitHub every 5 minutes. You can start/stop it
           manually or configure the interval. Events update in real-time via Server-Sent Events.
         </p>
       </div>

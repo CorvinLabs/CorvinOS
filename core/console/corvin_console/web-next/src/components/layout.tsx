@@ -1,7 +1,6 @@
 import * as React from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  Activity,
   AudioLines,
   BookOpen,
   Boxes,
@@ -29,10 +28,8 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  ShoppingCart,
   Sparkles,
   Users,
-  UsersRound,
   Menu,
   RefreshCw,
   Webhook,
@@ -83,7 +80,7 @@ function EngineChip() {
 
   return (
     <Link
-      to="/app/engines"
+      to="/app/engine-config"
       title="Active AI engine — click to change"
       className={cn(
         "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors no-underline",
@@ -132,22 +129,14 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/chat",      label: "Chat",      icon: MessagesSquare },
       { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    ],
-  },
-  {
-    id: "vibe",
-    label: "Vibe Engineering",
-    collapsible: true,
-    defaultOpen: true,
-    // CONSOLE_REDESIGN_UNIFIED_CONCEPT: the group is the ONE tabbed dashboard.
-    // Brain Monitor / Context Intelligence / Learning Hub / Session Explorer were
-    // retired on 2026-09-05 — their content lives in the dashboard's tabs, and
-    // the separate sidebar entries only duplicated it.
-    // A panel needs BOTH registrations — panelRoutes() mounts /app/<route> from
-    // PANELS, this list makes it reachable. tests/unit/panel-nav-wiring.test.ts
-    // fails if the two drift apart.
-    items: [
-      { to: "/app/vibe-engineering",     label: "Vibe Dashboard",   icon: TrendingUp, requiredFlag: "vibe_engineering" },
+      // Renamed from "Vibe Dashboard" to match the PANELS registry title
+      // (registry.tsx rc("vibe-engineering", "Learnings", ...), eb260d8f) and
+      // moved out of the now-single-item "vibe" group into top-level nav, per
+      // that commit's stated intent. A panel needs BOTH registrations —
+      // panelRoutes() mounts /app/<route> from PANELS, this list makes it
+      // reachable. tests/unit/panel-nav-wiring.test.ts fails if the two drift
+      // apart on ROUTE, but not on label — hence this label went stale.
+      { to: "/app/vibe-engineering", label: "Learnings", icon: TrendingUp, requiredFlag: "vibe_engineering" },
     ],
   },
   {
@@ -171,9 +160,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: "intelligence",
     label: "Assistant",
     items: [
-      { to: "/app/engines",        label: "AI Engine",    icon: Cpu },
       { to: "/app/engine-config",  label: "Engine Config", icon: Settings },
-      { to: "/app/browser",  label: "Browser",   icon: Globe },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },
     ],
@@ -197,7 +184,6 @@ const NAV_GROUPS: NavGroup[] = [
       // separate "Extensions" / "MCP Plugins" / "Plugins" entries, which pointed
       // at distinct backends but read as synonyms in the sidebar.
       { to: "/app/plugin-center", label: "Plugins & Extensions", icon: Blocks },
-      { to: "/app/marketplace",   label: "Marketplace",         icon: ShoppingCart, requiredFlag: "console_marketplace_panel" },
     ],
   },
   {
@@ -232,11 +218,9 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     defaultOpen: false,
     items: [
-      { to: "/app/activity",        label: "Activity Feed",       icon: Activity },
       { to: "/app/api-keys",       label: "API Keys",           icon: KeyRound },
       { to: "/app/license",        label: "License",            icon: Lock },
       { to: "/app/compliance",     label: "Audit & Compliance", icon: ShieldCheck },
-      { to: "/app/cowork",         label: "Auto-routing",       icon: UsersRound },
       { to: "/app/ldd",            label: "Quality",            icon: Boxes },
       { to: "/app/settings",       label: "Settings",           icon: Settings },
     ],

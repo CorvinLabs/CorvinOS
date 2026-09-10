@@ -170,8 +170,10 @@ export default function App() {
             <Route path="workflows/:wid" element={<WorkflowEditorPage />} />
             <Route path="workflows/:wid/runs" element={<WorkflowRunsPage />} />
             <Route path="workflows/:wid/runs/:rid" element={<WorkflowRunDetailPage />} />
-            {/* Engine Control merged into the AI Engine page (Control tab). */}
-            <Route path="engine-control" element={<Navigate to="/app/engines" replace />} />
+            {/* /app/engines (AI Engine page) removed 2026-09-10 — Engine Config
+                is its replacement. Both deprecated deep links now redirect there. */}
+            <Route path="engine-control" element={<Navigate to="/app/engine-config" replace />} />
+            <Route path="engines" element={<Navigate to="/app/engine-config" replace />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>

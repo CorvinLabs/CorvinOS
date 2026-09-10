@@ -86,7 +86,7 @@ function VisibilityBadge({ v }: { v: string }) {
     );
   if (v === "followers")
     return (
-      <Badge className="border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-400">
+      <Badge className="border-accent/40 bg-accent/10 text-accent">
         <Rss className="mr-1 h-3 w-3" /> Followers
       </Badge>
     );

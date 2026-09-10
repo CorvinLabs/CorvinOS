@@ -48,10 +48,10 @@ interface FlowStep {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  completed:      'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-  paused:         'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
-  budget_exceeded:'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
-  running:        'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+  completed:      'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+  paused:         'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+  budget_exceeded:'bg-destructive/15 text-destructive',
+  running:        'bg-accent/15 text-accent-foreground/90',
 };
 
 const EVENT_ICONS: Record<string, string> = {
@@ -164,7 +164,7 @@ function ResultsPanel({
                 {stepEvent && (
                   <span>{fmtTs(stepEvent.ts)}</span>
                 )}
-                <span className="text-green-600 dark:text-green-400 font-medium">✓ done</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium">✓ done</span>
               </div>
             </div>
 
@@ -484,7 +484,7 @@ export default function FlowsPage() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">
+        <div className="mb-4 p-3 bg-destructive/10 border border-destructive/40 rounded text-destructive text-sm">
           {error}
         </div>
       )}
@@ -524,10 +524,10 @@ export default function FlowsPage() {
                       </div>
                       {deleteConfirm === def.flow_id ? (
                         <div className="mt-2 flex gap-1">
-                          <span className="text-xs text-red-600 flex-1">Delete &ldquo;{def.flow_id}&rdquo;?</span>
+                          <span className="text-xs text-destructive flex-1">Delete &ldquo;{def.flow_id}&rdquo;?</span>
                           <button
                             onClick={() => void deleteDefinition(def.flow_id)}
-                            className="text-xs px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-700 transition-colors"
+                            className="text-xs px-2 py-0.5 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
                           >
                             Yes
                           </button>
@@ -560,7 +560,7 @@ export default function FlowsPage() {
                           </button>
                           <button
                             onClick={() => setDeleteConfirm(def.flow_id)}
-                            className="text-xs px-2 py-1 rounded border border-border hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors text-muted-foreground dark:hover:bg-red-950/30"
+                            className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 hover:text-destructive transition-colors text-muted-foreground"
                             title="Delete this flow definition"
                           >
                             🗑
@@ -599,7 +599,7 @@ export default function FlowsPage() {
                   }}
                   className={`p-3 rounded-lg border cursor-pointer transition-colors ${
                     selected === run.run_id
-                      ? 'border-blue-400 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-600'
+                      ? 'border-accent/60 bg-accent/10'
                       : 'border-border hover:border-muted-foreground/40 bg-card'
                   }`}
                 >
@@ -663,7 +663,7 @@ export default function FlowsPage() {
                         <button
                           onClick={() => void approveCheckpoint(selectedRun.run_id)}
                           disabled={approving}
-                          className="text-sm px-4 py-1.5 rounded bg-yellow-500 text-black font-medium hover:bg-yellow-400 disabled:opacity-50 transition-colors"
+                          className="text-sm px-4 py-1.5 rounded bg-amber-500 text-amber-950 font-medium hover:bg-amber-400 disabled:opacity-50 transition-colors"
                         >
                           {approving ? 'Approving…' : '▶ Approve checkpoint'}
                         </button>
@@ -694,7 +694,7 @@ export default function FlowsPage() {
                       <span>Steps: {selectedRun.steps_done}</span>
                     )}
                     {selectedRun.paused_at_step && (
-                      <span className="text-yellow-600 dark:text-yellow-400">
+                      <span className="text-amber-600 dark:text-amber-400">
                         Paused at: {selectedRun.paused_at_step}
                       </span>
                     )}
@@ -769,7 +769,7 @@ export default function FlowsPage() {
                               </div>
                             )}
                             {ev.reason && (
-                              <div className="text-xs text-red-600 dark:text-red-400 mt-0.5">
+                              <div className="text-xs text-destructive mt-0.5">
                                 {ev.reason}
                               </div>
                             )}

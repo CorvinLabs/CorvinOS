@@ -97,6 +97,10 @@ _ENGINE_KEYS: list[dict[str, Any]] = [
     {"id": "tts_openai",   "label": "OpenAI TTS (Sprache)", "kind": "api_key", "key": "CORVIN_TTS_OPENAI_KEY",    "url": "https://platform.openai.com/api-keys"},
     {"id": "gemini",        "label": "Google Gemini",       "kind": "api_key", "key": "GEMINI_API_KEY",           "url": "https://aistudio.google.com/app/apikey"},
     {"id": "ollama",        "label": "Ollama (local)",      "kind": "url",     "key": "OLLAMA_BASE_URL",          "url": "https://ollama.com/download"},
+    # ADR-0181 — Ollama Cloud is a distinct provider id from local Ollama
+    # (engine_model_registry.yaml's "ollama_cloud" vs "ollama_local"); it needs
+    # a bearer API key, local Ollama needs none.
+    {"id": "ollama_cloud",  "label": "Ollama Cloud",        "kind": "api_key", "key": "OLLAMA_API_KEY",           "url": "https://ollama.com/settings/keys"},
     {"id": "openrouter",    "label": "OpenRouter",          "kind": "api_key", "key": "OPENROUTER_API_KEY",       "url": "https://openrouter.ai/keys"},
     # ADR-0071 — GitHub Copilot CLI binary detection (no API key; authenticated via copilot auth login).
     {"id": "copilot",       "label": "GitHub Copilot",      "kind": "url",     "key": None,                      "url": "https://github.com/github/copilot-cli/releases"},

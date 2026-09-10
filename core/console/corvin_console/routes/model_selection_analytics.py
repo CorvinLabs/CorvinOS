@@ -105,18 +105,17 @@ async def get_analytics(
     optimizer = get_optimizer()
     tenant_id = rec.tenant_id
 
-    # Collect stats for all (task_type, model) pairs in the store
-    # For now, return a simple summary aggregated across task types
     try:
-        # This is a simplified version; in production, iterate over the store
+        from core.learning.confidence_persistence import list_entries
+
         models_data = []
         total_samples = 0
 
-        # Mock: collect from optimizer's cache
-        # Real implementation would iterate optimizer._stats_cache
-        for (task_type, model, tid), stats in optimizer._stats_cache.items():
-            if tid != tenant_id:
-                continue
+        # optimizer._stats_cache is process-local and only holds keys THIS
+        # process has already asked about — real enumeration comes from the
+        # persisted store (list_entries), which every process shares.
+        for task_type, model in list_entries(tenant_id):
+            stats = optimizer.get_stats(task_type, model, tenant_id)
 
             entry = ConfidenceEntry(
                 model=model,
@@ -164,11 +163,14 @@ async def get_task_type_analytics(
     tenant_id = rec.tenant_id
 
     try:
+        from core.learning.confidence_persistence import list_entries
+
         models_data = []
 
-        for (tt, model, tid), stats in optimizer._stats_cache.items():
-            if tt != task_type or tid != tenant_id:
+        for tt, model in list_entries(tenant_id):
+            if tt != task_type:
                 continue
+            stats = optimizer.get_stats(task_type, model, tenant_id)
 
             entry = ConfidenceEntry(
                 model=model,
@@ -253,13 +255,12 @@ async def reset_learning(
 
     try:
         # Audit the reset action (FIRST, fail-closed)
-        console_audit.action_succeeded(
+        console_audit.action_performed(
             tenant_id=tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="reset_learning",
             target_kind="model_selection",
             target_id="all",
-            details={"reason": "operator_initiated"},
         )
     except Exception as e:
         logger.error(f"Failed to audit reset: {e}")

@@ -56,13 +56,13 @@ const GATE_LABELS: Record<string, string> = {
 function statusBg(status: string): string {
   if (status === "success") return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800";
   if (status === "budget_exhausted") return "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800";
-  return "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300 border-red-200 dark:border-red-800";
+  return "bg-destructive/10 text-destructive border-destructive/30";
 }
 
 function StatusIcon({ status, className }: { status: string; className?: string }) {
   if (status === "success") return <CheckCircle2 className={cn("h-4 w-4 text-emerald-500", className)} />;
   if (status === "budget_exhausted") return <AlertTriangle className={cn("h-4 w-4 text-amber-500", className)} />;
-  return <AlertTriangle className={cn("h-4 w-4 text-red-500", className)} />;
+  return <AlertTriangle className={cn("h-4 w-4 text-destructive", className)} />;
 }
 
 // ── Open-Dir Button ───────────────────────────────────────────────────────────
@@ -188,9 +188,9 @@ function BudgetBar({
 // ── Decision Timeline ────────────────────────────────────────────────────────
 
 const DECISION_STYLES: Record<string, string> = {
-  DELEGATE: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-700",
+  DELEGATE: "bg-accent/15 text-accent-foreground/90 ring-1 ring-accent/30",
   COMPLETE: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-700",
-  FAIL: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 ring-1 ring-red-200 dark:ring-red-700",
+  FAIL: "bg-destructive/10 text-destructive ring-1 ring-destructive/30",
 };
 
 function DecisionTimeline({ iterations }: { iterations: AcsIteration[] }) {
@@ -237,7 +237,7 @@ function GateChainDots({ gateResults }: { gateResults: AcsGateResult[] }) {
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Gate Chain</p>
-        <span className={cn("text-xs font-medium", last.passed ? "text-emerald-600 dark:text-emerald-400" : "text-red-500")}>
+        <span className={cn("text-xs font-medium", last.passed ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
           {last.passed ? "Passed" : "Rejected"} — score {(last.aggregate_score * 100).toFixed(0)}%
         </span>
         {gateResults.length > 1 && (
@@ -252,7 +252,7 @@ function GateChainDots({ gateResults }: { gateResults: AcsGateResult[] }) {
               <div className={cn(
                 "h-2.5 w-2.5 rounded-full shrink-0",
                 !g ? "bg-muted-foreground/20" :
-                g.passed ? "bg-emerald-500" : "bg-red-500",
+                g.passed ? "bg-emerald-500" : "bg-destructive",
               )} />
               <span className="text-xs text-muted-foreground">
                 {GATE_LABELS[gid] ?? gid}
@@ -286,7 +286,7 @@ function WorkerGrid({ workers }: { workers: AcsWorkerResult[] }) {
               "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-mono border",
               w.status === "success" ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300" :
               w.status === "partial"  ? "bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300" :
-                                       "bg-red-50 border-red-200 text-red-700 dark:bg-red-950/40 dark:border-red-800 dark:text-red-300",
+                                       "bg-destructive/10 border-destructive/30 text-destructive",
             )}
           >
             <span className="opacity-70">{w.worker_id.slice(0, 6)}</span>
@@ -336,7 +336,7 @@ function LossCurveSparkline({ gateResults }: { gateResults: AcsGateResult[] }) {
           <span className={cn(
             "text-xs tabular-nums",
             delta > 0.005 ? "text-emerald-600 dark:text-emerald-400" :
-            delta < -0.005 ? "text-red-500" : "text-muted-foreground",
+            delta < -0.005 ? "text-destructive" : "text-muted-foreground",
           )}>
             {delta >= 0 ? "+" : ""}{delta.toFixed(3)}
           </span>
@@ -431,13 +431,13 @@ function WorkerAttributionPanel({ attrs }: { attrs: AcsWorkerAttribution[] }) {
               </span>
               <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
                 <div
-                  className={cn("h-full rounded-full", positive ? "bg-emerald-500" : "bg-red-500")}
+                  className={cn("h-full rounded-full", positive ? "bg-emerald-500" : "bg-destructive")}
                   style={{ width: `${pct}%` }}
                 />
               </div>
               <span className={cn(
                 "text-[11px] tabular-nums w-14 text-right shrink-0",
-                positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-500",
+                positive ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
               )}>
                 {positive ? "+" : ""}{w.attribution.toFixed(4)}
               </span>
@@ -445,7 +445,7 @@ function WorkerAttributionPanel({ attrs }: { attrs: AcsWorkerAttribution[] }) {
                 "text-[10px] shrink-0 px-1 rounded",
                 w.status === "success" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" :
                 w.status === "partial"  ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" :
-                                          "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+                                          "bg-destructive/10 text-destructive",
               )}>
                 {w.status}
               </span>
@@ -568,7 +568,7 @@ function AcsExportPanel({ runId, csrf }: { runId: string; csrf: string }) {
       </button>
 
       {status && (
-        <p className={cn("text-xs", status.ok ? "text-emerald-600 dark:text-emerald-400" : "text-red-500")}>
+        <p className={cn("text-xs", status.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
           {status.ok ? "✓ " : "✗ "}{status.msg}
         </p>
       )}
@@ -669,7 +669,7 @@ function AcsResultsPanel({
                 "text-xs font-semibold px-2 py-0.5 rounded-full",
                 last.passed
                   ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-                  : "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+                  : "bg-destructive/10 text-destructive",
               )}>
                 {last.passed ? "Passed" : "Rejected"} — {(last.aggregate_score * 100).toFixed(0)}%
               </span>
@@ -687,7 +687,7 @@ function AcsResultsPanel({
                       !g ? "bg-muted-foreground/20 ring-muted-foreground/10" :
                       g.passed
                         ? "bg-emerald-500 ring-emerald-200 dark:ring-emerald-800"
-                        : "bg-red-500 ring-red-200 dark:ring-red-800",
+                        : "bg-destructive ring-destructive/20",
                     )} />
                     <span className="text-[10px] text-center text-muted-foreground leading-tight">
                       {GATE_LABELS[gid] ?? gid}
@@ -707,9 +707,9 @@ function AcsResultsPanel({
 
       {/* Error */}
       {result.error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-800 dark:bg-red-950/30">
-          <p className="text-xs font-medium text-red-700 dark:text-red-300">Error</p>
-          <p className="text-xs text-red-600 dark:text-red-400 mt-0.5 font-mono">{result.error}</p>
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2">
+          <p className="text-xs font-medium text-destructive">Error</p>
+          <p className="text-xs text-destructive/90 mt-0.5 font-mono">{result.error}</p>
         </div>
       )}
 
@@ -770,7 +770,7 @@ function AcsRunCardDetail({ runId, manifest }: { runId: string; manifest: AcsMan
       {/* Budget bars */}
       <div className="space-y-2">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Budget Utilization</p>
-        <BudgetBar label="Iterations" used={result.iterations ?? 0} max={manifest.max_loops ?? 0} color="bg-blue-500" />
+        <BudgetBar label="Iterations" used={result.iterations ?? 0} max={manifest.max_loops ?? 0} color="bg-accent" />
         <BudgetBar label="Workers" used={result.workers_spawned ?? 0} max={manifest.max_workers_per_iteration ?? 0} color="bg-violet-500" />
         {result.elapsed_s ? (
           <BudgetBar label="Wall-time" used={Math.round(result.elapsed_s)} max={manifest.max_wall_time ?? 0} color="bg-cyan-500" />
@@ -910,7 +910,7 @@ function AcsRunCard({ manifest, defaultExpanded = false }: { manifest: AcsManife
               <div
                 className={cn(
                   "h-full rounded-full transition-all",
-                  iterPct >= 90 ? "bg-amber-500" : "bg-blue-500",
+                  iterPct >= 90 ? "bg-amber-500" : "bg-accent",
                 )}
                 style={{ width: `${iterPct}%` }}
               />
@@ -960,7 +960,7 @@ function AcsEmptyState() {
         </div>
         <div className="flex flex-wrap justify-center gap-3 pt-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-1.5">
-            <Shield className="h-3.5 w-3.5 text-blue-500" />
+            <Shield className="h-3.5 w-3.5 text-accent" />
             L34 data-classification gated
           </div>
           <div className="flex items-center gap-1.5">

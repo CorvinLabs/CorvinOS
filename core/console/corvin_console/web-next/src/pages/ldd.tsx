@@ -101,11 +101,11 @@ export function LddPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       {!q.data.master_enabled && (
-        <Card className="border-red-500/40 bg-red-500/5">
+        <Card className="border-destructive/40 bg-destructive/5">
           <CardContent className="flex items-center justify-between py-4">
             <div className="flex items-center gap-3">
-              <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
-              <span className="text-sm font-medium text-red-700 dark:text-red-400">
+              <div className="h-3 w-3 rounded-full bg-destructive animate-pulse" />
+              <span className="text-sm font-medium text-destructive">
                 LDD Master is disabled — all layers are OFF. Enable LDD to use quality settings.
               </span>
             </div>

@@ -7,6 +7,10 @@ import {
   TrendingUp,
   Filter,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 interface RAGHubProvider {
   id: string;
@@ -96,11 +100,12 @@ export default function RAGHubPage() {
               setActiveTab(tab.id);
               setSearchQuery("");
             }}
-            className={`px-4 py-3 font-medium border-b-2 transition ${
+            className={cn(
+              "px-4 py-3 font-medium border-b-2 transition",
               activeTab === tab.id
-                ? "border-blue-500 text-blue-600 dark:text-blue-400"
-                : "border-transparent text-muted-foreground hover:text-foreground dark:hover:text-foreground"
-            }`}
+                ? "border-accent text-accent"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
           >
             {tab.label}
           </button>
@@ -112,23 +117,26 @@ export default function RAGHubPage() {
         <div className="space-y-4">
           {/* Search Input */}
           <div className="relative">
-            <Search className="absolute left-3 top-3 w-5 h-5 text-muted-foreground dark:text-muted-foreground" />
-            <input
+            <Search className="absolute left-3 top-3 w-5 h-5 text-muted-foreground" />
+            <Input
               type="text"
               placeholder="Search providers by name, type, or capability..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-input rounded-lg bg-background dark:bg-muted/30 dark:border-input dark:text-foreground dark:placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500 focus:border-transparent"
+              className="pl-10"
             />
           </div>
 
           {/* Filter by Zone */}
           <div className="flex items-center space-x-4">
-            <Filter className="w-4 h-4 text-muted-foreground dark:text-muted-foreground" />
+            <Filter className="w-4 h-4 text-muted-foreground" />
             <select
               value={selectedZone}
               onChange={(e) => setSelectedZone(e.target.value)}
-              className="px-4 py-2 border border-input rounded-lg bg-background dark:bg-muted/30 dark:border-input dark:text-foreground focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500"
+              className={cn(
+                "flex h-10 rounded-md border border-input bg-background px-4 py-2 text-sm",
+                "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              )}
             >
               <option value="">All Zones</option>
               <option value="EU">EU (GDPR)</option>
@@ -191,7 +199,7 @@ function ProviderCard({ provider }: ProviderCardProps) {
   };
 
   return (
-    <div className="border border-border rounded-lg p-6 hover:shadow-lg transition space-y-4 bg-card dark:bg-card">
+    <div className="border border-border rounded-lg p-6 hover:shadow-lg transition space-y-4 bg-card">
       {/* Header */}
       <div>
         <h3 className="font-bold text-lg">{provider.name}</h3>
@@ -199,35 +207,32 @@ function ProviderCard({ provider }: ProviderCardProps) {
       </div>
 
       {/* Description */}
-      <p className="text-foreground text-sm dark:text-foreground/90">{provider.description}</p>
+      <p className="text-foreground text-sm">{provider.description}</p>
 
       {/* Version & Classification */}
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">v{provider.version}</span>
         <div className="flex space-x-2">
-          <span className="px-2 py-1 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 rounded text-xs font-medium">
+          <Badge variant="accent" className="text-xs">
             {provider.data_classification}
-          </span>
-          <span className="px-2 py-1 bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300 rounded text-xs font-medium">
+          </Badge>
+          <Badge variant="ok" className="text-xs">
             {provider.compliance_zone}
-          </span>
+          </Badge>
         </div>
       </div>
 
       {/* Capabilities */}
       <div className="flex flex-wrap gap-2">
         {provider.capabilities.slice(0, 3).map((cap) => (
-          <span
-            key={cap}
-            className="px-2 py-1 bg-muted dark:bg-muted/60 text-foreground dark:text-foreground rounded text-xs"
-          >
+          <Badge key={cap} variant="secondary" className="text-xs">
             {cap}
-          </span>
+          </Badge>
         ))}
         {provider.capabilities.length > 3 && (
-          <span className="px-2 py-1 bg-muted dark:bg-muted/60 text-foreground dark:text-foreground rounded text-xs">
+          <Badge variant="secondary" className="text-xs">
             +{provider.capabilities.length - 3} more
-          </span>
+          </Badge>
         )}
       </div>
 
@@ -236,7 +241,7 @@ function ProviderCard({ provider }: ProviderCardProps) {
         {/* Rating */}
         <div className="text-center">
           <div className="flex items-center justify-center space-x-1">
-            <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />
+            <Star className="w-4 h-4 text-amber-500 dark:text-amber-400 fill-amber-500 dark:fill-amber-400" />
             <span className="font-bold">{provider.rating}</span>
           </div>
           <p className="text-xs text-muted-foreground">{provider.review_count} reviews</p>
@@ -245,7 +250,7 @@ function ProviderCard({ provider }: ProviderCardProps) {
         {/* Downloads */}
         <div className="text-center">
           <div className="flex items-center justify-center">
-            <Download className="w-4 h-4 text-blue-600 dark:text-blue-400 mr-1" />
+            <Download className="w-4 h-4 text-accent mr-1" />
             <span className="font-bold">{provider.download_count}</span>
           </div>
           <p className="text-xs text-muted-foreground">downloads</p>
@@ -254,7 +259,7 @@ function ProviderCard({ provider }: ProviderCardProps) {
         {/* Trending */}
         <div className="text-center">
           <div className="flex items-center justify-center">
-            <TrendingUp className="w-4 h-4 text-green-600 dark:text-green-400 mr-1" />
+            <TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mr-1" />
             <span className="font-bold">
               {(provider.trending_score * 100).toFixed(0)}
             </span>
@@ -264,35 +269,25 @@ function ProviderCard({ provider }: ProviderCardProps) {
       </div>
 
       {/* Import Button */}
-      <button
-        onClick={() => setShowImportDialog(true)}
-        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition"
-      >
+      <Button variant="accent" className="w-full" onClick={() => setShowImportDialog(true)}>
         Import Provider
-      </button>
+      </Button>
 
       {/* Import Dialog */}
       {showImportDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card dark:bg-card rounded-lg p-6 max-w-md w-full space-y-4">
-            <h2 className="text-lg font-bold">Import {provider.name}?</h2>
+        <div className="fixed inset-0 bg-background/70 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full space-y-4 shadow-2xl shadow-black/30">
+            <h2 className="text-lg font-bold text-foreground">Import {provider.name}?</h2>
             <p className="text-muted-foreground text-sm">
               This will download and register the provider in your local RAG registry.
             </p>
             <div className="flex space-x-4">
-              <button
-                onClick={() => setShowImportDialog(false)}
-                className="flex-1 px-4 py-2 border border-border rounded-lg hover:bg-muted dark:hover:bg-muted/50 transition text-foreground"
-              >
+              <Button variant="outline" className="flex-1" onClick={() => setShowImportDialog(false)}>
                 Cancel
-              </button>
-              <button
-                onClick={handleImport}
-                disabled={importLoading}
-                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 disabled:opacity-50 transition"
-              >
+              </Button>
+              <Button variant="accent" className="flex-1" onClick={handleImport} disabled={importLoading}>
                 {importLoading ? "Importing..." : "Import"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

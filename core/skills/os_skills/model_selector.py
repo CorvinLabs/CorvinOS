@@ -81,8 +81,19 @@ class ModelSelector:
     5. Return audit event data
     """
 
-    def __init__(self, config: Optional[ModelSelectorConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ModelSelectorConfig] = None,
+        overrides: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
+    ):
         self.config = config or ModelSelectorConfig()
+        # Operator-set persisted choice per complexity tier — {"simple": {"provider":
+        # "ollama_local"|None, "model": "..."}, "medium": {...}, "complex": {...}}.
+        # Consulted BEFORE the hardcoded _select_provider/_select_model_for_provider
+        # rules below, so a saved console preference (core/console/corvin_console/
+        # routes/engine_api.py) has a real, observable effect on future
+        # classifications instead of being cosmetic-only.
+        self.overrides = overrides or {}
         self.feature_extractor = FeatureExtractor()
         self.classification_history: List[ClassificationResult] = []
 
@@ -103,11 +114,19 @@ class ModelSelector:
         # Step 2: Decision tree for complexity classification
         complexity, confidence = self._classify_complexity(features)
 
-        # Step 3: Map to provider
-        provider = self._select_provider(complexity)
-
-        # Step 4: Select model
-        model = self._select_model_for_provider(provider, complexity)
+        # Step 3+4: operator override wins outright; else the cost-optimized
+        # provider/model rule. `complexity in self.overrides` (not truthiness
+        # of the override dict) is the presence check: provider=None is a
+        # valid, deliberate override meaning "native Anthropic" and must NOT
+        # fall through to _select_provider's own default (e.g. "ollama" for
+        # simple) just because it's falsy.
+        if complexity in self.overrides:
+            override = self.overrides[complexity]
+            provider = override.get("provider")
+            model = override.get("model") or self._select_model_for_provider(provider, complexity)
+        else:
+            provider = self._select_provider(complexity)
+            model = self._select_model_for_provider(provider, complexity)
 
         # Step 5: Build reasoning
         reasoning = self._build_reasoning(features, complexity, provider, model)

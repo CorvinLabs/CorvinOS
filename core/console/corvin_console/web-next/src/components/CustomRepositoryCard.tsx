@@ -121,10 +121,10 @@ export function CustomRepositoryCard({
         {/* Status Indicator */}
         <div className="flex-shrink-0">
           {status === 'healthy' && (
-            <CheckCircle2 className="h-5 w-5 text-green-500" aria-label="Healthy" />
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" aria-label="Healthy" />
           )}
           {status === 'loading' && (
-            <RotateCw className="h-5 w-5 animate-spin text-blue-500" aria-label="Loading" />
+            <RotateCw className="h-5 w-5 animate-spin text-accent" aria-label="Loading" />
           )}
           {status === 'error' && (
             <AlertCircle className="h-5 w-5 text-destructive" aria-label="Error" />

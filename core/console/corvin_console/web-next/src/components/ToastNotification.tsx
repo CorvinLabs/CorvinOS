@@ -7,6 +7,7 @@
 
 import React, { useEffect } from 'react'
 import { AlertCircle, Check, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 export type ToastType = 'success' | 'error' | 'info'
 
@@ -50,15 +51,15 @@ const Toast: React.FC<ToastProps> = ({ toast, onDismiss }) => {
   }, [toast.duration, onDismiss])
 
   const bgColor = {
-    success: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700',
-    error: 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700',
-    info: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700',
+    success: 'bg-emerald-500/10 border-emerald-500/30',
+    error: 'bg-destructive/10 border-destructive/40',
+    info: 'bg-accent/10 border-accent/30',
   }[toast.type]
 
   const textColor = {
-    success: 'text-green-800 dark:text-green-200',
-    error: 'text-red-800 dark:text-red-200',
-    info: 'text-blue-800 dark:text-blue-200',
+    success: 'text-emerald-700 dark:text-emerald-400',
+    error: 'text-destructive',
+    info: 'text-accent-foreground',
   }[toast.type]
 
   const Icon = {
@@ -69,15 +70,15 @@ const Toast: React.FC<ToastProps> = ({ toast, onDismiss }) => {
 
   return (
     <div
-      className={`rounded-lg border p-4 flex items-start gap-3 ${bgColor}`}
+      className={cn('rounded-lg border p-4 flex items-start gap-3', bgColor)}
       role="alert"
       data-testid={`toast-${toast.type}`}
     >
-      <Icon className={`w-5 h-5 flex-shrink-0 ${textColor}`} />
-      <p className={`text-sm ${textColor}`}>{toast.message}</p>
+      <Icon className={cn('w-5 h-5 flex-shrink-0', textColor)} />
+      <p className={cn('text-sm', textColor)}>{toast.message}</p>
       <button
         onClick={onDismiss}
-        className={`flex-shrink-0 ${textColor} hover:opacity-75`}
+        className={cn('flex-shrink-0 hover:opacity-75', textColor)}
         aria-label="Dismiss"
       >
         <X className="w-4 h-4" />

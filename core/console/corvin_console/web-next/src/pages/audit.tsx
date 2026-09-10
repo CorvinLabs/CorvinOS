@@ -11,6 +11,11 @@
 
 import { useState, useEffect } from 'react'
 import { Shield, AlertCircle, CheckCircle, Search, RefreshCw, Download } from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 interface AuditEvent {
   timestamp: string
@@ -30,6 +35,11 @@ interface AuditStats {
   events_by_type: Record<string, number>
   time_range?: { first: string; last: string }
 }
+
+const selectClasses = cn(
+  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
+  "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+)
 
 export default function AuditViewerPanel() {
   const [stats, setStats] = useState<AuditStats | null>(null)
@@ -157,129 +167,132 @@ export default function AuditViewerPanel() {
       {/* Statistics */}
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-4">
-            <p className="text-xs text-slate-600 dark:text-slate-400">Total Events</p>
-            <p className="text-2xl font-bold text-slate-900 dark:text-white">
-              {stats.total_events}
-            </p>
-          </div>
+          <Card>
+            <CardContent className="p-4 space-y-0">
+              <p className="text-xs text-muted-foreground">Total Events</p>
+              <p className="text-2xl font-bold text-foreground">
+                {stats.total_events}
+              </p>
+            </CardContent>
+          </Card>
 
-          <div className={`bg-white dark:bg-slate-800 rounded-lg border p-4 ${
+          <Card className={cn(
             stats.chain_valid
-              ? 'border-green-200 dark:border-green-800'
-              : 'border-red-200 dark:border-red-800'
-          }`}>
-            <p className="text-xs text-slate-600 dark:text-slate-400">Chain Valid</p>
-            <p className={`text-2xl font-bold ${
-              stats.chain_valid
-                ? 'text-green-600'
-                : 'text-red-600'
-            }`}>
-              {stats.chain_valid ? '✓ Yes' : '✗ No'}
-            </p>
-          </div>
+              ? "border-emerald-500/30"
+              : "border-destructive/40"
+          )}>
+            <CardContent className="p-4 space-y-0">
+              <p className="text-xs text-muted-foreground">Chain Valid</p>
+              <p className={cn(
+                "text-2xl font-bold",
+                stats.chain_valid
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-destructive"
+              )}>
+                {stats.chain_valid ? '✓ Yes' : '✗ No'}
+              </p>
+            </CardContent>
+          </Card>
 
-          <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-4">
-            <p className="text-xs text-slate-600 dark:text-slate-400">Event Types</p>
-            <p className="text-2xl font-bold text-slate-900 dark:text-white">
-              {Object.keys(stats.events_by_type || {}).length}
-            </p>
-          </div>
+          <Card>
+            <CardContent className="p-4 space-y-0">
+              <p className="text-xs text-muted-foreground">Event Types</p>
+              <p className="text-2xl font-bold text-foreground">
+                {Object.keys(stats.events_by_type || {}).length}
+              </p>
+            </CardContent>
+          </Card>
 
-          <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-4">
-            <p className="text-xs text-slate-600 dark:text-slate-400">Time Range</p>
-            <p className="text-xs font-mono text-slate-600 dark:text-slate-400">
-              {stats.time_range ? `${stats.time_range.first.split('T')[0]}` : 'N/A'}
-            </p>
-          </div>
+          <Card>
+            <CardContent className="p-4 space-y-0">
+              <p className="text-xs text-muted-foreground">Time Range</p>
+              <p className="text-xs font-mono text-muted-foreground">
+                {stats.time_range ? `${stats.time_range.first.split('T')[0]}` : 'N/A'}
+              </p>
+            </CardContent>
+          </Card>
         </div>
       )}
 
       {/* Chain Verification */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Shield size={20} />
-            Chain Verification
-          </h2>
-          <button
-            onClick={handleVerify}
-            disabled={isVerifying}
-            className={`px-4 py-2 bg-blue-600 text-white rounded-lg font-medium transition ${
-              isVerifying ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'
-            }`}
-          >
-            {isVerifying ? 'Verifying...' : 'Verify Chain'}
-          </button>
-        </div>
+      <Card>
+        <CardContent className="p-6 space-y-0">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-foreground flex items-center gap-2">
+              <Shield size={20} />
+              Chain Verification
+            </h2>
+            <Button variant="accent" onClick={handleVerify} disabled={isVerifying}>
+              {isVerifying ? 'Verifying...' : 'Verify Chain'}
+            </Button>
+          </div>
 
-        {verifyResult && (
-          <div className={`p-4 rounded-lg border ${
-            verifyResult.valid
-              ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-              : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-          }`}>
-            <div className="flex items-start gap-2">
-              {verifyResult.valid ? (
-                <CheckCircle className="text-green-600 flex-shrink-0" size={20} />
-              ) : (
-                <AlertCircle className="text-red-600 flex-shrink-0" size={20} />
-              )}
-              <div className="flex-1">
-                <p className={`font-semibold ${verifyResult.valid ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
-                  {verifyResult.valid ? '✓ Chain Valid' : '✗ Chain Invalid'}
-                </p>
-                {verifyResult.errors.length > 0 && (
-                  <ul className="text-xs text-red-600 dark:text-red-400 mt-2 space-y-1">
-                    {verifyResult.errors.slice(0, 5).map((err, idx) => (
-                      <li key={idx}>• {err}</li>
-                    ))}
-                    {verifyResult.errors.length > 5 && (
-                      <li>• ... and {verifyResult.errors.length - 5} more</li>
-                    )}
-                  </ul>
+          {verifyResult && (
+            <div className={cn(
+              "p-4 rounded-lg border",
+              verifyResult.valid
+                ? "bg-emerald-500/10 border-emerald-500/30"
+                : "bg-destructive/10 border-destructive/40"
+            )}>
+              <div className="flex items-start gap-2">
+                {verifyResult.valid ? (
+                  <CheckCircle className="text-emerald-600 dark:text-emerald-400 flex-shrink-0" size={20} />
+                ) : (
+                  <AlertCircle className="text-destructive flex-shrink-0" size={20} />
                 )}
+                <div className="flex-1">
+                  <p className={cn(
+                    "font-semibold",
+                    verifyResult.valid ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
+                  )}>
+                    {verifyResult.valid ? '✓ Chain Valid' : '✗ Chain Invalid'}
+                  </p>
+                  {verifyResult.errors.length > 0 && (
+                    <ul className="text-xs text-destructive mt-2 space-y-1">
+                      {verifyResult.errors.slice(0, 5).map((err, idx) => (
+                        <li key={idx}>• {err}</li>
+                      ))}
+                      {verifyResult.errors.length > 5 && (
+                        <li>• ... and {verifyResult.errors.length - 5} more</li>
+                      )}
+                    </ul>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        <p className="text-xs text-slate-600 dark:text-slate-400 mt-4">
-          💡 Verifies SHA256 hash chain integrity (GDPR Art. 32). Each event is cryptographically signed.
-        </p>
-      </div>
+          <p className="text-xs text-muted-foreground mt-4">
+            Verifies SHA256 hash chain integrity (GDPR Art. 32). Each event is cryptographically signed.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Event Search & Filter */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
-          <Search size={20} />
-          Search Events
-        </h3>
+      <Card>
+        <CardContent className="p-6 space-y-4">
+          <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+            <Search size={20} />
+            Search Events
+          </h3>
 
-        <div className="space-y-4">
           {/* Search Input */}
           <div className="flex gap-2">
-            <input
+            <Input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by subject (e.g., github/owner/repo)"
               onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-              className="flex-1 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
+              className="flex-1"
             />
-            <button
-              onClick={handleSearch}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
-            >
+            <Button variant="accent" onClick={handleSearch}>
               Search
-            </button>
-            <button
-              onClick={handleExport}
-              className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-medium hover:bg-slate-300 dark:hover:bg-slate-600 flex items-center gap-2"
-            >
+            </Button>
+            <Button variant="secondary" onClick={handleExport}>
               <Download size={18} />
               Export CSV
-            </button>
+            </Button>
           </div>
 
           {/* Filters */}
@@ -287,7 +300,7 @@ export default function AuditViewerPanel() {
             <select
               value={filterType || ''}
               onChange={(e) => setFilterType(e.target.value || null)}
-              className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm"
+              className={cn(selectClasses, "text-sm")}
             >
               <option value="">All Event Types</option>
               <option value="github_integration">GitHub Integration</option>
@@ -299,7 +312,7 @@ export default function AuditViewerPanel() {
             <select
               value={filterAction || ''}
               onChange={(e) => setFilterAction(e.target.value || null)}
-              className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm"
+              className={cn(selectClasses, "text-sm")}
             >
               <option value="">All Actions</option>
               <option value="started">Started</option>
@@ -308,30 +321,26 @@ export default function AuditViewerPanel() {
               <option value="connected">Connected</option>
             </select>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Events Table */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
-        <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
-          <h3 className="font-bold text-slate-900 dark:text-white">Recent Events ({events.length})</h3>
-          <button
-            onClick={fetchEvents}
-            disabled={loading}
-            className="px-2 py-1 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 rounded"
-          >
+      <Card className="overflow-hidden">
+        <div className="p-4 border-b border-border flex justify-between items-center">
+          <h3 className="font-bold text-foreground">Recent Events ({events.length})</h3>
+          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={fetchEvents} disabled={loading}>
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          </button>
+          </Button>
         </div>
 
         {events.length === 0 ? (
-          <div className="p-8 text-center text-slate-600 dark:text-slate-400">
+          <div className="p-8 text-center text-muted-foreground">
             No events found
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-700">
+              <thead className="bg-muted/40 border-b border-border">
                 <tr>
                   <th className="px-4 py-2 text-left">Timestamp</th>
                   <th className="px-4 py-2 text-left">Event Type</th>
@@ -343,17 +352,17 @@ export default function AuditViewerPanel() {
               </thead>
               <tbody>
                 {events.map((event, idx) => (
-                  <tr key={idx} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-900/30">
+                  <tr key={idx} className="border-b border-border hover:bg-muted/20">
                     <td className="px-4 py-2 text-xs">{formatTime(event.timestamp)}</td>
                     <td className="px-4 py-2">
-                      <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded text-xs">
+                      <Badge variant="accent" className="text-xs">
                         {event.event_type}
-                      </span>
+                      </Badge>
                     </td>
                     <td className="px-4 py-2">{event.action}</td>
                     <td className="px-4 py-2 text-xs font-mono">{event.subject}</td>
                     <td className="px-4 py-2 text-xs">{event.operator_id}</td>
-                    <td className="px-4 py-2 font-mono text-xs text-slate-600 dark:text-slate-400 truncate" title={event.hash}>
+                    <td className="px-4 py-2 font-mono text-xs text-muted-foreground truncate" title={event.hash}>
                       {event.hash.substring(0, 8)}...
                     </td>
                   </tr>
@@ -362,13 +371,14 @@ export default function AuditViewerPanel() {
             </table>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Footer */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-        <p className="text-sm text-blue-700 dark:text-blue-400">
-          🔐 <strong>GDPR Compliance:</strong> All sync events are logged in a cryptographically signed audit trail.
-          The SHA256 hash chain ensures tamper-detection. Daily verification recommended.
+      <div className="bg-accent/10 border border-accent/30 rounded-lg p-4">
+        <p className="text-sm text-accent-foreground/90 flex items-start gap-2">
+          <Shield size={16} className="shrink-0 mt-0.5" />
+          <span><strong>GDPR Compliance:</strong> All sync events are logged in a cryptographically signed audit trail.
+          The SHA256 hash chain ensures tamper-detection. Daily verification recommended.</span>
         </p>
       </div>
     </div>

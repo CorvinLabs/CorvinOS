@@ -20,6 +20,7 @@ import {
   ToggleRight,
   XCircle,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,19 +39,19 @@ import { cn } from "@/lib/utils";
 
 const SCOPES = ["user", "session", "project", "tenant"] as const;
 
-const LOCALITY_BADGE: Record<string, string> = {
-  local: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  eu_cloud: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  us_cloud: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-  unknown: "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
+const LOCALITY_VARIANT: Record<string, "ok" | "secondary" | "warn" | "outline"> = {
+  local: "ok",
+  eu_cloud: "secondary",
+  us_cloud: "warn",
+  unknown: "outline",
 };
 
 function LocalityBadge({ locality }: { locality?: string }) {
   const loc = locality || "unknown";
   return (
-    <span className={cn("text-xs px-2 py-0.5 rounded font-mono", LOCALITY_BADGE[loc] || LOCALITY_BADGE.unknown)}>
+    <Badge variant={LOCALITY_VARIANT[loc] ?? "outline"} className="font-mono">
       {loc}
-    </span>
+    </Badge>
   );
 }
 
@@ -149,7 +150,7 @@ function ToolCard({ tool, csrf }: { tool: McpToolSummary; csrf: string }) {
           <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="font-mono text-sm font-medium truncate">{tool.id}</span>
           {tool.active ? (
-            <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
           ) : (
             <XCircle className="h-4 w-4 text-muted-foreground shrink-0" />
           )}
@@ -193,7 +194,7 @@ function ToolCard({ tool, csrf }: { tool: McpToolSummary; csrf: string }) {
               <p className="text-xs text-muted-foreground mb-1">Secrets required</p>
               <div className="flex flex-wrap gap-2">
                 {tool.secrets.map((s) => (
-                  <span key={s.name} className="text-xs font-mono px-2 py-0.5 rounded bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200">
+                  <span key={s.name} className="text-xs font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300">
                     {s.name}{s.required ? " *" : ""}
                   </span>
                 ))}

@@ -172,7 +172,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle missing required fields in response', async ({ page }) => {
-      await page.goto('/console/app/engines');
+      await page.goto('/console/app/engine-config');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 

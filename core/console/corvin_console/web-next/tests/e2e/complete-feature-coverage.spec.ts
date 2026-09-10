@@ -95,7 +95,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Engine & Compute Flow (Dependencies: Engines → Compute Jobs → Monitoring)', () => {
     test('Complete workflow: Engines → Compute Jobs → Monitoring', async ({ page }) => {
       // Step 1: Engines
-      await page.goto('/console/app/engines');
+      await page.goto('/console/app/engine-config');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -202,8 +202,8 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
     });
   });
 
-  test.describe('Advanced Features Flow (Dependencies: Voice → Agents → Cowork)', () => {
-    test('Complete workflow: Voice → Agent Hub → Cowork Collaboration', async ({ page }) => {
+  test.describe('Advanced Features Flow (Dependencies: Voice → Agents)', () => {
+    test('Complete workflow: Voice → Agent Hub', async ({ page }) => {
       // Step 1: Voice
       await page.goto('/console/app/voice');
       await page.waitForLoadState('load');
@@ -225,17 +225,6 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       // Look for agent listing and configuration
       const agentList = page.locator('[class*="agent"], [role="list"]');
       expect(await agentList.count()).toBeGreaterThanOrEqual(0);
-
-      // Step 3: Cowork (dependent on agent configuration)
-      await page.goto('/console/app/cowork');
-      await page.waitForLoadState('load');
-      await page.waitForTimeout(1000);
-      content = await page.content();
-      expect(content.length).toBeGreaterThan(100);
-
-      // Look for cowork/collaboration settings
-      const coworkControls = page.locator('input[type="checkbox"], [role="switch"], button');
-      expect(await coworkControls.count()).toBeGreaterThanOrEqual(0);
     });
   });
 
@@ -331,7 +320,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
         '/app/tasks',
         '/app/settings',
         '/app/compliance',
-        '/app/engines',
+        '/app/engine-config',
         '/app/api-keys'
       ];
 
@@ -411,7 +400,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
         '/app/tasks',
         '/app/api-keys',
         '/app/bridges',
-        '/app/engines',
+        '/app/engine-config',
         '/app/settings'
       ];
 

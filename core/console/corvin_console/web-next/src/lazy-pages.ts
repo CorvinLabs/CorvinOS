@@ -4,7 +4,7 @@ import * as React from "react";
 // Only the page(s) on the current route load into memory.
 
 export const LandingPage = React.lazy(() =>
-  import("@/pages/login").then((m) => ({ default: m.LoginPage }))
+  import("@/pages/landing").then((m) => ({ default: m.LandingPage }))
 );
 
 export const LoginPage = React.lazy(() =>
@@ -12,7 +12,7 @@ export const LoginPage = React.lazy(() =>
 );
 
 export const DashboardPage = React.lazy(() =>
-  import("@/pages/login").then((m) => ({ default: m.LoginPage }))
+  import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage }))
 );
 
 
@@ -21,24 +21,8 @@ export const SettingsPage = React.lazy(() =>
 );
 
 
-export const EnginesPage = React.lazy(() =>
-  import("@/pages/engines").then((m) => ({ default: m.EnginesPage }))
-);
-
-export const BrowserPage = React.lazy(() =>
-  import("@/pages/browser").then((m) => ({ default: m.BrowserPage }))
-);
-
-export const EngineControlPage = React.lazy(() =>
-  import("@/pages/engine-control").then((m) => ({ default: m.EngineControlPage }))
-);
-
 export const ComputePage = React.lazy(() =>
   import("@/pages/compute").then((m) => ({ default: m.ComputePage }))
-);
-
-export const ActivityFeedPage = React.lazy(() =>
-  import("@/pages/activity").then((m) => ({ default: m.ActivityFeedPage }))
 );
 
 
@@ -63,16 +47,12 @@ export const PackagesPage = React.lazy(() =>
   import("@/pages/packages").then((m) => ({ default: m.PackagesPage }))
 );
 
-export const CoworkPage = React.lazy(() =>
-  import("@/pages/login").then((m) => ({ default: m.LoginPage }))
-);
-
 export const LddPage = React.lazy(() =>
   import("@/pages/ldd").then((m) => ({ default: m.LddPage }))
 );
 
 export const CompliancePage = React.lazy(() =>
-  import("@/pages/login").then((m) => ({ default: m.LoginPage }))
+  import("@/pages/compliance").then((m) => ({ default: m.CompliancePage }))
 );
 
 export const ChatPage = React.lazy(() =>

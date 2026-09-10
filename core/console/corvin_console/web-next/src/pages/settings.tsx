@@ -578,7 +578,7 @@ function HealingCard({ csrf }: { csrf: string }) {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-medium">Allow code changes</span>
                 {riskyEnabled ? (
-                  <Badge variant="outline" className="text-[10px] text-red-600 dark:text-red-400 border-red-500/40">
+                  <Badge variant="outline" className="text-[10px] text-destructive border-destructive/40">
                     risky
                   </Badge>
                 ) : (

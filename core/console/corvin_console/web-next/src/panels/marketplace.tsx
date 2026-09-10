@@ -6,13 +6,18 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
-import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader, Github } from 'lucide-react'
+import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader2, Github } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { InstallProgress } from '@/components/install-progress'
 import { CustomRepositoriesSection } from '@/components/CustomRepositoriesSection'
 import { useProgressPolling } from '@/hooks/useProgressPolling'
 import { BASE } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 interface Plugin {
   id: string
@@ -270,52 +275,52 @@ export const MarketplacePanel: React.FC = () => {
   const categories = [...new Set(plugins.map(p => p.category))]
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className="bg-background">
       {/* Header */}
-      <div className="sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 shadow-sm">
+      <div className="sticky top-0 z-40 bg-card border-b border-border shadow-sm">
         <div className="max-w-6xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Package className="w-6 h-6 text-blue-600" />
+            <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+              <Package className="w-6 h-6 text-accent" />
               Marketplace
             </h1>
-            <button
-              onClick={fetchMarketplace}
-              className="px-3 py-1 text-sm bg-slate-200 dark:bg-slate-800 rounded hover:bg-slate-300 dark:hover:bg-slate-700"
-            >
+            <Button variant="secondary" size="sm" onClick={fetchMarketplace}>
               Refresh
-            </button>
+            </Button>
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-4 border-b border-slate-200 dark:border-slate-700">
+          <div className="flex gap-4 border-b border-border">
             <button
               onClick={() => setView('browse')}
-              className={`px-4 py-2 font-medium transition ${
+              className={cn(
+                'px-4 py-2 font-medium transition',
                 view === 'browse'
-                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
+                  ? 'text-accent border-b-2 border-accent'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
             >
               Browse
             </button>
             <button
               onClick={() => setView('installed')}
-              className={`px-4 py-2 font-medium transition ${
+              className={cn(
+                'px-4 py-2 font-medium transition',
                 view === 'installed'
-                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
+                  ? 'text-accent border-b-2 border-accent'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
             >
               Installed
             </button>
             <button
               onClick={() => setView('custom')}
-              className={`px-4 py-2 font-medium transition flex items-center gap-2 ${
+              className={cn(
+                'px-4 py-2 font-medium transition flex items-center gap-2',
                 view === 'custom'
-                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
+                  ? 'text-accent border-b-2 border-accent'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
             >
               <Github className="w-4 h-4" />
               Custom Repos
@@ -330,23 +335,24 @@ export const MarketplacePanel: React.FC = () => {
           {/* Filters */}
           <div className="mb-8 space-y-4">
             <div className="relative">
-              <Search className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
-              <input
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
                 type="text"
                 placeholder="Search extensions..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                className="pl-10"
               />
             </div>
             <div className="flex gap-2 flex-wrap">
               <button
                 onClick={() => setCategory('')}
-                className={`px-3 py-1 rounded text-sm ${
+                className={cn(
+                  'px-3 py-1 rounded text-sm transition-colors',
                   category === ''
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100'
-                }`}
+                    ? 'bg-accent text-accent-foreground'
+                    : 'bg-muted text-foreground hover:bg-muted/70',
+                )}
               >
                 All
               </button>
@@ -354,11 +360,12 @@ export const MarketplacePanel: React.FC = () => {
                 <button
                   key={cat}
                   onClick={() => setCategory(cat)}
-                  className={`px-3 py-1 rounded text-sm ${
+                  className={cn(
+                    'px-3 py-1 rounded text-sm transition-colors',
                     category === cat
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100'
-                  }`}
+                      ? 'bg-accent text-accent-foreground'
+                      : 'bg-muted text-foreground hover:bg-muted/70',
+                  )}
                 >
                   {cat}
                 </button>
@@ -368,16 +375,16 @@ export const MarketplacePanel: React.FC = () => {
 
           {/* Error */}
           {error && (
-            <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 rounded-lg flex gap-3">
-              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-              <div className="text-red-700 dark:text-red-200 text-sm">{error}</div>
+            <div className="mb-6 p-4 bg-destructive/10 border border-destructive/40 rounded-lg flex gap-3">
+              <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+              <div className="text-destructive text-sm">{error}</div>
             </div>
           )}
 
           {/* Loading */}
           {loading && (
             <div className="flex justify-center py-12">
-              <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" />
+              <Loader2 className="w-8 h-8 animate-spin text-accent" />
             </div>
           )}
 
@@ -385,36 +392,34 @@ export const MarketplacePanel: React.FC = () => {
           {!loading && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredPlugins.map(ext => (
-                <div
+                <Card
                   key={ext.id}
                   onClick={() => setSelectedPlugin(ext)}
-                  className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 p-4 cursor-pointer hover:shadow-md transition"
+                  className="p-4 cursor-pointer hover:shadow-md"
                 >
                   <div className="flex justify-between items-start mb-2">
                     <div>
-                      <h3 className="font-semibold text-slate-900 dark:text-white">{ext.name}</h3>
-                      <p className="text-sm text-slate-600 dark:text-slate-400">v{ext.version}</p>
+                      <h3 className="font-semibold text-foreground">{ext.name}</h3>
+                      <p className="text-sm text-muted-foreground">v{ext.version}</p>
                     </div>
-                    <span className="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded">
-                      {ext.category}
-                    </span>
+                    <Badge variant="outline" className="text-xs">{ext.category}</Badge>
                   </div>
-                  <p className="text-sm text-slate-600 dark:text-slate-300 mb-3 line-clamp-2">
+                  <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
                     {ext.description}
                   </p>
-                  <div className="flex justify-between items-center text-xs text-slate-500">
+                  <div className="flex justify-between items-center text-xs text-muted-foreground">
                     <span>{ext.install_count ?? 0} downloads</span>
                     <span>★ {(ext.rating ?? 0).toFixed(1)}</span>
                   </div>
-                </div>
+                </Card>
               ))}
             </div>
           )}
 
           {!loading && filteredPlugins.length === 0 && (
             <div className="text-center py-12">
-              <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-600 dark:text-slate-400">No extensions found</p>
+              <Package className="w-12 h-12 text-muted-foreground/50 mx-auto mb-3" />
+              <p className="text-muted-foreground">No extensions found</p>
             </div>
           )}
         </div>
@@ -425,47 +430,48 @@ export const MarketplacePanel: React.FC = () => {
         <div className="max-w-6xl mx-auto px-6 py-8">
           {loading ? (
             <div className="text-center py-8">
-              <Loader className="w-8 h-8 animate-spin mx-auto" />
+              <Loader2 className="w-8 h-8 animate-spin mx-auto text-accent" />
             </div>
           ) : installed.length === 0 ? (
-            <div className="bg-white dark:bg-slate-900 rounded-lg p-8 text-center">
-              <Check className="w-12 h-12 text-green-600 mx-auto mb-3" />
-              <p className="text-slate-600 dark:text-slate-400">
+            <Card className="p-8 text-center">
+              <Check className="w-12 h-12 text-emerald-600 dark:text-emerald-400 mx-auto mb-3" />
+              <p className="text-muted-foreground">
                 {installedNotice ?? 'No installed extensions yet'}
               </p>
-              <button
-                onClick={() => setView('browse')}
-                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
+              <Button variant="accent" className="mt-4" onClick={() => setView('browse')}>
                 Browse Marketplace
-              </button>
-            </div>
+              </Button>
+            </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {installed.map(ext => (
-                <div key={ext.plugin_id} className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 p-4 hover:shadow-md transition-shadow">
+                <Card key={ext.plugin_id} className="p-4 hover:shadow-md">
                   <div className="flex items-start justify-between mb-3">
                     <div>
-                      <h3 className="font-semibold text-slate-900 dark:text-white">{ext.display_name || ext.plugin_id}</h3>
-                      <p className="text-xs text-slate-500">{ext.version}</p>
+                      <h3 className="font-semibold text-foreground">{ext.display_name || ext.plugin_id}</h3>
+                      <p className="text-xs text-muted-foreground">{ext.version}</p>
                     </div>
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200">
-                      Active
-                    </span>
+                    <Badge variant="ok" className="text-xs">Active</Badge>
                   </div>
-                  <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">{ext.plugin_type}</p>
+                  <p className="text-sm text-muted-foreground mb-4">{ext.plugin_type}</p>
                   <div className="flex gap-2">
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="flex-1"
                       onClick={() => setSelectedPlugin(toPluginView(ext))}
-                      className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white rounded hover:bg-slate-200 dark:hover:bg-slate-700"
                     >
                       Details
-                    </button>
-                    <button className="px-3 py-2 text-sm bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-200 rounded hover:bg-red-200 dark:hover:bg-red-900">
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-destructive border-destructive/40 hover:bg-destructive/10"
+                    >
                       Remove
-                    </button>
+                    </Button>
                   </div>
-                </div>
+                </Card>
               ))}
             </div>
           )}
@@ -482,19 +488,19 @@ export const MarketplacePanel: React.FC = () => {
       {/* Detail Modal */}
       {selectedPlugin && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 rounded-lg max-w-2xl w-full my-8 max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 p-6 flex justify-between items-start">
+          <div className="bg-card border border-border rounded-lg max-w-2xl w-full my-8 max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-muted/60 border-b border-border p-6 flex justify-between items-start">
               <div>
-                <h2 className="text-2xl font-bold text-slate-900 dark:text-white">
+                <h2 className="text-2xl font-bold text-foreground">
                   {selectedPlugin.name}
                 </h2>
-                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                <p className="text-sm text-muted-foreground mt-1">
                   v{selectedPlugin.version} • {selectedPlugin.category}
                 </p>
               </div>
               <button
                 onClick={() => setSelectedPlugin(null)}
-                className="text-2xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                className="text-2xl text-muted-foreground hover:text-foreground"
               >
                 ✕
               </button>
@@ -502,22 +508,22 @@ export const MarketplacePanel: React.FC = () => {
 
             <div className="p-6 space-y-6">
               <div>
-                <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 uppercase">
+                <h3 className="text-sm font-semibold text-muted-foreground mb-2 uppercase">
                   Description
                 </h3>
-                <p className="text-slate-600 dark:text-slate-300">{selectedPlugin.description}</p>
+                <p className="text-foreground">{selectedPlugin.description}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 uppercase">Author</p>
-                  <p className="text-sm font-medium text-slate-900 dark:text-white">
+                  <p className="text-xs text-muted-foreground uppercase">Author</p>
+                  <p className="text-sm font-medium text-foreground">
                     {selectedPlugin.author}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 uppercase">Downloads</p>
-                  <p className="text-sm font-medium text-slate-900 dark:text-white">
+                  <p className="text-xs text-muted-foreground uppercase">Downloads</p>
+                  <p className="text-sm font-medium text-foreground">
                     {selectedPlugin.install_count ?? 0}
                   </p>
                 </div>
@@ -525,16 +531,17 @@ export const MarketplacePanel: React.FC = () => {
 
               {/* Install status message */}
               {installProgress[selectedPlugin.id] && (
-                <div className={`p-3 rounded-lg text-sm ${
+                <div className={cn(
+                  'p-3 rounded-lg text-sm border',
                   installProgress[selectedPlugin.id].status === 'success'
-                    ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-200'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
                     : installProgress[selectedPlugin.id].status === 'error'
-                    ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-200'
-                    : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-200'
-                }`}>
+                    ? 'bg-destructive/10 border-destructive/40 text-destructive'
+                    : 'bg-accent/10 border-accent/30 text-accent',
+                )}>
                   <div className="flex items-center gap-2">
                     {installProgress[selectedPlugin.id].status === 'installing' && (
-                      <Loader className="w-4 h-4 animate-spin" />
+                      <Loader2 className="w-4 h-4 animate-spin" />
                     )}
                     {installProgress[selectedPlugin.id].status === 'success' && (
                       <Check className="w-4 h-4" />
@@ -544,15 +551,16 @@ export const MarketplacePanel: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
-                <button
+              <div className="flex gap-3 pt-4 border-t border-border">
+                <Button
+                  variant="accent"
+                  className="flex-1"
                   onClick={() => handleInstall(selectedPlugin)}
                   disabled={installProgress[selectedPlugin.id]?.status === 'installing'}
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-400 font-medium flex items-center justify-center gap-2"
                 >
                   {installProgress[selectedPlugin.id]?.status === 'installing' ? (
                     <>
-                      <Loader className="w-4 h-4 animate-spin" />
+                      <Loader2 className="w-4 h-4 animate-spin" />
                       Installing...
                     </>
                   ) : (
@@ -561,11 +569,11 @@ export const MarketplacePanel: React.FC = () => {
                       Install
                     </>
                   )}
-                </button>
-                <button className="flex-1 px-4 py-2 bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white rounded-lg hover:bg-slate-300 dark:hover:bg-slate-700 font-medium flex items-center justify-center gap-2">
+                </Button>
+                <Button variant="secondary" className="flex-1">
                   <ExternalLink className="w-4 h-4" />
                   GitHub
-                </button>
+                </Button>
               </div>
             </div>
           </div>

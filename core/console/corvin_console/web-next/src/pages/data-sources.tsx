@@ -89,18 +89,18 @@ async function storeVaultSecret(
 
 // ── Shared helpers ────────────────────────────────────────────────────────
 
-const CLASSIFICATION_COLORS: Record<string, string> = {
-  PUBLIC:       "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
-  INTERNAL:     "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
-  CONFIDENTIAL: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300",
-  SECRET:       "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300",
+const CLASSIFICATION_VARIANT: Record<string, "ok" | "accent" | "warn" | "danger"> = {
+  PUBLIC:       "ok",
+  INTERNAL:     "accent",
+  CONFIDENTIAL: "warn",
+  SECRET:       "danger",
 };
 
 function ClassificationBadge({ value }: { value: string }) {
   return (
-    <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${CLASSIFICATION_COLORS[value] ?? "bg-muted text-muted-foreground"}`}>
+    <Badge variant={CLASSIFICATION_VARIANT[value] ?? "secondary"} className="text-xs">
       {value}
-    </span>
+    </Badge>
   );
 }
 
@@ -690,7 +690,7 @@ function ConnectForm({ db, csrf, onBack, onSuccess }: ConnectFormProps) {
 
           {db.setupHint && (
             <div className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground rounded border bg-muted/20 px-3 py-2">
-              <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5 text-green-500" />
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
               {db.setupHint}
             </div>
           )}
@@ -903,7 +903,7 @@ function DetailDialog({
               {testMut.data && (
                 <div className="mt-2 flex items-center gap-2 text-sm">
                   {testMut.data.ok
-                    ? <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    ? <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                     : <XCircle className="h-4 w-4 text-destructive" />}
                   <span>
                     {testMut.data.ok ? "Connected" : "Failed"}
@@ -1133,9 +1133,9 @@ function HttpAdapterCard({ adapter, csrf }: { adapter: HttpAdapter; csrf: string
             {pingResult !== null && (
               <div className="flex items-center gap-1.5 text-xs mt-1">
                 {pingResult.ok
-                  ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                  ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                   : <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />}
-                <span className={pingResult.ok ? "text-green-700 dark:text-green-400" : "text-destructive"}>
+                <span className={pingResult.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}>
                   {pingResult.ok ? "Reachable" : "Error"}
                 </span>
                 {pingResult.detail && <span className="text-muted-foreground">— {pingResult.detail}</span>}

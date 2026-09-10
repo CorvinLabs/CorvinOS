@@ -7,6 +7,10 @@
 
 import React, { useState, useEffect } from 'react'
 import { X, Upload, Search, Package as PackageIcon, ExternalLink, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 interface PackageInfo {
   package_id: string
@@ -143,38 +147,35 @@ export const PackageMarketplace: React.FC = () => {
   )
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <div className="sticky top-0 z-40 bg-white/80 dark:bg-slate-900/80 backdrop-blur border-b border-slate-200 dark:border-slate-700">
+      <div className="sticky top-0 z-40 bg-background/80 backdrop-blur border-b border-border">
         <div className="max-w-7xl mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
-                <PackageIcon className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+              <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
+                <PackageIcon className="w-8 h-8 text-accent" />
                 Package Marketplace
               </h1>
-              <p className="text-slate-600 dark:text-slate-300 mt-1">
+              <p className="text-muted-foreground mt-1">
                 {packages.length} package{packages.length !== 1 ? 's' : ''} installed
               </p>
             </div>
-            <button
-              onClick={() => setShowUploadModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            >
+            <Button variant="accent" onClick={() => setShowUploadModal(true)}>
               <Upload className="w-4 h-4" />
               Upload Package
-            </button>
+            </Button>
           </div>
 
           {/* Search */}
           <div className="mt-6 relative">
-            <Search className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
-            <input
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
               type="text"
               placeholder="Search packages..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500"
+              className="pl-10"
             />
           </div>
         </div>
@@ -183,22 +184,22 @@ export const PackageMarketplace: React.FC = () => {
       {/* Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
         {error && (
-          <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-200">
+          <div className="mb-6 p-4 rounded-lg border border-destructive/40 bg-destructive/10 text-destructive">
             {error}
           </div>
         )}
 
         {loading ? (
           <div className="flex items-center justify-center py-16">
-            <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full"></div>
+            <div className="animate-spin w-8 h-8 border-4 border-accent border-t-transparent rounded-full"></div>
           </div>
         ) : filteredPackages.length === 0 ? (
           <div className="text-center py-16">
-            <PackageIcon className="w-16 h-16 text-slate-300 dark:text-slate-600 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-2">
+            <PackageIcon className="w-16 h-16 text-muted-foreground/40 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-foreground mb-2">
               {searchTerm ? 'No packages found' : 'No packages installed yet'}
             </h3>
-            <p className="text-slate-600 dark:text-slate-400">
+            <p className="text-muted-foreground">
               {searchTerm
                 ? 'Try a different search term'
                 : 'Upload your first package to get started'}
@@ -210,48 +211,50 @@ export const PackageMarketplace: React.FC = () => {
               <div
                 key={pkg.package_id}
                 onClick={() => fetchPackageDetails(pkg.package_id)}
-                className="group cursor-pointer bg-white dark:bg-slate-800 rounded-xl shadow-md hover:shadow-lg transition border border-slate-200 dark:border-slate-700 overflow-hidden"
+                className="group cursor-pointer bg-card rounded-xl shadow-sm hover:shadow-md transition-shadow border border-border overflow-hidden"
               >
                 {/* Card Header */}
-                <div className="h-32 bg-gradient-to-br from-blue-500/10 to-purple-500/10 dark:from-blue-500/5 dark:to-purple-500/5 border-b border-slate-200 dark:border-slate-700 p-4 flex flex-col justify-end">
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition">
+                <div className="h-32 bg-accent/10 border-b border-border p-4 flex flex-col justify-end">
+                  <h3 className="text-xl font-bold text-foreground group-hover:text-accent transition-colors">
                     {pkg.display_name}
                   </h3>
-                  <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                  <p className="text-sm text-muted-foreground mt-1">
                     v{pkg.version}
                   </p>
                 </div>
 
                 {/* Card Body */}
                 <div className="p-4">
-                  <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-2 mb-3">
+                  <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
                     {pkg.description || 'No description available'}
                   </p>
 
                   {pkg.author && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+                    <div className="text-xs text-muted-foreground mb-4">
                       <span className="font-semibold">By</span> {pkg.author}
                     </div>
                   )}
 
                   {/* Metadata */}
-                  <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-4">
-                    <span className="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Badge variant="outline" className="text-xs">
                       Installed {new Date(pkg.installed_at).toLocaleDateString()}
-                    </span>
+                    </Badge>
                   </div>
 
                   {/* CTA */}
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="w-full"
                     onClick={(e) => {
                       e.stopPropagation()
                       fetchPackageDetails(pkg.package_id)
                     }}
-                    className="w-full px-3 py-2 bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900 transition text-sm font-medium flex items-center justify-center gap-2"
                   >
                     <ExternalLink className="w-4 h-4" />
                     View Details
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))}
@@ -262,22 +265,22 @@ export const PackageMarketplace: React.FC = () => {
       {/* Details Modal */}
       {selectedPackage && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-800 rounded-xl max-w-2xl w-full my-8 max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-xl max-w-2xl w-full my-8 max-h-[90vh] overflow-y-auto border border-border">
             {/* Modal Header */}
-            <div className="sticky top-0 bg-gradient-to-r from-blue-500/10 to-purple-500/10 dark:from-blue-500/5 dark:to-purple-500/5 border-b border-slate-200 dark:border-slate-700 p-6 flex items-start justify-between">
+            <div className="sticky top-0 bg-accent/10 border-b border-border p-6 flex items-start justify-between">
               <div>
-                <h2 className="text-2xl font-bold text-slate-900 dark:text-white">
+                <h2 className="text-2xl font-bold text-foreground">
                   {selectedPackage.display_name}
                 </h2>
-                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                <p className="text-sm text-muted-foreground mt-1">
                   Version {selectedPackage.version} • By {selectedPackage.author || 'Unknown'}
                 </p>
               </div>
               <button
                 onClick={() => setSelectedPackage(null)}
-                className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition"
+                className="p-2 hover:bg-muted rounded-lg transition-colors"
               >
-                <X className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+                <X className="w-5 h-5 text-muted-foreground" />
               </button>
             </div>
 
@@ -286,10 +289,10 @@ export const PackageMarketplace: React.FC = () => {
               {/* Description */}
               {selectedPackage.description && (
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wide mb-2">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2">
                     Description
                   </h3>
-                  <p className="text-slate-600 dark:text-slate-300">
+                  <p className="text-foreground/90">
                     {selectedPackage.description}
                   </p>
                 </div>
@@ -298,10 +301,10 @@ export const PackageMarketplace: React.FC = () => {
               {/* License */}
               {selectedPackage.license && (
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wide mb-2">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2">
                     License
                   </h3>
-                  <code className="px-3 py-1 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded text-sm">
+                  <code className="px-3 py-1 bg-muted text-foreground/90 rounded text-sm">
                     {selectedPackage.license}
                   </code>
                 </div>
@@ -310,14 +313,14 @@ export const PackageMarketplace: React.FC = () => {
               {/* Dependencies */}
               {selectedPackage.dependencies && selectedPackage.dependencies.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wide mb-2">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2">
                     Dependencies
                   </h3>
                   <div className="flex flex-wrap gap-2">
                     {selectedPackage.dependencies.map((dep, i) => (
                       <code
                         key={i}
-                        className="px-3 py-1 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded text-sm"
+                        className="px-3 py-1 bg-muted text-foreground/90 rounded text-sm"
                       >
                         {dep}
                       </code>
@@ -329,30 +332,30 @@ export const PackageMarketplace: React.FC = () => {
               {/* Permissions */}
               {selectedPackage.permissions && selectedPackage.permissions.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wide mb-3">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
                     Permissions Required
                   </h3>
                   <div className="space-y-2">
                     {selectedPackage.permissions.map((perm, i) => (
                       <div
                         key={i}
-                        className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg border border-slate-200 dark:border-slate-600"
+                        className="p-3 bg-muted/40 rounded-lg border border-border"
                       >
                         <div className="flex items-start justify-between">
                           <div>
-                            <code className="text-sm font-mono text-slate-700 dark:text-slate-300">
+                            <code className="text-sm font-mono text-foreground/90">
                               {perm.permission}
                             </code>
                             {perm.description && (
-                              <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                              <p className="text-xs text-muted-foreground mt-1">
                                 {perm.description}
                               </p>
                             )}
                           </div>
                           {perm.required && (
-                            <span className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs rounded font-semibold">
+                            <Badge variant="warn" className="text-xs">
                               Required
-                            </span>
+                            </Badge>
                           )}
                         </div>
                       </div>
@@ -362,20 +365,20 @@ export const PackageMarketplace: React.FC = () => {
               )}
 
               {/* Metadata */}
-              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border">
                 <div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 uppercase tracking-wide">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">
                     Installed
                   </p>
-                  <p className="text-sm font-medium text-slate-900 dark:text-white mt-1">
+                  <p className="text-sm font-medium text-foreground mt-1">
                     {new Date(selectedPackage.installed_at).toLocaleDateString()}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 uppercase tracking-wide">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">
                     Package ID
                   </p>
-                  <code className="text-sm font-mono text-slate-900 dark:text-white mt-1 break-all">
+                  <code className="text-sm font-mono text-foreground mt-1 break-all">
                     {selectedPackage.package_id}
                   </code>
                 </div>
@@ -383,22 +386,24 @@ export const PackageMarketplace: React.FC = () => {
             </div>
 
             {/* Modal Footer */}
-            <div className="sticky bottom-0 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/50 p-6 flex gap-3">
-              <button
+            <div className="sticky bottom-0 border-t border-border bg-muted/40 p-6 flex gap-3">
+              <Button
+                variant="outline"
+                className="flex-1"
                 onClick={() => setSelectedPackage(null)}
-                className="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition font-medium"
               >
                 Close
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="destructive"
+                className="flex-1"
                 onClick={() => {
                   handleUninstall(selectedPackage.package_id)
                 }}
-                className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition font-medium"
               >
                 <Trash2 className="w-4 h-4" />
                 Uninstall
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -414,7 +419,7 @@ export const PackageMarketplace: React.FC = () => {
       )}
 
       {uploadStatus && (
-        <div className="fixed bottom-6 right-6 bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg">
+        <div className="fixed bottom-6 right-6 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-lg">
           {uploadStatus}
         </div>
       )}
@@ -494,21 +499,21 @@ const UploadModal: React.FC<UploadModalProps> = ({ onClose, onUpload, onStatus }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-slate-800 rounded-xl max-w-md w-full">
-        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-700">
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+      <div className="bg-card rounded-xl max-w-md w-full border border-border">
+        <div className="flex items-center justify-between p-6 border-b border-border">
+          <h2 className="text-xl font-bold text-foreground">
             Upload Package
           </h2>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg"
+            className="p-2 hover:bg-muted rounded-lg transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5 text-muted-foreground" />
           </button>
         </div>
 
         <div className="p-6 space-y-4">
-          <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-8 text-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
+          <div className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:bg-muted/40 transition-colors">
             <input
               type="file"
               accept=".zip"
@@ -523,36 +528,34 @@ const UploadModal: React.FC<UploadModalProps> = ({ onClose, onUpload, onStatus }
               id="file-input"
             />
             <label htmlFor="file-input" className="cursor-pointer">
-              <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-              <p className="font-medium text-slate-900 dark:text-white">
+              <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+              <p className="font-medium text-foreground">
                 {file ? file.name : 'Click to select ZIP file'}
               </p>
-              <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 or drag and drop
               </p>
             </label>
           </div>
 
           {error && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-red-700 dark:text-red-200 text-sm">
+            <div className="p-3 rounded-lg border border-destructive/40 bg-destructive/10 text-destructive text-sm">
               {error}
             </div>
           )}
 
           <div className="flex gap-3">
-            <button
-              onClick={onClose}
-              className="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition font-medium"
-            >
+            <Button variant="outline" className="flex-1" onClick={onClose}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="accent"
+              className={cn("flex-1", (!file || uploading) && "opacity-50 cursor-not-allowed")}
               onClick={handleUpload}
               disabled={!file || uploading}
-              className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg transition font-medium"
             >
               {uploading ? 'Uploading...' : 'Upload'}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

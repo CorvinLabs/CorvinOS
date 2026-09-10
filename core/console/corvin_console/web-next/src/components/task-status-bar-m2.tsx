@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useTaskProgress } from '@/hooks/use-task-progress';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 /**
  * Task status bar M2 — powered by pub/sub (no polling).
@@ -17,23 +19,23 @@ export function TaskStatusBarM2() {
   ).length;
 
   return (
-    <div className="bg-white border-b border-gray-200 px-4 py-2">
+    <div className="bg-card border-b border-border px-4 py-2">
       <div className="flex items-center justify-between">
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className="flex items-center gap-2 text-sm font-medium"
         >
-          <span className="text-gray-600">Tasks</span>
-          <span className="rounded-full bg-blue-100 px-2 py-1 text-xs text-blue-700">
+          <span className="text-muted-foreground">Tasks</span>
+          <Badge variant="accent" className="text-xs">
             {runningTasks.length} running
-          </span>
+          </Badge>
           {completedCount > 0 && (
-            <span className="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600">
+            <Badge variant="secondary" className="text-xs">
               {completedCount} done
-            </span>
+            </Badge>
           )}
           {!isConnected && (
-            <span className="ml-2 text-xs text-orange-600">📶 Polling fallback active</span>
+            <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">📶 Polling fallback active</span>
           )}
         </button>
       </div>
@@ -41,13 +43,13 @@ export function TaskStatusBarM2() {
       {isExpanded && runningTasks.length > 0 && (
         <div className="mt-3 space-y-2">
           {runningTasks.map((task) => (
-            <div key={task.task_id} className="rounded bg-blue-50 p-2 text-sm">
-              <div className="font-mono text-xs text-gray-600">{task.task_id.slice(0, 8)}...</div>
-              <div className="truncate text-gray-900">{task.chat_key}</div>
+            <div key={task.task_id} className={cn("rounded p-2 text-sm", "bg-accent/10")}>
+              <div className="font-mono text-xs text-muted-foreground">{task.task_id.slice(0, 8)}...</div>
+              <div className="truncate text-foreground">{task.chat_key}</div>
               {task.progress_pct !== undefined && (
-                <div className="mt-1 h-1 w-full bg-gray-200">
+                <div className="mt-1 h-1 w-full bg-muted">
                   <div
-                    className="h-full bg-blue-500"
+                    className="h-full bg-accent"
                     style={{ width: `${task.progress_pct}%` }}
                   />
                 </div>

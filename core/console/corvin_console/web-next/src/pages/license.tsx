@@ -136,7 +136,7 @@ export function LicensePage() {
       <div className="mx-auto max-w-3xl p-6">
         <Card>
           <CardContent className="pt-6 text-center text-muted-foreground">
-            <AlertCircle className="mx-auto mb-2 h-8 w-8 text-red-400" />
+            <AlertCircle className="mx-auto mb-2 h-8 w-8 text-destructive" />
             <p>Could not load license information.</p>
           </CardContent>
         </Card>
@@ -175,7 +175,7 @@ export function LicensePage() {
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
               <span className={cn("h-2 w-2 rounded-full shrink-0",
-                lic.loaded ? "bg-emerald-500 animate-pulse" : "bg-zinc-500")} />
+                lic.loaded ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground/50")} />
               <LicenseBadge tier={lic.tier} />
               {lic.issued_to && (
                 <span className="text-sm text-muted-foreground">{lic.issued_to}</span>
@@ -190,7 +190,7 @@ export function LicensePage() {
                   <Clock className="h-3.5 w-3.5" />
                   {fmtDate(lic.expires_at)}
                   {daysUntilExpiry !== null && daysUntilExpiry > 0 && (
-                    <span className={expiryWarning ? "text-amber-400" : ""}>
+                    <span className={expiryWarning ? "text-amber-600 dark:text-amber-400" : ""}>
                       ({daysUntilExpiry}d)
                     </span>
                   )}
@@ -200,7 +200,7 @@ export function LicensePage() {
           </div>
 
           {expiryWarning && (
-            <div className="mt-4 flex items-center gap-2 rounded-md bg-amber-500/10 border border-amber-400/30 px-3 py-2 text-sm text-amber-300">
+            <div className="mt-4 flex items-center gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
               <AlertCircle className="h-4 w-4 shrink-0" />
               Licence expires in {daysUntilExpiry} day{daysUntilExpiry !== 1 ? "s" : ""}.{" "}
               <a href="https://corvin-labs.com/pricing" target="_blank" rel="noopener noreferrer"
@@ -209,7 +209,7 @@ export function LicensePage() {
           )}
 
           {!lic.loaded && (
-            <div className="mt-4 flex items-center gap-2 rounded-md bg-zinc-800/60 border border-zinc-600/40 px-3 py-2 text-sm text-muted-foreground">
+            <div className="mt-4 flex items-center gap-2 rounded-md bg-muted/40 border border-border px-3 py-2 text-sm text-muted-foreground">
               <Lock className="h-4 w-4 shrink-0" />
               No licence key — Free tier defaults apply.{" "}
               <a href="https://corvin-labs.com/pricing" target="_blank" rel="noopener noreferrer"
@@ -235,7 +235,7 @@ export function LicensePage() {
                   {isUnlimited
                     ? <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                     : locked
-                      ? <Lock className="h-4 w-4 text-zinc-500 shrink-0" />
+                      ? <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
                       : <CheckCircle2 className="h-4 w-4 text-accent shrink-0" />}
                   <span className={locked && !isUnlimited ? "text-muted-foreground" : undefined}>
                     {label}
@@ -247,7 +247,7 @@ export function LicensePage() {
                     {fmtLimit(val)}
                   </span>
                   {!lic.loaded && freeVal !== null && freeVal !== val && (
-                    <span className="text-[10px] text-zinc-600">
+                    <span className="text-[10px] text-muted-foreground">
                       (free: {fmtLimit(freeVal)})
                     </span>
                   )}
@@ -266,7 +266,7 @@ export function LicensePage() {
               <div key={key} className="flex items-center gap-2 text-sm">
                 {enabled
                   ? <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  : <XCircle className="h-4 w-4 text-zinc-500 shrink-0" />}
+                  : <XCircle className="h-4 w-4 text-muted-foreground shrink-0" />}
                 <span className={!enabled ? "text-muted-foreground" : undefined}>
                   {key.replace(/_/g, " ")}
                 </span>
@@ -304,7 +304,7 @@ export function LicensePage() {
             className="font-mono text-xs min-h-[80px] resize-y"
           />
           {applyMutation.error && (
-            <div className="flex items-center gap-2 text-sm text-red-400">
+            <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               {(applyMutation.error as { message?: string })?.message ?? "Failed to apply key"}
             </div>

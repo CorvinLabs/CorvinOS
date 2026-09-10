@@ -47,7 +47,7 @@ function statusBadge(status: AgentStatus) {
     case "disabled":
       return <Badge variant="danger" className="gap-1"><XCircle className="h-3 w-3" />Disabled</Badge>;
     case "orphan":
-      return <Badge variant="outline" className="gap-1 border-red-500/60 text-red-600"><ShieldOff className="h-3 w-3" />Orphan</Badge>;
+      return <Badge variant="outline" className="gap-1 border-destructive/60 text-destructive"><ShieldOff className="h-3 w-3" />Orphan</Badge>;
     default:
       return <Badge variant="outline">{status}</Badge>;
   }

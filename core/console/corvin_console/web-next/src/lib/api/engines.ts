@@ -105,7 +105,9 @@ export async function getEngineCapabilities(
 
 // ── Engine Detection (ADR-0125) ────────────────────────────────────
 
-export type CredentialSource = "subscription" | "env_var" | "config_file" | "vault" | "none" | "discovered" | null;
+export type CredentialSource =
+  | "subscription" | "env_var" | "bedrock" | "vertex" | "foundry"
+  | "config_file" | "vault" | "none" | "discovered" | null;
 
 export interface EngineProbeResult {
   engine_id: string;
@@ -408,4 +410,110 @@ export async function setPersonaEngine(
     `/personas/${encodeURIComponent(name)}/engine`,
     { method: "PUT", body: cfg, csrf },
   );
+}
+
+// ── ADR-0641/0642: Model Selection Config (per-task-type) ─────────────────
+
+export type TaskType = "corvinOS" | "SIMPLE" | "MEDIUM" | "COMPLEX";
+
+export interface TaskModelConfig {
+  task_type: TaskType;
+  selected_model: string;
+  // ADR-0181 provider id; null = native Anthropic
+  provider: string | null;
+  alternatives: string[];
+  // REAL, LEARNED (ADR-0644 Bayesian + EMA) — core.learning.
+  // model_selection_optimizer.ConfidenceOptimizer, fed by real turn outcomes
+  // (operator/bridges/shared/model_selector_shadow.py::report_turn_outcome).
+  // 0 until real turns for this tier's current model have completed.
+  confidence_score: number;
+  run_count: number;
+  // True only once the real variance criterion is met (n>=5, then <0.05
+  // variance over the last 50 samples) — never claimed early.
+  is_converged: boolean;
+}
+
+export interface EngineConfigResponse {
+  tenant_id: string;
+  models: Record<TaskType, TaskModelConfig>;
+  last_updated: string;
+  learning_status: "idle" | "learning" | "converged";
+  last_learning_update: string | null;
+  // Real classification count (operator/bridges/shared/adapter.py's shadow
+  // classify, every real turn) — independent of which model was selected.
+  total_samples: number;
+  // Real outcome-feedback samples across all tiers' currently selected models.
+  total_learned_samples: number;
+}
+
+export async function getEngineConfig(signal?: AbortSignal): Promise<EngineConfigResponse> {
+  return api<EngineConfigResponse>("/v1/engine/config", { signal });
+}
+
+export interface TaskModelConfigUpdate {
+  task_type: TaskType;
+  selected_model: string;
+  provider: string | null;
+  alternatives: string[];
+}
+
+export async function setEngineConfig(
+  models: Partial<Record<TaskType, TaskModelConfigUpdate>>,
+  csrf: string,
+): Promise<EngineConfigResponse> {
+  return api<EngineConfigResponse>("/v1/engine/config", {
+    method: "PUT",
+    body: { models },
+    csrf,
+  });
+}
+
+export interface ExternalProviderTestResult {
+  is_connected: boolean;
+  latency_ms: number | null;
+  error_message: string | null;
+  model_count: number;
+}
+
+export async function testExternalProvider(
+  provider: string,
+  csrf: string,
+): Promise<ExternalProviderTestResult> {
+  return api<ExternalProviderTestResult>("/v1/engine/external-provider/test", {
+    method: "POST",
+    body: { provider },
+    csrf,
+  });
+}
+
+// ── ADR-0644: Model Selection Analytics (real Bayesian confidence, currently
+// empty until outcome/quality feedback is wired — core/learning/
+// model_selection_optimizer.py::process_feedback has no production caller yet) ──
+
+export interface ConfidenceEntry {
+  model: string;
+  confidence: number;
+  n_samples: number;
+  mean_quality: number;
+  variance: number;
+  is_converged: boolean;
+}
+
+export interface AnalyticsSummary {
+  timestamp: string;
+  tenant_id: string;
+  total_samples: number;
+  models: ConfidenceEntry[];
+  top_model: string | null;
+  top_confidence: number | null;
+}
+
+export async function getModelSelectionAnalytics(signal?: AbortSignal): Promise<AnalyticsSummary> {
+  return api<AnalyticsSummary>("/v1/engine/analytics", { signal });
+}
+
+export async function resetModelSelectionLearning(
+  csrf: string,
+): Promise<{ status: string; message: string; reset_at: string }> {
+  return api("/v1/engine/analytics/reset", { method: "POST", csrf });
 }

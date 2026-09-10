@@ -45,7 +45,10 @@ providers:
   openai:
     label: "OpenAI"
     base_url: "https://api.openai.com/v1"
-    model_source: "static"
+    # LIVE (2026-09-10) — was "static". GET /v1/models needs an API key, so an
+    # install with none configured just keeps the curated list (same graceful
+    # fallback as the anthropic source), same as anthropic/ollama/openrouter.
+    model_source: "openai"
     credential_env: "OPENAI_API_KEY"
     kind: "cloud"
   ollama_local:

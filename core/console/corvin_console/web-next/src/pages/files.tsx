@@ -343,7 +343,7 @@ export function FilesPage() {
           const usedMB = (q.used_bytes / 1024 / 1024).toFixed(1);
           const limitGB = (q.limit_bytes / 1024 / 1024 / 1024).toFixed(0);
           const pct = Math.min(q.used_pct, 100);
-          const color = pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-primary";
+          const color = pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-amber-500" : "bg-primary";
           return (
             <div className="border-t px-3 py-3">
               <div className="mb-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
@@ -357,7 +357,7 @@ export function FilesPage() {
                 />
               </div>
               {pct >= 90 && (
-                <p className="mt-1 text-[10px] text-red-400">Storage almost full</p>
+                <p className="mt-1 text-[10px] text-destructive">Storage almost full</p>
               )}
             </div>
           );

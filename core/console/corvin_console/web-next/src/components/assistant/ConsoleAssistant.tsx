@@ -130,7 +130,7 @@ const PAGE_CHIPS: Record<string, Record<UiLang, { label: string; prompt: string 
       { label: "Trigger workflow", prompt: "How do I manually trigger a workflow?" },
     ],
   },
-  "/app/engines": {
+  "/app/engine-config": {
     en: [
       { label: "Set up Hermes", prompt: "How do I set up Hermes (local Ollama)?" },
       { label: "Switch engine", prompt: "How do I change the default engine?" },

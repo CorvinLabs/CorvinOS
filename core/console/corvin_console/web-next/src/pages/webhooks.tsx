@@ -10,8 +10,14 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Zap, CheckCircle, Eye, EyeOff, Send } from 'lucide-react'
+import { Zap, CheckCircle2, Eye, EyeOff, Send, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 interface WebhookStatus {
   registered: boolean
@@ -131,171 +137,161 @@ export default function WebhookConfigPanel() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       {/* Status Card */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        <div className="flex items-center gap-3 mb-4">
-          {status?.registered ? (
-            <CheckCircle className="text-green-500" size={24} />
-          ) : (
-            <Zap className="text-slate-400" size={24} />
-          )}
-          <div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white">GitHub Webhooks</h2>
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              Event-driven synchronization from GitHub
-            </p>
-          </div>
-        </div>
-
-        {status?.registered ? (
-          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-            <p className="text-sm font-semibold text-green-700 dark:text-green-400">
-              ✓ Webhook Registered
-            </p>
-            <div className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-400">
-              <p>Webhook ID: <code className="bg-slate-100 dark:bg-slate-900 px-2 py-1 rounded">{status.webhook_id}</code></p>
-              <p>Events: {status.events?.join(', ')}</p>
-              <p>URL: <code className="bg-slate-100 dark:bg-slate-900 px-2 py-1 rounded text-xs truncate">{status.url}</code></p>
-              <p>Secret: {status.has_secret ? '✓ Configured' : '✗ Not set'}</p>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            {status?.registered ? (
+              <CheckCircle2 className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+            ) : (
+              <Zap className="h-6 w-6 text-muted-foreground" />
+            )}
+            <div>
+              <CardTitle>GitHub Webhooks</CardTitle>
+              <CardDescription>Event-driven synchronization from GitHub</CardDescription>
             </div>
           </div>
-        ) : (
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-            <p className="text-sm font-semibold text-blue-700 dark:text-blue-400">
-              Webhook not registered
-            </p>
-            <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
-              Register to enable event-driven sync from GitHub
-            </p>
-          </div>
-        )}
-      </div>
+        </CardHeader>
+        <CardContent className="space-y-0">
+          {status?.registered ? (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                <CheckCircle2 className="h-3.5 w-3.5" />Webhook registered
+              </p>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                <p>Webhook ID: <code className="bg-muted px-2 py-0.5 rounded">{status.webhook_id}</code></p>
+                <p>Events: {status.events?.join(', ')}</p>
+                <p className="truncate">URL: <code className="bg-muted px-2 py-0.5 rounded text-xs">{status.url}</code></p>
+                <p>Secret: {status.has_secret ? '✓ Configured' : '✗ Not set'}</p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-muted/40 p-4">
+              <p className="text-sm font-semibold text-foreground">
+                Webhook not registered
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Register to enable event-driven sync from GitHub
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Registration Form */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Register Webhook</h3>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Register Webhook</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {error && (
+            <div className="p-3 rounded-lg border border-destructive/40 bg-destructive/10 flex items-start gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-destructive" />
+              <p className="text-sm text-destructive">{error}</p>
+            </div>
+          )}
 
-        {error && (
-          <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
-          </div>
-        )}
+          {success && (
+            <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 flex items-start gap-2">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+              <p className="text-sm text-emerald-700 dark:text-emerald-400">{success}</p>
+            </div>
+          )}
 
-        {success && (
-          <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-            <p className="text-sm text-green-700 dark:text-green-400">{success}</p>
-          </div>
-        )}
-
-        <div className="space-y-4">
           {/* Token Input */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-              GitHub Personal Access Token
-            </label>
+          <div className="space-y-2">
+            <Label htmlFor="gh-token">GitHub Personal Access Token</Label>
             <div className="relative">
-              <input
+              <Input
+                id="gh-token"
                 type={showToken ? 'text' : 'password'}
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400"
+                className="pr-10"
               />
               <button
+                type="button"
                 onClick={() => setShowToken(!showToken)}
-                className="absolute right-3 top-2 text-slate-500 hover:text-slate-700"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
-                {showToken ? <EyeOff size={18} /> : <Eye size={18} />}
+                {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-muted-foreground">
               Token needs repo webhook permissions (admin:repo_hook)
             </p>
           </div>
 
           {/* Secret Input */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                Webhook Secret (Optional)
-              </label>
-              <button
-                onClick={generateSecret}
-                className="text-xs px-2 py-1 bg-slate-200 dark:bg-slate-700 rounded hover:bg-slate-300 dark:hover:bg-slate-600"
-              >
+          <div className="space-y-2">
+            <div className="flex justify-between items-center">
+              <Label htmlFor="gh-secret">Webhook Secret (Optional)</Label>
+              <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={generateSecret}>
                 Generate
-              </button>
+              </Button>
             </div>
             <div className="relative">
-              <input
+              <Input
+                id="gh-secret"
                 type={showSecret ? 'text' : 'password'}
                 value={secret}
                 onChange={(e) => setSecret(e.target.value)}
                 placeholder="Optional webhook secret for verification"
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400"
+                className="pr-10"
               />
               <button
+                type="button"
                 onClick={() => setShowSecret(!showSecret)}
-                className="absolute right-3 top-2 text-slate-500 hover:text-slate-700"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
-                {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
+                {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-muted-foreground">
               Increases security. Webhook payloads will be signed with HMAC-SHA256.
             </p>
           </div>
 
           {/* Events Preview */}
-          <div>
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">
-              Events to subscribe
-            </label>
-            <div className="space-y-1 text-sm">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked disabled />
-                <span>push</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked disabled />
-                <span>pull_request</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked disabled />
-                <span>release</span>
-              </label>
+          <div className="space-y-2">
+            <Label>Events to subscribe</Label>
+            <div className="flex flex-wrap gap-1.5">
+              <Badge variant="outline" className="text-xs">push</Badge>
+              <Badge variant="outline" className="text-xs">pull_request</Badge>
+              <Badge variant="outline" className="text-xs">release</Badge>
             </div>
           </div>
 
           {/* Register Button */}
-          <button
+          <Button
+            variant="accent"
+            className="w-full"
             onClick={handleRegister}
             disabled={isRegistering || !token}
-            className={`w-full px-4 py-2 bg-blue-600 text-white rounded-lg font-medium transition ${
-              isRegistering || !token
-                ? 'opacity-50 cursor-not-allowed'
-                : 'hover:bg-blue-700'
-            }`}
           >
             {isRegistering ? 'Registering...' : 'Register Webhook'}
-          </button>
-        </div>
-      </div>
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* Test Webhook */}
       {status?.registered && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-          <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Test Webhook</h3>
-
-          <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Test Webhook</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
             {/* Event Type Select */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                Test Event Type
-              </label>
+            <div className="space-y-2">
+              <Label htmlFor="test-event">Test Event Type</Label>
               <select
+                id="test-event"
                 value={testEvent}
                 onChange={(e) => setTestEvent(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
+                className={cn(
+                  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
+                  "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                )}
               >
                 <option value="ping">ping (Connection test)</option>
                 <option value="push">push (Code pushed)</option>
@@ -305,26 +301,22 @@ export default function WebhookConfigPanel() {
             </div>
 
             {/* Test Button */}
-            <button
+            <Button
+              className="w-full"
               onClick={handleTestWebhook}
               disabled={isTesting}
-              className={`w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg font-medium transition ${
-                isTesting
-                  ? 'opacity-50 cursor-not-allowed'
-                  : 'hover:bg-green-700'
-              }`}
             >
-              <Send size={18} />
+              <Send size={16} />
               {isTesting ? 'Sending...' : 'Send Test Event'}
-            </button>
-          </div>
-        </div>
+            </Button>
+          </CardContent>
+        </Card>
       )}
 
       {/* Info */}
-      <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
-        <p className="text-sm text-slate-600 dark:text-slate-400">
-          💡 <strong>How it works:</strong> When you push code or open a pull request on GitHub, we immediately sync your tenant skills. No waiting for the 5-minute poll interval.
+      <div className="rounded-lg border border-border bg-muted/30 p-4">
+        <p className="text-sm text-muted-foreground">
+          <strong className="text-foreground">How it works:</strong> When you push code or open a pull request on GitHub, we immediately sync your tenant skills. No waiting for the 5-minute poll interval.
         </p>
       </div>
     </div>

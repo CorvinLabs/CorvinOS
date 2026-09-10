@@ -205,10 +205,10 @@ function AuditGraphPanel() {
 
   if (loading) {
     return (
-      <div className={`flex items-center justify-center h-96 ${darkMode ? 'bg-background' : 'bg-background-light'}`}>
+      <div className="flex items-center justify-center h-96 bg-background">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4" />
-          <p className={`${darkMode ? 'text-foreground' : 'text-foreground-light'}`}>Loading audit graph...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent mx-auto mb-4" />
+          <p className="text-foreground">Loading audit graph...</p>
         </div>
       </div>
     )
@@ -216,17 +216,17 @@ function AuditGraphPanel() {
 
   if (error) {
     return (
-      <div className={`p-6 ${darkMode ? 'bg-red-950' : 'bg-red-50'} rounded-lg border ${darkMode ? 'border-red-800' : 'border-red-200'}`}>
-        <h3 className={`font-semibold ${darkMode ? 'text-red-200' : 'text-red-900'}`}>Error Loading Graph</h3>
-        <p className={`text-sm mt-2 ${darkMode ? 'text-red-300' : 'text-red-800'}`}>{error}</p>
+      <div className="p-6 bg-destructive/10 rounded-lg border border-destructive/30">
+        <h3 className="font-semibold text-destructive">Error Loading Graph</h3>
+        <p className="text-sm mt-2 text-destructive">{error}</p>
       </div>
     )
   }
 
   if (!data || data.nodes.length === 0) {
     return (
-      <div className={`p-6 text-center ${darkMode ? 'bg-card' : 'bg-card-light'} rounded-lg`}>
-        <p className={`${darkMode ? 'text-foreground/60' : 'text-foreground-light/60'}`}>
+      <div className="p-6 text-center bg-card rounded-lg">
+        <p className="text-foreground/60">
           ℹ️ No audit events found. Audit chain will appear as events are recorded.
         </p>
       </div>
@@ -236,27 +236,23 @@ function AuditGraphPanel() {
   const uniqueEventTypes = [...new Set(data.nodes.map(n => n.event_type))].sort()
 
   return (
-    <div className={`space-y-4 ${darkMode ? 'bg-background' : 'bg-background-light'}`}>
+    <div className="space-y-4 bg-background">
       {/* Header & Controls */}
-      <div className={`p-4 ${darkMode ? 'bg-card' : 'bg-card-light'} rounded-lg border ${darkMode ? 'border-border' : 'border-border-light'}`}>
-        <h3 className={`font-semibold mb-3 ${darkMode ? 'text-foreground' : 'text-foreground-light'}`}>
+      <div className="p-4 bg-card rounded-lg border border-border">
+        <h3 className="font-semibold mb-3 text-foreground">
           Audit Chain DAG
         </h3>
 
         <div className="flex flex-wrap gap-4 items-center">
           {/* Filter by Event Type */}
           <div className="flex-1 min-w-xs">
-            <label className={`block text-xs font-medium mb-1 ${darkMode ? 'text-foreground/70' : 'text-foreground-light/70'}`}>
+            <label className="block text-xs font-medium mb-1 text-muted-foreground">
               Filter by Event Type
             </label>
             <select
               value={filterEventType}
               onChange={e => setFilterEventType(e.target.value)}
-              className={`w-full px-3 py-2 rounded text-sm ${
-                darkMode
-                  ? 'bg-background border-border text-foreground'
-                  : 'bg-background-light border-border-light text-foreground-light'
-              } border`}
+              className="w-full px-3 py-2 rounded text-sm bg-background border border-border text-foreground"
             >
               <option value="">All Events</option>
               {uniqueEventTypes.map(et => (
@@ -270,27 +266,27 @@ function AuditGraphPanel() {
           {/* Stats */}
           <div className="flex gap-4 text-xs">
             <div>
-              <p className={`${darkMode ? 'text-foreground/70' : 'text-foreground-light/70'}`}>Total Events</p>
-              <p className={`font-semibold ${darkMode ? 'text-foreground' : 'text-foreground-light'}`}>{data.total_events}</p>
+              <p className="text-muted-foreground">Total Events</p>
+              <p className="font-semibold text-foreground">{data.total_events}</p>
             </div>
             <div>
-              <p className={`${darkMode ? 'text-foreground/70' : 'text-foreground-light/70'}`}>Nodes</p>
-              <p className={`font-semibold ${darkMode ? 'text-foreground' : 'text-foreground-light'}`}>{data.nodes.length}</p>
+              <p className="text-muted-foreground">Nodes</p>
+              <p className="font-semibold text-foreground">{data.nodes.length}</p>
             </div>
             <div>
-              <p className={`${darkMode ? 'text-foreground/70' : 'text-foreground-light/70'}`}>Edges</p>
-              <p className={`font-semibold ${darkMode ? 'text-foreground' : 'text-foreground-light'}`}>{data.edges.length}</p>
+              <p className="text-muted-foreground">Edges</p>
+              <p className="font-semibold text-foreground">{data.edges.length}</p>
             </div>
           </div>
         </div>
 
         {/* Critical Path */}
         {data.critical_path.length > 0 && (
-          <div className={`mt-3 p-2 rounded text-xs ${darkMode ? 'bg-blue-950' : 'bg-blue-50'} border ${darkMode ? 'border-blue-800' : 'border-blue-200'}`}>
-            <p className={`font-medium ${darkMode ? 'text-blue-200' : 'text-blue-900'}`}>
+          <div className="mt-3 p-2 rounded text-xs bg-accent/10 border border-accent/30">
+            <p className="font-medium text-foreground">
               Critical Path: {data.critical_path.length} events
             </p>
-            <p className={`${darkMode ? 'text-blue-300' : 'text-blue-800'} truncate`} title={data.critical_path.join(' → ')}>
+            <p className="text-muted-foreground truncate" title={data.critical_path.join(' → ')}>
               {data.critical_path.slice(0, 3).join(' → ')} {data.critical_path.length > 3 ? '...' : ''}
             </p>
           </div>
@@ -298,12 +294,12 @@ function AuditGraphPanel() {
 
         {/* Anomalies */}
         {data.anomalies.length > 0 && (
-          <div className={`mt-3 p-2 rounded text-xs ${darkMode ? 'bg-yellow-950' : 'bg-yellow-50'} border ${darkMode ? 'border-yellow-800' : 'border-yellow-200'}`}>
-            <p className={`font-medium ${darkMode ? 'text-yellow-200' : 'text-yellow-900'}`}>
+          <div className="mt-3 p-2 rounded text-xs bg-amber-500/10 border border-amber-500/30">
+            <p className="font-medium text-amber-700 dark:text-amber-300">
               {data.anomalies.length} Anomaly/ies Detected
             </p>
             {data.anomalies.map((a, i) => (
-              <p key={i} className={`text-xs ${darkMode ? 'text-yellow-300' : 'text-yellow-800'}`}>
+              <p key={i} className="text-xs text-amber-700 dark:text-amber-300">
                 • {a.type}: {a.message}
               </p>
             ))}
@@ -312,13 +308,7 @@ function AuditGraphPanel() {
       </div>
 
       {/* Graph Container */}
-      <div
-        className={`relative w-full h-screen rounded-lg border overflow-hidden ${
-          darkMode
-            ? 'bg-background border-border'
-            : 'bg-card-light border-border-light'
-        }`}
-      >
+      <div className="relative w-full h-screen rounded-lg border overflow-hidden bg-background border-border">
         {elements.length > 0 ? (
           <>
             <CytoscapeComponent
@@ -350,24 +340,22 @@ function AuditGraphPanel() {
             {/* Tooltip */}
             {tooltip.visible && tooltip.node && (
               <div
-                className={`absolute z-50 p-2 rounded shadow-lg text-xs pointer-events-none ${
-                  darkMode ? 'bg-card border-border' : 'bg-card-light border-border-light'
-                } border`}
+                className="absolute z-50 p-2 rounded shadow-lg text-xs pointer-events-none bg-card border border-border"
                 style={{
                   left: `${tooltip.x}px`,
                   top: `${tooltip.y + 10}px`,
                   maxWidth: '200px',
                 }}
               >
-                <p className={`font-semibold ${darkMode ? 'text-foreground' : 'text-foreground-light'}`}>
+                <p className="font-semibold text-foreground">
                   {tooltip.node.event_type}
                 </p>
-                <p className={`text-xs ${darkMode ? 'text-foreground/70' : 'text-foreground-light/70'}`}>
+                <p className="text-xs text-muted-foreground">
                   {new Date(tooltip.node.ts * 1000).toLocaleString()}
                 </p>
                 {tooltip.node.severity && (
                   <p className={`text-xs mt-1 px-1 rounded inline-block ${
-                    tooltip.node.severity === 'ERROR' ? 'bg-red-900 text-red-200' : 'bg-blue-900 text-blue-200'
+                    tooltip.node.severity === 'ERROR' ? 'bg-destructive/15 text-destructive' : 'bg-accent/15 text-accent-foreground/90'
                   }`}>
                     {tooltip.node.severity}
                   </p>
@@ -376,15 +364,15 @@ function AuditGraphPanel() {
             )}
           </>
         ) : (
-          <div className={`flex items-center justify-center h-full ${darkMode ? 'text-foreground/50' : 'text-foreground-light/50'}`}>
+          <div className="flex items-center justify-center h-full text-foreground/50">
             <p>No nodes match the selected filter</p>
           </div>
         )}
       </div>
 
       {/* Legend */}
-      <div className={`p-4 ${darkMode ? 'bg-card' : 'bg-card-light'} rounded-lg border ${darkMode ? 'border-border' : 'border-border-light'}`}>
-        <p className={`text-xs font-semibold mb-2 ${darkMode ? 'text-foreground' : 'text-foreground-light'}`}>Legend</p>
+      <div className="p-4 bg-card rounded-lg border border-border">
+        <p className="text-xs font-semibold mb-2 text-foreground">Legend</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
           {Object.entries(EVENT_TYPE_COLORS).map(([type, color]) => (
             <div key={type} className="flex items-center gap-2">
@@ -392,7 +380,7 @@ function AuditGraphPanel() {
                 className="w-3 h-3 rounded-full"
                 style={{ backgroundColor: color }}
               />
-              <span className={darkMode ? 'text-foreground/70' : 'text-foreground-light/70'}>
+              <span className="text-muted-foreground">
                 {type === 'default' ? 'Other' : type.split('.').pop()}
               </span>
             </div>

@@ -27,7 +27,17 @@ _log = logging.getLogger(__name__)
 
 # Credential source priority (1 = highest, null = not installed).
 # "discovered" marks auto-found tools not yet registered as full CorvinOS engines.
-CREDENTIAL_SOURCES = ("subscription", "env_var", "config_file", "vault", "none", "discovered")
+# "bedrock"/"vertex"/"foundry" — the three 3rd-party-platform methods Claude
+# Code's own `/login` menu offers alongside "Claude subscription" and
+# "Anthropic Console" (env vars verified against code.claude.com/docs,
+# 2026-09-10): none of these set ANTHROPIC_API_KEY, so before this addition
+# probe_claude_code() reported "Installed but not authenticated" for every
+# Bedrock/Vertex/Foundry install even though Claude Code was fully configured
+# and working — the exact three options the user's own /login screen lists.
+CREDENTIAL_SOURCES = (
+    "subscription", "env_var", "bedrock", "vertex", "foundry",
+    "config_file", "vault", "none", "discovered",
+)
 _PROBE_TIMEOUT = 5.0
 _OLLAMA_TIMEOUT = 2.0
 
@@ -80,6 +90,42 @@ class EngineProbeResult:
     models: List[str] = field(default_factory=list)
     # Human-readable single-line status for the console UI.
     detail: Optional[str] = None
+
+
+def _claude_settings_path() -> Path:
+    """``$CLAUDE_CONFIG_DIR/settings.json`` if set, else ``~/.claude/settings.json``
+    (same override Claude Code itself honours — see /docs/en/settings)."""
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    base = Path(os.path.expanduser(config_dir)) if config_dir else Path.home() / ".claude"
+    return base / "settings.json"
+
+
+def _claude_settings_env() -> dict:
+    """The ``env`` block of Claude Code's own settings file.
+
+    The Bedrock/Vertex setup wizards write ``CLAUDE_CODE_USE_BEDROCK`` /
+    ``CLAUDE_CODE_USE_VERTEX`` and their credential vars HERE, not into the
+    shell's exported environment — the docs are explicit that this is the
+    point ("so you don't need to export environment variables yourself").
+    A probe that only checks ``os.environ`` misses every wizard-configured
+    install and only catches a manually-exported one. Re-read every call
+    (this is a low-frequency probe, not a hot path) so a wizard run since
+    the last probe is picked up without a process restart."""
+    try:
+        path = _claude_settings_path()
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text("utf-8"))
+        env = data.get("env")
+        return env if isinstance(env, dict) else {}
+    except Exception:  # noqa: BLE001 — a corrupt/unreadable settings file must not break detection
+        return {}
+
+
+def _env_lookup(name: str, settings_env: dict) -> str | None:
+    """process env first (an explicit override always wins), then Claude
+    Code's own settings.json ``env`` block."""
+    return os.environ.get(name) or settings_env.get(name)
 
 
 def _find_binary(name: str) -> str | None:
@@ -175,17 +221,55 @@ def probe_claude_code() -> EngineProbeResult:
             detail=f"Authenticated via Claude subscription (OAuth) — {creds_path}",
         )
 
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    # 3rd-party platform (checked before the plain env_var/API-key case: a
+    # Bedrock/Vertex/Foundry install often has NO ANTHROPIC_API_KEY at all —
+    # falling through to "not authenticated" below was the actual bug).
+    # Each wizard (`/setup-bedrock`, `/setup-vertex`) writes its result to
+    # settings.json's `env` block, not the shell — check both.
+    settings_env = _claude_settings_env()
+
+    if _env_lookup("CLAUDE_CODE_USE_BEDROCK", settings_env) in ("1", "true", "True"):
+        detail = "Authenticated via Amazon Bedrock"
+        region = _env_lookup("AWS_REGION", settings_env) or _env_lookup("AWS_DEFAULT_REGION", settings_env)
+        if region:
+            detail += f" ({region})"
+        return EngineProbeResult(
+            engine_id=engine_id, installed=True, authenticated=True,
+            credential_source="bedrock", version=version, detail=detail,
+        )
+
+    if _env_lookup("CLAUDE_CODE_USE_VERTEX", settings_env) in ("1", "true", "True"):
+        project = _env_lookup("ANTHROPIC_VERTEX_PROJECT_ID", settings_env)
+        detail = f"Authenticated via Google Vertex AI (project {project})" if project else \
+            "Authenticated via Google Vertex AI"
+        return EngineProbeResult(
+            engine_id=engine_id, installed=True, authenticated=True,
+            credential_source="vertex", version=version, detail=detail,
+        )
+
+    if _env_lookup("CLAUDE_CODE_USE_FOUNDRY", settings_env) in ("1", "true", "True"):
+        resource = _env_lookup("ANTHROPIC_FOUNDRY_RESOURCE", settings_env)
+        detail = f"Authenticated via Microsoft Foundry (resource {resource})" if resource else \
+            "Authenticated via Microsoft Foundry"
+        return EngineProbeResult(
+            engine_id=engine_id, installed=True, authenticated=True,
+            credential_source="foundry", version=version, detail=detail,
+        )
+
+    env_key = _env_lookup("ANTHROPIC_API_KEY", settings_env)
+    auth_token = _env_lookup("ANTHROPIC_AUTH_TOKEN", settings_env)
+    if env_key or auth_token:
+        env_name = "ANTHROPIC_API_KEY" if env_key else "ANTHROPIC_AUTH_TOKEN"
         return EngineProbeResult(
             engine_id=engine_id, installed=True, authenticated=True,
             credential_source="env_var", version=version,
-            detail="API key from ANTHROPIC_API_KEY",
+            detail=f"Authenticated via Anthropic Console (API key from {env_name})",
         )
 
     return EngineProbeResult(
         engine_id=engine_id, installed=True, authenticated=False,
         credential_source="none", version=version,
-        detail="Installed but not authenticated — run: claude auth login",
+        detail="Installed but not authenticated — run: claude /login",
     )
 
 

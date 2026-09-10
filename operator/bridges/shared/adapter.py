@@ -4884,6 +4884,18 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         # Classification failure is non-fatal; proceed without hint
         pass
 
+    # ADR-0641/0642 — os.model_selector SHADOW classification. Advisory only:
+    # never alters routing, never raises. See model_selector_shadow.py for why
+    # this call site (real prompt text, every real turn).
+    try:
+        try:
+            from . import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+        _mss.shadow_classify_task(prompt, os.environ.get("CORVIN_TENANT_ID") or "_default", chat_key)
+    except Exception:  # noqa: BLE001
+        pass
+
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
                            sender=sender, workload_hint=workload_hint)
     env["VOICE_HOOK_RECURSION"] = "1"
@@ -5954,6 +5966,17 @@ def _call_claude_streaming_via_engine(
             if isinstance(stderr, bytes):
                 stderr = stderr.decode("utf-8", errors="replace")
             log(f"engine streaming exited rc={rc}: {stderr[:300]}")
+            # ADR-0641/0642/0644 — real NEGATIVE outcome signal, mirroring the
+            # success hook below (same function, the shared claude_code
+            # engine call every early-return failure path here ends).
+            try:
+                try:
+                    from . import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+                except ImportError:
+                    import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+                _mss.report_turn_outcome(chat_key, success=False)
+            except Exception:  # noqa: BLE001
+                pass
             if (
                 rc < 0
                 and abs(rc) in (signal.SIGTERM, signal.SIGKILL)
@@ -5976,6 +5999,20 @@ def _call_claude_streaming_via_engine(
             )
         except Exception as _exc:  # noqa: BLE001
             log(f"budget account_turn (success) failed: {_exc}")
+        # ADR-0641/0642/0644 — real outcome feedback for the shadow-classified
+        # (task_type, model) this chat_key's turn was recommended, closing
+        # the loop into the Bayesian confidence optimizer. Sits next to
+        # _budget_account_turn on purpose: this is the ONE success point
+        # both call_claude() and call_claude_streaming() funnel through for
+        # claude_code (this function). See model_selector_shadow.py.
+        try:
+            try:
+                from . import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+            _mss.report_turn_outcome(chat_key, success=True)
+        except Exception:  # noqa: BLE001
+            pass
         # Phase 30.3 — output-sentinel post-spawn check. No-op when the
         # persona/tenant didn't opt in; one `claude -p` subprocess when
         # active. Replaces final_text with a curated block-message in
@@ -7169,6 +7206,18 @@ def call_claude_streaming(
         workload_hint = _wc.classify_and_store_workload_hint(prompt, {})
     except Exception:  # noqa: BLE001
         # Classification failure is non-fatal; proceed without hint
+        pass
+
+    # ADR-0641/0642 — os.model_selector SHADOW classification. Advisory only:
+    # never alters routing, never raises. See model_selector_shadow.py for why
+    # this call site (real prompt text, every real turn).
+    try:
+        try:
+            from . import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+        _mss.shadow_classify_task(prompt, os.environ.get("CORVIN_TENANT_ID") or "_default", chat_key)
+    except Exception:  # noqa: BLE001
         pass
 
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,

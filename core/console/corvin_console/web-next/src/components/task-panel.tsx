@@ -38,10 +38,10 @@ export function TaskPanel({
   }
 
   return (
-    <Card className="border-amber-200 bg-amber-50/50">
+    <Card className="border-amber-500/30 bg-amber-500/10">
       <CardContent className="p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold text-sm text-amber-900">
+          <h3 className="font-semibold text-sm text-amber-700 dark:text-amber-400">
             {tasks.length} Persisted Task{tasks.length !== 1 ? "s" : ""}
           </h3>
           <Badge variant="outline" className="text-xs">
@@ -73,33 +73,33 @@ function TaskCard({
   onDelete: () => void;
   onExport: () => void;
 }) {
-  const statusColors: Record<Task["status"], string> = {
-    pending: "bg-gray-100 text-gray-800",
-    running: "bg-blue-100 text-blue-800",
-    completed: "bg-green-100 text-green-800",
-    failed: "bg-red-100 text-red-800",
+  const statusVariant: Record<Task["status"], "secondary" | "accent" | "ok" | "danger"> = {
+    pending: "secondary",
+    running: "accent",
+    completed: "ok",
+    failed: "danger",
   };
 
   const syncStatus = task.synced ? "✓ Synced" : "✧ Local";
 
   return (
-    <div className="rounded-md border border-amber-100 bg-white p-3 text-xs">
+    <div className="rounded-md border border-amber-500/20 bg-card p-3 text-xs">
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="truncate font-mono text-gray-600 text-[10px]">
+          <p className="truncate font-mono text-muted-foreground text-[10px]">
             {task.task_id.slice(0, 8)}...
           </p>
-          <p className="truncate text-gray-700 font-medium">
+          <p className="truncate text-foreground font-medium">
             {task.instruction.slice(0, 50)}
             {task.instruction.length > 50 ? "…" : ""}
           </p>
         </div>
-        <Badge className={`shrink-0 ${statusColors[task.status]}`}>
+        <Badge variant={statusVariant[task.status]} className="shrink-0">
           {task.status}
         </Badge>
       </div>
 
-      <div className="mb-2 space-y-1 text-gray-600">
+      <div className="mb-2 space-y-1 text-muted-foreground">
         <div className="flex justify-between">
           <span>Progress:</span>
           <span className="font-mono">{task.progress_pct}%</span>
@@ -111,7 +111,7 @@ function TaskCard({
         <div className="flex justify-between">
           <span>Synced:</span>
           <span
-            className={task.synced ? "text-green-600" : "text-yellow-600"}
+            className={task.synced ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}
           >
             {syncStatus}
           </span>
@@ -119,7 +119,7 @@ function TaskCard({
       </div>
 
       {task.latest_line && (
-        <div className="mb-2 rounded bg-gray-50 p-2 font-mono text-gray-700">
+        <div className="mb-2 rounded bg-muted p-2 font-mono text-foreground">
           <p className="truncate text-[10px]">{task.latest_line}</p>
         </div>
       )}
@@ -139,7 +139,7 @@ function TaskCard({
           size="sm"
           variant="ghost"
           onClick={onDelete}
-          className="h-6 px-2 text-xs text-red-600 hover:text-red-700"
+          className="h-6 px-2 text-xs text-destructive hover:text-destructive/80"
           title="Delete from IndexedDB"
           aria-label="Delete task from IndexedDB"
         >
