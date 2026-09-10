@@ -6,6 +6,7 @@
  */
 
 import React from 'react';
+import { cn } from '@/lib/utils';
 
 interface ErrorGaugeProps {
   errorRate: number; // percentage (0-100)
@@ -13,16 +14,20 @@ interface ErrorGaugeProps {
 
 export function ErrorGauge({ errorRate }: ErrorGaugeProps) {
   // Determine color based on rate
-  let color: string;
+  let textClass: string;
+  let barClass: string;
   let status: string;
   if (errorRate < 0.5) {
-    color = '#3FB950'; // Green
+    textClass = 'text-emerald-600 dark:text-emerald-400';
+    barClass = 'bg-emerald-500';
     status = 'Excellent';
   } else if (errorRate < 1.0) {
-    color = '#D29922'; // Yellow
+    textClass = 'text-amber-600 dark:text-amber-400';
+    barClass = 'bg-amber-500';
     status = 'Acceptable';
   } else {
-    color = '#F85149'; // Red
+    textClass = 'text-destructive';
+    barClass = 'bg-destructive';
     status = 'High Risk';
   }
 
@@ -33,41 +38,38 @@ export function ErrorGauge({ errorRate }: ErrorGaugeProps) {
     <div className="flex flex-col gap-4">
       {/* Gauge visualization */}
       <div className="space-y-2">
-        <div className="text-3xl font-bold" style={{ color }}>
+        <div className={cn('text-3xl font-bold', textClass)}>
           {errorRate.toFixed(2)}%
         </div>
-        <div className="text-xs text-[#8B949E]">{status}</div>
+        <div className="text-xs text-muted-foreground">{status}</div>
       </div>
 
       {/* Gauge bar */}
-      <div className="w-full bg-[#0D1117] rounded-full h-3 overflow-hidden">
+      <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
         <div
-          className="h-full transition-all duration-300"
-          style={{
-            width: `${gaugePercent}%`,
-            backgroundColor: color,
-          }}
+          className={cn('h-full transition-all duration-300', barClass)}
+          style={{ width: `${gaugePercent}%` }}
         ></div>
       </div>
 
       {/* Thresholds */}
       <div className="grid grid-cols-3 gap-1 text-xs">
         <div className="text-center">
-          <div className="text-[#8B949E]">OK</div>
-          <div className="text-[#3FB950]">&lt;0.5%</div>
+          <div className="text-muted-foreground">OK</div>
+          <div className="text-emerald-600 dark:text-emerald-400">&lt;0.5%</div>
         </div>
         <div className="text-center">
-          <div className="text-[#8B949E]">WARN</div>
-          <div className="text-[#D29922]">0.5-1%</div>
+          <div className="text-muted-foreground">WARN</div>
+          <div className="text-amber-600 dark:text-amber-400">0.5-1%</div>
         </div>
         <div className="text-center">
-          <div className="text-[#8B949E]">ALERT</div>
-          <div className="text-[#F85149]">&gt;1%</div>
+          <div className="text-muted-foreground">ALERT</div>
+          <div className="text-destructive">&gt;1%</div>
         </div>
       </div>
 
       {/* SLO info */}
-      <div className="text-xs text-[#8B949E] border-t border-[#30363D] pt-2 mt-2">
+      <div className="text-xs text-muted-foreground border-t border-border pt-2 mt-2">
         Week 5 Target: &lt;1% error rate (Phase B cleanup)
       </div>
     </div>

@@ -47,6 +47,10 @@ export function MetricsGraph({ metrics }: MetricsGraphProps) {
     graphHeight - padding.bottom
   } L ${padding.left} ${graphHeight - padding.bottom} Z`;
 
+  const gridStroke = 'hsl(var(--border))';
+  const labelFill = 'hsl(var(--muted-foreground))';
+  const accentColor = 'hsl(var(--accent))';
+
   return (
     <div className="flex flex-col gap-4">
       <svg width="100%" height={graphHeight} viewBox={`0 0 ${graphWidth} ${graphHeight}`} className="font-mono">
@@ -55,8 +59,8 @@ export function MetricsGraph({ metrics }: MetricsGraphProps) {
           const y = graphHeight - padding.bottom - pct * (graphHeight - padding.top - padding.bottom);
           return (
             <g key={`hgrid-${i}`}>
-              <line x1={padding.left} y1={y} x2={graphWidth - padding.right} y2={y} stroke="#30363D" strokeWidth="1" />
-              <text x={padding.left - 5} y={y + 4} fontSize="11" fill="#8B949E" textAnchor="end">
+              <line x1={padding.left} y1={y} x2={graphWidth - padding.right} y2={y} stroke={gridStroke} strokeWidth="1" />
+              <text x={padding.left - 5} y={y + 4} fontSize="11" fill={labelFill} textAnchor="end">
                 {(pct * maxValue).toFixed(0)}
               </text>
             </g>
@@ -64,22 +68,22 @@ export function MetricsGraph({ metrics }: MetricsGraphProps) {
         })}
 
         {/* Vertical axis */}
-        <line x1={padding.left} y1={padding.top} x2={padding.left} y2={graphHeight - padding.bottom} stroke="#30363D" strokeWidth="2" />
+        <line x1={padding.left} y1={padding.top} x2={padding.left} y2={graphHeight - padding.bottom} stroke={gridStroke} strokeWidth="2" />
 
         {/* Horizontal axis */}
-        <line x1={padding.left} y1={graphHeight - padding.bottom} x2={graphWidth - padding.right} y2={graphHeight - padding.bottom} stroke="#30363D" strokeWidth="2" />
+        <line x1={padding.left} y1={graphHeight - padding.bottom} x2={graphWidth - padding.right} y2={graphHeight - padding.bottom} stroke={gridStroke} strokeWidth="2" />
 
         {/* Area fill */}
-        <path d={areaData} fill="rgba(88, 166, 255, 0.1)" stroke="none" />
+        <path d={areaData} fill={accentColor} fillOpacity="0.1" stroke="none" />
 
         {/* Line chart */}
-        <path d={pathData} stroke="#58A6FF" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        <path d={pathData} stroke={accentColor} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
 
         {/* Data points */}
         {dataPoints.map((val, i) => {
           const x = padding.left + i * xScale;
           const y = graphHeight - padding.bottom - val * yScale;
-          return <circle key={`point-${i}`} cx={x} cy={y} r="3" fill="#58A6FF" opacity="0.6" />;
+          return <circle key={`point-${i}`} cx={x} cy={y} r="3" fill={accentColor} opacity="0.6" />;
         })}
 
         {/* X-axis labels (every 6 hours) */}
@@ -87,25 +91,25 @@ export function MetricsGraph({ metrics }: MetricsGraphProps) {
           const x = padding.left + i * xScale;
           const hour = (i * 1) % 24;
           return (
-            <text key={`xlabel-${i}`} x={x} y={graphHeight - padding.bottom + 20} fontSize="11" fill="#8B949E" textAnchor="middle">
+            <text key={`xlabel-${i}`} x={x} y={graphHeight - padding.bottom + 20} fontSize="11" fill={labelFill} textAnchor="middle">
               {hour}h
             </text>
           );
         })}
 
         {/* Y-axis label */}
-        <text x="10" y="15" fontSize="11" fill="#8B949E">
+        <text x="10" y="15" fontSize="11" fill={labelFill}>
           calls/min
         </text>
       </svg>
 
       {/* Legend */}
-      <div className="flex gap-6 text-xs text-[#8B949E]">
+      <div className="flex gap-6 text-xs text-muted-foreground">
         <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#58A6FF' }}></div>
+          <div className="w-3 h-3 rounded-full bg-accent"></div>
           <span>Call Rate</span>
         </div>
-        <div className="text-[#8B949E]">SLO Target: &lt;10/min (Phase B)</div>
+        <div className="text-muted-foreground">SLO Target: &lt;10/min (Phase B)</div>
       </div>
     </div>
   );

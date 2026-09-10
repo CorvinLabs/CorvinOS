@@ -67,8 +67,8 @@ export function MaturityDashboard() {
               onClick={() => setWindow(w)}
               className={`px-3 py-1 rounded text-sm font-medium transition-all ${
                 windowPref === w
-                  ? 'bg-[#58A6FF] text-[#0D1117]'
-                  : 'bg-[#30363D] text-[#C9D1D9] hover:bg-[#3d444d]'
+                  ? 'bg-accent text-accent-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
               }`}
             >
               {w === 'today' ? '24h' : w}
@@ -78,7 +78,7 @@ export function MaturityDashboard() {
         <button
           onClick={refresh}
           disabled={loading}
-          className="flex items-center gap-2 px-3 py-1 rounded bg-[#30363D] text-[#C9D1D9] hover:bg-[#3d444d] disabled:opacity-50 transition-all"
+          className="flex items-center gap-2 px-3 py-1 rounded bg-muted text-muted-foreground hover:bg-muted/80 disabled:opacity-50 transition-all"
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           Refresh
@@ -87,16 +87,16 @@ export function MaturityDashboard() {
 
       {/* Error Alert */}
       {error && (
-        <div className="bg-[#3d1f1a] border border-[#F85149] rounded p-4 flex items-center gap-3">
-          <AlertCircle size={18} className="text-[#F85149] flex-shrink-0" />
-          <div className="text-sm text-[#F85149]">{error}</div>
+        <div className="border border-destructive/40 bg-destructive/10 rounded p-4 flex items-center gap-3">
+          <AlertCircle size={18} className="text-destructive flex-shrink-0" />
+          <div className="text-sm text-destructive">{error}</div>
         </div>
       )}
 
       {/* Loading State */}
       {loading && !loopScores && (
         <div className="text-center py-12">
-          <div className="inline-flex items-center gap-2 text-[#8B949E]">
+          <div className="inline-flex items-center gap-2 text-muted-foreground">
             <RefreshCw size={16} className="animate-spin" />
             <span>Loading live maturity data...</span>
           </div>
@@ -108,13 +108,13 @@ export function MaturityDashboard() {
 
       {/* Tab Navigation */}
       {loopScores && (
-        <div className="flex gap-2 border-b border-[#30363D]">
+        <div className="flex gap-2 border-b border-border">
           <button
             onClick={() => setActiveTab('radar')}
             className={`px-4 py-2 text-sm font-medium transition-all ${
               activeTab === 'radar'
-                ? 'border-b-2 border-[#58A6FF] text-[#58A6FF]'
-                : 'text-[#8B949E] hover:text-[#C9D1D9]'
+                ? 'border-b-2 border-accent text-accent'
+                : 'text-muted-foreground hover:text-foreground'
             }`}
           >
             📊 Hexagon Radar
@@ -123,8 +123,8 @@ export function MaturityDashboard() {
             onClick={() => setActiveTab('summary')}
             className={`px-4 py-2 text-sm font-medium transition-all ${
               activeTab === 'summary'
-                ? 'border-b-2 border-[#58A6FF] text-[#58A6FF]'
-                : 'text-[#8B949E] hover:text-[#C9D1D9]'
+                ? 'border-b-2 border-accent text-accent'
+                : 'text-muted-foreground hover:text-foreground'
             }`}
           >
             📈 Summary
@@ -133,8 +133,8 @@ export function MaturityDashboard() {
             onClick={() => setActiveTab('patterns')}
             className={`px-4 py-2 text-sm font-medium transition-all ${
               activeTab === 'patterns'
-                ? 'border-b-2 border-[#58A6FF] text-[#58A6FF]'
-                : 'text-[#8B949E] hover:text-[#C9D1D9]'
+                ? 'border-b-2 border-accent text-accent'
+                : 'text-muted-foreground hover:text-foreground'
             }`}
           >
             🔍 Patterns
@@ -143,8 +143,8 @@ export function MaturityDashboard() {
             onClick={() => setActiveTab('deprecated-api')}
             className={`px-4 py-2 text-sm font-medium transition-all ${
               activeTab === 'deprecated-api'
-                ? 'border-b-2 border-[#58A6FF] text-[#58A6FF]'
-                : 'text-[#8B949E] hover:text-[#C9D1D9]'
+                ? 'border-b-2 border-accent text-accent'
+                : 'text-muted-foreground hover:text-foreground'
             }`}
           >
             ⚠️ Deprecated APIs
@@ -158,8 +158,8 @@ export function MaturityDashboard() {
           {/* Hexagon Radar + Tier Breakdown + Meta + Recommendations */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
-              <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-                <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
+              <div className="bg-card border border-border rounded-lg p-6">
+                <h3 className="text-sm font-semibold mb-4 text-foreground">
                   Learning Loops — 9D Maturity Radar (click loop for details)
                 </h3>
                 <HexagonRadar
@@ -170,27 +170,27 @@ export function MaturityDashboard() {
             </div>
 
             {/* Trend Card */}
-            <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6 flex flex-col justify-between">
+            <div className="bg-card border border-border rounded-lg p-6 flex flex-col justify-between">
               <div>
-                <h4 className="text-xs font-semibold text-[#8B949E] uppercase mb-4">Trend</h4>
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-4">Trend</h4>
                 <div className="space-y-4">
                   <div>
                     <div className="flex items-baseline gap-2 mb-1">
-                      <span className="text-2xl font-bold text-[#58A6FF]">+0.3</span>
-                      <span className="text-xs text-[#8B949E]">last 7 days</span>
+                      <span className="text-2xl font-bold text-accent">+0.3</span>
+                      <span className="text-xs text-muted-foreground">last 7 days</span>
                     </div>
-                    <div className="w-full bg-[#0D1117] rounded h-2">
-                      <div className="bg-gradient-to-r from-[#58A6FF] to-[#79C0FF] h-2 rounded" style={{ width: '75%' }}></div>
+                    <div className="w-full bg-muted rounded h-2">
+                      <div className="bg-accent h-2 rounded" style={{ width: '75%' }}></div>
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs text-[#8B949E] mb-1">Projected (30 days)</div>
-                    <div className="text-xl font-bold text-[#79C0FF]">8.2/10</div>
+                    <div className="text-xs text-muted-foreground mb-1">Projected (30 days)</div>
+                    <div className="text-xl font-bold text-accent">8.2/10</div>
                   </div>
                 </div>
               </div>
-              <div className="mt-6 pt-6 border-t border-[#30363D]">
-                <div className="flex items-center gap-2 text-xs text-[#8B949E]">
+              <div className="mt-6 pt-6 border-t border-border">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <TrendingUp size={14} />
                   <span>Stable trajectory</span>
                 </div>
@@ -200,42 +200,42 @@ export function MaturityDashboard() {
 
           <TierBreakdown loopScores={loopScores} />
 
-          <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-            <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h3 className="text-sm font-semibold mb-4 text-foreground">
               Meta Loop — Hyperparameter Tuning
             </h3>
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
-                <div className="text-xs text-[#8B949E] uppercase">Convergence Rate</div>
-                <div className="text-lg font-semibold text-[#79C0FF]">0.87</div>
-                <div className="text-xs text-[#3FB950]">Excellent</div>
+                <div className="text-xs text-muted-foreground uppercase">Convergence Rate</div>
+                <div className="text-lg font-semibold text-accent">0.87</div>
+                <div className="text-xs text-emerald-600 dark:text-emerald-400">Excellent</div>
               </div>
               <div className="space-y-2">
-                <div className="text-xs text-[#8B949E] uppercase">Drift</div>
-                <div className="text-lg font-semibold text-[#79C0FF]">0.12</div>
-                <div className="text-xs text-[#3FB950]">Minimal</div>
+                <div className="text-xs text-muted-foreground uppercase">Drift</div>
+                <div className="text-lg font-semibold text-accent">0.12</div>
+                <div className="text-xs text-emerald-600 dark:text-emerald-400">Minimal</div>
               </div>
               <div className="space-y-2">
-                <div className="text-xs text-[#8B949E] uppercase">Prediction Accuracy</div>
-                <div className="text-lg font-semibold text-[#79C0FF]">92.3%</div>
-                <div className="text-xs text-[#3FB950]">Highly accurate</div>
+                <div className="text-xs text-muted-foreground uppercase">Prediction Accuracy</div>
+                <div className="text-lg font-semibold text-accent">92.3%</div>
+                <div className="text-xs text-emerald-600 dark:text-emerald-400">Highly accurate</div>
               </div>
             </div>
           </div>
 
-          <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6">
-            <h3 className="text-sm font-semibold mb-4 text-[#C9D1D9]">💡 Recommendations</h3>
-            <ul className="space-y-3 text-sm text-[#8B949E]">
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h3 className="text-sm font-semibold mb-4 text-foreground">💡 Recommendations</h3>
+            <ul className="space-y-3 text-sm text-muted-foreground">
               <li className="flex gap-3">
-                <span className="text-[#F85149] flex-shrink-0">1.</span>
+                <span className="text-destructive flex-shrink-0">1.</span>
                 <span>Workflow Loop ({loopScores.workflow.toFixed(1)}) is bottleneck — focus on this</span>
               </li>
               <li className="flex gap-3">
-                <span className="text-[#F85149] flex-shrink-0">2.</span>
+                <span className="text-destructive flex-shrink-0">2.</span>
                 <span>Skills config drift detected — rebalance weights</span>
               </li>
               <li className="flex gap-3">
-                <span className="text-[#3FB950] flex-shrink-0">3.</span>
+                <span className="text-emerald-600 dark:text-emerald-400 flex-shrink-0">3.</span>
                 <span>Meta-loop converging well — stable trajectory</span>
               </li>
             </ul>

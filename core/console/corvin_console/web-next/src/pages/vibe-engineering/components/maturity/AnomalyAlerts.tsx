@@ -73,9 +73,9 @@ export function AnomalyAlerts({ windowSeconds = 300 }: AnomalyAlertsProps) {
 
   if (anomalies.length === 0) {
     return (
-      <div className="bg-[#1a3a1f] border border-[#3FB950] rounded-lg p-4 flex items-center gap-3">
-        <CheckCircle size={18} className="text-[#3FB950] flex-shrink-0" />
-        <span className="text-sm text-[#3FB950]">All systems nominal — no anomalies detected</span>
+      <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-lg p-4 flex items-center gap-3">
+        <CheckCircle size={18} className="text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+        <span className="text-sm text-emerald-600 dark:text-emerald-400">All systems nominal — no anomalies detected</span>
       </div>
     );
   }
@@ -85,33 +85,33 @@ export function AnomalyAlerts({ windowSeconds = 300 }: AnomalyAlertsProps) {
       {anomalies.map((anomaly) => {
         const icon =
           anomaly.severity === 'critical' ? (
-            <AlertTriangle size={18} className="text-[#F85149] flex-shrink-0" />
+            <AlertTriangle size={18} className="text-destructive flex-shrink-0" />
           ) : anomaly.severity === 'warning' ? (
-            <AlertCircle size={18} className="text-[#FB8500] flex-shrink-0" />
+            <AlertCircle size={18} className="text-amber-600 dark:text-amber-400 flex-shrink-0" />
           ) : (
-            <AlertCircle size={18} className="text-[#79C0FF] flex-shrink-0" />
+            <AlertCircle size={18} className="text-accent flex-shrink-0" />
           );
 
         const bgColor =
           anomaly.severity === 'critical'
-            ? 'bg-[#3d1f1a]'
+            ? 'bg-destructive/10'
             : anomaly.severity === 'warning'
-              ? 'bg-[#3d2817]'
-              : 'bg-[#1a2d3a]';
+              ? 'bg-amber-500/10'
+              : 'bg-accent/10';
 
         const borderColor =
           anomaly.severity === 'critical'
-            ? 'border-[#F85149]'
+            ? 'border-destructive/40'
             : anomaly.severity === 'warning'
-              ? 'border-[#FB8500]'
-              : 'border-[#79C0FF]';
+              ? 'border-amber-500/40'
+              : 'border-accent/40';
 
         const textColor =
           anomaly.severity === 'critical'
-            ? 'text-[#F85149]'
+            ? 'text-destructive'
             : anomaly.severity === 'warning'
-              ? 'text-[#FB8500]'
-              : 'text-[#79C0FF]';
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-accent';
 
         return (
           <div

@@ -71,16 +71,18 @@ const PALETTE = {
     dark: '#1A1A1A',
   },
   status: {
-    good: '#2ECC71', // green
-    warning: '#F39C12', // orange
-    serious: '#E74C3C', // red
+    good: '#10b981', // emerald-500 — matches the success convention used elsewhere in the console
+    warning: '#f59e0b', // amber-500 — matches the warning convention used elsewhere
+    serious: 'hsl(var(--destructive))',
   },
+  // Theme-reactive chrome (was hardcoded GitHub-dark hex; now rides the app's
+  // light/dark CSS custom properties so this page matches the rest of the console).
   surface: {
-    dark: '#0D1117', // GitHub dark
-    card: '#161B22',
-    border: '#30363D',
-    text: '#C9D1D9',
-    muted: '#8B949E',
+    dark: 'hsl(var(--card))',
+    card: 'hsl(var(--card))',
+    border: 'hsl(var(--border))',
+    text: 'hsl(var(--foreground))',
+    muted: 'hsl(var(--muted-foreground))',
   },
 };
 
@@ -525,12 +527,7 @@ const LearningDashboard: React.FC = () => {
   // }, []);
 
   return (
-    <div
-      className="min-h-screen bg-background p-6"
-      style={{
-        color: PALETTE.surface.text,
-      }}
-    >
+    <div className="min-h-screen bg-background text-foreground p-6">
       {/* Header */}
       <div style={{ marginBottom: '32px' }}>
         <h1 style={{ margin: '0 0 8px', fontSize: '28px', fontWeight: 700 }}>
@@ -586,7 +583,7 @@ const LearningDashboard: React.FC = () => {
         <p>
           Data refreshed every 5 minutes. Learning events audited and hash-chained.
           See{' '}
-          <a href="#" style={{ color: PALETTE.systems[0].hex, textDecoration: 'none' }}>
+          <a href="#" className="text-accent" style={{ textDecoration: 'none' }}>
             full audit trail
           </a>
           .

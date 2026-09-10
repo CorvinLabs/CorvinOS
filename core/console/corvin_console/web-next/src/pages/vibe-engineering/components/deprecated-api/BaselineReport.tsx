@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { cn } from '@/lib/utils';
 import { CurrentMetricsResponse } from '../../hooks/useDeprecatedApiMetrics';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
@@ -54,57 +55,57 @@ export function BaselineReport({ metrics, lastUpdated }: BaselineReportProps) {
   }, [metrics]);
 
   return (
-    <div className="bg-[#161B22] border border-[#30363D] rounded-lg p-6 space-y-6">
+    <div className="bg-card border border-border rounded-lg p-6 space-y-6">
       <div>
-        <h3 className="text-sm font-semibold text-[#C9D1D9]">Week 5 Baseline Report (Phase B Cleanup)</h3>
-        <p className="text-xs text-[#8B949E] mt-1">
+        <h3 className="text-sm font-semibold text-foreground">Week 5 Baseline Report (Phase B Cleanup)</h3>
+        <p className="text-xs text-muted-foreground mt-1">
           Established {lastUpdated ? new Date(lastUpdated).toLocaleString() : 'now'}
         </p>
       </div>
 
       {loading ? (
-        <div className="text-[#8B949E] text-sm">Loading baseline...</div>
+        <div className="text-muted-foreground text-sm">Loading baseline...</div>
       ) : baseline ? (
         <>
           {/* Baseline Metrics Grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-[#0D1117] rounded p-3 border border-[#30363D]">
-              <div className="text-xs text-[#8B949E] uppercase mb-1">Baseline Call Rate</div>
-              <div className="text-xl font-bold text-[#79C0FF]">
+            <div className="bg-muted/40 rounded p-3 border border-border">
+              <div className="text-xs text-muted-foreground uppercase mb-1">Baseline Call Rate</div>
+              <div className="text-xl font-bold text-accent">
                 {baseline.baseline_calls_per_min.toFixed(2)} calls/min
               </div>
-              <div className="text-xs text-[#8B949E] mt-2">Target (Phase B): &lt;10/min</div>
+              <div className="text-xs text-muted-foreground mt-2">Target (Phase B): &lt;10/min</div>
             </div>
 
-            <div className="bg-[#0D1117] rounded p-3 border border-[#30363D]">
-              <div className="text-xs text-[#8B949E] uppercase mb-1">Baseline Error Rate</div>
-              <div className="text-xl font-bold text-[#F85149]">
+            <div className="bg-muted/40 rounded p-3 border border-border">
+              <div className="text-xs text-muted-foreground uppercase mb-1">Baseline Error Rate</div>
+              <div className="text-xl font-bold text-destructive">
                 {baseline.baseline_error_rate_pct.toFixed(2)}%
               </div>
-              <div className="text-xs text-[#8B949E] mt-2">Target: &lt;1%</div>
+              <div className="text-xs text-muted-foreground mt-2">Target: &lt;1%</div>
             </div>
 
-            <div className="bg-[#0D1117] rounded p-3 border border-[#30363D]">
-              <div className="text-xs text-[#8B949E] uppercase mb-1">Skill Availability</div>
-              <div className="text-xl font-bold text-[#3FB950]">
+            <div className="bg-muted/40 rounded p-3 border border-border">
+              <div className="text-xs text-muted-foreground uppercase mb-1">Skill Availability</div>
+              <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
                 {baseline.baseline_skill_availability_pct.toFixed(2)}%
               </div>
-              <div className="text-xs text-[#8B949E] mt-2">Target: 99%</div>
+              <div className="text-xs text-muted-foreground mt-2">Target: 99%</div>
             </div>
           </div>
 
           {/* Top 3 APIs */}
           {baseline.top_3_apis.length > 0 && (
             <div>
-              <div className="text-xs font-semibold text-[#C9D1D9] uppercase mb-3">Top 3 Most-Called APIs</div>
+              <div className="text-xs font-semibold text-foreground uppercase mb-3">Top 3 Most-Called APIs</div>
               <div className="space-y-2">
                 {baseline.top_3_apis.map(([api, count], i) => (
-                  <div key={api} className="flex items-center justify-between bg-[#0D1117] rounded p-3 border border-[#30363D]">
+                  <div key={api} className="flex items-center justify-between bg-muted/40 rounded p-3 border border-border">
                     <div className="flex items-center gap-3">
-                      <span className="text-[#8B949E] font-mono text-sm">{i + 1}.</span>
-                      <span className="text-[#C9D1D9] font-mono text-sm">{api}</span>
+                      <span className="text-muted-foreground font-mono text-sm">{i + 1}.</span>
+                      <span className="text-foreground font-mono text-sm">{api}</span>
                     </div>
-                    <span className="text-[#79C0FF] font-semibold">{count} calls</span>
+                    <span className="text-accent font-semibold">{count} calls</span>
                   </div>
                 ))}
               </div>
@@ -114,16 +115,16 @@ export function BaselineReport({ metrics, lastUpdated }: BaselineReportProps) {
           {/* Recommendations */}
           {baseline.recommendations.length > 0 && (
             <div>
-              <div className="text-xs font-semibold text-[#C9D1D9] uppercase mb-3">Recommendations</div>
+              <div className="text-xs font-semibold text-foreground uppercase mb-3">Recommendations</div>
               <div className="space-y-2">
                 {baseline.recommendations.map((rec, i) => (
-                  <div key={i} className="flex items-start gap-3 bg-[#0D1117] rounded p-3 border border-[#30363D]">
+                  <div key={i} className="flex items-start gap-3 bg-muted/40 rounded p-3 border border-border">
                     {rec.includes('safe') || rec.includes('No deprecated') ? (
-                      <CheckCircle2 size={16} className="text-[#3FB950] flex-shrink-0 mt-0.5" />
+                      <CheckCircle2 size={16} className="text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
                     ) : (
-                      <AlertCircle size={16} className="text-[#D29922] flex-shrink-0 mt-0.5" />
+                      <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
                     )}
-                    <span className="text-xs text-[#8B949E]">{rec}</span>
+                    <span className="text-xs text-muted-foreground">{rec}</span>
                   </div>
                 ))}
               </div>
@@ -131,13 +132,13 @@ export function BaselineReport({ metrics, lastUpdated }: BaselineReportProps) {
           )}
 
           {/* SLO Status */}
-          <div className="border-t border-[#30363D] pt-4">
-            <div className="flex items-center gap-2 text-xs text-[#8B949E]">
+          <div className="border-t border-border pt-4">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <div
-                className="w-2 h-2 rounded-full"
-                style={{
-                  backgroundColor: baseline.baseline_calls_per_min < 10 ? '#3FB950' : '#F85149',
-                }}
+                className={cn(
+                  'w-2 h-2 rounded-full',
+                  baseline.baseline_calls_per_min < 10 ? 'bg-emerald-500' : 'bg-destructive',
+                )}
               ></div>
               <span>
                 SLO Status: {baseline.baseline_calls_per_min < 10 ? 'ON TRACK' : 'AT RISK'} — Phase C
