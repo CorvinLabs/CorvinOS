@@ -157,9 +157,6 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     defaultOpen: true,
     items: [
-      { to: "/app/learning-dashboard", label: "Learning Dashboard", icon: BookOpen, requiredFlag: "learning_enabled" },
-      { to: "/app/infinite-session", label: "Session Manager", icon: RefreshCw },
-      { to: "/app/world-map", label: "World Map", icon: Globe },
     ],
   },
   {
@@ -177,7 +174,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/engines",  label: "AI Engine", icon: Cpu },
       { to: "/app/browser",  label: "Browser",   icon: Globe },
-      { to: "/app/personas", label: "Personas",  icon: Sparkles },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },
     ],

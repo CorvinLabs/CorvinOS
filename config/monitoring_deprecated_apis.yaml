@@ -1,0 +1,195 @@
+# Week 5: Deprecated API Monitoring Configuration (ADR-0538 Phase B)
+#
+# Real-time baseline metrics tracking for old Brain/Vibe/Context-v1 APIs
+# transitioning to new ACP Skills. Used for Phase C decision gate
+# (measured deletion only if <5 compat calls/day).
+
+dashboards:
+  - name: "Deprecated APIs — Phase B Baseline"
+    description: "Week 5 baseline tracking for legacy API migration"
+    refresh_interval_s: 30
+    panels:
+      - metric: "deprecated_calls_per_minute"
+        type: "line"
+        unit: "calls/min"
+        thresholds:
+          ok: "< 10"
+          warning: "10–50"
+          critical: "> 50"
+        target: "< 10 calls/min (baseline)"
+        annotation: "Baseline established Week 5; Phase C deletion safe if sustained < 5 calls/day"
+
+      - metric: "deprecated_error_rate"
+        type: "gauge"
+        unit: "%"
+        thresholds:
+          ok: "< 0.5"
+          warning: "0.5–1.0"
+          critical: "> 1.0"
+        target: "< 0.5%"
+        annotation: "Compat layer SLA"
+
+      - metric: "skill_availability"
+        type: "gauge"
+        unit: "%"
+        thresholds:
+          ok: "> 99.5"
+          warning: "99.0–99.5"
+          critical: "< 99.0"
+        target: ">= 99.99%"
+        annotation: "os.context_adapter + os.personality_adapter Skills"
+
+      - metric: "skill_p99_latency"
+        type: "line"
+        unit: "ms"
+        thresholds:
+          ok: "< 50"
+          warning: "50–100"
+          critical: "> 100"
+        target: "< 50ms (added latency on compat layer)"
+        annotation: "Compat overhead vs direct new API call"
+
+      - metric: "top_3_deprecated_apis"
+        type: "table"
+        unit: "calls/24h"
+        target: "Identify remaining callers"
+        columns:
+          - api_name: "API function name"
+          - call_count: "Total calls (24h)"
+          - error_rate: "Error rate (%)"
+          - p99_latency: "p99 latency (ms)"
+
+      - metric: "historical_trend"
+        type: "line"
+        unit: "calls/min"
+        target: "Declining trend toward Phase C deletion"
+        window: "7 days"
+        annotation: "Expected: downward trend as callers migrate to new Skills"
+
+alerts:
+  - name: "DEPRECATED_CALLS_ELEVATED"
+    condition: "deprecated_calls_per_minute > 50"
+    severity: "HIGH"
+    action: "Alert Phase B lead, review active callers, plan migration"
+    duration: "2 std-dev above baseline (>50/min sustained 10 min)"
+    threshold_justification: "Baseline ~5-10/min; 50/min is 2σ deviation, indicates new usage"
+
+  - name: "DEPRECATED_ERROR_RATE_HIGH"
+    condition: "deprecated_error_rate > 1.0"
+    severity: "HIGH"
+    action: "Alert Skill maintainers (context_adapter, personality_adapter), check Skill logs"
+    duration: "5 min sustained"
+    threshold_justification: "Compat layer SLA is <0.5%; >1% indicates Skill failure"
+
+  - name: "SKILL_AVAILABILITY_LOW"
+    condition: "skill_availability < 99.0"
+    severity: "CRITICAL"
+    action: "Page SRE, investigate Skill crash / timeout / dependency failure"
+    duration: "immediate (even 1 failure if availability < 99%)"
+    threshold_justification: "Target 99.99%; <99% is unacceptable for Phase B"
+
+  - name: "SKILL_LATENCY_REGRESSION"
+    condition: "skill_p99_latency > 50"
+    severity: "MEDIUM"
+    action: "Alert performance team, check Skill execution time + network latency"
+    duration: "10 min sustained"
+    threshold_justification: "Compat layer overhead should be <5ms; 50ms indicates Skill slowdown"
+
+  - name: "DEPRECATED_CALLS_SPIKE"
+    condition: "deprecated_calls_per_minute increased by 100% in 5 min"
+    severity: "HIGH"
+    action: "Alert on-call, investigate new caller or load spike"
+    duration: "5 min sustained"
+    threshold_justification: "Unexpected traffic surge may indicate new dependency on deprecated APIs"
+
+slos:
+  - name: "Baseline Calls/Min"
+    metric: "deprecated_calls_per_minute"
+    target: "< 10 calls/min (Week 5 baseline)"
+    window: "24 hours"
+    note: "Phase C decision gate: safe to delete if <5 calls/day for 2 weeks"
+
+  - name: "Compat Layer Availability"
+    metric: "skill_availability"
+    target: ">= 99.99% (zero tolerance for Skill failures)"
+    window: "7 days"
+    note: "Compat layer SLA same as live system"
+
+  - name: "Compat Layer Error Rate"
+    metric: "deprecated_error_rate"
+    target: "< 0.5% (strict SLA)"
+    window: "24 hours"
+    note: "Errors in compat layer directly block callers"
+
+  - name: "Migration Progress"
+    metric: "top_3_deprecated_apis"
+    target: "Decreasing call counts across all APIs"
+    window: "7 days"
+    note: "Success metric: trending toward zero by end of Phase C"
+
+escalation:
+  - level: 1
+    on: "Single alert triggered"
+    action: "Log alert, watch for 10 min"
+
+  - level: 2
+    on: "Alert sustained > 30 min OR skill_availability < 99%"
+    action: "Notify Phase B lead (ADR-0538 owner)"
+
+  - level: 3
+    on: "Multiple alerts OR high call rate (>50/min) sustained"
+    action: "Page SRE + Phase B lead, evaluate rollback to old code"
+
+  - level: 4
+    on: "Skill_availability < 95% OR all Skills down"
+    action: "Page engineering lead, potential rollback + incident response"
+
+phase_c_decision_gates:
+  - gate: "Call Rate"
+    metric: "deprecated_calls_per_minute"
+    threshold: "< 5 calls/day average over 2 weeks"
+    decision: "SAFE_TO_DELETE"
+    action: "Proceed with Phase C measured deletion"
+
+  - gate: "Error Rate"
+    metric: "deprecated_error_rate"
+    threshold: "< 0.1% (no sustained errors in final week)"
+    decision: "SAFE_TO_DELETE"
+    action: "No error debt; safe to remove compat layer"
+
+  - gate: "No Active Callers"
+    metric: "top_3_deprecated_apis"
+    threshold: "All APIs < 1 call/day"
+    decision: "SAFE_TO_DELETE"
+    action: "Confirm no new callers; delete compat layer + audit events"
+
+  - gate: "Skill Stability"
+    metric: "skill_availability"
+    threshold: "> 99.5% (no degradation during Phase B)"
+    decision: "SAFE_TO_DELETE"
+    action: "Skills stable; no rollback risk"
+
+reporting:
+  - frequency: "Daily"
+    metrics: ["deprecated_calls_per_minute", "deprecated_error_rate", "skill_availability"]
+    recipients: ["phase-b-team@corvin", "ops@corvin"]
+    format: "Slack summary + detailed CSV"
+
+  - frequency: "Weekly (Friday)"
+    name: "Phase B Baseline Report"
+    metrics:
+      - total_calls_24h
+      - calls_per_min (with std-dev)
+      - error_rate_pct
+      - top_3_apis
+      - skill_availability_pct
+      - trend (vs previous week)
+    recipients: ["phase-b-team@corvin", "engineering@corvin"]
+    format: "Full markdown report + charts"
+
+  - frequency: "At Phase C Gate (Week 8)"
+    name: "Phase C Decision Report"
+    metrics: ["Call Rate Gate", "Error Rate Gate", "Active Callers Gate", "Skill Stability Gate"]
+    decision: "APPROVE Phase C deletion OR extend Phase B"
+    recipients: ["engineering-leads@corvin"]
+    format: "Executive summary + detailed analysis"
