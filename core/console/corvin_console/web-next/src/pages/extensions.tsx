@@ -51,7 +51,7 @@ function CoreLayerRow({ layer }: { layer: CoreLayer }) {
       className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-2.5"
     >
       <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
+      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-sm font-medium">{layer.name}</span>
@@ -96,7 +96,7 @@ function ExtensionCard({
       <CardContent className="px-4 py-3">
         <div className="flex items-start gap-3">
           {ext.enabled
-            ? <CheckCircle2 className="h-5 w-5 shrink-0 text-green-500 mt-0.5" />
+            ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400 mt-0.5" />
             : <PauseCircle className="h-5 w-5 shrink-0 text-muted-foreground mt-0.5" />}
           <div className="flex-1 min-w-0 space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
@@ -255,12 +255,13 @@ function AddExtensionDialog({
               data-testid="ext-enable-checkbox"
               checked={enable}
               onChange={(e) => setEnable(e.target.checked)}
+              className="accent-accent"
             />
             Enable immediately after install
           </label>
 
           <div className="rounded border bg-muted/20 px-3 py-2 text-xs text-muted-foreground flex items-start gap-1.5">
-            <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5 text-green-500" />
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
             <span>
               Extensions follow the deny-wins model: they can add restrictions but
               never override a core deny. The <code>corvin.*</code> namespace is reserved.

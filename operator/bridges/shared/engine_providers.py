@@ -5,6 +5,7 @@ actually offers right now:
   * ``anthropic``  → GET {base_url}/v1/models              (paginated, cached)
   * ``ollama``     → GET {base_url}/api/tags               (local + cloud)
   * ``openrouter`` → GET {base_url}/models                 (public catalogue)
+  * ``openai``     → GET {base_url}/models                 (requires an API key)
   * ``static``     → no live list (use the curated registry entries)
 
 The ``anthropic`` source differs from the other two in both directions: it walks
@@ -168,6 +169,19 @@ def fetch_models(
             items = (data or {}).get("data") or []
             models = [
                 {"id": m.get("id", ""), "label": m.get("name") or m.get("id", "")}
+                for m in items if isinstance(m, dict) and m.get("id")
+            ]
+        elif model_source == "openai":
+            if not key:
+                result["error"] = (
+                    f"no {credential_env or 'OPENAI_API_KEY'} configured — add an API "
+                    f"key under Settings → API Keys to see OpenAI's live model list."
+                )
+                return result
+            data = _get_json(f"{base}/models", bearer=key, timeout=timeout)
+            items = (data or {}).get("data") or []
+            models = [
+                {"id": m.get("id", ""), "label": m.get("id", "")}
                 for m in items if isinstance(m, dict) and m.get("id")
             ]
         else:

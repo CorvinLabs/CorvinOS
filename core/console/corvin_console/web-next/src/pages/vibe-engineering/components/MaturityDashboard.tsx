@@ -245,7 +245,7 @@ export function MaturityDashboard() {
 
       {/* Summary Tab */}
       {activeTab === 'summary' && loopScores && (
-        <SummaryTab loopScores={loopData} lastUpdated={lastUpdated} />
+        <SummaryTab loopScores={loopData} lastUpdated={lastUpdated?.toISOString()} />
       )}
 
       {/* Patterns Tab */}

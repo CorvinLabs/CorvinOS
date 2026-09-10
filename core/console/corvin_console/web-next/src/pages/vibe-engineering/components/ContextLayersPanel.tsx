@@ -324,8 +324,8 @@ export const ContextLayersPanel: React.FC = () => {
 
         {/* Error State */}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-            <p className="text-sm text-red-400">{error}</p>
+          <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
+            <p className="text-sm text-destructive">{error}</p>
           </div>
         )}
 

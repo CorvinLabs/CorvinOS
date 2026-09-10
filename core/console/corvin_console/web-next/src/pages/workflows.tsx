@@ -927,7 +927,7 @@ function DeliveryInspector({
         >
           <span
             className={cn(
-              "block h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+              "block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
               voice ? "translate-x-4" : "translate-x-0",
             )}
           />
@@ -2557,7 +2557,7 @@ function HitlApprovalBar({
         <div className="px-3 pb-3 space-y-2">
           <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">{message}</p>
           <textarea
-            className="w-full rounded border border-amber-300 dark:border-amber-700 bg-white dark:bg-amber-950/20 px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-amber-400"
+            className="w-full rounded border border-amber-300 dark:border-amber-700 bg-background dark:bg-amber-950/20 px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-amber-400"
             rows={2}
             placeholder="Optional comment…"
             value={comment}

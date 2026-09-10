@@ -29,14 +29,14 @@ export function DebugPanel({ data }: DebugPanelProps) {
   const { events_count, latest_event, all_events } = data.debug;
 
   return (
-    <Card className="border-yellow-400/50 bg-yellow-500/5">
+    <Card className="border-amber-500/40 bg-amber-500/5">
       <CardHeader
-        className="pb-2 cursor-pointer hover:bg-yellow-500/10"
+        className="pb-2 cursor-pointer hover:bg-amber-500/10"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Code className="h-4 w-4 text-yellow-600" />
+            <Code className="h-4 w-4 text-amber-600 dark:text-amber-400" />
             <CardTitle className="text-sm">DEBUG: Real Data Inspector</CardTitle>
           </div>
           {expanded ? (
@@ -45,13 +45,13 @@ export function DebugPanel({ data }: DebugPanelProps) {
             <ChevronDown className="h-4 w-4" />
           )}
         </div>
-        <p className="text-xs text-yellow-600 mt-1">{events_count} real events loaded from session logs</p>
+        <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">{events_count} real events loaded from session logs</p>
       </CardHeader>
 
       {expanded && (
         <CardContent className="space-y-3">
           {/* Latest Event */}
-          <div className="p-3 bg-secondary/30 rounded border border-yellow-400/30">
+          <div className="p-3 bg-secondary/30 rounded border border-amber-500/30">
             <p className="text-xs font-mono font-bold mb-1">Latest Event:</p>
             <pre className="text-[10px] overflow-x-auto whitespace-pre-wrap break-words">
               {JSON.stringify(latest_event, null, 2)}
@@ -71,20 +71,20 @@ export function DebugPanel({ data }: DebugPanelProps) {
           </div>
 
           {/* All Events (Scrollable) */}
-          <div className="max-h-48 overflow-y-auto border border-yellow-400/20 rounded p-2 bg-black/20">
+          <div className="max-h-48 overflow-y-auto border border-amber-500/20 rounded p-2 bg-background/40">
             <p className="text-xs font-mono font-bold mb-2">All Events:</p>
             <div className="space-y-1">
               {all_events?.slice(0, 20).map((e, i) => (
                 <div key={i} className="text-[9px] font-mono p-1 bg-secondary/20 rounded">
-                  <span className="text-yellow-600">[{e.seq || i}]</span>{' '}
-                  <span className="text-blue-400">{e.event}</span>{' '}
+                  <span className="text-amber-600 dark:text-amber-400">[{e.seq || i}]</span>{' '}
+                  <span className="text-accent">{e.event}</span>{' '}
                   <span className="text-muted-foreground">({e.persona || e.engine || '?'})</span>
                 </div>
               ))}
             </div>
           </div>
 
-          <p className="text-xs text-yellow-600 italic">
+          <p className="text-xs text-amber-600 dark:text-amber-400 italic">
             💡 Tip: Open browser console to inspect &apos;window.__VIBE_DEBUG__&apos;
           </p>
         </CardContent>

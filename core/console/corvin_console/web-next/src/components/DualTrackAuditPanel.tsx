@@ -88,10 +88,10 @@ const COLOR_CLASSES: Record<string, { border: string; bg: string; text: string; 
     dot:    "bg-cyan-100 border-cyan-400 dark:bg-cyan-950 dark:border-cyan-500",
   },
   default: {
-    border: "border-slate-300 dark:border-slate-600",
-    bg:     "bg-slate-50 dark:bg-slate-900",
-    text:   "text-slate-600 dark:text-slate-400",
-    dot:    "bg-slate-100 border-slate-400 dark:bg-slate-900 dark:border-slate-500",
+    border: "border-border",
+    bg:     "bg-muted/50",
+    text:   "text-muted-foreground",
+    dot:    "bg-muted border-border",
   },
 };
 
@@ -118,7 +118,7 @@ function EventBlock({ ev, last }: EventBlockProps) {
       {/* chain link column */}
       <div className="flex flex-col items-center w-3 flex-shrink-0 pt-1">
         <div className={cn("w-2.5 h-2.5 rounded-full border-2 flex-shrink-0", c.dot)} />
-        {!last && <div className="w-px flex-1 bg-slate-200 dark:bg-slate-700 mt-0.5" />}
+        {!last && <div className="w-px flex-1 bg-border mt-0.5" />}
       </div>
       {/* event card */}
       <div
@@ -214,7 +214,7 @@ function DelegationRow({ grp, index, chainVerified }: DelegationRowProps) {
     <div className="mb-4">
       {/* delegation header */}
       <div className="flex items-center gap-2 mb-2 px-1">
-        <div className="w-4 h-px bg-border dark:bg-slate-700" />
+        <div className="w-4 h-px bg-border" />
         <span className="text-[9px] text-muted-foreground font-mono flex-shrink-0">
           #{index + 1}
         </span>
@@ -353,7 +353,7 @@ export function DualTrackAuditPanel({ sid }: DualTrackAuditPanelProps) {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 h-40 text-slate-500">
+      <div className="flex flex-col items-center justify-center gap-3 h-40 text-muted-foreground">
         <Loader2 size={20} className="animate-spin" />
         <span className="text-sm">Loading chain events…</span>
       </div>
@@ -362,10 +362,10 @@ export function DualTrackAuditPanel({ sid }: DualTrackAuditPanelProps) {
 
   if (isError) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 h-40 text-red-400">
+      <div className="flex flex-col items-center justify-center gap-3 h-40 text-destructive">
         <AlertCircle size={20} />
         <span className="text-sm">{String(error)}</span>
-        <button onClick={() => refetch()} className="text-xs text-slate-400 underline">retry</button>
+        <button onClick={() => refetch()} className="text-xs text-muted-foreground underline">retry</button>
       </div>
     );
   }
@@ -376,7 +376,7 @@ export function DualTrackAuditPanel({ sid }: DualTrackAuditPanelProps) {
   const hasOsOnly = data.os_only_events.length > 0;
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden bg-card dark:bg-slate-950">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden bg-card">
       {/* header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border flex-shrink-0">
         <GitBranch size={13} className="text-muted-foreground" />
@@ -391,8 +391,8 @@ export function DualTrackAuditPanel({ sid }: DualTrackAuditPanelProps) {
           className={cn(
             "text-[9px] px-1.5 font-mono",
             data.chain_verified
-              ? "border-green-700 text-green-500"
-              : "border-red-700 text-red-500",
+              ? "border-emerald-500/50 text-emerald-600 dark:text-emerald-400"
+              : "border-destructive/50 text-destructive",
           )}
           title={
             data.chain_verified

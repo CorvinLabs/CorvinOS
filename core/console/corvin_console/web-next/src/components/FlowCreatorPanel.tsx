@@ -270,7 +270,7 @@ export function FlowCreatorPanel({ open, onClose, onSaved, initialFlowId }: Prop
               <div className="grid gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-muted-foreground mb-1">
-                    Flow ID <span className="text-red-500">*</span>
+                    Flow ID <span className="text-destructive">*</span>
                   </label>
                   <input
                     data-testid="input-flow-id"
@@ -355,7 +355,7 @@ export function FlowCreatorPanel({ open, onClose, onSaved, initialFlowId }: Prop
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <label className="block text-xs text-muted-foreground mb-1">
-                              Step ID <span className="text-red-500">*</span>
+                              Step ID <span className="text-destructive">*</span>
                             </label>
                             <input
                               data-testid={`input-step-id-${i}`}

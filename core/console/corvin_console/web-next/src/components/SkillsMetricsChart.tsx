@@ -62,7 +62,9 @@ export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) 
 
   // Trend indicator
   const trendIcon = metrics.score_trend > 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />;
-  const trendColor = metrics.score_trend > 0 ? "text-green-600" : "text-red-600";
+  const trendColor = metrics.score_trend > 0
+    ? "text-emerald-600 dark:text-emerald-400"
+    : "text-destructive";
 
   return (
     <div className="space-y-4">
@@ -95,8 +97,8 @@ export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) 
               <Line
                 type="monotone"
                 dataKey="score"
-                stroke="#3b82f6"
-                dot={{ fill: "#3b82f6", r: 4 }}
+                stroke="hsl(var(--accent))"
+                dot={{ fill: "hsl(var(--accent))", r: 4 }}
                 activeDot={{ r: 6 }}
                 name="Score"
               />
@@ -139,10 +141,10 @@ export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) 
       </Card>
 
       {/* Anomalies & Performance */}
-      <Card className={metrics.anomalies.length > 0 ? "border-orange-200 bg-orange-50" : ""}>
+      <Card className={metrics.anomalies.length > 0 ? "border-amber-500/30 bg-amber-500/10" : ""}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <AlertTriangle size={20} className={metrics.anomalies.length > 0 ? "text-orange-600" : "text-green-600"} />
+            <AlertTriangle size={20} className={metrics.anomalies.length > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"} />
             {metrics.anomalies.length > 0 ? "Anomalies Detected" : "All Systems Healthy"}
           </CardTitle>
         </CardHeader>
@@ -150,24 +152,24 @@ export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) 
           {metrics.anomalies.length > 0 ? (
             metrics.anomalies.map((anomaly, idx) => (
               <div key={idx} className="flex items-center gap-2">
-                <Badge variant="outline" className={getAnomalySeverity(anomaly) === "error" ? "bg-red-100 text-red-900" : "bg-yellow-100 text-yellow-900"}>
+                <Badge variant={getAnomalySeverity(anomaly) === "error" ? "danger" : "warn"}>
                   {getAnomalySeverity(anomaly)}
                 </Badge>
                 <span className="text-sm">{anomaly}</span>
               </div>
             ))
           ) : (
-            <p className="text-sm text-gray-600">No anomalies detected. Skill is learning normally.</p>
+            <p className="text-sm text-muted-foreground">No anomalies detected. Skill is learning normally.</p>
           )}
 
           {/* Performance Metrics */}
-          <div className="grid grid-cols-2 gap-2 pt-4 border-t">
+          <div className="grid grid-cols-2 gap-2 pt-4 border-t border-border">
             <div className="text-sm">
-              <div className="text-gray-600">Total Runs (24h)</div>
+              <div className="text-muted-foreground">Total Runs (24h)</div>
               <div className="text-lg font-bold">{metrics.total_runs}</div>
             </div>
             <div className="text-sm">
-              <div className="text-gray-600">Error Rate</div>
+              <div className="text-muted-foreground">Error Rate</div>
               <div className="text-lg font-bold">
                 {metrics.total_runs > 0
                   ? (Math.min(100, (metrics.total_errors / Math.max(metrics.total_runs, 1)) * 100)).toFixed(1)
@@ -180,12 +182,12 @@ export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) 
       </Card>
 
       {/* Recommendations */}
-      <Card className="border-blue-200 bg-blue-50">
+      <Card className="border-accent/30 bg-accent/10">
         <CardHeader>
-          <CardTitle className="text-blue-900">Recommendations</CardTitle>
+          <CardTitle>Recommendations</CardTitle>
         </CardHeader>
         <CardContent>
-          <ul className="space-y-1 text-sm text-blue-800">
+          <ul className="space-y-1 text-sm text-foreground">
             {data.recommendations.map((rec, idx) => (
               <li key={idx} className="flex items-start gap-2">
                 <span>•</span>

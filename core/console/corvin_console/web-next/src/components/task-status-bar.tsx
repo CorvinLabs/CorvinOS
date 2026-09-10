@@ -120,12 +120,12 @@ export function TaskStatusBar() {
   }
 
   return (
-    <div className="border-b bg-blue-50 px-4 py-2">
+    <div className="border-b border-border bg-accent/10 px-4 py-2">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center gap-2 text-sm font-medium text-blue-900"
+        className="flex items-center gap-2 text-sm font-medium text-accent-foreground/90"
       >
-        <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+        <span className="inline-block h-2 w-2 rounded-full bg-accent animate-pulse" />
         {runningTasks.length} task{runningTasks.length !== 1 ? 's' : ''} running
         <span>{isExpanded ? '−' : '+'}</span>
       </button>
@@ -136,19 +136,19 @@ export function TaskStatusBar() {
             <div
               key={task.task_id}
               className={`flex items-center justify-between rounded px-3 py-2 text-xs ${
-                task.isOfflineCached ? 'bg-gray-100' : 'bg-white'
+                task.isOfflineCached ? 'bg-muted' : 'bg-card'
               }`}
             >
               <div>
                 <div className="flex items-center gap-2">
-                  <div className="font-mono text-gray-500">{task.task_id.slice(0, 8)}...</div>
+                  <div className="font-mono text-muted-foreground">{task.task_id.slice(0, 8)}...</div>
                   {task.isOfflineCached && (
-                    <span className="rounded bg-gray-300 px-1.5 py-0.5 text-xs font-semibold text-gray-700">
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
                       offline
                     </span>
                   )}
                 </div>
-                <div className="max-w-sm truncate text-gray-700">
+                <div className="max-w-sm truncate text-foreground">
                   {task.instruction.slice(0, 60)}
                   {task.instruction.length > 60 ? '…' : ''}
                 </div>
@@ -156,7 +156,7 @@ export function TaskStatusBar() {
               {task.session_id && (
                 <Link
                   to={`/app/chat/sessions/${task.session_id}`}
-                  className="ml-2 whitespace-nowrap rounded bg-blue-500 px-2 py-1 text-white hover:bg-blue-600"
+                  className="ml-2 whitespace-nowrap rounded bg-accent px-2 py-1 text-accent-foreground hover:bg-accent/90"
                 >
                   Open
                 </Link>

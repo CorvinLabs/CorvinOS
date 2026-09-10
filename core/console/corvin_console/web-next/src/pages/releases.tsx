@@ -10,7 +10,13 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { Package, Plus } from 'lucide-react'
+import { Package, Plus, BookOpen } from 'lucide-react'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
 
 interface Release {
   skill_id: string
@@ -114,181 +120,169 @@ export default function ReleaseManagerPanel({ skillId }: { skillId?: string } = 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex items-center gap-3">
-            <Package className="text-blue-600" size={24} />
-            <div>
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Release Manager</h2>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Skill: {skillId}</p>
+      <Card>
+        <CardHeader>
+          <div className="flex justify-between items-center gap-3">
+            <div className="flex items-center gap-3">
+              <Package className="h-6 w-6 text-accent" />
+              <div>
+                <CardTitle>Release Manager</CardTitle>
+                <CardDescription>Skill: {skillId}</CardDescription>
+              </div>
             </div>
+            <Button variant="accent" onClick={() => setShowCreateForm(!showCreateForm)}>
+              <Plus size={18} />
+              New Release
+            </Button>
           </div>
-          <button
-            onClick={() => setShowCreateForm(!showCreateForm)}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
-          >
-            <Plus size={18} />
-            New Release
-          </button>
-        </div>
-
-        {/* Version Info */}
-        <div className="grid grid-cols-2 gap-4">
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4">
           <div>
-            <p className="text-xs text-slate-600 dark:text-slate-400">Latest Version</p>
-            <p className="text-2xl font-bold text-slate-900 dark:text-white">
+            <p className="text-xs text-muted-foreground">Latest Version</p>
+            <p className="text-2xl font-bold text-foreground">
               {latestVersion || 'None'}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-600 dark:text-slate-400">Next Version ({bumpType})</p>
-            <p className="text-2xl font-bold text-blue-600">{nextVersion}</p>
+            <p className="text-xs text-muted-foreground">Next Version ({bumpType})</p>
+            <p className="text-2xl font-bold text-accent">{nextVersion}</p>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Create Release Form */}
       {showCreateForm && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-          <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Create New Release</h3>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Create New Release</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleCreateRelease} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="rel-version">Version (Semantic)</Label>
+                  <Input
+                    id="rel-version"
+                    type="text"
+                    name="version"
+                    placeholder={nextVersion || '1.0.0'}
+                    defaultValue={nextVersion || ''}
+                    required
+                  />
+                </div>
 
-          <form onSubmit={handleCreateRelease} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                  Version (Semantic)
-                </label>
-                <input
-                  type="text"
-                  name="version"
-                  placeholder={nextVersion || '1.0.0'}
-                  defaultValue={nextVersion || ''}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
-                  required
+                <div className="space-y-2">
+                  <Label htmlFor="rel-author">Author</Label>
+                  <Input
+                    id="rel-author"
+                    type="text"
+                    name="author"
+                    placeholder="Your name"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="rel-description">Description</Label>
+                <Textarea
+                  id="rel-description"
+                  name="description"
+                  placeholder="Release description"
+                  className="font-sans text-sm"
+                  rows={2}
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                  Author
-                </label>
-                <input
-                  type="text"
-                  name="author"
-                  placeholder="Your name"
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
+              <div className="space-y-2">
+                <Label htmlFor="rel-changes">Changes (one per line)</Label>
+                <Textarea
+                  id="rel-changes"
+                  name="changes"
+                  placeholder={"- Feature A added\n- Bug fix B\n- Performance improvement"}
+                  rows={4}
                 />
               </div>
-            </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                Description
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="breaking"
+                  className="rounded border-input accent-accent"
+                />
+                <span className="text-sm text-foreground">
+                  This is a breaking change
+                </span>
               </label>
-              <textarea
-                name="description"
-                placeholder="Release description"
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
-                rows={2}
-              />
-            </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                Changes (one per line)
-              </label>
-              <textarea
-                name="changes"
-                placeholder="- Feature A added&#10;- Bug fix B&#10;- Performance improvement"
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white font-mono text-xs"
-                rows={4}
-              />
-            </div>
-
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                name="breaking"
-                className="rounded"
-              />
-              <span className="text-sm text-slate-700 dark:text-slate-300">
-                This is a breaking change
-              </span>
-            </label>
-
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
-              >
-                Create Release
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowCreateForm(false)}
-                className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-medium"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
+              <div className="flex gap-2">
+                <Button type="submit" variant="accent" className="flex-1">
+                  Create Release
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => setShowCreateForm(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
       )}
 
       {/* Changelog Link */}
       {releases.length > 0 && (
-        <button
+        <Button
+          variant="secondary"
+          className="w-full justify-start"
           onClick={() => changelog ? setChangelog(null) : fetchChangelog()}
-          className="w-full px-4 py-2 text-left bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg font-medium hover:bg-slate-200 dark:hover:bg-slate-600"
         >
-          {changelog ? '📖 Hide Changelog' : '📖 View Changelog'}
-        </button>
+          <BookOpen size={16} />
+          {changelog ? 'Hide Changelog' : 'View Changelog'}
+        </Button>
       )}
 
       {changelog && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6">
-          <pre className="bg-slate-100 dark:bg-slate-900/50 p-4 rounded overflow-auto text-xs">
-            {changelog}
-          </pre>
-        </div>
+        <Card>
+          <CardContent className="pt-6">
+            <pre className="bg-muted p-4 rounded overflow-auto text-xs">
+              {changelog}
+            </pre>
+          </CardContent>
+        </Card>
       )}
 
       {/* Release History */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
-        <div className="p-4 border-b border-slate-200 dark:border-slate-700 font-bold text-slate-900 dark:text-white">
+      <Card className="overflow-hidden">
+        <div className="p-4 border-b border-border font-bold text-foreground">
           Release History ({releases.length})
         </div>
 
         {releases.length === 0 ? (
-          <div className="p-8 text-center text-slate-600 dark:text-slate-400">
+          <div className="p-8 text-center text-muted-foreground">
             No releases yet. Create the first one!
           </div>
         ) : (
-          <div className="divide-y divide-slate-200 dark:divide-slate-700">
+          <div className="divide-y divide-border">
             {releases.map((release) => (
               <div
                 key={release.version}
-                className="p-4 hover:bg-slate-50 dark:hover:bg-slate-900/30 cursor-pointer transition"
+                className="p-4 hover:bg-muted/30 cursor-pointer transition-colors"
               >
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-900 dark:text-white">v{release.version}</span>
+                    <span className="font-bold text-foreground">v{release.version}</span>
                     {release.breaking_changes && (
-                      <span className="text-xs px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded">
-                        BREAKING
-                      </span>
+                      <Badge variant="danger" className="text-xs">BREAKING</Badge>
                     )}
                   </div>
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-muted-foreground">
                     {new Date(release.timestamp).toLocaleDateString()}
                   </span>
                 </div>
 
-                <p className="text-sm text-slate-700 dark:text-slate-300 mb-2">
+                <p className="text-sm text-foreground/90 mb-2">
                   {release.description}
                 </p>
 
-                <p className="text-xs text-slate-600 dark:text-slate-400">
+                <p className="text-xs text-muted-foreground">
                   By {release.author} • {release.changes.length} changes
                 </p>
 
@@ -297,7 +291,7 @@ export default function ReleaseManagerPanel({ skillId }: { skillId?: string } = 
                     e.stopPropagation()
                     viewReleaseNotes(release.version)
                   }}
-                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-1"
+                  className="text-xs text-accent hover:underline mt-1"
                 >
                   View Notes →
                 </button>
@@ -305,12 +299,12 @@ export default function ReleaseManagerPanel({ skillId }: { skillId?: string } = 
             ))}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Info */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-        <p className="text-sm text-blue-700 dark:text-blue-400">
-          💡 <strong>Semantic Versioning:</strong> Use MAJOR.MINOR.PATCH format.
+      <div className="rounded-lg border border-border bg-muted/30 p-4">
+        <p className="text-sm text-muted-foreground">
+          <strong className="text-foreground">Semantic Versioning:</strong> Use MAJOR.MINOR.PATCH format.
           Major version for breaking changes, minor for new features, patch for bug fixes.
         </p>
       </div>

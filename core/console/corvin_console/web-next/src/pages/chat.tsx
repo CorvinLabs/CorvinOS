@@ -490,7 +490,7 @@ function SessionListItem({
               )}
               {!streamState && taskStatus.status === "pending" && (
                 <span
-                  className="h-2 w-2 rounded-full bg-blue-500 animate-pulse shrink-0"
+                  className="h-2 w-2 rounded-full bg-accent animate-pulse shrink-0"
                   title="Task pending"
                   aria-label="Task pending in this chat"
                 />
@@ -686,7 +686,7 @@ const ChatStatusBar = React.memo(function ChatStatusBar({
     <div className="border-t border-border/30 bg-background/60 px-8 py-1.5">
       <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
         <button
-          onClick={() => navigate("/app/engines")}
+          onClick={() => navigate("/app/engine-config")}
           title="AI Engine — click to change"
           className={cn(
             "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
@@ -1832,13 +1832,13 @@ function ChatPane({
       {auditOpen && (
         <div className="flex flex-col flex-1 min-h-0 border-b border-border">
           {/* tab bar */}
-          <div className="flex items-center gap-0 border-b border-slate-800 bg-slate-950 flex-shrink-0">
+          <div className="flex items-center gap-0 border-b border-border bg-muted/30 flex-shrink-0">
             <button
               onClick={() => setAuditTab("single")}
               className={`px-3 py-1.5 text-[10px] font-semibold border-b-2 transition-colors ${
                 auditTab === "single"
-                  ? "border-indigo-500 text-indigo-400 bg-indigo-950/30"
-                  : "border-transparent text-slate-500 hover:text-slate-300"
+                  ? "border-indigo-500 text-indigo-600 dark:text-indigo-400 bg-indigo-500/10"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
               Single-Chain
@@ -1847,8 +1847,8 @@ function ChatPane({
               onClick={() => setAuditTab("dual-track")}
               className={`px-3 py-1.5 text-[10px] font-semibold border-b-2 transition-colors ${
                 auditTab === "dual-track"
-                  ? "border-orange-500 text-orange-400 bg-orange-950/20"
-                  : "border-transparent text-slate-500 hover:text-slate-300"
+                  ? "border-orange-500 text-orange-600 dark:text-orange-400 bg-orange-500/10"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
               Dual-Track
@@ -1857,8 +1857,8 @@ function ChatPane({
               onClick={() => setAuditTab("tde-graph")}
               className={`px-3 py-1.5 text-[10px] font-semibold border-b-2 transition-colors ${
                 auditTab === "tde-graph"
-                  ? "border-sky-500 text-sky-400 bg-sky-950/20"
-                  : "border-transparent text-slate-500 hover:text-slate-300"
+                  ? "border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/10"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
               TDE Graph
@@ -1883,20 +1883,20 @@ function ChatPane({
           {persistedTasks.length > 0 && (
             <>
               {/* Task update status indicator */}
-              <div className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+              <div className="text-xs text-muted-foreground mb-2">
                 {tasksConnected ? (
                   <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     Live updates active
                   </span>
                 ) : tasksPolling ? (
                   <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                     Polling for updates
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-gray-500" />
+                    <span className="w-2 h-2 rounded-full bg-muted-foreground/50" />
                     Task updates paused (offline)
                   </span>
                 )}
@@ -2117,17 +2117,17 @@ function ChatPane({
 function RecordingOverlay({ onStop }: { onStop: () => void }) {
   return (
     <div className="pointer-events-none sticky top-0 z-10 -mx-8 -mt-8 mb-8 flex justify-center px-8 pt-3">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm shadow-lg backdrop-blur">
+      <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm shadow-lg backdrop-blur">
         <span className="relative flex h-2.5 w-2.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
-          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-destructive" />
         </span>
-        <span className="font-medium text-red-700 dark:text-red-300">
+        <span className="font-medium text-destructive">
           Recording — release <kbd className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-[11px]">Space</kbd> to send
         </span>
         <button
           onClick={onStop}
-          className="rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600"
+          className="rounded-full bg-destructive px-2 py-0.5 text-[11px] font-medium text-destructive-foreground hover:bg-destructive/90"
         >
           Stop
         </button>
@@ -2206,15 +2206,15 @@ const CCC_ENTITY_LINKS: Record<string, string> = {
   audit_query:     "/app/compliance",
   erasure_request: "/app/compliance",
   vault_entry:     "/app/compliance",
-  worker_engine:   "/app/engines",
+  worker_engine:   "/app/engine-config",
   rag_source:      "/app/rag",
-  a2a_session:     "/app/engines",
+  a2a_session:     "/app/engine-config",
 };
 
 const CCC_STATUS_COLORS: Record<string, string> = {
-  created:         "bg-green-500/20 text-green-700 border-green-300",
-  queued:          "bg-yellow-500/20 text-yellow-700 border-yellow-300",
-  error:           "bg-red-500/20 text-red-700 border-red-300",
+  created:         "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
+  queued:          "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  error:           "bg-destructive/10 text-destructive border-destructive/30",
   not_implemented: "bg-muted text-muted-foreground border-muted-foreground/30",
 };
 
@@ -2564,7 +2564,7 @@ function ArtifactCard({ artifact }: { artifact: Extract<MessagePart, { kind: "ar
             <pre className="overflow-auto max-h-[400px] p-4 font-mono text-xs leading-relaxed text-foreground/80 whitespace-pre-wrap break-words">
               {content}
               {content.length >= 10000 && (
-                <div className="text-yellow-500 mt-2">… (truncated, download for full content)</div>
+                <div className="text-amber-600 dark:text-amber-400 mt-2">… (truncated, download for full content)</div>
               )}
             </pre>
           ) : (
@@ -2580,9 +2580,9 @@ function ArtifactCard({ artifact }: { artifact: Extract<MessagePart, { kind: "ar
         {artifact.label && (
           <span className={
             "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide " +
-            (artifact.label === "Graph"   ? "bg-purple-500/20 text-purple-400" :
-             artifact.label === "live"    ? "bg-blue-500/20 text-blue-400" :
-             artifact.label === "compute" ? "bg-orange-500/20 text-orange-400" :
+            (artifact.label === "Graph"   ? "bg-purple-500/15 text-purple-700 dark:text-purple-400" :
+             artifact.label === "live"    ? "bg-accent/15 text-accent-foreground/90" :
+             artifact.label === "compute" ? "bg-orange-500/15 text-orange-700 dark:text-orange-400" :
                                             "bg-muted text-muted-foreground")
           }>
             {artifact.label}

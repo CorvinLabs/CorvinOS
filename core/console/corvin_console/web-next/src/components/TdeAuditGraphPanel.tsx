@@ -12,6 +12,7 @@ import * as React from "react";
 import { GitGraph } from "lucide-react";
 import { useChatSession } from "@/lib/chat-registry";
 import { ComputeGraphView } from "@/components/ComputeGraphView";
+import { Input } from "@/components/ui/input";
 
 interface Props {
   sid: string;
@@ -53,12 +54,12 @@ export function TdeAuditGraphPanel({ sid }: Props) {
   const latencyDelta = latestTdeProgress?.latency_delta_pct;
 
   return (
-    <div className="flex flex-col gap-3 p-4 h-full overflow-y-auto bg-slate-950">
-      <div className="flex items-center gap-2 text-xs text-slate-400">
+    <div className="flex flex-col gap-3 p-4 h-full overflow-y-auto bg-background">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <GitGraph className="h-3.5 w-3.5" />
         {latestTdeRunId ? (
           <span>
-            Latest TDE turn in this chat: <span className="font-mono text-slate-200">{latestTdeRunId}</span>
+            Latest TDE turn in this chat: <span className="font-mono text-foreground">{latestTdeRunId}</span>
           </span>
         ) : (
           <span>No TDE turn detected yet in this chat (run <code className="font-mono">/use-engine tiered_delegation &lt;task&gt;</code> to start one).</span>
@@ -67,40 +68,40 @@ export function TdeAuditGraphPanel({ sid }: Props) {
 
       {latestTdeProgress && (
         <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-2 gap-2 text-xs bg-slate-900 rounded p-2 border border-slate-800">
-            <div className="col-span-2 font-semibold text-slate-300 mb-1">TDE Delegation Metrics</div>
+          <div className="grid grid-cols-2 gap-2 text-xs bg-muted/40 rounded p-2 border border-border">
+            <div className="col-span-2 font-semibold text-foreground mb-1">TDE Delegation Metrics</div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Steps:</span>
-              <span className="text-slate-200 font-mono">{latestTdeProgress.completed_steps}/{latestTdeProgress.total_steps}</span>
+              <span className="text-muted-foreground">Steps:</span>
+              <span className="text-foreground font-mono">{latestTdeProgress.completed_steps}/{latestTdeProgress.total_steps}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Delegated:</span>
-              <span className="text-slate-200 font-mono">{latestTdeProgress.delegated_count}</span>
+              <span className="text-muted-foreground">Delegated:</span>
+              <span className="text-foreground font-mono">{latestTdeProgress.delegated_count}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Local:</span>
-              <span className="text-slate-200 font-mono">{latestTdeProgress.local_count}</span>
+              <span className="text-muted-foreground">Local:</span>
+              <span className="text-foreground font-mono">{latestTdeProgress.local_count}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">L34 Gate:</span>
-              <span className={`font-mono ${latestTdeProgress.l34_forced ? "text-red-400" : "text-green-400"}`}>
+              <span className="text-muted-foreground">L34 Gate:</span>
+              <span className={`font-mono ${latestTdeProgress.l34_forced ? "text-destructive" : "text-emerald-600 dark:text-emerald-400"}`}>
                 {latestTdeProgress.l34_forced ? "Blocked" : "Allowed"}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Latency vs. local:</span>
-              <span className="text-slate-200 font-mono">
+              <span className="text-muted-foreground">Latency vs. local:</span>
+              <span className="text-foreground font-mono">
                 {typeof latencyDelta === "number"
                   ? `${latencyDelta > 0 ? "+" : ""}${latencyDelta.toFixed(1)}%`
                   : "n/a"}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Token savings:</span>
+              <span className="text-muted-foreground">Token savings:</span>
               {/* ADR-0215 honesty: token_savings_pct is null until a
                   counterfactual baseline exists (ADR-0218 Phase-1 measurement) —
                   render the truth, never an invented estimate. */}
-              <span className="text-slate-500 font-mono">
+              <span className="text-muted-foreground font-mono">
                 {latestTdeProgress.token_usage_instrumented &&
                  typeof latestTdeProgress.token_savings_pct === "number"
                   ? `${latestTdeProgress.token_savings_pct.toFixed(1)}%`
@@ -114,16 +115,16 @@ export function TdeAuditGraphPanel({ sid }: Props) {
               typeof latestTdeProgress.total_tokens === "number" && (
               <>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Tokens (total):</span>
-                  <span className="text-slate-300 font-mono">
+                  <span className="text-muted-foreground">Tokens (total):</span>
+                  <span className="text-foreground font-mono">
                     {latestTdeProgress.total_tokens.toLocaleString()}
                     {typeof latestTdeProgress.cost_usd === "number" &&
                       ` · $${latestTdeProgress.cost_usd.toFixed(4)}`}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Delegated / local:</span>
-                  <span className="text-slate-300 font-mono">
+                  <span className="text-muted-foreground">Delegated / local:</span>
+                  <span className="text-foreground font-mono">
                     {(latestTdeProgress.tokens_delegated ?? 0).toLocaleString()}
                     {" / "}
                     {(latestTdeProgress.tokens_local ?? 0).toLocaleString()}
@@ -131,8 +132,8 @@ export function TdeAuditGraphPanel({ sid }: Props) {
                 </div>
                 {latestTdeProgress.tokens_by_kind && (
                   <div className="flex justify-between">
-                    <span className="text-slate-400">Context vs work:</span>
-                    <span className="text-slate-500 font-mono text-[10px]">
+                    <span className="text-muted-foreground">Context vs work:</span>
+                    <span className="text-muted-foreground font-mono text-[10px]">
                       cache {(
                         (latestTdeProgress.tokens_by_kind.cache_read_input_tokens ?? 0) +
                         (latestTdeProgress.tokens_by_kind.cache_creation_input_tokens ?? 0)
@@ -151,18 +152,18 @@ export function TdeAuditGraphPanel({ sid }: Props) {
         </div>
       )}
 
-      <label className="flex items-center gap-2 text-xs text-slate-400">
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="shrink-0">TDE run id override:</span>
-        <input
+        <Input
           type="text"
           value={manualRunId}
           onChange={(e) => setManualRunId(e.target.value)}
           placeholder={latestTdeRunId ?? "tde-<epoch>-<hex>"}
-          className="flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="flex-1 h-7 font-mono text-xs"
         />
       </label>
       {manualTrimmed !== "" && !manualValid && (
-        <div className="text-[10px] text-amber-400">
+        <div className="text-[10px] text-amber-600 dark:text-amber-400">
           Not a TDE run id yet — expected shape <code className="font-mono">tde-&lt;epoch&gt;-&lt;8 hex&gt;</code>.
         </div>
       )}
@@ -173,7 +174,7 @@ export function TdeAuditGraphPanel({ sid }: Props) {
         // fetch latched a sticky 404 for the whole run (review 2026-07-24).
         <ComputeGraphView mode="tde" runId={activeRunId} pollMs={streaming ? 2000 : 0} />
       ) : (
-        <div className="text-xs text-slate-500 py-8 text-center">
+        <div className="text-xs text-muted-foreground py-8 text-center">
           No TDE run selected — start a TDE turn or paste a run id above.
         </div>
       )}

@@ -927,12 +927,12 @@ function FeatureHeatmapCard() {
               const pct = data.adoption_pct[f.key] ?? 0;
               const bgColor =
                 pct > 50 ? "bg-emerald-500/20" :
-                pct > 20 ? "bg-yellow-500/20" :
-                "bg-gray-500/20";
+                pct > 20 ? "bg-amber-500/20" :
+                "bg-muted";
               const textColor =
-                pct > 50 ? "text-emerald-600" :
-                pct > 20 ? "text-yellow-600" :
-                "text-gray-600";
+                pct > 50 ? "text-emerald-600 dark:text-emerald-400" :
+                pct > 20 ? "text-amber-600 dark:text-amber-400" :
+                "text-muted-foreground";
 
               return (
                 <div key={f.key} className="space-y-1">

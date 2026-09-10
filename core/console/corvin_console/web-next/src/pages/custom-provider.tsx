@@ -201,7 +201,7 @@ export default function CustomProviderPage() {
     <div className="space-y-6 p-6">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Database className="h-8 w-8 text-blue-600 dark:text-blue-400" />
+        <Database className="h-8 w-8 text-accent" />
         <div>
           <h1 className="text-3xl font-bold">Create Custom RAG Provider</h1>
           <p className="text-sm text-muted-foreground mt-1">Connect your API in 4 simple steps</p>
@@ -250,8 +250,8 @@ export default function CustomProviderPage() {
               className={cn(
                 "flex-1 h-2 rounded-full transition-all",
                 idx <= currentStepIndex
-                  ? "bg-blue-600 dark:bg-blue-500"
-                  : "bg-muted dark:bg-muted"
+                  ? "bg-accent"
+                  : "bg-muted"
               )}
             />
           ))}
@@ -265,9 +265,9 @@ export default function CustomProviderPage() {
         </CardHeader>
         <CardContent className="space-y-6">
           {errors._general && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30 dark:bg-red-500/5">
-              <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-              <span className="text-sm text-red-600 dark:text-red-400">{errors._general}</span>
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
+              <AlertCircle className="h-4 w-4 text-destructive" />
+              <span className="text-sm text-destructive">{errors._general}</span>
             </div>
           )}
 
@@ -381,7 +381,7 @@ function Step1Basic({ form, updateForm }: StepBaseProps & { errors?: Record<stri
           value={form.description}
           onChange={(e) => updateForm("description", e.target.value)}
           rows={2}
-          className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground placeholder:text-muted-foreground dark:placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500"
+          className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground placeholder:text-muted-foreground dark:placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
         />
       </div>
 
@@ -439,7 +439,7 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
             id="method"
             value={form.method}
             onChange={(e) => updateForm("method", e.target.value)}
-            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500"
+            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option>GET</option>
             <option>POST</option>
@@ -464,7 +464,7 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
             id="auth_type"
             value={form.auth_type}
             onChange={(e) => updateForm("auth_type", e.target.value)}
-            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500"
+            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="bearer-token">Bearer Token</option>
             <option value="api-key">API Key</option>
@@ -490,7 +490,7 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
           value={form.query_format_sample}
           onChange={(e) => updateForm("query_format_sample", e.target.value)}
           rows={3}
-          className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground font-mono text-sm placeholder:text-muted-foreground dark:placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500"
+          className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground font-mono text-sm placeholder:text-muted-foreground dark:placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           placeholder='{"search": "{query}", "results": {limit}}'
         />
         <p className="text-xs text-muted-foreground mt-2">Must contain {"{query}"} and {"{limit}"} placeholders</p>
@@ -520,8 +520,8 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
           className={cn(
             "p-4 rounded-lg border",
             testResult.status === "connected"
-              ? "bg-emerald-500/10 border-emerald-500/30 dark:bg-emerald-500/5"
-              : "bg-red-500/10 border-red-500/30 dark:bg-red-500/5"
+              ? "bg-emerald-500/10 border-emerald-500/30"
+              : "bg-destructive/10 border-destructive/30"
           )}
         >
           {testResult.status === "connected" ? (
@@ -539,8 +539,8 @@ function Step2API({ form, updateForm, onTest, testResult, isLoading }: StepBaseP
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-              <p className="text-sm text-red-700 dark:text-red-400">{testResult.error}</p>
+              <AlertCircle className="h-4 w-4 text-destructive" />
+              <p className="text-sm text-destructive">{testResult.error}</p>
             </div>
           )}
         </div>
@@ -555,8 +555,8 @@ function Step3Mapping({ form, updateForm }: StepBaseProps & { testResult?: TestR
   return (
     <div className="space-y-4">
       {form.endpoint && (
-        <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 dark:bg-blue-500/5 dark:border-blue-500/30">
-          <p className="text-sm text-blue-700 dark:text-blue-400">
+        <div className="p-3 rounded-lg bg-accent/10 border border-accent/30">
+          <p className="text-sm text-accent">
             <strong>Tip:</strong> Use JSONPath like `results[].content`, `data.items[].score`
           </p>
         </div>
@@ -650,7 +650,7 @@ function Step4Compliance({ form, updateForm }: StepBaseProps) {
             id="classification"
             value={form.data_classification}
             onChange={(e) => updateForm("data_classification", e.target.value)}
-            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500"
+            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="PUBLIC">PUBLIC</option>
             <option value="INTERNAL">INTERNAL</option>
@@ -664,7 +664,7 @@ function Step4Compliance({ form, updateForm }: StepBaseProps) {
             id="zone"
             value={form.compliance_zone}
             onChange={(e) => updateForm("compliance_zone", e.target.value)}
-            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500"
+            className="w-full mt-2 px-3 py-2 border border-input rounded-md bg-background dark:bg-muted/40 text-foreground dark:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="EU">EU (GDPR)</option>
             <option value="US">US</option>
@@ -674,8 +674,8 @@ function Step4Compliance({ form, updateForm }: StepBaseProps) {
         </div>
       </div>
 
-      <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 dark:bg-blue-500/5 dark:border-blue-500/30">
-        <p className="text-sm text-blue-700 dark:text-blue-400">
+      <div className="p-3 rounded-lg bg-accent/10 border border-accent/30">
+        <p className="text-sm text-accent">
           ✅ Your provider will be created with secure defaults (circuit breaker, retries, health checks).
         </p>
       </div>

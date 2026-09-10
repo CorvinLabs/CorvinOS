@@ -23,6 +23,7 @@ import {
   ToggleRight,
   Trash2,
 } from "lucide-react";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,33 +40,19 @@ import {
   updatePluginSettings,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { cn } from "@/lib/utils";
 
-const ORIGIN_BADGE: Record<string, string> = {
-  builtin: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  vetted: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  community: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+const ORIGIN_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> = {
+  builtin: "ok",
+  vetted: "accent",
+  community: "warn",
 };
 
-const PII_BADGE: Record<string, string> = {
-  none: "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
-  low: "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
-  medium: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-  high: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+const PII_BADGE: Record<string, NonNullable<BadgeProps["variant"]>> = {
+  none: "secondary",
+  low: "secondary",
+  medium: "warn",
+  high: "danger",
 };
-
-function Badge({ text, className }: { text: string; className?: string }) {
-  return (
-    <span
-      className={cn(
-        "rounded px-1.5 py-0.5 text-xs font-medium",
-        className ?? "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
-      )}
-    >
-      {text}
-    </span>
-  );
-}
 
 // ── One plugin card ───────────────────────────────────────────────────────────
 
@@ -150,9 +137,9 @@ function PluginCard({ plugin, csrf, mutable }: CardProps) {
           <Puzzle className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="font-medium">{plugin.display_name}</span>
           <span className="text-xs text-muted-foreground">v{plugin.version}</span>
-          <Badge text={plugin.plugin_type} />
-          <Badge text={plugin.origin} className={ORIGIN_BADGE[plugin.origin]} />
-          <Badge text={`PII: ${plugin.pii_risk}`} className={PII_BADGE[plugin.pii_risk]} />
+          <Badge variant="secondary">{plugin.plugin_type}</Badge>
+          <Badge variant={ORIGIN_BADGE[plugin.origin]}>{plugin.origin}</Badge>
+          <Badge variant={PII_BADGE[plugin.pii_risk]}>{`PII: ${plugin.pii_risk}`}</Badge>
           {plugin.requires_consent && (
             <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
               <ShieldAlert className="h-3 w-3" /> consent required
@@ -172,7 +159,7 @@ function PluginCard({ plugin, csrf, mutable }: CardProps) {
             </span>
           )}
           {plugin.last_error_type && (
-            <span className="flex items-center gap-1 text-xs text-red-600 dark:text-red-400">
+            <span className="flex items-center gap-1 text-xs text-destructive">
               <AlertTriangle className="h-3 w-3" /> last error: {plugin.last_error_type}
             </span>
           )}
@@ -185,7 +172,7 @@ function PluginCard({ plugin, csrf, mutable }: CardProps) {
                 disabled={!mutable || busy}
                 onClick={() => disableMut.mutate()}
               >
-                <ToggleRight className="mr-1 h-4 w-4 text-green-600" /> Enabled
+                <ToggleRight className="mr-1 h-4 w-4 text-emerald-600 dark:text-emerald-400" /> Enabled
               </Button>
             ) : (
               <Button
@@ -218,7 +205,7 @@ function PluginCard({ plugin, csrf, mutable }: CardProps) {
         )}
 
         {notice && (
-          <div className="space-y-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs dark:border-amber-800 dark:bg-amber-950">
+          <div className="space-y-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs">
             <p>{notice}</p>
             {enableMut.isError && plugin.requires_consent && !plugin.enabled && (
               <Button
@@ -282,9 +269,9 @@ function ScaffoldCard({ scaffold }: { scaffold: PluginScaffoldSummary }) {
         <div className="flex flex-wrap items-center gap-2">
           <Hammer className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="font-medium">{scaffold.display_name}</span>
-          <Badge text={scaffold.kind} />
-          <Badge text={`Tier ${scaffold.tier}`} />
-          {scaffold.plugin_type && <Badge text={scaffold.plugin_type} />}
+          <Badge variant="secondary">{scaffold.kind}</Badge>
+          <Badge variant="secondary">{`Tier ${scaffold.tier}`}</Badge>
+          {scaffold.plugin_type && <Badge variant="secondary">{scaffold.plugin_type}</Badge>}
           <span className="ml-auto text-xs text-muted-foreground">{created}</span>
         </div>
         <p className="text-xs text-muted-foreground">
@@ -376,7 +363,7 @@ export function PluginsPage() {
 
       {error && !surfaceOff && (
         <Card>
-          <CardContent className="p-4 text-sm text-red-600 dark:text-red-400">
+          <CardContent className="p-4 text-sm text-destructive">
             {error instanceof Error ? error.message : "Failed to load plugins."}
           </CardContent>
         </Card>

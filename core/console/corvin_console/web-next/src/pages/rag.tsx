@@ -47,8 +47,8 @@ import {
 function HealthBadge({ status }: { status: RAGProvider["health_status"] }) {
   const variants = {
     healthy: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
-    unhealthy: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30",
-    unknown: "bg-gray-500/10 text-gray-600 dark:text-gray-400 border-gray-500/30",
+    unhealthy: "bg-destructive/10 text-destructive border-destructive/30",
+    unknown: "bg-muted text-muted-foreground border-border",
   };
 
   const icons = {
@@ -87,7 +87,7 @@ function ProviderCard({ provider }: { provider: RAGProvider }) {
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Database className="h-5 w-5 text-blue-500" />
+            <Database className="h-5 w-5 text-accent" />
             <div>
               <CardTitle className="text-base">{current.name}</CardTitle>
               <CardDescription className="text-xs">{current.id}</CardDescription>
@@ -253,7 +253,7 @@ function QueryTester() {
                         else renders as inert text. */}
                     {item.source_url && (
                       safeHttpUrl(item.source_url) ? (
-                        <a href={safeHttpUrl(item.source_url) as string} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+                        <a href={safeHttpUrl(item.source_url) as string} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">
                           {item.source_url}
                         </a>
                       ) : (
@@ -298,7 +298,7 @@ function ProviderList() {
         <p className="text-muted-foreground">No providers registered</p>
         <p className="text-sm text-muted-foreground mt-1">
           Register a provider on the{" "}
-          <a href="/app/custom-provider" className="text-blue-500 hover:underline">
+          <a href="/app/custom-provider" className="text-accent hover:underline">
             Create Custom RAG Provider
           </a>{" "}
           page.

@@ -118,7 +118,11 @@ class ConfidenceOptimizer:
             store: learning_store for persistence (dict-like interface)
             audit_backend: audit backend for logging updates
         """
-        self.store = store or {}
+        # NOT `store or {}` — an empty MutableMapping (len()==0, e.g. a
+        # freshly-created PersistentConfidenceStore before its first write)
+        # is falsy, so `or` would silently replace it with a throwaway plain
+        # dict on every fresh process, discarding all persistence.
+        self.store = store if store is not None else {}
         self.audit_backend = audit_backend
         self._stats_cache: Dict[Tuple[str, str, str], ModelStats] = {}  # (task_type, model, tenant) -> stats
         self._confidence_history: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
@@ -191,8 +195,17 @@ class ConfidenceOptimizer:
             last_updated=datetime.now(timezone.utc).isoformat(),
         )
 
-        # Track confidence history
-        self._confidence_history[key].append(new_confidence)
+        # Track confidence history (persisted — see _load_stats/_check_convergence)
+        history = self._confidence_history[key]
+        history.append(new_confidence)
+        del history[:-self.CONVERGENCE_WINDOW]  # cap growth; only the window matters
+        try:
+            from . import confidence_persistence  # noqa: PLC0415
+            confidence_persistence.save_confidence_history(
+                f"model_stats:{task_type}:{model}:{tenant_id}", history,
+            )
+        except Exception as e:  # noqa: BLE001 — in-memory history still works this process
+            logger.warning(f"Failed to persist confidence history: {e}")
 
         # Check convergence
         is_converged = self._check_convergence(key)
@@ -216,7 +229,7 @@ class ConfidenceOptimizer:
 
         # Persist (SECOND, safe to fail with log)
         self._cache_stats(key, new_stats)
-        if self.store:
+        if self.store is not None:
             try:
                 self.store[f"model_stats:{task_type}:{model}:{tenant_id}"] = new_stats.to_dict()
             except Exception as e:
@@ -278,7 +291,7 @@ class ConfidenceOptimizer:
             del self._confidence_history[key]
 
         # Clear store
-        if self.store:
+        if self.store is not None:
             try:
                 keys_to_delete = [k for k in self.store.keys() if tenant_id in k]
                 for k in keys_to_delete:
@@ -298,12 +311,23 @@ class ConfidenceOptimizer:
         task_type, model, tenant_id = key
 
         # Try to load from store
-        if self.store:
+        if self.store is not None:
             store_key = f"model_stats:{task_type}:{model}:{tenant_id}"
             if store_key in self.store:
                 data = self.store[store_key]
                 stats = ModelStats(**data)
                 self._stats_cache[key] = stats
+                # Convergence needs the confidence trajectory too, not just
+                # the latest stats — without this, every process restart
+                # (or a cross-process read, e.g. the console reading what
+                # the bridge daemon wrote) starts is_converged() from an
+                # empty window and reports "not converged" regardless of
+                # real history.
+                try:
+                    from . import confidence_persistence  # noqa: PLC0415
+                    self._confidence_history[key] = confidence_persistence.load_confidence_history(store_key)
+                except Exception:  # noqa: BLE001 — history is an optimization, not correctness-critical
+                    pass
                 return stats
 
         # Initialize with default stats (uniform prior)
@@ -347,6 +371,43 @@ class ConfidenceOptimizer:
         return variance < self.CONVERGENCE_THRESHOLD
 
 
+class _SkillAuditBackend:
+    """Adapts ConfidenceOptimizer's ``audit_backend.write_event(**kwargs)``
+    call to the tenant's real hash-chained core chain (skill_audit.py) —
+    the same sink os.model_selector's shadow classification and
+    os.delegation_router's L5 shadow record use. Without this,
+    ``audit_backend=None`` (the dataclass default) means "confidence_updated"
+    is never audited even though ADR-0644 calls audit-first non-negotiable."""
+
+    _ALLOWLIST_REGISTERED = False
+
+    def write_event(self, *, event_type: str, tenant_id: str, **details: Any) -> None:
+        try:
+            from core.skills.skill_audit import emit_skill_audit  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 — stripped install without core.skills
+            return
+        if not self._ALLOWLIST_REGISTERED:
+            try:
+                import corvin_core._bootstrap  # noqa: F401
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]  # noqa: PLC0415
+                register_event_allowlist("confidence_updated", {
+                    "task_type", "model", "old_confidence", "new_confidence",
+                    "quality_observed", "n_samples",
+                })
+                type(self)._ALLOWLIST_REGISTERED = True
+            except Exception:  # noqa: BLE001 — best-effort; emit still tries
+                pass
+        emit_skill_audit(
+            tenant_id=tenant_id,
+            event_type=event_type,
+            tool="os.model_selector",
+            details=details,
+        )
+
+
 # Singleton instance
 _optimizer: Optional[ConfidenceOptimizer] = None
 
@@ -362,8 +423,18 @@ def initialize_optimizer(
 
 
 def get_optimizer() -> ConfidenceOptimizer:
-    """Get the global optimizer."""
+    """Get the global optimizer — real, persistent, audited by default.
+
+    2026-09-10: was ``ConfidenceOptimizer()`` (in-memory dict, no audit) —
+    every process (the bridge daemon that classifies+feeds outcomes, the
+    console gateway that reads analytics) got its OWN invisible-to-each-other
+    singleton, and a restart of either wiped it. See confidence_persistence.py.
+    """
     global _optimizer
     if _optimizer is None:
-        _optimizer = ConfidenceOptimizer()
+        from . import confidence_persistence  # noqa: PLC0415
+        _optimizer = ConfidenceOptimizer(
+            store=confidence_persistence.PersistentConfidenceStore(),
+            audit_backend=_SkillAuditBackend(),
+        )
     return _optimizer

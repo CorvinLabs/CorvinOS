@@ -9,6 +9,7 @@
  */
 
 import React, { useState } from 'react'
+import { cn } from '@/lib/utils'
 import { MarketplacePanel } from '@/panels/marketplace'
 import { InstalledTab } from './InstalledTab'
 
@@ -18,25 +19,27 @@ export const MarketplaceTab: React.FC = () => {
   return (
     <div className="mt-4 space-y-4">
       {/* Sub-tabs for Browse vs Installed */}
-      <div className="flex gap-4 border-b border-slate-200 dark:border-slate-700">
+      <div className="flex gap-4 border-b border-border">
         <button
           onClick={() => setView('browse')}
-          className={`px-4 py-2 font-medium transition ${
+          className={cn(
+            'px-4 py-2 font-medium transition',
             view === 'browse'
-              ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600'
-              : 'text-slate-600 dark:text-slate-400'
-          }`}
+              ? 'text-accent border-b-2 border-accent'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
           data-testid="marketplace-view-browse"
         >
           Browse
         </button>
         <button
           onClick={() => setView('installed')}
-          className={`px-4 py-2 font-medium transition ${
+          className={cn(
+            'px-4 py-2 font-medium transition',
             view === 'installed'
-              ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600'
-              : 'text-slate-600 dark:text-slate-400'
-          }`}
+              ? 'text-accent border-b-2 border-accent'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
           data-testid="marketplace-view-installed"
         >
           Installed

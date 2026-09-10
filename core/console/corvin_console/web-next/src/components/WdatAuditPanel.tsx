@@ -250,8 +250,8 @@ function ComplianceBadge({ label, value }: { label: string; value?: string }) {
     <span className={cn(
       "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-mono whitespace-nowrap",
       ok
-        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-        : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500",
+        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+        : "bg-muted text-muted-foreground",
     )}>
       <ShieldCheck className="h-3 w-3 shrink-0" />
       {label}: {value ?? "—"}
@@ -407,7 +407,7 @@ function WdatGraphInner({
 
   React.useEffect(() => {
     const incoming = payload.nodes as Node[];
-    const incomingEdges = payload.edges as Edge[];
+    const incomingEdges = payload.edges as unknown as Edge[];
 
     if (!initializedRef.current) {
       // First load — full replace + fitView
@@ -474,12 +474,12 @@ function WdatGraphInner({
           className={cn(
             "font-mono text-[10px]",
             meta.chain_integrity === "verified"
-              ? "border-green-700 text-green-400"
+              ? "border-emerald-500/50 text-emerald-600 dark:text-emerald-400"
               : meta.chain_integrity === "broken"
-                ? "border-red-700 text-red-400"
+                ? "border-destructive/50 text-destructive"
                 : meta.chain_integrity === "unavailable"
-                  ? "border-amber-700 text-amber-400"
-                  : "border-zinc-600 text-zinc-400",
+                  ? "border-amber-500/50 text-amber-600 dark:text-amber-400"
+                  : "border-muted-foreground/30 text-muted-foreground",
           )}
           title={
             meta.chain_integrity === "broken"
@@ -495,8 +495,8 @@ function WdatGraphInner({
           {meta.total_manager_decisions} decisions · {meta.total_workers} workers
         </span>
         {isActive && (
-          <span className="inline-flex items-center gap-1 rounded bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-mono text-blue-700 dark:text-blue-400">
-            <span className="h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400 animate-pulse" />
+          <span className="inline-flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-[10px] font-mono text-accent-foreground/90">
+            <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
             Live
           </span>
         )}
@@ -643,10 +643,10 @@ const trimModelId = (m: string): string => m.replace(MODEL_DATE_SUFFIX, "");
 function OsTurnRow({ turn }: { turn: OsTurn }) {
   const dur = turn.duration_ms > 0 ? `${(turn.duration_ms / 1000).toFixed(1)}s` : "—";
   const statusColor = !turn.completed
-    ? "text-yellow-400"
+    ? "text-amber-600 dark:text-amber-400"
     : turn.exit_code !== 0
     ? "text-destructive"
-    : "text-emerald-400";
+    : "text-emerald-600 dark:text-emerald-400";
   const label = turn.completed
     ? (turn.exit_code !== 0 ? "error" : "ok")
     : "running…";
@@ -908,8 +908,8 @@ function OsTurnPanel({ sid }: { sid: string }) {
       <div className="flex items-center border-b border-border bg-muted/30 px-3 py-1.5 text-xs font-semibold text-muted-foreground">
         <span>OS-Turn Audit (EU AI Act Art. 12) — {turns.length} turns · graph oldest→newest, list newest first</span>
         {hasRunning && (
-          <span className="ml-2 inline-flex items-center gap-1 rounded bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-mono text-blue-700 dark:text-blue-400">
-            <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
+          <span className="ml-2 inline-flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-[10px] font-mono text-accent-foreground/90">
+            <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
             Live
           </span>
         )}
@@ -1220,10 +1220,10 @@ const EVENT_COLOR: Record<string, string> = {
 };
 
 const ANOMALY_SEVERITY_COLOR: Record<string, string> = {
-  CRITICAL: "bg-red-600 text-white",
-  HIGH:     "bg-orange-500 text-white",
-  MEDIUM:   "bg-yellow-500 text-black",
-  LOW:      "bg-slate-500 text-white",
+  CRITICAL: "bg-destructive text-destructive-foreground",
+  HIGH:     "bg-amber-500 text-white",
+  MEDIUM:   "bg-amber-500/60 text-black",
+  LOW:      "bg-muted-foreground/70 text-background",
 };
 
 function AnomalyPanel({ sid }: { sid: string }) {
@@ -1266,10 +1266,10 @@ function AnomalyPanel({ sid }: { sid: string }) {
 
   const data = q.data;
   if (!data || data.total === 0) return (
-    <div className="flex items-center gap-2 px-3 py-2 text-xs text-emerald-500">
+    <div className="flex items-center gap-2 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
       <ShieldCheck className="h-3 w-3" />
       {repairMsg
-        ? <span className="text-emerald-400">{repairMsg}</span>
+        ? <span className="text-emerald-600 dark:text-emerald-400">{repairMsg}</span>
         : <span>No anomalies detected</span>
       }
       <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => q.refetch()}>↺</button>
@@ -1281,12 +1281,12 @@ function AnomalyPanel({ sid }: { sid: string }) {
   return (
     <div className="border-b border-border bg-muted/5 shrink-0">
       <div className="flex items-center gap-2 px-3 py-1.5">
-        <AlertCircle className="h-3 w-3 text-orange-400 shrink-0" />
-        <span className="text-xs font-semibold text-orange-400">{data.total} anomal{data.total === 1 ? "y" : "ies"}</span>
+        <AlertCircle className="h-3 w-3 text-amber-600 dark:text-amber-400 shrink-0" />
+        <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">{data.total} anomal{data.total === 1 ? "y" : "ies"}</span>
         <span className="flex gap-1 ml-1">
-          {data.critical > 0 && <span className="px-1 rounded text-[10px] bg-red-600 text-white">{data.critical} CRIT</span>}
-          {data.high > 0 && <span className="px-1 rounded text-[10px] bg-orange-500 text-white">{data.high} HIGH</span>}
-          {data.medium > 0 && <span className="px-1 rounded text-[10px] bg-yellow-500 text-black">{data.medium} MED</span>}
+          {data.critical > 0 && <span className="px-1 rounded text-[10px] bg-destructive text-destructive-foreground">{data.critical} CRIT</span>}
+          {data.high > 0 && <span className="px-1 rounded text-[10px] bg-amber-500 text-white">{data.high} HIGH</span>}
+          {data.medium > 0 && <span className="px-1 rounded text-[10px] bg-amber-500/60 text-black">{data.medium} MED</span>}
         </span>
         <div className="ml-auto flex items-center gap-2">
           {hasActionable && (
@@ -1298,7 +1298,7 @@ function AnomalyPanel({ sid }: { sid: string }) {
                 "flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
                 repairing
                   ? "opacity-50 cursor-not-allowed bg-muted text-muted-foreground"
-                  : "bg-orange-500/15 text-orange-400 hover:bg-orange-500/30 border border-orange-500/30",
+                  : "bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 border border-amber-500/30",
               )}
             >
               {repairing
@@ -1314,7 +1314,7 @@ function AnomalyPanel({ sid }: { sid: string }) {
       {repairMsg && (
         <div className={cn(
           "px-3 pb-1.5 text-[11px] font-mono",
-          repairMsg.startsWith("✓") ? "text-emerald-400" : "text-orange-300",
+          repairMsg.startsWith("✓") ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400",
         )}>
           {repairMsg}
         </div>
@@ -1322,10 +1322,10 @@ function AnomalyPanel({ sid }: { sid: string }) {
       <div className="px-3 pb-2 space-y-1 max-h-36 overflow-y-auto">
         {data.anomalies.slice(0, 5).map((a: AnomalyItem, i: number) => (
           <div key={i} className="flex gap-2 text-[11px]">
-            <span className={`px-1 rounded shrink-0 ${ANOMALY_SEVERITY_COLOR[a.severity] ?? "bg-slate-600 text-white"}`}>
+            <span className={`px-1 rounded shrink-0 ${ANOMALY_SEVERITY_COLOR[a.severity] ?? "bg-muted-foreground/70 text-background"}`}>
               {a.severity}
             </span>
-            <span className="text-slate-300 truncate" title={a.message}>{a.anomaly_class}: {a.message.slice(0, 80)}</span>
+            <span className="text-muted-foreground truncate" title={a.message}>{a.anomaly_class}: {a.message.slice(0, 80)}</span>
           </div>
         ))}
         {data.total > 5 && (
@@ -1408,7 +1408,7 @@ function DebugLogPanel({ sid }: { sid: string }) {
           const r = evt as Record<string, unknown>;
           const ev = String(r.event ?? "?");
           const ts = String(r.ts ?? "").replace("T", " ").replace("Z", "");
-          const color = EVENT_COLOR[ev] ?? "text-slate-400";
+          const color = EVENT_COLOR[ev] ?? "text-muted-foreground";
           // Build compact field display (exclude ts/event/sid)
           const fields = Object.entries(r)
             .filter(([k]) => !["ts", "event", "sid", "chat_key", "channel"].includes(k))
@@ -1416,9 +1416,9 @@ function DebugLogPanel({ sid }: { sid: string }) {
             .join("  ");
           return (
             <div key={i} className="flex gap-2 min-w-0">
-              <span className="text-slate-600 shrink-0 select-none">{ts.slice(11)}</span>
+              <span className="text-muted-foreground/70 shrink-0 select-none">{ts.slice(11)}</span>
               <span className={`${color} shrink-0 font-semibold`}>{ev}</span>
-              <span className="text-slate-500 truncate">{fields}</span>
+              <span className="text-muted-foreground truncate">{fields}</span>
             </div>
           );
         })}

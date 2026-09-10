@@ -147,15 +147,15 @@ export const InstallProgress: React.FC<InstallProgressProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-testid="install-progress-backdrop">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl p-6 w-full max-w-md" data-testid="install-progress-modal" role="dialog">
+      <div className="bg-card text-card-foreground border border-border rounded-lg shadow-xl p-6 w-full max-w-md" data-testid="install-progress-modal" role="dialog">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-foreground">
             Installing {extensionName}
           </h2>
           <button
             onClick={handleClose}
-            className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            className="text-muted-foreground hover:text-foreground"
             disabled={!state.completed && !state.error}
             data-testid="install-progress-close-btn"
           >
@@ -167,9 +167,9 @@ export const InstallProgress: React.FC<InstallProgressProps> = ({
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
             {!state.error && !state.completed && <Loader size={16} className="animate-spin" />}
-            {state.error && <AlertCircle size={16} className="text-red-500" />}
-            {state.completed && <CheckCircle size={16} className="text-green-500" />}
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            {state.error && <AlertCircle size={16} className="text-destructive" />}
+            {state.completed && <CheckCircle size={16} className="text-emerald-600 dark:text-emerald-400" />}
+            <span className="text-sm font-medium text-foreground">
               {currentStepName}
             </span>
           </div>
@@ -181,8 +181,8 @@ export const InstallProgress: React.FC<InstallProgressProps> = ({
                 key={idx}
                 className={`flex-1 h-1 rounded-full ${
                   idx + 1 <= state.step
-                    ? 'bg-blue-500'
-                    : 'bg-gray-200 dark:bg-gray-700'
+                    ? 'bg-accent'
+                    : 'bg-muted'
                 }`}
               />
             ))}
@@ -192,16 +192,16 @@ export const InstallProgress: React.FC<InstallProgressProps> = ({
         {/* Progress Bar */}
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-gray-600 dark:text-gray-400" data-testid="progress-percentage">
+            <span className="text-xs text-muted-foreground" data-testid="progress-percentage">
               {Math.round(state.progress)}%
             </span>
-            <span className="text-xs text-gray-600 dark:text-gray-400">
+            <span className="text-xs text-muted-foreground">
               {state.eta > 0 ? `${Math.ceil(state.eta)}s remaining` : 'Complete'}
             </span>
           </div>
-          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden" data-testid="progress-bar">
+          <div className="w-full bg-muted rounded-full h-2 overflow-hidden" data-testid="progress-bar">
             <div
-              className="bg-blue-500 h-full rounded-full transition-all duration-100"
+              className="bg-accent h-full rounded-full transition-all duration-100"
               style={{ width: `${state.progress}%` }}
             />
           </div>
@@ -209,20 +209,20 @@ export const InstallProgress: React.FC<InstallProgressProps> = ({
 
         {/* Error Message */}
         {state.error && (
-          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md">
-            <p className="text-sm text-red-700 dark:text-red-400">{state.error}</p>
+          <div className="mb-4 p-3 bg-destructive/10 border border-destructive/40 rounded-md">
+            <p className="text-sm text-destructive">{state.error}</p>
           </div>
         )}
 
         {/* Status Message */}
         {!state.error && !state.completed && (
-          <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
+          <p className="text-xs text-muted-foreground mb-4">
             Step {state.step} of 5: {currentStepName}
           </p>
         )}
 
         {state.completed && (
-          <p className="text-xs text-green-600 dark:text-green-400 mb-4">
+          <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-4">
             Installation completed successfully
           </p>
         )}
@@ -232,7 +232,7 @@ export const InstallProgress: React.FC<InstallProgressProps> = ({
           {!state.completed && !state.error && (
             <button
               onClick={handleCancel}
-              className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-800"
+              className="px-4 py-2 text-sm text-foreground border border-border rounded-md hover:bg-muted"
               data-testid="install-progress-cancel-btn"
             >
               Cancel
@@ -241,7 +241,7 @@ export const InstallProgress: React.FC<InstallProgressProps> = ({
           {(state.completed || state.error) && (
             <button
               onClick={handleClose}
-              className="px-4 py-2 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600"
+              className="px-4 py-2 text-sm bg-accent text-accent-foreground rounded-md hover:bg-accent/90"
             >
               {state.completed ? 'Close' : 'Dismiss'}
             </button>

@@ -111,7 +111,7 @@ function ToolBtn({
       title={title}
       className={`flex h-7 w-7 items-center justify-center rounded text-xs font-medium transition-colors ${
         active
-          ? 'bg-blue-600 text-white'
+          ? 'bg-accent text-accent-foreground'
           : 'bg-[#21262d] text-gray-400 hover:bg-[#30363d] hover:text-gray-200'
       }`}
     >

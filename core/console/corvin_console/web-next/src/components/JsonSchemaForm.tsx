@@ -106,7 +106,7 @@ function Field({ name, spec, value, required, disabled, error, onChange }: Field
       {spec.ui?.warning && (
         <p className="text-xs text-amber-600 dark:text-amber-500">{spec.ui.warning}</p>
       )}
-      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </>
   );
 
@@ -116,7 +116,7 @@ function Field({ name, spec, value, required, disabled, error, onChange }: Field
       <div className="space-y-1">
         <label htmlFor={id} className="text-sm font-medium">
           {label}
-          {required && <span className="text-red-500"> *</span>}
+          {required && <span className="text-destructive"> *</span>}
         </label>
         <select
           id={id}
@@ -161,7 +161,7 @@ function Field({ name, spec, value, required, disabled, error, onChange }: Field
       <div className="space-y-1">
         <label htmlFor={id} className="text-sm font-medium">
           {label}
-          {required && <span className="text-red-500"> *</span>}
+          {required && <span className="text-destructive"> *</span>}
           {bounded && (
             <span className="ml-2 text-xs text-muted-foreground">
               {String(current)} ({spec.minimum}–{spec.maximum})
@@ -194,7 +194,7 @@ function Field({ name, spec, value, required, disabled, error, onChange }: Field
       <div className="space-y-1">
         <label htmlFor={id} className="text-sm font-medium">
           {label}
-          {required && <span className="text-red-500"> *</span>}
+          {required && <span className="text-destructive"> *</span>}
         </label>
         {multiline ? (
           <textarea

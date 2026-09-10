@@ -10,13 +10,13 @@ interface Props {
 function statusIcon(status: string): React.ReactNode {
   switch (status) {
     case 'running':
-      return <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />;
+      return <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />;
     case 'thinking':
-      return <span className="inline-block h-2 w-2 rounded-full bg-yellow-500 animate-pulse" />;
+      return <span className="inline-block h-2 w-2 rounded-full bg-amber-500 animate-pulse" />;
     case 'blocked':
-      return <span className="inline-block h-2 w-2 rounded-full bg-red-500" />;
+      return <span className="inline-block h-2 w-2 rounded-full bg-destructive" />;
     default:
-      return <span className="inline-block h-2 w-2 rounded-full bg-gray-500" />;
+      return <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground" />;
   }
 }
 
@@ -86,7 +86,7 @@ export function BrainStatus({ data }: Props) {
             </div>
             <div className="w-full bg-secondary rounded-full h-2">
               <div
-                className="bg-green-500 h-2 rounded-full transition-all"
+                className="bg-emerald-500 h-2 rounded-full transition-all"
                 style={{
                   width: `${Math.round((data.decision_queue[0]?.confidence || 0) * 100)}%`,
                 }}

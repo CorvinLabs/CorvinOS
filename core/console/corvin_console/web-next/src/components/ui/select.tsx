@@ -38,4 +38,21 @@ const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
 );
 Select.displayName = "Select";
 
-export { Select };
+// Compat shims for Radix-UI Select API (used in engine-config.tsx)
+const SelectTrigger = React.forwardRef<HTMLSelectElement, { children: React.ReactNode; value?: string; onValueChange?: (value: string) => void; className?: string }>(
+  ({ className, ...props }, ref) => <Select ref={ref} className={className} {...props} />
+);
+SelectTrigger.displayName = "SelectTrigger";
+
+const SelectContent = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+SelectContent.displayName = "SelectContent";
+
+const SelectItem = React.forwardRef<HTMLOptionElement, { value: string; children: React.ReactNode }>(
+  ({ value, children }, ref) => <option ref={ref} value={value}>{children}</option>
+);
+SelectItem.displayName = "SelectItem";
+
+const SelectValue = () => null;
+SelectValue.displayName = "SelectValue";
+
+export { Select, SelectTrigger, SelectContent, SelectItem, SelectValue };

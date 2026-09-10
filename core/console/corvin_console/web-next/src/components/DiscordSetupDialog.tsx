@@ -9,7 +9,8 @@
  */
 
 import { useState } from 'react'
-import { CheckCircle, AlertCircle, Copy, ExternalLink, Loader, X } from 'lucide-react'
+import { CheckCircle, AlertCircle, Copy, ExternalLink, Loader2, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 
 interface ValidateTokenResponse {
   valid: boolean
@@ -147,10 +148,12 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
       onClick={() => { if (!busy) onClose() }}
     >
       <div
-        className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-card text-card-foreground rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto border border-border"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
+        {/* Header — Discord's own indigo/purple brand gradient, kept as a
+            recognizable service crest (same convention as CHANNEL_COLOR in
+            people.tsx: fixed per-service hue, not a themeable surface). */}
         <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-4 flex items-start justify-between">
           <div>
             <h2 className="text-xl font-bold">🤖 Discord Bot Aktivierung</h2>
@@ -172,34 +175,28 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           {step === 'input' && (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-foreground mb-2">
                   Bot Token von Discord Developer Portal
                 </label>
                 <textarea
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   placeholder="Paste your bot token here..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-input bg-background rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
                   rows={3}
                 />
-                <p className="text-xs text-gray-500 mt-2">
+                <p className="text-xs text-muted-foreground mt-2">
                   Token findest du hier: Discord Developer Portal → Applications → Deine App → Bot → Copy Token
                 </p>
               </div>
 
               <div className="flex gap-2">
-                <button
-                  onClick={onClose}
-                  className="px-4 py-2 rounded-md font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition"
-                >
+                <Button variant="outline" onClick={onClose}>
                   Abbrechen
-                </button>
-                <button
-                  onClick={handleValidate}
-                  className="flex-1 bg-indigo-600 text-white py-2 rounded-md font-medium hover:bg-indigo-700 transition"
-                >
+                </Button>
+                <Button variant="accent" className="flex-1" onClick={handleValidate}>
                   Validieren &amp; Weiter
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -207,7 +204,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           {/* Step 2: Validating */}
           {step === 'validating' && (
             <div className="flex items-center justify-center py-8">
-              <Loader className="w-8 h-8 animate-spin text-indigo-600 mr-3" />
+              <Loader2 className="w-8 h-8 animate-spin text-accent mr-3" />
               <span>Validiere Token...</span>
             </div>
           )}
@@ -215,19 +212,19 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           {/* Step 3: Confirm & OAuth2 URL */}
           {step === 'confirm' && validationResult && (
             <>
-              <div className="bg-green-50 border border-green-200 rounded-md p-4">
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-4">
                 <div className="flex items-center">
-                  <CheckCircle className="w-5 h-5 text-green-600 mr-2" />
-                  <span className="text-sm font-medium text-green-800">Token validiert ✓</span>
+                  <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 mr-2" />
+                  <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Token validiert ✓</span>
                 </div>
-                <p className="text-sm text-green-700 mt-2">
+                <p className="text-sm text-emerald-700 dark:text-emerald-400 mt-2">
                   App: <strong>{validationResult.appName}</strong> ({validationResult.appId})
                 </p>
               </div>
 
               <div>
-                <h3 className="font-semibold text-gray-900 mb-2">Berechtigungen</h3>
-                <ul className="text-sm text-gray-700 space-y-1 list-disc list-inside">
+                <h3 className="font-semibold text-foreground mb-2">Berechtigungen</h3>
+                <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
                   {validationResult.permissionsHuman?.map((perm, i) => (
                     <li key={i}>{perm}</li>
                   ))}
@@ -235,53 +232,50 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               </div>
 
               <div>
-                <h3 className="font-semibold text-gray-900 mb-2">Discord Autorisierung</h3>
-                <p className="text-sm text-gray-600 mb-3">
+                <h3 className="font-semibold text-foreground mb-2">Discord Autorisierung</h3>
+                <p className="text-sm text-muted-foreground mb-3">
                   Klicke den Button um den Bot zu Discord hinzuzufügen:
                 </p>
                 <a
                   href={validationResult.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition font-medium"
+                  className="inline-flex items-center px-4 py-2 bg-accent text-accent-foreground rounded-md hover:bg-accent/90 transition font-medium"
                 >
                   Öffne Discord Autorisierung
                   <ExternalLink className="w-4 h-4 ml-2" />
                 </a>
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-                <p className="text-xs text-blue-800">
+              <div className="rounded-md border border-accent/30 bg-accent/10 p-3">
+                <p className="text-xs text-accent-foreground/90">
                   💡 Alternativ kannst du diese URL kopieren und selbst öffnen:
                 </p>
-                <div className="mt-2 flex items-center justify-between bg-white border border-blue-100 rounded p-2">
-                  <code className="text-xs font-mono text-gray-700 overflow-hidden text-ellipsis">
+                <div className="mt-2 flex items-center justify-between bg-card border border-border rounded p-2">
+                  <code className="text-xs font-mono text-muted-foreground overflow-hidden text-ellipsis">
                     {validationResult.url?.substring(0, 50)}...
                   </code>
                   <button
                     onClick={() => validationResult.url && copyToClipboard(validationResult.url)}
-                    className="ml-2 p-1 hover:bg-gray-100 rounded transition"
+                    className="ml-2 p-1 hover:bg-muted rounded transition"
                     title="Copy URL"
                   >
                     {copied ? (
-                      <CheckCircle className="w-4 h-4 text-emerald-600" />
+                      <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                     ) : (
-                      <Copy className="w-4 h-4 text-gray-500" />
+                      <Copy className="w-4 h-4 text-muted-foreground" />
                     )}
                   </button>
                 </div>
               </div>
 
-              <div className="border-t pt-4">
-                <p className="text-sm text-gray-600 mb-3">
+              <div className="border-t border-border pt-4">
+                <p className="text-sm text-muted-foreground mb-3">
                   Nach der Autorisierung speichern wir den Token lokal:
                 </p>
-                <button
-                  onClick={handleSaveToken}
-                  className="w-full bg-green-600 text-white py-2 rounded-md font-medium hover:bg-green-700 transition"
-                >
+                <Button variant="accent" className="w-full" onClick={handleSaveToken}>
                   Token speichern &amp; Setup abschließen
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -289,7 +283,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           {/* Step 4: Saving */}
           {step === 'saving' && (
             <div className="flex items-center justify-center py-8">
-              <Loader className="w-8 h-8 animate-spin text-green-600 mr-3" />
+              <Loader2 className="w-8 h-8 animate-spin text-accent mr-3" />
               <span>Speichern...</span>
             </div>
           )}
@@ -298,61 +292,59 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           {step === 'success' && (
             <div className="text-center py-6">
               <div className="flex justify-center mb-4">
-                <CheckCircle className="w-12 h-12 text-green-600" />
+                <CheckCircle className="w-12 h-12 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Bot erfolgreich aktiviert! 🎉</h3>
-              <p className="text-sm text-gray-600 mb-4">
+              <h3 className="text-lg font-semibold text-foreground mb-2">Bot erfolgreich aktiviert! 🎉</h3>
+              <p className="text-sm text-muted-foreground mb-4">
                 Dein Discord-Bot ist jetzt bereit. Der Daemon startet neu und verbindet sich mit Discord.
               </p>
-              <p className="text-xs text-gray-500 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Falls der Bot nicht sofort antwortet, kann es 30 Sekunden dauern bis die Verbindung hergestellt ist.
               </p>
-              <button
-                onClick={() => window.location.reload()}
-                className="px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition font-medium"
-              >
+              <Button variant="accent" onClick={() => window.location.reload()}>
                 Schließen &amp; Neu laden
-              </button>
+              </Button>
             </div>
           )}
 
           {/* Step: Error */}
           {step === 'error' && (
             <>
-              <div className="bg-red-50 border border-red-200 rounded-md p-4">
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4">
                 <div className="flex items-start">
-                  <AlertCircle className="w-5 h-5 text-red-600 mr-2 mt-0.5 flex-shrink-0" />
+                  <AlertCircle className="w-5 h-5 text-destructive mr-2 mt-0.5 flex-shrink-0" />
                   <div>
-                    <h3 className="font-medium text-red-800">Fehler</h3>
-                    <p className="text-sm text-red-700 mt-1">{error}</p>
+                    <h3 className="font-medium text-destructive">Fehler</h3>
+                    <p className="text-sm text-destructive mt-1">{error}</p>
                   </div>
                 </div>
               </div>
 
-              <button
+              <Button
+                variant="secondary"
+                className="w-full"
                 onClick={() => {
                   setStep('input')
                   setToken('')
                   setValidationResult(null)
                   setError('')
                 }}
-                className="w-full bg-gray-600 text-white py-2 rounded-md font-medium hover:bg-gray-700 transition"
               >
                 Nochmal probieren
-              </button>
+              </Button>
             </>
           )}
         </div>
 
         {/* Footer */}
-        <div className="bg-gray-50 border-t px-6 py-4 text-xs text-gray-500">
+        <div className="bg-muted/40 border-t border-border px-6 py-4 text-xs text-muted-foreground">
           <p>
             Anleitung:{' '}
             <a
               href="https://discord.com/developers/applications"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-indigo-600 hover:underline"
+              className="text-accent hover:underline"
             >
               Discord Developer Portal öffnen
             </a>

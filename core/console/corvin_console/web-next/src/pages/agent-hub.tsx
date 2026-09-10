@@ -86,7 +86,7 @@ function fmtDuration(ms: number | null): string {
 
 function SeverityDot({ severity }: { severity: string }) {
   if (severity === "CRITICAL")
-    return <span className="inline-block h-2 w-2 rounded-full bg-red-500" />;
+    return <span className="inline-block h-2 w-2 rounded-full bg-destructive" />;
   if (severity === "WARNING")
     return <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />;
   return <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />;
@@ -101,7 +101,7 @@ function EventTypeBadge({ type }: { type: string }) {
       variant="outline"
       className={
         isRejected
-          ? "border-red-500/40 text-red-600 dark:text-red-400 font-mono text-[10px]"
+          ? "border-destructive/40 text-destructive font-mono text-[10px]"
           : isSpawned
             ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400 font-mono text-[10px]"
             : "font-mono text-[10px]"
@@ -148,7 +148,7 @@ function StateBadge({ state }: { state: "PENDING" | "ACTIVE" | "UNREACHABLE" | s
     // WILL NOT deliver messages right now (2026-07-29 — url-presence alone
     // used to be reported as ACTIVE, which was misleading).
     return (
-      <Badge className="bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30 text-[10px]">
+      <Badge className="bg-destructive/15 text-destructive border-destructive/30 text-[10px]">
         UNREACHABLE
       </Badge>
     );
@@ -292,7 +292,7 @@ function PermBadge({ spawnWorker, enabled, personas }: {
     );
   }
   return (
-    <Badge className="bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30 gap-1 text-[10px]">
+    <Badge className="bg-accent/15 text-accent-foreground/90 border-accent/30 gap-1 text-[10px]">
       <Zap className="h-2.5 w-2.5" /> Full Executor
     </Badge>
   );
@@ -402,10 +402,10 @@ function OriginPermEditor({
     },
     {
       id: "executor",
-      icon: <Zap className="h-4 w-4 text-blue-500" />,
+      icon: <Zap className="h-4 w-4 text-accent" />,
       label: "Full Executor",
       desc: "All personas, full execution.",
-      color: "blue",
+      color: "accent",
     },
   ];
 
@@ -442,7 +442,7 @@ function OriginPermEditor({
                   ? "border-amber-500/50 bg-amber-500/8"
                   : p.color === "violet"
                   ? "border-violet-500/50 bg-violet-500/8"
-                  : "border-blue-500/50 bg-blue-500/8"
+                  : "border-accent/50 bg-accent/8"
                 : "border-border hover:border-border/80",
             )}
           >
@@ -1179,7 +1179,7 @@ function EventRow({ event: ev }: { event: A2AEvent }) {
       {ev.status && (
         <Badge
           variant="outline"
-          className={`shrink-0 text-[10px] ${ev.status === "ok" ? "text-emerald-600" : "text-red-500"}`}
+          className={`shrink-0 text-[10px] ${ev.status === "ok" ? "text-emerald-600" : "text-destructive"}`}
         >
           {ev.status}
         </Badge>
@@ -1376,11 +1376,11 @@ function PermissionSelector({
         </label>
         <label className={cn(
           "flex cursor-pointer flex-col gap-1 rounded-md border p-2.5 transition-colors",
-          value ? "border-blue-500/50 bg-blue-500/5" : "border-border hover:border-border/80"
+          value ? "border-accent/50 bg-accent/5" : "border-border hover:border-border/80"
         )}>
           <input type="radio" checked={value} onChange={() => onChange(true)} className="sr-only" />
           <span className="text-xs font-medium flex items-center gap-1">
-            <Zap className="h-3.5 w-3.5 text-blue-500" /> Full Executor
+            <Zap className="h-3.5 w-3.5 text-accent" /> Full Executor
           </span>
           <p className="text-[10px] text-muted-foreground">All tasks, all personas.</p>
         </label>

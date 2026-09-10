@@ -664,7 +664,7 @@ function BridgeTile({
   onConnect: () => void;
   onManage: () => void;
 }) {
-  const meta = CHANNEL_META[bridge.channel] ?? {
+  const meta: ChannelMeta = CHANNEL_META[bridge.channel] ?? {
     label: bridge.channel,
     hint: "",
     icon: Network,
@@ -823,7 +823,7 @@ function BridgeWizardDialog({
 }) {
   const { session } = useAuth();
   const qc = useQueryClient();
-  const meta = CHANNEL_META[channel] ?? {
+  const meta: ChannelMeta = CHANNEL_META[channel] ?? {
     label: channel,
     hint: "",
     icon: Network,
@@ -1287,11 +1287,13 @@ function BridgeManageDialog({
 }) {
   const { session } = useAuth();
   const qc = useQueryClient();
-  const meta = CHANNEL_META[channel] ?? {
+  const meta: ChannelMeta = CHANNEL_META[channel] ?? {
     label: channel,
     hint: "",
     icon: Network,
     color: "",
+    requirements: [],
+    timeMinutes: 5,
   };
   const Icon = meta.icon;
 
@@ -1459,14 +1461,14 @@ function BridgeManageDialog({
                 {initial.enabled ? (
                   <Badge
                     variant="outline"
-                    className="border-emerald-500/40 text-emerald-500 text-[10px]"
+                    className="border-emerald-500/40 text-emerald-600 dark:text-emerald-400 text-[10px]"
                   >
                     <Power className="mr-1 h-2.5 w-2.5" /> active
                   </Badge>
                 ) : (
                   <Badge
                     variant="outline"
-                    className="border-amber-500/40 text-amber-500 text-[10px]"
+                    className="border-amber-500/40 text-amber-600 dark:text-amber-400 text-[10px]"
                   >
                     <PowerOff className="mr-1 h-2.5 w-2.5" /> inactive
                   </Badge>

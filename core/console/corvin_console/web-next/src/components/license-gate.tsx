@@ -16,10 +16,10 @@ import type { LicenseInfo } from "@/lib/api";
 // ── Tier colours ──────────────────────────────────────────────────────────────
 
 const TIER_STYLES: Record<string, string> = {
-  free:         "bg-zinc-700/60 text-zinc-300",
-  starter:      "bg-blue-900/60 text-blue-200",
-  professional: "bg-indigo-800/60 text-indigo-200",
-  enterprise:   "bg-amber-800/60 text-amber-200",
+  free:         "bg-secondary text-secondary-foreground",
+  starter:      "bg-accent/15 text-accent-foreground/90",
+  professional: "bg-accent/25 text-accent-foreground",
+  enterprise:   "bg-amber-500/15 text-amber-700 dark:text-amber-300",
 };
 
 const TIER_LABEL: Record<string, string> = {
@@ -32,7 +32,7 @@ const TIER_LABEL: Record<string, string> = {
 // ── LicenseBadge ──────────────────────────────────────────────────────────────
 
 export function LicenseBadge({ tier }: { tier: string }) {
-  const style = TIER_STYLES[tier] ?? "bg-zinc-700/60 text-zinc-300";
+  const style = TIER_STYLES[tier] ?? "bg-secondary text-secondary-foreground";
   const label = TIER_LABEL[tier] ?? tier;
   return (
     <span
@@ -65,7 +65,7 @@ export function LimitBadge({ label, used, limit, unit = "", className }: LimitBa
     <div className={cn("space-y-1", className)}>
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{label}</span>
-        <span className={cn("font-mono", over && "text-red-400")}>
+        <span className={cn("font-mono", over && "text-destructive")}>
           {used !== undefined ? `${used} / ` : ""}
           {unlimited ? "∞" : `${limit}${unit}`}
         </span>
@@ -75,7 +75,7 @@ export function LimitBadge({ label, used, limit, unit = "", className }: LimitBa
           <div
             className={cn(
               "h-full rounded-full transition-all",
-              over ? "bg-red-500" : pct > 80 ? "bg-amber-500" : "bg-accent",
+              over ? "bg-destructive" : pct > 80 ? "bg-amber-500" : "bg-accent",
             )}
             style={{ width: `${pct}%` }}
           />

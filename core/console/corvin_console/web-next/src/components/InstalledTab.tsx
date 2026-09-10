@@ -9,8 +9,11 @@
 
 import React, { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, Settings, Trash2 } from 'lucide-react'
+import { Check, Settings, Trash2, Loader2 } from 'lucide-react'
 import { listPlugins } from '@/lib/api/plugins'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 
 interface InstalledPlugin {
   plugin_id: string
@@ -68,15 +71,15 @@ export const InstalledTab: React.FC = () => {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent" />
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 rounded-lg">
-        <p className="text-red-700 dark:text-red-200 text-sm">{error}</p>
+      <div className="p-4 rounded-lg border border-destructive/40 bg-destructive/10">
+        <p className="text-sm text-destructive">{error}</p>
       </div>
     )
   }
@@ -84,9 +87,9 @@ export const InstalledTab: React.FC = () => {
   if (installedPlugins.length === 0) {
     return (
       <div className="text-center py-12">
-        <Check className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-        <p className="text-slate-600 dark:text-slate-400">No marketplace plugins installed</p>
-        <p className="text-sm text-slate-500 dark:text-slate-500 mt-2">
+        <Check className="w-12 h-12 text-muted-foreground/40 mx-auto mb-3" />
+        <p className="text-muted-foreground">No marketplace plugins installed</p>
+        <p className="text-sm text-muted-foreground/80 mt-2">
           Go to the Marketplace tab to discover and install plugins.
         </p>
       </div>
@@ -95,51 +98,54 @@ export const InstalledTab: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+      <h3 className="text-lg font-semibold text-foreground">
         Installed Marketplace Plugins ({installedPlugins.length})
       </h3>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {installedPlugins.map((plugin) => (
-          <div
-            key={plugin.plugin_id}
-            className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 p-4"
-          >
-            <div className="flex justify-between items-start mb-2">
-              <div>
-                <h4 className="font-semibold text-slate-900 dark:text-white">{plugin.name}</h4>
-                <p className="text-sm text-slate-600 dark:text-slate-400">v{plugin.version}</p>
+          <Card key={plugin.plugin_id}>
+            <CardContent className="p-4">
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h4 className="font-semibold text-foreground">{plugin.name}</h4>
+                  <p className="text-sm text-muted-foreground">v{plugin.version}</p>
+                </div>
+                {plugin.enabled ? (
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    <Check className="w-5 h-5" />
+                  </span>
+                ) : (
+                  <Badge variant="secondary" className="text-[10px]">disabled</Badge>
+                )}
               </div>
-              {plugin.enabled ? (
-                <span className="text-green-600 dark:text-green-400">
-                  <Check className="w-5 h-5" />
-                </span>
-              ) : (
-                <span className="text-slate-400">disabled</span>
+
+              {plugin.category && (
+                <p className="text-xs text-muted-foreground mb-3">
+                  Category: {plugin.category}
+                </p>
               )}
-            </div>
 
-            {plugin.category && (
-              <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-                Category: {plugin.category}
-              </p>
-            )}
-
-            <div className="flex gap-2">
-              <button className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center gap-2">
-                <Settings className="w-4 h-4" />
-                Settings
-              </button>
-              <button className="flex-1 px-3 py-2 text-sm bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded hover:bg-red-100 dark:hover:bg-red-900/40 flex items-center justify-center gap-2">
-                <Trash2 className="w-4 h-4" />
-                Uninstall
-              </button>
-            </div>
-          </div>
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" className="flex-1">
+                  <Settings className="w-4 h-4" />
+                  Settings
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="flex-1 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Uninstall
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
-      <div className="text-xs text-slate-500 dark:text-slate-400 mt-4">
+      <div className="text-xs text-muted-foreground">
         Tip: Use Settings to configure each plugin. Live updates sync with PluginsPage.
       </div>
     </div>

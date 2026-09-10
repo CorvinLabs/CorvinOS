@@ -145,13 +145,13 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
 
   const getEventTypeColor = (type: string): string => {
     const colors: Record<string, string> = {
-      skill_executed: 'bg-blue-100 text-blue-900',
-      learning_event: 'bg-green-100 text-green-900',
-      decision: 'bg-amber-100 text-amber-900',
-      context_snapshot: 'bg-purple-100 text-purple-900',
-      error: 'bg-red-100 text-red-900',
+      skill_executed: 'bg-accent/15 text-accent-foreground/90',
+      learning_event: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+      decision: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+      context_snapshot: 'bg-purple-500/15 text-purple-700 dark:text-purple-300',
+      error: 'bg-destructive/15 text-destructive',
     };
-    return colors[type] || 'bg-gray-100 text-gray-900';
+    return colors[type] || 'bg-muted text-muted-foreground';
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -173,7 +173,9 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
               <span className="font-semibold">Status:</span>{' '}
               <span
                 className={`inline-block rounded px-2 py-1 text-xs font-semibold ${
-                  event.status === 'success' ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'
+                  event.status === 'success'
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-destructive/15 text-destructive'
                 }`}
               >
                 {event.status}
@@ -192,12 +194,12 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
             </div>
           )}
           {event.error && (
-            <div className="rounded-lg border border-red-300 bg-red-50 p-3">
+            <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3">
               <div className="flex gap-2">
-                <AlertCircle className="h-4 w-4 text-red-600" />
+                <AlertCircle className="h-4 w-4 text-destructive" />
                 <div>
-                  <p className="text-xs font-semibold text-red-900">{event.error.type}</p>
-                  <p className="text-xs text-red-800">{event.error.message}</p>
+                  <p className="text-xs font-semibold text-destructive">{event.error.type}</p>
+                  <p className="text-xs text-destructive/90">{event.error.message}</p>
                 </div>
               </div>
             </div>
@@ -217,7 +219,7 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
           {event.event_type && (
             <div>
               <span className="font-semibold">Event Type:</span>{' '}
-              <span className="inline-block rounded bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-900">
+              <span className="inline-block rounded bg-accent/15 px-2 py-1 text-xs font-semibold text-accent-foreground/90">
                 {event.event_type}
               </span>
             </div>
@@ -238,7 +240,7 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
             <div>
               <span className="font-semibold">Delta:</span>{' '}
               <span
-                className={`font-semibold ${event.confidence_delta > 0 ? 'text-green-600' : 'text-red-600'}`}
+                className={`font-semibold ${event.confidence_delta > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}
               >
                 {event.confidence_delta > 0 ? '+' : ''}
                 {event.confidence_delta.toFixed(4)}
@@ -315,8 +317,8 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
             <span
               className={`inline-block rounded px-2 py-1 text-xs font-semibold ${
                 event.merge_status === 'success'
-                  ? 'bg-green-100 text-green-900'
-                  : 'bg-red-100 text-red-900'
+                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-destructive/15 text-destructive'
               }`}
             >
               {event.merge_status}
@@ -390,7 +392,7 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
                 onClick={() => copyToClipboard(event.id, 'id')}
               >
                 {copied.copiedField === 'id' ? (
-                  <Check className="h-4 w-4 text-green-600" />
+                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                 ) : (
                   <Copy className="h-4 w-4" />
                 )}
@@ -493,15 +495,17 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
 
               {verificationResult && (
                 <div
-                  className={`rounded-lg p-3 ${
+                  className={`rounded-lg p-3 border ${
                     verificationResult.isValid
-                      ? 'border-green-300 bg-green-50'
-                      : 'border-red-300 bg-red-50'
-                  } border`}
+                      ? 'border-emerald-500/30 bg-emerald-500/10'
+                      : 'border-destructive/40 bg-destructive/10'
+                  }`}
                 >
                   <p
                     className={`text-xs font-semibold ${
-                      verificationResult.isValid ? 'text-green-900' : 'text-red-900'
+                      verificationResult.isValid
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-destructive'
                     }`}
                   >
                     {verificationResult.isValid ? '✓' : '✗'} {verificationResult.message}
@@ -574,12 +578,12 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
 
           {/* Proof Tab */}
           <TabsContent value="proof" className="space-y-3">
-            <div className="rounded-lg border border-green-300 bg-green-50 p-4">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4">
               <div className="flex gap-2">
-                <Shield className="h-5 w-5 text-green-600" />
+                <Shield className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                 <div>
-                  <p className="text-sm font-semibold text-green-900">✓ Audit Event Verified</p>
-                  <p className="text-xs text-green-800">
+                  <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">✓ Audit Event Verified</p>
+                  <p className="text-xs text-emerald-700/90 dark:text-emerald-300/90">
                     This event is part of an immutable, hash-chained audit trail.
                   </p>
                 </div>

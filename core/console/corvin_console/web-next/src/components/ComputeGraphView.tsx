@@ -1107,7 +1107,7 @@ export function ComputeGraphView({ mode, runId, pollMs = 0 }: Props) {
               ? "text-emerald-500"
               : (meta as Record<string, unknown>).state === "running"
               ? "text-sky-400"
-              : "text-red-400"
+              : "text-destructive"
           }>
             {(meta as Record<string, unknown>).state as string}
           </span>

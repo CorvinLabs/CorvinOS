@@ -923,7 +923,7 @@ function OrgNetworkView({ nodes, edges }: OrgNetworkViewProps) {
           title={physicsOn ? 'Freeze layout' : 'Resume physics'}
           className={`flex h-7 w-7 items-center justify-center rounded text-xs transition-colors ${
             physicsOn
-              ? 'bg-blue-700 text-white hover:bg-blue-600'
+              ? 'bg-accent text-accent-foreground hover:bg-accent/90'
               : 'bg-[#21262d] text-gray-400 hover:bg-[#30363d] hover:text-gray-200'
           }`}
         >{physicsOn ? '⏸' : '▶'}</button>

@@ -10,10 +10,13 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react'
-import { AlertCircle, CheckCircle2, Loader } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { BASE } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
 
 interface CustomRepositoryFormProps {
   onRepositoryAdded?: (url: string) => void
@@ -164,36 +167,31 @@ export function CustomRepositoryForm({
     >
       {/* URL Input */}
       <div>
-        <label
-          htmlFor="repo-url"
-          className="block text-sm font-medium text-foreground mb-2"
-        >
+        <Label htmlFor="repo-url" className="block mb-2">
           Repository URL
           <span className="text-destructive ml-1">*</span>
-        </label>
+        </Label>
         <div className="relative">
-          <input
+          <Input
             id="repo-url"
             type="url"
             value={url}
             onChange={(e) => handleUrlChange(e.target.value)}
             placeholder="https://github.com/owner/repo"
             className={cn(
-              'w-full px-3 py-2 border rounded-md bg-background text-foreground',
-              'placeholder:text-muted-foreground',
-              'focus:outline-none focus:ring-2 focus:ring-primary',
-              validation.status === 'valid' && 'border-green-500',
-              validation.status === 'invalid' && 'border-destructive'
+              'pr-10',
+              validation.status === 'valid' && 'border-emerald-500 focus-visible:ring-emerald-500',
+              validation.status === 'invalid' && 'border-destructive focus-visible:ring-destructive'
             )}
             aria-describedby={validation.error ? 'url-error' : undefined}
             aria-label="GitHub repository URL"
             required
           />
           {validation.status === 'validating' && (
-            <Loader className="absolute right-3 top-2.5 h-5 w-5 animate-spin text-primary" />
+            <Loader2 className="absolute right-3 top-2.5 h-5 w-5 animate-spin text-accent" />
           )}
           {validation.status === 'valid' && (
-            <CheckCircle2 className="absolute right-3 top-2.5 h-5 w-5 text-green-500" />
+            <CheckCircle2 className="absolute right-3 top-2.5 h-5 w-5 text-emerald-600 dark:text-emerald-400" />
           )}
         </div>
         {validation.error && (
@@ -206,23 +204,15 @@ export function CustomRepositoryForm({
 
       {/* Optional Token Input */}
       <div>
-        <label
-          htmlFor="repo-token"
-          className="block text-sm font-medium text-foreground mb-2"
-        >
+        <Label htmlFor="repo-token" className="block mb-2">
           GitHub Token <span className="text-muted-foreground">(optional)</span>
-        </label>
-        <input
+        </Label>
+        <Input
           id="repo-token"
           type="password"
           value={token}
           onChange={(e) => setToken(e.target.value)}
           placeholder="ghp_... (private repos only)"
-          className={cn(
-            'w-full px-3 py-2 border rounded-md bg-background text-foreground',
-            'placeholder:text-muted-foreground',
-            'focus:outline-none focus:ring-2 focus:ring-primary'
-          )}
           aria-label="Optional GitHub Personal Access Token"
         />
         <p className="text-xs text-muted-foreground mt-1">
@@ -232,34 +222,29 @@ export function CustomRepositoryForm({
 
       {/* Submit Error */}
       {submitError && (
-        <div className="p-3 bg-destructive/10 border border-destructive rounded-md flex gap-2">
+        <div className="p-3 bg-destructive/10 border border-destructive/40 rounded-md flex gap-2">
           <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
           <p className="text-sm text-destructive">{submitError}</p>
         </div>
       )}
 
       {/* Submit Button */}
-      <button
+      <Button
         type="submit"
+        variant="accent"
         disabled={!isSubmitEnabled}
-        className={cn(
-          'w-full px-4 py-2 rounded-md font-medium',
-          'transition-colors duration-200',
-          isSubmitEnabled
-            ? 'bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer'
-            : 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
-        )}
+        className="w-full"
         aria-busy={isSubmitting}
       >
         {isSubmitting ? (
-          <span className="flex items-center justify-center gap-2">
-            <Loader className="h-4 w-4 animate-spin" />
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
             Adding...
-          </span>
+          </>
         ) : (
           'Add Repository'
         )}
-      </button>
+      </Button>
     </form>
   )
 }

@@ -45,32 +45,38 @@ function fetchSkillsStatus(signal?: AbortSignal): Promise<SkillsStatusResponse> 
   return api<SkillsStatusResponse>("/api/skills/status", { signal });
 }
 
+const STATUS_VARIANT: Record<string, "ok" | "warn" | "danger"> = {
+  healthy: "ok",
+  degraded: "warn",
+  error: "danger",
+};
+
 const StatusBadge = ({ status }: { status: string }) => {
   const config = {
-    healthy: { bg: "bg-green-100", text: "text-green-800", icon: CheckCircle },
-    degraded: { bg: "bg-yellow-100", text: "text-yellow-800", icon: AlertTriangle },
-    error: { bg: "bg-red-100", text: "text-red-800", icon: AlertCircle },
+    healthy: { icon: CheckCircle },
+    degraded: { icon: AlertTriangle },
+    error: { icon: AlertCircle },
   };
 
-  const { bg, text, icon: Icon } = config[status as keyof typeof config] || config.healthy;
+  const { icon: Icon } = config[status as keyof typeof config] || config.healthy;
 
   return (
-    <div className={`${bg} ${text} px-3 py-1 rounded-full flex items-center gap-1 text-sm font-medium`}>
+    <Badge variant={STATUS_VARIANT[status] ?? "outline"} className="gap-1">
       <Icon size={14} />
       {status}
-    </div>
+    </Badge>
   );
 };
 
 const ScoreBar = ({ score }: { score: number | null }) => {
-  if (score === null) return <span className="text-gray-400">No data</span>;
+  if (score === null) return <span className="text-muted-foreground">No data</span>;
 
   const percentage = Math.round(score * 100);
-  const color = score >= 0.8 ? "bg-green-500" : score >= 0.5 ? "bg-yellow-500" : "bg-red-500";
+  const color = score >= 0.8 ? "bg-emerald-500" : score >= 0.5 ? "bg-amber-500" : "bg-destructive";
 
   return (
     <div className="flex items-center gap-2">
-      <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+      <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
         <div className={`${color} h-full`} style={{ width: `${percentage}%` }} />
       </div>
       <span className="text-sm font-semibold">{percentage}%</span>
@@ -95,7 +101,7 @@ export const SkillsOverviewPanel: React.FC = () => {
           <CardDescription>Loading skill metrics...</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="text-center py-8 text-gray-500">Loading...</div>
+          <div className="text-center py-8 text-muted-foreground">Loading...</div>
         </CardContent>
       </Card>
     );
@@ -103,13 +109,13 @@ export const SkillsOverviewPanel: React.FC = () => {
 
   if (error || data?.error) {
     return (
-      <Card className="border-red-200 bg-red-50">
+      <Card className="border-destructive/40 bg-destructive/10">
         <CardHeader>
-          <CardTitle className="text-red-900">OS-Skills Overview</CardTitle>
-          <CardDescription className="text-red-800">Failed to load skills</CardDescription>
+          <CardTitle className="text-destructive">OS-Skills Overview</CardTitle>
+          <CardDescription className="text-destructive/90">Failed to load skills</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-red-700">{error?.message || data?.error}</p>
+          <p className="text-sm text-destructive">{error?.message || data?.error}</p>
         </CardContent>
       </Card>
     );
@@ -134,7 +140,7 @@ export const SkillsOverviewPanel: React.FC = () => {
 
         {skills.length === 0 ? (
           <CardContent>
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-muted-foreground">
               No active skills found. Skills are installed but not yet running.
             </div>
           </CardContent>
@@ -144,7 +150,7 @@ export const SkillsOverviewPanel: React.FC = () => {
               {skills.map((skill) => (
                 <div
                   key={skill.id}
-                  className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer transition"
+                  className="p-3 border border-border rounded-lg hover:bg-muted/50 cursor-pointer transition"
                   onClick={() => setSelectedSkill(skill.id)}
                 >
                   <div className="flex items-start justify-between gap-4">
@@ -158,23 +164,23 @@ export const SkillsOverviewPanel: React.FC = () => {
                       </div>
 
                       <div className="mb-2">
-                        <div className="text-xs text-gray-600 mb-1">Learning Score</div>
+                        <div className="text-xs text-muted-foreground mb-1">Learning Score</div>
                         <ScoreBar score={skill.score} />
                       </div>
 
                       <div className="grid grid-cols-3 gap-3 text-xs">
-                        <div className="flex items-center gap-1 text-gray-600">
+                        <div className="flex items-center gap-1 text-muted-foreground">
                           <TrendingUp size={14} />
                           <span>{skill.runs_24h} runs (24h)</span>
                         </div>
                         {skill.errors_24h > 0 && (
-                          <div className="flex items-center gap-1 text-red-600">
+                          <div className="flex items-center gap-1 text-destructive">
                             <AlertCircle size={14} />
                             <span>{skill.errors_24h} errors</span>
                           </div>
                         )}
                         {skill.last_run && (
-                          <div className="flex items-center gap-1 text-gray-600">
+                          <div className="flex items-center gap-1 text-muted-foreground">
                             <Clock size={14} />
                             <span>Last run: {new Date(skill.last_run).toLocaleTimeString()}</span>
                           </div>
@@ -230,12 +236,12 @@ class SkillDetailsErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <Card className="border-red-200 bg-red-50">
+        <Card className="border-destructive/40 bg-destructive/10">
           <CardHeader>
-            <CardTitle className="text-red-900">Error loading skill metrics</CardTitle>
+            <CardTitle className="text-destructive">Error loading skill metrics</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-red-800">{this.state.error?.message || "Unknown error"}</p>
+            <p className="text-sm text-destructive">{this.state.error?.message || "Unknown error"}</p>
           </CardContent>
         </Card>
       );
@@ -258,10 +264,10 @@ const SkillDetailsModal: React.FC<SkillDetailsModalProps> = ({ skillId, onClose 
 
   return (
     <SkillDetailsErrorBoundary>
-      <Card className="border-blue-200 bg-blue-50">
+      <Card className="border-accent/30 bg-accent/5">
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle className="text-blue-900">Skill Details: {skillId}</CardTitle>
+            <CardTitle className="text-foreground">Skill Details: {skillId}</CardTitle>
             <Button
               variant="ghost"
               size="sm"
@@ -272,8 +278,8 @@ const SkillDetailsModal: React.FC<SkillDetailsModalProps> = ({ skillId, onClose 
           </div>
         </CardHeader>
         <CardContent>
-          {isLoading && <div className="text-center py-8 text-gray-500">Loading metrics...</div>}
-          {error && <div className="text-center py-8 text-red-500">Failed to load metrics</div>}
+          {isLoading && <div className="text-center py-8 text-muted-foreground">Loading metrics...</div>}
+          {error && <div className="text-center py-8 text-destructive">Failed to load metrics</div>}
           {data && <SkillsMetricsChart data={data} />}
         </CardContent>
       </Card>

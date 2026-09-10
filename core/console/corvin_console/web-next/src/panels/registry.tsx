@@ -13,16 +13,15 @@ import { Loader2 } from "lucide-react";
 import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
-import { MarketplacePanel } from "./marketplace";
 import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
 import { VibeDashboard } from "@/pages/vibe-engineering";
 import {
-  DashboardPage, SettingsPage, EnginesPage, BrowserPage,
+  DashboardPage, SettingsPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
-  CoworkPage, LddPage, CompliancePage, FilesPage, SpacePage, MemoryPage,
+  LddPage, CompliancePage, FilesPage, SpacePage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
-  ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage, ActivityFeedPage,
+  ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
@@ -39,9 +38,7 @@ import { SkillInspector } from "@/components/SkillInspector";
 const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   DashboardPage,
   SettingsPage,
-  EnginesPage,
   EngineConfigPage,
-  BrowserPage,
   ComputePage,
   BridgesPage,
   VoicePage,
@@ -49,7 +46,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   SkillsPage,
   SkillsOverviewPanel: SkillsOverviewPanel as unknown as ComponentType,
   PackagesPage,
-  CoworkPage,
   LddPage,
   CompliancePage,
   FilesPage,
@@ -71,7 +67,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   McpPluginsPage,
   PluginsPage,
   PluginCenterPage,
-  ActivityFeedPage,
   GitHubPage,
   SyncMonitorPage,
   WebhooksPage,
@@ -94,9 +89,7 @@ export const PANELS: ConsolePanel[] = [
   rc("vibe-engineering", "Learnings", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain" } }),
   rc("dashboard", "Dashboard", DashboardPage),
   rc("settings", "Settings", SettingsPage),
-  rc("engines", "AI Engines", EnginesPage),
   rc("engine-config", "Engine Config", EngineConfigPage, { nav: { label: "Engine Config", icon: "" } }),
-  rc("browser", "Browser", BrowserPage),
   rc("compute", "Compute", ComputePage),
   rc("bridges", "Bridges", BridgesPage),
   rc("voice", "Voice", VoicePage),
@@ -104,7 +97,6 @@ export const PANELS: ConsolePanel[] = [
   rc("skills", "Skills", SkillsPage),
   rc("os-skills", "OS-Skills", SkillsOverviewPanel as unknown as ComponentType),
   rc("packages", "Packages", PackagesPage),
-  rc("cowork", "Cowork", CoworkPage),
   rc("ldd", "LDD", LddPage),
   rc("compliance", "Compliance", CompliancePage),
   rc("files", "Files", FilesPage),
@@ -131,8 +123,6 @@ export const PANELS: ConsolePanel[] = [
   rc("extensions", "Extensions", ExtensionsPage),
   rc("mcp-plugins", "MCP Plugins", McpPluginsPage),
   rc("plugins", "Plugins", PluginsPage),
-  rc("marketplace", "Marketplace", MarketplacePanel, { requiredFlag: "console_marketplace_panel" }),
-  rc("activity", "Activity", ActivityFeedPage),
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "settings" } }),
