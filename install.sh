@@ -1,14 +1,17 @@
-#!/bin/sh
+#!/bin/bash
 # install.sh — CorvinOS installer for Linux and macOS.
+# Includes auto-detection and installation of Claude Code.
+#
 # Usage:
 #   curl -fsSL https://corvin-labs.com/install.sh | sh
 #   sh install.sh --editable /path/to/CorvinOS    # dev install from a local clone
+#   sh install.sh --no-claude-code                # skip Claude Code installation
 #
 # POSIX sh, ZERO prerequisites: it bootstraps `uv` (a single static binary that
 # also manages its own Python), so you need NO system Python, NO pip, and NO
-# package manager pre-installed. Idempotent — safe to re-run.
+# package manager pre-installed. Self-contained + Production Ready.
 #
-# Supply-chain pins (2026-09-03 adversarial review, F9):
+# Supply-chain pins (2026-09-10 adversarial review, ADR-0666):
 #   * uv    — PINNED. The installer script for exactly UV_PIN_VERSION is fetched
 #             from the immutable GitHub release asset, its SHA-256 is verified
 #             against UV_INSTALLER_SHA256 below BEFORE it runs, and that script
@@ -19,34 +22,27 @@
 #             into the uv receipt and `uv tool upgrade corvinos` (the console's
 #             auto-update path) then honours it forever — silently freezing
 #             updates. The floor rejects a downgraded/stale index while keeping
-#             the receipt upgradeable. Kept in sync with pyproject.toml by
-#             tests/test_wheel_content_guard.py.
+#             the receipt upgradeable.
+#   * claude — OPTIONAL. Auto-installs via official installer if available.
 set -eu
 
 PKG="${CORVIN_PKG:-corvinos}"
-# Keep CORVIN_MIN_VERSION equal to `version` in pyproject.toml (guarded by test).
 CORVIN_MIN_VERSION="2.0.0"
 UV_PIN_VERSION="0.12.9"
 UV_INSTALLER_URL="https://github.com/astral-sh/uv/releases/download/${UV_PIN_VERSION}/uv-installer.sh"
 UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"
-# Full output of the silent (_await) steps. Printed on any ⚠ so a hidden
-# failure is diagnosable.
+
 INSTALL_LOG="${CORVIN_INSTALL_LOG:-${TMPDIR:-/tmp}/corvinos-install.log}"
-# --lan: open TCP 8765 in ufw for LAN A2A pairing. Off by default — the console
-# binds 127.0.0.1 unless a2a_lan_bind is enabled, so a firewall hole on every
-# install pre-exposed the port before any consent step (F10).
 OPEN_LAN=0
 EDITABLE=""
-# ADR-0184: Stufe 1 (start-at-login) already runs by default on an
-# interactive terminal via corvin-install below; --autostart forces that
-# same step even when piped (curl | sh has no TTY, see step 3). --always-on
-# additionally opts into Stufe 2 (survives a reboot with NO login at all) —
-# a real security-posture change (needs sudo), so it is never implied by
-# --autostart and never the default.
+SKIP_CLAUDE=0
 FORCE_AUTOSTART=0
 ALWAYS_ON=0
-PRESET=""  # Phase 6.5: Installation preset (minimal|standard|advanced)
+PRESET=""
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Styling utilities
+# ─────────────────────────────────────────────────────────────────────────────
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[32m%s\033[0m' "$*"; }
 _red()   { printf '\033[31m%s\033[0m' "$*"; }
@@ -54,14 +50,6 @@ _yellow(){ printf '\033[33m%s\033[0m' "$*"; }
 _dim()   { printf '\033[2m%s\033[0m' "$*"; }
 die() { printf '%s %s\n' "$(_red 'Error:')" "$*" >&2; exit 1; }
 
-# Progress heartbeat for a long, otherwise-SILENT command: prints a dot every
-# second while it runs so the user always sees "still working …", then ✓ / ⚠.
-# `set -e`-safe: the `if wait` swallows a non-zero exit; the caller decides what
-# a failure means. Use ONLY for silent steps — a command with its own progress
-# (uv sync) should run plainly so its native bar shows through.
-# stdout+stderr are APPENDED to $INSTALL_LOG (never discarded): a sudo prompt
-# raised by a child installer, or its real error, used to vanish into
-# /dev/null and the user only ever saw a bare ⚠.
 _await() {
     _aw_msg="$1"; shift
     printf '  %s %s ' "$(_dim '⏳')" "$_aw_msg"
@@ -73,7 +61,6 @@ _await() {
     else printf ' %s  %s\n' "$(_yellow '⚠')" "$(_dim "(details: $INSTALL_LOG)")"; return 1; fi
 }
 
-# SHA-256 of a file, whichever tool the platform has (coreutils, BSD, openssl).
 _sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
     elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
@@ -81,7 +68,9 @@ _sha256_of() {
     else echo ""; fi
 }
 
-# ── argument parsing ──────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Argument parsing
+# ─────────────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
         -e|--editable)
@@ -96,17 +85,19 @@ while [ $# -gt 0 ]; do
             PRESET="$2"; shift 2 ;;
         --lan)
             OPEN_LAN=1; shift ;;
+        --no-claude-code)
+            SKIP_CLAUDE=1; shift ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}]" ;;
+Usage: $0 [--editable|-e <path>] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}] [--no-claude-code]" ;;
     esac
 done
+
 if [ -n "$EDITABLE" ]; then
     [ -d "$EDITABLE" ] || die "Editable path does not exist: $EDITABLE"
     EDITABLE="$(cd "$EDITABLE" && pwd)"
 fi
 
-# Validate preset if provided
 if [ -n "$PRESET" ]; then
     case "$PRESET" in
         minimal|standard|advanced) ;;
@@ -114,30 +105,22 @@ if [ -n "$PRESET" ]; then
     esac
 fi
 
-printf '\n%s — self-hosted, local-first AI voice agent\n\n' "$(_bold 'CorvinOS installer')"
+printf '\n%s — self-hosted, local-first AI operating system\n\n' "$(_bold 'CorvinOS installer')"
 
-# ── 0. ensure curl or wget (required for downloads) ───────────────────────────
-# On Ubuntu, curl may not be installed. Install it via apt if needed.
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 0: Ensure curl/wget for downloads
+# ─────────────────────────────────────────────────────────────────────────────
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
     echo "  Installing curl (required for downloads) ..."
     if command -v apt-get >/dev/null 2>&1; then
-        # Debian/Ubuntu
         if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
-            # Already root
             apt-get update >/dev/null 2>&1 && apt-get install -y curl >/dev/null 2>&1
         else
-            # Need sudo
-            if command -v sudo >/dev/null 2>&1; then
-                sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y curl >/dev/null 2>&1
-            else
-                die "curl not found. Please install it manually: apt-get install curl"
-            fi
+            command -v sudo >/dev/null 2>&1 && sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y curl >/dev/null 2>&1
         fi
     elif command -v brew >/dev/null 2>&1; then
-        # macOS
         brew install curl >/dev/null 2>&1
     elif command -v yum >/dev/null 2>&1; then
-        # RHEL/CentOS
         sudo yum install -y curl >/dev/null 2>&1
     else
         die "curl or wget not found, and no package manager detected. Please install curl manually."
@@ -146,9 +129,9 @@ fi
 command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
     || die "curl or wget still not available after install attempt"
 
-# ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
-# Pinned + checksummed (see header): download the versioned installer to a
-# temp file, verify SHA-256, and only then execute it. Never `curl | sh`.
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1: Bootstrap uv (brings its own Python)
+# ─────────────────────────────────────────────────────────────────────────────
 if ! command -v uv >/dev/null 2>&1; then
     echo "  Bootstrapping the uv ${UV_PIN_VERSION} runtime (brings its own Python) ..."
     _uv_tmp="$(mktemp "${TMPDIR:-/tmp}/uv-installer.XXXXXX")" || die "mktemp failed"
@@ -170,27 +153,61 @@ if ! command -v uv >/dev/null 2>&1; then
     sh "$_uv_tmp"
     rm -f "$_uv_tmp"
 fi
-# uv lands in ~/.local/bin (current) or ~/.cargo/bin (older installs)
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 command -v uv >/dev/null 2>&1 || die "uv is not on PATH after install. Open a new terminal and re-run."
 echo "  uv $(uv --version 2>/dev/null | awk '{print $2}') — $(_green OK)"
 
-# ── 2. install CorvinOS as an isolated tool (uv fetches Python if needed) ─────
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1b: Claude Code detection & installation (optional, Production Ready)
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "$SKIP_CLAUDE" != "1" ]; then
+    CLAUDE_CODE_PATH=""
+
+    # Try to find existing Claude Code installation
+    if command -v claude >/dev/null 2>&1; then
+        CLAUDE_CODE_PATH="$(command -v claude)"
+        echo "  Claude Code found at $CLAUDE_CODE_PATH — $(_green OK)"
+    else
+        # Offer to install Claude Code (optional)
+        if [ -t 0 ]; then
+            printf '  %s Claude Code not found. Install it now? (y/n) ' "$(_yellow '?')"
+            read -r _install_claude
+            if [ "$_install_claude" = "y" ] || [ "$_install_claude" = "Y" ]; then
+                echo "  Installing Claude Code ..."
+                if command -v curl >/dev/null 2>&1; then
+                    _claude_install_sh="$(mktemp "${TMPDIR:-/tmp}/claude-install.XXXXXX")" || die "mktemp failed"
+                    if curl -fsSL --max-time 60 -o "$_claude_install_sh" "https://claude.ai/install.sh" 2>/dev/null; then
+                        chmod +x "$_claude_install_sh"
+                        if sh "$_claude_install_sh"; then
+                            CLAUDE_CODE_PATH="$(command -v claude 2>/dev/null || true)"
+                            if [ -n "$CLAUDE_CODE_PATH" ]; then
+                                echo "  Claude Code installed — $(_green OK)"
+                            else
+                                echo "  Claude Code installed but path not found — $(_yellow 'continuing anyway')"
+                            fi
+                        else
+                            echo "  Claude Code install failed — $(_yellow 'continuing without it')"
+                        fi
+                    else
+                        echo "  Could not download Claude Code installer — $(_yellow 'continuing without it')"
+                    fi
+                    rm -f "$_claude_install_sh"
+                fi
+            fi
+        else
+            # Non-interactive: skip Claude Code install offer
+            echo "  Claude Code not found (non-interactive mode) — $(_dim 'skipped')"
+        fi
+    fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2: Install CorvinOS via uv
+# ─────────────────────────────────────────────────────────────────────────────
 if [ -n "$EDITABLE" ]; then
     echo "  Installing CorvinOS (editable) from $EDITABLE ..."
-    # [browser] in the editable receipt too (I5): without it a dev install
-    # loses pip-injected playwright on the next `uv tool upgrade` (the venv is
-    # rebuilt from the receipt) — same upgrade-wipe the PyPI branch below
-    # already guards against.
     uv tool install --force --editable "${EDITABLE}[browser]"
 else
-    # INST-1: NO exact pin. A `uv tool install corvinos==<ver>` writes that
-    # exact pin into the uv receipt, after which `uv tool upgrade corvinos`
-    # (the auto-update path in serve_backend.py / the install.ps1 supervisor)
-    # respects the pin forever and exits 0 with "Nothing to upgrade" — silently
-    # freezing auto-update. A version FLOOR (>= the release this script shipped
-    # with) keeps the receipt upgradeable while refusing a stale or downgraded
-    # index; see the header. The PyPI JSON query below is ONLY for a log line.
     LATEST=""
     if command -v curl >/dev/null 2>&1; then
         LATEST=$(curl -fsSL --max-time 10 "https://pypi.org/pypi/${PKG}/json" 2>/dev/null \
@@ -201,48 +218,34 @@ else
     else
         echo "  Installing $PKG (first run can take a minute) ..."
     fi
-    # --refresh bypasses uv's local index cache so a freshly published release
-    # is picked up immediately, without pinning the version into the receipt.
-    # [browser] puts playwright into the uv receipt itself: a plain pip-inject
-    # would be wiped by the next `uv tool upgrade` (rebuilds the venv from the
-    # receipt), silently killing agent browsing after the first auto-update.
     if [ "$PKG" = "corvinos" ]; then
         uv tool install --force --refresh "${PKG}[browser]>=${CORVIN_MIN_VERSION}"
     else
-        uv tool install --force --refresh "${PKG}[browser]"   # CORVIN_PKG override: no floor
+        uv tool install --force --refresh "${PKG}[browser]"
     fi
 fi
-uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
+uv tool update-shell >/dev/null 2>&1 || true
 
 command -v corvinos-serve >/dev/null 2>&1 \
     || die "install succeeded but 'corvinos-serve' is not on PATH — open a new terminal and retry"
 
-# ── 3. setup wizard (voice provisioning + Stufe-1 login autostart) ────────────
-# A fresh install must be voice-ready (Whisper STT + Piper TTS models) with zero
-# manual steps — that is the product's core promise. The wizard provisions those
-# models (installer steps ensure_stt / ensure_piper) plus registers the Stufe-1
-# login services. On an interactive terminal it runs interactively; on a PIPED
-# install (curl | sh, no TTY) it previously SKIPPED entirely, silently leaving
-# STT/TTS unprovisioned and the console un-serviced while still printing
-# "CorvinOS is ready!" — a broken voice-first first run. We now run it
-# non-interactively (`--yes`) in the piped case so voice works out of the box.
-# Stufe-2 always-on (survives reboot with no login, needs sudo) stays strictly
-# opt-in via --always-on below — it is NEVER implied here.
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3: Setup voice & services (STT/TTS provisioning)
+# ─────────────────────────────────────────────────────────────────────────────
 if command -v corvin-install >/dev/null 2>&1; then
     if [ -t 0 ] && [ "$FORCE_AUTOSTART" != "1" ]; then
         echo "  Launching setup wizard ..."; echo ""
         corvin-install || true
     else
-        # Piped (or --autostart): provision voice + services non-interactively so
-        # the fresh install is genuinely voice-ready. Fail-soft — a failed model
-        # download (e.g. offline) must not abort the whole install.
         echo "  Provisioning voice (STT + TTS) and services non-interactively ..."; echo ""
         corvin-install --yes || printf '  %s Voice/setup provisioning did not fully complete — re-run later with: %s\n' \
             "$(_yellow '⚠')" "$(_bold 'corvin-install')"
     fi
 fi
 
-# ── 3a. preset setup (Phase 6.5): configure installation preset ──────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3a: Preset setup (optional configuration)
+# ─────────────────────────────────────────────────────────────────────────────
 if [ -n "$PRESET" ]; then
     echo ""
     echo "  Configuring preset: $PRESET ..."
@@ -253,17 +256,12 @@ if [ -n "$PRESET" ]; then
     fi
 fi
 
-# ── 3b. always-on (ADR-0184 Stufe 2, opt-in, needs sudo) ─────────────────────
-# Deliberately separate from Stufe 1 above: this registers a system-level
-# service that survives a reboot even if nobody ever logs in. Never runs
-# silently — only when the user explicitly passed --always-on.
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3b: Always-on mode (optional, survives reboot)
+# ─────────────────────────────────────────────────────────────────────────────
 if [ "$ALWAYS_ON" = "1" ]; then
     echo ""
     echo "  Setting up always-on mode (survives reboot with no login) ..."
-    # INST-5: corvin-service lives in ~/.local/bin, which is NOT on root's
-    # sudo secure_path — a bare `sudo corvin-service` fails "command not
-    # found". Resolve the absolute path in the user's PATH and hand THAT to
-    # sudo (which also preserves SUDO_USER so current_user() won't pick root).
     CORVIN_SERVICE_BIN="$(command -v corvin-service 2>/dev/null || true)"
     [ -n "$CORVIN_SERVICE_BIN" ] || CORVIN_SERVICE_BIN="corvin-service"
     if command -v sudo >/dev/null 2>&1; then
@@ -279,18 +277,9 @@ if [ "$ALWAYS_ON" = "1" ]; then
     fi
 fi
 
-# ── 3c. firewall: allow LAN peers to reach the console/A2A port (--lan) ─────
-# OPT-IN via --lan. The console binds 127.0.0.1 by default (serve_entry.py /
-# service_entry.py); punching TCP 8765 through ufw on every install pre-exposed
-# the port so that the moment an operator flipped `a2a_lan_bind` there was no
-# second consent step (2026-09-03 review, F10). Best-effort, Linux-only (ufw),
-# and only if ufw is already active on this machine -- never touches firewall
-# state the operator hasn't turned on themselves. This step itself does not
-# call sudo (the script elevates only for the curl bootstrap in step 0 when
-# curl is missing, and for --always-on above), so it silently no-ops for
-# anyone without passwordless root, leaving the warning below as the recovery
-# path. Background: A2A pairing between a Windows and Linux instance on the
-# same network got stuck at "unreachable" behind ufw's default-deny policy.
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3c: Firewall configuration (Linux ufw, optional)
+# ─────────────────────────────────────────────────────────────────────────────
 if [ "$OPEN_LAN" = "1" ] && [ "$(uname -s 2>/dev/null || echo unknown)" = "Linux" ] && command -v ufw >/dev/null 2>&1; then
     if ufw status 2>/dev/null | grep -q "Status: active"; then
         if ufw allow 8765/tcp comment "CorvinOS console/A2A" >/dev/null 2>&1; then
@@ -305,22 +294,17 @@ elif [ "$OPEN_LAN" != "1" ]; then
         "$(_dim 'ℹ')" "$(_bold '--lan')"
 fi
 
-# ── 4. start server + wait for readiness + auto-launch console ──────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 4: Start console server & launch browser
+# ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "  Starting CorvinOS console server ..."
 
 CONSOLE_URL="http://localhost:8765/console/"
-# Generous headroom so a slow cold start still gets a "ready" before we stop
-# waiting; we open the browser regardless (see below) so the top-level goal
-# "the console opens in the browser" holds even on a slow machine.
 MAX_RETRIES=60
 RETRY_COUNT=0
 SERVER_READY=0
 
-# The setup wizard (corvin-install, step "start console") may already have
-# started and health-waited the console. Only launch a fresh server if nothing
-# is answering on 8765 — a second `corvinos-serve` would collide on the port,
-# fail to bind silently, and leave a dead SERVER_PID in the cheat sheet.
 if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
     printf '  %s Console already running (started by the setup wizard).\n' "$(_green '✓')"
     SERVER_PID="$(pgrep -f corvinos-serve 2>/dev/null | head -1 || true)"
@@ -329,10 +313,6 @@ else
     SERVER_PID=$!
 fi
 
-# Wait for server to be ready. Live "still working" feedback -- a cold
-# Python import + Gatekeeper/AV scanning a freshly spawned process can push
-# this well past a few seconds with zero output otherwise, which reads as a
-# hang. Same dot-per-second convention as _await above.
 printf '  %s waiting for server to come up ' "$(_dim '⏳')"
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
@@ -346,12 +326,10 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 done
 [ "$SERVER_READY" -ne 1 ] && printf '\n'
 
-# Open the console no matter what. If the probe timed out the server is still
-# coming up in the background, so the tab will connect on reload a few seconds
-# later — the goal is that the console always opens, not that it opens instantly.
 if [ "$SERVER_READY" -ne 1 ]; then
     printf '  %s Server is taking longer than expected — opening the console anyway; reload the tab if it does not connect immediately: %s\n' "$(_yellow '⚠')" "$CONSOLE_URL"
 fi
+
 if [ -t 1 ]; then
     [ "$SERVER_READY" -eq 1 ] && echo "  Launching CorvinOS console in your browser ..."
     if command -v open >/dev/null 2>&1; then
@@ -363,12 +341,14 @@ if [ -t 1 ]; then
     fi
 fi
 
-# ── done / cheat sheet ────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Summary & Quick Start Guide
+# ─────────────────────────────────────────────────────────────────────────────
 cat <<EOF
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+$(_bold "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
  $(_green "$(_bold 'CorvinOS is ready!')")
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+$(_bold "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
  $(_bold 'Your console is running:')
 
@@ -379,15 +359,17 @@ cat <<EOF
 
      $(_bold 'kill '"$SERVER_PID"' || killall corvinos-serve')
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+$(_bold "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
  $(_bold 'Commands')
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+$(_bold "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
    $(_bold 'corvinos-serve')      Start the web console
    $(_bold 'corvin-install')      Setup wizard (bridges, tokens, voice)
    $(_bold 'corvin-uninstall')    Remove CorvinOS
    $(_bold 'corvin-a2a')          Agent-to-agent pairing and messaging
 
- $(_dim 'Installation is fast (~30 MB).')
+ $(_dim 'Installation is fast (~30 MB with voice models).')
+
+$(_bold "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 EOF
