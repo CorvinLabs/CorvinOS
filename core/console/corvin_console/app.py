@@ -168,6 +168,8 @@ from .routes import (
     talent as talent_route,
     vibe_engineering as vibe_engineering_route,
     api_vibe_maturity as api_vibe_maturity_route,
+    api_vibe_maturity_phase3 as api_vibe_maturity_phase3_route,
+    api_vibe_maturity_export as api_vibe_maturity_export_route,
     # ADR-0357 P3 — versioned capability manifest (shell renders nav from it)
     capabilities as capabilities_route,
     # ADR-0366 — AI-generated Console panels
@@ -210,6 +212,8 @@ router.include_router(method_discovery_api_route.router, tags=["console-method-d
 router.include_router(l5_metrics_route.router, tags=["console-l5-metrics"])
 router.include_router(vibe_route.router, tags=["console-vibe"])
 router.include_router(api_vibe_maturity_route.router, tags=["console-vibe-maturity"])
+router.include_router(api_vibe_maturity_phase3_route.router, tags=["console-vibe-maturity-phase3"])
+router.include_router(api_vibe_maturity_export_route.router, tags=["console-vibe-export"])
 router.include_router(memory.router, tags=["console-memory"])
 # Phase D — realtime SSE streams
 router.include_router(streams.router, tags=["console-streams"])
