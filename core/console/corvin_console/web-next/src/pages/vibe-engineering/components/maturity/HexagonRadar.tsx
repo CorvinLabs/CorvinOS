@@ -14,6 +14,7 @@ import { LoopScores, getScoreColor } from './types';
 
 interface HexagonRadarProps {
   loopScores: LoopScores;
+  onLoopClick?: (loopName: string, loopKey: string) => void;
 }
 
 // Tier 1 loop names (outer hexagon, 6 vertices)
@@ -159,8 +160,16 @@ export function HexagonRadar({ loopScores }: HexagonRadarProps) {
             const color = getScoreColor(loop.value);
             return (
               <g key={`tier1-${i}`}>
-                {/* Vertex point */}
-                <circle cx={x} cy={y} r="6" fill={color} opacity="0.8" />
+                {/* Vertex point - clickable */}
+                <circle
+                  cx={x}
+                  cy={y}
+                  r="6"
+                  fill={color}
+                  opacity="0.8"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => props.onLoopClick?.(loop.label, `tier1_${i}`)}
+                />
 
                 {/* Label background */}
                 <g>
