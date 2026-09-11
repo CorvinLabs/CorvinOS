@@ -22,7 +22,7 @@ class SecurityScanner:
             r"(aws_access_key_id|aws_secret_access_key|AKIA[0-9A-Z]{16})",
             "high",
         ),
-        "github_token": (r"ghp_[a-zA-Z0-9]{36}", "high"),
+        "github_token": (r"ghp_[a-zA-Z0-9]{20,}", "high"),
         "api_key_generic": (
             r"(api[_-]?key|apikey|api-key)[\s:=]+['\"]?[a-zA-Z0-9\-_.]{20,}['\"]?",
             "high",
