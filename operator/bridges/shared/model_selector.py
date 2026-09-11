@@ -541,9 +541,10 @@ def resolve_os_model(
     tenant_id: str = "_default",
     workload_hint: dict | None = None,
     chat_key: str | None = None,
+    ato_plan_hint: dict | None = None,
     audit_fn=None,
 ) -> str | None:
-    """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 6-Tier adaptive OS model selection.
+    """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 7-Tier adaptive OS model selection.
 
     THE single source of truth for OS-turn model resolution. Both the console
     web-chat (``chat_runtime.py``) and the bridge adapter (``adapter.py``) call
@@ -558,6 +559,7 @@ def resolve_os_model(
       1.5. profile._persona_os_model                                → per-persona pin (ADR-0123)
       2.5. spec.engine_models.<engine_id>.os_model in tenant YAML   → per-engine tenant default (ADR-0119)
       2.7. ADR-0043 workload classification (CHAT fast-path only)    → opt-in tenant feature flag
+      2.8. ADR-0165 ATO plan recommendation                          → complexity-based routing (NEW)
       3.   autoselect(payload_chars) + floor                         → adaptive (default path)
       4.   None                                                      → CLI subscription default
 
@@ -696,6 +698,48 @@ def resolve_os_model(
                             return model
             except Exception:  # noqa: BLE001
                 pass  # Tier 2.7 routing failure is non-fatal; fall through to Tier 3
+
+    # Tier 2.8 — ADR-0165 ATO plan recommendation (complexity-based routing)
+    # Injected from the adapter's ATO classification phase, applied before
+    # the generic autoselect heuristic. If a recommendation exists and has
+    # sufficient confidence, use it; otherwise fall through to Tier 3.
+    if ato_plan_hint:
+        try:
+            recommended = ato_plan_hint.get("recommended_model")
+            confidence = float(ato_plan_hint.get("confidence", 0.0))
+
+            # Only apply if recommendation exists and confidence is reasonable
+            if recommended and confidence > 0.0:
+                # Map shorthand names to actual models
+                model_map = {
+                    "haiku": DEFAULT_LOW,
+                    "sonnet": DEFAULT_HIGH,
+                    "opus": "claude-opus-4-7",
+                }
+                actual_model = model_map.get(recommended.lower())
+
+                if actual_model:
+                    # Audit the routing decision (ADR-0165)
+                    if audit_fn is not None:
+                        try:
+                            task_type = ato_plan_hint.get("task_type", "unknown")
+                            audit_fn(
+                                "bridge.ato_model_selection",
+                                chat_key=chat_key or "unknown",
+                                details={
+                                    "task_type": task_type,
+                                    "recommended_model": recommended,
+                                    "confidence": confidence,
+                                    "selected_model": actual_model,
+                                    "engine": engine_id,
+                                    "tier": "2.8_ato",
+                                },
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass  # audit failure is non-fatal
+                    return actual_model
+        except Exception:  # noqa: BLE001
+            pass  # Tier 2.8 routing failure is non-fatal; fall through to Tier 3
 
     # Tier 3 — adaptive autoselect (the new default path)
     if autoselect_enabled():
