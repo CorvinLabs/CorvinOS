@@ -20,13 +20,14 @@ from typing import Optional
 from .trail import AuditEvent, AuditTrail
 
 # Regex patterns for PII detection (conservative, comprehensive)
+# Order matters: IBAN first (more specific), then phone, then others
 PII_PATTERNS = {
+    'iban': r'\b[A-Z]{2}[0-9]{2}[0-9A-Z]{1,30}\b',  # Any IBAN: 2 letters + 2 digits + 1-30 alphanumeric
     'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-    # Phone: US formats (555) 123-4567, 555-1234, +1-555-1234567, DE formats +49 123 456789, (030) 123456, 030/123456
-    'phone': r'(?:\+\d{1,3}[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3}[-.\s]?\d{4}|\d{4}[-.\s]?\d{5}|[0-9]{2,}[-/.\s]?[0-9]{3,})',
+    # Phone: Multiple formats — US: (555) 123-4567, 555-1234, +1-555-1234567; DE: +49 123 456789, (030) 123456, 030/123456
+    'phone': r'(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)*\d{3,4}[\s.-]?\d{3,4}(?=\s|$|[^\d])',
     'credit_card': r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',
     'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
-    'iban': r'[D|A|A][E|T|U][0-9]{2}[0-9A-Z]{1,30}',  # German/Austrian/other IBAN
 }
 
 

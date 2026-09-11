@@ -23,6 +23,14 @@ from typing import Literal, Optional
 
 from core.tenants.validation import validate_tenant_id
 
+# Import for consent checking (will be injected at runtime)
+try:
+    from core.consent.manager import get_consent_manager
+except ImportError:
+    # Fallback for environments without consent manager
+    def get_consent_manager(*args, **kwargs):
+        return None
+
 __all__ = [
     "UserFeedback",
     "ConfigHypothesis",
@@ -98,6 +106,9 @@ class FeedbackInterpreter:
       - Confidence: how sure are we this is right?
 
     All rules are documented in this class as constants for reviewability.
+
+    Consent check: User must have given consent before feedback is processed.
+    Fail-closed: If consent is not given, feedback is rejected with 403.
     """
 
     # Rules: feedback pattern → hypothesis
@@ -144,12 +155,55 @@ class FeedbackInterpreter:
         },
     ]
 
+    def check_consent(self, feedback: UserFeedback) -> bool:
+        """
+        Check if user has given consent for feedback processing.
+
+        Args:
+            feedback: UserFeedback to check
+
+        Returns:
+            True if user has consent, False otherwise
+
+        Raises:
+            PermissionError: If user has not given consent (fail-closed)
+        """
+        try:
+            consent_manager = get_consent_manager(tenant_id=feedback.tenant_id)
+            if consent_manager is None:
+                # No consent manager available; default to deny (fail-closed)
+                raise PermissionError(
+                    f"Feedback rejected: No consent manager available for user processing"
+                )
+
+            # Check if user has given consent for feedback/learning
+            # User ID would need to be available in a real implementation
+            # For now, we check the tenant-level consent flag
+            has_consent = consent_manager.has_learning_consent()
+            if not has_consent:
+                raise PermissionError(
+                    f"Feedback rejected: User has not given consent for learning/feedback processing"
+                )
+
+            return True
+        except Exception as e:
+            # Fail-closed: any error in consent check → deny
+            if isinstance(e, PermissionError):
+                raise
+            raise PermissionError(f"Feedback rejected: Consent check failed: {str(e)}")
+
     def interpret(self, feedback: UserFeedback) -> list[ConfigHypothesis]:
         """Convert feedback into hypotheses.
 
         Each matching rule generates one hypothesis. Multiple rules can fire
         for one feedback (e.g., "excellent" + "reason contains 'fast'").
+
+        Raises:
+            PermissionError: If user has not given consent (403)
         """
+        # Check consent first (fail-closed)
+        self.check_consent(feedback)
+
         hypotheses = []
 
         for rule in self._RULES:

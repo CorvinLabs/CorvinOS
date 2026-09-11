@@ -42,6 +42,55 @@ class PrometheusExporter:
         """
         self.audit_trail = audit_trail
 
+    @staticmethod
+    def _validate_metric_value(metric_name: str, value: float) -> bool:
+        """
+        Validate metric values (fail-closed).
+
+        Args:
+            metric_name: Name of the metric
+            value: Value to validate
+
+        Returns:
+            True if valid, raises ValueError otherwise
+
+        Raises:
+            ValueError: If value is invalid (negative counter, NaN, Infinity, etc.)
+        """
+        # Check for NaN or Infinity
+        if math.isnan(value) or math.isinf(value):
+            raise ValueError(f"Invalid metric value for {metric_name}: {value} (NaN or Infinity)")
+
+        # Convergence status must be in [0, 1]
+        if "convergence" in metric_name.lower():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"Convergence metric {metric_name} must be in [0, 1], got {value}")
+
+        # Counters must be >= 0
+        if "total" in metric_name.lower() or "count" in metric_name.lower():
+            if value < 0:
+                raise ValueError(f"Counter metric {metric_name} must be >= 0, got {value}")
+
+        return True
+
+    @staticmethod
+    def _validate_metric_prefix(prefix: str) -> bool:
+        """
+        Validate metric name prefix (alphanumeric + underscore only).
+
+        Args:
+            prefix: Prefix to validate
+
+        Returns:
+            True if valid, raises ValueError otherwise
+        """
+        if not re.match(r'^[a-z_]+$', prefix):
+            raise ValueError(
+                f"Metric prefix must match [a-z_]+, got '{prefix}' "
+                "(only lowercase letters and underscores allowed)"
+            )
+        return True
+
     def collect_metrics(
         self,
         daemon_convergence_status: Optional[float] = None,
@@ -54,6 +103,9 @@ class PrometheusExporter:
 
         Returns:
             PrometheusMetrics object
+
+        Raises:
+            ValueError: If any metric value is invalid
         """
         # Count events by type
         events = self.audit_trail.query_events(limit=999999)
@@ -73,11 +125,22 @@ class PrometheusExporter:
         # Check chain integrity
         is_valid, _ = self.audit_trail.verify_integrity()
 
+        # Validate convergence status if provided
+        if daemon_convergence_status is not None:
+            self._validate_metric_value("daemon_convergence_status", daemon_convergence_status)
+        else:
+            daemon_convergence_status = 0.0
+
+        # Validate counter values
+        self._validate_metric_value("skill_generation_count", float(skill_gen_count))
+        self._validate_metric_value("weight_updates_total", float(weight_update_count))
+        self._validate_metric_value("feedback_signals_total", float(feedback_count))
+
         return PrometheusMetrics(
             skill_generation_count=skill_gen_count,
             weight_updates_total=weight_update_count,
             feedback_signals_total=feedback_count,
-            daemon_convergence_status=daemon_convergence_status or 0.0,
+            daemon_convergence_status=daemon_convergence_status,
             audit_chain_height=len(events),
             audit_chain_verified=1.0 if is_valid else 0.0,
         )
@@ -92,11 +155,17 @@ class PrometheusExporter:
 
         Args:
             daemon_convergence_status: Optional convergence status
-            prefix: Metric name prefix
+            prefix: Metric name prefix (must match [a-z_]+)
 
         Returns:
             Prometheus-format text (for /metrics endpoint)
+
+        Raises:
+            ValueError: If prefix is invalid
         """
+        # Validate prefix
+        self._validate_metric_prefix(prefix.rstrip('_'))
+
         metrics = self.collect_metrics(daemon_convergence_status)
 
         lines = [
