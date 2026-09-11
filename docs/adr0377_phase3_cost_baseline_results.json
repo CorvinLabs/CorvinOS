@@ -1,0 +1,11 @@
+{
+  "baseline_cost": 15.9444,
+  "phase1_cost": 9.7873,
+  "phase3_cost": 2.8834,
+  "phase1_savings_pct": 38.6,
+  "phase3_savings_pct": 81.9,
+  "phase3_model_distribution": {
+    "claude-3-5-sonnet": 74,
+    "gemini-1.5-pro": 26
+  }
+}
