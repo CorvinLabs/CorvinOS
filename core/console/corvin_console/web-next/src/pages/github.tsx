@@ -1,24 +1,54 @@
 /**
  * GitHub Integration Panel — Cross-Device-Learning Sync
  *
- * Location: /app/settings/github (or modal in Skills Manager)
+ * Location: /app/settings/github (single unified surface).
+ *
+ * Consolidation (2026-09-11): this used to be three separate pages —
+ * this one (connect/verify), a standalone "Sync Monitor" (worker
+ * start/stop + a Server-Sent-Events log that pointed at a route which
+ * was never implemented, so it just reconnected every 5s forever), and
+ * a standalone "Webhooks" page whose "Register Webhook" button never
+ * called the GitHub API at all — it wrote a local placeholder file and
+ * reported success unconditionally. Both of those routes now redirect
+ * here (kept mounted for deep-link stability, dropped from the sidebar).
+ *
+ * There is exactly one sync mechanism: a polling worker (5-minute
+ * interval, see routes/github_sync.py::GitHubSyncWorker). The
+ * "Automatic Sync" toggle below is the single control for it — flipping
+ * it persists `auto_sync` on the tenant's config AND starts/stops the
+ * worker thread in the same request, so the two can never drift apart.
+ * The backend also resumes sync for every tenant that had it enabled
+ * before the last restart (app.py lifespan), so this switch reflects
+ * what will actually happen, not just what's true until the next reboot.
  *
  * Features:
  * - URL input with format validation
  * - Real-time GitHub API connectivity check
  * - Sync status display (connected/disconnected/error)
- * - Auto-sync toggle
+ * - Automatic Sync toggle + live worker stats
  * - Disconnect button
  */
 
-import { useState, useEffect } from 'react'
-import { Github, CheckCircle2, AlertCircle, Loader2, Trash2, Eye, EyeOff, Lock } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Github, CheckCircle2, AlertCircle, Loader2, Trash2, Eye, EyeOff, Lock, RotateCw } from 'lucide-react'
 import { fetchConsoleJson, fetchConsoleApi } from '@/lib/api-utils'
 import { useAuth } from '@/lib/auth'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { cn } from '@/lib/utils'
+
+interface WorkerStatus {
+  running: boolean
+  interval_seconds: number
+  last_sync?: string | null
+  last_error?: string | null
+  sync_count: number
+  error_count: number
+  uptime: string
+}
 
 interface GitHubStatus {
   connected: boolean
@@ -28,9 +58,7 @@ interface GitHubStatus {
   url?: string
   auto_sync?: boolean
   last_verified?: string
-  last_sync?: string
-  sync_status?: string
-  sync_error?: string
+  worker_status?: WorkerStatus
 }
 
 interface VerifyResult {
@@ -48,6 +76,8 @@ interface VerifyResult {
   }
 }
 
+const STATUS_POLL_MS = 15_000
+
 export default function GitHubIntegrationPanel() {
   // Every mutation below carries the session's CSRF token (backend: require_csrf).
   const { session } = useAuth()
@@ -60,11 +90,39 @@ export default function GitHubIntegrationPanel() {
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+  const [autoSyncBusy, setAutoSyncBusy] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const data = await fetchConsoleJson<GitHubStatus>('/v1/console/github/status')
+      setStatus(data)
+    } catch (error) {
+      console.error('Failed to fetch GitHub status:', error)
+    }
+  }, [])
 
   // Load current status on mount
   useEffect(() => {
     fetchStatus()
-  }, [])
+  }, [fetchStatus])
+
+  // Poll worker stats while connected — there is no live event stream (the
+  // previous "Sync Monitor" page connected to one that was never implemented
+  // server-side), so this is the only source of truth for whether sync is
+  // actually happening.
+  useEffect(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    if (status.connected) {
+      pollRef.current = setInterval(fetchStatus, STATUS_POLL_MS)
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [status.connected, fetchStatus])
 
   // Format URL input to ensure https://github.com/owner/repo format
   const formatUrl = (input: string) => {
@@ -84,15 +142,6 @@ export default function GitHubIntegrationPanel() {
     formatted = formatted.replace(/\/$/, '')
 
     return formatted
-  }
-
-  const fetchStatus = async () => {
-    try {
-      const data = await fetchConsoleJson<GitHubStatus>('/v1/console/github/status')
-      setStatus(data)
-    } catch (error) {
-      console.error('Failed to fetch GitHub status:', error)
-    }
   }
 
   const validateUrl = (input: string): string | null => {
@@ -148,7 +197,7 @@ export default function GitHubIntegrationPanel() {
   }
 
   const handleDisconnect = async () => {
-    if (!window.confirm('Disconnect from GitHub? Sync will be disabled.')) {
+    if (!window.confirm('Disconnect from GitHub? Automatic sync will stop.')) {
       return
     }
 
@@ -166,6 +215,35 @@ export default function GitHubIntegrationPanel() {
       }
     } catch (error) {
       setError(`Failed to disconnect: ${error}`)
+    }
+  }
+
+  const handleToggleAutoSync = async (enabled: boolean) => {
+    setAutoSyncBusy(true)
+    try {
+      const result = await fetchConsoleJson<{ auto_sync: boolean; worker_status: WorkerStatus }>(
+        '/v1/console/github/auto-sync',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ enabled }),
+        }
+      )
+      setStatus((prev) => ({ ...prev, auto_sync: result.auto_sync, worker_status: result.worker_status }))
+      setError(null)
+    } catch (error) {
+      setError(`Failed to update automatic sync: ${error instanceof Error ? error.message : error}`)
+    } finally {
+      setAutoSyncBusy(false)
+    }
+  }
+
+  const formatTimestamp = (ts?: string | null) => {
+    if (!ts) return 'Never'
+    try {
+      return new Date(ts).toLocaleString()
+    } catch {
+      return ts
     }
   }
 
@@ -208,8 +286,10 @@ export default function GitHubIntegrationPanel() {
     }
   }
 
+  const worker = status.worker_status
+
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto space-y-6">
       <Card>
         <CardContent className="p-6">
           {/* Header */}
@@ -227,34 +307,6 @@ export default function GitHubIntegrationPanel() {
           <div className="mb-6 p-4 bg-muted/40 rounded-lg border border-border">
             {getStatusText()}
           </div>
-
-          {/* Sync Status Details */}
-          {status.connected && (
-            <div className="mb-6 space-y-2 text-sm">
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Auto-Sync:</span>
-                <span className={status.auto_sync ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'font-semibold text-muted-foreground'}>
-                  {status.auto_sync ? '✓ Enabled' : 'Disabled'}
-                </span>
-              </div>
-              {status.last_sync && (
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">Last Sync:</span>
-                  <span className="text-foreground">
-                    {new Date(status.last_sync).toLocaleString()}
-                  </span>
-                </div>
-              )}
-              {status.sync_status && (
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">Sync Status:</span>
-                  <span className={status.sync_status === 'success' ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'font-semibold text-amber-600 dark:text-amber-400'}>
-                    {status.sync_status}
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Connection Form */}
           <div className="space-y-4">
@@ -367,16 +419,77 @@ export default function GitHubIntegrationPanel() {
               )}
             </div>
           </div>
-
-          {/* Footer Info */}
-          <div className="mt-6 pt-4 border-t border-border">
-            <p className="text-xs text-muted-foreground">
-              When connected, your tenant will automatically sync skills and learning data with the GitHub repository.
-              This enables cross-device learning synchronization.
-            </p>
-          </div>
         </CardContent>
       </Card>
+
+      {/* Automatic Sync — the one real sync mechanism */}
+      {status.connected && (
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-foreground">Automatic Sync</h3>
+                <p className="text-sm text-muted-foreground">
+                  Uploads your tenant's skills to the repository every {worker ? Math.round(worker.interval_seconds / 60) : 5} minutes.
+                  Resumes on its own after a server restart.
+                </p>
+              </div>
+              <Switch
+                checked={!!status.auto_sync}
+                onCheckedChange={handleToggleAutoSync}
+                disabled={autoSyncBusy}
+              />
+            </div>
+
+            {worker && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-muted/40 p-3 rounded-lg">
+                    <p className="text-xs text-muted-foreground">Worker</p>
+                    <p className={cn("font-semibold", worker.running ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
+                      {worker.running ? '✓ Running' : 'Stopped'}
+                    </p>
+                  </div>
+                  <div className="bg-muted/40 p-3 rounded-lg">
+                    <p className="text-xs text-muted-foreground">Interval</p>
+                    <p className="font-semibold text-foreground">{worker.interval_seconds}s</p>
+                  </div>
+                  <div className="bg-muted/40 p-3 rounded-lg">
+                    <p className="text-xs text-muted-foreground">Syncs</p>
+                    <p className="font-semibold text-foreground">
+                      {worker.sync_count} success / {worker.error_count} errors
+                    </p>
+                  </div>
+                  <div className="bg-muted/40 p-3 rounded-lg">
+                    <p className="text-xs text-muted-foreground">Last Sync</p>
+                    <p className="font-semibold text-foreground text-xs">{formatTimestamp(worker.last_sync)}</p>
+                  </div>
+                </div>
+
+                {worker.last_error && (
+                  <div className="p-3 rounded-lg border border-destructive/40 bg-destructive/10">
+                    <p className="text-sm text-destructive">{worker.last_error}</p>
+                  </div>
+                )}
+
+                <Button variant="secondary" size="sm" onClick={fetchStatus}>
+                  <RotateCw size={14} />
+                  Refresh
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Footer Info */}
+      <div className="rounded-lg border border-border bg-muted/30 p-4">
+        <p className="text-xs text-muted-foreground">
+          Sync is polling-based (checks every 5 minutes) — there is no GitHub webhook receiver, since that
+          would require this console to be reachable from the public internet. Turn off Automatic Sync above
+          to pause it without disconnecting the repository.
+        </p>
+      </div>
     </div>
   )
 }

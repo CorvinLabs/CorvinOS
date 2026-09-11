@@ -5,18 +5,17 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Cpu, Edit2, FileText, FlaskConical, HeartPulse, Loader2, RefreshCw, Save, Server, Upload, Users, Wrench, X } from "lucide-react";
+import { Check, Edit2, FileText, HeartPulse, Loader2, RefreshCw, Save, Server, Upload, Wrench, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, getFeatureFlags, setFeatureFlag, getWorkerEngine, setWorkerEngine, type DelegationBudgetResponse, type FeatureFlagState, type HealingConfigResponse, type WorkerEngineMode } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -463,56 +462,6 @@ function TelemetryCard({ csrf }: { csrf: string }) {
   );
 }
 
-function InstanceStatsCard() {
-  const q = useQuery({
-    queryKey: ["instance-stats"],
-    queryFn: ({ signal }) => getInstanceStats(signal),
-    refetchInterval: 300_000,   // refresh every 5 min
-    retry: 1,
-  });
-
-  // If error or loading, show nothing (graceful degradation)
-  if (q.isError || (!q.data && !q.isLoading)) return null;
-
-  return (
-    <Card>
-      <CardContent className="pt-4 pb-3">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 min-w-0">
-            <Users className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <div>
-              <p className="text-sm font-medium">Active CorvinOS instances</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Anonymised count across all opted-in installations.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
-            {q.isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            ) : q.data ? (
-              <>
-                <div className="text-right">
-                  <p className="text-xs text-muted-foreground">7 days</p>
-                  <p className="text-lg font-mono font-semibold tabular-nums">
-                    ~{q.data.active_7d}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs text-muted-foreground">30 days</p>
-                  <p className="text-lg font-mono font-semibold tabular-nums text-muted-foreground">
-                    ~{q.data.active_30d}
-                  </p>
-                </div>
-              </>
-            ) : null}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 function HealingCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
@@ -749,331 +698,6 @@ function DelegationBudgetCard({ csrf }: { csrf: string }) {
   );
 }
 
-/**
- * Worker engine — which engine performs a turn.
- *
- * `native` is the default: Claude Code does the work in-process and the only
- * auto-delegation left is big-data-shaped work, which still goes to ACS.
- * TDE only ever runs when it is selected here.
- */
-const WORKER_ENGINE_COPY: Record<WorkerEngineMode, { label: string; desc: string }> = {
-  native: {
-    label: "Native (Claude Code)",
-    desc: "Default. Claude Code does the work in-process. Only big-data-shaped " +
-          "tasks are handed to ACS workers — everything else stays native.",
-  },
-  acs: {
-    label: "ACS (manager + workers)",
-    desc: "Substantial tasks fan out to ACS worker agents. Costs agentic-compute " +
-          "units from the shared daily pool.",
-  },
-  tde: {
-    label: "TDE (Tiered Delegation Engine)",
-    desc: "Substantial tasks run as tiered, per-step routed delegation. Off " +
-          "unless selected — falls back to native when TDE is unavailable or the " +
-          "compute pool is exhausted.",
-  },
-};
-
-function WorkerEngineCard({ csrf }: { csrf: string }) {
-  const qc = useQueryClient();
-  const q = useQuery({
-    queryKey: ["worker-engine"],
-    queryFn: ({ signal }) => getWorkerEngine(signal),
-  });
-  const [saving, setSaving] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-
-  const select = async (mode: WorkerEngineMode) => {
-    if (mode === q.data?.mode) return;
-    setError(null);
-    setSaving(mode);
-    try {
-      await setWorkerEngine(mode, csrf);
-      qc.invalidateQueries({ queryKey: ["worker-engine"] });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  const current = q.data?.mode ?? "native";
-  const modes = q.data?.modes ?? (["native", "acs", "tde"] as WorkerEngineMode[]);
-
-  return (
-    <Card>
-      <CardContent className="pt-4 pb-3 space-y-3">
-        <div className="flex items-center gap-2">
-          <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="text-sm font-medium">Worker engine</span>
-          {q.isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-        </div>
-        <div className="space-y-2">
-          {modes.map((mode) => {
-            const copy = WORKER_ENGINE_COPY[mode];
-            const active = current === mode;
-            return (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                disabled={saving !== null || q.isLoading}
-                onClick={() => void select(mode)}
-                className={cn(
-                  "w-full rounded-md border px-3 py-2 text-left transition-colors",
-                  active
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:bg-muted/50",
-                  saving !== null && "opacity-60",
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{copy?.label ?? mode}</span>
-                  {mode === (q.data?.default ?? "native") && (
-                    <Badge variant="secondary" className="text-[10px]">default</Badge>
-                  )}
-                  {active && <Check className="ml-auto h-4 w-4 text-primary" />}
-                  {saving === mode && <Loader2 className="ml-auto h-4 w-4 animate-spin" />}
-                </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{copy?.desc}</p>
-              </button>
-            );
-          })}
-        </div>
-        {error && (
-          <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** A shell-command line with a copy button — used for the lock-out off-ramp. */
-function CommandBlock({ command }: { command: string }) {
-  const [copied, setCopied] = React.useState(false);
-  return (
-    <div className="flex items-center gap-2 rounded border border-border bg-muted/60 px-2.5 py-2">
-      <code
-        data-testid="feature-recovery-command"
-        className="min-w-0 flex-1 select-all break-all font-mono text-[11px]"
-      >
-        {command}
-      </code>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="h-6 shrink-0 px-2"
-        aria-label="Copy command"
-        onClick={() => {
-          void navigator.clipboard?.writeText(command).then(
-            () => {
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1500);
-            },
-            () => undefined,   // clipboard blocked (non-secure context) — the code is select-all anyway
-          );
-        }}
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </Button>
-    </div>
-  );
-}
-
-/**
- * Feature flags — new features ship dark; this is where they get switched on.
- *
- * SELF-LOCKING flags get a confirmation gate. A normal flag is reversible from
- * this same panel, so a bare switch is honest UI. `headless_api_mode` is not:
- * turning it on unmounts /console/, and the panel the operator just clicked is
- * gone on the next boot. Rendering that as an ordinary checkbox is the actual
- * defect — it promises a reversibility the flag does not have.
- *
- * So enabling a self-locking flag requires an explicit confirmation that names
- * the consequence AND shows the CLI off-ramp *before* the door shuts, which is
- * the only moment the operator can still read it here. Disabling one is also
- * confirmed, because it is a boot-affecting deployment change — but the tone
- * there is a restart notice, not a warning.
- *
- * Which flags are self-locking is decided by the backend registry
- * (`feature_flags.FeatureFlag.self_locking`), never by a flag id hard-coded in
- * this file — otherwise the next self-locking flag ships without the warning.
- */
-export function FeatureFlagsCard({ csrf }: { csrf: string }) {
-  const qc = useQueryClient();
-  const q = useQuery({
-    queryKey: ["feature-flags"],
-    queryFn: ({ signal }) => getFeatureFlags(signal),
-  });
-  const [saving, setSaving] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  // Pending self-locking toggle awaiting confirmation. null = no dialog open.
-  const [pending, setPending] = React.useState<{ flag: FeatureFlagState; next: boolean } | null>(null);
-
-  const apply = async (id: string, enabled: boolean) => {
-    setError(null);
-    setSaving(id);
-    try {
-      await setFeatureFlag(id, enabled, csrf);
-      qc.invalidateQueries({ queryKey: ["feature-flags"] });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  /**
-   * Every switch goes through here. A self-locking flag is diverted into the
-   * dialog instead of being written straight through — fail-closed: nothing is
-   * persisted until the operator confirms.
-   */
-  const requestToggle = (f: FeatureFlagState, next: boolean) => {
-    if (f.self_locking) {
-      setError(null);
-      setPending({ flag: f, next });
-      return;
-    }
-    void apply(f.id, next);
-  };
-
-  const confirmPending = async () => {
-    if (!pending) return;
-    const { flag, next } = pending;
-    setPending(null);
-    await apply(flag.id, next);
-  };
-
-  const features = q.data?.features ?? [];
-
-  return (
-    <Card>
-      <CardContent className="pt-4 pb-3 space-y-3">
-        <div className="flex items-center gap-2">
-          <FlaskConical className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="text-sm font-medium">Optional features</span>
-          {q.isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-        </div>
-        <p className="text-[11px] text-muted-foreground">
-          New features ship switched off, so an update never changes how your install
-          behaves. Turn one on here when you want it; off restores the previous behavior.
-        </p>
-        {!q.isLoading && features.length === 0 && (
-          <p className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
-            No optional features on this version.
-          </p>
-        )}
-        <div className="space-y-2">
-          {features.map((f) => (
-            <div key={f.id} className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {f.self_locking && (
-                    <span data-testid={`feature-warning-${f.id}`} title="Removes the Console web interface — needs the CLI to undo">
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-label="Self-locking feature" />
-                    </span>
-                  )}
-                  <span className="text-sm font-medium">{f.label}</span>
-                  <Badge variant="outline" className="font-mono text-[10px]">{f.id}</Badge>
-                  {f.source === "tenant_yaml" && (
-                    <Badge variant="secondary" className="text-[10px]">from tenant.corvin.yaml</Badge>
-                  )}
-                  {f.self_locking && (
-                    <Badge variant="secondary" className="text-[10px] text-amber-600 dark:text-amber-400">
-                      no way back from the UI
-                    </Badge>
-                  )}
-                </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{f.description}</p>
-                {f.self_locking && f.recovery_command && (
-                  <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-                    Undo needs a terminal:{" "}
-                    <code className="select-all font-mono">{f.recovery_command}</code>
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {saving === f.id && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-                <Switch
-                  checked={f.enabled}
-                  onCheckedChange={(next) => requestToggle(f, next)}
-                  disabled={saving !== null}
-                  aria-label={f.label}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-        {error && (
-          <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
-        )}
-      </CardContent>
-
-      {/* Confirmation gate — nothing is written until the operator confirms. */}
-      <Dialog open={pending !== null} onOpenChange={(open) => { if (!open) setPending(null); }}>
-        <DialogContent className="max-w-lg" data-testid="feature-self-lock-dialog">
-          {pending && (
-            <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  {pending.next && <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />}
-                  {pending.next
-                    ? `Turn on ${pending.flag.label}?`
-                    : `Turn off ${pending.flag.label}?`}
-                </DialogTitle>
-                <DialogDescription>
-                  {pending.next ? (
-                    <>
-                      This disables the Console web interface. After the next restart
-                      there is no <code className="font-mono">/console/</code> page — so
-                      you cannot come back to this panel to switch it off again. The REST
-                      API stays available.
-                    </>
-                  ) : (
-                    <>
-                      Turning off API-Only Mode re-enables the web interface. Restart the
-                      service for the Console to be served again.
-                    </>
-                  )}
-                </DialogDescription>
-              </DialogHeader>
-
-              {pending.next && pending.flag.recovery_command && (
-                <div className="space-y-1.5">
-                  <p className="text-xs font-medium">
-                    Write this down first — it is the only way back:
-                  </p>
-                  <CommandBlock command={pending.flag.recovery_command} />
-                  <p className="text-[11px] text-muted-foreground">
-                    Run it on the machine hosting Corvin, then restart the service.
-                  </p>
-                </div>
-              )}
-
-              <DialogFooter>
-                <Button variant="ghost" onClick={() => setPending(null)} disabled={saving !== null}>
-                  Cancel
-                </Button>
-                <Button
-                  variant={pending.next ? "destructive" : "default"}
-                  onClick={() => void confirmPending()}
-                  disabled={saving !== null}
-                  data-testid="feature-self-lock-confirm"
-                >
-                  {pending.next ? "Disable the web interface" : "Re-enable the web interface"}
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-    </Card>
-  );
-}
-
 export function SettingsPage() {
   const { session } = useAuth();
   const navigate = useNavigate();
@@ -1099,33 +723,16 @@ export function SettingsPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="font-serif text-3xl font-light tracking-tight">Settings</h1>
-            <HelpTooltip title="Configuration files" side="right" width="lg">
-              These are the raw YAML/JSON config files that control Corvin's behaviour.
-              <br /><br />
-              <strong>tenant.corvin.yaml</strong> — engines, bridges, compliance zone.
-              <br />
-              <strong>ldd.json</strong> — Loss-Driven Development layer toggles.
-              <br />
-              <strong>data_policy.yaml</strong> — data handling rules.
-              <br /><br />
-              Each save requires re-authentication to prevent accidental changes.
-            </HelpTooltip>
-          </div>
+          <h1 className="font-serif text-3xl font-light tracking-tight">Settings</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Tenant configuration files. Each save requires confirmation.
+            Tenant-level configuration and operational controls. Changes that affect
+            security or availability require re-authentication before they save.
           </p>
         </div>
         {data && (
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-xs">
-              {data.present_count}/{data.total_count} files present
-            </Badge>
-            <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
-              {data.tenant_id}
-            </Badge>
-          </div>
+          <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
+            {data.tenant_id}
+          </Badge>
         )}
       </div>
 
@@ -1169,18 +776,11 @@ export function SettingsPage() {
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-foreground">Self-healing</h2>
         <HealingCard csrf={session!.csrf_token} />
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">Telemetry &amp; Privacy</h2>
         <TelemetryCard csrf={session!.csrf_token} />
-        <InstanceStatsCard />
-      </div>
-
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-foreground">Worker Engine</h2>
-        <WorkerEngineCard csrf={session!.csrf_token} />
-      </div>
-
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-foreground">Features</h2>
-        <FeatureFlagsCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">
@@ -1189,7 +789,24 @@ export function SettingsPage() {
       </div>
 
       {data && (
-        <>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-foreground">Advanced: Raw Config Files</h2>
+            <HelpTooltip title="Configuration files" side="right" width="lg">
+              These are the raw YAML/JSON config files that control Corvin's behaviour.
+              <br /><br />
+              <strong>tenant.corvin.yaml</strong> — engines, bridges, compliance zone.
+              <br />
+              <strong>ldd.json</strong> — Loss-Driven Development layer toggles.
+              <br />
+              <strong>data_policy.yaml</strong> — data handling rules.
+              <br /><br />
+              Each save requires re-authentication to prevent accidental changes.
+            </HelpTooltip>
+            <Badge variant="outline" className="text-xs">
+              {data.present_count}/{data.total_count} files present
+            </Badge>
+          </div>
           <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
             <span className="font-medium text-foreground">Config directory: </span>
             <span className="break-all font-mono">{data.global_dir}</span>
@@ -1205,7 +822,7 @@ export function SettingsPage() {
               />
             ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
