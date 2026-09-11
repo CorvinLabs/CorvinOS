@@ -2927,6 +2927,7 @@ def _resolve_os_model(
     tenant_id: str = "_default",
     workload_hint: dict | None = None,
     chat_key: str | None = None,
+    ato_plan_hint: dict | None = None,
 ) -> str | None:
     """The 6-tier resolution, then the ADR-0251 ``engine.model_selection`` hook.
 
@@ -2939,6 +2940,9 @@ def _resolve_os_model(
     With ``plugin_extension_points`` off — the default — ``resolve_step_model``
     returns its input untouched, so this is the pre-feature path with one
     function call after it.
+
+    ADR-0165: ato_plan_hint is applied at Tier 2 (after explicit override and
+    context-length heuristic, before workload hint and skill hook).
     """
     bundled = _resolve_os_model_bundled(
         profile,
@@ -2947,6 +2951,7 @@ def _resolve_os_model(
         tenant_id=tenant_id,
         workload_hint=workload_hint,
         chat_key=chat_key,
+        ato_plan_hint=ato_plan_hint,
     )
     try:
         from model_selector import resolve_step_model as _rsm  # noqa: PLC0415
@@ -2972,6 +2977,7 @@ def _resolve_os_model_bundled(
     tenant_id: str = "_default",
     workload_hint: dict | None = None,
     chat_key: str | None = None,
+    ato_plan_hint: dict | None = None,
 ) -> str | None:
     """Bridge entry point for the shared 6-Tier OS model resolver.
 
@@ -2982,6 +2988,9 @@ def _resolve_os_model_bundled(
     docstring for the full tier order. Kept under this name/signature for
     backward compatibility with existing bridge call sites and tests
     (``test_adapter_os_model.py``).
+
+    ADR-0165: ato_plan_hint (from ATO classification) is passed through to
+    resolve_os_model() as Tier 2 input.
     """
     try:
         from . import model_selector as _ms  # type: ignore
@@ -3004,6 +3013,7 @@ def _resolve_os_model_bundled(
         tenant_id=tenant_id,
         workload_hint=workload_hint,
         chat_key=chat_key,
+        ato_plan_hint=ato_plan_hint,
         audit_fn=_audit_event,
     )
 
@@ -3569,13 +3579,22 @@ def _resolve_spawn_inputs(
         except Exception:  # noqa: BLE001
             payload_chars = 0
 
-    # ADR-0165 M6 — model hint from ATO plan is advisory only.
-    # The recommended_model field in _ato_plan is read by _resolve_os_model
-    # through the existing L29.5 priority chain.  We do NOT override
-    # _resolved_model here — doing so would break CORVIN_OS_MODEL_AUTOSELECT=off
-    # and CORVIN_OS_MODEL_OVERRIDE, which have higher priority in L29.5.
-    # Full M6 wiring (injecting ato_hint into _resolve_os_model as a low-priority
-    # input below context-length autoselect) is a separate ADR-0165 follow-up.
+    # ADR-0165 M6 — inject ATO plan recommendation as Tier 2 into model resolution.
+    # The recommended_model field in _ato_plan is passed to _resolve_os_model(),
+    # which applies it at Tier 2 (after explicit override and context-length heuristic,
+    # but before workload hint and skill hook). Full fail-safe: if ato_plan is None
+    # or confidence is low, routing falls through to Tier 3 (unchanged behavior).
+    _ato_plan_hint = None
+    if _ato_plan:
+        try:
+            _ato_plan_hint = {
+                "recommended_model": _ato_plan.recommended_model,
+                "task_type": _ato_plan.task_type,
+                "confidence": _ato_plan.confidence,
+            }
+        except (AttributeError, TypeError):
+            _ato_plan_hint = None  # Fail-open: if ato_plan is malformed
+
     _resolved_model = _resolve_os_model(
         profile,
         payload_chars=payload_chars,
@@ -3583,6 +3602,7 @@ def _resolve_spawn_inputs(
         tenant_id=os.environ.get("CORVIN_TENANT_ID", "_default"),
         workload_hint=workload_hint,
         chat_key=chat_key,
+        ato_plan_hint=_ato_plan_hint,
     )
 
     # Vibe Engineering (ADR-0275/0278) — inject the CEL brief into THIS turn's

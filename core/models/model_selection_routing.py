@@ -8,7 +8,8 @@ Integrates with audit trail for every selection.
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
 
 from ..skills.os_skills.model_selector import ModelSelector, ClassificationResult
 from .router import ModelRouter
@@ -16,6 +17,27 @@ from .provider_interface import ModelResponse
 from ..skills.skill_audit import emit_skill_audit
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ATOPlanHint:
+    """Immutable hint from ATO classification for routing injection (ADR-0165 Tier 2).
+
+    This structure carries the recommendation from the ATO plan into _resolve_os_model(),
+    where it is applied as a low-priority tier (after explicit override and context-length
+    heuristic, but before workload hint and skill hook).
+    """
+    recommended_model: Optional[str]  # "haiku" | "sonnet" | "opus" | None
+    task_type: Optional[str]
+    confidence: float = 0.0  # 0.0 to 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dict for audit trail."""
+        return {
+            "recommended_model": self.recommended_model,
+            "task_type": self.task_type,
+            "confidence": self.confidence,
+        }
 
 
 class ModelSelectionRouter:
