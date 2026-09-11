@@ -190,5 +190,9 @@ export const EngineConfigPage = React.lazy(() =>
   import("@/pages/engine-config").then((m) => ({ default: m.EngineConfigPage }))
 );
 
+export const LearningDashboardPage = React.lazy(() =>
+  import("@/panels/learning-dashboard").then((m) => ({ default: m.LearningDashboard }))
+);
+
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
