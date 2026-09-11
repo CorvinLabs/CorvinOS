@@ -119,6 +119,7 @@ from .routes import (
     plugins as plugins_route,
     marketplace as marketplace_route,
     marketplace_custom_repos as marketplace_custom_repos_route,
+    marketplace_hub as marketplace_hub_route,
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
@@ -210,6 +211,7 @@ router.include_router(skills.router, tags=["console-skills"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
+router.include_router(marketplace_hub_route.router, tags=["console-marketplace"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
 router.include_router(deprecated_api_metrics_route.router, tags=["console-deprecated-api-metrics"])
 router.include_router(world_map_route.router, tags=["console-world-map"])
