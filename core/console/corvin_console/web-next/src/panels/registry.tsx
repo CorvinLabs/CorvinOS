@@ -29,6 +29,7 @@ import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
 import { GenericPluginInspector } from "@/components/GenericPluginInspector";
 import { SkillInspector } from "@/components/SkillInspector";
+import MarketplaceHub from "@/panels/marketplace-hub";
 
 // ─ Manifest rendering support (ADR-0561) ────────────────────────────────────
 
@@ -75,6 +76,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   ReleasesPage,
   LearningDashboardPage,
   ModelSelectionLearningPage,
+  MarketplaceHub: MarketplaceHub as unknown as ComponentType,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -141,6 +143,8 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Learning", icon: "Brain" } }),
   rc("model-selection-learning", "Model Selection Learning", ModelSelectionLearningPage,
      { nav: { label: "Model Selection", icon: "Zap" } }),
+  rc("marketplace", "Marketplace", MarketplaceHub as unknown as ComponentType,
+     { nav: { label: "Marketplace", icon: "ShoppingBag" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);
