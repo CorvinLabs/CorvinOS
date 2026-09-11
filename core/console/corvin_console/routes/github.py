@@ -2,10 +2,17 @@
 
 Full implementation with:
 - GitHub API connectivity
-- Background sync worker
-- Webhook integration
+- Background sync worker (auto-started on verify + at boot, single
+  ``auto_sync`` toggle keeps the config flag and the worker thread in lock-step)
 - Audit trail logging
 - GDPR compliance
+
+Sync is polling-only (5-minute interval). There is no webhook receiver: a
+real GitHub webhook needs a publicly reachable callback URL, which a local
+console instance does not have, and the earlier "webhook" UI never actually
+called the GitHub API — it wrote a local placeholder file and reported
+success unconditionally. Removed 2026-09-11 rather than kept as a dishonest
+green checkmark; see docs/claude-ref (GitHub sync consolidation).
 
 Security contract (adversarial review E-02, 2026-09-03):
 
@@ -26,7 +33,6 @@ import hashlib
 import json
 import logging
 import re
-import time
 from pathlib import Path
 from typing import Annotated, Tuple
 
@@ -45,7 +51,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/github", tags=["console-github"])
 
 _CONFIG_FILE = "github-config.json"
-_WEBHOOK_FILE = "github-webhook.json"
 _GITHUB_URL_RE = re.compile(r"^https://github\.com/[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+/?$")
 
 
@@ -75,6 +80,19 @@ def save_config(config: dict, *, tenant_id: str) -> None:
         json.dump(config, f, indent=2)
 
 
+def load_config(tenant_id: str) -> dict | None:
+    """Load the persisted GitHub config, or None if not configured/unreadable."""
+    config_file = get_tenant_path(tenant_id) / _CONFIG_FILE
+    if not config_file.exists():
+        return None
+    try:
+        with open(config_file, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        logger.error("Failed to load GitHub config: %s", type(e).__name__)
+        return None
+
+
 def _audit(rec: session_auth.SessionRecord, action: str, target_id: str) -> None:
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -90,14 +108,8 @@ class VerifyRequest(BaseModel):
     token: str | None = Field(default=None, max_length=512)
 
 
-class WebhookRegisterRequest(BaseModel):
-    token: str = Field(..., min_length=1, max_length=512)
-    webhook_secret: str | None = Field(default=None, max_length=512)
-
-
-class WebhookTestRequest(BaseModel):
-    event_type: str = Field(default="ping", max_length=64)
-    secret: str | None = Field(default=None, max_length=512)
+class AutoSyncRequest(BaseModel):
+    enabled: bool
 
 
 @router.post("/verify")
@@ -126,6 +138,11 @@ async def verify_github_connection(
     except OSError as e:
         logger.error("GitHub verify: could not persist config: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="failed to persist GitHub config")
+
+    # auto_sync defaults to True on connect — start syncing immediately instead
+    # of leaving the operator to separately discover and click a worker-start
+    # control. Idempotent: start() no-ops (returns success=False) if already running.
+    get_worker(rec.tenant_id).start()
 
     _audit(rec, "github.verify", "github-config")
 
@@ -244,56 +261,31 @@ async def stop_worker(
     return result
 
 
-@router.post("/webhook/register")
-async def register_webhook(
-    body: WebhookRegisterRequest,
+@router.post("/auto-sync")
+async def set_auto_sync(
+    body: AutoSyncRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ):
-    """Register a GitHub webhook for event-driven sync."""
+    """Single control for background sync: persists ``auto_sync`` on the
+    tenant's config AND starts/stops the worker thread to match, so the two
+    can never drift apart (previously the worker's running-state and the
+    config flag were independent — a worker could be running against a
+    disabled config, or vice versa)."""
+    config = load_config(rec.tenant_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="GitHub not configured")
+
+    config["auto_sync"] = body.enabled
     tenant_path = get_tenant_path(rec.tenant_id)
-    webhook_file = tenant_path / _WEBHOOK_FILE
+    tenant_path.mkdir(parents=True, exist_ok=True)
+    with open(tenant_path / _CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
 
-    webhook_config = {
-        "webhook_id": f"wh_{int(time.time())}",
-        "url": "https://your-instance/v1/console/github/webhook/receive",
-        "events": ["push", "pull_request", "release"],
-        "has_secret": bool(body.webhook_secret),
-        "active": True,
-    }
+    worker = get_worker(rec.tenant_id)
+    if body.enabled:
+        worker.start()
+    elif worker.running:
+        worker.stop()
 
-    try:
-        tenant_path.mkdir(parents=True, exist_ok=True)
-        webhook_file.write_text(json.dumps(webhook_config, indent=2), encoding="utf-8")
-    except OSError as e:
-        logger.error("Webhook register error: %s", type(e).__name__)
-        return {"success": False, "error": "failed to persist webhook config"}
-
-    _audit(rec, "github.webhook_register", webhook_config["webhook_id"])
-    return {"success": True, "webhook_id": webhook_config["webhook_id"]}
-
-
-@router.get("/webhook/status")
-async def get_webhook_status(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-):
-    """Get webhook registration status."""
-    webhook_file = get_tenant_path(rec.tenant_id) / _WEBHOOK_FILE
-
-    if webhook_file.exists():
-        try:
-            return json.loads(webhook_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
-
-    return {"registered": False}
-
-
-@router.post("/webhook/test")
-async def test_webhook(
-    body: WebhookTestRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-):
-    """Send a test webhook event."""
-    logger.info("Test webhook: %s", body.event_type)
-    _audit(rec, "github.webhook_test", body.event_type[:64])
-    return {"success": True, "message": f"Test {body.event_type} sent"}
+    _audit(rec, "github.auto_sync_toggled", "enabled" if body.enabled else "disabled")
+    return {"auto_sync": body.enabled, "worker_status": worker.get_status()}

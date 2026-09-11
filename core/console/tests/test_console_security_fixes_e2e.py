@@ -72,7 +72,7 @@ def _actions(sb) -> list[str]:
 class TestGithubRoutesE02:
     def test_reads_are_401_for_anonymous_not_404(self, sb):
         for path in ("/v1/console/github/status", "/v1/console/github/config",
-                     "/v1/console/github/worker/status", "/v1/console/github/webhook/status"):
+                     "/v1/console/github/worker/status"):
             r = sb.anon.get(path)
             assert r.status_code == 401, (path, r.status_code, r.text)
 
@@ -81,8 +81,8 @@ class TestGithubRoutesE02:
         r = sb.authed.post("/v1/console/github/verify", json={"url": "https://github.com/a/b"})
         assert r.status_code == 403, r.text  # session but no CSRF token
         for path in ("/v1/console/github/worker/start", "/v1/console/github/worker/stop",
-                     "/v1/console/github/webhook/register", "/v1/console/github/webhook/test"):
-            assert sb.authed.post(path, json={"token": "t"}).status_code == 403, path
+                     "/v1/console/github/auto-sync"):
+            assert sb.authed.post(path, json={"token": "t", "enabled": True}).status_code == 403, path
         assert sb.authed.delete("/v1/console/github/config").status_code == 403
 
     def test_verify_writes_under_corvin_home_and_audits(self, sb):

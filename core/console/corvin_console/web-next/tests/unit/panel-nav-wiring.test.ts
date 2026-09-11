@@ -45,6 +45,13 @@ const NAV_EXEMPT = new Set<string>([
   "extensions",
   "mcp-plugins",
   "plugins",
+  // Folded into the unified GitHub Integration panel (/app/settings/github,
+  // itself reached from Settings, not the sidebar — see the "settings/github"
+  // exemption above). Both routes now just redirect to that panel; "webhooks"
+  // additionally never worked (its "Register Webhook" button never called the
+  // GitHub API), so it isn't just consolidated, it's removed.
+  "sync-monitor",
+  "webhooks",
 ]);
 
 describe("panel wiring: registry route <-> sidebar nav", () => {

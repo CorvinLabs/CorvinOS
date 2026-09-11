@@ -31,8 +31,6 @@ import {
   Sparkles,
   Users,
   Menu,
-  RefreshCw,
-  Webhook,
   Workflow,
   X,
 } from "lucide-react";
@@ -196,8 +194,6 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/space",      label: "CorvinSpace",   icon: Globe },
       { to: "/app/orgs",       label: "Organisations", icon: Building2 },
       { to: "/app/connectors", label: "Connectors",    icon: Plug },
-      { to: "/app/sync-monitor", label: "Sync Monitor", icon: RefreshCw },
-      { to: "/app/webhooks",     label: "Webhooks",     icon: Webhook },
     ],
   },
   {
