@@ -23,6 +23,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
+  LearningDashboardPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -72,6 +73,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   WebhooksPage,
   AuditPage,
   ReleasesPage,
+  LearningDashboardPage,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -134,6 +136,8 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Audit", icon: "Shield" } }),
   rc("releases", "Releases", ReleasesPage,
      { nav: { label: "Releases", icon: "Package" } }),
+  rc("learning-dashboard", "Learning", LearningDashboardPage,
+     { nav: { label: "Learning", icon: "Brain" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);
