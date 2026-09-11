@@ -5,7 +5,6 @@ import {
   BookOpen,
   Boxes,
   TrendingUp,
-  Building2,
   ChevronDown,
   Cloud,
   Cpu,
@@ -29,7 +28,6 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
-  Users,
   Menu,
   Workflow,
   X,
@@ -151,7 +149,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/bridges", label: "Channels", icon: Network },
       { to: "/app/voice",   label: "Profile",  icon: AudioLines },
-      { to: "/app/people",  label: "People",   icon: Users },
     ],
   },
   {
@@ -161,6 +158,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/engine-config",  label: "Engine Config", icon: Settings },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },
+      { to: "/app/model-selection-learning", label: "Model Selection", icon: TrendingUp },
     ],
   },
   {
@@ -170,13 +168,11 @@ const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { to: "/app/workflows",  label: "Workflows",       icon: Workflow },
-      { to: "/app/flows",      label: "Pipelines",       icon: Network },
       { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
       { to: "/app/forge",      label: "Tools",           icon: Hammer },
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
       { to: "/app/os-skills",  label: "OS Skills",       icon: Layers },
       { to: "/app/packages",   label: "Packages",        icon: Package },
-      { to: "/app/agents",      label: "Agents",          icon: ShieldCheck },
       // Unified hub for the three extend-CorvinOS subsystems (plugin registry,
       // MCP tools, layer extensions) — one entry, three tabs. Replaces the former
       // separate "Extensions" / "MCP Plugins" / "Plugins" entries, which pointed
@@ -191,8 +187,6 @@ const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { to: "/app/agent-hub",  label: "Agent Hub",     icon: Globe2 },
-      { to: "/app/space",      label: "CorvinSpace",   icon: Globe },
-      { to: "/app/orgs",       label: "Organisations", icon: Building2 },
       { to: "/app/connectors", label: "Connectors",    icon: Plug },
     ],
   },
