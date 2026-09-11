@@ -182,6 +182,8 @@ from .routes import (
     engine_api as engine_api_route,
     # ADR-0644 — real Bayesian confidence analytics (core.learning.model_selection_optimizer)
     model_selection_analytics as model_selection_analytics_route,
+    # ADR-0377 Phase 2b — Learned threshold persistence and console UI
+    model_selection_learning_api as model_selection_learning_api_route,
 )
 
 
@@ -238,6 +240,8 @@ router.include_router(engine_route.router, tags=["console-engine"])
 router.include_router(engine_pref_route.router, tags=["console-engine-pref"])
 router.include_router(engine_api_route.router, tags=["console-engine-api"])
 router.include_router(model_selection_analytics_route.router, tags=["console-model-selection-analytics"])
+# ADR-0377 Phase 2b — Learned threshold persistence and console UI
+router.include_router(model_selection_learning_api_route.router, tags=["console-model-selection-learning"])
 # GitHub Cross-Device-Learning integration
 router.include_router(github_route.router, tags=["console-github"])
 # MUST precede settings_route: its `PUT /settings/{label}` (config-file writer)
