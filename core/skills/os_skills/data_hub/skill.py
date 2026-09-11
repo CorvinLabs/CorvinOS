@@ -1,6 +1,7 @@
 """DataHub Skill — unified data ingestion layer."""
 
 import hashlib
+import asyncio
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from dataclasses import dataclass
 from .manifest import DataManifest, Document, compute_manifest_hash
 from .security.scanner import SecurityScanner
 from .quality.scorer import QualityScorer
-from .ingestion.ingester import DataSourceIngestor
+from .ingestion.ingester import DataSourceIngestor, IngestedDocument
 
 
 @dataclass
@@ -20,13 +21,23 @@ class DataHubRequest:
 
 
 class DataHubSkill:
-    """Unified data ingestion + quality scoring + security scanning."""
+    """
+    Unified data ingestion + quality scoring + security scanning.
+
+    Phases:
+    1. Ingest from all sources (Memory, RAG, MCP, Files)
+    2. Security scan + redact (secrets, PII, injections)
+    3. Quality scoring (relevance, freshness, coverage, completeness)
+    4. Filtering by quality thresholds
+    5. Manifest generation (metadata, hash-chain proof)
+    6. Caching (deterministic, no staleness)
+    """
 
     def __init__(self):
         self.scanner = SecurityScanner()
         self.scorer = QualityScorer()
         self.ingester = DataSourceIngestor()
-        self.cache = {}  # Simple in-memory cache (source key → DataManifest)
+        self.cache = {}  # {cache_key: DataManifest}
 
     async def execute(self, request: DataHubRequest) -> DataManifest:
         """
