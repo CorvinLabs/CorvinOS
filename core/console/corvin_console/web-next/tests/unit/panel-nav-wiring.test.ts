@@ -52,6 +52,13 @@ const NAV_EXEMPT = new Set<string>([
   // GitHub API), so it isn't just consolidated, it's removed.
   "sync-monitor",
   "webhooks",
+  // Operator request (2026-09-11): hide from the sidebar without deleting —
+  // routes stay mounted for deep-link stability, just no nav entry.
+  "orgs",
+  "space",
+  "agents",
+  "flows",
+  "people",
 ]);
 
 describe("panel wiring: registry route <-> sidebar nav", () => {

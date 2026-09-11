@@ -1,0 +1,194 @@
+{
+  "timestamp": "2026-09-11T16:23:32.914316",
+  "summary": {
+    "baseline_cost_dollars": 4.23,
+    "routed_cost_dollars": 0.32,
+    "savings_dollars": 3.91,
+    "savings_percent": 92.43498817966903,
+    "target_savings_percent": 25,
+    "target_met": true
+  },
+  "task_count": 20,
+  "routing_decisions": {
+    "task-001": {
+      "task_type": "chat",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 5,
+      "routed_engine": "haiku",
+      "routed_cost_cents": 0,
+      "savings_cents": 5,
+      "savings_percent": 100.0
+    },
+    "task-002": {
+      "task_type": "code_generation",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 7,
+      "routed_engine": "haiku",
+      "routed_cost_cents": 0,
+      "savings_cents": 7,
+      "savings_percent": 100.0
+    },
+    "task-003": {
+      "task_type": "chat",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 3,
+      "routed_engine": "haiku",
+      "routed_cost_cents": 0,
+      "savings_cents": 3,
+      "savings_percent": 100.0
+    },
+    "task-004": {
+      "task_type": "synthesis",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 10,
+      "routed_engine": "haiku",
+      "routed_cost_cents": 0,
+      "savings_cents": 10,
+      "savings_percent": 100.0
+    },
+    "task-005": {
+      "task_type": "analysis",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 19,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 1,
+      "savings_cents": 18,
+      "savings_percent": 94.73684210526316
+    },
+    "task-006": {
+      "task_type": "research",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 28,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 2,
+      "savings_cents": 26,
+      "savings_percent": 92.85714285714286
+    },
+    "task-007": {
+      "task_type": "code_generation",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 30,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 3,
+      "savings_cents": 27,
+      "savings_percent": 90.0
+    },
+    "task-008": {
+      "task_type": "chat",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 20,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 2,
+      "savings_cents": 18,
+      "savings_percent": 90.0
+    },
+    "task-009": {
+      "task_type": "analysis",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 37,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 3,
+      "savings_cents": 34,
+      "savings_percent": 91.89189189189189
+    },
+    "task-010": {
+      "task_type": "research",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 46,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 4,
+      "savings_cents": 42,
+      "savings_percent": 91.30434782608695
+    },
+    "task-011": {
+      "task_type": "code_generation",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 9,
+      "routed_engine": "haiku",
+      "routed_cost_cents": 0,
+      "savings_cents": 9,
+      "savings_percent": 100.0
+    },
+    "task-012": {
+      "task_type": "chat",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 13,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 1,
+      "savings_cents": 12,
+      "savings_percent": 92.3076923076923
+    },
+    "task-013": {
+      "task_type": "synthesis",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 5,
+      "routed_engine": "haiku",
+      "routed_cost_cents": 0,
+      "savings_cents": 5,
+      "savings_percent": 100.0
+    },
+    "task-014": {
+      "task_type": "analysis",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 24,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 2,
+      "savings_cents": 22,
+      "savings_percent": 91.66666666666667
+    },
+    "task-015": {
+      "task_type": "research",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 41,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 4,
+      "savings_cents": 37,
+      "savings_percent": 90.2439024390244
+    },
+    "task-016": {
+      "task_type": "code_generation",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 25,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 2,
+      "savings_cents": 23,
+      "savings_percent": 92.0
+    },
+    "task-017": {
+      "task_type": "chat",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 6,
+      "routed_engine": "haiku",
+      "routed_cost_cents": 0,
+      "savings_cents": 6,
+      "savings_percent": 100.0
+    },
+    "task-018": {
+      "task_type": "analysis",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 41,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 4,
+      "savings_cents": 37,
+      "savings_percent": 90.2439024390244
+    },
+    "task-019": {
+      "task_type": "synthesis",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 29,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 2,
+      "savings_cents": 27,
+      "savings_percent": 93.10344827586206
+    },
+    "task-020": {
+      "task_type": "research",
+      "baseline_engine": "claude-opus-5",
+      "baseline_cost_cents": 25,
+      "routed_engine": "claude-sonnet-4",
+      "routed_cost_cents": 2,
+      "savings_cents": 23,
+      "savings_percent": 92.0
+    }
+  }
+}
