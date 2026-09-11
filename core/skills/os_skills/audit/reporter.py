@@ -9,6 +9,7 @@ Features:
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from collections import Counter
 from dataclasses import asdict
@@ -18,12 +19,14 @@ from typing import Optional
 
 from .trail import AuditEvent, AuditTrail
 
-# Regex patterns for PII detection (conservative)
+# Regex patterns for PII detection (conservative, comprehensive)
 PII_PATTERNS = {
     'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-    'phone': r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
+    # Phone: US formats (555) 123-4567, 555-1234, +1-555-1234567, DE formats +49 123 456789, (030) 123456, 030/123456
+    'phone': r'(?:\+\d{1,3}[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3}[-.\s]?\d{4}|\d{4}[-.\s]?\d{5}|[0-9]{2,}[-/.\s]?[0-9]{3,})',
     'credit_card': r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',
     'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
+    'iban': r'[D|A|A][E|T|U][0-9]{2}[0-9A-Z]{1,30}',  # German/Austrian/other IBAN
 }
 
 
@@ -34,7 +37,7 @@ class ComplianceReporter:
         self,
         audit_trail: AuditTrail,
         retention_days: int = 90,
-        user_id_salt: str = "default_salt",
+        user_id_salt: Optional[str] = None,
     ):
         """
         Initialize compliance reporter.
@@ -42,11 +45,12 @@ class ComplianceReporter:
         Args:
             audit_trail: AuditTrail instance to report from
             retention_days: Delete events older than this (GDPR Art. 5)
-            user_id_salt: Salt for consistent user ID masking
+            user_id_salt: Salt for consistent user ID masking (random if not provided)
         """
         self.audit_trail = audit_trail
         self.retention_days = retention_days
-        self.user_id_salt = user_id_salt
+        # Generate random salt if not provided (cryptographically secure)
+        self.user_id_salt = user_id_salt or os.urandom(32).hex()
 
     def mask_user_id(self, user_id: str) -> str:
         """Hash-based user ID masking (deterministic, anonymous)."""
@@ -221,7 +225,7 @@ class ComplianceReporter:
             counter = Counter(signals)
             most_common_pct = (counter.most_common(1)[0][1] / len(signals)) * 100
 
-            if most_common_pct > 80:
+            if most_common_pct >= 80:
                 alerts["skewed_feedback"].append(
                     f"{skill_id}: {most_common_pct:.0f}% {counter.most_common(1)[0][0]} (N={len(signals)})"
                 )
