@@ -111,7 +111,7 @@ from datetime import datetime
 
 state = json.loads('''$(read_state)''')
 state['stage'] = '${stage}'
-state['healthy_since'] = ${healthy_since}
+state['healthy_since'] = '${healthy_since}' if '${healthy_since}' != 'null' else None
 state['updated_at'] = '$(date -u +'%Y-%m-%dT%H:%M:%SZ')'
 state['traffic_percent'] = {'${STAGE_BUILD}': 0, '${STAGE_CANARY_5}': 5, '${STAGE_CANARY_25}': 25, '${STAGE_CANARY_50}': 50, '${STAGE_FULL_100}': 100}.get('${stage}', 0)
 
