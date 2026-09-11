@@ -13,6 +13,7 @@ class ConvergenceStatus(Enum):
     CONVERGED = "converged"  # Stabilized
     OSCILLATING = "oscillating"  # Amplitude too high
     DISABLED = "disabled"  # Learning disabled (too many attempts)
+    STALLED = "stalled"  # Zero improvement for N iterations
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class WeightUpdateEvent:
             "converged",
             "oscillating",
             "disabled",
+            "stalled",
         ]:
             return False
         return True
@@ -180,12 +182,17 @@ class WeightLearner:
         return event
 
     def _check_convergence(self, weight_name: str) -> ConvergenceStatus:
-        """Check if weight has converged."""
+        """Check if weight has converged, oscillating, or stalled."""
         if self.update_count[weight_name] < 10:
             return ConvergenceStatus.LEARNING
 
         # Get last 10 deltas
         recent = self.delta_history[weight_name][-10:]
+
+        # Check for stalling: zero improvement for 10 iterations
+        loss_improvements = [abs(d) for d in recent]
+        if all(imp < 1e-6 for imp in loss_improvements):
+            return ConvergenceStatus.STALLED
 
         # Check magnitude
         avg_magnitude = sum(abs(d) for d in recent) / len(recent)
