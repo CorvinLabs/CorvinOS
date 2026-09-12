@@ -12,7 +12,7 @@ from datetime import datetime
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from core.learning.event_persistence import EventEmitter  # ADR-0314 feedback
+from core.learning.event_emitter import EventEmitter  # ADR-0314 feedback
 from .youtube_api import YouTubeAPI
 
 
