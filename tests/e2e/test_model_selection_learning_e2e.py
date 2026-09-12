@@ -30,8 +30,14 @@ def test_client():
     from core.console.corvin_console.app import router as console_router
     from fastapi import FastAPI
 
+    # Mirror the real deployment: corvin_gateway/app.py mounts the console
+    # router under /v1/console. Without this prefix the test hits paths that
+    # only exist in this standalone app, never in production (ADR-0377 P2b
+    # double-prefix bug, 2026-09-12 — the router's own prefix used to bake in
+    # "/v1/console" too, which produced /v1/console/v1/console/... at the real
+    # gateway mount and 404'd the browser).
     app = FastAPI()
-    app.include_router(console_router)
+    app.include_router(console_router, prefix="/v1/console")
 
     return TestClient(app)
 

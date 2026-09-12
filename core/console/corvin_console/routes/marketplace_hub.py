@@ -4,16 +4,14 @@ Provides unified discovery + aggregation for all artifact types
 """
 
 import logging
-from datetime import datetime
-from pathlib import Path
 from typing import Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from core.console.auth.session_record import SessionRecord
-from core.console.auth.dependencies import get_session_record
-from core.compliance.audit_backend import audit_backend
-from core.console.marketplace.index_cache import get_marketplace_index_cache
+from ..auth import SessionRecord
+from ..deps import require_session
+from .. import audit as console_audit
+from ..marketplace.index_cache import get_marketplace_index_cache
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +79,7 @@ class ArtifactSearchResult(BaseModel):
 
 @router.get("/status", response_model=MarketplaceStatus)
 async def get_marketplace_status(
-    rec: SessionRecord = Depends(get_session_record),
+    rec: SessionRecord = Depends(require_session),
 ) -> MarketplaceStatus:
     """
     Aggregate installation status across all 5 artifact types.
@@ -105,11 +103,13 @@ async def get_marketplace_status(
         )
 
         # Audit trail
-        await audit_backend.write_event({
-            "tenant_id": tenant_id,
-            "event_type": "marketplace_hub_status",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        })
+        console_audit.action_performed(
+            tenant_id=tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="marketplace_hub_status",
+            target_kind="marketplace",
+            target_id="status",
+        )
 
         return status
 
@@ -127,7 +127,7 @@ async def search_marketplace(
     ),
     category: Optional[str] = Query(None, description="Filter by category"),
     tier: Optional[str] = Query(None, description="Filter by tier"),
-    rec: SessionRecord = Depends(get_session_record),
+    rec: SessionRecord = Depends(require_session),
 ) -> List[ArtifactSearchResult]:
     """
     Cross-type search via marketplace index + local registries.
@@ -141,7 +141,7 @@ async def search_marketplace(
     results: List[ArtifactSearchResult] = []
 
     try:
-        from core.console.paths import corvin_home
+        from core.paths.tenant import corvin_home
         cache_dir = corvin_home() / "tenants" / tenant_id / "marketplace"
         cache = get_marketplace_index_cache(tenant_id, cache_dir)
         index = await cache.load(refresh_if_stale=False)
@@ -183,14 +183,13 @@ async def search_marketplace(
             )
         )
 
-        await audit_backend.write_event({
-            "tenant_id": tenant_id,
-            "event_type": "marketplace_hub_search",
-            "query": q,
-            "types": types,
-            "results_count": len(results),
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        })
+        console_audit.action_performed(
+            tenant_id=tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="marketplace_hub_search",
+            target_kind="marketplace",
+            target_id=q or "*",
+        )
 
         return results
 

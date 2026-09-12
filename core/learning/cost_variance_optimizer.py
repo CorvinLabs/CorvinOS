@@ -469,6 +469,12 @@ class _SkillAuditBackend:
                     "cost_variance_observed", "quality_observed", "n_samples",
                     "is_converged",
                 })
+                # learned_threshold_store.set_threshold()'s own audit write —
+                # shares this backend (see model_selection_learner.py).
+                register_event_allowlist("learned_threshold_updated", {
+                    "task_type", "subsystem", "old_threshold", "new_threshold",
+                    "sample_count", "is_converged", "timestamp",
+                })
                 type(self)._ALLOWLIST_REGISTERED = True
             except Exception:  # noqa: BLE001 — best-effort
                 pass

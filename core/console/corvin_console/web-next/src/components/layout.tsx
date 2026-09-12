@@ -15,7 +15,6 @@ import {
   Globe2,
   Hammer,
   KeyRound,
-  Layers,
   LayoutDashboard,
   Lock,
   LogOut,
@@ -169,9 +168,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/workflows",  label: "Workflows",       icon: Workflow },
       { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
-      { to: "/app/forge",      label: "Tools",           icon: Hammer },
+      { to: "/app/forge",      label: "Forge",           icon: Hammer },
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
-      { to: "/app/os-skills",  label: "OS Skills",       icon: Layers },
       { to: "/app/packages",   label: "Packages",        icon: Package },
       // Unified hub for the three extend-CorvinOS subsystems (plugin registry,
       // MCP tools, layer extensions) — one entry, three tabs. Replaces the former

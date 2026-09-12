@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 class EventEmitter:
     """Non-blocking async event emitter (fire-and-forget queue)."""
 
-    def __init__(self, event_store: EventStore, queue_size: int = 1000):
+    def __init__(self, event_store: EventStore, queue_size: int = 10000):
         """Initialize emitter with event store.
 
         Args:
             event_store: An ``EventStore`` (anything with ``write_event(event)``).
-            queue_size: Bounded queue depth (int > 0).
+            queue_size: Bounded queue depth (int > 0). MEDIUM FIX #5: Default 10K max.
 
         The worker is a DAEMON thread with an ``atexit`` flush: the previous
         ``daemon=False`` + ``while True`` combination kept every process that

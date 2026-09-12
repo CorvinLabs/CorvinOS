@@ -355,6 +355,45 @@ class TokenMetricsDB:
             "subsystems": self.aggregate_by_subsystem(session_id, tenant_id),
         }
 
+    def cleanup_old_metrics(self, days_old: int = 30, tenant_id: str = None) -> int:
+        """MEDIUM FIX #6: Delete old metrics records based on TTL (age-based eviction).
+
+        Args:
+            days_old: Delete records older than this many days (default 30)
+            tenant_id: Optional tenant to limit cleanup (None = all tenants)
+
+        Returns:
+            Number of rows deleted
+        """
+        from datetime import timedelta
+
+        cutoff_date = (datetime.utcnow() - timedelta(days=days_old)).isoformat()
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                if tenant_id:
+                    cursor = conn.execute("""
+                        DELETE FROM token_metrics
+                        WHERE created_at < ? AND tenant_id = ?
+                    """, (cutoff_date, tenant_id))
+                else:
+                    cursor = conn.execute("""
+                        DELETE FROM token_metrics
+                        WHERE created_at < ?
+                    """, (cutoff_date,))
+
+                conn.commit()
+                deleted_count = cursor.rowcount
+
+                logging.info(
+                    f"Cleanup old metrics: deleted {deleted_count} records older than {days_old} days"
+                )
+
+                return deleted_count
+        except sqlite3.Error as e:
+            logging.error(f"Failed to cleanup old metrics: {e}")
+            return 0
+
 
 # ---------------------------------------------------------------------------
 # Backend alias.

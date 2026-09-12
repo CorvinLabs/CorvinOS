@@ -5,6 +5,7 @@ Provides graph queries and mutations via DuckDB backend.
 
 import duckdb
 import json
+import threading
 from datetime import datetime
 from typing import List, Optional
 import logging
@@ -44,6 +45,8 @@ class KnowledgeGraph:
         self.db_path = db_path
         self.tenant_id = tenant_id
         self.conn = GateSchema.initialize(db_path)
+        # MEDIUM FIX #3: Mutex for concurrent DAG construction
+        self._lock = threading.Lock()
 
     def write_node(self, node: KGNode) -> str:
         """Write a node to the graph.
@@ -56,23 +59,27 @@ class KnowledgeGraph:
 
         Raises:
             ValueError: If node.tenant_id != self.tenant_id
+
+        MEDIUM FIX #3: Thread-safe via Lock for DAG construction
         """
         if node.tenant_id != self.tenant_id:
             raise ValueError(
                 f"Node tenant_id {node.tenant_id} != graph tenant_id {self.tenant_id}"
             )
 
-        created_at = node.created_at or datetime.utcnow().isoformat() + "Z"
-        data_json = json.dumps(node.data)
+        # MEDIUM FIX #3: Acquire lock for concurrent DAG construction
+        with self._lock:
+            created_at = node.created_at or datetime.utcnow().isoformat() + "Z"
+            data_json = json.dumps(node.data)
 
-        self.conn.execute(
-            "INSERT OR REPLACE INTO kg_nodes (id, tenant_id, node_type, data, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            [node.id, node.tenant_id, node.node_type.value, data_json, created_at],
-        )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO kg_nodes (id, tenant_id, node_type, data, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [node.id, node.tenant_id, node.node_type.value, data_json, created_at],
+            )
 
-        logger.debug(f"Wrote node {node.id} to graph")
-        return node.id
+            logger.debug(f"Wrote node {node.id} to graph")
+            return node.id
 
     def write_edge(self, edge: KGEdge) -> str:
         """Write an edge to the graph.
@@ -85,32 +92,36 @@ class KnowledgeGraph:
 
         Raises:
             ValueError: If edge.tenant_id != self.tenant_id
+
+        MEDIUM FIX #3: Thread-safe via Lock for DAG construction
         """
         if edge.tenant_id != self.tenant_id:
             raise ValueError(
                 f"Edge tenant_id {edge.tenant_id} != graph tenant_id {self.tenant_id}"
             )
 
-        created_at = edge.created_at or datetime.utcnow().isoformat() + "Z"
-        data_json = json.dumps(edge.data) if edge.data else None
+        # MEDIUM FIX #3: Acquire lock for concurrent DAG construction
+        with self._lock:
+            created_at = edge.created_at or datetime.utcnow().isoformat() + "Z"
+            data_json = json.dumps(edge.data) if edge.data else None
 
-        self.conn.execute(
-            "INSERT OR REPLACE INTO kg_edges "
-            "(source_id, target_id, relationship_type, tenant_id, data, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                edge.source_id,
-                edge.target_id,
-                edge.relationship_type,
-                edge.tenant_id,
-                data_json,
-                created_at,
-            ],
-        )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO kg_edges "
+                "(source_id, target_id, relationship_type, tenant_id, data, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    edge.source_id,
+                    edge.target_id,
+                    edge.relationship_type,
+                    edge.tenant_id,
+                    data_json,
+                    created_at,
+                ],
+            )
 
-        edge_id = f"{edge.source_id}:{edge.target_id}:{edge.relationship_type}"
-        logger.debug(f"Wrote edge {edge_id} to graph")
-        return edge_id
+            edge_id = f"{edge.source_id}:{edge.target_id}:{edge.relationship_type}"
+            logger.debug(f"Wrote edge {edge_id} to graph")
+            return edge_id
 
     def query_nodes(self, node_type: Optional[KGNodeType] = None) -> List[KGNode]:
         """Query nodes by type.

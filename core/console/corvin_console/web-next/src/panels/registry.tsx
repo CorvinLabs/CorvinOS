@@ -13,7 +13,6 @@ import { Loader2 } from "lucide-react";
 import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
-import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
 import { VibeDashboard } from "@/pages/vibe-engineering";
 import {
   DashboardPage, SettingsPage,
@@ -46,7 +45,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   VoicePage,
   ForgePage,
   SkillsPage,
-  SkillsOverviewPanel: SkillsOverviewPanel as unknown as ComponentType,
   PackagesPage,
   LddPage,
   CompliancePage,
@@ -101,7 +99,6 @@ export const PANELS: ConsolePanel[] = [
   rc("voice", "Voice", VoicePage),
   rc("forge", "Forge", ForgePage),
   rc("skills", "Skills", SkillsPage),
-  rc("os-skills", "OS-Skills", SkillsOverviewPanel as unknown as ComponentType),
   rc("packages", "Packages", PackagesPage),
   rc("ldd", "LDD", LddPage),
   rc("compliance", "Compliance", CompliancePage),
