@@ -123,7 +123,7 @@ class E2EVerifier:
         """Verify model selection learning endpoint."""
         try:
             resp = self.session.get(
-                f"{CONSOLE_URL}/model-selection-learning/status",
+                f"{CONSOLE_URL}/learning/model-cost-optimizer/status",
                 timeout=5,
             )
 

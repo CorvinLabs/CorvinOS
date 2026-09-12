@@ -1,12 +1,12 @@
 /**
- * Model Selection Learning Dashboard — ADR-0377 Phase 2b
+ * Model Cost Optimizer Dashboard — ADR-0377 Phase 2b, renamed ADR-0696
  *
  * Displays:
  * - Convergence status per task type (simple/medium/complex)
  * - Learned threshold values (compared to base 0.5)
- * - Cost efficiency metrics (savings since Phase 2 deployed)
+ * - Cost efficiency metrics (real token usage x real per-model pricing)
  * - Quality maintenance (accuracy trends)
- * - Operator controls (manual override, reset, export/import)
+ * - Operator controls (reset, export/import)
  * - Real-time updates via polling
  */
 
@@ -59,7 +59,7 @@ interface ThresholdHistory {
   value: number;
 }
 
-export const ModelSelectionLearning: React.FC = () => {
+export const ModelCostOptimizer: React.FC = () => {
   const [status, setStatus] = useState<DashboardStatus | null>(null);
   const [history, setHistory] = useState<ThresholdHistory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,7 +76,7 @@ export const ModelSelectionLearning: React.FC = () => {
 
   const fetchData = async () => {
     try {
-      const response = await fetch('/v1/console/learning/model-selection/status');
+      const response = await fetch('/v1/console/learning/model-cost-optimizer/status');
       if (!response.ok) {
         setError(`API error: ${response.status}`);
         setLoading(false);
@@ -105,7 +105,7 @@ export const ModelSelectionLearning: React.FC = () => {
     }
 
     try {
-      const response = await fetch('/v1/console/learning/model-selection/reset', {
+      const response = await fetch('/v1/console/learning/model-cost-optimizer/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'Operator manual reset via console' }),
@@ -127,7 +127,7 @@ export const ModelSelectionLearning: React.FC = () => {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const response = await fetch('/v1/console/learning/model-selection/export');
+      const response = await fetch('/v1/console/learning/model-cost-optimizer/export');
       if (!response.ok) {
         setError('Export failed');
         return;
@@ -138,7 +138,7 @@ export const ModelSelectionLearning: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `model-selection-thresholds-${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `model-cost-optimizer-thresholds-${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -194,7 +194,7 @@ export const ModelSelectionLearning: React.FC = () => {
       <div className="mb-6">
         <h1 className="text-3xl font-bold flex items-center gap-2">
           <Gauge className="w-7 h-7 text-accent" />
-          Model Selection Learning
+          Model Cost Optimizer
         </h1>
         <p className="text-muted-foreground mt-1">
           Learned thresholds &amp; cost optimization for automatic model routing
@@ -449,7 +449,7 @@ export const ModelSelectionLearning: React.FC = () => {
                         const data = JSON.parse(event.target?.result as string);
                         const formData = new FormData();
                         formData.append('data', JSON.stringify(data));
-                        const response = await fetch('/v1/console/learning/model-selection/import', {
+                        const response = await fetch('/v1/console/learning/model-cost-optimizer/import', {
                           method: 'POST',
                           body: formData,
                         });

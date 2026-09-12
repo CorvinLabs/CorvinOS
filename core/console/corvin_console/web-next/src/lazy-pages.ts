@@ -194,8 +194,8 @@ export const LearningDashboardPage = React.lazy(() =>
   import("@/panels/learning-dashboard").then((m) => ({ default: m.LearningDashboard }))
 );
 
-export const ModelSelectionLearningPage = React.lazy(() =>
-  import("@/panels/ModelSelectionLearning").then((m) => ({ default: m.ModelSelectionLearning }))
+export const ModelCostOptimizerPage = React.lazy(() =>
+  import("@/panels/ModelCostOptimizer").then((m) => ({ default: m.ModelCostOptimizer }))
 );
 
 export const QualityGatesPage = React.lazy(() =>

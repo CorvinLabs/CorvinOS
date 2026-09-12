@@ -141,7 +141,7 @@ class DeploymentVerifier:
         """
         try:
             resp = self.session.get(
-                f"{CONSOLE_URL}/model-selection-learning",
+                f"{CONSOLE_URL}/learning/model-cost-optimizer/status",
                 timeout=5,
             )
 

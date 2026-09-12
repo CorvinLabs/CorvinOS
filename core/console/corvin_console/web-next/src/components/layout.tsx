@@ -157,7 +157,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/engine-config",  label: "Engine Config", icon: Settings },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },
-      { to: "/app/model-selection-learning", label: "Model Selection", icon: TrendingUp },
+      { to: "/app/model-cost-optimizer", label: "Model Cost Optimizer", icon: TrendingUp },
     ],
   },
   {
