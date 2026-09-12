@@ -22,7 +22,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
-  LearningDashboardPage, ModelSelectionLearningPage, QualityGatesPage,
+  LearningDashboardPage, ModelSelectionLearningPage, QualityGatesPage, VideoProducerPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -75,6 +75,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   LearningDashboardPage,
   ModelSelectionLearningPage,
   QualityGatesPage,
+  VideoProducerPage,
   MarketplaceHub: MarketplaceHub as unknown as ComponentType,
 };
 
@@ -142,6 +143,8 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Learning", icon: "Brain" } }),
   rc("model-selection-learning", "Model Selection Learning", ModelSelectionLearningPage,
      { nav: { label: "Model Selection", icon: "Zap" } }),
+  rc("video-producer", "Video Producer", VideoProducerPage,
+     { nav: { label: "Video Producer", icon: "Film" } }),
   rc("marketplace", "Marketplace", MarketplaceHub as unknown as ComponentType,
      { nav: { label: "Marketplace", icon: "ShoppingBag" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
