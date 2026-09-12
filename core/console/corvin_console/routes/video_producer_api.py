@@ -8,28 +8,59 @@ import uuid
 import sys
 import os
 import logging
+import importlib.util
 
 logger = logging.getLogger(__name__)
 
-# Add plugin src to path (try multiple locations)
-plugin_paths = [
-    os.path.expanduser("~/.corvin/plugins/video_producer/src"),  # Installed
-    os.path.join(os.path.dirname(__file__), "../../../Corvin-Marketplace/plugins/contributor/video_producer/src"),  # Dev
-    "/home/shumway/projects/Corvin-Marketplace/plugins/contributor/video_producer/src",  # Dev (absolute)
-]
-
+# Try to import plugin modules from multiple locations
 VideoJob = None
 get_storage = None
 
-for path in plugin_paths:
-    if os.path.exists(path):
-        sys.path.insert(0, path)
+plugin_locations = [
+    ("~/.corvin/plugins/video_producer/src", "installed"),
+    ("../../../Corvin-Marketplace/plugins/contributor/video_producer/src", "dev-relative"),
+    ("/home/shumway/projects/Corvin-Marketplace/plugins/contributor/video_producer/src", "dev-absolute"),
+]
+
+for rel_path, location_type in plugin_locations:
+    # Expand path
+    if rel_path.startswith("~"):
+        plugin_path = os.path.expanduser(rel_path)
+    elif rel_path.startswith("/"):
+        plugin_path = rel_path
+    else:
+        plugin_path = os.path.join(os.path.dirname(__file__), rel_path)
+
+    if not os.path.exists(plugin_path):
+        continue
+
+    # Try to load models.py directly
+    models_path = os.path.join(plugin_path, "models.py")
+    storage_path = os.path.join(plugin_path, "storage.py")
+
+    if os.path.exists(models_path) and os.path.exists(storage_path):
         try:
-            from models import VideoJob
-            from storage import get_storage
+            logger.debug(f"Attempting import from {location_type}: {plugin_path}")
+
+            # Load models module
+            spec = importlib.util.spec_from_file_location("video_producer_models", models_path)
+            models_module = importlib.util.module_from_spec(spec)
+            sys.modules["video_producer_models"] = models_module
+            spec.loader.exec_module(models_module)
+            VideoJob = models_module.VideoJob
+
+            # Load storage module (need to register models in sys.modules first)
+            sys.modules["models"] = models_module
+            spec = importlib.util.spec_from_file_location("video_producer_storage", storage_path)
+            storage_module = importlib.util.module_from_spec(spec)
+            sys.modules["video_producer_storage"] = storage_module
+            spec.loader.exec_module(storage_module)
+            get_storage = storage_module.get_storage
+
+            logger.info(f"✓ Successfully imported video producer from {location_type}: {plugin_path}")
             break
-        except ImportError:
-            pass
+        except Exception as e:
+            logger.debug(f"✗ Import failed from {location_type}: {e}")
 
 router = APIRouter(prefix="/v1/video", tags=["video-producer"])
 
