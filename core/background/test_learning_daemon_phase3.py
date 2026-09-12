@@ -376,7 +376,7 @@ class TestRegenerationScheduler:
         scheduler = RegenerationScheduler()
         scheduler.regeneration_threshold = 0.80
 
-        queued = await scheduler.should_queue_regeneration("skill1", quality=0.85)
+        queued = await scheduler.should_queue_regeneration("skill1", 0.85)
         assert not queued, "High quality should not be queued"
 
     @pytest.mark.asyncio
@@ -385,7 +385,7 @@ class TestRegenerationScheduler:
         scheduler = RegenerationScheduler()
         scheduler.regeneration_threshold = 0.80
 
-        queued = await scheduler.should_queue_regeneration("skill1", quality=0.75)
+        queued = await scheduler.should_queue_regeneration("skill1", 0.75)
         assert queued, "Low quality should be queued"
 
     @pytest.mark.asyncio
@@ -393,8 +393,8 @@ class TestRegenerationScheduler:
         """Queueing same skill twice should result in one queue entry."""
         scheduler = RegenerationScheduler()
 
-        await scheduler.should_queue_regeneration("skill1", quality=0.75)
-        await scheduler.should_queue_regeneration("skill1", quality=0.75)
+        await scheduler.should_queue_regeneration("skill1", 0.75)
+        await scheduler.should_queue_regeneration("skill1", 0.75)
 
         assert len(scheduler.regeneration_queue) == 1, "Should be idempotent"
         assert "skill1" in scheduler.queued_skills
@@ -405,7 +405,7 @@ class TestRegenerationScheduler:
         scheduler = RegenerationScheduler()
         scheduler.batch_window_seconds = 0.1  # Short window for testing
 
-        await scheduler.should_queue_regeneration("skill1", quality=0.75)
+        await scheduler.should_queue_regeneration("skill1", 0.75)
 
         # Batch not ready immediately
         batch = await scheduler.get_ready_batch()

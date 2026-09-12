@@ -233,15 +233,17 @@ class FeedbackCollector:
             self.skill_consensus[skill_id] = {"signal": 0.0, "confidence": 0.0, "count": 0}
             return
 
-        # Consensus = mean signal, weighted by recency
+        # Consensus = weighted mean signal, weighted by recency (exponential decay)
         now = datetime.utcnow()
         weighted_signals = []
+        weights = []
         for fb in feedback_list:
             age_hours = (now - datetime.fromisoformat(fb.timestamp)).total_seconds() / 3600
-            recency_weight = 1.0 / (1.0 + age_hours / 24.0)  # exponential decay
+            recency_weight = 1.0 / (1.0 + age_hours / 6.0)  # More aggressive decay (6h half-life)
             weighted_signals.append(fb.signal * recency_weight)
+            weights.append(recency_weight)
 
-        consensus_signal = sum(weighted_signals) / len(weighted_signals)
+        consensus_signal = sum(weighted_signals) / sum(weights)
         confidence = min(1.0, len(feedback_list) / 5.0)  # confidence grows with more feedback
 
         self.skill_consensus[skill_id] = {
@@ -355,7 +357,8 @@ class WeightLearner:
     def check_convergence(self) -> bool:
         """
         Are weights stabilizing?
-        Check variance over recent window.
+        Check variance over recent window AND detect oscillation.
+        Oscillation = alternating direction of change.
         """
         if len(self.weight_history) < self.convergence_window:
             return False
@@ -370,9 +373,26 @@ class WeightLearner:
             variance = sum((v - mean) ** 2 for v in values) / len(values)
             variances[source] = variance
 
-        # Convergence if all variances < threshold
+        # Check for oscillation (alternating direction of change)
+        oscillating = False
+        for source in self.weights:
+            values = [w.get(source, 0.5) for w in recent]
+            deltas = [values[i+1] - values[i] for i in range(len(values)-1)]
+
+            # Count sign changes (oscillation indicator)
+            sign_changes = 0
+            for i in range(len(deltas)-1):
+                if deltas[i] * deltas[i+1] < 0:  # Different signs
+                    sign_changes += 1
+
+            # If more than half the deltas changed sign, it's oscillating
+            if sign_changes > len(deltas) / 2:
+                oscillating = True
+                break
+
+        # Convergence if all variances < threshold AND NOT oscillating
         max_variance = max(variances.values())
-        return max_variance < self.convergence_threshold
+        return max_variance < self.convergence_threshold and not oscillating
 
 
 # ============================================================================
