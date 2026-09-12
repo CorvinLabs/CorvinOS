@@ -198,5 +198,9 @@ export const ModelSelectionLearningPage = React.lazy(() =>
   import("@/panels/ModelSelectionLearning").then((m) => ({ default: m.ModelSelectionLearning }))
 );
 
+export const QualityGatesPage = React.lazy(() =>
+  import("@/pages/quality").then((m) => ({ default: m.default }))
+);
+
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 

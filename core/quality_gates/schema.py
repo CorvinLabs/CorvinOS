@@ -85,9 +85,6 @@ class GateSchema:
         """
         conn = duckdb.connect(db_path)
 
-        # Ensure database is properly initialized
-        conn.execute("PRAGMA journal_mode = WAL")
-
         # Create tables (idempotent)
         conn.execute(GateSchema.GATE_EVENTS_DDL)
         conn.execute(GateSchema.KG_NODES_DDL)

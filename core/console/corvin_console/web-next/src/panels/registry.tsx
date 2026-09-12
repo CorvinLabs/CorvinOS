@@ -23,7 +23,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
-  LearningDashboardPage, ModelSelectionLearningPage,
+  LearningDashboardPage, ModelSelectionLearningPage, QualityGatesPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -76,6 +76,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   ReleasesPage,
   LearningDashboardPage,
   ModelSelectionLearningPage,
+  QualityGatesPage,
   MarketplaceHub: MarketplaceHub as unknown as ComponentType,
 };
 
@@ -104,6 +105,7 @@ export const PANELS: ConsolePanel[] = [
   rc("packages", "Packages", PackagesPage),
   rc("ldd", "LDD", LddPage),
   rc("compliance", "Compliance", CompliancePage),
+  rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle" } }),
   rc("files", "Files", FilesPage),
   rc("space", "Space", SpacePage),
   rc("memory", "Memory", MemoryPage),

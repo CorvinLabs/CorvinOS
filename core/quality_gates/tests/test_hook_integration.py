@@ -4,6 +4,7 @@ import pytest
 import tempfile
 import os
 from pathlib import Path
+from datetime import datetime
 
 from core.quality_gates.hooks.pre_commit import (
     get_file_content,
