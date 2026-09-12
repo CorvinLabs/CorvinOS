@@ -13,9 +13,13 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Optional, Any
+from datetime import datetime
 
-from .types import AssetAnalysisResult, Storyboard
+from .types import AssetAnalysisResult, Storyboard, Scene
 from .exceptions import AnalysisGateFailedError
+
+# Import AssetAnalyzer from workers (dynamic to avoid circular imports)
+# Will be imported when needed in orchestrate() method
 
 
 class VideoProducerOrchestrator:
@@ -27,6 +31,7 @@ class VideoProducerOrchestrator:
         self.assets_dir = self.project_dir / "assets"
         self.analysis_path = self.project_dir / "analysis.json"
         self.storyboard_path = self.project_dir / "storyboard.json"
+        self.project_dir.mkdir(parents=True, exist_ok=True)
 
     async def orchestrate(
         self,
@@ -36,12 +41,12 @@ class VideoProducerOrchestrator:
         """
         Main orchestration entry point.
 
-        Phases:
-        1. Asset ingestion
+        Phases (Phase 1–3 in this version):
+        1. Asset ingestion (via narrated-video-producer)
         2. Deep analysis (via worker.asset_analyzer)
         3. Gate check (ready_for_narration)
-        4. Storyboard generation
-        5. (Phases 4–7 in later phases)
+        4. Storyboard generation (LLM-constrained to analysis facts)
+        5–7. (Phases 4–7 in later phases: voice, assembly, YouTube)
 
         Args:
             asset_paths: Files to analyze
@@ -50,55 +55,64 @@ class VideoProducerOrchestrator:
         Returns:
             {
                 "analysis": AssetAnalysisResult dict,
-                "storyboard": Storyboard dict,
+                "storyboard": Storyboard dict | None,
                 "status": "success" | "blocked",
             }
 
         Raises:
             AnalysisGateFailedError: If analysis gates not met
         """
-        self.project_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # Phase 2: Deep analysis via worker.asset_analyzer
+            # Import dynamically to avoid circular imports
+            from core.skills.workers.asset_analyzer import AssetAnalyzer
 
-        # Phase 1: Asset ingestion
-        assets = await self._ingest_assets(asset_paths)
+            analyzer = AssetAnalyzer(str(self.project_dir))
+            analysis = await analyzer.analyze(asset_paths, instructions)
 
-        # Phase 2: Deep analysis
-        analysis = await self._deep_analyze_assets(assets, instructions)
+            # Save analysis to disk
+            self._save_analysis(analysis)
 
-        # Gate check: ready_for_narration
-        self._check_analysis_gates(analysis)
+            # Gate check: ready_for_narration must be true
+            self._check_analysis_gates(analysis)
 
-        # Phase 3: Storyboard generation (constrained)
-        storyboard = await self._generate_storyboard(analysis)
+            # Phase 3: Storyboard generation (constrained)
+            storyboard = await self._generate_storyboard(analysis)
 
-        return {
-            "analysis": analysis.to_dict(),
-            "storyboard": storyboard.to_dict() if storyboard else None,
-            "status": "success",
-        }
+            # Save storyboard to disk
+            if storyboard:
+                self._save_storyboard(storyboard)
 
-    async def _ingest_assets(self, asset_paths: list[str | Path]) -> dict[str, Any]:
-        """Phase 1: Call narrated-video-producer/ingest_assets.py."""
-        # TODO: Call narrated-video-producer ingest_assets
-        return {
-            "assets": [],
-            "workdir": str(self.project_dir),
-        }
-
-    async def _deep_analyze_assets(
-        self,
-        assets: dict[str, Any],
-        instructions: Optional[dict[str, Any]],
-    ) -> AssetAnalysisResult:
-        """Phase 2: Call worker.asset_analyzer."""
-        # TODO: Dispatch to worker.asset_analyzer
-        return AssetAnalysisResult(
-            metadata={
-                "processed_at": "2026-09-12T00:00:00Z",
-                "total_assets": 0,
-                "analysis_complete": False,
+            return {
+                "analysis": analysis.to_dict(),
+                "storyboard": storyboard.to_dict() if storyboard else None,
+                "status": "success",
             }
-        )
+
+        except AnalysisGateFailedError:
+            # Re-raise gate failures (expected workflow stop)
+            raise
+        except Exception as e:
+            # Wrap unexpected errors
+            return {
+                "analysis": {
+                    "metadata": {"error": str(e)},
+                    "ready_for_narration": False,
+                    "blockers": [str(e)],
+                },
+                "storyboard": None,
+                "status": "blocked",
+            }
+
+    def _save_analysis(self, analysis: AssetAnalysisResult) -> None:
+        """Save analysis to JSON file."""
+        with open(self.analysis_path, "w") as f:
+            json.dump(analysis.to_dict(), f, indent=2)
+
+    def _save_storyboard(self, storyboard: Storyboard) -> None:
+        """Save storyboard to JSON file."""
+        with open(self.storyboard_path, "w") as f:
+            json.dump(storyboard.to_dict(), f, indent=2)
 
     def _check_analysis_gates(self, analysis: AssetAnalysisResult) -> None:
         """Gate check: ensure ready_for_narration is true."""
@@ -115,6 +129,36 @@ class VideoProducerOrchestrator:
         self,
         analysis: AssetAnalysisResult,
     ) -> Optional[Storyboard]:
-        """Phase 3: Generate LLM storyboard constrained to analysis.factual_claims."""
-        # TODO: Call LLM with source-constrained prompt
-        return None
+        """Phase 3: Generate storyboard constrained to analysis.factual_claims.
+
+        NOTE: This is a placeholder skeleton. Real implementation in Phase 1 k=5
+        would call an LLM with the source-constrained prompt.
+        """
+        if not analysis.ready_for_narration:
+            return None
+
+        # Create a minimal storyboard structure (placeholder for LLM generation)
+        # In production, this would:
+        # 1. Call LLM with source-constrained prompt
+        # 2. Validate that all narration references analysis.factual_claims
+        # 3. Return structured storyboard with timing data
+
+        scenes = []
+        for i, claim in enumerate(analysis.factual_claims[:3], 1):
+            scene = Scene(
+                id=f"s{i:02d}",
+                kind="card",
+                narration=claim.text[:100],  # Truncated for now
+                source_asset=claim.source_asset,
+                captions=True,
+            )
+            scenes.append(scene)
+
+        return Storyboard(
+            metadata={
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "source_constrained": True,
+                "scene_count": len(scenes),
+            },
+            scenes=scenes,
+        )
