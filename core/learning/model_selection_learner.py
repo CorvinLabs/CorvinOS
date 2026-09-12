@@ -23,8 +23,14 @@ in the ADR-0613 sense (see docs/claude-ref/learning-loop.md) — it closes a
 DIFFERENT, narrower loop: real events -> real statistics -> real dashboard,
 with no fabricated numbers anywhere in the chain.
 
-Bucketing (task_type=complexity tier, subsystem=persona) uses tools_called
-per completed turn as the only complexity signal os_turn.* events carry.
+Bucketing (task_type=complexity tier, pooled across personas — subsystem
+is always "all") uses tools_called per completed turn as the only
+complexity signal os_turn.* events carry. Personas are real (bridge
+conversations can route to a non-default persona; the console web chat
+is always "assistant") but a per-persona split just doubled every tier's
+dashboard card without telling the operator anything useful — dropped
+2026-09-12 on operator feedback; `persona` is still captured per-turn in
+``_read_completed_turns`` for any future consumer that does need it.
 Tier boundaries and the normalization cap are DERIVED from the real observed
 distribution each refresh (33rd/66th percentile for tier cuts, 95th
 percentile for the cap) rather than hardcoded guesses — so every number in
@@ -301,14 +307,23 @@ def compute_learned_thresholds(
     bounds = _tier_bounds(tools_called_values)
     cap = _complexity_cap(tools_called_values)
 
-    buckets: dict[tuple[str, str], _Bucket] = defaultdict(_Bucket)
+    # Bucketed by tier only — pooled across whatever emitted the turn
+    # (console web chat, always "assistant"; a bridge conversation, which
+    # can carry a real routed persona like "coder"). A per-persona split
+    # here meant the dashboard silently doubled every tier's card whenever
+    # a bridge conversation used a non-default persona, which told the
+    # operator nothing useful (2026-09-12 operator feedback) — the
+    # dashboard's question is "how complex are successful turns at this
+    # tier", not "...for this persona". `persona` is still captured in
+    # `_read_completed_turns` and available to any future consumer that
+    # does need the split.
+    buckets: dict[str, _Bucket] = defaultdict(_Bucket)
     for t in turns:
-        persona = t.get("persona") or "unknown"
         tools_called = int(t.get("tools_called") or 0)
         tier = _tier_for(tools_called, bounds)
         success = t.get("exit_code") == 0 and not t.get("timed_out")
 
-        b = buckets[(tier, persona)]
+        b = buckets[tier]
         b.total += 1
         if success:
             b.successes += 1
@@ -318,7 +333,7 @@ def compute_learned_thresholds(
 
     now = datetime.now(timezone.utc).isoformat()
     results: list[StoredThreshold] = []
-    for (tier, persona), b in sorted(buckets.items()):
+    for tier, b in sorted(buckets.items()):
         learned = (b.complexity_sum_success / b.successes) if b.successes else 0.5
         learned = max(0.1, min(0.9, learned))
         success_rate = (b.successes / b.total) if b.total else 0.0
@@ -327,7 +342,7 @@ def compute_learned_thresholds(
         results.append(
             StoredThreshold(
                 task_type=tier,
-                subsystem=persona,
+                subsystem="all",
                 tenant_id=tenant_id,
                 learned_threshold=learned,
                 base_threshold=0.5,
