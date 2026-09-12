@@ -66,7 +66,6 @@ export const ModelSelectionLearning: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [resetConfirm, setResetConfirm] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [overrideValues, setOverrideValues] = useState<Record<string, number>>({});
 
   // Fetch data on mount and periodic refresh
   useEffect(() => {
@@ -148,29 +147,6 @@ export const ModelSelectionLearning: React.FC = () => {
       setError(`Export failed: ${err}`);
     } finally {
       setExporting(false);
-    }
-  };
-
-  const handleOverride = async (taskType: string, newThreshold: number) => {
-    try {
-      const response = await fetch('/v1/console/learning/model-selection/override', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task_type: taskType,
-          new_threshold: newThreshold,
-          reason: `Operator override via console: ${newThreshold.toFixed(2)}`,
-        }),
-      });
-
-      if (response.ok) {
-        await fetchData();
-        setOverrideValues({ ...overrideValues, [taskType]: newThreshold });
-      } else {
-        setError('Failed to apply override');
-      }
-    } catch (err) {
-      setError(`Override failed: ${err}`);
     }
   };
 
@@ -432,42 +408,6 @@ export const ModelSelectionLearning: React.FC = () => {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Samples:</span>
                     <span className="font-mono font-semibold">{t.sample_count}</span>
-                  </div>
-                </div>
-
-                {/* Manual Override Slider */}
-                <div className="mt-3 pt-3 border-t border-border">
-                  <label className="text-xs font-semibold text-muted-foreground block mb-2">
-                    Manual Override
-                  </label>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="0.9"
-                    step="0.05"
-                    defaultValue={t.learned_threshold}
-                    onChange={(e) => {
-                      const newValue = parseFloat(e.target.value);
-                      setOverrideValues({
-                        ...overrideValues,
-                        [t.task_type]: newValue,
-                      });
-                    }}
-                    className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-accent"
-                  />
-                  <div className="flex justify-between items-center text-xs mt-1">
-                    <span className="text-muted-foreground">
-                      {(overrideValues[t.task_type] ?? t.learned_threshold).toFixed(2)}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="accent"
-                      onClick={() =>
-                        handleOverride(t.task_type, overrideValues[t.task_type] ?? t.learned_threshold)
-                      }
-                    >
-                      Apply
-                    </Button>
                   </div>
                 </div>
               </CardContent>
