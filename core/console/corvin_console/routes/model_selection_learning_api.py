@@ -48,7 +48,7 @@ from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/console/learning/model-selection", tags=["model-selection-learning"])
+router = APIRouter(prefix="/learning/model-selection", tags=["model-selection-learning"])
 
 
 # ── Pydantic models for requests/responses ──────────────────────────────
@@ -114,6 +114,16 @@ async def get_learning_status(
         last_updated: timestamp
     """
     try:
+        # Recompute learned thresholds from real os_turn.* audit events
+        # before reading the store (cooldown-gated — see
+        # model_selection_learner.py). A refresh failure must not break the
+        # dashboard: the store still returns whatever it last had.
+        try:
+            from core.learning.model_selection_learner import refresh_store
+            refresh_store(rec.tenant_id)
+        except Exception as refresh_err:  # noqa: BLE001
+            logger.warning(f"Learned-threshold refresh failed (non-fatal): {refresh_err}")
+
         store = get_store(rec.tenant_id)
         optimizer = get_optimizer()
 
@@ -365,7 +375,11 @@ def _get_audit_backend(tenant_id: str) -> Optional[Any]:
         Audit backend instance, or None if unavailable.
     """
     try:
-        from core.skills.skill_audit import _SkillAuditBackend  # noqa: PLC0415
+        # NOT core.skills.skill_audit (no such class there — was silently
+        # falling through to None, so override/reset ran unaudited; fixed
+        # 2026-09-12). The real adapter lives next to CostVarianceOptimizer,
+        # which shares this audit event family (learned_threshold_updated).
+        from core.learning.cost_variance_optimizer import _SkillAuditBackend  # noqa: PLC0415
         return _SkillAuditBackend()
     except Exception:  # noqa: BLE001
         logger.warning("Audit backend unavailable (non-fatal)")

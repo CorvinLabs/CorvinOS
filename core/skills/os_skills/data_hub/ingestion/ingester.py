@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import uuid
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -33,6 +34,8 @@ class DataSourceIngestor:
         self.sources = {}
         self.cache_expiry_minutes = 60
         self._corvin_home = self._get_corvin_home()
+        # MEDIUM FIX #1: RLock for concurrent artifact processing
+        self._lock = threading.RLock()
 
     def _get_corvin_home(self) -> Path:
         """Get CORVIN_HOME path, respecting environment variable."""
@@ -342,31 +345,34 @@ class DataSourceIngestor:
         Remove exact duplicates and near-duplicates.
 
         Uses SHA256 for exact matching and content length + sample matching for near-duplicates.
+        Thread-safe via RLock (MEDIUM FIX #1).
         """
-        seen_hashes = set()
-        seen_signatures = set()
-        deduplicated = []
+        # MEDIUM FIX #1: Acquire lock for deduplication (concurrent artifact processing)
+        with self._lock:
+            seen_hashes = set()
+            seen_signatures = set()
+            deduplicated = []
 
-        for doc in documents:
-            # Exact duplicate check using SHA256
-            content_hash = hashlib.sha256(doc.content.encode()).hexdigest()
-            if content_hash in seen_hashes:
-                continue
-            seen_hashes.add(content_hash)
+            for doc in documents:
+                # Exact duplicate check using SHA256
+                content_hash = hashlib.sha256(doc.content.encode()).hexdigest()
+                if content_hash in seen_hashes:
+                    continue
+                seen_hashes.add(content_hash)
 
-            # Near-duplicate detection: length + first/last 50 chars
-            content_length = len(doc.content)
-            first_chunk = doc.content[:50]
-            last_chunk = doc.content[-50:] if len(doc.content) > 100 else ""
-            signature = (content_length, first_chunk, last_chunk)
+                # Near-duplicate detection: length + first/last 50 chars
+                content_length = len(doc.content)
+                first_chunk = doc.content[:50]
+                last_chunk = doc.content[-50:] if len(doc.content) > 100 else ""
+                signature = (content_length, first_chunk, last_chunk)
 
-            if signature in seen_signatures:
-                continue
-            seen_signatures.add(signature)
+                if signature in seen_signatures:
+                    continue
+                seen_signatures.add(signature)
 
-            deduplicated.append(doc)
+                deduplicated.append(doc)
 
-        return deduplicated
+            return deduplicated
 
     async def ingest_all(
         self,

@@ -13,6 +13,13 @@ from .task_registry import (
     TaskRegistryPersistence, get_default_registry
 )
 
+# Audit integration (ADR-0232: every state change must be logged)
+try:
+    from core.compliance.audit_chain_writer import write_audit_event
+    _audit_available = True
+except ImportError:
+    _audit_available = False
+
 logger = logging.getLogger(__name__)
 
 # Import notification router (optional, fail-gracefully if not available)
@@ -261,6 +268,23 @@ class TaskOrchestrator:
             parent_task_id=task.parent_task_id,
         )
         await self.registry.append_task(final_task)
+
+        # AUDIT: Log task state transition (ADR-0232 compliance)
+        if _audit_available:
+            try:
+                write_audit_event(
+                    event_type="vibe.task_state_changed",
+                    details={
+                        "task_id": spec.task_id,
+                        "from_status": str(task.status.value),
+                        "to_status": str(final_status.value),
+                        "reason": "phase_execution_complete" if final_status == TaskStatus.COMPLETED else "phase_retries_exhausted",
+                        "failed_phases": hard_failures,
+                    },
+                    tenant_id=spec.tenant_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to log task state change to audit chain: {e}")
 
         if final_status == TaskStatus.FAILED:
             if _notification_router:

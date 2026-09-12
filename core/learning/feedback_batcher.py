@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
+import threading
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -66,83 +67,93 @@ class FeedbackBatcher:
         # Per-tenant buffers (tenant_id -> deque of outcomes)
         self._buffers: dict[str, deque] = {}
         self._last_flush_time: dict[str, float] = {}
+        # MEDIUM FIX #2: Lock for concurrent feedback batching
+        self._lock = threading.Lock()
 
     def add_outcome(self, outcome: TaskOutcome) -> FeedbackBatch | None:
         """Add one outcome to the buffer.
 
         Returns:
             FeedbackBatch if buffer reached threshold, else None
+
+        MEDIUM FIX #2: Thread-safe via Lock
         """
-        tenant_id = outcome.tenant_id
-        self._buffers.setdefault(tenant_id, deque())
+        # MEDIUM FIX #2: Acquire lock for concurrent feedback batching
+        with self._lock:
+            tenant_id = outcome.tenant_id
+            self._buffers.setdefault(tenant_id, deque())
 
-        # Add to buffer
-        self._buffers[tenant_id].append(outcome)
+            # Add to buffer
+            self._buffers[tenant_id].append(outcome)
 
-        # Check flush conditions
-        should_flush = (
-            len(self._buffers[tenant_id]) >= self.batch_size
-            or (time.time() - self._last_flush_time.get(tenant_id, 0)) > self.batch_timeout
-        )
+            # Check flush conditions
+            should_flush = (
+                len(self._buffers[tenant_id]) >= self.batch_size
+                or (time.time() - self._last_flush_time.get(tenant_id, 0)) > self.batch_timeout
+            )
 
-        if should_flush:
-            return self.flush_batch(tenant_id)
+            if should_flush:
+                return self.flush_batch(tenant_id)
 
-        return None
+            return None
 
     def flush_batch(self, tenant_id: str) -> FeedbackBatch | None:
         """Flush accumulated outcomes for a tenant into a batch.
 
         Returns:
             FeedbackBatch with all buffered outcomes, or None if buffer empty
+
+        MEDIUM FIX #2: Thread-safe via Lock
         """
-        buffer = self._buffers.get(tenant_id)
-        if not buffer or len(buffer) == 0:
-            return None
+        # MEDIUM FIX #2: Acquire lock for flush operations
+        with self._lock:
+            buffer = self._buffers.get(tenant_id)
+            if not buffer or len(buffer) == 0:
+                return None
 
-        outcomes = tuple(buffer)
-        buffer.clear()
+            outcomes = tuple(buffer)
+            buffer.clear()
 
-        # Compute batch metadata
-        skill_ids = set()
-        outcome_distribution = {"success": 0, "partial": 0, "failure": 0}
-        timestamps = []
+            # Compute batch metadata
+            skill_ids = set()
+            outcome_distribution = {"success": 0, "partial": 0, "failure": 0}
+            timestamps = []
 
-        for outcome in outcomes:
-            skill_ids.add(outcome.decision_skill_id)
-            timestamps.append(outcome.timestamp)
-            status = "success" if outcome.success else ("partial" if outcome.partial else "failure")
-            outcome_distribution[status] += 1
+            for outcome in outcomes:
+                skill_ids.add(outcome.decision_skill_id)
+                timestamps.append(outcome.timestamp)
+                status = "success" if outcome.success else ("partial" if outcome.partial else "failure")
+                outcome_distribution[status] += 1
 
-        # Create batch
-        import uuid
+            # Create batch
+            import uuid
 
-        batch = FeedbackBatch(
-            batch_id=str(uuid.uuid4()),
-            tenant_id=tenant_id,
-            skill_ids=skill_ids,
-            outcome_count=len(outcomes),
-            timestamp_range=(min(timestamps), max(timestamps)) if timestamps else (0, 0),
-            outcomes=outcomes,
-            outcome_distribution=outcome_distribution,
-        )
+            batch = FeedbackBatch(
+                batch_id=str(uuid.uuid4()),
+                tenant_id=tenant_id,
+                skill_ids=skill_ids,
+                outcome_count=len(outcomes),
+                timestamp_range=(min(timestamps), max(timestamps)) if timestamps else (0, 0),
+                outcomes=outcomes,
+                outcome_distribution=outcome_distribution,
+            )
 
-        # Persist to disk
-        if self.storage_dir:
-            self._persist_batch(batch)
+            # Persist to disk
+            if self.storage_dir:
+                self._persist_batch(batch)
 
-        # Update flush time
-        self._last_flush_time[tenant_id] = time.time()
+            # Update flush time
+            self._last_flush_time[tenant_id] = time.time()
 
-        _log.info(
-            "Feedback batch flushed: batch_id=%s tenant_id=%s count=%d skills=%s",
-            batch.batch_id,
-            tenant_id,
-            batch.outcome_count,
-            batch.skill_ids,
-        )
+            _log.info(
+                "Feedback batch flushed: batch_id=%s tenant_id=%s count=%d skills=%s",
+                batch.batch_id,
+                tenant_id,
+                batch.outcome_count,
+                batch.skill_ids,
+            )
 
-        return batch
+            return batch
 
     def _persist_batch(self, batch: FeedbackBatch) -> None:
         """Persist batch to disk for durability."""
