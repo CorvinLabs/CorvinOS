@@ -9,7 +9,7 @@ Main components:
 
 from .orchestrator import VideoProducerOrchestrator
 from .storyboard_generator import StoryboardGenerator
-from .types import AssetAnalysisResult, Storyboard, Scene, FactualClaim
+from .types import AssetAnalysisResult, Storyboard, Scene, FactualClaim, Contradiction
 from .exceptions import (
     VideoProducerError,
     AssetIngestionError,
@@ -24,6 +24,7 @@ __all__ = [
     "Storyboard",
     "Scene",
     "FactualClaim",
+    "Contradiction",
     "VideoProducerError",
     "AssetIngestionError",
     "AnalysisIncompleteError",
