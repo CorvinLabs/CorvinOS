@@ -384,7 +384,13 @@ function TelemetryCard({ csrf }: { csrf: string }) {
       await setHealingConfig(patch, csrf);
       qc.invalidateQueries({ queryKey: ["healing-config"] });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      // Handle license tier restriction
+      if (msg.includes("403") || msg.includes("telemetry_locked")) {
+        setError("Telemetry settings are only available with Member tier license.");
+      } else {
+        setError(msg);
+      }
     } finally {
       setSaving(null);
     }
@@ -416,6 +422,9 @@ function TelemetryCard({ csrf }: { csrf: string }) {
     },
   ];
 
+  const licenseTier = q.data?._license_tier ?? "free";
+  const isTelemetryLocked = licenseTier !== "member";
+
   return (
     <Card>
       <CardContent className="pt-4 pb-3 space-y-3">
@@ -424,7 +433,13 @@ function TelemetryCard({ csrf }: { csrf: string }) {
           <p className="text-[11px] text-muted-foreground mt-0.5">
             On by default so the project sees real usage and can fix bugs. Everything
             sent is anonymous and content-free (GDPR Art. 6(1)(f) legitimate interest).
-            Turn any channel off here at any time.
+            {isTelemetryLocked ? (
+              <span className="block mt-1 text-amber-600 dark:text-amber-400 font-medium">
+                💡 Telemetry settings are only available with Member tier license.
+              </span>
+            ) : (
+              <span> Turn any channel off here at any time.</span>
+            )}
           </p>
         </div>
         {rows.map((row) => {
@@ -446,7 +461,7 @@ function TelemetryCard({ csrf }: { csrf: string }) {
                   <Switch
                     checked={enabled}
                     onCheckedChange={(next) => toggle({ [row.key]: next }, row.patchKey)}
-                    disabled={saving !== null}
+                    disabled={saving !== null || isTelemetryLocked}
                     aria-label={row.label}
                   />
                 )}

@@ -190,6 +190,7 @@ export interface HealingConfigResponse {
   error_enabled: boolean;       // error diagnostics (spec.telemetry.error_traces)
   healing_enabled: boolean;     // ACO L5 self-healing (spec.aco.l5_enabled)
   risky_enabled: boolean;       // risky repair tier (spec.aco.l5_risky)
+  _license_tier?: "free" | "member";  // License tier; telemetry locked to member tier
 }
 
 export function getHealingConfig(signal?: AbortSignal): Promise<HealingConfigResponse> {
