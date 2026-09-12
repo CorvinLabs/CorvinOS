@@ -122,7 +122,7 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
     : null;
 
   return (
-    <Card className="border-l-4 border-l-accent">
+    <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <div>
