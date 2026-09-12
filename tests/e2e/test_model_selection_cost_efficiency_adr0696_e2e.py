@@ -187,12 +187,12 @@ class TestStatusEndpointRealCost:
 
     @pytest.fixture
     def test_client(self):
-        from core.console.corvin_console.routes.model_selection_learning_api import (
+        from core.console.corvin_console.routes.model_cost_optimizer_api import (
             router as ms_router,
         )
 
         app = FastAPI()
-        # ms_router already declares prefix="/learning/model-selection" —
+        # ms_router already declares prefix="/learning/model-cost-optimizer" —
         # mirror the real gateway mount (/v1/console) exactly, not the
         # inner path too (that double-prefix 404 bug bit ADR-0377 P2b once
         # already, see test_model_selection_learning_e2e.py's comment).
@@ -214,7 +214,7 @@ class TestStatusEndpointRealCost:
     def test_status_reports_no_cost_data_by_default(self, test_client, store):
         """With no real usage recorded, the endpoint must say so honestly —
         never fall back to the old hardcoded $100.0 baseline."""
-        response = test_client.get("/v1/console/learning/model-selection/status")
+        response = test_client.get("/v1/console/learning/model-cost-optimizer/status")
 
         assert response.status_code == 200
         data = response.json()
@@ -232,7 +232,7 @@ class TestStatusEndpointRealCost:
             _write_turn(fh, turn_id="t1", model="claude-sonnet-5",
                         input_tokens=10_000, output_tokens=2_000, ts=1_800_000_000.0)
 
-        response = test_client.get("/v1/console/learning/model-selection/status")
+        response = test_client.get("/v1/console/learning/model-cost-optimizer/status")
 
         assert response.status_code == 200
         data = response.json()

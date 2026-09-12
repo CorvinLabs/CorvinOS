@@ -22,7 +22,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
-  LearningDashboardPage, ModelSelectionLearningPage, QualityGatesPage, VideoProducerPage,
+  LearningDashboardPage, ModelCostOptimizerPage, QualityGatesPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -73,9 +73,8 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   AuditPage,
   ReleasesPage,
   LearningDashboardPage,
-  ModelSelectionLearningPage,
+  ModelCostOptimizerPage,
   QualityGatesPage,
-  VideoProducerPage,
   MarketplaceHub: MarketplaceHub as unknown as ComponentType,
 };
 
@@ -141,10 +140,8 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Releases", icon: "Package" } }),
   rc("learning-dashboard", "Learning", LearningDashboardPage,
      { nav: { label: "Learning", icon: "Brain" } }),
-  rc("model-selection-learning", "Model Selection Learning", ModelSelectionLearningPage,
-     { nav: { label: "Model Selection", icon: "Zap" } }),
-  rc("video-producer", "Video Producer", VideoProducerPage,
-     { nav: { label: "Video Producer", icon: "Film" } }),
+  rc("model-cost-optimizer", "Model Cost Optimizer", ModelCostOptimizerPage,
+     { nav: { label: "Model Cost Optimizer", icon: "Zap" } }),
   rc("marketplace", "Marketplace", MarketplaceHub as unknown as ComponentType,
      { nav: { label: "Marketplace", icon: "ShoppingBag" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.

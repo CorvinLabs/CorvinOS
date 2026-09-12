@@ -62,9 +62,9 @@ class TestAPIEndpoints:
     """Test API endpoints."""
 
     def test_get_status_endpoint(self, test_client, auth_headers, store):
-        """GET /v1/console/learning/model-selection/status works."""
+        """GET /v1/console/learning/model-cost-optimizer/status works."""
         response = test_client.get(
-            "/v1/console/learning/model-selection/status",
+            "/v1/console/learning/model-cost-optimizer/status",
             headers=auth_headers,
         )
 
@@ -93,7 +93,7 @@ class TestAPIEndpoints:
         store.set_threshold(st)
 
         response = test_client.get(
-            "/v1/console/learning/model-selection/status",
+            "/v1/console/learning/model-cost-optimizer/status",
             headers=auth_headers,
         )
 
@@ -107,7 +107,7 @@ class TestAPIEndpoints:
         assert data["thresholds"][0]["converged"] is True
 
     def test_export_endpoint(self, test_client, auth_headers, store):
-        """GET /v1/console/learning/model-selection/export returns JSON."""
+        """GET /v1/console/learning/model-cost-optimizer/export returns JSON."""
         st = StoredThreshold(
             task_type="code_gen",
             subsystem="analyzer",
@@ -119,7 +119,7 @@ class TestAPIEndpoints:
         store.set_threshold(st)
 
         response = test_client.get(
-            "/v1/console/learning/model-selection/export",
+            "/v1/console/learning/model-cost-optimizer/export",
             headers=auth_headers,
         )
 
@@ -131,7 +131,7 @@ class TestAPIEndpoints:
         assert len(data["thresholds"]) == 1
 
     def test_reset_endpoint(self, test_client, auth_headers, store):
-        """POST /v1/console/learning/model-selection/reset clears thresholds."""
+        """POST /v1/console/learning/model-cost-optimizer/reset clears thresholds."""
         st = StoredThreshold(
             task_type="code_gen",
             subsystem="analyzer",
@@ -145,7 +145,7 @@ class TestAPIEndpoints:
         assert len(store.get_all()) == 1
 
         response = test_client.post(
-            "/v1/console/learning/model-selection/reset",
+            "/v1/console/learning/model-cost-optimizer/reset",
             json={"reason": "Test reset"},
             headers=auth_headers,
         )
@@ -162,19 +162,19 @@ class TestDashboardPanel:
 
     def test_panel_imports_without_error(self):
         """Dashboard panel imports without error."""
-        from core.console.corvin_console.web_next.src.panels.ModelSelectionLearning import (
-            ModelSelectionLearning,
+        from core.console.corvin_console.web_next.src.panels.ModelCostOptimizer import (
+            ModelCostOptimizer,
         )
 
-        assert ModelSelectionLearning is not None
+        assert ModelCostOptimizer is not None
 
     def test_panel_in_registry(self):
         """Panel is registered in PANELS."""
         from core.console.corvin_console.web_next.src.panels.registry import PANELS
 
-        panel = next((p for p in PANELS if p.id == "model-selection-learning"), None)
+        panel = next((p for p in PANELS if p.id == "model-cost-optimizer"), None)
         assert panel is not None
-        assert panel.nav["label"] == "Model Selection Learning"
+        assert panel.nav["label"] == "Model Cost Optimizer"
 
 
 class TestOperatorControls:
@@ -194,7 +194,7 @@ class TestOperatorControls:
 
         # Override threshold
         override_response = test_client.post(
-            "/v1/console/learning/model-selection/override",
+            "/v1/console/learning/model-cost-optimizer/override",
             json={
                 "task_type": "code_gen",
                 "new_threshold": 0.55,
@@ -208,7 +208,7 @@ class TestOperatorControls:
 
         # Verify new threshold is used
         status_response = test_client.get(
-            "/v1/console/learning/model-selection/status",
+            "/v1/console/learning/model-cost-optimizer/status",
             headers=auth_headers,
         )
         data = status_response.json()
@@ -228,7 +228,7 @@ class TestOperatorControls:
 
         # Export
         export_response = test_client.get(
-            "/v1/console/learning/model-selection/export",
+            "/v1/console/learning/model-cost-optimizer/export",
             headers=auth_headers,
         )
         export_data = export_response.json()
@@ -239,7 +239,7 @@ class TestOperatorControls:
 
         # Import
         import_response = test_client.post(
-            "/v1/console/learning/model-selection/import",
+            "/v1/console/learning/model-cost-optimizer/import",
             json=export_data,
             headers=auth_headers,
         )
@@ -258,7 +258,7 @@ class TestDataValidation:
     def test_override_invalid_threshold(self, test_client, auth_headers):
         """Override with invalid threshold is rejected."""
         response = test_client.post(
-            "/v1/console/learning/model-selection/override",
+            "/v1/console/learning/model-cost-optimizer/override",
             json={
                 "task_type": "code_gen",
                 "new_threshold": 0.05,  # Too low
@@ -272,7 +272,7 @@ class TestDataValidation:
     def test_override_high_invalid_threshold(self, test_client, auth_headers):
         """Override with high invalid threshold is rejected."""
         response = test_client.post(
-            "/v1/console/learning/model-selection/override",
+            "/v1/console/learning/model-cost-optimizer/override",
             json={
                 "task_type": "code_gen",
                 "new_threshold": 0.95,  # Too high
@@ -286,7 +286,7 @@ class TestDataValidation:
     def test_import_invalid_version(self, test_client, auth_headers):
         """Import with invalid version is rejected."""
         response = test_client.post(
-            "/v1/console/learning/model-selection/import",
+            "/v1/console/learning/model-cost-optimizer/import",
             json={
                 "version": "2",  # Invalid
                 "tenant_id": "_default",
@@ -307,7 +307,7 @@ class TestTenantIsolation:
         # that tenant_id from SessionRecord is used for filtering
 
         response = test_client.get(
-            "/v1/console/learning/model-selection/status",
+            "/v1/console/learning/model-cost-optimizer/status",
             headers=auth_headers,
         )
 
@@ -320,7 +320,7 @@ class TestErrorHandling:
     def test_missing_auth_headers(self, test_client):
         """Missing auth headers returns error."""
         response = test_client.get(
-            "/v1/console/learning/model-selection/status",
+            "/v1/console/learning/model-cost-optimizer/status",
         )
 
         # Should fail without auth headers
@@ -331,7 +331,7 @@ class TestErrorHandling:
         reset_store("_default")
 
         response = test_client.get(
-            "/v1/console/learning/model-selection/status",
+            "/v1/console/learning/model-cost-optimizer/status",
             headers=auth_headers,
         )
 

@@ -1,14 +1,14 @@
 """
-Model Selection Learning API — ADR-0377 Phase 2b
+Model Cost Optimizer API — ADR-0377 Phase 2b, renamed ADR-0696
 
 REST API endpoints for learned threshold management and operator controls.
 
 Endpoints:
-  GET  /v1/console/learning/model-selection/status    → Dashboard status (convergence, cost, quality)
-  POST /v1/console/learning/model-selection/override   → Manual threshold override
-  POST /v1/console/learning/model-selection/reset      → Reset all learning
-  GET  /v1/console/learning/model-selection/export     → Export learned thresholds as JSON
-  POST /v1/console/learning/model-selection/import     → Import thresholds from JSON
+  GET  /v1/console/learning/model-cost-optimizer/status    → Dashboard status (convergence, cost, quality)
+  POST /v1/console/learning/model-cost-optimizer/override   → Manual threshold override (not exposed in the UI — see ADR-0696, the value is recomputed from real data on every refresh anyway)
+  POST /v1/console/learning/model-cost-optimizer/reset      → Reset all learning
+  GET  /v1/console/learning/model-cost-optimizer/export     → Export learned thresholds as JSON
+  POST /v1/console/learning/model-cost-optimizer/import     → Import thresholds from JSON
 
 Auth: requires session (tenant isolation enforced via rec.tenant_id)
 Audit: all actions logged to audit trail
@@ -48,7 +48,7 @@ from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/learning/model-selection", tags=["model-selection-learning"])
+router = APIRouter(prefix="/learning/model-cost-optimizer", tags=["model-cost-optimizer"])
 
 
 # ── Pydantic models for requests/responses ──────────────────────────────
@@ -103,7 +103,7 @@ class ImportRequest(BaseModel):
 async def get_learning_status(
     rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
-    """Get Model Selection Learning dashboard status.
+    """Get Model Cost Optimizer dashboard status.
 
     Returns:
         converged_count: number of converged task types
