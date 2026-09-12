@@ -46,6 +46,17 @@ except Exception:                 # pragma: no cover
 from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
 
+# Lazy import — license may not be on path in all envs
+def _get_active_tier() -> str:
+	"""Get active license tier ('free' or 'member'). Fail-close: return 'free' on any error."""
+	try:
+		from license import validator as _lv
+		return _lv.active_tier()
+	except Exception:
+		# Fail-close: if license module is unavailable, assume free tier
+		# (telemetry will be locked, which is safer than unlocked)
+		return "free"
+
 
 router = APIRouter()
 
@@ -156,7 +167,10 @@ def get_healing_config(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Return the current self-healing flags for this tenant."""
-    return _read_flags(rec.tenant_id)
+    flags = _read_flags(rec.tenant_id)
+    # Include license tier so frontend knows if telemetry is locked
+    flags["_license_tier"] = _get_active_tier()
+    return flags
 
 
 @router.patch("/healing-config")
@@ -164,8 +178,35 @@ def patch_healing_config(
     body: HealingConfigRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    """Update one or more self-healing flags. Only the supplied keys are changed."""
+    """Update one or more self-healing flags. Only the supplied keys are changed.
+
+    Telemetry options (ping_enabled, error_enabled, telemetry_enabled) are only
+    modifiable by users with member tier license. Free tier users always send all
+    telemetry data (fail-close).
+    """
     patch = body.model_dump(exclude_none=True)
+
+    # Check if any telemetry option is being modified
+    telemetry_keys = {"ping_enabled", "error_enabled", "telemetry_enabled"}
+    is_telemetry_change = bool(telemetry_keys & set(patch.keys()))
+
+    if is_telemetry_change:
+        # Only member tier can change telemetry settings
+        tier = _get_active_tier()
+        if tier != "member":
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="settings.write",
+                target_kind="settings_file",
+                target_id="tenant.corvin.yaml",
+                reason="license-tier-restricted",
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="telemetry_locked_to_member_tier",
+            )
+
     if patch:
         try:
             _write_flags(rec.tenant_id, patch)
