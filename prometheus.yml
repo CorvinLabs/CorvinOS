@@ -1,0 +1,56 @@
+# Prometheus Configuration for CorvinOS Observability
+# Scrapes OTEL Collector metrics endpoint
+# 15s scrape interval (default)
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'corvinOS-production'
+    environment: 'production'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: []
+
+# Load rules once
+# rule_files:
+#   - "alerts.yml"
+
+scrape_configs:
+  # OTEL Collector Prometheus exporter
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['localhost:8888']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # CorvinOS instances heartbeat (via OTEL)
+  - job_name: 'corvinOS-instances'
+    static_configs:
+      - targets: ['localhost:8888']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'corvin_instance_.*'
+        action: keep
+
+  # CorvinOS skill execution metrics
+  - job_name: 'corvinOS-skills'
+    static_configs:
+      - targets: ['localhost:8888']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'corvin_skill_.*'
+        action: keep
+
+  # CorvinOS learning metrics
+  - job_name: 'corvinOS-learning'
+    static_configs:
+      - targets: ['localhost:8888']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'corvin_learning_.*'
+        action: keep

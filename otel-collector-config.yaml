@@ -1,0 +1,50 @@
+# OpenTelemetry Collector Configuration (Phase 2–4 deployment)
+# Receives metrics/traces from CorvinOS instances
+# Exports to Prometheus + Jaeger
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  attributes:
+    actions:
+      - key: service.name
+        value: corvinOS
+        action: insert
+      - key: environment
+        value: production
+        action: insert
+
+exporters:
+  prometheus:
+    endpoint: "0.0.0.0:8888"
+
+  jaeger:
+    endpoint: jaeger:6831
+    agent:
+      host: jaeger
+      port: 6831
+
+  logging:
+    loglevel: debug
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, attributes]
+      exporters: [jaeger, logging]
+
+    metrics:
+      receivers: [otlp]
+      processors: [batch, attributes]
+      exporters: [prometheus, logging]
