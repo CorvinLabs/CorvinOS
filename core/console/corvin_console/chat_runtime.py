@@ -5183,12 +5183,20 @@ async def stream_turn(
         if _os_completed_emitted:
             return
         _os_completed_emitted = True
+        # ADR-0696 — real per-model token usage for the cost-efficiency
+        # dashboard (core/learning/model_selection_learner.py). last_usage
+        # is the raw Claude Code CLI `usage` object (or None if the turn
+        # ended before any `result` event arrived, e.g. error/cancel) —
+        # guard with `or {}` rather than fabricate a number.
+        _usage = last_usage or {}
         _os_audit("os_turn.completed", {
             "duration_ms": int((time.monotonic() - _os_turn_start) * 1000),
             "tools_called": _os_tools_called,
             "exit_code": rc,
             "timed_out": False,
             "model": _os_model_used,
+            "input_tokens": int(_usage.get("input_tokens") or 0),
+            "output_tokens": int(_usage.get("output_tokens") or 0),
         })
         # ADR-0171 — engine-span END (paired with the start above). status from rc.
         if _espan is not None and _os_span_started:
