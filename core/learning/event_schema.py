@@ -1,4 +1,7 @@
-"""Learning Event Schema — typed, immutable events for learning signals (ADR-0314)."""
+"""Learning Event Schema — typed, immutable events for learning signals (ADR-0314).
+
+F4: Unbounded Payload Fix — max_payload_size=4KB validation + drop oversized events.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +10,13 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 from uuid import uuid4
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# F4: Maximum payload size (4 KB) to prevent unbounded memory growth
+MAX_PAYLOAD_SIZE_BYTES = 4 * 1024  # 4 KB
 
 
 class LearningEventType(str, Enum):
@@ -40,7 +50,10 @@ class LearningEventType(str, Enum):
 
 @dataclass(frozen=True)
 class LearningEvent:
-    """Immutable learning event with audit trail."""
+    """Immutable learning event with audit trail.
+
+    F4: Unbounded Payload Fix — payload size limited to 4 KB.
+    """
 
     event_type: LearningEventType
     tenant_id: str
@@ -53,6 +66,32 @@ class LearningEvent:
     payload: dict[str, Any] = field(default_factory=dict)
     audit_id: Optional[str] = None
     tags: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Validate payload size after initialization (F4).
+
+        Raises ValueError if payload exceeds MAX_PAYLOAD_SIZE_BYTES.
+        """
+        # F4: Validate payload size
+        try:
+            payload_json = json.dumps(self.payload)
+            payload_size = len(payload_json.encode("utf-8"))
+
+            if payload_size > MAX_PAYLOAD_SIZE_BYTES:
+                logger.warning(
+                    f"Learning event payload exceeds limit (F4): "
+                    f"event_id={self.event_id}, size={payload_size} bytes, "
+                    f"max={MAX_PAYLOAD_SIZE_BYTES} bytes. "
+                    f"Event will be DROPPED."
+                )
+                raise ValueError(
+                    f"Payload size {payload_size} bytes exceeds maximum "
+                    f"{MAX_PAYLOAD_SIZE_BYTES} bytes (F4: unbounded payload fix)"
+                )
+        except (TypeError, json.JSONDecodeError) as e:
+            # If payload can't be JSON-serialized, reject it
+            logger.error(f"Failed to validate payload size: {e}")
+            raise ValueError(f"Payload validation error: {e}")
 
     def to_audit_event(self) -> dict[str, Any]:
         """Convert to audit.jsonl format."""
@@ -68,6 +107,19 @@ class LearningEvent:
             "payload": self.payload,
             "tags": self.tags,
         }
+
+    @staticmethod
+    def validate_payload_size(payload: dict[str, Any]) -> bool:
+        """Check if payload would exceed size limit (F4).
+
+        Returns: True if payload is within limits, False otherwise.
+        """
+        try:
+            payload_json = json.dumps(payload)
+            payload_size = len(payload_json.encode("utf-8"))
+            return payload_size <= MAX_PAYLOAD_SIZE_BYTES
+        except (TypeError, json.JSONDecodeError):
+            return False
 
 
 # Event payload dataclasses

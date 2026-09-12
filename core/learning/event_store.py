@@ -8,7 +8,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any, Dict
 
 from core.learning.learning_events import LearningEvent, EventType
 
@@ -25,6 +25,54 @@ def _validate_tenant_id(tenant_id: str) -> None:
 
     if not re.match(r'^[a-zA-Z0-9_-]+$', tenant_id):
         raise ValueError(f"Invalid tenant_id format: {tenant_id!r}")
+
+
+def _scrub_pii(text: Optional[str]) -> Optional[str]:
+    """Scrub PII from text (F2: PII Leakage Fix).
+
+    Removes:
+    - Email addresses (user@domain.com)
+    - Phone numbers (+1-234-567-8900, 555-1234, etc.)
+    - Credit card numbers (4111 1111 1111 1111, etc.)
+    - Social security numbers (123-45-6789, etc.)
+    - API keys / tokens (common patterns)
+
+    Returns: Scrubbed text or original if no PII found.
+    GDPR Art. 32 requires data security measures; this prevents PII leakage into audit logs.
+    """
+    if not text or not isinstance(text, str):
+        return text
+
+    # PII patterns (fail-closed: when in doubt, redact)
+    patterns = [
+        (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL]'),  # Email
+        (r'\b(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})\b', '[PHONE]'),  # Phone
+        (r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b', '[CARD]'),  # Credit card
+        (r'\b\d{3}-\d{2}-\d{4}\b', '[SSN]'),  # Social security number
+        (r'\b(?:sk_live_|sk_test_|pk_live_|pk_test_)[A-Za-z0-9]{20,}\b', '[API_KEY]'),  # Stripe keys
+        (r'\b[A-Za-z0-9]{40}\b', '[TOKEN]'),  # Generic 40-char tokens (common in APIs)
+    ]
+
+    scrubbed = text
+    for pattern, replacement in patterns:
+        scrubbed = re.sub(pattern, replacement, scrubbed, flags=re.IGNORECASE)
+
+    return scrubbed
+
+
+def _scrub_pii_deep(obj: Any) -> Any:
+    """Recursively scrub PII from nested dicts/lists (F2: PII Leakage Fix).
+
+    GDPR Art. 32 requires data security measures; this prevents PII leakage into audit logs.
+    """
+    if isinstance(obj, dict):
+        return {k: _scrub_pii_deep(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_scrub_pii_deep(item) for item in obj]
+    elif isinstance(obj, str):
+        return _scrub_pii(obj)
+    else:
+        return obj
 
 
 class EventStore:
@@ -64,6 +112,8 @@ class EventStore:
     def write_event(self, event: LearningEvent) -> None:
         """Write event: core audit chain FIRST (fail-closed), then disk.
 
+        F2: PII Scrubbing — all payloads scrubbed before disk write (GDPR Art. 32).
+
         ADR-0314 / CLAUDE.md § Phase 3: "write_event writes the core chain
         FIRST; no chain commit → no disk record". Until 2026-09-06 only the
         sibling ``event_persistence.EventStore`` honoured that; THIS store — the
@@ -93,6 +143,10 @@ class EventStore:
 
             try:
                 event_dict = event.to_dict()
+
+                # F2: Scrub PII from event payload before writing to disk (GDPR Art. 32)
+                event_dict = _scrub_pii_deep(event_dict)
+
                 event_dict["audit_ref"] = audit_ref
                 line = json.dumps(event_dict, separators=(",", ":")) + "\n"
 

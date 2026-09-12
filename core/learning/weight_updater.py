@@ -25,6 +25,7 @@ import numpy as np
 from collections import deque
 import json
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class WeightUpdater:
     """
     Manages weight updates with EMA filtering and oscillation detection.
 
+    Thread-safe via RLock (F1: Race Condition Fix).
+
     Public API:
       - update_weight(weight_id, delta, audit_backend, tenant_id)
       - is_oscillation_clamped(weight_id) -> bool
@@ -94,6 +97,9 @@ class WeightUpdater:
         self.weights: Dict[str, OscillationState] = {}
         self.update_history: List[WeightUpdateRecord] = []
 
+        # F1: Race Condition Fix — RLock protects concurrent feedback processing
+        self._lock = threading.RLock()
+
     def update_weight(
         self,
         weight_id: str,
@@ -104,6 +110,8 @@ class WeightUpdater:
     ) -> WeightUpdateRecord:
         """
         Apply weight update with oscillation protection.
+
+        F1: Thread-safe via RLock — protects concurrent feedback processing.
 
         Steps:
           1. Detect oscillation (frequency check)
@@ -123,87 +131,88 @@ class WeightUpdater:
         Returns:
           WeightUpdateRecord with full update details
         """
-        # Audit-first, fail-closed — checked BEFORE any state is touched.
-        # Round-4 review: the gate was ``if audit_backend:`` with the parameter
-        # defaulting to ``None``, so the DEFAULT call applied the update with no
-        # audit record at all. An unaudited weight change is precisely the
-        # "silent config change" this module's docstring says is BLOCKED.
-        if audit_backend is None:
-            raise WeightAuditFailedError(
-                f"weight update for {weight_id!r} refused: no audit backend supplied "
-                "(audit-first is mandatory; an unaudited weight change is a silent "
-                "config change)"
-            )
+        with self._lock:
+            # Audit-first, fail-closed — checked BEFORE any state is touched.
+            # Round-4 review: the gate was ``if audit_backend:`` with the parameter
+            # defaulting to ``None``, so the DEFAULT call applied the update with no
+            # audit record at all. An unaudited weight change is precisely the
+            # "silent config change" this module's docstring says is BLOCKED.
+            if audit_backend is None:
+                raise WeightAuditFailedError(
+                    f"weight update for {weight_id!r} refused: no audit backend supplied "
+                    "(audit-first is mandatory; an unaudited weight change is a silent "
+                    "config change)"
+                )
 
-        current_time = time.time()
+            current_time = time.time()
 
-        # Initialize tracking if first time seeing this weight
-        if weight_id not in self.weights:
-            self.weights[weight_id] = OscillationState(weight_id=weight_id)
+            # Initialize tracking if first time seeing this weight
+            if weight_id not in self.weights:
+                self.weights[weight_id] = OscillationState(weight_id=weight_id)
 
-        state = self.weights[weight_id]
+            state = self.weights[weight_id]
 
-        # 1. Detect frequency-based oscillation
-        osc_detected = self._detect_frequency_oscillation(weight_id, current_time)
+            # 1. Detect frequency-based oscillation
+            osc_detected = self._detect_frequency_oscillation(weight_id, current_time)
 
-        # If oscillation window has expired, clear it
-        if (state.oscillation_clamp_until is not None and
-            current_time > state.oscillation_clamp_until):
-            state.oscillation_clamp_until = None
-            state.is_clamped = False
+            # If oscillation window has expired, clear it
+            if (state.oscillation_clamp_until is not None and
+                current_time > state.oscillation_clamp_until):
+                state.oscillation_clamp_until = None
+                state.is_clamped = False
 
-        # 2. Apply EMA filter to weight delta
-        ema_filtered_delta = self._apply_ema_filter(weight_id, delta)
+            # 2. Apply EMA filter to weight delta
+            ema_filtered_delta = self._apply_ema_filter(weight_id, delta)
 
-        # 3. Determine effective learning rate
-        effective_lr = base_learning_rate
-        if state.is_clamped or osc_detected:
-            effective_lr = base_learning_rate * self.learning_rate_clamp
+            # 3. Determine effective learning rate
+            effective_lr = base_learning_rate
+            if state.is_clamped or osc_detected:
+                effective_lr = base_learning_rate * self.learning_rate_clamp
 
-        # Compute new weight value (delta * LR)
-        new_value_delta = ema_filtered_delta * effective_lr
+            # Compute new weight value (delta * LR)
+            new_value_delta = ema_filtered_delta * effective_lr
 
-        # 4. Audit-log the update BEFORE applying (fail-closed). A refused
-        # update must also leave NO trace in the oscillation state, otherwise
-        # a wedged audit backend still moves the EMA on every retry.
-        _ema_before = state.weight_delta_ema_prev
-        try:
-            self._audit_weight_update(
-                audit_backend=audit_backend,
+            # 4. Audit-log the update BEFORE applying (fail-closed). A refused
+            # update must also leave NO trace in the oscillation state, otherwise
+            # a wedged audit backend still moves the EMA on every retry.
+            _ema_before = state.weight_delta_ema_prev
+            try:
+                self._audit_weight_update(
+                    audit_backend=audit_backend,
+                    weight_id=weight_id,
+                    delta=delta,
+                    ema_filtered_delta=ema_filtered_delta,
+                    oscillation_detected=osc_detected,
+                    effective_learning_rate=effective_lr,
+                    base_learning_rate=base_learning_rate,
+                    tenant_id=tenant_id,
+                    timestamp=current_time,
+                )
+            except Exception as e:
+                # Fail-closed: if audit fails, don't apply weight — and roll the
+                # filter state back so the refused attempt is a true no-op.
+                state.weight_delta_ema = _ema_before
+                state.weight_delta_ema_prev = _ema_before
+                if state.update_times_window:
+                    state.update_times_window.pop()  # drop this attempt's timestamp
+                raise RuntimeError(
+                    f"Audit write failed for weight {weight_id}: {e}. "
+                    "Weight update rejected (fail-closed)."
+                )
+
+            # 5. Create and return update record
+            record = WeightUpdateRecord(
                 weight_id=weight_id,
-                delta=delta,
+                old_value=0.0,  # Placeholder (caller tracks the actual weight)
+                new_value=new_value_delta,
                 ema_filtered_delta=ema_filtered_delta,
                 oscillation_detected=osc_detected,
-                effective_learning_rate=effective_lr,
-                base_learning_rate=base_learning_rate,
-                tenant_id=tenant_id,
+                learning_rate_applied=effective_lr,
                 timestamp=current_time,
             )
-        except Exception as e:
-            # Fail-closed: if audit fails, don't apply weight — and roll the
-            # filter state back so the refused attempt is a true no-op.
-            state.weight_delta_ema = _ema_before
-            state.weight_delta_ema_prev = _ema_before
-            if state.update_times_window:
-                state.update_times_window.pop()  # drop this attempt's timestamp
-            raise RuntimeError(
-                f"Audit write failed for weight {weight_id}: {e}. "
-                "Weight update rejected (fail-closed)."
-            )
 
-        # 5. Create and return update record
-        record = WeightUpdateRecord(
-            weight_id=weight_id,
-            old_value=0.0,  # Placeholder (caller tracks the actual weight)
-            new_value=new_value_delta,
-            ema_filtered_delta=ema_filtered_delta,
-            oscillation_detected=osc_detected,
-            learning_rate_applied=effective_lr,
-            timestamp=current_time,
-        )
-
-        self.update_history.append(record)
-        return record
+            self.update_history.append(record)
+            return record
 
     def _detect_frequency_oscillation(self, weight_id: str, current_time: float) -> bool:
         """
@@ -356,18 +365,22 @@ class WeightUpdater:
                 )
 
     def is_oscillation_clamped(self, weight_id: str) -> bool:
-        """Check if a weight is currently under oscillation clamp."""
-        if weight_id not in self.weights:
-            return False
-        state = self.weights[weight_id]
-        if state.oscillation_clamp_until is None:
-            return False
-        # Check if clamp window has expired
-        if time.time() > state.oscillation_clamp_until:
-            state.is_clamped = False
-            state.oscillation_clamp_until = None
-            return False
-        return state.is_clamped
+        """Check if a weight is currently under oscillation clamp.
+
+        F1: Thread-safe via RLock.
+        """
+        with self._lock:
+            if weight_id not in self.weights:
+                return False
+            state = self.weights[weight_id]
+            if state.oscillation_clamp_until is None:
+                return False
+            # Check if clamp window has expired
+            if time.time() > state.oscillation_clamp_until:
+                state.is_clamped = False
+                state.oscillation_clamp_until = None
+                return False
+            return state.is_clamped
 
     def get_effective_learning_rate(
         self,
@@ -380,41 +393,49 @@ class WeightUpdater:
         return base_learning_rate
 
     def get_oscillation_status(self, weight_id: str) -> Dict:
-        """Get detailed oscillation status for a weight."""
-        if weight_id not in self.weights:
-            return {'weight_id': weight_id, 'found': False}
+        """Get detailed oscillation status for a weight.
 
-        state = self.weights[weight_id]
-        current_time = time.time()
+        F1: Thread-safe via RLock.
+        """
+        with self._lock:
+            if weight_id not in self.weights:
+                return {'weight_id': weight_id, 'found': False}
 
-        # Count recent updates
-        one_minute_ago = current_time - 60.0
-        recent_updates = [t for t in state.update_times_window if t >= one_minute_ago]
+            state = self.weights[weight_id]
+            current_time = time.time()
 
-        return {
-            'weight_id': weight_id,
-            'found': True,
-            'is_clamped': state.is_clamped,
-            'updates_per_minute': len(recent_updates),
-            'frequency_threshold': self.osc_freq_threshold,
-            'oscillation_detected_at': (
-                datetime.fromtimestamp(state.oscillation_detected_at).isoformat()
-                if state.oscillation_detected_at else None
-            ),
-            'oscillation_clamp_until': (
-                datetime.fromtimestamp(state.oscillation_clamp_until).isoformat()
-                if state.oscillation_clamp_until else None
-            ),
-            'last_update_time': (
-                datetime.fromtimestamp(state.last_update_time).isoformat()
-                if state.last_update_time else None
-            ),
-            'ema_filtered_delta': state.weight_delta_ema,
-            'ema_alpha': self.ema_alpha,
-        }
+            # Count recent updates
+            one_minute_ago = current_time - 60.0
+            recent_updates = [t for t in state.update_times_window if t >= one_minute_ago]
+
+            return {
+                'weight_id': weight_id,
+                'found': True,
+                'is_clamped': state.is_clamped,
+                'updates_per_minute': len(recent_updates),
+                'frequency_threshold': self.osc_freq_threshold,
+                'oscillation_detected_at': (
+                    datetime.fromtimestamp(state.oscillation_detected_at).isoformat()
+                    if state.oscillation_detected_at else None
+                ),
+                'oscillation_clamp_until': (
+                    datetime.fromtimestamp(state.oscillation_clamp_until).isoformat()
+                    if state.oscillation_clamp_until else None
+                ),
+                'last_update_time': (
+                    datetime.fromtimestamp(state.last_update_time).isoformat()
+                    if state.last_update_time else None
+                ),
+                'ema_filtered_delta': state.weight_delta_ema,
+                'ema_alpha': self.ema_alpha,
+            }
 
     def get_update_history(self, weight_id: Optional[str] = None) -> List[WeightUpdateRecord]:
-        """Get update history, optionally filtered by weight_id."""
-        if weight_id is None:
-            return self.update_history
-        return [r for r in self.update_history if r.weight_id == weight_id]
+        """Get update history, optionally filtered by weight_id.
+
+        F1: Thread-safe via RLock.
+        """
+        with self._lock:
+            if weight_id is None:
+                return list(self.update_history)  # Return copy
+            return [r for r in self.update_history if r.weight_id == weight_id]

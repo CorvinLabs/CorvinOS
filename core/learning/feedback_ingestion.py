@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from enum import Enum
 import logging
+import hmac
+import hashlib
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,10 @@ class FeedbackType(str, Enum):
 
 @dataclass(frozen=True)
 class SkillFeedback:
-    """Immutable feedback record (GDPR Art. 30 audit trail)."""
+    """Immutable feedback record (GDPR Art. 30 audit trail).
+
+    F3: Signature validation enforced — feedback source authenticated via HMAC-SHA256.
+    """
     skill_id: str
     task_id: str
     feedback_type: FeedbackType
@@ -29,6 +35,7 @@ class SkillFeedback:
     user_id: Optional[str] = None  # Who gave feedback (optional, for privacy)
     tenant_id: str = "_default"
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    signature: Optional[str] = None  # F3: HMAC-SHA256 signature for authentication
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to audit event format."""
@@ -41,27 +48,64 @@ class SkillFeedback:
             "user_id": self.user_id,
             "tenant_id": self.tenant_id,
             "timestamp": self.timestamp,
+            "signature": self.signature,
         }
+
+    def compute_signature(self, secret: Optional[str] = None) -> str:
+        """Compute HMAC-SHA256 signature for this feedback.
+
+        F3: Signature validation — use CORVIN_FEEDBACK_SECRET from environment.
+
+        Args:
+            secret: Optional override; defaults to CORVIN_FEEDBACK_SECRET env var.
+
+        Returns:
+            Hex-encoded HMAC-SHA256 signature.
+        """
+        if secret is None:
+            secret = os.environ.get("CORVIN_FEEDBACK_SECRET", "")
+            if not secret:
+                raise ValueError(
+                    "CORVIN_FEEDBACK_SECRET not set; cannot compute signature. "
+                    "Set CORVIN_FEEDBACK_SECRET env var or pass secret explicitly."
+                )
+
+        # Signature covers: skill_id + task_id + feedback_type + timestamp (not reason for stability)
+        message = f"{self.skill_id}:{self.task_id}:{self.feedback_type.value}:{self.timestamp}"
+        sig = hmac.new(
+            secret.encode("utf-8"),
+            message.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+        return sig
 
 
 class FeedbackIngestionValidator:
-    """Validates feedback before storage (fail-closed, GDPR Art. 32)."""
+    """Validates feedback before storage (fail-closed, GDPR Art. 32).
+
+    F3: Signature validation enforced — feedback source authenticated via HMAC-SHA256.
+    """
 
     FEEDBACK_WINDOW_MINUTES = 60  # Only feedback within 60min of execution counts
     MAX_REASON_LENGTH = 1000      # Prevent DoS via huge reason strings
 
-    def __init__(self, audit_backend=None, event_store=None):
+    def __init__(self, audit_backend=None, event_store=None, feedback_secret: Optional[str] = None):
         """Initialize validator with dependencies.
 
         Args:
             audit_backend: Audit trail writer (for logging feedback)
             event_store: EventStore instance (to verify task exists)
+            feedback_secret: F3 — Secret for HMAC-SHA256 signature validation (defaults to env var)
         """
         self.audit_backend = audit_backend
         self.event_store = event_store
+        self.feedback_secret = feedback_secret or os.environ.get("CORVIN_FEEDBACK_SECRET", "")
 
     def validate(self, feedback: SkillFeedback) -> tuple[bool, Optional[str]]:
-        """Validate feedback (return: (is_valid, error_message))."""
+        """Validate feedback (return: (is_valid, error_message)).
+
+        F3: Signature validation enforced — all feedback must carry valid HMAC-SHA256 signature.
+        """
 
         # 1. Feedback type must be valid (enum validates this already)
         if feedback.feedback_type not in [FeedbackType.GOOD, FeedbackType.BAD, FeedbackType.OTHER]:
@@ -87,11 +131,53 @@ class FeedbackIngestionValidator:
         if not self._is_valid_tenant(feedback.tenant_id):
             return False, f"invalid tenant_id: {feedback.tenant_id}"
 
-        # 7. Task must exist in audit trail (proof of execution)
+        # 7. F3: Signature validation — all feedback must carry valid HMAC-SHA256 signature
+        if not self._validate_signature(feedback):
+            return False, "feedback signature invalid or missing (F3: authentication required)"
+
+        # 8. Task must exist in audit trail (proof of execution)
         if self.event_store and not self._task_exists_in_audit(feedback.task_id, feedback.tenant_id):
             return False, f"task_id not found in audit trail (must have executed skill)"
 
         return True, None
+
+    def _validate_signature(self, feedback: SkillFeedback) -> bool:
+        """Validate feedback signature using HMAC-SHA256.
+
+        F3: Signature validation — fail-closed if signature is missing or invalid.
+
+        Returns: True if signature is valid, False otherwise.
+        """
+        # Fail-closed: if no secret is configured, reject unsigned feedback
+        if not self.feedback_secret:
+            logger.warning(
+                "CORVIN_FEEDBACK_SECRET not configured; rejecting unsigned feedback "
+                "(F3: authentication required). Set CORVIN_FEEDBACK_SECRET to enable feedback."
+            )
+            return False
+
+        # Fail-closed: signature must be present
+        if not feedback.signature:
+            logger.warning(f"Feedback signature missing (F3 validation failed)")
+            return False
+
+        # Compute expected signature
+        try:
+            expected_sig = feedback.compute_signature(secret=self.feedback_secret)
+        except ValueError as e:
+            logger.error(f"Failed to compute signature: {e}")
+            return False
+
+        # Constant-time comparison (prevent timing attacks)
+        is_valid = hmac.compare_digest(feedback.signature, expected_sig)
+
+        if not is_valid:
+            logger.warning(
+                f"Feedback signature mismatch (F3 validation failed) — "
+                f"skill_id={feedback.skill_id}, task_id={feedback.task_id}"
+            )
+
+        return is_valid
 
     @staticmethod
     def _is_within_feedback_window(timestamp_iso: str) -> bool:
