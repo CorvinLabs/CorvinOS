@@ -202,5 +202,9 @@ export const QualityGatesPage = React.lazy(() =>
   import("@/pages/quality").then((m) => ({ default: m.default }))
 );
 
+export const VideoProducerPage = React.lazy(() =>
+  import("@/pages/video-producer")
+);
+
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
