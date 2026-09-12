@@ -1264,6 +1264,24 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("skills", "autonomy", "auto-grading", "observability", "production"),
         release_tier="beta",
     ),
+    FeatureFlag(
+        id="creator_2_0_enabled",
+        label="Creator 2.0 — AI-Generated Skill & Tool Builder",
+        description=(
+            "Enable Creator 2.0 (ADR-0661, ADR-0662): unified AI-powered Skill + Tool creator "
+            "with 10-phase interactive workflow, persistent feedback WAL, and autonomous learning daemon. "
+            "Features: LLM-generated skill scaffolding, iterative refinement, real-time testing, "
+            "integrated feedback loop (ADR-0314), and config auto-optimization. Supersedes Creator v1.0 "
+            "(classic Skill Creator) and Skill Forge v1.0 (manual tool builder). Staged canary rollout "
+            "(Week 17: 5% → Week 20: 100%). Off (default) routes requests to Creator v1.0."
+        ),
+        owner="shumway",
+        target_release="v1.2",
+        tags=("skills", "tools", "learning", "agentic", "creator"),
+        release_tier="alpha",
+        released_date="2026-09-17",
+        promoted_by="shumway",
+    ),
 )
 
 
