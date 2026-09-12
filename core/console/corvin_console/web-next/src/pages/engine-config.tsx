@@ -186,13 +186,29 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
           </div>
         )}
 
-        {config.run_count === 0 ? (
+        {isCorvinOS ? (
+          // corvinOS's "task type" is the classifier step itself — a
+          // deterministic token/keyword rule (ModelSelector.classify(),
+          // no LLM call), never one of the SIMPLE/MEDIUM/COMPLEX outputs
+          // shadow_classify_task() feeds into the confidence optimizer.
+          // run_count is structurally always 0 here, not "not yet" — an amber
+          // "waiting for data" box (same styling as the other three cards
+          // legitimately still filling in) misrepresented a permanent,
+          // by-design state as a temporary gap. Neutral note instead,
+          // matching the muted empty-state style used elsewhere (e.g.
+          // ModelCostOptimizer's "no data yet" cards).
+          <div className="p-3 border border-dashed border-border rounded-md flex gap-2">
+            <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-muted-foreground">
+              Classification is rule-based (token/keyword heuristics) — there is no
+              model choice here to learn a confidence score from.
+            </div>
+          </div>
+        ) : config.run_count === 0 ? (
           <div className="p-3 border border-amber-500/30 bg-amber-500/10 rounded-md flex gap-2">
             <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-700 dark:text-amber-300">
-              {isCorvinOS
-                ? 'Classification is rule-based (token/keyword heuristics) — there is no model choice here to learn from.'
-                : 'No real outcomes learned for this model yet. Confidence updates live as real turns complete.'}
+              No real outcomes learned for this model yet. Confidence updates live as real turns complete.
             </div>
           </div>
         ) : (
