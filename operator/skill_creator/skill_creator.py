@@ -302,31 +302,59 @@ class SkillPlanner:
             PlanningError: If planning fails at any stage
         """
         try:
+            # SECURITY FIX: Scrub PII from user request before sending to Claude (GDPR Art. 32)
+            scrubbed_request = self._scrub_pii_from_text(user_request)
+
             if base and self.client is not None:
-                spec = await self._refine_spec(user_request, base)
+                spec = await self._refine_spec(scrubbed_request, base)
                 logger.info("Phase 1 Refine complete: %s", spec.name)
                 return spec
 
             if self.use_local or self.client is None:
                 # Local generation mode (no Claude API needed)
                 logger.info("Using local skill generation (no API key required)")
-                spec = self._generate_skill_spec_locally(user_request)
+                spec = self._generate_skill_spec_locally(scrubbed_request)
             else:
                 # Claude-based generation (requires API key)
                 # Step 1: Generate thesis (optimistic interpretation)
-                thesis = await self._generate_thesis(user_request)
+                thesis = await self._generate_thesis(scrubbed_request)
 
                 # Step 2: Generate antithesis (critical interpretation)
-                antithesis = await self._generate_antithesis(thesis, user_request)
+                antithesis = await self._generate_antithesis(thesis, scrubbed_request)
 
                 # Step 3: Synthesize into SkillSpec
-                spec = await self._synthesize_spec(thesis, antithesis, user_request)
+                spec = await self._synthesize_spec(thesis, antithesis, scrubbed_request)
 
             logger.info(f"Phase 1 Planning complete: {spec.name}")
             return spec
 
         except Exception as e:
             raise PlanningError(f"Planning failed: {e}") from e
+
+    @staticmethod
+    def _scrub_pii_from_text(text: str) -> str:
+        """Scrub PII from text before sending to Claude API (GDPR Art. 32).
+
+        Removes emails, phone numbers, SSNs, API keys, credit card patterns.
+        Returns sanitized text suitable for LLM transmission.
+        """
+        if not text:
+            return text
+
+        # PII patterns (fail-closed: when in doubt, redact)
+        patterns = [
+            (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL]'),
+            (r'\b(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})\b', '[PHONE]'),
+            (r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b', '[CARD]'),
+            (r'\b\d{3}-\d{2}-\d{4}\b', '[SSN]'),
+            (r'\b(?:sk_live_|sk_test_|pk_live_|pk_test_)[A-Za-z0-9]{20,}\b', '[API_KEY]'),
+        ]
+
+        scrubbed = text
+        for pattern, replacement in patterns:
+            scrubbed = re.sub(pattern, replacement, scrubbed, flags=re.IGNORECASE)
+
+        return scrubbed
 
     def _generate_skill_spec_locally(self, user_request: str) -> SkillSpec:
         r"""Generate SkillSpec locally without Claude API (template-based).
@@ -407,12 +435,15 @@ result = use_skill("{skill_name}", input_data)
         base_name = base.get("name") or ""
         base_body = base.get("body") or ""
 
+        # SECURITY FIX: Scrub PII from skill body before sending to Claude (GDPR Art. 32)
+        scrubbed_body = self._scrub_pii_from_text(base_body)
+
         prompt = f"""You are refining an EXISTING skill. Apply the operator's
 change and keep everything else intact — this replaces the skill in place, so
 anything you drop is lost.
 
 CURRENT SKILL ({base_name}):
-{base_body}
+{scrubbed_body}
 
 OPERATOR'S REQUESTED CHANGE:
 {instruction}

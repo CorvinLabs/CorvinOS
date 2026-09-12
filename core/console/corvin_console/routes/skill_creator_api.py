@@ -405,11 +405,39 @@ async def delete_generated_skill(
     engine plugin slot. Goes through the registry rather than removing the
     directory, so the manifest, the slot and the hash-chained skill audit
     stay consistent.
+
+    SECURITY: Skill ownership is verified before deletion (CRITICAL FIX — was missing).
+    Only the creator or admin can delete a skill (privilege escalation mitigation).
     """
     if delete_skill is None:
         raise HTTPException(status_code=500, detail="Skill-Creator not available")
 
     _require_namespace(name)
+
+    # SECURITY: Verify ownership before deletion (was missing — anyone could delete any skill)
+    skill_metadata = read_skill(_registry_root(rec.tenant_id), name)
+    if skill_metadata is None:
+        raise HTTPException(status_code=404, detail=f"skill not found: {name}")
+
+    # Check if current user is the creator or has admin role
+    creator_id = skill_metadata.get("created_by")
+    is_admin = getattr(rec, "is_admin", False)
+
+    if creator_id and creator_id != rec.sid_fingerprint and not is_admin:
+        # Audit the failed deletion attempt (security event)
+        console_audit.action_denied(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="skill.delete_unauthorized",
+            target_kind="generated_skill",
+            target_id=name,
+            reason="not_owner_and_not_admin",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete skill created by another user (owner: {creator_id})"
+        )
+
     removed = delete_skill(_registry_root(rec.tenant_id), name,
                            reason="deleted from console Skill Creator")
     if not removed:
