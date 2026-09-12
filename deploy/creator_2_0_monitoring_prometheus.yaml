@@ -1,0 +1,179 @@
+# Prometheus Configuration for Creator 2.0 Canary Rollout (Week 17-20)
+#
+# Metrics collected during staged deployment:
+# - Week 17 (5% canary baseline)
+# - Week 18 (25% expansion + learning convergence)
+# - Week 19 (50% expansion + DAG health)
+# - Week 20 (100% full rollout)
+#
+# Reference: CREATOR_2_0_CANARY_ROLLOUT_PLAN.md § IV Monitoring & Metrics
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "corvinos-local"
+    deployment: "creator_2_0_canary"
+
+# Alerting rules
+rule_files:
+  - "/etc/prometheus/rules/creator_2_0_alerts.yaml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["localhost:9093"]
+
+scrape_configs:
+  # Creator 2.0 Skill metrics (exported by the Skill itself)
+  - job_name: "creator_2_0_skill"
+    scheme: http
+    static_configs:
+      - targets: ["localhost:8765"]
+    metrics_path: "/metrics/creator_2_0"
+    scrape_interval: 10s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "corvinos-creator-2-0"
+
+  # Learning daemon metrics
+  - job_name: "learning_daemon"
+    scheme: http
+    static_configs:
+      - targets: ["localhost:8765"]
+    metrics_path: "/metrics/learning"
+    scrape_interval: 10s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "corvinos-learning-daemon"
+
+  # Audit chain integrity metrics
+  - job_name: "audit_chain"
+    scheme: http
+    static_configs:
+      - targets: ["localhost:8765"]
+    metrics_path: "/metrics/audit"
+    scrape_interval: 30s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "corvinos-audit-chain"
+
+  # System metrics (CPU, memory, disk)
+  - job_name: "node_exporter"
+    scheme: http
+    static_configs:
+      - targets: ["localhost:9100"]
+    scrape_interval: 30s
+
+---
+# Prometheus Alert Rules for Creator 2.0 Canary
+# Save as: /etc/prometheus/rules/creator_2_0_alerts.yaml
+
+groups:
+  - name: creator_2_0_canary
+    interval: 30s
+    rules:
+      # Latency SLA violations
+      - alert: Creator2_0_P99_LatencySLAViolation
+        expr: histogram_quantile(0.99, rate(creator_2_0_latency_p99[5m])) > 400
+        for: 5m
+        labels:
+          severity: critical
+          service: creator_2_0
+        annotations:
+          summary: "Creator 2.0 P99 latency exceeds 400ms SLA (Week 17)"
+          description: "P99 latency: {{ $value }}ms (SLA: 400ms). Check Dashboard: /grafana/creator-2-0-canary"
+
+      # Error rate spike
+      - alert: Creator2_0_ErrorRateSpike
+        expr: rate(creator_2_0_errors_total[5m]) > 0.001  # 0.1% error rate
+        for: 2m
+        labels:
+          severity: critical
+          service: creator_2_0
+        annotations:
+          summary: "Creator 2.0 error rate exceeded 0.1% (P1 incident)"
+          description: "Error rate: {{ $value }}/sec. Rollback procedure: scripts/creator_2_0_rollback.sh"
+
+      # Learning daemon queue depth
+      - alert: Creator2_0_LearningDaemonQueueDepth
+        expr: learning_daemon_queue_depth{service="creator_2_0"} > 500
+        for: 2m
+        labels:
+          severity: warning
+          service: creator_2_0
+        annotations:
+          summary: "Learning daemon queue depth exceeds 500 events"
+          description: "Queue depth: {{ $value }} events. Check daemon: systemctl --user status corvin-learning-daemon"
+
+      # Learning convergence divergence
+      - alert: Creator2_0_LearningConvergenceDivergence
+        expr: creator_2_0_learning_convergence > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: creator_2_0
+        annotations:
+          summary: "Learning weight oscillation exceeds 5% (divergence detected)"
+          description: "Oscillation: {{ $value }}%. Investigate feedback loop: corvin audit show-task <task_id>"
+
+      # Audit chain integrity
+      - alert: Creator2_0_AuditChainGaps
+        expr: creator_2_0_audit_chain_gaps{tenant_id="_default"} > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: creator_2_0
+        annotations:
+          summary: "Audit chain has gaps (integrity violation)"
+          description: "Gaps detected: {{ $value }}. Verify chain: corvin audit verify-chain --tenant=_default"
+
+      # Learning daemon down
+      - alert: Creator2_0_LearningDaemonDown
+        expr: up{job="learning_daemon"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: creator_2_0
+        annotations:
+          summary: "Learning daemon is down or unresponsive"
+          description: "Restart: systemctl --user restart corvin-learning-daemon"
+
+      # Low adoption in canary (Week 18+)
+      - alert: Creator2_0_LowAdoptionWeek18Plus
+        expr: |
+          (creator_2_0_requests_total / on(tenant_id) group_left(phase)
+           (creator_2_0_requests_total + creator_v1_0_requests_total)) < 0.15
+          and on(phase) (phase="phase2_week18" or phase="phase3_week19" or phase="phase4_week20")
+        for: 24h
+        labels:
+          severity: warning
+          service: creator_2_0
+        annotations:
+          summary: "Creator 2.0 adoption below 15% target (Week 18+)"
+          description: "Current adoption: {{ $value | humanizePercentage }}. Investigate routing: grep creator_2_0_enabled features.json"
+
+      # Skill dependency DAG cycles
+      - alert: Creator2_0_SkillDAGCycles
+        expr: skill_dependency_dag_cycles{service="creator_2_0"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: creator_2_0
+        annotations:
+          summary: "Skill dependency DAG has cycles (learning loop may diverge)"
+          description: "Cycles detected: {{ $value }}. Check DAG: corvin audit show-learning-dag"
+
+      # Feedback loop stale records
+      - alert: Creator2_0_FeedbackLoopStale
+        expr: creator_2_0_oldest_feedback_record_age_hours > 1
+        for: 30m
+        labels:
+          severity: warning
+          service: creator_2_0
+        annotations:
+          summary: "Feedback loop has stale records (>1h old)"
+          description: "Oldest record: {{ $value }}h old. Check WAL: ls -la ~/.corvin/tenants/_default/global/forge/feedback_wal/"
