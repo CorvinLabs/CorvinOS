@@ -83,6 +83,7 @@ from .api import feature_status_endpoints, multi_instance_sync
 from .routes import (
     auth_routes, dashboard, sessions, audit_tail, runs,
     tasks as tasks_route,
+    task_audit as task_audit_route,
     tools, skills, memory, streams, promote,
     workspaces, members, compute, settings as settings_route,
     features as features_route,
@@ -98,6 +99,7 @@ from .routes import (
     workflows as workflows_route,
     connectors as connectors_route,
     setup as setup_route,
+    forge_unified as forge_unified_route,
     settings_stream as settings_stream_route,
     byok as byok_route,
     engine as engine_route,
@@ -200,6 +202,7 @@ router.include_router(remote_trigger_log_route.router, tags=["console-a2a"])
 router.include_router(a2a_pair_route.router, tags=["console-a2a-pair"])
 router.include_router(runs.router, tags=["console-runs"])
 router.include_router(tasks_route.router, tags=["console-tasks"])
+router.include_router(task_audit_route.router, tags=["console-task-audit"])
 # Phase C — drilldowns
 # ADR-0124 M5a/M5b: manual-skill and manual-tool routers MUST be registered
 # before the generic skills/tools routers so that /skills/manual and
@@ -209,6 +212,8 @@ router.include_router(skills_manual_route.router, tags=["console-skills-manual"]
 router.include_router(tools_manual_route.router, tags=["console-tools-manual"])
 router.include_router(tools.router, tags=["console-tools"])
 router.include_router(skills.router, tags=["console-skills"])
+# Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
+router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])

@@ -145,6 +145,36 @@ class TaskManager:
             # If rotation fails, log and continue (don't block task execution)
             pass
 
+    def _write_audit_event(
+        self,
+        task_id: str,
+        event_type: str,
+        old_state: Optional[str],
+        new_state: str,
+        executor_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        tenant_id: str = "_default",
+    ) -> None:
+        """Write task state transition to audit trail (fail-soft).
+
+        Uses TaskAuditTrail for hash-chained immutable recording.
+        Never raises; failures are logged and execution continues.
+        """
+        try:
+            from .task_audit_trail import TaskAuditTrail  # noqa: PLC0415
+
+            audit = TaskAuditTrail(task_id=task_id, tenant_id=tenant_id)
+            audit.write_event(
+                event_type=event_type,
+                old_state=old_state,
+                new_state=new_state,
+                executor_id=executor_id or "system",
+                reason=reason,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Fail-soft: audit trail failure never blocks task execution
+            logger.debug(f"Failed to write task audit event for {task_id}: {e}")
+
     def _write_event(self, task_id: str, event: dict[str, Any]) -> int:
         """Append event to event log, return sequence number (0-indexed).
 
@@ -306,6 +336,8 @@ class TaskManager:
         persona: str = "assistant",
         check_quota: bool = True,
         quota_limits: dict[str, int] | None = None,
+        executor_id: Optional[str] = None,
+        tenant_id: str = "_default",
         **metadata: Any,
     ) -> str:
         """Create a new task, record task.created event.
@@ -316,6 +348,8 @@ class TaskManager:
             persona: Persona name
             check_quota: If True, verify quota before creation (M4)
             quota_limits: {"max_concurrent": N, "max_per_day": N} or use defaults
+            executor_id: Who created the task (user_id or 'system')
+            tenant_id: Tenant scoping (ADR-0007)
             **metadata: Additional input metadata
 
         Returns: task_id (UUID)
@@ -340,13 +374,24 @@ class TaskManager:
             "persona": persona,
         })
 
+        # Write task.created audit event
+        self._write_audit_event(
+            task_id=task_id,
+            event_type="task.created",
+            old_state=None,
+            new_state=TaskStatus.PENDING.value,
+            executor_id=executor_id or "system",
+            reason="Task creation initiated",
+            tenant_id=tenant_id,
+        )
+
         # Write metadata snapshot
         task = Task(
             task_id=task_id,
             chat_key=chat_key,
             status=TaskStatus.PENDING,
             created_at=time.time(),
-            input={"instruction": instruction, "persona": persona, **metadata},
+            input={"instruction": instruction, "persona": persona, "tenant_id": tenant_id, **metadata},
         )
         self._write_meta(task_id, task)
 
@@ -379,8 +424,22 @@ class TaskManager:
         except Exception:  # noqa: BLE001 — never break the task lifecycle on learning
             logger.debug("learning outcome not recorded for task %s", task.task_id, exc_info=True)
 
-    def record_event(self, task_id: str, event: dict[str, Any]) -> int:
+    def record_event(
+        self,
+        task_id: str,
+        event: dict[str, Any],
+        executor_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        tenant_id: str = "_default",
+    ) -> int:
         """Record an event in the task's log, update metadata if needed.
+
+        Args:
+            task_id: Task identifier
+            event: Event dict with 'event' field
+            executor_id: Who triggered the event (user_id or 'system')
+            reason: Why the event was triggered
+            tenant_id: Tenant scoping (ADR-0007)
 
         Returns: sequence number of the event
         """
@@ -390,9 +449,20 @@ class TaskManager:
         if event["event"] in ("task.started", "task.completed", "task.failed", "task.cancelled"):
             task = self._replay_task(task_id)
             if task:
+                old_status = task.status.value if task.status else None
+
                 if event["event"] == "task.started":
                     task.status = TaskStatus.RUNNING
                     task.started_at = time.time()
+                    self._write_audit_event(
+                        task_id=task_id,
+                        event_type="task.started",
+                        old_state=old_status,
+                        new_state=TaskStatus.RUNNING.value,
+                        executor_id=executor_id or "system",
+                        reason=reason or "Task execution started",
+                        tenant_id=tenant_id,
+                    )
                 elif event["event"] == "task.completed":
                     task.status = TaskStatus.COMPLETED
                     task.ended_at = time.time()
@@ -400,21 +470,49 @@ class TaskManager:
                     if task.started_at and task.ended_at:
                         task.duration_ms = int((task.ended_at - task.started_at) * 1000)
                     task.result_summary = event.get("summary", "")
+                    self._write_audit_event(
+                        task_id=task_id,
+                        event_type="task.completed",
+                        old_state=old_status,
+                        new_state=TaskStatus.COMPLETED.value,
+                        executor_id=executor_id or "system",
+                        reason=reason or f"Task completed with exit code {task.exit_code}",
+                        tenant_id=tenant_id,
+                    )
                 elif event["event"] == "task.failed":
                     task.status = TaskStatus.FAILED
                     task.ended_at = time.time()
                     task.exit_code = event.get("exit_code", 1)
                     if task.started_at and task.ended_at:
                         task.duration_ms = int((task.ended_at - task.started_at) * 1000)
+                    self._write_audit_event(
+                        task_id=task_id,
+                        event_type="task.failed",
+                        old_state=old_status,
+                        new_state=TaskStatus.FAILED.value,
+                        executor_id=executor_id or "system",
+                        reason=reason or f"Task failed with exit code {task.exit_code}",
+                        tenant_id=tenant_id,
+                    )
+                elif event["event"] == "task.cancelled":
+                    task.status = TaskStatus.CANCELLED
+                    task.ended_at = time.time()
+                    self._write_audit_event(
+                        task_id=task_id,
+                        event_type="task.cancelled",
+                        old_state=old_status,
+                        new_state=TaskStatus.CANCELLED.value,
+                        executor_id=executor_id or "system",
+                        reason=reason or "Task was cancelled",
+                        tenant_id=tenant_id,
+                    )
+
                 if event["event"] in ("task.completed", "task.failed"):
                     # ADR-0314 loop closure: every real task outcome becomes an
                     # OUTCOME learning event (audit-first store). The tenant is
                     # the task's OWN metadata (create_task(tenant_id=...)) —
                     # never an env fallback; without it nothing is recorded.
                     self._emit_learning_outcome(task, event)
-                elif event["event"] == "task.cancelled":
-                    task.status = TaskStatus.CANCELLED
-                    task.ended_at = time.time()
 
                 self._write_meta(task_id, task)
 
