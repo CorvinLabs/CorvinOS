@@ -4,6 +4,7 @@ import pytest
 import tempfile
 import os
 import json
+from datetime import datetime
 
 from core.quality_gates.cli import QualityGateCLI
 from core.quality_gates.models import VerdictType

@@ -7,6 +7,7 @@ No mocks, real DuckDB, real audit chain.
 import pytest
 import tempfile
 import os
+from datetime import datetime
 
 from core.quality_gates.graph import KnowledgeGraph
 from core.quality_gates.validators import (

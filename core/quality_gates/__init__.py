@@ -25,6 +25,12 @@ from .audit import QualityGateAuditLogger
 from .cli import QualityGateCLI
 from .config import load_gate_config, list_gates, get_validator_class
 from .schema import GateSchema
+from .learning import (
+    BayesianGateTuner,
+    GateFeedback,
+    BayesianThreshold,
+    FeedbackType,
+)
 
 __all__ = [
     "GateResult",
@@ -47,4 +53,8 @@ __all__ = [
     "list_gates",
     "get_validator_class",
     "GateSchema",
+    "BayesianGateTuner",
+    "GateFeedback",
+    "BayesianThreshold",
+    "FeedbackType",
 ]
