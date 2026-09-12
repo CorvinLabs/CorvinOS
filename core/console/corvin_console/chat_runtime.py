@@ -5149,6 +5149,23 @@ async def stream_turn(
     _os_span_id = f"spn-os-{_os_turn_id}"
     _os_span_started = False
 
+    # ADR-0641/0642/0644 — os.model_selector SHADOW classification, extended
+    # to the console web-chat turn (previously wired only into the bridge
+    # adapter's call_claude/call_claude_streaming — the Engine Config page's
+    # confidence analytics stayed at "no real outcomes learned" for every
+    # console conversation because this call site never existed here).
+    # Advisory only: never alters routing, never raises. Paired with
+    # report_turn_outcome() in _os_emit_completed() below. See
+    # operator/bridges/shared/model_selector_shadow.py for the contract.
+    try:
+        _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        if str(_bridge_shared) not in sys.path:
+            sys.path.insert(0, str(_bridge_shared))
+        import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+        _mss.shadow_classify_task(prompt, sess.tenant_id, sess.chat_key)
+    except Exception:  # noqa: BLE001
+        pass
+
     def _os_audit(event: str, extra: dict[str, Any] | None = None) -> None:
         if _bridge_audit is None:
             return
@@ -5198,6 +5215,20 @@ async def stream_turn(
             "input_tokens": int(_usage.get("input_tokens") or 0),
             "output_tokens": int(_usage.get("output_tokens") or 0),
         })
+        # ADR-0641/0642/0644 — real outcome feedback for the shadow
+        # classification above, closing the loop into the Bayesian
+        # confidence optimizer. `rc == 0` mirrors the same coarse
+        # success-only-accounting convention the bridge adapter's
+        # equivalent call site uses. SHADOW: never influences which model
+        # served the turn — classification already happened at turn start.
+        try:
+            _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+            if str(_bridge_shared) not in sys.path:
+                sys.path.insert(0, str(_bridge_shared))
+            import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
+            _mss.report_turn_outcome(sess.chat_key, success=(rc == 0))
+        except Exception:  # noqa: BLE001
+            pass
         # ADR-0171 — engine-span END (paired with the start above). status from rc.
         if _espan is not None and _os_span_started:
             try:
