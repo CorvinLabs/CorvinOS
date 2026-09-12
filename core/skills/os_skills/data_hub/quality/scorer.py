@@ -263,17 +263,26 @@ class QualityScorer:
         """
         Legacy method: weighted sum of 4 dimensions (backward compatible).
         All inputs should be in [0, 1].
+        Normalizes weights to sum to 1.0 for the 4 components.
         """
         # Validate inputs
         for val in [relevance, freshness, coverage, completeness]:
             if not (0 <= val <= 1):
                 raise ValueError(f"Score out of bounds: {val}")
 
+        # Extract and normalize weights for the 4 components
+        w_rel = self.weights["relevance"]
+        w_fresh = self.weights["freshness"]
+        w_cov = self.weights["coverage"]
+        w_comp = self.weights["completeness"]
+        w_sum = w_rel + w_fresh + w_cov + w_comp
+
+        # Normalize so weights sum to 1.0
         score = (
-            self.weights["relevance"] * relevance
-            + self.weights["freshness"] * freshness
-            + self.weights["coverage"] * coverage
-            + self.weights["completeness"] * completeness
+            (w_rel / w_sum) * relevance
+            + (w_fresh / w_sum) * freshness
+            + (w_cov / w_sum) * coverage
+            + (w_comp / w_sum) * completeness
         )
         return min(1.0, max(0.0, score))  # ensure [0, 1]
 

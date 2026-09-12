@@ -123,6 +123,20 @@ def permitted_engines(*, mode: str, bundled: str) -> frozenset[str]:
     return frozenset({bundled, WORKER_ENGINE_DEFAULT})
 
 
+def _get_phase_mode() -> str:
+    """Detect which Phase of ACP Skills is active (ADR-0532).
+
+    Returns:
+        'phase1_shadow' — L5 routes through bundled rule, Skill logged in shadow
+        'phase2_dual_write' — L5 routes through real Skill decision, dual-write monitoring
+        'phase1_shadow' — default (no env var or config override)
+    """
+    import os
+
+    mode = os.environ.get("CORVIN_ACP_PHASE", "phase1_shadow")
+    return mode if mode in ("phase1_shadow", "phase2_dual_write") else "phase1_shadow"
+
+
 def _acp_shadow_route(
     *,
     mode: str | None,
@@ -190,15 +204,23 @@ def resolve_worker_engine(
     tde_available: bool,
     quota_ok: bool,
     tenant_id: str = "_default",
+    request_id: str | None = None,
 ) -> str:
-    """:func:`_resolve_worker_engine` plus the ACP L5 shadow record.
+    """:func:`_resolve_worker_engine` plus the ACP L5 routing (shadow or production mode).
 
-    The routing answer is computed by :func:`_resolve_worker_engine` (the rule
-    and the extension-point hook). Afterwards — never before, so no Skill can
-    delay or alter the decision — ``os.delegation_router`` is executed in
-    shadow mode with the same signals (see :func:`_acp_shadow_route`).
+    Phase 1 (shadow mode): the bundled routing rule's answer stands; the Skill is
+    executed in advisory mode, decision logged but not used.
+
+    Phase 2 (dual-write mode, ADR-0532.2): the Skill's real decision is used for
+    routing, compared against the bundled rule, and both are tracked for correctness
+    monitoring and auto-rollback on degradation.
+
+    The phase is determined by CORVIN_ACP_PHASE env var (default: phase1_shadow).
     """
-    engine = _resolve_worker_engine(
+    phase = _get_phase_mode()
+
+    # Compute bundled engine (pure rule + extension point hook)
+    bundled_engine = _resolve_worker_engine(
         mode=mode,
         force_delegate=force_delegate,
         is_big_data=is_big_data,
@@ -206,14 +228,43 @@ def resolve_worker_engine(
         quota_ok=quota_ok,
         tenant_id=tenant_id,
     )
+
+    if phase == "phase2_dual_write":
+        # Phase 2a: real Skill decision, dual-write monitoring, auto-rollback
+        try:
+            from core.skills.os_skills.monitoring.dual_write import (
+                resolve_worker_engine_dual_write,
+            )  # noqa: PLC0415
+
+            return resolve_worker_engine_dual_write(
+                request_id=request_id or f"req_{int(__import__('time').time() * 1e6)}",
+                bundled_engine=bundled_engine,
+                bundled_confidence=1.0,
+                skill_decision=None,  # will be fetched by dual_write module
+                task_type="delegate"
+                if force_delegate
+                else ("big_data" if is_big_data else "chat"),
+                tenant_id=tenant_id,
+            )
+        except Exception:  # noqa: BLE001 — dual-write import failed, fall back to shadow
+            _acp_shadow_route(
+                mode=mode,
+                engine=bundled_engine,
+                force_delegate=force_delegate,
+                is_big_data=is_big_data,
+                tenant_id=tenant_id,
+            )
+            return bundled_engine
+
+    # Phase 1 (default): shadow mode
     _acp_shadow_route(
         mode=mode,
-        engine=engine,
+        engine=bundled_engine,
         force_delegate=force_delegate,
         is_big_data=is_big_data,
         tenant_id=tenant_id,
     )
-    return engine
+    return bundled_engine
 
 
 def _resolve_worker_engine(
