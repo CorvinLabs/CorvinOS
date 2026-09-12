@@ -34,6 +34,12 @@ interface ThresholdData {
   timestamp: string;
 }
 
+interface CostDayPoint {
+  date: string;
+  actual_usd: number;
+  baseline_usd: number;
+}
+
 interface DashboardStatus {
   converged_count: number;
   total_count: number;
@@ -41,6 +47,8 @@ interface DashboardStatus {
   cost_savings_percent: number;
   cost_baseline_usd: number;
   cost_current_usd: number;
+  cost_data_available: boolean;
+  cost_history: CostDayPoint[];
   accuracy_percent: number;
   last_updated: string;
 }
@@ -259,12 +267,23 @@ export const ModelSelectionLearning: React.FC = () => {
               <DollarSign size={16} className="text-accent" />
               Cost Savings
             </div>
-            <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-              {status.cost_savings_percent.toFixed(1)}%
-            </div>
-            <div className="text-xs text-muted-foreground mt-2">
-              ${status.cost_baseline_usd.toFixed(2)} → ${status.cost_current_usd.toFixed(2)}/day
-            </div>
+            {status.cost_data_available ? (
+              <>
+                <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+                  {status.cost_savings_percent.toFixed(1)}%
+                </div>
+                <div className="text-xs text-muted-foreground mt-2">
+                  ${status.cost_baseline_usd.toFixed(2)} baseline → ${status.cost_current_usd.toFixed(2)} actual
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-3xl font-bold text-muted-foreground">—</div>
+                <div className="text-xs text-muted-foreground mt-2">
+                  No token-usage data yet
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -342,29 +361,45 @@ export const ModelSelectionLearning: React.FC = () => {
       <Card className="mb-6">
         <CardHeader>
           <CardTitle>Cost Efficiency Trend</CardTitle>
-          <CardDescription>Estimated daily cost, baseline vs current</CardDescription>
+          <CardDescription>
+            Real daily cost from actual token usage — actual model mix vs. an
+            always-Opus baseline on the same tokens
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={250}>
-            <AreaChart
-              data={[
-                { name: 'Baseline', cost: status.cost_baseline_usd },
-                { name: 'Current', cost: status.cost_current_usd },
-              ]}
-            >
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(value) => `$${(value as number).toFixed(2)}`} />
-              <Area
-                type="monotone"
-                dataKey="cost"
-                fill="hsl(var(--accent))"
-                stroke="hsl(var(--accent))"
-                fillOpacity={0.25}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          {status.cost_data_available && status.cost_history.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <AreaChart data={status.cost_history}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip formatter={(value) => `$${(value as number).toFixed(4)}`} />
+                <Legend />
+                <Area
+                  type="monotone"
+                  dataKey="baseline_usd"
+                  name="Baseline (always Opus)"
+                  fill="hsl(var(--muted-foreground))"
+                  stroke="hsl(var(--muted-foreground))"
+                  fillOpacity={0.15}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="actual_usd"
+                  name="Actual"
+                  fill="hsl(var(--accent))"
+                  stroke="hsl(var(--accent))"
+                  fillOpacity={0.25}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="py-16 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
+              No cost data yet — token usage is only recorded on turns
+              completed after this feature shipped (ADR-0696). Once new
+              turns complete, real daily cost will appear here.
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -127,8 +127,120 @@ def _read_completed_turns(chain_path: Path, max_bytes: int) -> list[dict[str, An
             entry["exit_code"] = det.get("exit_code")
             entry["timed_out"] = bool(det.get("timed_out"))
             entry.setdefault("model", det.get("model", ""))
+            # ADR-0696 — real token usage, added to os_turn.completed
+            # 2026-09-12 (chat_runtime.py::_os_emit_completed). Absent on
+            # events emitted before that change, hence the 0 default; a
+            # turn with no usage is excluded from cost totals downstream,
+            # never assigned a guessed cost.
+            entry["input_tokens"] = int(det.get("input_tokens") or 0)
+            entry["output_tokens"] = int(det.get("output_tokens") or 0)
+            entry["completed_ts"] = rec.get("ts")
 
     return [t for t in turns.values() if "exit_code" in t]
+
+
+# ── ADR-0696: real cost-efficiency trend ────────────────────────────────
+#
+# Real, published per-1K-token USD pricing (Anthropic first-party API
+# rates). Matched by prefix since the CLI may report a dated snapshot
+# suffix (e.g. "claude-haiku-4-5-20251001"). A model not listed here is
+# excluded from cost totals rather than assigned a guessed price — same
+# honesty rule as the rest of this module.
+_MODEL_PRICING_USD_PER_1K: dict[str, tuple[float, float]] = {
+    "claude-opus-5": (0.005, 0.025),
+    "claude-sonnet-5": (0.002, 0.010),
+    "claude-haiku-4-5": (0.001, 0.005),
+}
+
+# Reference model for the "baseline" counterfactual (cost if every turn had
+# used the most expensive recognized tier instead of whatever was actually
+# selected) — a documented modeling choice, applied to each turn's REAL
+# observed token counts. Not itself a fabricated number.
+_BASELINE_MODEL_PREFIX = "claude-opus-5"
+
+
+def _price_for_model(model: str) -> Optional[tuple[float, float]]:
+    """(input_usd_per_1k, output_usd_per_1k) for a recognized model, else None."""
+    for prefix, price in _MODEL_PRICING_USD_PER_1K.items():
+        if model and model.startswith(prefix):
+            return price
+    return None
+
+
+@dataclass
+class CostDayPoint:
+    date: str
+    actual_usd: float
+    baseline_usd: float
+
+
+@dataclass
+class CostEfficiencyResult:
+    has_data: bool
+    daily: list[CostDayPoint]
+    total_actual_usd: float
+    total_baseline_usd: float
+    savings_percent: float
+
+
+def compute_cost_efficiency(
+    tenant_id: str,
+    chain_path: Optional[Path] = None,
+) -> CostEfficiencyResult:
+    """Real cost-efficiency trend from actual token usage + published pricing.
+
+    Every number here traces to a real ``os_turn.completed`` event's real
+    ``input_tokens``/``output_tokens`` and a real published per-model price.
+    A turn whose model isn't in ``_MODEL_PRICING_USD_PER_1K``, or that
+    carries no token counts (events emitted before ADR-0696, or a turn that
+    ended before any usage arrived), is excluded rather than estimated.
+    ``has_data=False`` means exactly that — no turn in the scanned window
+    has both a recognized model AND real token counts — so the honest
+    result is "insufficient data", never a fabricated number.
+    """
+    if chain_path is None:
+        from core.console.corvin_console import _bootstrap
+
+        chain_path = _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+
+    turns = _read_completed_turns(chain_path, _MAX_SCAN_BYTES)
+    baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
+
+    by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])  # date -> [actual, baseline]
+    counted = 0
+    for t in turns:
+        price = _price_for_model(t.get("model") or "")
+        in_tok = t.get("input_tokens") or 0
+        out_tok = t.get("output_tokens") or 0
+        ts = t.get("completed_ts")
+        if price is None or ts is None or (in_tok == 0 and out_tok == 0):
+            continue
+        actual = (in_tok / 1000.0) * price[0] + (out_tok / 1000.0) * price[1]
+        baseline = (in_tok / 1000.0) * baseline_price[0] + (out_tok / 1000.0) * baseline_price[1]
+        day = datetime.fromtimestamp(float(ts), tz=timezone.utc).date().isoformat()
+        by_day[day][0] += actual
+        by_day[day][1] += baseline
+        counted += 1
+
+    daily = [
+        CostDayPoint(date=day, actual_usd=round(vals[0], 4), baseline_usd=round(vals[1], 4))
+        for day, vals in sorted(by_day.items())
+    ]
+    total_actual = sum(p.actual_usd for p in daily)
+    total_baseline = sum(p.baseline_usd for p in daily)
+    savings_pct = (
+        max(0.0, min(100.0, (1 - total_actual / total_baseline) * 100))
+        if total_baseline > 0
+        else 0.0
+    )
+
+    return CostEfficiencyResult(
+        has_data=counted > 0,
+        daily=daily,
+        total_actual_usd=round(total_actual, 4),
+        total_baseline_usd=round(total_baseline, 4),
+        savings_percent=round(savings_pct, 2),
+    )
 
 
 def _tier_bounds(tools_called_values: list[int]) -> tuple[float, float]:

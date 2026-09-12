@@ -75,6 +75,8 @@ class DashboardStatusResponse(BaseModel):
     accuracy_percent: float
     last_updated: str
     history: Optional[List[Dict[str, Any]]] = None
+    cost_data_available: bool = False
+    cost_history: List[Dict[str, Any]] = []
 
 
 class OverrideRequest(BaseModel):
@@ -107,10 +109,21 @@ async def get_learning_status(
         converged_count: number of converged task types
         total_count: total task types tracked
         thresholds: list of learned thresholds
-        cost_savings_percent: estimated cost savings
-        cost_baseline_usd: baseline cost (before learning)
-        cost_current_usd: current cost (after learning)
-        accuracy_percent: quality maintenance metric
+        cost_savings_percent: real savings %, actual model mix vs. an
+            always-Opus baseline, computed from real os_turn.completed
+            token usage (ADR-0696); 0.0 when cost_data_available is False
+        cost_baseline_usd: real total $ if every turn had used the
+            reference top-tier model, from real token counts
+        cost_current_usd: real total $ actually spent, from real token
+            counts x the real price of the model actually used per turn
+        cost_data_available: False when no os_turn.completed event in the
+            scanned window has both a recognized model and real token
+            counts (e.g. events from before ADR-0696 shipped) — the
+            "insufficient data" state, distinct from real zero-cost data
+        cost_history: real daily [{date, actual_usd, baseline_usd}] series,
+            empty when cost_data_available is False
+        accuracy_percent: quality maintenance metric (still a placeholder —
+            not addressed by ADR-0696)
         last_updated: timestamp
     """
     try:
@@ -131,12 +144,29 @@ async def get_learning_status(
         converged = sum(1 for t in thresholds if t.converged)
         total = len(thresholds) or 1  # Avoid division by zero
 
-        # Calculate cost metrics (placeholder — integrate with billing if available)
-        # TODO: Replace with real cost data from billing subsystem
-        cost_baseline = 100.0  # $100/day baseline (before learning)
-        cost_savings_pct = (sum(t.sample_count * 0.005 for t in thresholds) / (total * 10)) if thresholds else 0
-        cost_savings_pct = max(0, min(100, cost_savings_pct))  # Clamp [0, 100]
-        cost_current = cost_baseline * (1 - cost_savings_pct / 100)
+        # Real cost-efficiency: actual token usage x published per-model
+        # pricing, from real os_turn.completed events (ADR-0696). A turn
+        # with no recognized model or no token counts is excluded rather
+        # than estimated — see model_selection_learner.compute_cost_efficiency.
+        try:
+            from core.learning.model_selection_learner import compute_cost_efficiency
+            cost_result = compute_cost_efficiency(rec.tenant_id)
+        except Exception as cost_err:  # noqa: BLE001
+            logger.warning(f"Cost efficiency computation failed (non-fatal): {cost_err}")
+            cost_result = None
+
+        cost_data_available = bool(cost_result and cost_result.has_data)
+        cost_baseline = cost_result.total_baseline_usd if cost_data_available else 0.0
+        cost_current = cost_result.total_actual_usd if cost_data_available else 0.0
+        cost_savings_pct = cost_result.savings_percent if cost_data_available else 0.0
+        cost_history = (
+            [
+                {"date": p.date, "actual_usd": p.actual_usd, "baseline_usd": p.baseline_usd}
+                for p in cost_result.daily
+            ]
+            if cost_data_available
+            else []
+        )
 
         # Quality metric (placeholder)
         # TODO: Replace with real accuracy data from quality monitoring
@@ -160,6 +190,8 @@ async def get_learning_status(
             "cost_savings_percent": cost_savings_pct,
             "cost_baseline_usd": cost_baseline,
             "cost_current_usd": cost_current,
+            "cost_data_available": cost_data_available,
+            "cost_history": cost_history,
             "accuracy_percent": accuracy,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
