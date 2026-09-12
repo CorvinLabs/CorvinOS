@@ -241,7 +241,10 @@ async def generate_skill(
 
         if req.async_:
             # Async mode: spawn background task, return run_id
-            run_id = _spawn_generation_task(user_request, rec.tenant_id, base=base)
+            run_id = _spawn_generation_task(
+                user_request, rec.tenant_id, base=base,
+                sid_fingerprint=rec.sid_fingerprint
+            )
             verb = "refinement" if base else "generation"
             return {
                 "status": "accepted",
@@ -259,6 +262,14 @@ async def generate_skill(
         )
         artifact = await asyncio.to_thread(
             lambda: asyncio.run(orchestrator.create_skill(user_request, base=base))
+        )
+        # AUDIT: Log skill creation (ADR-0232 compliance — every mutation audited)
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="skill.generated_created",
+            target_kind="generated_skill",
+            target_id=artifact.spec.name,
         )
         return {
             "status": "success",
@@ -278,9 +289,27 @@ async def generate_skill(
         raise
     except SkillCreatorError as e:
         logger.error(f"Skill generation failed: {e}")
+        # AUDIT: Log skill generation failure
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="skill.generated_creation_failed",
+            target_kind="generated_skill",
+            target_id=req.base_skill or "new",
+            reason=str(e)[:200],  # Truncate to prevent log spam
+        )
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in skill generation: {e}")
+        # AUDIT: Log unexpected error
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="skill.generated_creation_failed",
+            target_kind="generated_skill",
+            target_id=req.base_skill or "new",
+            reason="unexpected_error",
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -449,12 +478,16 @@ def _update_run(run_id: str, **fields: Any) -> None:
 
 
 def _spawn_generation_task(user_request: str, tenant_id: str,
-                           base: Optional[Dict[str, str]] = None) -> str:
+                           base: Optional[Dict[str, str]] = None,
+                           sid_fingerprint: Optional[str] = None) -> str:
     """Spawn the generation worker thread; return its run_id.
 
     The orchestrator drives a `claude -p` subprocess per phase (Max
     subscription), which is blocking and minutes-long — hence a thread with
     its own event loop rather than a task on the server's loop.
+
+    Args:
+        sid_fingerprint: Session fingerprint (for audit trail) — optional in async
     """
     run_id = f"run-{uuid4().hex[:12]}"
 
@@ -468,6 +501,7 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
             "engine": "unknown",
             "base_skill": base["name"] if base else None,
             "created_at": datetime.utcnow().isoformat(),
+            "sid_fingerprint": sid_fingerprint,  # Save for audit trail
         }
 
     def on_progress(phase: str, progress: int, message: str) -> None:
@@ -514,10 +548,30 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
                     "registry_path": str(artifact.registration.get("path") or ""),
                 },
             )
+            # AUDIT: Log skill creation in async task (ADR-0232 compliance)
+            if sid_fingerprint:
+                console_audit.action_performed(
+                    tenant_id=tenant_id,
+                    sid_fingerprint=sid_fingerprint,
+                    action="skill.generated_created",
+                    target_kind="generated_skill",
+                    target_id=artifact.spec.name,
+                    run_id=run_id,
+                )
             _record_stats(artifact)
 
         except Exception as e:  # noqa: BLE001 — surface, never crash the thread
             logger.exception("Skill generation run %s failed", run_id)
+            # AUDIT: Log async task failure
+            if sid_fingerprint:
+                console_audit.action_failed(
+                    tenant_id=tenant_id,
+                    sid_fingerprint=sid_fingerprint,
+                    action="skill.generated_creation_failed",
+                    target_kind="generated_skill",
+                    target_id=base["name"] if base else "new",
+                    reason="async_task_failed",
+                )
             _update_run(
                 run_id,
                 status="failed",
