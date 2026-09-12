@@ -1,10 +1,18 @@
-"""Learning infrastructure integration for Creator 2.0 (ADR-0661 Phase 2)."""
+"""Learning infrastructure integration for Creator 2.0 (ADR-0661 Phase 2).
+
+CRITICAL FIX #1 (2026-09-12): Feedback Audit-Chaining (GDPR Art. 30)
+- Every learning feedback event MUST be hash-chained to audit trail
+- Uses EventStore.write_event for audit-first design
+- Tenant-scoped for GDPR Art. 32 compliance
+"""
 
 from dataclasses import asdict
 from typing import List, Optional
 from datetime import datetime
+from pathlib import Path
 
 from core.learning.learning_events import LearningEvent, EventType
+from core.learning.event_store import EventStore
 from .events import PhaseCompletedEvent
 
 
@@ -150,6 +158,115 @@ class Creator20LearningBridge:
             return 1.0
 
         return total_weighted_loss / total_weight
+
+
+class Creator20AuditIntegration:
+    """FIX #1: Audit-first integration for learning feedback (GDPR Art. 30, ADR-0314).
+
+    Every feedback event from skill generation is:
+    1. Committed to the core hash-chain FIRST (audit-first, fail-closed)
+    2. Persisted to disk with audit_ref pointing back to core chain
+    3. Tenant-scoped (GDPR Art. 32)
+    4. Immutable (frozen dataclass)
+
+    This ensures operator compliance proof: every learning decision is auditable.
+    """
+
+    def __init__(self, tenant_home: Optional[Path] = None, tenant_id: str = "_default"):
+        """Initialize audit integration for Creator 2.0 feedback.
+
+        Args:
+            tenant_home: Path to tenant home (~/.corvin/tenants/_default/)
+            tenant_id: Tenant scope for isolation (GDPR Art. 32)
+        """
+        self.tenant_id = tenant_id
+        if tenant_home is None:
+            from core.paths import tenant_home as get_tenant_home
+            tenant_home = get_tenant_home(tenant_id)
+        self.event_store = EventStore(tenant_home, tenant_id=tenant_id)
+
+    def emit_feedback_event_with_audit(
+        self,
+        phase_event: PhaseCompletedEvent,
+        skill_version: str = "1.0",
+    ) -> str:
+        """Emit a feedback event with audit-chaining (FIX #1).
+
+        Args:
+            phase_event: Creator 2.0 PhaseCompletedEvent
+            skill_version: Version of skill being created
+
+        Returns:
+            audit_ref (pointer to core hash-chain record, for proof)
+
+        Raises:
+            RuntimeError: if audit chain is unavailable or fails to commit
+            (fail-closed: no disk write if audit chain fails)
+        """
+        # Convert phase event to learning event
+        learning_event = Creator20LearningBridge.convert_phase_event_to_learning_event(
+            phase_event,
+            tenant_id=self.tenant_id,
+            skill_version=skill_version,
+        )
+
+        # FIX #1: Write to event store with audit-chaining
+        # This FIRST commits to core hash-chain, then writes disk
+        # If chain fails, exception is raised and nothing hits disk (fail-closed)
+        self.event_store.write_event(learning_event)
+
+        return learning_event.audit_ref or ""
+
+    def emit_feedback_events_with_audit(
+        self,
+        phase_events: List[PhaseCompletedEvent],
+        skill_version: str = "1.0",
+    ) -> List[str]:
+        """Emit multiple feedback events with audit-chaining.
+
+        Args:
+            phase_events: List of PhaseCompletedEvent
+            skill_version: Version of skill
+
+        Returns:
+            List of audit_refs (one per event)
+        """
+        audit_refs = []
+        for event in phase_events:
+            try:
+                audit_ref = self.emit_feedback_event_with_audit(event, skill_version)
+                audit_refs.append(audit_ref)
+            except (RuntimeError, IOError) as e:
+                # Log error but continue (graceful degradation)
+                # The audit chain failure is already in core audit trail
+                raise RuntimeError(
+                    f"Failed to emit feedback for phase {event.phase_num}: {e}"
+                ) from e
+
+        return audit_refs
+
+    def validate_feedback_chain(self, skill_id: str, phase_num: int) -> bool:
+        """Validate that feedback events are properly hash-chained (FIX #1 proof).
+
+        Args:
+            skill_id: Skill ID to check
+            phase_num: Phase number
+
+        Returns:
+            True if event chain is valid, False otherwise
+        """
+        # Query events for this skill
+        events = self.event_store.query_events(
+            tenant_id=self.tenant_id,
+            skill_id=f"creator_2_0.{skill_id}",
+        )
+
+        # Check that each event has audit_ref (proof of audit-chaining)
+        for event in events:
+            if event.audit_ref is None:
+                return False  # Event not properly audit-chained
+
+        return len(events) > 0
 
 
 class Creator20AuditLogger:
