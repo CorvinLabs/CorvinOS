@@ -13,7 +13,7 @@ from dataclasses import asdict
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from os_skills.video_producer.types import Scene, Storyboard
-from core.learning.event_persistence import EventEmitter  # ADR-0314 feedback
+from core.learning.event_emitter import EventEmitter  # ADR-0314 feedback
 
 
 class ScreenshotCapturer:

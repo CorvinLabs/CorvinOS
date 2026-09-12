@@ -14,7 +14,14 @@ from uuid import uuid4
 
 
 class EventType(str, Enum):
-    """Learning event types (ADR-0314, Security Fix #12)."""
+    """Learning event types (ADR-0314, Security Fix #12).
+
+    ADR-0695 Extensions (Video Producer Skill 2.0):
+    - SCENE_RENDERED: Per-scene video production milestone (voice, screenshots, assembly)
+    - QUALITY_FEEDBACK: Operator feedback on scene quality (0.0-1.0 score)
+    - UPLOAD_PROGRESS: YouTube upload progress (percent, ETA)
+    - PRODUCTION_COMPLETE: Video production finished (success or failure)
+    """
 
     CONFIDENCE = "confidence"  # Skill confidence score changed
     FEEDBACK = "feedback"  # User gave feedback on Skill decision
@@ -26,6 +33,12 @@ class EventType(str, Enum):
     SKILL_EXECUTED = "skill_executed"  # Skill was executed (from audit chain)
     DECISION = "decision"  # Skill selection decision recorded (ADR-0316, Phase 4 hooks)
     GEO_MISMATCH = "geo_mismatch"  # Geolocation mismatch detected (Security Fix #12)
+
+    # ADR-0695: Video Producer Skill 2.0 (Phase 4c)
+    SCENE_RENDERED = "scene_rendered"  # Per-scene milestone (voice/screenshot/assembly)
+    QUALITY_FEEDBACK = "quality_feedback"  # Operator feedback on scene quality
+    UPLOAD_PROGRESS = "upload_progress"  # YouTube upload progress tracking
+    PRODUCTION_COMPLETE = "production_complete"  # Video production finished
 
 
 @dataclass(frozen=True)

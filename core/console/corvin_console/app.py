@@ -188,6 +188,8 @@ from .routes import (
     model_selection_analytics as model_selection_analytics_route,
     # ADR-0377 Phase 2b — Learned threshold persistence and console UI
     model_selection_learning_api as model_selection_learning_api_route,
+    # ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI)
+    video_producer_api as video_producer_route,
 )
 
 
@@ -275,6 +277,8 @@ router.include_router(quality_layers_route.router, tags=["console-quality-layers
 router.include_router(quality_gates_route.router, tags=["console-quality-gates"])
 # Skill-Creator (autonomous 6-phase skill builder) — main quality subsystem.
 router.include_router(skill_creator_route.router, tags=["console-skill-creator"])
+# ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI + orchestration)
+router.include_router(video_producer_route.router, tags=["console-video-producer"])
 # ADR-0037 (web-next) — web-bridge chat + voice (Iter 3a/b).
 router.include_router(chat_route.router, tags=["console-chat"])
 router.include_router(voice_route.router, tags=["console-voice"])
