@@ -14,13 +14,16 @@ All events audit-logged + hash-chained (ADR-0665).
 """
 
 import asyncio
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
 from collections import defaultdict
+
+if TYPE_CHECKING:
+    from core.learning.feedback_wal import FeedbackWALEntry
 
 logger = logging.getLogger(__name__)
 
@@ -448,13 +451,16 @@ class DataHubLearningDaemon:
 
     Runs in subprocess, non-blocking. Emits LearningEvent for every decision.
     All events hash-chained + tenant-scoped (ADR-0665, ADR-0007).
+
+    Phase 4 Integration: Reads feedback from Write-Ahead Log (WAL) for crash recovery.
     """
 
-    def __init__(self, tenant_id: str = "_default"):
+    def __init__(self, tenant_id: str = "_default", feedback_wal=None):
         self.tenant_id = tenant_id
         self.event_queue: asyncio.Queue = asyncio.Queue()
         self.audit_trail: List[Dict[str, Any]] = []
         self.audit_chain_hash = "genesis"  # Start of hash chain
+        self.feedback_wal = feedback_wal  # Optional: Phase 4 WAL integration
 
         # Components
         self.change_detector = DataSourceChangeDetector(tenant_id)
@@ -617,6 +623,8 @@ class DataHubLearningDaemon:
     async def run(self) -> None:
         """
         Main daemon loop: process events, check for batches, maintain state.
+
+        Phase 4: Also polls feedback WAL for crash recovery.
         """
         logger.info(f"DataHubLearningDaemon starting (tenant={self.tenant_id})")
 
@@ -624,9 +632,13 @@ class DataHubLearningDaemon:
             while True:
                 try:
                     # Process one event with timeout
-                    event = await asyncio.wait_for(self.event_queue.get(), timeout=2.0)
+                    event = await asyncio.wait_for(self.event_queue.get(), timeout=0.1)
                     await self.on_event(event)
                 except asyncio.TimeoutError:
+                    # Poll feedback WAL (Phase 4) for unprocessed entries
+                    if self.feedback_wal:
+                        await self._process_feedback_from_wal()
+
                     # Check if regeneration batch is ready
                     batch = await self.regeneration_scheduler.get_ready_batch()
                     if batch:
@@ -636,6 +648,66 @@ class DataHubLearningDaemon:
                     logger.error(f"Daemon loop error: {e}", exc_info=True)
         except KeyboardInterrupt:
             logger.info("Daemon shutting down")
+
+    async def _process_feedback_from_wal(self) -> None:
+        """
+        Process feedback entries from Write-Ahead Log (Phase 4 crash recovery).
+
+        Reads unprocessed feedback, applies learning, marks processed in WAL.
+        On error, marks entry with error reason for operator debugging.
+        """
+        try:
+            unprocessed = await self.feedback_wal.get_unprocessed(batch_size=50)
+            for entry in unprocessed:
+                try:
+                    # Validate context: is skill/feedback still valid?
+                    if not self._validate_feedback_context(entry):
+                        await self.feedback_wal.mark_processed(entry.entry_id, error="stale_feedback")
+                        continue
+
+                    # Apply learning (same as event-based path)
+                    await self.on_user_feedback(
+                        DaemonEvent(
+                            event_type="user_feedback",
+                            timestamp=entry.timestamp,
+                            payload={
+                                "skill_id": entry.skill_id,
+                                "signal": entry.signal,
+                                "feedback_id": entry.feedback_id,
+                                "task_id": entry.task_id,
+                                "data_sources": entry.data_sources,  # Phase 4: attribution
+                            },
+                            tenant_id=entry.tenant_id,
+                        )
+                    )
+
+                    # Mark as processed in WAL
+                    await self.feedback_wal.mark_processed(entry.entry_id)
+                except Exception as e:
+                    logger.error(f"Error processing feedback {entry.entry_id}: {e}")
+                    await self.feedback_wal.mark_processed(entry.entry_id, error=str(e))
+        except Exception as e:
+            logger.error(f"Error reading feedback WAL: {e}")
+
+    def _validate_feedback_context(self, entry: "FeedbackWALEntry") -> bool:
+        """
+        Validate feedback is still relevant (not stale, skill still active).
+
+        Returns False if feedback is too old or skill no longer exists.
+        """
+        # Check freshness: feedback must be <24h old
+        try:
+            feedback_age_hours = (
+                datetime.utcnow() - datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00"))
+            ).total_seconds() / 3600
+            if feedback_age_hours > 24:
+                logger.warning(f"Feedback too stale: {feedback_age_hours:.1f}h old")
+                return False
+        except Exception as e:
+            logger.error(f"Error validating feedback timestamp: {e}")
+            return False
+
+        return True
 
     async def emit_event(self, event: DaemonEvent) -> None:
         """Public API: emit event for daemon to process."""
