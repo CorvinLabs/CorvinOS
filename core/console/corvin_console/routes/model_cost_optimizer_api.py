@@ -97,6 +97,9 @@ class DashboardStatusResponse(BaseModel):
     # check exists in the model-selection path; a single-model cost_model_mix
     # is explained by THIS, when set, not by license tier.
     cost_os_model_pin: Optional[str] = None
+
+
+class OverrideRequest(BaseModel):
     """Manual threshold override request."""
     task_type: str
     new_threshold: float
