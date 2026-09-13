@@ -140,6 +140,12 @@ def _read_completed_turns(chain_path: Path, max_bytes: int) -> list[dict[str, An
             # never assigned a guessed cost.
             entry["input_tokens"] = int(det.get("input_tokens") or 0)
             entry["output_tokens"] = int(det.get("output_tokens") or 0)
+            # 2026-09-13 finding — for a cache-heavy turn these dwarf
+            # input_tokens/output_tokens above (one real sample: 3.2M
+            # cache-read tokens vs 266 input_tokens); priced separately
+            # below at Anthropic's published cache multipliers.
+            entry["cache_creation_input_tokens"] = int(det.get("cache_creation_input_tokens") or 0)
+            entry["cache_read_input_tokens"] = int(det.get("cache_read_input_tokens") or 0)
             entry["completed_ts"] = rec.get("ts")
 
     return [t for t in turns.values() if "exit_code" in t]
@@ -195,6 +201,8 @@ def _read_acs_completions(chain_path: Path, max_bytes: int) -> list[dict[str, An
             "model": det.get("model_id", ""),
             "input_tokens": int(det.get("input_tokens") or 0),
             "output_tokens": int(det.get("output_tokens") or 0),
+            "cache_creation_input_tokens": int(det.get("cache_creation_input_tokens") or 0),
+            "cache_read_input_tokens": int(det.get("cache_read_input_tokens") or 0),
             "completed_ts": rec.get("ts"),
         })
     return completions
@@ -232,6 +240,20 @@ _MODEL_PRICING_USD_PER_1K: dict[str, tuple[float, float]] = {
 # observed token counts. Not itself a fabricated number.
 _BASELINE_MODEL_PREFIX = "claude-opus-5"
 
+# Anthropic's published prompt-caching multipliers, applied to a model's own
+# INPUT rate (cache tokens are never priced at the output rate). 2026-09-13
+# finding: for a cache-heavy Claude Code turn these tokens dwarf plain
+# input_tokens — one real sample had cache_read_input_tokens=3,236,410 vs
+# input_tokens=266 — so omitting them (the state before this fix) understated
+# real cost by orders of magnitude, not a rounding error.
+# _CACHE_WRITE_MULTIPLIER prices the undifferentiated
+# ``cache_creation_input_tokens`` total at the cheaper 5-minute-TTL rate
+# (1.25x) rather than the 1-hour-TTL rate (2x): a documented, conservative
+# choice when the finer ephemeral_5m/ephemeral_1h split isn't captured —
+# never a fabricated split, just a stated assumption on a real count.
+_CACHE_WRITE_MULTIPLIER = 1.25
+_CACHE_READ_MULTIPLIER = 0.1
+
 
 def _price_for_model(model: str) -> Optional[tuple[float, float]]:
     """(input_usd_per_1k, output_usd_per_1k) for a recognized model, else None."""
@@ -239,6 +261,25 @@ def _price_for_model(model: str) -> Optional[tuple[float, float]]:
         if model and model.startswith(prefix):
             return price
     return None
+
+
+def _turn_cost_usd(
+    price: tuple[float, float],
+    in_tok: int, out_tok: int,
+    cache_write_tok: int, cache_read_tok: int,
+) -> float:
+    """Real $ for one turn's full token accounting against one model's price.
+
+    All four token categories from the real usage object — never just
+    input/output (see _CACHE_WRITE_MULTIPLIER docstring for why that alone
+    silently discarded most of the real spend on cache-heavy turns).
+    """
+    return (
+        (in_tok / 1000.0) * price[0]
+        + (out_tok / 1000.0) * price[1]
+        + (cache_write_tok / 1000.0) * price[0] * _CACHE_WRITE_MULTIPLIER
+        + (cache_read_tok / 1000.0) * price[0] * _CACHE_READ_MULTIPLIER
+    )
 
 
 @dataclass
@@ -284,14 +325,20 @@ class CostEfficiencyResult:
     acs_model_mix: dict[str, int] = field(default_factory=dict)
 
 
-def _price_and_baseline(model: str, in_tok: int, out_tok: int) -> Optional[tuple[float, float]]:
-    """(actual_usd, baseline_usd) for one turn's tokens, or None if unpriceable."""
+def _price_and_baseline(
+    model: str, in_tok: int, out_tok: int,
+    cache_write_tok: int = 0, cache_read_tok: int = 0,
+) -> Optional[tuple[float, float]]:
+    """(actual_usd, baseline_usd) for one turn's full token accounting, or
+    None if unpriceable. Baseline reuses the SAME real token counts (input,
+    output, cache-write, cache-read) at the reference model's price — "what
+    if the same real work had used Opus", not a different token count."""
     price = _price_for_model(model)
     if price is None:
         return None
     baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
-    actual = (in_tok / 1000.0) * price[0] + (out_tok / 1000.0) * price[1]
-    baseline = (in_tok / 1000.0) * baseline_price[0] + (out_tok / 1000.0) * baseline_price[1]
+    actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok)
+    baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok)
     return actual, baseline
 
 
@@ -333,10 +380,12 @@ def compute_cost_efficiency(
         price = _price_for_model(t.get("model") or "")
         in_tok = t.get("input_tokens") or 0
         out_tok = t.get("output_tokens") or 0
-        if price is None or (in_tok == 0 and out_tok == 0):
+        cache_write_tok = t.get("cache_creation_input_tokens") or 0
+        cache_read_tok = t.get("cache_read_input_tokens") or 0
+        if price is None or (in_tok == 0 and out_tok == 0 and cache_write_tok == 0 and cache_read_tok == 0):
             continue
-        actual = (in_tok / 1000.0) * price[0] + (out_tok / 1000.0) * price[1]
-        baseline = (in_tok / 1000.0) * baseline_price[0] + (out_tok / 1000.0) * baseline_price[1]
+        actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok)
+        baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok)
         by_day[day][0] += actual
         by_day[day][1] += baseline
         by_day_counted[day] += 1
@@ -382,7 +431,13 @@ def compute_cost_efficiency(
         model = c.get("model") or ""
         in_tok = c.get("input_tokens") or 0
         out_tok = c.get("output_tokens") or 0
-        priced = _price_and_baseline(model, in_tok, out_tok) if (in_tok or out_tok) else None
+        cache_write_tok = c.get("cache_creation_input_tokens") or 0
+        cache_read_tok = c.get("cache_read_input_tokens") or 0
+        has_usage = in_tok or out_tok or cache_write_tok or cache_read_tok
+        priced = (
+            _price_and_baseline(model, in_tok, out_tok, cache_write_tok, cache_read_tok)
+            if has_usage else None
+        )
         if priced is None:
             continue
         acs_by_day[day][0] += priced[0]
