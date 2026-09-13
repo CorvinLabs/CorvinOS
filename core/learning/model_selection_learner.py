@@ -145,6 +145,74 @@ def _read_completed_turns(chain_path: Path, max_bytes: int) -> list[dict[str, An
     return [t for t in turns.values() if "exit_code" in t]
 
 
+def _read_acs_completions(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]:
+    """Real ACS worker completions from ``acs.engine_completed`` events.
+
+    ACS is the substantive-work delegation path (full tool access, e.g. a
+    21-tool-call agentic run) — the OS-turn chain ``_read_completed_turns``
+    reads only ever sees the cheap "OS manager" layer, never this. Each
+    ``acs.engine_completed`` record is already a complete, single-event
+    completion (no started/completed join needed, unlike os_turn.*).
+
+    Note (2026-09-13 finding): ``acs_runtime.py::_audit_path()`` writes to
+    ``<corvin_home>/tenants/<tid>/global/audit.jsonl`` — NOT the canonical
+    ``.../global/forge/audit.jsonl`` ``_read_completed_turns`` reads. This is
+    the pre-existing "audit chain split" ADR-0650/0654 already document
+    (multiple live chain files per tenant); reading from where ACS actually
+    writes is the correct fix for THIS dashboard, not a chain consolidation
+    (that requires the documented seam mechanism, out of scope here).
+    """
+    if not chain_path.exists():
+        return []
+
+    size = chain_path.stat().st_size
+    start = max(0, size - max_bytes)
+    try:
+        with chain_path.open("rb") as fh:
+            fh.seek(start)
+            buf = fh.read()
+    except OSError:
+        return []
+
+    text = buf.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if start > 0 and lines:
+        lines = lines[1:]  # drop a partial first line from the seek
+
+    completions: list[dict[str, Any]] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("event_type") != "acs.engine_completed":
+            continue
+        det = rec.get("details") or {}
+        completions.append({
+            "model": det.get("model_id", ""),
+            "input_tokens": int(det.get("input_tokens") or 0),
+            "output_tokens": int(det.get("output_tokens") or 0),
+            "completed_ts": rec.get("ts"),
+        })
+    return completions
+
+
+def _acs_chain_path(tenant_id: str) -> Path:
+    """The chain ``acs_runtime.py`` actually writes to (see its ``_audit_path``).
+
+    Deliberately NOT ``tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"``
+    (the canonical chain) — ACS writes one directory up. Mirrored here rather
+    than imported so this module doesn't need acs_runtime's full dependency
+    surface just to read a path.
+    """
+    from core.console.corvin_console import _bootstrap
+
+    return _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "audit.jsonl"
+
+
 # ── ADR-0696: real cost-efficiency trend ────────────────────────────────
 #
 # Real, published per-1K-token USD pricing (Anthropic first-party API
@@ -178,6 +246,16 @@ class CostDayPoint:
     date: str
     actual_usd: float
     baseline_usd: float
+    # Coverage — how many of that day's real os_turn.completed events actually
+    # carried usable model+token data vs. how many completed turns happened
+    # that day in total. A day can look like a cost crash purely because
+    # coverage was thin (e.g. the emitter was mid-rollout or briefly broken),
+    # not because spend actually dropped — surfacing both counts lets a
+    # reader tell "real drop" from "sparse data" instead of the two looking
+    # identical (live incident 2026-09-13: 1/28 turns counted read as a 99%
+    # cost crash from the previous day's 12/70).
+    counted_turns: int = 0
+    total_turns: int = 0
 
 
 @dataclass
@@ -187,6 +265,34 @@ class CostEfficiencyResult:
     total_actual_usd: float
     total_baseline_usd: float
     savings_percent: float
+    # Real per-model turn counts across every counted turn. A single-key mix
+    # (e.g. {"claude-haiku-4-5-20251001": 244}) means savings_percent is just
+    # that model's fixed price ratio against the baseline model — a pricing
+    # fact, not evidence of a routing decision — so the UI can say so instead
+    # of presenting it as an optimization result (live finding 2026-09-13).
+    model_mix: dict[str, int] = field(default_factory=dict)
+    # ACS-delegated worker spend (core/console's os_turn chain never sees this
+    # — ACS is the substantive-work path with full tool access, e.g. a
+    # 21-tool-call agentic run, and writes its own acs.engine_completed
+    # events). Kept as a SEPARATE series rather than folded into `daily`
+    # above — never blend two independently-measured cost sources into one
+    # number without saying so (2026-09-13 finding: the OS-turn chain alone
+    # was only ever showing the cheap "OS manager" slice, never this).
+    acs_daily: list[CostDayPoint] = field(default_factory=list)
+    acs_total_actual_usd: float = 0.0
+    acs_total_baseline_usd: float = 0.0
+    acs_model_mix: dict[str, int] = field(default_factory=dict)
+
+
+def _price_and_baseline(model: str, in_tok: int, out_tok: int) -> Optional[tuple[float, float]]:
+    """(actual_usd, baseline_usd) for one turn's tokens, or None if unpriceable."""
+    price = _price_for_model(model)
+    if price is None:
+        return None
+    baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
+    actual = (in_tok / 1000.0) * price[0] + (out_tok / 1000.0) * price[1]
+    baseline = (in_tok / 1000.0) * baseline_price[0] + (out_tok / 1000.0) * baseline_price[1]
+    return actual, baseline
 
 
 def compute_cost_efficiency(
@@ -213,24 +319,42 @@ def compute_cost_efficiency(
     baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
 
     by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])  # date -> [actual, baseline]
+    by_day_total: dict[str, int] = defaultdict(int)
+    by_day_counted: dict[str, int] = defaultdict(int)
+    model_mix: dict[str, int] = defaultdict(int)
     counted = 0
     for t in turns:
+        ts = t.get("completed_ts")
+        if ts is None:
+            continue
+        day = datetime.fromtimestamp(float(ts), tz=timezone.utc).date().isoformat()
+        by_day_total[day] += 1
+
         price = _price_for_model(t.get("model") or "")
         in_tok = t.get("input_tokens") or 0
         out_tok = t.get("output_tokens") or 0
-        ts = t.get("completed_ts")
-        if price is None or ts is None or (in_tok == 0 and out_tok == 0):
+        if price is None or (in_tok == 0 and out_tok == 0):
             continue
         actual = (in_tok / 1000.0) * price[0] + (out_tok / 1000.0) * price[1]
         baseline = (in_tok / 1000.0) * baseline_price[0] + (out_tok / 1000.0) * baseline_price[1]
-        day = datetime.fromtimestamp(float(ts), tz=timezone.utc).date().isoformat()
         by_day[day][0] += actual
         by_day[day][1] += baseline
+        by_day_counted[day] += 1
+        model_mix[t.get("model") or ""] += 1
         counted += 1
 
+    # Every day with at least one completed turn gets a bar — including a day
+    # with zero counted turns (cost 0, coverage 0/N) — so a coverage gap shows
+    # up as a visibly thin bar instead of silently vanishing from the chart.
     daily = [
-        CostDayPoint(date=day, actual_usd=round(vals[0], 4), baseline_usd=round(vals[1], 4))
-        for day, vals in sorted(by_day.items())
+        CostDayPoint(
+            date=day,
+            actual_usd=round(by_day[day][0], 4) if day in by_day else 0.0,
+            baseline_usd=round(by_day[day][1], 4) if day in by_day else 0.0,
+            counted_turns=by_day_counted.get(day, 0),
+            total_turns=by_day_total[day],
+        )
+        for day in sorted(by_day_total)
     ]
     total_actual = sum(p.actual_usd for p in daily)
     total_baseline = sum(p.baseline_usd for p in daily)
@@ -240,12 +364,56 @@ def compute_cost_efficiency(
         else 0.0
     )
 
+    # ACS-delegated worker spend — separate chain, separate series (see
+    # CostEfficiencyResult.acs_daily docstring above for why it's never
+    # blended into `daily`).
+    acs_completions = _read_acs_completions(_acs_chain_path(tenant_id), _MAX_SCAN_BYTES)
+    acs_by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    acs_by_day_total: dict[str, int] = defaultdict(int)
+    acs_by_day_counted: dict[str, int] = defaultdict(int)
+    acs_model_mix: dict[str, int] = defaultdict(int)
+    for c in acs_completions:
+        ts = c.get("completed_ts")
+        if ts is None:
+            continue
+        day = datetime.fromtimestamp(float(ts), tz=timezone.utc).date().isoformat()
+        acs_by_day_total[day] += 1
+
+        model = c.get("model") or ""
+        in_tok = c.get("input_tokens") or 0
+        out_tok = c.get("output_tokens") or 0
+        priced = _price_and_baseline(model, in_tok, out_tok) if (in_tok or out_tok) else None
+        if priced is None:
+            continue
+        acs_by_day[day][0] += priced[0]
+        acs_by_day[day][1] += priced[1]
+        acs_by_day_counted[day] += 1
+        acs_model_mix[model] += 1
+
+    acs_daily = [
+        CostDayPoint(
+            date=day,
+            actual_usd=round(acs_by_day[day][0], 4) if day in acs_by_day else 0.0,
+            baseline_usd=round(acs_by_day[day][1], 4) if day in acs_by_day else 0.0,
+            counted_turns=acs_by_day_counted.get(day, 0),
+            total_turns=acs_by_day_total[day],
+        )
+        for day in sorted(acs_by_day_total)
+    ]
+    acs_total_actual = round(sum(p.actual_usd for p in acs_daily), 4)
+    acs_total_baseline = round(sum(p.baseline_usd for p in acs_daily), 4)
+
     return CostEfficiencyResult(
         has_data=counted > 0,
         daily=daily,
         total_actual_usd=round(total_actual, 4),
         total_baseline_usd=round(total_baseline, 4),
         savings_percent=round(savings_pct, 2),
+        model_mix=dict(model_mix),
+        acs_daily=acs_daily,
+        acs_total_actual_usd=acs_total_actual,
+        acs_total_baseline_usd=acs_total_baseline,
+        acs_model_mix=dict(acs_model_mix),
     )
 
 
@@ -349,6 +517,7 @@ def compute_learned_thresholds(
                 timestamp=now,
                 sample_count=b.total,
                 converged=b.total >= _MIN_SAMPLES_CONVERGED,
+                success_rate=success_rate,
                 notes=(
                     f"descriptive stat from {b.total} real os_turn events "
                     f"({success_rate:.0%} success; dominant model: {dominant_model}); "

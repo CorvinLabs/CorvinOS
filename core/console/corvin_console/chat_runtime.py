@@ -5162,7 +5162,17 @@ async def stream_turn(
         if str(_bridge_shared) not in sys.path:
             sys.path.insert(0, str(_bridge_shared))
         import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
-        _mss.shadow_classify_task(prompt, sess.tenant_id, sess.chat_key)
+        # `shadow_classify_task` is a SYNC function (audit write incl. a
+        # threading.Lock + cross-process flock on the audit chain). Calling
+        # it directly here — inside `stream_turn`'s async generator — blocks
+        # the ENTIRE event loop, not just this turn, for as long as that lock
+        # takes to acquire. Live incident 2026-09-13: every web-chat turn
+        # since the ADR-0697 deploy stalled silently right at this call (no
+        # exception, no os_turn.started emitted, only ACO's repair layer
+        # flushing the orphaned turn.start minutes later). `to_thread` moves
+        # the blocking call off the loop so a slow/contended lock delays only
+        # this turn's shadow classification, never the process.
+        await asyncio.to_thread(_mss.shadow_classify_task, prompt, sess.tenant_id, sess.chat_key)
     except Exception:  # noqa: BLE001
         pass
 

@@ -5533,6 +5533,12 @@ def _call_claude_streaming_via_engine(
     seen_tools = 0
     timed_out = False
     _captured_session_id: str = ""
+    # ADR-0696 follow-up — real per-model token usage for the cost-efficiency
+    # dashboard (core/learning/model_selection_learner.py). Populated from the
+    # StreamEvent's `turn_completed.usage` (see agents/__init__.py:
+    # "turn done, final usage in `usage`"); stays {} when the turn errors or
+    # times out before a turn_completed event ever arrives — never fabricated.
+    final_usage: dict[str, Any] = {}
     start_t = time.time()
     last_event = start_t
     last_event_type = ""  # type of the most recent stream event
@@ -5696,6 +5702,10 @@ def _call_claude_streaming_via_engine(
                     # earlier real one (matches legacy invariant).
                     if new_result.strip() or not final_text:
                         final_text = new_result
+                    # ADR-0696 follow-up — capture real token usage for the
+                    # cost-efficiency dashboard (see final_usage init above).
+                    if ev.usage:
+                        final_usage = ev.usage
                     # Engine has already closed stdin via close_stdin().
                     # Drop engine from the /btw routing table — a /btw
                     # racing past the close lands as a queue message.
@@ -6124,6 +6134,17 @@ def _call_claude_streaming_via_engine(
                         "exit_code": rc,
                         "timed_out": timed_out,
                         "model": str(resolved.get("model") or ""),
+                        # ADR-0696 follow-up — real per-model token usage for
+                        # the cost-efficiency dashboard (see final_usage
+                        # init above). This is the code path every console
+                        # web-chat / bridge "claude" turn actually completes
+                        # through; ADR-0696 originally patched only
+                        # chat_runtime.py's OWN (separate, v1-minimal)
+                        # os_turn.completed emitter, which turned out to be
+                        # unreachable for turns that route through here —
+                        # the dashboard's Cost Savings card never moved.
+                        "input_tokens": int(final_usage.get("input_tokens") or 0),
+                        "output_tokens": int(final_usage.get("output_tokens") or 0),
                     },
                 )
                 # ADR-0171 — paired engine.span.end (in finally → never orphaned).

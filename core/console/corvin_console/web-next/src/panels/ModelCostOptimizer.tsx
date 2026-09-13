@@ -31,6 +31,7 @@ interface ThresholdData {
   base_threshold: number;
   sample_count: number;
   converged: boolean;
+  success_rate: number;
   timestamp: string;
 }
 
@@ -38,6 +39,14 @@ interface CostDayPoint {
   date: string;
   actual_usd: number;
   baseline_usd: number;
+  counted_turns: number;
+  total_turns: number;
+  // ACS-delegated worker spend — a separate cost source (full tool-access
+  // agentic runs), never blended into actual_usd/baseline_usd above.
+  acs_actual_usd: number;
+  acs_baseline_usd: number;
+  acs_counted_turns: number;
+  acs_total_turns: number;
 }
 
 interface DashboardStatus {
@@ -49,6 +58,10 @@ interface DashboardStatus {
   cost_current_usd: number;
   cost_data_available: boolean;
   cost_history: CostDayPoint[];
+  cost_model_mix: Record<string, number>;
+  acs_cost_actual_usd: number;
+  acs_cost_baseline_usd: number;
+  acs_model_mix: Record<string, number>;
   accuracy_percent: number;
   last_updated: string;
 }
@@ -188,6 +201,56 @@ export const ModelCostOptimizer: React.FC = () => {
 
   const hasThresholds = status.thresholds.length > 0;
 
+  // Model mix — a single-model mix means cost_savings_percent is just that
+  // model's fixed price ratio against the baseline model, not evidence of
+  // any routing decision (live finding 2026-09-13: this tenant's traffic has
+  // been 100% one model since recording began).
+  const modelMixEntries = Object.entries(status.cost_model_mix || {}).sort((a, b) => b[1] - a[1]);
+  const modelMixTotal = modelMixEntries.reduce((sum, [, n]) => sum + n, 0);
+  const modelMixLabel = (id: string) => id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+  const isSingleModel = modelMixEntries.length === 1;
+
+  // Coverage — days where most completed turns had no usable token data
+  // (emitter gap, mid-rollout, etc.) look like a cost crash in the raw $
+  // numbers alone. Flag them explicitly instead of letting a thin bar pass
+  // as a real trend (live incident 2026-09-13).
+  const LOW_COVERAGE_THRESHOLD = 0.5;
+  const lowCoverageDays = status.cost_history.filter(
+    (p) => p.total_turns > 0 && p.counted_turns / p.total_turns < LOW_COVERAGE_THRESHOLD
+  );
+
+  const CostTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload || !payload.length) return null;
+    const point: CostDayPoint | undefined = payload[0]?.payload;
+    const coverage = point && point.total_turns > 0
+      ? Math.round((point.counted_turns / point.total_turns) * 100)
+      : null;
+    const lowCoverage = coverage !== null && coverage < LOW_COVERAGE_THRESHOLD * 100;
+    return (
+      <div className="rounded-md border border-border bg-background p-3 text-xs shadow-md">
+        <div className="font-semibold mb-1">{label}</div>
+        {payload.map((p: any) => (
+          <div key={p.dataKey} className="flex justify-between gap-4">
+            <span className="text-muted-foreground">{p.name}:</span>
+            <span className="font-mono">${(p.value as number).toFixed(4)}</span>
+          </div>
+        ))}
+        {point && (
+          <div className={`mt-1 pt-1 border-t border-border ${lowCoverage ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+            OS-Manager: {point.counted_turns}/{point.total_turns} Turns erfasst
+            {coverage !== null ? ` (${coverage}%)` : ''}
+            {lowCoverage ? ' — geringe Abdeckung' : ''}
+          </div>
+        )}
+        {point && point.acs_total_turns > 0 && (
+          <div className="text-muted-foreground">
+            ACS-Worker: {point.acs_counted_turns}/{point.acs_total_turns} Turns erfasst
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="w-full h-full flex flex-col p-6 bg-background">
       {/* Header */}
@@ -236,12 +299,12 @@ export const ModelCostOptimizer: React.FC = () => {
           </CardContent>
         </Card>
 
-        {/* Cost Savings */}
+        {/* Haiku vs. Opus reference cost — NOT a routing/optimization result */}
         <Card>
           <CardContent className="p-6">
             <div className="text-muted-foreground text-sm font-semibold mb-2 flex items-center gap-2">
               <DollarSign size={16} className="text-accent" />
-              Cost Savings
+              Haiku- vs. Opus-Referenzkosten
             </div>
             {status.cost_data_available ? (
               <>
@@ -249,8 +312,19 @@ export const ModelCostOptimizer: React.FC = () => {
                   {status.cost_savings_percent.toFixed(1)}%
                 </div>
                 <div className="text-xs text-muted-foreground mt-2">
-                  ${status.cost_baseline_usd.toFixed(2)} baseline → ${status.cost_current_usd.toFixed(2)} actual
+                  ${status.cost_baseline_usd.toFixed(2)} hypothetisch (Opus) → ${status.cost_current_usd.toFixed(2)} real
                 </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {modelMixEntries.map(([id, n]) => (
+                    `${Math.round((n / modelMixTotal) * 100)}% ${modelMixLabel(id)}`
+                  )).join(' · ')}
+                </div>
+                {isSingleModel && (
+                  <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                    <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                    <span>Kein aktives Modell-Routing — fester Default, kein Optimierungssignal</span>
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -263,7 +337,7 @@ export const ModelCostOptimizer: React.FC = () => {
           </CardContent>
         </Card>
 
-        {/* Quality Maintenance */}
+        {/* Turn success rate — completion reliability, NOT content quality */}
         <Card>
           <CardContent className="p-6">
             <div className="text-muted-foreground text-sm font-semibold mb-2 flex items-center gap-2">
@@ -272,13 +346,13 @@ export const ModelCostOptimizer: React.FC = () => {
               ) : (
                 <AlertCircle size={16} className="text-amber-600 dark:text-amber-400" />
               )}
-              Accuracy
+              Turn-Erfolgsquote
             </div>
             <div className="text-3xl font-bold">
               {status.accuracy_percent.toFixed(1)}%
             </div>
             <div className="text-xs text-muted-foreground mt-2">
-              Target: ≥85%
+              Anteil abgeschlossener Turns ohne Fehler/Timeout — keine inhaltliche Qualitätsbewertung
             </div>
           </CardContent>
         </Card>
@@ -338,23 +412,25 @@ export const ModelCostOptimizer: React.FC = () => {
         <CardHeader>
           <CardTitle>Cost Efficiency Trend</CardTitle>
           <CardDescription>
-            Real daily cost from actual token usage — actual model mix vs. an
-            always-Opus baseline on the same tokens
+            Zwei getrennt gemessene Kostenquellen — OS-Manager (leichte
+            Orchestrierungs-Turns) und ACS-Worker (delegierte Agentic-Runs mit
+            vollem Tool-Zugriff) — nie vermischt, da sie unterschiedliche
+            Arbeit abbilden.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {status.cost_data_available && status.cost_history.length > 0 ? (
+          {status.cost_history.length > 0 ? (
             <ResponsiveContainer width="100%" height={250}>
               <AreaChart data={status.cost_history}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" tick={{ fontSize: 12 }} />
                 <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value) => `$${(value as number).toFixed(4)}`} />
+                <Tooltip content={<CostTooltip />} />
                 <Legend />
                 <Area
                   type="monotone"
                   dataKey="baseline_usd"
-                  name="Baseline (always Opus)"
+                  name="OS-Manager Baseline (Opus)"
                   fill="hsl(var(--muted-foreground))"
                   stroke="hsl(var(--muted-foreground))"
                   fillOpacity={0.15}
@@ -362,10 +438,26 @@ export const ModelCostOptimizer: React.FC = () => {
                 <Area
                   type="monotone"
                   dataKey="actual_usd"
-                  name="Actual"
+                  name="OS-Manager (real)"
                   fill="hsl(var(--accent))"
                   stroke="hsl(var(--accent))"
                   fillOpacity={0.25}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="acs_baseline_usd"
+                  name="ACS-Worker Baseline (Opus)"
+                  fill="hsl(217 91% 60%)"
+                  stroke="hsl(217 91% 60%)"
+                  fillOpacity={0.1}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="acs_actual_usd"
+                  name="ACS-Worker (real)"
+                  fill="hsl(217 91% 45%)"
+                  stroke="hsl(217 91% 45%)"
+                  fillOpacity={0.3}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -374,6 +466,16 @@ export const ModelCostOptimizer: React.FC = () => {
               No cost data yet — token usage is only recorded on turns
               completed after this feature shipped (ADR-0696). Once new
               turns complete, real daily cost will appear here.
+            </div>
+          )}
+          {status.cost_data_available && lowCoverageDays.length > 0 && (
+            <div className="mt-3 flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 border border-amber-600/30 dark:border-amber-400/30 rounded-lg px-3 py-2">
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <span>
+                Geringe Datenabdeckung an {lowCoverageDays.length === 1 ? 'diesem Tag' : 'diesen Tagen'}:{' '}
+                {lowCoverageDays.map((p) => `${p.date} (${p.counted_turns}/${p.total_turns})`).join(', ')}
+                {' '}— die Kosten dort spiegeln keinen echten Trend, sondern eine Lücke in der Token-Erfassung.
+              </span>
             </div>
           )}
         </CardContent>
@@ -408,6 +510,10 @@ export const ModelCostOptimizer: React.FC = () => {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Samples:</span>
                     <span className="font-mono font-semibold">{t.sample_count}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Erfolgsquote:</span>
+                    <span className="font-mono font-semibold">{(t.success_rate * 100).toFixed(0)}%</span>
                   </div>
                 </div>
               </CardContent>
