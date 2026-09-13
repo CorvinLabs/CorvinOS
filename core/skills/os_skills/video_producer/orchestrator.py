@@ -1,10 +1,34 @@
 """Maestro Skill for orchestrating Video Producer workflow.
 
-Coordinates:
+Coordinates all 7 phases of video production pipeline:
 1. Asset ingestion and analysis
 2. Storyboard generation (constrained to analysis facts)
 3. Worker dispatch (voice, screenshots, assembly)
-4. Feedback collection and learning
+4. Video assembly (FFmpeg orchestration)
+5. YouTube upload (async, non-blocking)
+6. Feedback collection (Phase 4b)
+7. Learning optimization (Phase 4b)
+
+Related Architecture Documents:
+    - ADR-0692: Video Producer Orchestration (main architecture decision)
+    - ADR-0690: Quality Gates (compliance-critical, hardcoded thresholds)
+    - ADR-0691: Audit Trail Hash-Chaining (provenance proof, GDPR Art. 30)
+    - ADR-0693: Asset Analyzer Worker
+    - ADR-0694: Voice + Screenshot Workers
+    - ADR-0695: Video Assembler + YouTube Worker
+    - CONCEPT-0040: Orchestrated Multi-Skill Pattern (reusable design)
+
+See Also:
+    - docs/ARCHITECTURE.md: System overview + component breakdown
+    - docs/BUILD_PROCESS.md: Design decisions with Thesis/Antithesis/Synthesis
+    - docs/PLUGIN_DEVELOPMENT_GUIDE.md: Template for future plugins
+
+Compliance Notes:
+    - Every phase transition is logged to hash-chained audit.jsonl (GDPR Art. 30)
+    - Quality gates are hardcoded + fail-closed (no bypass, ADR-0690)
+    - Design system is locked per-project (immutable, versioned)
+    - All workers are deterministic (same input → same output bit-for-bit)
+    - Feedback integration for Phase 4b learning loop (ADR-0314)
 """
 
 from __future__ import annotations
