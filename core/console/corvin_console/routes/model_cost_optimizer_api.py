@@ -61,6 +61,9 @@ class ThresholdStatus(BaseModel):
     base_threshold: float
     sample_count: int
     converged: bool
+    # Real share of this bucket's turns that exited 0 without a timeout —
+    # completion reliability, NOT a content-quality assessment.
+    success_rate: float = 0.0
     timestamp: str
 
 
@@ -77,6 +80,18 @@ class DashboardStatusResponse(BaseModel):
     history: Optional[List[Dict[str, Any]]] = None
     cost_data_available: bool = False
     cost_history: List[Dict[str, Any]] = []
+    # ACS-delegated worker spend — the substantive-work path (full tool
+    # access), tracked entirely separately from the OS-turn numbers above.
+    # Zero when no acs.engine_completed event has usable token data.
+    acs_cost_actual_usd: float = 0.0
+    acs_cost_baseline_usd: float = 0.0
+    acs_model_mix: Dict[str, int] = {}
+    # Real per-model turn counts for every counted os_turn.completed event
+    # (e.g. {"claude-haiku-4-5-20251001": 244}). A single-key mix means
+    # cost_savings_percent is just that model's fixed price ratio against the
+    # baseline model — a pricing fact, not a routing achievement — so the UI
+    # can say so instead of presenting it as an optimization result.
+    cost_model_mix: Dict[str, int] = {}
 
 
 class OverrideRequest(BaseModel):
@@ -120,10 +135,29 @@ async def get_learning_status(
             scanned window has both a recognized model and real token
             counts (e.g. events from before ADR-0696 shipped) — the
             "insufficient data" state, distinct from real zero-cost data
-        cost_history: real daily [{date, actual_usd, baseline_usd}] series,
-            empty when cost_data_available is False
-        accuracy_percent: quality maintenance metric (still a placeholder —
-            not addressed by ADR-0696)
+        cost_history: real daily [{date, actual_usd, baseline_usd, counted_turns,
+            total_turns}] series, empty when cost_data_available is False.
+            counted_turns/total_turns expose coverage per day (how many of
+            that day's completed turns actually had usable token data) so a
+            thin bar reads as "sparse data", never as a real cost crash.
+        cost_model_mix: real per-model turn counts across every counted turn
+            (e.g. {"claude-haiku-4-5-20251001": 244}). A single-key mix means
+            cost_savings_percent is just that model's fixed price ratio
+            against the baseline model — a pricing fact, not evidence of a
+            routing decision (live finding 2026-09-13: this tenant's traffic
+            has been 100% one model since recording began, so savings_percent
+            has been mathematically constant, never a measurement).
+        acs_cost_actual_usd / acs_cost_baseline_usd: real $ for ACS-delegated
+            worker turns (full tool-access agentic runs) — the substantive
+            work the OS-turn numbers above never cover. A SEPARATE cost
+            source, tracked from ``acs.engine_completed`` events, never
+            blended into cost_current_usd/cost_baseline_usd.
+        acs_model_mix: real per-model turn counts for ACS workers.
+        accuracy_percent: real turn-success rate — sample-count-weighted
+            average of each threshold bucket's share of turns that exited 0
+            without a timeout (see StoredThreshold.success_rate). This is
+            completion reliability, NOT a content-quality assessment; no
+            content-quality signal exists in this system today.
         last_updated: timestamp
     """
     try:
@@ -159,18 +193,48 @@ async def get_learning_status(
         cost_baseline = cost_result.total_baseline_usd if cost_data_available else 0.0
         cost_current = cost_result.total_actual_usd if cost_data_available else 0.0
         cost_savings_pct = cost_result.savings_percent if cost_data_available else 0.0
+
+        # ACS-delegated worker spend is a SEPARATE series, never blended into
+        # the OS-turn numbers above (see CostEfficiencyResult.acs_daily
+        # docstring — two independently-measured cost sources). Its own
+        # availability check: ACS can have data on days the OS-turn chain
+        # doesn't, and vice versa.
+        acs_data_available = bool(cost_result and cost_result.acs_daily)
+        acs_by_date = {p.date: p for p in cost_result.acs_daily} if acs_data_available else {}
+        os_by_date = {p.date: p for p in cost_result.daily} if cost_data_available else {}
+        all_dates = sorted(set(os_by_date) | set(acs_by_date))
         cost_history = (
             [
-                {"date": p.date, "actual_usd": p.actual_usd, "baseline_usd": p.baseline_usd}
-                for p in cost_result.daily
+                {
+                    "date": d,
+                    "actual_usd": os_by_date[d].actual_usd if d in os_by_date else 0.0,
+                    "baseline_usd": os_by_date[d].baseline_usd if d in os_by_date else 0.0,
+                    "counted_turns": os_by_date[d].counted_turns if d in os_by_date else 0,
+                    "total_turns": os_by_date[d].total_turns if d in os_by_date else 0,
+                    "acs_actual_usd": acs_by_date[d].actual_usd if d in acs_by_date else 0.0,
+                    "acs_baseline_usd": acs_by_date[d].baseline_usd if d in acs_by_date else 0.0,
+                    "acs_counted_turns": acs_by_date[d].counted_turns if d in acs_by_date else 0,
+                    "acs_total_turns": acs_by_date[d].total_turns if d in acs_by_date else 0,
+                }
+                for d in all_dates
             ]
-            if cost_data_available
+            if (cost_data_available or acs_data_available)
             else []
         )
+        acs_total_actual = cost_result.acs_total_actual_usd if acs_data_available else 0.0
+        acs_total_baseline = cost_result.acs_total_baseline_usd if acs_data_available else 0.0
+        acs_model_mix = cost_result.acs_model_mix if acs_data_available else {}
 
-        # Quality metric (placeholder)
-        # TODO: Replace with real accuracy data from quality monitoring
-        accuracy = 85.0 + (converged / max(total, 1)) * 10  # [85%, 95%]
+        # Real turn-success rate — sample-count-weighted average of each
+        # bucket's success_rate (already computed in compute_learned_thresholds
+        # from real exit_code/timed_out data). Replaces a fabricated
+        # 85+converged*10 placeholder formula that had no connection to any
+        # real signal (live finding 2026-09-13).
+        weighted_success = sum(t.success_rate * t.sample_count for t in thresholds)
+        total_samples = sum(t.sample_count for t in thresholds)
+        accuracy = (weighted_success / total_samples * 100) if total_samples > 0 else 0.0
+
+        cost_model_mix = cost_result.model_mix if cost_data_available else {}
 
         return {
             "converged_count": converged,
@@ -183,6 +247,7 @@ async def get_learning_status(
                     "base_threshold": t.base_threshold,
                     "sample_count": t.sample_count,
                     "converged": t.converged,
+                    "success_rate": t.success_rate,
                     "timestamp": t.timestamp,
                 }
                 for t in thresholds
@@ -192,6 +257,10 @@ async def get_learning_status(
             "cost_current_usd": cost_current,
             "cost_data_available": cost_data_available,
             "cost_history": cost_history,
+            "cost_model_mix": cost_model_mix,
+            "acs_cost_actual_usd": acs_total_actual,
+            "acs_cost_baseline_usd": acs_total_baseline,
+            "acs_model_mix": acs_model_mix,
             "accuracy_percent": accuracy,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }

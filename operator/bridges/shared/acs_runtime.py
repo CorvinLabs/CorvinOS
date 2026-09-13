@@ -1874,6 +1874,13 @@ def _call_worker_sync(
             tok_out = int(usage.get("output_tokens") or 0)
             if tok_in + tok_out > 0:
                 tokens_used = tok_in + tok_out
+                # Preserve the in/out split (not just the sum) so a caller
+                # can price this worker's spend per-model — see
+                # acs.engine_completed below and
+                # core/learning/model_selection_learner.py's per-model
+                # pricing table, which needs both halves.
+                attestation["input_tokens"] = tok_in
+                attestation["output_tokens"] = tok_out
             # Session ID for investigation path (content store only)
             if resp.get("session_id"):
                 attestation["session_id"] = str(resp["session_id"])
@@ -2260,6 +2267,11 @@ async def _dispatch_workers(
                 ),  # M9: default matches engine_id (claude_code → us_cloud)
                 "duration_ms": int((time.monotonic() - _spawn_start) * 1000),
                 "tokens_used": tok,
+                # Real in/out split, when the worker call captured one (see
+                # _call_worker_sync above) — additive alongside tokens_used,
+                # needed for per-model $ pricing (input/output rates differ).
+                "input_tokens": attestation.get("input_tokens", 0),
+                "output_tokens": attestation.get("output_tokens", 0),
                 "exit_code":   0,
             })
             # ADR-0172 M1 — post-run trace extraction (zero hot-path overhead:

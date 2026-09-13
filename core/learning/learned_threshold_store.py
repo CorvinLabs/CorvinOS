@@ -63,6 +63,11 @@ class StoredThreshold:
     )
     sample_count: int = 0  # How many samples led to this threshold
     converged: bool = False
+    # Real share of this bucket's turns that exited 0 without a timeout — a
+    # completion-reliability signal, NOT a content-quality assessment. Additive
+    # field: from_dict() already filters unknown keys, so pre-existing stored
+    # records without it just default to 0.0 (backward compatible).
+    success_rate: float = 0.0
     notes: str = ""  # Operator notes (e.g., "manual override 2026-09-11")
 
     def to_dict(self) -> Dict[str, Any]:
