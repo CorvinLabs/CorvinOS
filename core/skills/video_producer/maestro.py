@@ -213,13 +213,20 @@ class MaestroOrchestrator:
             job.youtube_result = result
 
         # Emit audit event
+        # Handle both dict and dataclass results
+        success = True
+        if isinstance(result, dict):
+            success = result.get("success", True)
+        else:
+            success = getattr(result, "success", True)
+
         self._audit(
             "phase_executed",
             job_id,
             {
                 "phase": job.current_phase.name,
                 "worker": worker.__class__.__name__,
-                "success": result.get("success", True),
+                "success": success,
             },
         )
 
