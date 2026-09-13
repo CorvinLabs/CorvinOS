@@ -886,3 +886,93 @@ class TestConcurrentMutations(_Base):
         self.assertNotIn(
             "reg.save()", source, "mutations must go through registry_mutation()"
         )
+
+
+# ── Console panel sync (ADR-0561/ADR-0455) ─────────────────────────────────
+#
+# A plugin declaring ``console_panel`` gets a sidebar entry the moment it is
+# enabled and loses it on disable/uninstall — driven through the REAL
+# PluginPanelRegistry (file-backed, tenant-scoped), not a mock, so this is the
+# real transport a Console request actually reads (routes/capabilities.py
+# ``_get_plugin_panels`` → ``get_panel_registry(tenant_id)``).
+
+
+class TestConsolePanelSync(_Base):
+    def setUp(self):
+        super().setUp()
+        os.environ["CORVIN_HOME"] = str(self.home)
+        # The panel registry caches one instance per tenant_id for the process
+        # lifetime; each test gets its own CORVIN_HOME, so the cache must not
+        # leak an instance pointing at a previous test's temp dir.
+        from core.plugins import plugin_panel_registry as ppr
+
+        ppr._panel_registry_instances.clear()
+        self.ppr = ppr
+
+    def tearDown(self):
+        self.ppr._panel_registry_instances.clear()
+        os.environ.pop("CORVIN_HOME", None)
+        super().tearDown()
+
+    def _panel_record(self, pid="video-producer", **kw):
+        return _record(
+            pid,
+            console_panel={
+                "label": "Video Producer",
+                "route": "video-producer",
+                "icon": "Video",
+                "group": "marketplace",
+                "element_kind": "react-component",
+                "component": "VideoProducerPage",
+            },
+            **kw,
+        )
+
+    def test_enable_registers_the_panel(self):
+        self.lc.install(self._panel_record(), installed_by="test")
+        self.lc.enable("video-producer")
+
+        panel = self.ppr.get_panel_registry("_default").get_panel("plugin-video-producer")
+        self.assertIsNotNone(panel)
+        self.assertTrue(panel["enabled"])
+        self.assertEqual(panel["element_kind"], "react-component")
+        self.assertEqual(panel["component"], "VideoProducerPage")
+
+    def test_disable_hides_but_keeps_the_panel(self):
+        self.lc.install(self._panel_record(), installed_by="test")
+        self.lc.enable("video-producer")
+        self.lc.disable("video-producer")
+
+        registry = self.ppr.get_panel_registry("_default")
+        panel = registry.get_panel("plugin-video-producer")
+        self.assertIsNotNone(panel, "disable must not delete the registry entry")
+        self.assertFalse(panel["enabled"])
+        self.assertNotIn("plugin-video-producer", [p["panel_id"] for p in registry.get_all_enabled_panels()])
+
+    def test_uninstall_removes_the_panel_entirely(self):
+        self.lc.install(self._panel_record(), installed_by="test")
+        self.lc.enable("video-producer")
+        self.lc.disable("video-producer")
+        self.lc.uninstall("video-producer")
+
+        panel = self.ppr.get_panel_registry("_default").get_panel("plugin-video-producer")
+        self.assertIsNone(panel)
+
+    def test_plugin_without_console_panel_never_touches_the_registry(self):
+        self.lc.install(_record("acme-notify"), installed_by="test")
+        self.lc.enable("acme-notify")
+        self.lc.disable("acme-notify")
+
+        registry = self.ppr.get_panel_registry("_default")
+        self.assertEqual(registry.get_all_enabled_panels(), [])
+
+    def test_re_enable_after_disable_is_idempotent(self):
+        """enable -> disable -> enable must re-show the SAME panel, not raise."""
+        self.lc.install(self._panel_record(), installed_by="test")
+        self.lc.enable("video-producer")
+        self.lc.disable("video-producer")
+        self.lc.enable("video-producer")
+
+        registry = self.ppr.get_panel_registry("_default")
+        panel = registry.get_panel("plugin-video-producer")
+        self.assertTrue(panel["enabled"])

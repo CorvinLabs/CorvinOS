@@ -704,6 +704,7 @@ class PluginLifecycle:
             },
             tenant_id=self.tenant_id,
         )
+        self._sync_console_panel(enabled, "enable")
         return enabled
 
     def _assert_flow_declarations(self, record: PluginRecord) -> None:
@@ -796,6 +797,36 @@ class PluginLifecycle:
                 "hot-load of %r failed (%s)", record.plugin_id, type(exc).__name__
             )
             return False
+
+    def _sync_console_panel(self, record: PluginRecord, action: str) -> None:
+        """Reflect an enable/disable/uninstall transition onto the plugin's
+        declared Console panel (ADR-0561/ADR-0455), so the sidebar entry
+        appears/disappears with the plugin — no frontend redeploy.
+
+        Best-effort: a panel-registry failure must never block the plugin
+        transition itself, so every error is logged and swallowed.
+        """
+        panel = record.console_panel
+        if not panel:
+            return
+        panel_id = f"plugin-{record.plugin_id}"
+        try:
+            from core.plugins.plugin_panel_registry import get_panel_registry
+
+            registry = get_panel_registry(self.tenant_id)
+            if action == "enable":
+                registry.ensure_panel(record.plugin_id, {"id": panel_id, **panel})
+            elif action == "disable":
+                if registry.get_panel(panel_id):
+                    registry.disable_panel(panel_id)
+            elif action == "uninstall":
+                if registry.get_panel(panel_id):
+                    registry.unregister_panel(panel_id)
+        except Exception as exc:  # noqa: BLE001 — never blocks the plugin transition
+            log.error(
+                "console panel sync (%s) failed for %r (%s)",
+                action, record.plugin_id, type(exc).__name__,
+            )
 
     def _deactivate(self, record: PluginRecord) -> None:
         """Unregister the plugin for this record, right now.
@@ -927,6 +958,7 @@ class PluginLifecycle:
         _audit(
             "plugin.disabled", {"plugin_id": disabled.full_id}, tenant_id=self.tenant_id
         )
+        self._sync_console_panel(disabled, "disable")
         return disabled
 
     def uninstall(self, plugin_id: str, *, purge_state: bool = True) -> None:
@@ -974,6 +1006,7 @@ class PluginLifecycle:
             },
             tenant_id=self.tenant_id,
         )
+        self._sync_console_panel(record, "uninstall")
 
 
 #: Every plugin_type that owns a provider slot, mapped to its module name.

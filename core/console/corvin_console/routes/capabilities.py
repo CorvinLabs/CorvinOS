@@ -208,16 +208,36 @@ def _read_flags_uncached(tenant_id: str) -> dict[str, bool]:
         return {flag: False for flag in GATED_FLAGS}
 
 
-def _get_plugin_panels() -> list[dict]:
+def _plugin_panel_element(p: dict) -> dict:
+    """Build the PanelElement for a registered plugin panel.
+
+    Defaults to the generic "plugin-inspector" kind — a plugin gets a working
+    Console panel (config + audit + enable/disable) with zero bundled frontend
+    code, which is what makes install/uninstall not require a redeploy. A
+    plugin that ships its own bundled React page instead declared
+    element_kind="react-component" (+ component) or "iframe" (+ src) when it
+    registered (see PluginPanelRegistry.register_panel/ensure_panel).
+    """
+    kind = p.get("element_kind") or "plugin-inspector"
+    if kind == "react-component" and p.get("component"):
+        return {"kind": "react-component", "component": p["component"]}
+    if kind == "iframe" and p.get("src"):
+        return {"kind": "iframe", "src": p["src"]}
+    return {"kind": "plugin-inspector", "plugin_id": p["plugin_id"]}
+
+
+def _get_plugin_panels(tenant_id: str = "_default") -> list[dict]:
     """Get all auto-registered plugin panels (Phase 3 Integration).
 
-    Returns panels registered by installed plugins via PluginPanelRegistry.
-    Schema matches frontend PanelDescriptor (ADR-0561 Phase 3).
-    Degrades gracefully if registry is unavailable (panel registry not yet created).
+    Returns panels registered by installed plugins via PluginPanelRegistry,
+    scoped to the caller's tenant (plugins — and their panels — are
+    tenant-scoped state; CLAUDE.md § Multi-tenant axis). Schema matches
+    frontend PanelDescriptor (ADR-0561 Phase 3). Degrades gracefully if the
+    registry is unavailable.
     """
     try:
         from core.plugins.plugin_panel_registry import get_panel_registry
-        registry = get_panel_registry()
+        registry = get_panel_registry(tenant_id)
         panels = registry.get_all_enabled_panels()
         return [
             {
@@ -227,13 +247,10 @@ def _get_plugin_panels() -> list[dict]:
                 "icon": p.get("icon", "Package"),
                 "kind": "plugin",
                 "source": "installed",
-                "nav_group": p.get("group", "plugins"),
+                "nav_group": p.get("group", "marketplace"),
                 "requiredFlag": None,
                 "requiredCapability": None,
-                "element": {
-                    "kind": "plugin-inspector",
-                    "plugin_id": p["plugin_id"],
-                },
+                "element": _plugin_panel_element(p),
                 "version": p.get("version", "1.0.0"),
                 "audit_events": ["console_panel_opened", "plugin_executed"],
                 "tenant_scoped": True,
@@ -253,7 +270,7 @@ async def get_capabilities(session: Any = Depends(require_session)) -> dict:
         "contract_version": CONTRACT_VERSION,
         "capabilities": list(CORE_CAPABILITIES),
         "flags": _read_flags(tenant_id),
-        "plugin_panels": _get_plugin_panels(),  # Phase 3: auto-registered panels
+        "plugin_panels": _get_plugin_panels(tenant_id),  # Phase 3: auto-registered panels
     }
 
 
@@ -390,12 +407,12 @@ def _get_builtin_panels() -> list[dict]:
         },
         {
             "id": "plugins",
-            "title": "Plugins & Extensions",
+            "title": "Marketplace",
             "route": "plugin-center",
             "icon": "Blocks",
             "kind": "feature",
             "source": "builtin",
-            "nav_group": "build",
+            "nav_group": "marketplace",
             "requiredFlag": None,
             "requiredCapability": None,
             "element": {"kind": "react-component", "component": "PluginCenterPage"},
@@ -462,7 +479,23 @@ def _get_skill_panels(gated_flags: dict[str, bool]) -> list[dict]:
 
 
 def _get_nav_groups(panels: list[dict], flags: dict[str, bool]) -> list[dict]:
-    """Generate nav groups from gated panels (ADR-0561)."""
+    """Generate nav groups from gated panels (ADR-0561).
+
+    Until 2026-09-12, ``kind == "plugin"`` panels were included in ``panels``
+    (so their ROUTE mounted) but never referenced by any group here — so an
+    installed, enabled plugin panel was reachable only by typing its URL, and
+    invisible in the sidebar (the video-producer plugin panel report). Every
+    plugin panel now lands in the "marketplace" group, alongside the
+    Marketplace hub itself (the renamed "Plugins & Extensions" panel). This
+    group is rebuilt from the live PluginPanelRegistry on every manifest
+    request, so installing/enabling a plugin panel makes it appear directly
+    under Marketplace and disabling/uninstalling makes it disappear — no
+    frontend redeploy. The frontend's static "marketplace" NAV_GROUPS entry
+    (layout.tsx) already links the hub panel itself; mergeManifestNav is
+    additive-only, so listing "plugins" here too is a documented no-op (same
+    pattern as the "vibe" group below), not a duplicate.
+    """
+    plugin_items = [{"panel_id": p["id"]} for p in panels if p["kind"] == "plugin"]
     return [
         {
             "id": "primary",
@@ -484,13 +517,19 @@ def _get_nav_groups(panels: list[dict], flags: dict[str, bool]) -> list[dict]:
             ],
         },
         {
+            "id": "marketplace",
+            "label": "Marketplace",
+            "collapsible": True,
+            "defaultOpen": True,
+            "items": [{"panel_id": "plugins"}] + plugin_items,
+        },
+        {
             "id": "build",
             "label": "Build",
             "collapsible": True,
             "defaultOpen": True,
             "items": [
                 {"panel_id": "skills"},
-                {"panel_id": "plugins"},
             ] + [
                 {"panel_id": p["id"]} for p in panels
                 if p["kind"] == "skill" and p["nav_group"] == "build"
@@ -545,7 +584,7 @@ async def get_console_manifest(session: Any = Depends(require_session)) -> dict:
 
     # Collect all panels (builtin + plugin + skill + ai-generated)
     all_panels = _get_builtin_panels()
-    all_panels.extend(_get_plugin_panels())
+    all_panels.extend(_get_plugin_panels(tenant_id))
     all_panels.extend(_get_skill_panels(flags))
 
     # Gate panels by capability + flag
