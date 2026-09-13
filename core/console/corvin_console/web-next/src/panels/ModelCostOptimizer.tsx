@@ -59,6 +59,7 @@ interface DashboardStatus {
   cost_data_available: boolean;
   cost_history: CostDayPoint[];
   cost_model_mix: Record<string, number>;
+  cost_os_model_pin: string | null;
   acs_cost_actual_usd: number;
   acs_cost_baseline_usd: number;
   acs_model_mix: Record<string, number>;
@@ -322,7 +323,13 @@ export const ModelCostOptimizer: React.FC = () => {
                 {isSingleModel && (
                   <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
                     <AlertCircle size={12} className="mt-0.5 shrink-0" />
-                    <span>Kein aktives Modell-Routing — fester Default, kein Optimierungssignal</span>
+                    <span>
+                      {status.cost_os_model_pin ? (
+                        <>Modell fest gepinnt auf <span className="font-mono">{modelMixLabel(status.cost_os_model_pin)}</span> (Settings → AI Engines → OS Model) — keine adaptive Auswahl aktiv. Keine Lizenz-/Tier-Beschränkung.</>
+                      ) : (
+                        <>Kein Modellwechsel beobachtet — keine adaptive Auswahl aktiv. Keine Lizenz-/Tier-Beschränkung.</>
+                      )}
+                    </span>
                   </div>
                 )}
               </>

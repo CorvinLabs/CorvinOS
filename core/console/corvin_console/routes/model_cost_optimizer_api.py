@@ -92,9 +92,11 @@ class DashboardStatusResponse(BaseModel):
     # baseline model — a pricing fact, not a routing achievement — so the UI
     # can say so instead of presenting it as an optimization result.
     cost_model_mix: Dict[str, int] = {}
-
-
-class OverrideRequest(BaseModel):
+    # The tenant's explicit spec.engine_models.claude_code.os_model pin, when
+    # set (None = adaptive default). NOT a license/tier thing — no license
+    # check exists in the model-selection path; a single-model cost_model_mix
+    # is explained by THIS, when set, not by license tier.
+    cost_os_model_pin: Optional[str] = None
     """Manual threshold override request."""
     task_type: str
     new_threshold: float
@@ -147,6 +149,13 @@ async def get_learning_status(
             routing decision (live finding 2026-09-13: this tenant's traffic
             has been 100% one model since recording began, so savings_percent
             has been mathematically constant, never a measurement).
+        cost_os_model_pin: the tenant's explicit
+            spec.engine_models.claude_code.os_model value from
+            tenant.corvin.yaml, or None when unset (adaptive default). When
+            set, it — NOT a license/tier restriction — is why cost_model_mix
+            above is a single key: no license/tier check exists anywhere in
+            the model-selection code path (model_selector.py,
+            engine_models.py), confirmed by direct code search 2026-09-13.
         acs_cost_actual_usd / acs_cost_baseline_usd: real $ for ACS-delegated
             worker turns (full tool-access agentic runs) — the substantive
             work the OS-turn numbers above never cover. A SEPARATE cost
@@ -193,6 +202,23 @@ async def get_learning_status(
         cost_baseline = cost_result.total_baseline_usd if cost_data_available else 0.0
         cost_current = cost_result.total_actual_usd if cost_data_available else 0.0
         cost_savings_pct = cost_result.savings_percent if cost_data_available else 0.0
+
+        # 2026-09-13 finding: a single-model mix is NOT a license/tier
+        # restriction (no license check exists anywhere in the model-selection
+        # code path) — it's this tenant's explicit
+        # spec.engine_models.claude_code.os_model pin in tenant.corvin.yaml,
+        # which wins over the adaptive Haiku/Sonnet selector. Surface the
+        # real cause instead of a generic "no routing" guess.
+        os_model_pin: Optional[str] = None
+        try:
+            import sys
+            _bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+            if str(_bridge_shared) not in sys.path:
+                sys.path.insert(0, str(_bridge_shared))
+            from engine_models import get_tenant_engine_model  # type: ignore  # noqa: PLC0415
+            os_model_pin = get_tenant_engine_model(rec.tenant_id, "claude_code", "os_model")
+        except Exception:  # noqa: BLE001 — advisory only, never break the dashboard
+            pass
 
         # ACS-delegated worker spend is a SEPARATE series, never blended into
         # the OS-turn numbers above (see CostEfficiencyResult.acs_daily
@@ -258,6 +284,7 @@ async def get_learning_status(
             "cost_data_available": cost_data_available,
             "cost_history": cost_history,
             "cost_model_mix": cost_model_mix,
+            "cost_os_model_pin": os_model_pin,
             "acs_cost_actual_usd": acs_total_actual,
             "acs_cost_baseline_usd": acs_total_baseline,
             "acs_model_mix": acs_model_mix,
