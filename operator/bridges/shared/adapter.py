@@ -6145,6 +6145,17 @@ def _call_claude_streaming_via_engine(
                         # the dashboard's Cost Savings card never moved.
                         "input_tokens": int(final_usage.get("input_tokens") or 0),
                         "output_tokens": int(final_usage.get("output_tokens") or 0),
+                        # 2026-09-13 finding: for a cache-heavy Claude Code
+                        # turn, input_tokens/output_tokens above are a small
+                        # fraction of what's actually billed — one real
+                        # sample: input_tokens=266 but
+                        # cache_read_input_tokens=3,236,410 (12,000x more).
+                        # Both fields come straight from the same raw CLI
+                        # usage object (never estimated) — see
+                        # model_selection_learner.py's pricing, which prices
+                        # these at Anthropic's published cache multipliers.
+                        "cache_creation_input_tokens": int(final_usage.get("cache_creation_input_tokens") or 0),
+                        "cache_read_input_tokens": int(final_usage.get("cache_read_input_tokens") or 0),
                     },
                 )
                 # ADR-0171 — paired engine.span.end (in finally → never orphaned).

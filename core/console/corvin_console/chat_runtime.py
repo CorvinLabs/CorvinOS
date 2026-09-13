@@ -5224,6 +5224,12 @@ async def stream_turn(
             "model": _os_model_used,
             "input_tokens": int(_usage.get("input_tokens") or 0),
             "output_tokens": int(_usage.get("output_tokens") or 0),
+            # 2026-09-13 finding — see the matching comment in adapter.py's
+            # os_turn.completed emission: cache tokens dominate real spend
+            # for a cache-heavy turn (one sample: 3.2M cache-read tokens vs
+            # 266 input_tokens). Priced by model_selection_learner.py.
+            "cache_creation_input_tokens": int(_usage.get("cache_creation_input_tokens") or 0),
+            "cache_read_input_tokens": int(_usage.get("cache_read_input_tokens") or 0),
         })
         # ADR-0641/0642/0644 — real outcome feedback for the shadow
         # classification above, closing the loop into the Bayesian

@@ -1881,6 +1881,13 @@ def _call_worker_sync(
                 # pricing table, which needs both halves.
                 attestation["input_tokens"] = tok_in
                 attestation["output_tokens"] = tok_out
+            # Cache tokens dominate real spend for a cache-heavy turn (one
+            # observed sample: 3.2M cache-read tokens vs 266 input_tokens) —
+            # captured unconditionally (not gated on tok_in+tok_out>0 above),
+            # priced by model_selection_learner.py at Anthropic's published
+            # cache multipliers, never estimated.
+            attestation["cache_creation_input_tokens"] = int(usage.get("cache_creation_input_tokens") or 0)
+            attestation["cache_read_input_tokens"] = int(usage.get("cache_read_input_tokens") or 0)
             # Session ID for investigation path (content store only)
             if resp.get("session_id"):
                 attestation["session_id"] = str(resp["session_id"])
@@ -2272,6 +2279,8 @@ async def _dispatch_workers(
                 # needed for per-model $ pricing (input/output rates differ).
                 "input_tokens": attestation.get("input_tokens", 0),
                 "output_tokens": attestation.get("output_tokens", 0),
+                "cache_creation_input_tokens": attestation.get("cache_creation_input_tokens", 0),
+                "cache_read_input_tokens": attestation.get("cache_read_input_tokens", 0),
                 "exit_code":   0,
             })
             # ADR-0172 M1 — post-run trace extraction (zero hot-path overhead:
