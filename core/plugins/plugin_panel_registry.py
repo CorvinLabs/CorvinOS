@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import hashlib
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -65,6 +66,14 @@ class PanelEntry:
     icon: str              # Icon name for sidebar ("Shield")
     group: str             # Sidebar group ("settings")
     enabled: bool = True   # Can be disabled without uninstall
+    # Rendering hint (ADR-0561): defaults to the generic, zero-rebuild
+    # inspector so a plugin needs no frontend code to get a panel. A plugin
+    # that ships a real bundled React page instead sets element_kind=
+    # "react-component" + component (the COMPONENTS_BY_NAME key), or
+    # element_kind="iframe" + src for a sandboxed external UI.
+    element_kind: str = "plugin-inspector"
+    component: Optional[str] = None
+    src: Optional[str] = None
     registered_at: int = None
     enabled_at: Optional[int] = None
     disabled_at: Optional[int] = None
@@ -138,7 +147,10 @@ class PluginPanelRegistry:
             label=panel_spec["label"],
             route=panel_spec["route"],
             icon=panel_spec["icon"],
-            group=panel_spec["group"]
+            group=panel_spec["group"],
+            element_kind=panel_spec.get("element_kind", "plugin-inspector"),
+            component=panel_spec.get("component"),
+            src=panel_spec.get("src"),
         )
 
         self.data["panels"].append(asdict(entry))
@@ -152,6 +164,36 @@ class PluginPanelRegistry:
         })
 
         logger.info(f"✓ Panel registered: {panel_id} (plugin: {plugin_id})")
+        return panel_id
+
+    def ensure_panel(self, plugin_id: str, panel_spec: Dict[str, Any]) -> str:
+        """Register the panel if new, or bring an existing entry's declared
+        fields (label/route/icon/group/element) up to date and re-enable it.
+
+        A plugin's console panel must be safe to (re-)declare on every boot —
+        that is what makes install/enable idempotent instead of throwing on
+        the second call ``register_panel`` would raise on. Returns panel_id.
+        """
+        panel_id = panel_spec["id"]
+        existing = self.get_panel(panel_id)
+        if existing is None:
+            return self.register_panel(plugin_id, panel_spec)
+
+        existing.update({
+            "plugin_id": plugin_id,
+            "label": panel_spec["label"],
+            "route": panel_spec["route"],
+            "icon": panel_spec["icon"],
+            "group": panel_spec["group"],
+            "element_kind": panel_spec.get("element_kind", "plugin-inspector"),
+            "component": panel_spec.get("component"),
+            "src": panel_spec.get("src"),
+        })
+        if not existing.get("enabled", True):
+            existing["enabled"] = True
+            existing["enabled_at"] = int(time.time())
+            existing["disabled_at"] = None
+        self._save()
         return panel_id
 
     def get_panel(self, panel_id: str) -> Optional[Dict[str, Any]]:
@@ -268,13 +310,19 @@ class PluginPanelRegistry:
             raise
 
 
-# Global singleton (thread-safe in production)
-_panel_registry_instance: Optional[PluginPanelRegistry] = None
+# One instance per tenant (a single global singleton always resolved to
+# tenant "_default", so a panel registered for any other tenant was silently
+# invisible — panels ARE tenant-scoped state, same as the plugin registry
+# itself; CLAUDE.md § Multi-tenant axis).
+_panel_registry_instances: Dict[str, PluginPanelRegistry] = {}
+_registry_lock = threading.Lock()
 
 
-def get_panel_registry() -> PluginPanelRegistry:
-    """Get or create the global panel registry singleton."""
-    global _panel_registry_instance
-    if _panel_registry_instance is None:
-        _panel_registry_instance = PluginPanelRegistry()
-    return _panel_registry_instance
+def get_panel_registry(tenant_id: str = "_default") -> PluginPanelRegistry:
+    """Get or create the panel registry singleton for one tenant."""
+    with _registry_lock:
+        instance = _panel_registry_instances.get(tenant_id)
+        if instance is None:
+            instance = PluginPanelRegistry(tenant_id=tenant_id)
+            _panel_registry_instances[tenant_id] = instance
+        return instance

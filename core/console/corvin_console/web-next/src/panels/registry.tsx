@@ -22,7 +22,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
-  LearningDashboardPage, ModelCostOptimizerPage, QualityGatesPage,
+  LearningDashboardPage, ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -75,6 +75,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   LearningDashboardPage,
   ModelCostOptimizerPage,
   QualityGatesPage,
+  VideoProducerPage,
   MarketplaceHub: MarketplaceHub as unknown as ComponentType,
 };
 
@@ -118,12 +119,13 @@ export const PANELS: ConsolePanel[] = [
   rc("data-sources", "Data Sources", DataSourcesPage),
   rc("flows", "Flows", FlowsPage),
   rc("agents", "Agents", AgentsPage),
-  // Unified "Plugins & Extensions" hub — the ONE sidebar entry for the three
-  // extend-CorvinOS subsystems (roadmap de-dup of the plugin triple). It renders
-  // the three components below as tabs. The three standalone routes stay mounted
-  // for deep-link stability but are dropped from the sidebar — see NAV_EXEMPT in
+  // Unified "Marketplace" hub (renamed from "Plugins & Extensions", 2026-09-12) —
+  // the ONE sidebar entry for the three extend-CorvinOS subsystems (roadmap
+  // de-dup of the plugin triple). It renders the three components below as
+  // tabs. The three standalone routes stay mounted for deep-link stability
+  // but are dropped from the sidebar — see NAV_EXEMPT in
   // tests/unit/panel-nav-wiring.test.ts.
-  rc("plugin-center", "Plugins & Extensions", PluginCenterPage),
+  rc("plugin-center", "Marketplace", PluginCenterPage),
   rc("extensions", "Extensions", ExtensionsPage),
   rc("mcp-plugins", "MCP Plugins", McpPluginsPage),
   rc("plugins", "Plugins", PluginsPage),

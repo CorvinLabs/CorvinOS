@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Try to import plugin modules from multiple locations
 VideoJob = None
 get_storage = None
+get_runner = None
 
 plugin_locations = [
     ("~/.corvin/plugins/video_producer/src", "installed"),
@@ -37,6 +38,8 @@ for rel_path, location_type in plugin_locations:
     # Try to load models.py directly
     models_path = os.path.join(plugin_path, "models.py")
     storage_path = os.path.join(plugin_path, "storage.py")
+    skill_path = os.path.join(plugin_path, "skill.py")
+    async_runner_path = os.path.join(plugin_path, "async_runner.py")
 
     if os.path.exists(models_path) and os.path.exists(storage_path):
         try:
@@ -56,13 +59,30 @@ for rel_path, location_type in plugin_locations:
             sys.modules["video_producer_storage"] = storage_module
             spec.loader.exec_module(storage_module)
             get_storage = storage_module.get_storage
+            sys.modules["storage"] = storage_module
+
+            # Load skill module (real orchestration) if present
+            if os.path.exists(skill_path):
+                spec = importlib.util.spec_from_file_location("video_producer_skill", skill_path)
+                skill_module = importlib.util.module_from_spec(spec)
+                sys.modules["video_producer_skill"] = skill_module
+                sys.modules["skill"] = skill_module
+                spec.loader.exec_module(skill_module)
+
+            # Load async_runner module (background thread-pool job runner) if present
+            if os.path.exists(async_runner_path):
+                spec = importlib.util.spec_from_file_location("video_producer_async_runner", async_runner_path)
+                async_runner_module = importlib.util.module_from_spec(spec)
+                sys.modules["video_producer_async_runner"] = async_runner_module
+                spec.loader.exec_module(async_runner_module)
+                get_runner = async_runner_module.get_runner
 
             logger.info(f"✓ Successfully imported video producer from {location_type}: {plugin_path}")
             break
         except Exception as e:
             logger.debug(f"✗ Import failed from {location_type}: {e}")
 
-router = APIRouter(prefix="/v1/video", tags=["video-producer"])
+router = APIRouter(prefix="/video", tags=["video-producer"])
 
 
 class CreateJobRequest(BaseModel):
@@ -74,6 +94,10 @@ class JobResponse(BaseModel):
     task: str
     status: str
     created_at: str
+    percent: int = 0
+    current_step: Optional[str] = None
+    current_scene: Optional[int] = None
+    total_scenes: Optional[int] = None
 
 
 class JobDetailResponse(JobResponse):
@@ -81,6 +105,7 @@ class JobDetailResponse(JobResponse):
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
     storyboard: Optional[dict] = None
+    video_output_path: Optional[str] = None
 
 
 class SettingsRequest(BaseModel):
@@ -99,7 +124,7 @@ _settings = {
 
 @router.post("/jobs")
 async def create_video_job(req: CreateJobRequest, background_tasks: BackgroundTasks):
-    """Create a new video job (non-blocking)."""
+    """Create a new video job and start real production in the background (non-blocking)."""
     if not req.task or not req.task.strip():
         raise HTTPException(status_code=400, detail="Task cannot be empty")
 
@@ -116,7 +141,15 @@ async def create_video_job(req: CreateJobRequest, background_tasks: BackgroundTa
 
         logger.info(f"Job created: {job_id}")
 
-        # Phase 2: background_tasks.add_task(orchestrate_video, job_id, req.task)
+        if get_runner:
+            config = {
+                "output_folder": _settings.get("output_folder"),
+                "tts_engine": _settings.get("tts_engine", "azure"),
+                "max_duration_minutes": _settings.get("max_duration_minutes") or 60,
+            }
+            await get_runner().start_job(job_id, req.task, config)
+        else:
+            logger.error(f"[{job_id}] async_runner not available — job stays pending, no production will run")
 
         return {
             "job_id": job_id,
@@ -147,6 +180,11 @@ async def get_job_status(job_id: str):
         started_at=job.started_at.isoformat() if job.started_at else None,
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
         error_message=job.error_message,
+        video_output_path=job.video_output_path,
+        percent=getattr(job, "percent", 0),
+        current_step=getattr(job, "current_step", None),
+        current_scene=getattr(job, "current_scene", None),
+        total_scenes=getattr(job, "total_scenes", None),
     )
 
 
@@ -170,7 +208,11 @@ async def list_jobs(limit: int = 20, offset: int = 0):
                 id=j.id,
                 task=j.task,
                 status=j.status,
-                created_at=j.created_at.isoformat()
+                created_at=j.created_at.isoformat(),
+                percent=getattr(j, "percent", 0),
+                current_step=getattr(j, "current_step", None),
+                current_scene=getattr(j, "current_scene", None),
+                total_scenes=getattr(j, "total_scenes", None),
             )
             for j in jobs
         ],

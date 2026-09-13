@@ -12,14 +12,16 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Upload, Play, Settings, Trash2, Download } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { VideoPlayer } from "@/components/VideoPlayer";
 
-const BASE_URL = "/api";
+const BASE_URL = "/v1/console/video";
 
 // API client
 const videoApi = {
   async createJob(task: string) {
-    const response = await fetch(`${BASE_URL}/v1/video/jobs`, {
+    const response = await fetch(`${BASE_URL}/jobs`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ task }),
     });
@@ -28,20 +30,21 @@ const videoApi = {
   },
 
   async getJob(jobId: string) {
-    const response = await fetch(`${BASE_URL}/v1/video/jobs/${jobId}`);
+    const response = await fetch(`${BASE_URL}/jobs/${jobId}`, { credentials: "include" });
     if (!response.ok) throw new Error("Failed to get job");
     return response.json();
   },
 
   async listJobs(limit = 20, offset = 0) {
-    const response = await fetch(`${BASE_URL}/v1/video/jobs?limit=${limit}&offset=${offset}`);
+    const response = await fetch(`${BASE_URL}/jobs?limit=${limit}&offset=${offset}`, { credentials: "include" });
     if (!response.ok) throw new Error("Failed to list jobs");
     return response.json();
   },
 
   async updateSettings(settings: Record<string, any>) {
-    const response = await fetch(`${BASE_URL}/v1/video/settings`, {
+    const response = await fetch(`${BASE_URL}/settings`, {
       method: "PUT",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     });
@@ -50,7 +53,7 @@ const videoApi = {
   },
 
   async getSettings() {
-    const response = await fetch(`${BASE_URL}/v1/video/settings`);
+    const response = await fetch(`${BASE_URL}/settings`, { credentials: "include" });
     if (!response.ok) throw new Error("Failed to get settings");
     return response.json();
   },
@@ -97,6 +100,20 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+const ACTIVE_STATUSES = ["pending", "storyboard_generating", "skills_running"];
+
+function ProgressBar({ percent }: { percent: number }) {
+  const pct = Math.max(0, Math.min(100, percent || 0));
+  return (
+    <div className="w-full h-2 rounded bg-muted overflow-hidden">
+      <div
+        className="h-full bg-primary transition-all duration-500"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
 export function VideoProducerPage() {
   const queryClient = useQueryClient();
   const [userTask, setUserTask] = useState("");
@@ -105,19 +122,23 @@ export function VideoProducerPage() {
   const [ttsEngine, setTtsEngine] = useState("azure");
   const [maxDuration, setMaxDuration] = useState(60);
 
-  // Fetch jobs list
+  // Fetch jobs list — poll faster while any job is still in production for a live-feeling gallery
   const jobsQuery = useQuery({
     queryKey: ["video-jobs"],
     queryFn: () => videoApi.listJobs(),
-    refetchInterval: 5000,
+    refetchInterval: (query) => {
+      const jobs = query.state.data?.jobs ?? [];
+      const anyActive = jobs.some((j: any) => ACTIVE_STATUSES.includes(j.status));
+      return anyActive ? 1500 : 5000;
+    },
   });
 
-  // Fetch selected job details
+  // Fetch selected job details — poll every 1s while running for real-time production status
   const jobDetailsQuery = useQuery({
     queryKey: ["video-job", selectedJobId],
     queryFn: () => (selectedJobId ? videoApi.getJob(selectedJobId) : null),
     enabled: !!selectedJobId,
-    refetchInterval: 3000,
+    refetchInterval: (query) => (ACTIVE_STATUSES.includes(query.state.data?.status) ? 1000 : 4000),
   });
 
   // Create job mutation
@@ -179,19 +200,37 @@ export function VideoProducerPage() {
         </div>
       </Card>
 
-      {/* Section 2: Job Details & Progress */}
+      {/* Section 2: Job Details & Realtime Progress */}
       {selectedJob && (
         <Card className="p-6">
           <h2 className="text-xl font-semibold mb-4">Production Status</h2>
           <div className="space-y-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Status</p>
+            <div className="flex items-center justify-between">
               <StatusBadge status={selectedJob.status} />
+              {ACTIVE_STATUSES.includes(selectedJob.status) && (
+                <span className="text-xs text-muted-foreground animate-pulse">● live</span>
+              )}
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Task</p>
               <p className="text-sm">{selectedJob.task}</p>
             </div>
+
+            {ACTIVE_STATUSES.includes(selectedJob.status) && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{selectedJob.current_step || "Working..."}</span>
+                  <span>{selectedJob.percent ?? 0}%</span>
+                </div>
+                <ProgressBar percent={selectedJob.percent ?? 0} />
+                {selectedJob.total_scenes ? (
+                  <p className="text-xs text-muted-foreground">
+                    Scene {selectedJob.current_scene ?? 0} / {selectedJob.total_scenes}
+                  </p>
+                ) : null}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-xs text-muted-foreground">Created</p>
@@ -211,8 +250,17 @@ export function VideoProducerPage() {
               </div>
             )}
             {selectedJob.status === "complete" && (
-              <div className="bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded">
-                <p className="text-sm font-medium">✓ Video Ready</p>
+              <div className="space-y-3">
+                <div className="bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded">
+                  <p className="text-sm font-medium">✓ Video Ready</p>
+                </div>
+                <VideoPlayer
+                  videoPath={`${BASE_URL}/videos/${selectedJob.id}/download`}
+                  title={selectedJob.task}
+                  onDownload={() => {
+                    window.location.href = `${BASE_URL}/videos/${selectedJob.id}/download`;
+                  }}
+                />
               </div>
             )}
           </div>
@@ -247,6 +295,14 @@ export function VideoProducerPage() {
                   </div>
                   <StatusBadge status={job.status} />
                 </div>
+                {ACTIVE_STATUSES.includes(job.status) && (
+                  <div className="mt-2 space-y-1">
+                    <ProgressBar percent={job.percent ?? 0} />
+                    <p className="text-xs text-muted-foreground truncate">
+                      {job.current_step || "Working..."} ({job.percent ?? 0}%)
+                    </p>
+                  </div>
+                )}
               </div>
             ))}
           </div>

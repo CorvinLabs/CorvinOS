@@ -28,6 +28,7 @@ import {
   ShieldCheck,
   Sparkles,
   Menu,
+  Video,
   Workflow,
   X,
 } from "lucide-react";
@@ -134,6 +135,21 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/vibe-engineering", label: "Learnings", icon: TrendingUp, requiredFlag: "vibe_engineering" },
     ],
   },
+  // Renamed from "Plugins & Extensions" (2026-09-12, operator request) and
+  // promoted to its own top-level section right under Learnings. This group's
+  // id is also the id the backend manifest's "marketplace" nav group merges
+  // into (see mergeManifestNav + capabilities.py::_get_nav_groups) — every
+  // installed plugin's Console panel is appended here automatically, and
+  // removed automatically on disable/uninstall, with no frontend redeploy.
+  {
+    id: "marketplace",
+    label: "Marketplace",
+    collapsible: true,
+    defaultOpen: true,
+    items: [
+      { to: "/app/plugin-center", label: "Marketplace", icon: Blocks },
+    ],
+  },
   {
     id: "observability",
     label: "Observability",
@@ -171,11 +187,6 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/forge",      label: "Forge",           icon: Hammer },
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
       { to: "/app/packages",   label: "Packages",        icon: Package },
-      // Unified hub for the three extend-CorvinOS subsystems (plugin registry,
-      // MCP tools, layer extensions) — one entry, three tabs. Replaces the former
-      // separate "Extensions" / "MCP Plugins" / "Plugins" entries, which pointed
-      // at distinct backends but read as synonyms in the sidebar.
-      { to: "/app/plugin-center", label: "Plugins & Extensions", icon: Blocks },
     ],
   },
   {
@@ -404,7 +415,7 @@ export function mergeManifestNav(groups: NavGroup[], manifest: ConsoleManifest |
 const MANIFEST_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   MessagesSquare, LayoutDashboard, Layers: Boxes, Cpu, BookOpen, Blocks, Settings,
   Zap: Sparkles, Shield: ShieldCheck, ShieldCheck, Sparkles, Plug, Package, Globe, Network, Workflow,
-  TrendingUp,
+  TrendingUp, Video,
 };
 
 export function AppLayout() {

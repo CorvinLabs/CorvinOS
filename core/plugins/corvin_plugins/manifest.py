@@ -414,6 +414,16 @@ class PluginRecord:
     last_error_type: Optional[str] = None
     error_count: int = 0
 
+    # Console panel (ADR-0561/ADR-0455): a plugin that wants a sidebar entry
+    # declares it here instead of the Console hand-editing NAV_GROUPS/PANELS.
+    # PluginLifecycle.enable/disable/uninstall (state.py) drives
+    # PluginPanelRegistry from this field, so the panel appears the moment the
+    # plugin is enabled and disappears on disable/uninstall — no frontend
+    # redeploy. Shape: {"label", "route", "icon", "group",
+    # "element_kind" ("plugin-inspector" default | "react-component" | "iframe"),
+    # "component"?, "src"?} — see PluginPanelRegistry.PanelEntry.
+    console_panel: Optional[Dict[str, Any]] = None
+
     def __post_init__(self) -> None:
         if self.plugin_type not in KNOWN_PLUGIN_TYPES:
             raise UnknownPluginType(
@@ -521,6 +531,7 @@ class PluginRecord:
             "version_history": [m.to_dict() for m in self.version_history],
             "last_error_type": self.last_error_type,
             "error_count": self.error_count,
+            "console_panel": self.console_panel,
         }
 
     @classmethod
@@ -587,6 +598,7 @@ class PluginRecord:
                 ],
                 last_error_type=data.get("last_error_type"),
                 error_count=int(data.get("error_count", 0)),
+                console_panel=data.get("console_panel"),
             )
         except KeyError as exc:
             raise PluginError(f"registry record missing required field {exc}") from exc
