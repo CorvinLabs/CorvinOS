@@ -37,63 +37,88 @@ class VideoProducerOrchestrator:
         self,
         asset_paths: list[str | Path],
         instructions: Optional[dict[str, Any]] = None,
+        skip_phases: Optional[list[int]] = None,
     ) -> dict[str, Any]:
         """
         Main orchestration entry point.
 
-        Phases (Phase 1–3 in this version):
+        Seven-Phase Pipeline:
         1. Asset ingestion (via narrated-video-producer)
         2. Deep analysis (via worker.asset_analyzer)
         3. Gate check (ready_for_narration)
         4. Storyboard generation (LLM-constrained to analysis facts)
-        5–7. (Phases 4–7 in later phases: voice, assembly, YouTube)
+        5. Parallel Workers (voice, screenshots, slides) [PHASE 3 NEW]
+        6. Video Assembly (FFmpeg orchestration) [PHASE 3 NEW]
+        7. YouTube Upload (async, non-blocking) [PHASE 4a NEW]
 
         Args:
             asset_paths: Files to analyze
             instructions: Optional user guidance
+            skip_phases: Optional list of phase numbers to skip (for testing)
 
         Returns:
             {
                 "analysis": AssetAnalysisResult dict,
                 "storyboard": Storyboard dict | None,
-                "status": "success" | "blocked",
+                "slides_metadata": dict | None,
+                "video_path": str | None,
+                "youtube_task_id": str | None,
+                "status": "success" | "partial" | "blocked",
+                "message": str,
             }
 
         Raises:
             AnalysisGateFailedError: If analysis gates not met
         """
+        skip_phases = skip_phases or []
+
         try:
-            # Phase 2: Deep analysis via worker.asset_analyzer
-            # Import dynamically to avoid circular imports
+            # Phase 1-4: Existing implementation
             from core.skills.workers.asset_analyzer import AssetAnalyzer
 
             analyzer = AssetAnalyzer(str(self.project_dir))
             analysis = await analyzer.analyze(asset_paths, instructions)
-
-            # Save analysis to disk
             self._save_analysis(analysis)
-
-            # Gate check: ready_for_narration must be true
             self._check_analysis_gates(analysis)
 
-            # Phase 3: Storyboard generation (constrained)
             storyboard = await self._generate_storyboard(analysis)
-
-            # Save storyboard to disk
             if storyboard:
                 self._save_storyboard(storyboard)
+
+            # Phase 5: Parallel Workers (NEW - Phase 3)
+            if 5 not in skip_phases and storyboard:
+                slides_metadata = await self._execute_phase_5_parallel_workers(storyboard)
+            else:
+                slides_metadata = None
+
+            # Phase 6: Video Assembly (NEW - Phase 3)
+            video_path = None
+            video_metadata = None
+            if 6 not in skip_phases and slides_metadata:
+                result = await self._execute_phase_6_video_assembly(storyboard, slides_metadata)
+                video_path = result.get("video_path")
+                video_metadata = result.get("metadata")
+
+            # Phase 7: YouTube Upload (NEW - Phase 4a, optional, non-blocking)
+            youtube_task_id = None
+            if 7 not in skip_phases and video_path:
+                youtube_task_id = await self._execute_phase_7_youtube_upload(
+                    video_path, storyboard, video_metadata
+                )
 
             return {
                 "analysis": analysis.to_dict(),
                 "storyboard": storyboard.to_dict() if storyboard else None,
-                "status": "success",
+                "slides_metadata": slides_metadata,
+                "video_path": video_path,
+                "youtube_task_id": youtube_task_id,
+                "status": "success" if video_path else "partial",
+                "message": "Video production complete" if video_path else "Partial completion (phases 5+ pending)",
             }
 
         except AnalysisGateFailedError:
-            # Re-raise gate failures (expected workflow stop)
             raise
         except Exception as e:
-            # Wrap unexpected errors
             return {
                 "analysis": {
                     "metadata": {"error": str(e)},
@@ -101,7 +126,11 @@ class VideoProducerOrchestrator:
                     "blockers": [str(e)],
                 },
                 "storyboard": None,
+                "slides_metadata": None,
+                "video_path": None,
+                "youtube_task_id": None,
                 "status": "blocked",
+                "message": f"Orchestration failed: {str(e)}",
             }
 
     def _save_analysis(self, analysis: AssetAnalysisResult) -> None:
@@ -162,3 +191,202 @@ class VideoProducerOrchestrator:
             },
             scenes=scenes,
         )
+
+    async def _execute_phase_5_parallel_workers(
+        self, storyboard: Storyboard
+    ) -> Optional[dict[str, Any]]:
+        """
+        Phase 5: Parallel Workers (voice, screenshots, slides).
+
+        Dispatch voice_synthesizer, screenshot_capturer, and slide_renderer
+        in parallel. Return slides_metadata for Phase 6.
+
+        Returns:
+            {
+                "slides_dir": str,
+                "slides_metadata": dict,
+                "voice_dir": str,
+                "screenshots_dir": str,
+                "status": "success" | "partial",
+            }
+        """
+        try:
+            from core.skills.workers.slide_renderer import SlideRenderer
+            from core.skills.workers.voice_synthesizer import VoiceSynthesizer
+            from core.skills.workers.screenshot_capturer import ScreenshotCapturer
+
+            # Precondition: storyboard must exist
+            if not storyboard or not storyboard.scenes:
+                return None
+
+            # Get PowerPoint asset path from metadata
+            ppt_path = storyboard.metadata.get("ppt_asset_path", self.project_dir / "input.pptx")
+
+            # Initialize workers
+            slide_renderer = SlideRenderer(str(self.project_dir))
+            voice_synthesizer = VoiceSynthesizer(str(self.project_dir))
+            screenshot_capturer = ScreenshotCapturer(str(self.project_dir))
+
+            # Execute in parallel
+            tasks = [
+                slide_renderer.render_slides(ppt_path, storyboard),
+                voice_synthesizer.synthesize_narration(storyboard),
+                screenshot_capturer.capture_scenes(storyboard),
+            ]
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Check results
+            slide_result = results[0]
+            voice_result = results[1]
+            screenshot_result = results[2]
+
+            if isinstance(slide_result, Exception):
+                slide_result = {"status": "error", "error": str(slide_result)}
+            if isinstance(voice_result, Exception):
+                voice_result = {"status": "error", "error": str(voice_result)}
+            if isinstance(screenshot_result, Exception):
+                screenshot_result = {"status": "error", "error": str(screenshot_result)}
+
+            # Return slides metadata for next phase
+            return {
+                "slides_dir": str(slide_renderer.slides_dir),
+                "slides_metadata": slide_result.get("metadata", {}),
+                "slides_rendered": slide_result.get("slides_rendered", 0),
+                "voice_dir": str(voice_synthesizer.audio_dir),
+                "screenshots_dir": str(screenshot_capturer.output_dir),
+                "status": "success" if slide_result.get("status") == "success" else "partial",
+            }
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "slides_dir": str(self.project_dir / "slides"),
+                "voice_dir": str(self.project_dir / "audio"),
+                "screenshots_dir": str(self.project_dir / "screenshots"),
+            }
+
+    async def _execute_phase_6_video_assembly(
+        self,
+        storyboard: Storyboard,
+        slides_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Phase 6: Video Assembly (FFmpeg orchestration + timing validation).
+
+        Compose slides + audio + screenshots into final MP4.
+
+        Returns:
+            {
+                "status": "success" | "partial" | "blocked",
+                "video_path": str | None,
+                "metadata": dict,
+                "timing_issues": list,
+            }
+        """
+        try:
+            from core.skills.workers.video_assembler import VideoAssembler
+
+            # Precondition: slides and audio directories must exist
+            slides_dir = Path(slides_metadata.get("slides_dir", self.project_dir / "slides"))
+            audio_dir = Path(self.project_dir / "audio")
+            screenshots_dir = Path(self.project_dir / "screenshots")
+
+            if not slides_dir.exists():
+                return {
+                    "status": "blocked",
+                    "video_path": None,
+                    "metadata": {"error": f"Slides directory not found: {slides_dir}"},
+                    "timing_issues": [],
+                }
+
+            # Initialize video assembler
+            assembler = VideoAssembler(str(self.project_dir))
+
+            # Load timing data
+            timings_file = self.project_dir / "timings.json"
+            timings = {}
+            if timings_file.exists():
+                with open(timings_file) as f:
+                    timings = json.load(f)
+
+            # Assemble video
+            result = await assembler.assemble_video(
+                storyboard=storyboard,
+                slides_dir=slides_dir,
+                audio_dir=audio_dir,
+                screenshots_dir=screenshots_dir if screenshots_dir.exists() else None,
+                timings=timings,
+                output_name="output.mp4",
+            )
+
+            # Save video metadata to disk
+            if result.get("status") == "success":
+                video_metadata_path = self.project_dir / "video_metadata.json"
+                with open(video_metadata_path, "w") as f:
+                    json.dump(result, f, indent=2)
+
+            return result
+
+        except Exception as e:
+            return {
+                "status": "blocked",
+                "video_path": None,
+                "metadata": {"error": str(e)},
+                "timing_issues": [],
+            }
+
+    async def _execute_phase_7_youtube_upload(
+        self,
+        video_path: str,
+        storyboard: Storyboard,
+        video_metadata: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """
+        Phase 7: YouTube Upload (async, non-blocking via Task API).
+
+        Enqueue video for upload but do NOT wait for completion.
+        Return task_id immediately.
+
+        Returns:
+            task_id if successful, None otherwise
+        """
+        try:
+            from core.skills.workers.youtube_uploader import YouTubeUploader
+
+            uploader = YouTubeUploader(str(self.project_dir))
+
+            # Precondition: quality_score ≥ 0.70
+            video_metadata = video_metadata or {}
+            quality_score = video_metadata.get("quality_score", 0.5)
+
+            if quality_score < 0.70:
+                # Skip upload if quality too low
+                return None
+
+            # Validate quality
+            validation = await uploader.validate_quality(video_metadata)
+            if not validation["valid"]:
+                return None
+
+            # Enqueue upload (non-blocking, returns immediately)
+            metadata = {
+                "title": storyboard.metadata.get("title", "CorvinOS Video"),
+                "description": storyboard.metadata.get("description", "Generated by CorvinOS"),
+                "tags": ["corvinOS", "generated"],
+            }
+
+            result = await uploader.enqueue_upload(
+                video_path=video_path,
+                metadata=metadata,
+                srt_path=self.project_dir / "output.srt",  # If exists
+            )
+
+            if result.get("status") == "queued":
+                return result.get("task_id")
+            return None
+
+        except Exception:
+            # YouTube upload failure doesn't block video completion
+            return None
