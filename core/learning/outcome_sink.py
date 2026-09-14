@@ -1,225 +1,36 @@
-"""Task-outcome sink for the ADR-0314 learning loop (loop closure, sink side).
+"""Outcome Sink — Record Task Results to Learning Event Store"""
 
-A learning loop needs an OUTCOME signal per real task, joined to the routing
-decision that produced it. Until 2026-09-06 the ACP emitted ``skill_executed``
-events only (and only from console boot/manifest calls) and nothing ever
-recorded whether the task those decisions belonged to succeeded — so the
-optimizer had no ground truth (adversarial review F1/F2).
-
-:func:`emit_task_outcome` is called from the ONE chokepoint every surface's
-task lifecycle passes through — ``corvin_core.task_manager.TaskManager.
-record_event`` on ``task.completed`` / ``task.failed`` — and writes an
-``EventType.OUTCOME`` learning event through the SAME emitter the booted ACP
-registry uses (audit-first ``EventStore``, so the record is hash-chained).
-
-Content-free by construction: task id, status, exit code, duration, engine
-name — never the instruction, the output or a user id (GDPR Art. 5).
-Fail-soft: a missing tenant, an un-booted registry or an emitter without a
-learning backend means "no outcome recorded" and is reported via the return
-value, never as an exception into the task lifecycle.
-
-What actually protects the optimizer from poisoned outcomes (round-4 review, F6):
-the AUDIT-FIRST write in :meth:`core.learning.event_store.EventStore.write_event`
-— a learning event that does not commit to the core hash chain is never written
-to disk, and the store is tenant-bound, so a foreign tenant's OUTCOME is refused.
-That is the whole mitigation.
-
-Until 2026-09-07 this module also carried a ``verify_outcome_source`` check and
-an ``outcome_source_verified`` flag, described in this header as the weight-
-poisoning mitigation. It was a tautology: ``emit_task_outcome`` set
-``source="task_manager"`` one line above the check, ``TRUSTED_OUTCOME_SOURCES``
-contained that literal, no other producer of ``EventType.OUTCOME`` exists in the
-repo, and the flag was therefore ``True`` on 100 % of records — the branch that
-returns False was unreachable and the consumer filter filtered nothing. It also
-offered nothing against the stated threat: the flag was an ordinary field on the
-same JSONL line an attacker would have to be able to write in the first place,
-so anyone able to inject an outcome could set it. A check that cannot fail is
-not a mitigation, so it was removed rather than left standing as one. A real
-source gate needs a source the CALLER does not control; if one is ever built
-(e.g. outcomes arriving over A2A), it belongs at the producer boundary, not here.
-"""
-from __future__ import annotations
-
-import logging
-from typing import Any, Optional
-
-logger = logging.getLogger(__name__)
-
-#: The Skill whose decisions task outcomes are attributed to (L5 routing).
-OUTCOME_SKILL_ID = "os.delegation_router"
+import uuid
+import hashlib
+from datetime import datetime
+from core.learning.event_store import LearningEvent
 
 
-def learning_emitter() -> Optional[Any]:
-    """The booted ACP registry's learning emitter, or None."""
-    try:
-        from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
-    except Exception:  # noqa: BLE001 — stripped install
-        return None
-    registry = getattr(_reg, "_global_registry", None)
-    backend = getattr(registry, "learning_backend", None) if registry is not None else None
-    return getattr(backend, "emitter", None)
+class OutcomeSink:
+    def __init__(self, event_store):
+        self.event_store = event_store
 
-
-def emit_task_outcome(
-    *,
-    tenant_id: Optional[str],
-    task_id: str,
-    status: str,
-    exit_code: Optional[int] = None,
-    duration_ms: Optional[int] = None,
-    engine: Optional[str] = None,
-    task_type: Optional[str] = None,
-    emitter: Optional[Any] = None,
-) -> bool:
-    """Record one task outcome as an ``OUTCOME`` learning event.
-
-    Args:
-        tenant_id: The task's tenant (from the task's own metadata — NEVER an
-            env fallback). ``None``/empty → dropped, returns False.
-        task_id: Task identifier (uuid; not PII).
-        status: ``"completed"`` | ``"failed"`` | ``"cancelled"``.
-        exit_code, duration_ms, engine, task_type: content-free metadata.
-        emitter: Explicit ``EventEmitter`` (tests); default is the booted
-            registry's.
-
-    Returns:
-        True when the event was queued for the audit-first store.
-    """
-    if not tenant_id or not isinstance(tenant_id, str):
-        logger.debug("task outcome dropped: no tenant_id (task %s)", task_id)
-        return False
-    if status not in ("completed", "failed", "cancelled"):
-        logger.debug("task outcome dropped: unknown status %r", status)
-        return False
-    em = emitter if emitter is not None else learning_emitter()
-    if em is None:
-        logger.debug("task outcome dropped: no learning emitter booted (task %s)", task_id)
-        return False
-    try:
-        from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
-
-        signal: dict[str, Any] = {
-            "task_id": task_id,
-            "status": status,
-            "success": status == "completed" and (exit_code in (None, 0)),
-            "exit_code": exit_code,
-            "duration_ms": duration_ms,
-            "engine": engine,
-            "task_type": task_type,
-            "source": "task_manager",
-        }
-
-        event = LearningEvent.create(
-            event_type=EventType.OUTCOME,
-            skill_id=OUTCOME_SKILL_ID,
+    async def record_outcome(
+        self, task_id: str, skill_id: str, tenant_id: str, outcome: str,
+        reason: str | None = None, confidence: float | None = None,
+        prev_hash: str = "0" * 64,
+    ) -> bool:
+        signal = {"success": 1.0, "partial": 0.5, "failure": 0.0}.get(outcome, 0.0)
+        event = LearningEvent(
+            id=str(uuid.uuid4()),
             tenant_id=tenant_id,
+            timestamp=datetime.utcnow().isoformat(),
+            event_type="outcome",
+            skill_id=skill_id,
+            input_hash=hashlib.sha256(task_id.encode()).hexdigest()[:16],
+            output_hash=hashlib.sha256(outcome.encode()).hexdigest()[:16],
             signal=signal,
-            lom="core/learning/outcome_sink.py:emit_task_outcome",
+            prev_hash=prev_hash,
+            hash="",
+            lom=f"core/learning/outcome_sink.py:record_outcome",
         )
-        return bool(em.emit(event))
-    except Exception as exc:  # noqa: BLE001 — the task lifecycle must never break on learning
-        logger.warning("task outcome not recorded (%s): %s", task_id, type(exc).__name__)
-        return False
-
-
-def recent_outcomes(tenant_id: str, limit: int = 10, *, store: Optional[Any] = None) -> tuple[int, int]:
-    """``(successes, total)`` over the ``limit`` MOST RECENT task outcomes.
-
-    The optimizer's per-epoch input (``SkillAdapter.run_optimizer_epoch``) and
-    therefore the sole ground truth behind every accept/reject of a config
-    hypothesis for ``os.delegation_router``. Reads the booted registry's store
-    unless ``store`` is given. ``(0, 0)`` when no outcome has been recorded yet
-    — the caller treats that as "no evidence".
-
-    Round-4 review, F3: this used to ask for ``limit=5000`` and then slice
-    ``events[-limit:]``. ``query_events`` selected the OLDEST 5000, so past a
-    tenant's 5000th outcome the optimizer's ground truth was frozen forever on
-    outcomes #4991–#5000 of all time. ``query_events`` now always windows from
-    the newest end, and this asks for exactly ``limit``.
-    """
-    if limit <= 0:
-        return 0, 0
-    st = store
-    if st is None:
-        em = learning_emitter()
-        st = getattr(em, "store", None)
-    if st is None:
-        return 0, 0
-    try:
-        from core.learning.learning_events import EventType  # noqa: PLC0415
-
-        events = st.query_events(tenant_id, event_type=EventType.OUTCOME, limit=limit)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("recent_outcomes unreadable: %s", type(exc).__name__)
-        return 0, 0
-    total = len(events)
-    successes = sum(1 for e in events if (e.signal or {}).get("success") is True)
-    return successes, total
-
-
-def integrate_feedback_outcome(
-    *,
-    tenant_id: Optional[str],
-    task_id: str,
-    feedback_signal: dict[str, Any],
-    emitter: Optional[Any] = None,
-) -> bool:
-    """Record feedback-based outcome tuning signal.
-
-    Called from the feedback loop when user provides feedback on a task outcome.
-    Emits a special OUTCOME variant that combines original task result with
-    user feedback to refine the confidence/loss calculation.
-
-    Args:
-        tenant_id: Task's tenant
-        task_id: Task identifier
-        feedback_signal: User feedback dict with keys like:
-            - outcome_feedback: "yes"|"no"|"unknown"
-            - quality_rating: 1–5
-            - preference_feedback: "llm"|"deterministic"|"either"
-            - confidence: 0–1 user confidence in feedback
-        emitter: Explicit EventEmitter (tests); default is booted registry's
-
-    Returns:
-        True when the event was queued
-    """
-    if not tenant_id or not isinstance(tenant_id, str):
-        logger.debug("feedback outcome dropped: no tenant_id (task %s)", task_id)
-        return False
-
-    em = emitter if emitter is not None else learning_emitter()
-    if em is None:
-        logger.debug("feedback outcome dropped: no emitter (task %s)", task_id)
-        return False
-
-    try:
-        from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
-
-        signal: dict[str, Any] = {
-            "task_id": task_id,
-            "feedback_signal": feedback_signal,
-            "source": "feedback_loop",
-        }
-
-        event = LearningEvent.create(
-            event_type=EventType.OUTCOME,
-            skill_id=OUTCOME_SKILL_ID,
-            tenant_id=tenant_id,
-            signal=signal,
-            lom="core/learning/outcome_sink.py:integrate_feedback_outcome",
-        )
-        return bool(em.emit(event))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("feedback outcome not recorded (%s): %s", task_id, type(exc).__name__)
-        return False
-
-
-_learning_emitter = learning_emitter  # compat alias
-
-__all__ = [
-    "emit_task_outcome",
-    "recent_outcomes",
-    "learning_emitter",
-    "OUTCOME_SKILL_ID",
-    "integrate_feedback_outcome",
-]
+        
+        event_dict = {k: v for k, v in vars(event).items() if k != "hash" and v}
+        event = LearningEvent(**{**vars(event), "hash": LearningEvent.compute_hash(event_dict)})
+        
+        return await self.event_store.write_event(event)

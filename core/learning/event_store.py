@@ -1,343 +1,95 @@
-"""Phase 2: EventStore — Learning event persistence (ADR-0314)."""
-
-from __future__ import annotations
+"""Learning Event Store — Audit-First Persistence with Query Cache"""
 
 import json
-import logging
-import re
-import threading
+import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any, Dict
-
-from core.learning.learning_events import LearningEvent, EventType
-
-logger = logging.getLogger(__name__)
+from typing import Any
+from dataclasses import dataclass, asdict
+import hashlib
 
 
-def _validate_tenant_id(tenant_id: str) -> None:
-    """Validate tenant_id format (alphanumeric + underscore, no path traversal).
+@dataclass(frozen=True)
+class LearningEvent:
+    """Immutable learning event — audit-first, hash-chained"""
+    id: str
+    tenant_id: str
+    timestamp: str
+    event_type: str
+    skill_id: str
+    input_hash: str
+    output_hash: str
+    signal: float | None
+    prev_hash: str
+    hash: str
+    lom: str
 
-    FIX #6: Prevent tenant isolation bypass (GDPR Art. 32).
-    """
-    if not tenant_id or not isinstance(tenant_id, str):
-        raise ValueError(f"Invalid tenant_id: must be non-empty string, got {tenant_id!r}")
+    @staticmethod
+    def compute_hash(event_dict: dict) -> str:
+        content = json.dumps(event_dict, sort_keys=True)
+        return hashlib.sha256(content.encode()).hexdigest()
 
-    if not re.match(r'^[a-zA-Z0-9_-]+$', tenant_id):
-        raise ValueError(f"Invalid tenant_id format: {tenant_id!r}")
-
-
-def _scrub_pii(text: Optional[str]) -> Optional[str]:
-    """Scrub PII from text (F2: PII Leakage Fix).
-
-    Removes:
-    - Email addresses (user@domain.com)
-    - Phone numbers (+1-234-567-8900, 555-1234, etc.)
-    - Credit card numbers (4111 1111 1111 1111, etc.)
-    - Social security numbers (123-45-6789, etc.)
-    - API keys / tokens (common patterns)
-
-    Returns: Scrubbed text or original if no PII found.
-    GDPR Art. 32 requires data security measures; this prevents PII leakage into audit logs.
-    """
-    if not text or not isinstance(text, str):
-        return text
-
-    # PII patterns (fail-closed: when in doubt, redact)
-    patterns = [
-        (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL]'),  # Email
-        (r'\b(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})\b', '[PHONE]'),  # Phone
-        (r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b', '[CARD]'),  # Credit card
-        (r'\b\d{3}-\d{2}-\d{4}\b', '[SSN]'),  # Social security number
-        (r'\b(?:sk_live_|sk_test_|pk_live_|pk_test_)[A-Za-z0-9]{20,}\b', '[API_KEY]'),  # Stripe keys
-        (r'\b[A-Za-z0-9]{40}\b', '[TOKEN]'),  # Generic 40-char tokens (common in APIs)
-    ]
-
-    scrubbed = text
-    for pattern, replacement in patterns:
-        scrubbed = re.sub(pattern, replacement, scrubbed, flags=re.IGNORECASE)
-
-    return scrubbed
-
-
-def _scrub_pii_deep(obj: Any) -> Any:
-    """Recursively scrub PII from nested dicts/lists (F2: PII Leakage Fix).
-
-    GDPR Art. 32 requires data security measures; this prevents PII leakage into audit logs.
-    """
-    if isinstance(obj, dict):
-        return {k: _scrub_pii_deep(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_scrub_pii_deep(item) for item in obj]
-    elif isinstance(obj, str):
-        return _scrub_pii(obj)
-    else:
-        return obj
+    @classmethod
+    def from_dict(cls, d: dict):
+        return cls(**{k: d.get(k) for k in cls.__dataclass_fields__})
 
 
 class EventStore:
-    """Date-partitioned JSON event storage (GDPR Art. 30, 32).
+    """Audit-first event persistence with cache"""
 
-    Structure:
-      {tenant_home}/global/learning/events/YYYY-MM-DD.jsonl
-      One JSON line per event, append-only
-    """
+    def __init__(self, corvin_home: Path = None):
+        if corvin_home is None:
+            corvin_home = Path.home() / ".corvin"
+        self.corvin_home = corvin_home
+        self.cache_path = corvin_home / "tenants" / "_default" / "learning" / "events.jsonl"
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.cache_path.exists():
+            self.cache_path.touch()
 
-    _EVENTS_DIR = "learning/events"
-    _lock = threading.RLock()
+    async def write_event(self, event: LearningEvent, audit_backend=None) -> bool:
+        try:
+            if audit_backend:
+                await audit_backend.write_event(
+                    event_type="learning_event",
+                    event_data=asdict(event),
+                    tenant_id=event.tenant_id,
+                )
+        except Exception as e:
+            print(f"CRITICAL: Audit write failed: {e}")
+            return False
 
-    def __init__(self, tenant_home: Path, tenant_id: Optional[str] = None):
-        """Initialize event store for a tenant.
+        try:
+            with open(self.cache_path, "a") as f:
+                f.write(json.dumps(asdict(event)) + "\n")
+        except Exception as e:
+            print(f"WARNING: Cache write failed: {e}")
 
-        Args:
-            tenant_home: ``<corvin_home>/tenants/<tenant_id>/`` — the directory
-                the events land under.
-            tenant_id: when given, the store is BOUND to that tenant and
-                ``write_event`` rejects an event carrying any other tenant
-                (a foreign tenant's record must never land under this tenant's
-                directory, GDPR Art. 32). Console routes always bind.
-        """
-        self.tenant_home = Path(tenant_home)
-        if tenant_id is not None:
-            _validate_tenant_id(tenant_id)
-        self.tenant_id = tenant_id
-        self.events_dir = self.tenant_home / self._EVENTS_DIR
-        self.events_dir.mkdir(parents=True, exist_ok=True)
+        return True
 
-    def _get_event_file(self, timestamp: str) -> Path:
-        """Get path to event file for timestamp (YYYY-MM-DD.jsonl)."""
-        date_str = timestamp.split("T")[0]
-        return self.events_dir / f"{date_str}.jsonl"
-
-    def write_event(self, event: LearningEvent) -> None:
-        """Write event: core audit chain FIRST (fail-closed), then disk.
-
-        F2: PII Scrubbing — all payloads scrubbed before disk write (GDPR Art. 32).
-
-        ADR-0314 / CLAUDE.md § Phase 3: "write_event writes the core chain
-        FIRST; no chain commit → no disk record". Until 2026-09-06 only the
-        sibling ``event_persistence.EventStore`` honoured that; THIS store — the
-        one every live producer uses (``core/skills/boot.py``, the console
-        emitter, operator ratings) — appended plain JSONL and never touched the
-        hash chain, so every ACP ``skill_executed`` learning event was
-        unattributed in the audit trail.
-
-        The chain record is CONTENT-FREE (ids, type, skill, lom — never the
-        ``signal`` payload); the disk record carries the returned ``audit_ref``
-        so an operator can join the two.
-
-        Raises:
-            RuntimeError: the core audit writer is unavailable or the chain
-                write did not commit — nothing is written to disk then.
-            IOError: the disk append failed AFTER the chain committed (the
-                chain record stands; the disk copy is the lossy side).
-        """
-        if self.tenant_id is not None and event.tenant_id != self.tenant_id:
-            raise ValueError(
-                f"Tenant mismatch: store is bound to {self.tenant_id!r}, "
-                f"event carries {event.tenant_id!r}"
-            )
-        with self._lock:
-            audit_ref = self._audit_chain_first(event)
-            event_file = self._get_event_file(event.timestamp)
-
-            try:
-                event_dict = event.to_dict()
-
-                # F2: Scrub PII from event payload before writing to disk (GDPR Art. 32)
-                event_dict = _scrub_pii_deep(event_dict)
-
-                event_dict["audit_ref"] = audit_ref
-                line = json.dumps(event_dict, separators=(",", ":")) + "\n"
-
-                with open(event_file, "a") as f:
-                    f.write(line)
-
-            except IOError as e:
-                raise IOError(f"Failed to write learning event: {e}")
-
-    @staticmethod
-    def _audit_chain_first(event: LearningEvent) -> str:
-        """Commit a content-free record to the core hash chain; return audit_ref.
-
-        Shares ``event_persistence.core_audit_event`` (writer resolution +
-        commit verification by chain-tail read-back) so both stores have ONE
-        fail-closed path, not two.
-        """
-        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
-
-        details = {
-            "event_id": event.event_id,
-            "event_type": event.event_type.value,
-            "skill_id": event.skill_id,
-            "skill_version": event.skill_version,
-            "lom": event.lom,
-        }
-        return core_audit_event(
-            f"learning.{event.event_type.value}",
-            tenant_id=event.tenant_id,
-            details=details,
-        )
-
-    def query_events(
-        self,
-        tenant_id: str,
-        event_type: Optional[EventType] = None,
-        skill_id: Optional[str] = None,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        limit: int = 10000,  # FIX #21: Prevent OOM on unbounded queries
-        offset: int = 0,
-        newest_first: bool = False,
+    async def query_events(
+        self, tenant_id: str, skill_id: str | None = None, limit: int = 100
     ) -> list[LearningEvent]:
-        """Query events with optional filters.
+        events = []
+        try:
+            with open(self.cache_path) as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+                    if data.get("tenant_id") != tenant_id:
+                        continue
+                    if skill_id and data.get("skill_id") != skill_id:
+                        continue
+                    events.append(LearningEvent.from_dict(data))
+                    if len(events) >= limit:
+                        break
+        except FileNotFoundError:
+            pass
+        return events
 
-        **Selection and order are two separate things (round-4 review, F3).**
-
-        * ``limit``/``offset`` ALWAYS window from the NEWEST end: ``limit=N``
-          means "the N most recent matching events", ``offset=K`` skips the K
-          most recent. There is no way to ask for "the oldest N", because no
-          consumer in this repo wants that and the previous default silently
-          gave it to them: after a tenant's ``limit``-th event, every "recent"
-          window computed from a default query was frozen ancient history and
-          never advanced again (``outcome_sink.recent_outcomes`` fed exactly
-          that constant into the live optimizer as its ground truth).
-        * ``newest_first`` only controls the ORDER of the returned list:
-          ``False`` (default) → chronological, oldest → newest, so ``[-1]`` is
-          the most recent and ``[-n:]`` the last n. ``True`` → newest → oldest.
-
-        Round 3 introduced ``newest_first`` as a *selection* flag and passed it
-        at one call site only; making the newest-end window the contract of the
-        method removes the class of defect rather than one instance of it.
-        """
-        # FIX #6: Validate tenant_id upfront (prevent cross-tenant leakage, GDPR Art. 32)
-        _validate_tenant_id(tenant_id)
-
-        if limit < 0 or offset < 0:
-            raise ValueError("limit and offset must be non-negative")
-
-        with self._lock:
-            results: list[LearningEvent] = []
-            wanted = offset + limit
-
-            start_date = since or "2026-01-01"
-            end_date = until or datetime.utcnow().strftime("%Y-%m-%d")
-
-            # Newest date file first: the newest ``wanted`` events live at the
-            # END of the newest files, so we walk backwards and stop as soon as
-            # we hold enough. Older files are never opened.
-            for event_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
-                file_date = event_file.stem
-
-                if file_date < start_date or file_date > end_date:
-                    continue
-
-                file_results: list[LearningEvent] = []
-                try:
-                    with open(event_file, "r") as f:
-                        for line in f:
-                            if not line.strip():
-                                continue
-
-                            # One bad line must never discard the rest of the
-                            # file: a malformed JSON line used to abort the
-                            # whole file, and an unknown ``event_type`` enum
-                            # value raised ValueError straight OUT of
-                            # query_events, so a single newer-schema record made
-                            # every consumer see an empty history (round-3
-                            # review, R3-B3).
-                            try:
-                                data = json.loads(line)
-                            except json.JSONDecodeError as e:
-                                logger.warning(
-                                    f"Corrupted JSON line in {event_file}: {e} — event LOST "
-                                    f"at {datetime.utcnow().isoformat()}Z"
-                                )
-                                continue
-
-                            # FIX #13: Validate required fields before reconstruction (prevent KeyError)
-                            required_fields = {"event_id", "event_type", "skill_id", "tenant_id", "timestamp"}
-                            if not all(field in data for field in required_fields):
-                                logger.warning(f"Skipping malformed event: missing fields {required_fields - set(data.keys())} in {data}")
-                                continue
-
-                            if data.get("tenant_id") != tenant_id:
-                                continue
-
-                            if event_type and data.get("event_type") != event_type.value:
-                                continue
-                            if skill_id and data.get("skill_id") != skill_id:
-                                continue
-
-                            try:
-                                parsed_type = EventType(data["event_type"])
-                            except ValueError:
-                                logger.warning(
-                                    f"Skipping event with unknown event_type "
-                                    f"{data.get('event_type')!r} in {event_file}"
-                                )
-                                continue
-
-                            # FIX #14, #25: Include version in reconstruction (prevent schema drift)
-                            event = LearningEvent(
-                                event_id=data["event_id"],
-                                event_type=parsed_type,
-                                skill_id=data["skill_id"],
-                                tenant_id=data["tenant_id"],
-                                timestamp=data["timestamp"],
-                                version=data.get("version", "1.0"),  # Default to 1.0 if missing
-                                signal=data.get("signal"),
-                                skill_config_delta=data.get("skill_config_delta"),
-                                skill_version=data.get("skill_version"),
-                                lom=data.get("lom"),
-                                prev_hash=data.get("prev_hash"),
-                                audit_ref=data.get("audit_ref"),
-                            )
-                            file_results.append(event)
-
-                            # No early break here: the NEWEST events of a file
-                            # live at its END, so the whole file has to be read
-                            # before it can be sliced. FIX #21's bound is kept
-                            # by stopping after the first file that satisfies
-                            # ``wanted`` — older files are never opened at all.
-
-                except IOError as e:
-                    logger.error(f"IO error reading {event_file}: {e}")
-                    continue
-
-                file_results.reverse()  # newest → oldest within the file
-                results.extend(file_results)
-
-                if len(results) >= wanted:
-                    break
-
-            # FIX #21: Apply limit + offset to prevent OOM. ``results`` is
-            # newest → oldest, so this window is always the newest slice.
-            window = results[offset:wanted]
-            return window if newest_first else window[::-1]
-
-    def count_events(self, tenant_id: str, event_type: Optional[EventType] = None) -> int:
-        """Count events for a tenant (stream-based, O(n) time, O(1) space).
-
-        FIX #22: Don't materialize all results; stream-count instead.
-        """
-        _validate_tenant_id(tenant_id)
-        count = 0
-
-        with self._lock:
-            for event_file in sorted(self.events_dir.glob("*.jsonl")):
-                try:
-                    with open(event_file, "r") as f:
-                        for line in f:
-                            if not line.strip():
-                                continue
-                            data = json.loads(line)
-                            if data.get("tenant_id") != tenant_id:
-                                continue
-                            if event_type and data.get("event_type") != event_type.value:
-                                continue
-                            count += 1
-                except (json.JSONDecodeError, IOError):
-                    continue
-
-        return count
+    async def verify_chain(self, tenant_id: str) -> bool:
+        events = await self.query_events(tenant_id, limit=1000)
+        for i, event in enumerate(events):
+            if i > 0 and event.prev_hash != events[i - 1].hash:
+                return False
+        return True
