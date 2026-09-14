@@ -1042,6 +1042,31 @@ def submit_run(
             "(systemctl --user start corvin-compute@<tenant>)",
         )
 
+    # Phase 1.2: require_capability via ADR-0703 unified gate
+    try:
+        from license.capability_api import require_capability, LicenseDenied
+        try:
+            require_capability(
+                "compute.run", requested=1, tenant_id=rec.tenant_id,
+                entry_point=__file__+":1033"
+            )
+        except LicenseDenied as e:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "license_limit",
+                    "feature": "compute",
+                    "reason": e.reason,
+                    "upgrade_url": e.upgrade_url or "https://corvin-labs.com/pricing",
+                },
+            )
+    except ImportError:
+        # Fallback to legacy gate if license module unavailable
+        from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
+        enforce_compute_quota(
+            rec.tenant_id, rec.sid_fingerprint, audit_action="compute.run_submit",
+        )
+
     # corvin_compute lives at core/compute/corvin_compute — not on the
     # console's PYTHONPATH by default (see compute_license_status above for
     # the same pattern with corvin_license).
