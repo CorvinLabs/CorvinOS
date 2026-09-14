@@ -24,6 +24,7 @@ import {
   GitHubPage, SyncMonitorPage, EngineConfigPage,
   ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
+  LicensingAuditPage, OTELTelemetryPage, ModelSelectionPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -74,6 +75,9 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   VideoProducerPage,
   DataHubUnifiedPage,
   SkillForgeGeneratorPage,
+  LicensingAuditPage,
+  OTELTelemetryPage,
+  ModelSelectionPage,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -140,6 +144,12 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "DataHub", icon: "Database" } }),
   rc("skill-forge-generator", "Skill Forge", SkillForgeGeneratorPage,
      { nav: { label: "Skill Forge", icon: "Sparkles" } }),
+  rc("licensing-audit", "Licensing Audit", LicensingAuditPage,
+     { nav: { label: "Licensing Audit", icon: "Lock", group: "admin" } }),
+  rc("otel-telemetry", "OTEL Telemetry", OTELTelemetryPage,
+     { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "monitoring" } }),
+  rc("model-selection", "Model Selection", ModelSelectionPage,
+     { nav: { label: "Model Selection", icon: "Brain", group: "settings" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);
