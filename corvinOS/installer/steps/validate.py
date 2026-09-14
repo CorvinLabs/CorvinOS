@@ -6,6 +6,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+_SHARED_DIR = str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared")
+
+
+def _windows_shim(argv: list[str]):
+    """Best-effort ``agents._win_shim.windows_shim_command`` — see plugins.py's
+    ``_run_claude`` for the full writeup of why this needs its own sys.path
+    insert (operator/ is deliberately not a real package). Falls back to argv
+    unchanged if the shared module can't be found, so a validation-only step
+    never hard-fails the install over this."""
+    if _SHARED_DIR not in sys.path:
+        sys.path.insert(0, _SHARED_DIR)
+    try:
+        from agents._win_shim import windows_shim_command  # noqa: PLC0415
+        return windows_shim_command(argv)
+    except ImportError:
+        return argv
+
 
 def run_validation(
     voice_config_dir: Path,
@@ -133,22 +150,39 @@ def run_validation(
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _list_plugins() -> str:
-    if not shutil.which("claude"):
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
         return ""
     try:
+        # `text=True` without an explicit encoding decodes using the SYSTEM
+        # locale (cp1252 on this Windows install) — claude's CLI output has
+        # real UTF-8 bytes, so that decode raised UnicodeDecodeError inside
+        # subprocess's internal reader thread, silently killing it and
+        # leaving CompletedProcess.stdout as `None` instead of raising here;
+        # every caller's `"x" in plugins` then crashed with "argument of type
+        # 'NoneType' is not a container" (2026-09-14 live report). Also route
+        # through the same cmd.exe-safe shim every other claude spawn site
+        # uses — a bare "claude" list-form subprocess.run only happens to
+        # work when PATH resolves an actual .exe; the far more common
+        # npm-global-install case (claude.cmd) needs the shim or it raises
+        # WinError 193/2 outright.
         r = subprocess.run(
-            ["claude", "plugin", "list"],
-            capture_output=True, text=True, check=False,
+            _windows_shim([claude_bin, "plugin", "list"]),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            check=False,
         )
-        return r.stdout
+        return r.stdout or ""
     except Exception:
         return ""
 
 
 def _run_stdout(cmd: list[str]) -> str:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        return r.stdout.strip()
+        r = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            check=False,
+        )
+        return (r.stdout or "").strip()
     except Exception:
         return ""
 

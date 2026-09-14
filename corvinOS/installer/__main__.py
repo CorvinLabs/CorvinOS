@@ -11,6 +11,26 @@ import sys
 
 from corvinOS.installer.core import CorvinInstaller
 
+# The installer prints U+2713/2717/26A0 (checkmark/cross/warning) throughout
+# every step. Attached to a real Windows Console with a UTF-8 codepage
+# (chcp 65001, the default in modern Windows Terminal/PowerShell 7) that's
+# fine — but the SAME print() crashes with UnicodeEncodeError the moment
+# stdout is NOT that specific console: piped to a file/another process,
+# redirected under a scheduled task, or just a non-UTF-8 system locale
+# (cp1252 etc.) — `sys.stdout.encoding` falls back to the ambient codepage
+# in every one of those cases (2026-09-14 live report: `corvin-install`
+# aborted mid-way through Step 2 with "character maps to <undefined>" the
+# instant it tried to print the ✓ from a piped invocation, discarding all
+# install progress). Force UTF-8 unconditionally, before any print() runs,
+# so installer output never depends on the caller's console/locale.
+# `reconfigure()` is Python 3.7+ TextIOWrapper-only; guard for a stdout
+# already replaced by something else (e.g. a test harness).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 
 def main():
     parser = argparse.ArgumentParser(

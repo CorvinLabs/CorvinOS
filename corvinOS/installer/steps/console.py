@@ -111,6 +111,14 @@ def build_frontend(repo_root: Path) -> bool:
     result = subprocess.run([npm_cmd, "run", "build"], cwd=webnext_dir, check=False)
     if result.returncode != 0:
         print("✗ npm run build failed")
+        # On Windows, real-time antivirus scanning can race npm's tar
+        # extraction of hundreds of small package files and drop a binary
+        # (typically node_modules/.bin/tsc) even though `npm install` itself
+        # still exited 0 — the next `npm run build` then fails with "'tsc' is
+        # not recognized as an internal or external command" (2026-09-14 live
+        # report, fresh install). A plain re-run of install+build is the fix;
+        # it isn't retried automatically here to keep this outcome
+        # deterministic and testable.
         print(f"  Fix manually:")
         print(f"    cd {webnext_dir} && npm install && npm run build")
         return False

@@ -13,18 +13,25 @@ import pytest
 from corvinOS.installer.core import CorvinInstaller
 from corvinOS.shared.paths import corvin_home
 
-# Exact step sequence install() runs — kept in sync with core.py's install().
-# A test asserts this order is what actually fires; if this list and install()
-# drift apart, that test (not just this constant) will fail.
+# Exact step sequence install() runs (FULL/non-quick mode — quick_install=True
+# skips 9-12) — kept in sync with core.py's install(). A test asserts this
+# order is what actually fires; if this list and install() drift apart, that
+# test (not just this constant) will fail. step_6_bootstrap_hermes was removed
+# from core.py (190c4fbf, "Remove optional Hermes/Ollama bootstrap step") and
+# step_8b_setup_browser was added later; both drifted from this list
+# undetected because every test below happened to also predate quick_install
+# defaulting to True (044344f6) without ever exercising it (2026-09-14 found
+# via unrelated regression testing — these tests were failing on `main`
+# already, independent of any change in this session).
 _INSTALL_STEPS = [
     "step_1_detect_platform",
     "step_2_create_directories",
     "step_3_system_dependencies",
     "step_4_install_claude_code",
     "step_5_claude_login",
-    "step_6_bootstrap_hermes",
     "step_7_setup_stt",
     "step_8_setup_piper",
+    "step_8b_setup_browser",
     "step_9_api_keys",
     "step_10_select_bridges",
     "step_11_install_bridges",
@@ -262,16 +269,23 @@ class TestInstallOrchestration:
     the full install() call sequence rather than individual step_N methods."""
 
     def test_install_calls_all_steps_in_exact_order(self):
-        """A refactor that reorders/drops/duplicates a step must fail a test."""
-        installer = CorvinInstaller(interactive=False)
+        """A refactor that reorders/drops/duplicates a step must fail a test.
+
+        quick_install=False: the default (True) skips steps 9-12 entirely,
+        which would make this comparison vacuously match a truncated
+        _INSTALL_STEPS instead of proving the full sequence."""
+        installer = CorvinInstaller(interactive=False, quick_install=False)
         call_order: list[str] = []
 
         with contextlib.ExitStack() as stack:
             for name in _INSTALL_STEPS:
                 stack.enter_context(
                     mock.patch.object(
+                        # step_17_start_console is called with a `quick_mode=`
+                        # kwarg — accept **kwargs so this generic recorder
+                        # works regardless of which step is being mocked.
                         installer, name,
-                        side_effect=lambda n=name: call_order.append(n),
+                        side_effect=lambda *a, n=name, **kw: call_order.append(n),
                     )
                 )
             installer.install()
@@ -280,8 +294,11 @@ class TestInstallOrchestration:
 
     def test_install_mid_flow_exception_exits_1_without_retry_or_rollback(self):
         """step_9_api_keys raising must: (a) sys.exit(1), (b) run every step
-        BEFORE it exactly once (no retry), (c) never run any step AFTER it."""
-        installer = CorvinInstaller(interactive=False)
+        BEFORE it exactly once (no retry), (c) never run any step AFTER it.
+
+        quick_install=False: step_9 doesn't run at all under the True default,
+        which would make this a no-op test instead of exercising the failure."""
+        installer = CorvinInstaller(interactive=False, quick_install=False)
         call_order: list[str] = []
 
         def _boom():
@@ -319,12 +336,17 @@ class TestInstallOrchestration:
         """Re-running install() after a crash is the real-world recovery path.
         A second run must not clobber the seeded profile.json defaults nor
         corrupt installer.json — only step_2 (dirs+profile seed) and step_18
-        (config save) touch real state; everything else is mocked out."""
+        (config save) touch real state; everything else is mocked out.
+
+        quick_install=False: the True default's skip-branch unconditionally
+        resets `selected_bridges = []` ("No bridges in quick mode"), which
+        would clobber this test's own ["discord"] setup before step_18 ever
+        gets to save it — unrelated to what this test is actually checking."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             corvin_home_dir = tmpdir_path / "home"
             voice_config_dir = tmpdir_path / "config"
-            installer = CorvinInstaller(interactive=False)
+            installer = CorvinInstaller(interactive=False, quick_install=False)
             installer.selected_bridges = ["discord"]
 
             steps_to_mock = [s for s in _INSTALL_STEPS
@@ -334,7 +356,9 @@ class TestInstallOrchestration:
                  mock.patch.object(installer, "voice_config", voice_config_dir), \
                  contextlib.ExitStack() as stack:
                 for name in steps_to_mock:
-                    stack.enter_context(mock.patch.object(installer, name, side_effect=lambda: None))
+                    # step_17_start_console is called with a `quick_mode=`
+                    # kwarg — accept **kwargs so this works for every step.
+                    stack.enter_context(mock.patch.object(installer, name, side_effect=lambda *a, **kw: None))
 
                 installer.install()
 
@@ -431,7 +455,15 @@ class TestRestore:
 
     def test_restore_skips_foreground_start_when_systemd_restart_succeeds(self):
         """Successful systemd stop + successful systemd start must NOT also
-        foreground-launch the console — that would double-start uvicorn."""
+        foreground-launch the console — that would double-start uvicorn.
+
+        The systemd branch this exercises is gated on `sys.platform !=
+        "win32"` — on a Windows test host that guard alone would skip it and
+        _webui_stopped_via_systemd would stay False regardless of the mocked
+        subprocess result, silently turning this into the SAME (wrong,
+        vacuous) pass the sibling systemd-fails test gets by accident. Pin
+        the platform so this actually exercises the "systemd handled it"
+        path everywhere, not just on Linux/macOS CI."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             installer = self._make_installer(tmpdir_path)
@@ -440,7 +472,8 @@ class TestRestore:
                 # Both "stop" and "start" systemctl invocations succeed.
                 return SimpleNamespace(returncode=0)
 
-            with mock.patch.object(installer.service_manager, "stop_service"), \
+            with mock.patch("sys.platform", "linux"), \
+                 mock.patch.object(installer.service_manager, "stop_service"), \
                  mock.patch.object(installer.service_manager, "restart_service"), \
                  mock.patch("corvinOS.installer.core.subprocess.run", side_effect=_fake_run), \
                  mock.patch("corvinOS.installer.core._IS_WHEEL_INSTALL", True), \
