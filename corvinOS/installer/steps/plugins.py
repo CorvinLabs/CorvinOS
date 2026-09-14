@@ -15,7 +15,34 @@ def _run_claude(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     with a list raises WinError 2 for .cmd files without shell=True.
     Uses proper cmd.exe quoting to prevent injection vulnerabilities.
     """
-    from operator.bridges.shared.agents._win_shim import windows_shim_command
+    # operator/ has no __init__.py (it deliberately shadows the stdlib
+    # `operator` module — see nerve_builtins.py / bridge_manager.py's own
+    # comment on this exact class of bug), so the dotted
+    # `from operator.bridges.shared.agents._win_shim import ...` form used
+    # here previously can NEVER resolve; it broke every fresh Windows
+    # install at step_16_register_plugins with "No module named
+    # 'operator.bridges'; 'operator' is not a package" (2026-09-14 live
+    # report). Put operator/bridges/shared on sys.path and import bare,
+    # matching every other _win_shim call site in this codebase.
+    _shared_dir = str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared")
+    if _shared_dir not in sys.path:
+        sys.path.insert(0, _shared_dir)
+    from agents._win_shim import windows_shim_command  # noqa: PLC0415
+
+    # `text=True` (used by every caller that reads .stdout) without an
+    # explicit encoding decodes the child's output using the SYSTEM locale
+    # encoding (cp1252 on this Windows install), not UTF-8. `claude`'s CLI
+    # output contains real UTF-8 multi-byte characters (e.g. its own
+    # checkmarks/icons), so the cp1252 decode inside subprocess's internal
+    # reader thread raised UnicodeDecodeError there, silently killed that
+    # thread (Python only logs it — the exception never reaches this
+    # function), and CompletedProcess.stdout came back `None` instead of the
+    # real text — crashing every caller's `plugin_id in list_result.stdout`
+    # with "argument of type 'NoneType' is not a container" (2026-09-14 live
+    # report, reproduced deterministically on `claude plugin list`). Force
+    # UTF-8 unconditionally so this never depends on the ambient locale.
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
 
     claude_bin = shutil.which("claude") or "claude"
     if sys.platform == "win32":

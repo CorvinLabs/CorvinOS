@@ -138,7 +138,14 @@ class TestWindowsInstallerEncoding:
     def test_issue_6_windows_command_quoting_security(self):
         """Issue #6: _run_claude() must use proper cmd.exe quoting."""
         from corvinOS.installer.steps.plugins import _run_claude
-        from operator.bridges.shared.agents._win_shim import windows_shim_command
+        # operator/ has no __init__.py (deliberately shadows the stdlib
+        # `operator` module), so the dotted form here can never resolve —
+        # put operator/bridges/shared on sys.path and import bare, matching
+        # every other _win_shim call site in this codebase.
+        _shared_dir = str(Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared")
+        if _shared_dir not in sys.path:
+            sys.path.insert(0, _shared_dir)
+        from agents._win_shim import windows_shim_command
 
         # Test that dangerous args don't break through
         dangerous_args = [
@@ -149,14 +156,17 @@ class TestWindowsInstallerEncoding:
             "arg&with&ampersand",  # cmd.exe metacharacter
         ]
 
-        # On Windows, should use windows_shim_command
+        # On Windows, should use windows_shim_command. windows_shim_command only
+        # wraps argv[0] when it's a real .cmd/.bat shim path (see its docstring
+        # in _win_shim.py) — a bare "claude" is a no-op by design and returns
+        # the list unchanged, so use the actual npm-installed shim name here.
         if sys.platform == "win32":
-            cmd = windows_shim_command(["claude"] + dangerous_args)
+            cmd = windows_shim_command(["claude.cmd"] + dangerous_args)
             # Should return a properly quoted string, not a vulnerable shell injection
             assert isinstance(cmd, str)
-            assert "claude" in cmd
+            assert "claude.cmd" in cmd
             # Should not be a simple join()
-            assert cmd != " ".join(["claude"] + dangerous_args)
+            assert cmd != " ".join(["claude.cmd"] + dangerous_args)
 
 
 class TestWindowsInstallationEndToEnd:
