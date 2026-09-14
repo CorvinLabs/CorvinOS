@@ -570,12 +570,23 @@ def trigger_flow_run(
     # per-run FlowBudget compares against a STATELESS limit (compute_used resets
     # to 0 each run) — so "compute_units_per_day" was effectively "per run" and a
     # free-tier user could trigger unlimited runs/day. Charge the run against the
-    # SAME persistent per-UTC-day counter as the other compute entrypoints, at the
-    # HTTP boundary (before the background thread), via the shared fail-closed
-    # helper — so a 402 reaches the caller instead of dying in the daemon thread.
-    from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
-
-    enforce_compute_quota(tid, rec.sid_fingerprint, audit_action="flows.trigger", channel="flows")
+    # Phase 1.2: require_capability via ADR-0703 unified gate
+    try:
+        from license.capability_api import require_capability, LicenseDenied
+        try:
+            require_capability(
+                "compute.run", requested=1, tenant_id=tid,
+                entry_point=__file__+":578"
+            )
+        except LicenseDenied as e:
+            raise HTTPException(
+                status_code=402,
+                detail={"error": "license_limit", "reason": e.reason,
+                       "upgrade_url": e.upgrade_url or "https://corvin-labs.com/pricing"},
+            )
+    except ImportError:
+        from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
+        enforce_compute_quota(tid, rec.sid_fingerprint, audit_action="flows.trigger", channel="flows")
 
     manifest_root = _runs_dir(tid)
     manifest_root.mkdir(parents=True, exist_ok=True)
