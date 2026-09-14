@@ -174,17 +174,8 @@ export const SyncMonitorPage = React.lazy(() =>
   import("@/pages/sync-monitor").then((m) => ({ default: m.default }))
 );
 
-export const WebhooksPage = React.lazy(() =>
-  import("@/pages/webhooks").then((m) => ({ default: m.default }))
-);
-
-export const AuditPage = React.lazy(() =>
-  import("@/pages/audit").then((m) => ({ default: m.default }))
-);
-
-export const ReleasesPage = React.lazy(() =>
-  import("@/pages/releases").then((m) => ({ default: m.default }))
-);
+// REMOVED: WebhooksPage, AuditPage, ReleasesPage — backend routes return 404
+// These are not implemented and should not be referenced
 
 export const EngineConfigPage = React.lazy(() =>
   import("@/pages/engine-config").then((m) => ({ default: m.EngineConfigPage }))
@@ -204,6 +195,14 @@ export const QualityGatesPage = React.lazy(() =>
 
 export const VideoProducerPage = React.lazy(() =>
   import("@/pages/video-producer")
+);
+
+export const DataHubUnifiedPage = React.lazy(() =>
+  import("@/pages/datahub-unified").then((m) => ({ default: m.default }))
+);
+
+export const SkillForgeGeneratorPage = React.lazy(() =>
+  import("@/pages/skill-forge-generator").then((m) => ({ default: m.default }))
 );
 
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
