@@ -857,7 +857,7 @@ class CorvinInstaller:
         cfg_path = self.voice_config / "installer.json"
         if cfg_path.exists():
             try:
-                config = json.loads(cfg_path.read_text())
+                config = json.loads(cfg_path.read_text(encoding='utf-8'))
                 self.selected_bridges = config.get("installed_bridges", [])
                 print(f"\n  Manifest : {cfg_path}")
                 print(f"  Bridges  : {', '.join(self.selected_bridges) or 'none'}")
@@ -985,7 +985,7 @@ class CorvinInstaller:
         cfg_path = self.voice_config / "installer.json"
         if cfg_path.exists():
             try:
-                config = json.loads(cfg_path.read_text())
+                config = json.loads(cfg_path.read_text(encoding='utf-8'))
                 self.selected_bridges = config.get("installed_bridges", [])
                 print(f"  Manifest: {cfg_path}")
                 print(f"  Bridges : {', '.join(self.selected_bridges) or 'none'}")
@@ -1276,10 +1276,13 @@ class CorvinInstaller:
         known_marketplaces = self.claude_plugins_dir / "known_marketplaces.json"
         if known_marketplaces.exists():
             try:
-                marketplaces = json.loads(known_marketplaces.read_text())
+                marketplaces = json.loads(known_marketplaces.read_text(encoding='utf-8'))
                 if "corvin-voice-local" in marketplaces:
                     marketplaces.pop("corvin-voice-local", None)
-                    known_marketplaces.write_text(json.dumps(marketplaces, indent=2) + "\n")
+                    known_marketplaces.write_text(
+                        json.dumps(marketplaces, indent=2, ensure_ascii=False) + "\n",
+                        encoding='utf-8'
+                    )
                     print("  ✓ Removed marketplace registration: corvin-voice-local")
                 else:
                     print("  ℹ Marketplace registration not found")

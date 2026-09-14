@@ -13,13 +13,14 @@ def _run_claude(args: list[str], **kwargs) -> subprocess.CompletedProcess:
 
     On Windows, shutil.which("claude") finds claude.cmd, but subprocess.run
     with a list raises WinError 2 for .cmd files without shell=True.
+    Uses proper cmd.exe quoting to prevent injection vulnerabilities.
     """
+    from operator.bridges.shared.agents._win_shim import windows_shim_command
+
     claude_bin = shutil.which("claude") or "claude"
     if sys.platform == "win32":
-        parts = [f'"{claude_bin}"'] + [
-            f'"{a}"' if (" " in str(a) or str(a) == "") else str(a) for a in args
-        ]
-        return subprocess.run(" ".join(parts), shell=True, **kwargs)
+        cmd = windows_shim_command([claude_bin] + args)
+        return subprocess.run(cmd, **kwargs)
     return subprocess.run([claude_bin] + args, **kwargs)
 
 
@@ -97,7 +98,7 @@ def _ensure_plugin(plugin_id: str, label: str) -> bool:
         text=True,
         check=False,
     )
-    Path(log_path).write_text(result.stdout + result.stderr)
+    Path(log_path).write_text(result.stdout + result.stderr, encoding='utf-8')
 
     # Verify it actually appears in plugin list
     list_result = _run_claude(

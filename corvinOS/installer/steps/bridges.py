@@ -270,7 +270,7 @@ def _run_bridge_install(bridge_dir: Path) -> bool:
 def _read_field(settings_path: Path, field: str) -> str:
     """Read a single field from a bridge's settings.json."""
     try:
-        data: dict[str, Any] = json.loads(settings_path.read_text())
+        data: dict[str, Any] = json.loads(settings_path.read_text(encoding='utf-8'))
         return str(data.get(field, ""))
     except Exception:
         return ""
@@ -284,7 +284,7 @@ def _write_settings(
     """Merge fields and whitelist entries into settings.json (idempotent)."""
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        data: dict[str, Any] = json.loads(settings_path.read_text())
+        data: dict[str, Any] = json.loads(settings_path.read_text(encoding='utf-8'))
     except Exception:
         data = {}
 
@@ -298,7 +298,7 @@ def _write_settings(
             if entry and entry not in current:
                 current.append(entry)
 
-    settings_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    settings_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
 _MAIL_HOSTS: dict[str, tuple[str, str]] = {

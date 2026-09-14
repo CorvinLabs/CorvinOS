@@ -257,7 +257,7 @@ def _setup_model(voice_config_dir: Path, interactive: bool) -> None:
 def _find_existing_model(config_file: Path) -> Path | None:
     """Return the first configured piper model path that actually exists on disk."""
     try:
-        cfg = json.loads(config_file.read_text())
+        cfg = json.loads(config_file.read_text(encoding='utf-8'))
         for key, val in cfg.items():
             if key.startswith("piper_model_") and val:
                 p = Path(val)
@@ -274,7 +274,7 @@ def _config_lang_default(config_file: Path) -> str:
     Lets the prefetch path (model already on disk → early return in
     ``_setup_model``) recover the language to seed into ``display_language``."""
     try:
-        cfg = json.loads(config_file.read_text())
+        cfg = json.loads(config_file.read_text(encoding='utf-8'))
         return str(cfg.get("lang_default") or "").strip()
     except Exception:
         return ""
@@ -474,13 +474,13 @@ def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
 
 def _save_model_config(config_file: Path, lang: str, onnx_path: str) -> None:
     try:
-        cfg = json.loads(config_file.read_text()) if config_file.exists() else {}
+        cfg = json.loads(config_file.read_text(encoding='utf-8')) if config_file.exists() else {}
     except Exception:
         cfg = {}
 
     cfg[f"piper_model_{lang}"] = str(onnx_path)
     cfg.setdefault("lang_default", lang)
-    config_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+    config_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding='utf-8')
     print(f"  ✓ Saved piper_model_{lang} in config.json")
 
     _seed_profile_display_language(lang)
