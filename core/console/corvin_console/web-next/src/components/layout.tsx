@@ -4,6 +4,7 @@ import {
   AudioLines,
   BookOpen,
   Boxes,
+  CheckCircle,
   TrendingUp,
   ChevronDown,
   Cloud,
@@ -161,6 +162,9 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     defaultOpen: true,
     items: [
+      // Group shipped empty (so it rendered as a header with nothing under it)
+      // while the panel below was mounted by PANELS and unreachable.
+      { to: "/app/quality", label: "Quality Gates", icon: CheckCircle },
     ],
   },
   {
@@ -192,6 +196,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/forge",      label: "Forge",           icon: Hammer },
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
       { to: "/app/packages",   label: "Packages",        icon: Package },
+      { to: "/app/skill-forge-generator", label: "Skill Forge", icon: Sparkles },
     ],
   },
   {
@@ -214,6 +219,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/rag",             label: "Knowledge",     icon: Database },
       { to: "/app/rag-hub",         label: "Knowledge Hub", icon: Globe2 },
       { to: "/app/custom-provider", label: "Add Provider",  icon: Plug },
+      { to: "/app/datahub-unified", label: "DataHub",       icon: Database },
     ],
   },
   {

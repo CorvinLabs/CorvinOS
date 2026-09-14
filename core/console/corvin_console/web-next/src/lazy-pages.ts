@@ -181,10 +181,6 @@ export const EngineConfigPage = React.lazy(() =>
   import("@/pages/engine-config").then((m) => ({ default: m.EngineConfigPage }))
 );
 
-export const LearningDashboardPage = React.lazy(() =>
-  import("@/panels/learning-dashboard").then((m) => ({ default: m.LearningDashboard }))
-);
-
 export const ModelCostOptimizerPage = React.lazy(() =>
   import("@/panels/ModelCostOptimizer").then((m) => ({ default: m.ModelCostOptimizer }))
 );

@@ -97,6 +97,13 @@ class DashboardStatusResponse(BaseModel):
     # baseline model — a pricing fact, not a routing achievement — so the UI
     # can say so instead of presenting it as an optimization result.
     cost_model_mix: Dict[str, int] = {}
+    # How many os_turn.completed events the cost totals above actually rest on,
+    # against how many were seen at all. These diverge hard in practice (live
+    # 2026-09-15: 154 of 391 — turns before the ADR-0696 token emitter carry no
+    # counts), and a $ total quoted without that ratio reads as the full bill
+    # when it is 39% of it.
+    cost_counted_turns: int = 0
+    cost_total_turns: int = 0
     # The tenant's explicit spec.engine_models.claude_code.os_model pin, when
     # set (None = adaptive default). NOT a license/tier thing — no license
     # check exists in the model-selection path; a single-model cost_model_mix
@@ -236,7 +243,20 @@ async def get_learning_status(
         acs_data_available = bool(cost_result and cost_result.acs_daily)
         acs_by_date = {p.date: p for p in cost_result.acs_daily} if acs_data_available else {}
         os_by_date = {p.date: p for p in cost_result.daily} if cost_data_available else {}
-        all_dates = sorted(set(os_by_date) | set(acs_by_date))
+        # A date only earns a point if SOMETHING on it was actually priced.
+        # Until 2026-09-15 every date that produced an event joined the series
+        # even when not one of its turns carried token data, so the chart drew
+        # a flat $0.00 line for days that were merely unmeasured — live
+        # finding: 11 of 16 points came from 267 acs.engine_completed events
+        # (2026-07-09 .. 2026-09-06) of which ZERO had token counts, reading
+        # as "these days were free" when they were "these days were not
+        # recorded". An unmeasured day is absent, never a zero.
+        all_dates = sorted(
+            d
+            for d in set(os_by_date) | set(acs_by_date)
+            if (d in os_by_date and os_by_date[d].counted_turns > 0)
+            or (d in acs_by_date and acs_by_date[d].counted_turns > 0)
+        )
         cost_history = (
             [
                 {
@@ -255,6 +275,8 @@ async def get_learning_status(
             if (cost_data_available or acs_data_available)
             else []
         )
+        cost_counted_turns = sum(p.counted_turns for p in cost_result.daily) if cost_data_available else 0
+        cost_total_turns = sum(p.total_turns for p in cost_result.daily) if cost_data_available else 0
         acs_total_actual = cost_result.acs_total_actual_usd if acs_data_available else 0.0
         acs_total_baseline = cost_result.acs_total_baseline_usd if acs_data_available else 0.0
         acs_model_mix = cost_result.acs_model_mix if acs_data_available else {}
@@ -292,6 +314,8 @@ async def get_learning_status(
             "cost_data_available": cost_data_available,
             "cost_history": cost_history,
             "cost_model_mix": cost_model_mix,
+            "cost_counted_turns": cost_counted_turns,
+            "cost_total_turns": cost_total_turns,
             "cost_os_model_pin": os_model_pin,
             "acs_cost_actual_usd": acs_total_actual,
             "acs_cost_baseline_usd": acs_total_baseline,

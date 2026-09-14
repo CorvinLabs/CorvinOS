@@ -229,16 +229,36 @@ def _acs_chain_path(tenant_id: str) -> Path:
 # suffix (e.g. "claude-haiku-4-5-20251001"). A model not listed here is
 # excluded from cost totals rather than assigned a guessed price — same
 # honesty rule as the rest of this module.
+# Longest-prefix matched (see _price_for_model) so "claude-opus-5" cannot
+# shadow a hypothetical "claude-opus-5-x" entry, and a dated CLI suffix
+# ("claude-haiku-4-5-20251001") still resolves.
+# Verified against the published first-party rate card 2026-09-15.
 _MODEL_PRICING_USD_PER_1K: dict[str, tuple[float, float]] = {
+    # Top tier — more expensive than Opus. Absent until 2026-09-15, which
+    # silently EXCLUDED every turn on these models from the cost totals
+    # rather than pricing it (see _price_for_model returning None).
+    "claude-fable-5-1": (0.010, 0.050),
+    "claude-fable-5": (0.010, 0.050),
+    "claude-mythos-5-1": (0.010, 0.050),
+    "claude-mythos-5": (0.010, 0.050),
     "claude-opus-5": (0.005, 0.025),
+    "claude-opus-4-8": (0.005, 0.025),
+    "claude-opus-4-7": (0.005, 0.025),
+    "claude-opus-4-6": (0.005, 0.025),
     "claude-sonnet-5": (0.002, 0.010),
+    "claude-sonnet-4-6": (0.003, 0.015),
     "claude-haiku-4-5": (0.001, 0.005),
 }
 
-# Reference model for the "baseline" counterfactual (cost if every turn had
-# used the most expensive recognized tier instead of whatever was actually
-# selected) — a documented modeling choice, applied to each turn's REAL
-# observed token counts. Not itself a fabricated number.
+# Reference model for the "baseline" counterfactual — "what this same traffic
+# would have cost on Opus 5", applied to each turn's REAL observed token
+# counts. A documented modeling choice, not a fabricated number.
+#
+# NOT "the most expensive recognized tier" (as this comment claimed until
+# 2026-09-15): the Fable/Mythos entries above are priced ABOVE Opus, so a
+# turn on one of those shows as a NEGATIVE saving against this baseline.
+# That is the honest reading — it cost more than the reference — and the
+# label the UI shows names the reference model explicitly for that reason.
 _BASELINE_MODEL_PREFIX = "claude-opus-5"
 
 # Anthropic's published prompt-caching multipliers, applied to a model's own
@@ -279,10 +299,20 @@ def _price_for_model(model: str) -> Optional[tuple[float, float]]:
     """(input_usd_per_1k, output_usd_per_1k) for a recognized model, else None."""
     if not model:
         return None
+    # Two independent corrections, both required:
+    #   1. strip the routing prefix, or Bedrock/Vertex ids price at $0.00
+    #      (see _ROUTING_PREFIX above);
+    #   2. match the LONGEST prefix, not the first dict hit — the table
+    #      contains nested keys (claude-fable-5 is a prefix of
+    #      claude-fable-5-1), so first-match would price a newer variant
+    #      at its predecessor's rate the moment the two rates diverge.
     candidate = _ROUTING_PREFIX.sub("", model)
+    best: Optional[tuple[str, tuple[float, float]]] = None
     for prefix, price in _MODEL_PRICING_USD_PER_1K.items():
-        if candidate.startswith(prefix):
-            return price
+        if candidate.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+            best = (prefix, price)
+    if best is not None:
+        return best[1]
     return None
 
 

@@ -22,14 +22,13 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, EngineConfigPage,
-  LearningDashboardPage, ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
+  ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
 import { GenericPluginInspector } from "@/components/GenericPluginInspector";
 import { SkillInspector } from "@/components/SkillInspector";
-import MarketplaceHub from "@/panels/marketplace-hub";
 
 // ─ Manifest rendering support (ADR-0561) ────────────────────────────────────
 
@@ -70,13 +69,11 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   PluginCenterPage,
   GitHubPage,
   SyncMonitorPage,
-  LearningDashboardPage,
   ModelCostOptimizerPage,
   QualityGatesPage,
   VideoProducerPage,
   DataHubUnifiedPage,
   SkillForgeGeneratorPage,
-  MarketplaceHub: MarketplaceHub as unknown as ComponentType,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -136,12 +133,9 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Sync Monitor", icon: "Activity" } }),
   // REMOVED: webhooks, audit, releases — backend routes 404 (not implemented)
   // Use compliance.tsx for audit needs; GitHub integration works via settings/github
-  rc("learning-dashboard", "Learning", LearningDashboardPage,
-     { nav: { label: "Learning", icon: "Brain" } }),
+  // REMOVED 2026-09-15 (operator request): learning-dashboard panel.
   rc("model-cost-optimizer", "Model Cost Optimizer", ModelCostOptimizerPage,
      { nav: { label: "Model Cost Optimizer", icon: "Zap" } }),
-  rc("marketplace", "Marketplace", MarketplaceHub as unknown as ComponentType,
-     { nav: { label: "Marketplace", icon: "ShoppingBag" } }),
   rc("datahub-unified", "DataHub", DataHubUnifiedPage,
      { nav: { label: "DataHub", icon: "Database" } }),
   rc("skill-forge-generator", "Skill Forge", SkillForgeGeneratorPage,

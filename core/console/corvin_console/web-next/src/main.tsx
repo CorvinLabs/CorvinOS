@@ -48,7 +48,8 @@ const queryClient = new QueryClient({
   }),
   defaultOptions: {
     queries: {
-      staleTime: 30_000,
+      staleTime: 5_000,           // Data is "stale" after 5s — UI responds faster
+      refetchInterval: 15_000,    // Auto-refetch every 15s for live panels (Learning, Analytics, etc.)
       gcTime: 5 * 60_000,
       refetchOnWindowFocus: false,
       // Retry up to 2× on transient errors, but never on 401/403/404.
