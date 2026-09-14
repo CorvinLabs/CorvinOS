@@ -1,0 +1,9 @@
+# operator/policy/house_rules.yaml is byte-integrity-checked against a
+# committed sha256 anchor (EXPECTED_POLICY_SHA256 in
+# operator/bridges/shared/house_rules.py — ADR-0143 M2 / L44 boot tripwire).
+# Without this pin, a Windows checkout with core.autocrlf=true rewrites its
+# LF line endings to CRLF, the on-disk hash no longer matches the anchor
+# computed from the committed (LF) blob, and the fail-closed compliance
+# tripwire refuses to boot the console on every fresh Windows install
+# (2026-09-14 fresh-install finding). Force LF regardless of local git config.
+operator/policy/house_rules.yaml text eol=lf
