@@ -922,11 +922,15 @@ function LearningStatusBar({ csrf }: { csrf: string }) {
   const configQ = useQuery({
     queryKey: ['engine-config'],
     queryFn: ({ signal }) => getEngineConfig(signal),
+    staleTime: 5_000,
+    refetchInterval: 30_000,
   });
   const analyticsQ = useQuery({
     queryKey: ['model-selection-analytics'],
     queryFn: ({ signal }) => getModelSelectionAnalytics(signal),
     enabled: showAnalytics,
+    staleTime: 5_000,
+    refetchInterval: 30_000,
   });
   const resetMut = useMutation({
     mutationFn: () => resetModelSelectionLearning(csrf),
@@ -1021,6 +1025,8 @@ export const EngineConfigPage: React.FC = () => {
   const configQ = useQuery({
     queryKey: ['engine-config'],
     queryFn: ({ signal }) => getEngineConfig(signal),
+    staleTime: 5_000,
+    refetchInterval: 30_000,
   });
 
   const saveMut = useMutation({

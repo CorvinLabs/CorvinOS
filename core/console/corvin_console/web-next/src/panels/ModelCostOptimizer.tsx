@@ -54,6 +54,8 @@ interface DashboardStatus {
   total_count: number;
   thresholds: ThresholdData[];
   cost_savings_percent: number;
+  cost_counted_turns?: number;
+  cost_total_turns?: number;
   cost_baseline_usd: number;
   cost_current_usd: number;
   cost_data_available: boolean;
@@ -215,6 +217,12 @@ export const ModelCostOptimizer: React.FC = () => {
   const modelMixLabel = (id: string) => id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
   const isSingleModel = modelMixEntries.length === 1;
 
+  // Share of seen turns the cost totals are actually computed from.
+  const costCoverage =
+    status.cost_total_turns && status.cost_total_turns > 0
+      ? Math.round(((status.cost_counted_turns ?? 0) / status.cost_total_turns) * 100)
+      : null;
+
   // Coverage — days where most completed turns had no usable token data
   // (emitter gap, mid-rollout, etc.) look like a cost crash in the raw $
   // numbers alone. Flag them explicitly instead of letting a thin bar pass
@@ -332,6 +340,17 @@ export const ModelCostOptimizer: React.FC = () => {
                 {!status.acs_data_available && (
                   <div className="text-xs text-muted-foreground mt-1">
                     Nur OS-Manager-Turns — keine Worker-Daten erfasst
+                  </div>
+                )}
+                {/* The $ figures above rest on the turns that carried token
+                    counts, not on every turn. Quoting a total without that
+                    ratio reads as the full bill — live 2026-09-15 it was 154
+                    of 391 turns (39%), the rest emitted before ADR-0696's
+                    token counts existed. */}
+                {costCoverage !== null && (
+                  <div className={`mt-1 text-xs ${costCoverage < 90 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+                    Basis: {status.cost_counted_turns}/{status.cost_total_turns} Turns mit Token-Daten ({costCoverage}%)
+                    {costCoverage < 90 ? ' — reale Kosten liegen höher' : ''}
                   </div>
                 )}
                 {isSingleModel && (
