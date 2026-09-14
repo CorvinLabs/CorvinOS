@@ -120,7 +120,7 @@ def _cmd_exists(name: str) -> bool:
 
 def _is_wsl() -> bool:
     try:
-        proc_version = open("/proc/version").read().lower()
+        proc_version = open("/proc/version", encoding="utf-8").read().lower()
         return "microsoft" in proc_version or "wsl" in proc_version
     except OSError:
         return False

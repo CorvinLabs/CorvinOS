@@ -1,0 +1,77 @@
+name: Windows Installation E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  windows-e2e-tests:
+    name: Windows E2E Tests
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install pytest pytest-xdist pyyaml
+
+      - run: pytest tests/e2e/test_windows_installation_e2e.py -v --tb=short --junit-xml=test-results-${{ matrix.python-version }}.xml -m "not slow" --maxfail=3
+        env:
+          PYTHONIOENCODING: utf-8
+          CORVIN_TEST_MODE: "1"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: test-results-${{ matrix.python-version }}.xml
+          retention-days: 30
+
+  windows-slow-tests:
+    name: Windows Slow Tests (Console Boot)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest pyyaml
+
+      - run: pytest tests/e2e/test_windows_installation_e2e.py::TestFullWindowsInstallToConsoleBoot -v --tb=short -m slow --timeout=60
+        continue-on-error: true
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [windows-e2e-tests, windows-slow-tests]
+
+    steps:
+      - run: |
+          echo "## Windows E2E Test Results"
+          echo "- Main tests: ${{ needs.windows-e2e-tests.result }}"
+          echo "- Slow tests: ${{ needs.windows-slow-tests.result }}"
