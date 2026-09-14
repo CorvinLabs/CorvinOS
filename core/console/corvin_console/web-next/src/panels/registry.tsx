@@ -21,8 +21,9 @@ import {
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
-  GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage, EngineConfigPage,
+  GitHubPage, SyncMonitorPage, EngineConfigPage,
   LearningDashboardPage, ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
+  DataHubUnifiedPage, SkillForgeGeneratorPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -69,13 +70,12 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   PluginCenterPage,
   GitHubPage,
   SyncMonitorPage,
-  WebhooksPage,
-  AuditPage,
-  ReleasesPage,
   LearningDashboardPage,
   ModelCostOptimizerPage,
   QualityGatesPage,
   VideoProducerPage,
+  DataHubUnifiedPage,
+  SkillForgeGeneratorPage,
   MarketplaceHub: MarketplaceHub as unknown as ComponentType,
 };
 
@@ -134,18 +134,18 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "GitHub", icon: "Github", group: "settings" } }),
   rc("sync-monitor", "Sync Monitor", SyncMonitorPage,
      { nav: { label: "Sync Monitor", icon: "Activity" } }),
-  rc("webhooks", "Webhooks", WebhooksPage,
-     { nav: { label: "Webhooks", icon: "Zap" } }),
-  rc("audit", "Audit", AuditPage,
-     { nav: { label: "Audit", icon: "Shield" } }),
-  rc("releases", "Releases", ReleasesPage,
-     { nav: { label: "Releases", icon: "Package" } }),
+  // REMOVED: webhooks, audit, releases — backend routes 404 (not implemented)
+  // Use compliance.tsx for audit needs; GitHub integration works via settings/github
   rc("learning-dashboard", "Learning", LearningDashboardPage,
      { nav: { label: "Learning", icon: "Brain" } }),
   rc("model-cost-optimizer", "Model Cost Optimizer", ModelCostOptimizerPage,
      { nav: { label: "Model Cost Optimizer", icon: "Zap" } }),
   rc("marketplace", "Marketplace", MarketplaceHub as unknown as ComponentType,
      { nav: { label: "Marketplace", icon: "ShoppingBag" } }),
+  rc("datahub-unified", "DataHub", DataHubUnifiedPage,
+     { nav: { label: "DataHub", icon: "Database" } }),
+  rc("skill-forge-generator", "Skill Forge", SkillForgeGeneratorPage,
+     { nav: { label: "Skill Forge", icon: "Sparkles" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);
