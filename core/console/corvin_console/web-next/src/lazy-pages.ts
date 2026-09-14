@@ -201,5 +201,17 @@ export const SkillForgeGeneratorPage = React.lazy(() =>
   import("@/pages/skill-forge-generator").then((m) => ({ default: m.default }))
 );
 
+export const LicensingAuditPage = React.lazy(() =>
+  import("@/pages/licensing-audit").then((m) => ({ default: m.LicensingAuditPage }))
+);
+
+export const OTELTelemetryPage = React.lazy(() =>
+  import("@/pages/otel-telemetry").then((m) => ({ default: m.OTELTelemetryPage }))
+);
+
+export const ModelSelectionPage = React.lazy(() =>
+  import("@/pages/model-selection").then((m) => ({ default: m.ModelSelectionPage }))
+);
+
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
