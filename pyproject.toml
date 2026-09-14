@@ -100,6 +100,12 @@ dependencies = [
     # ever being declared, so importing that module raised ModuleNotFoundError
     # on every install.
     "semver >= 3.0",
+    # Quality Gates (ADR-0688): routes/quality_gates.py is unconditionally
+    # mounted by app.py and imports core.quality_gates.graph at module level,
+    # which imports duckdb eagerly. duckdb was only declared under the
+    # optional `compute` extra, so a base (non-`compute`) install crashed the
+    # console at import time on every boot (2026-09-14 fresh-install finding).
+    "duckdb >= 0.9",
 ]
 
 [project.optional-dependencies]

@@ -561,18 +561,31 @@ def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
         _NEXT_DIST_DIR,
     )
 
+    import shutil
     import subprocess
     try:
         web_next_dir = _NEXT_DIST_DIR.parent
+        # A bare "npm" fails with FileNotFoundError ([WinError 2]) on Windows:
+        # CreateProcess (no shell=True) does not do the PATHEXT-style search
+        # that resolves "npm" -> "npm.CMD" the way a real shell does. Resolve
+        # the actual executable via shutil.which first — it performs that
+        # PATHEXT search itself and returns the concrete "npm.CMD" path,
+        # which CreateProcess CAN launch directly (verified 2026-09-14
+        # fresh-install finding: the auto-build silently no-op'd on every
+        # Windows install, always falling through to the "npm may not be
+        # installed" branch even with npm genuinely on PATH).
+        npm_cmd = shutil.which("npm")
+        if npm_cmd is None:
+            raise FileNotFoundError("npm not found on PATH")
         subprocess.run(
-            ["npm", "install"],
+            [npm_cmd, "install"],
             cwd=web_next_dir,
             check=True,
             capture_output=True,
             timeout=300,  # 5-min timeout for npm install
         )
         subprocess.run(
-            ["npm", "run", "build"],
+            [npm_cmd, "run", "build"],
             cwd=web_next_dir,
             check=True,
             capture_output=True,
