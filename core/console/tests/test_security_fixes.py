@@ -358,9 +358,13 @@ class TestEngineKeyConcurrentWrites(unittest.TestCase):
 
 
 class TestEngineSetupMalformedBodies(unittest.TestCase):
-    """Blind spot #2: ``EngineTestRequest``/``EngineKeyUpdate`` are the only
-    Pydantic-validated bodies in setup.py (``extra='forbid'`` + length
-    caps) but nothing exercised their 422 path — or even their happy path.
+    """Blind spot #2: ``EngineKeyUpdate`` is a Pydantic-validated body in
+    setup.py (``extra='forbid'`` + length caps) but nothing exercised its
+    422 path — or even its happy path.
+
+    (The former ``EngineTestRequest``/POST /setup/test-engine tests were
+    removed together with the first-run onboarding wizard that was its only
+    caller.)
     """
 
     def setUp(self):
@@ -370,30 +374,6 @@ class TestEngineSetupMalformedBodies(unittest.TestCase):
     def tearDown(self):
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_test_engine_rejects_unexpected_extra_field(self):
-        with _isolated_voice_config_dir(self._tmp_path):
-            with _sandbox(self._tmp_path) as (client, home, tenant_id):
-                resp = client.post(
-                    "/v1/console/setup/test-engine",
-                    json={"engine_id": "anthropic", "unexpected_field": "x"},
-                )
-                assert resp.status_code == 422, resp.text
-
-    def test_test_engine_requires_engine_id(self):
-        with _isolated_voice_config_dir(self._tmp_path):
-            with _sandbox(self._tmp_path) as (client, home, tenant_id):
-                resp = client.post("/v1/console/setup/test-engine", json={})
-                assert resp.status_code == 422, resp.text
-
-    def test_test_engine_rejects_oversized_engine_id(self):
-        with _isolated_voice_config_dir(self._tmp_path):
-            with _sandbox(self._tmp_path) as (client, home, tenant_id):
-                resp = client.post(
-                    "/v1/console/setup/test-engine",
-                    json={"engine_id": "x" * 33},
-                )
-                assert resp.status_code == 422, resp.text
 
     def test_update_engine_key_rejects_oversized_value(self):
         with _isolated_voice_config_dir(self._tmp_path):

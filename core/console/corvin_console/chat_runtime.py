@@ -79,7 +79,7 @@ path, resolved from ``spec.default_engine``:
   subprocess path (the historical path; behaviour is byte-for-byte unchanged).
 * ``hermes`` → the Layer-22 ``WorkerEngine`` path (``HermesEngine`` → local
   Ollama HTTP, no subprocess, no Anthropic API key). This is the zero-egress /
-  NO-API-KEY path the README + first-run SetupGate promote. Before this fix the
+  NO-API-KEY path the README promotes. Before this fix the
   web-chat only drove ``claude_code`` and every Hermes turn hit a
   "switch to Claude Code" dead-end — the no-API-key onboarding produced a
   console that could not answer (round-6 HIGH blocker).
@@ -301,7 +301,7 @@ except Exception:  # noqa: BLE001
 # the OS turn through the SAME engine machinery the bridge adapter uses when the
 # tenant picked a non-claude OS engine in Setup. HermesEngine drives local Ollama
 # over HTTP (no subprocess, no Anthropic API key) — the zero-egress path the
-# README + first-run SetupGate promote. Best-effort import mirroring the other
+# README promotes. Best-effort import mirroring the other
 # bridge-tree imports: absence degrades to the honest "engine not drivable"
 # message rather than a crash.
 _HermesEngine = None
@@ -1291,7 +1291,7 @@ def _install_generated_panels(tenant_id: str, workdir: "Path") -> list[dict]:
 #   * claude_code → the direct `claude -p --output-format stream-json` subprocess
 #     path (below). This is the historical path; behaviour is byte-for-byte.
 #   * hermes      → the Layer-22 WorkerEngine path (HermesEngine → Ollama HTTP).
-#     This is the zero-egress / NO-API-KEY path the README + SetupGate promote;
+#     This is the zero-egress / NO-API-KEY path the README promotes;
 #     wiring it here is what makes the recommended Hermes onboarding actually
 #     answer in the web chat (round-6 blocker). HermesEngine drives Ollama's
 #     local HTTP streaming API — no subprocess, no Anthropic credential.
@@ -6436,7 +6436,7 @@ async def stream_turn(
     # The pre-spawn gates (L44/LIP/L34/L35) ALREADY ran above with
     # engine_id=hermes, so this branch is reached only for a permitted turn.
     # HermesEngine drives local Ollama over HTTP — no subprocess, no Anthropic
-    # API key. This is the zero-egress / NO-API-KEY path the SetupGate promotes;
+    # API key. This is the zero-egress / NO-API-KEY path the README promotes;
     # routing it here is what makes the recommended Hermes onboarding actually
     # answer in the web chat (round-6 blocker).
     if _os_engine == "hermes":

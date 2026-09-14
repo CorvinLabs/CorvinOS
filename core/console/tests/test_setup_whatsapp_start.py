@@ -2,8 +2,9 @@
 
 Confirmed blind spot (2026-07-13): the whole /setup/whatsapp/* surface had
 zero test coverage even though the sibling /setup/welcome-check endpoint (same
-file, same async-job/poll/idempotency pattern) has a dedicated test file
-(test_setup_welcome_check.py). This file closes that gap for whatsapp_start:
+file, same async-job/poll/idempotency pattern) had a dedicated test file
+(test_setup_welcome_check.py, removed 2026-09-14 together with the first-run
+onboarding wizard it tested). This file closes that gap for whatsapp_start:
 
   1. CSRF is actually enforced (require_csrf dependency, line ~711) — missing
      token and wrong token both -> 403, using a REAL session + real/derived

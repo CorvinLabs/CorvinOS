@@ -25,8 +25,9 @@ The app exposes:
   /                 Redirect → /v1/console/auth/local-login
 
 local-login creates a session automatically for localhost operators and
-redirects to /console/. The SetupGate component then guides first-time
-configuration (engine key, optional bridge channel).
+redirects to /console/, landing directly on the chat page. Engine key and
+bridge-channel configuration live in Settings → Engines / Settings →
+Bridges (no first-run wizard gates access to chat).
 
 Bind address + proxy headers (adversarial review E-08, 2026-09-03)
 ------------------------------------------------------------------

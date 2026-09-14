@@ -37,7 +37,9 @@ which could not start its managed dev server at all: `webServer.url` probed
 `CONSOLE_BASE_URL` with the correct default. The spec mocks auth and
 `/setup/status` (SetupGate renders a `fixed inset-0 z-50` overlay that swallows
 every click while setup is incomplete), so it runs against the dev server alone —
-no gateway, no session, no fixture data.
+no gateway, no session, no fixture data. (Historical note, 2026-09-14: SetupGate
+and its overlay were removed together with the first-run onboarding wizard —
+the spec's `/setup/status` mock is now a no-op but harmless.)
 
 **Still not executed:** `operator/bridges/run-all-tests.sh` — it exceeded a
 15-minute budget twice and buffers all output until exit. The `audit.py` fan-out

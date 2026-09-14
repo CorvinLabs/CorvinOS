@@ -1,24 +1,20 @@
-"""Characterization tests for a CONFIRMED test blind spot: both background
-job states in routes/setup.py — `_WA_START_STATE` (WhatsApp bridge start,
-POST /setup/whatsapp/start) and `_WELCOME_CHECK_STATE` (welcome-check,
-POST /setup/welcome-check) — are flipped to {"state": "running"} right
-before a daemon thread starts, and NOTHING in the module ever marks either
-state stale: no `started_at` timestamp is recorded, no timeout/watchdog
-exists, and a second POST while the job is "running" is a pure no-op that
-just echoes the same stuck dict back.
+"""Characterization test for a CONFIRMED test blind spot: `_WA_START_STATE`
+(WhatsApp bridge start, POST /setup/whatsapp/start) is flipped to
+{"state": "running"} right before a daemon thread starts, and NOTHING in
+the module ever marks that state stale: no `started_at` timestamp is
+recorded, no timeout/watchdog exists, and a second POST while the job is
+"running" is a pure no-op that just echoes the same stuck dict back.
 
 This is reachable in production, not theoretical: `bm.start_channel_detached`
 (-> `_materialise_channel`) shells out to `subprocess.run(_npm_install_cmd(...))`
-with NO `timeout=` argument (operator/bridges/bridge_manager.py), and the
-welcome-check job's STT/TTS round-trip calls into voice_doctor with no
-timeout on the TTS leg either. A stalled npm registry / hung TTS provider
-call genuinely blocks the daemon thread forever, and every subsequent poll
-(and even a fresh retry POST) returns the exact same stuck "running" state
-indefinitely, with no client-visible way to recover short of a server
-restart.
+with NO `timeout=` argument (operator/bridges/bridge_manager.py). A stalled
+npm registry call genuinely blocks the daemon thread forever, and every
+subsequent poll (and even a fresh retry POST) returns the exact same stuck
+"running" state indefinitely, with no client-visible way to recover short
+of a server restart.
 
-These tests do not (yet) assert a fix — no staleness field exists in the
-code to assert on. They pin TODAY's undesirable behavior (a background job
+This test does not (yet) assert a fix — no staleness field exists in the
+code to assert on. It pins TODAY's undesirable behavior (a background job
 that hangs forever keeps the shared state stuck at "running" forever, with
 no started_at/staleness marker anywhere and no self-healing on retry) so
 that whoever adds the staleness mechanism has a red test to turn green,
@@ -26,7 +22,10 @@ and so a future accidental "fix" that quietly makes the retry a silent
 no-op forever cannot ship unnoticed.
 
 Harness follows the FastAPI TestClient + isolated-CORVIN_HOME + auth-bypass
-pattern established by test_setup_welcome_check.py / test_engine_detect_routes_adr0125.py.
+pattern established by test_engine_detect_routes_adr0125.py.
+
+(The former welcome-check counterpart of this test was removed together
+with the first-run onboarding wizard / welcome-check feature it exercised.)
 """
 from __future__ import annotations
 
@@ -95,25 +94,6 @@ def _sandbox(tmp_path: Path):
             else:
                 os.environ[k] = v
         _reset_modules()
-
-
-def _install_fake_house_rules(*, warn: str | None = None) -> None:
-    mod = types.ModuleType("house_rules")
-
-    def _boot_check(log_fn=None):
-        if warn and callable(log_fn):
-            log_fn(warn)
-
-    mod.house_rules_boot_health_check = _boot_check
-    sys.modules["house_rules"] = mod
-
-
-def _install_fake_voice_doctor(*, stt_ok: bool = True, tts_ok: bool = True) -> None:
-    mod = types.ModuleType("voice_doctor")
-    mod._DOCTOR_TTS_TEXT = "test"
-    mod._check_stt = lambda timeout_s: (stt_ok, "ok" if stt_ok else "stt broken")
-    mod._check_tts = lambda text: (tts_ok, "ok" if tts_ok else "tts broken", None)
-    sys.modules["voice_doctor"] = mod
 
 
 class TestWhatsappStartJobHang(unittest.TestCase):
@@ -222,103 +202,6 @@ class TestWhatsappStartJobHang(unittest.TestCase):
             "a retry POST while the job is stuck must currently be "
             "indistinguishable from the original response -- there is no "
             "way for the client to force a fresh attempt",
-        )
-
-
-class TestWelcomeCheckJobHang(unittest.TestCase):
-    """Same blind spot for the welcome-check job: `_run_welcome_check_job`
-    calls `.result()` on 4 ThreadPoolExecutor futures with no timeout, so a
-    single hanging probe (e.g. voice_doctor's TTS call, which itself has no
-    timeout) blocks the whole job, and `_WELCOME_CHECK_STATE` for that
-    tenant stays 'running' forever with no started_at/staleness field."""
-
-    def setUp(self):
-        self._tmp = tempfile.mkdtemp()
-        self._tmp_path = Path(self._tmp)
-        self._orig_house_rules = sys.modules.get("house_rules")
-        self._orig_voice_doctor = sys.modules.get("voice_doctor")
-        self._release = threading.Event()
-
-    def tearDown(self):
-        self._release.set()
-        time.sleep(0.05)
-        shutil.rmtree(self._tmp, ignore_errors=True)
-        for name, orig in (
-            ("house_rules", self._orig_house_rules),
-            ("voice_doctor", self._orig_voice_doctor),
-        ):
-            if orig is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = orig
-
-    def _hanging_stt_tts(self):
-        def _fn():
-            # Mirrors voice_doctor._check_tts calling a provider with no
-            # timeout at all -- this future's .result() never returns
-            # until released.
-            self._release.wait()
-            return ({"status": "ok", "detail": ""}, {"status": "ok", "detail": ""})
-        return _fn
-
-    def test_status_stays_running_forever_with_no_staleness_marker(self):
-        _install_fake_house_rules(warn=None)
-        _install_fake_voice_doctor(stt_ok=True, tts_ok=True)
-
-        with _sandbox(self._tmp_path) as tc:
-            with (
-                patch("corvin_console.routes.setup._default_engine", return_value="claude_code"),
-                patch(
-                    "corvin_console.routes.setup.test_engine",
-                    return_value={"ok": True, "detail": ""},
-                ),
-                patch(
-                    "corvin_console.routes.setup._welcome_check_stt_tts",
-                    side_effect=self._hanging_stt_tts(),
-                ),
-            ):
-                start = tc.post("/v1/console/setup/welcome-check")
-                self.assertEqual(start.json()["state"], "running")
-
-                for _ in range(5):
-                    time.sleep(0.05)
-                    status = tc.get("/v1/console/setup/welcome-check/status").json()
-                    self.assertEqual(
-                        status["state"], "running",
-                        "job never finishes here, so it must stay 'running' "
-                        "-- if this flips on its own a timeout/watchdog now "
-                        "exists and this test should be updated",
-                    )
-                    self.assertNotIn(
-                        "started_at", status,
-                        "no staleness timestamp exists yet -- documents the gap",
-                    )
-
-    def test_retry_post_while_stuck_is_a_pure_noop_returns_same_stuck_state(self):
-        _install_fake_house_rules(warn=None)
-        _install_fake_voice_doctor(stt_ok=True, tts_ok=True)
-
-        with _sandbox(self._tmp_path) as tc:
-            with (
-                patch("corvin_console.routes.setup._default_engine", return_value="claude_code"),
-                patch(
-                    "corvin_console.routes.setup.test_engine",
-                    return_value={"ok": True, "detail": ""},
-                ),
-                patch(
-                    "corvin_console.routes.setup._welcome_check_stt_tts",
-                    side_effect=self._hanging_stt_tts(),
-                ),
-            ):
-                first = tc.post("/v1/console/setup/welcome-check").json()
-                retry = tc.post("/v1/console/setup/welcome-check").json()
-
-        self.assertEqual(first["state"], "running")
-        self.assertEqual(retry["state"], "running")
-        self.assertEqual(
-            first, retry,
-            "a retry POST while the welcome-check job is stuck must "
-            "currently be indistinguishable from the original response",
         )
 
 

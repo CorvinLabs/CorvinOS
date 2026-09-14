@@ -6,7 +6,6 @@ import { useConsoleManifest } from "@/adapters/capabilities";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout";
-import { SetupGate } from "@/components/setup/SetupGate";
 import { ChunkErrorBoundary } from "@/components/error-boundary";
 import {
   LandingPage,
@@ -87,16 +86,13 @@ function useManifestPanelRoutes(): React.ReactNode[] {
   return mergePanelRoutes(manifest?.panels);
 }
 
-// SetupGate is rendered inside RequireAuth so it has access to the auth
-// context and only appears for authenticated operators.
+// The first-run onboarding gate (engine/bridge wizard + spoken welcome) was
+// removed so a fresh install lands directly on the chat console — the
+// installer now marks onboarding complete itself (corvinOS/installer/core.py
+// step_18_finalise) instead of waiting for a "Finish" click in a modal.
 // ConsoleAssistant is now embedded in AppLayout (header button + panel).
 function AuthenticatedShell() {
-  return (
-    <>
-      <SetupGate />
-      <AppLayout />
-    </>
-  );
+  return <AppLayout />;
 }
 
 function RootRedirect() {

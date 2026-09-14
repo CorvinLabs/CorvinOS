@@ -736,6 +736,34 @@ class CorvinInstaller:
         print(f"\n  Web Console  →  {url}")
         print("  Configure bridges and tokens: Settings → Bridges")
 
+        self._mark_onboarding_complete()
+
+    def _mark_onboarding_complete(self) -> None:
+        """Mark first-run onboarding as done — same state the removed
+        SetupGate wizard used to write via a "Finish" click (ADR-0120:
+        ``_SETUP_COMPLETE_PATH`` + ``onboarding.json``). The console UI no
+        longer gates the chat behind an onboarding wizard, so a finished
+        install must set this state itself; otherwise `_onboarding_complete()`
+        (``ops/launcher/corvin/cli.py``, ``core/console/corvin_console/routes/
+        setup.py``) would stay permanently false and every `corvin serve`
+        would keep printing a "First run" message that is no longer true.
+        Best-effort: a failure here must never fail the install."""
+        try:
+            setup_complete_flag = self.voice_config / ".corvin_setup_complete"
+            setup_complete_flag.parent.mkdir(parents=True, exist_ok=True)
+            setup_complete_flag.touch()
+
+            global_dir = self.corvin_home / "tenants" / "_default" / "global"
+            global_dir.mkdir(parents=True, exist_ok=True)
+            import datetime as _dt
+            state = {
+                "complete": True,
+                "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            }
+            (global_dir / "onboarding.json").write_text(json.dumps(state, indent=2))
+        except Exception as e:
+            print(f"  ⚠ Could not mark onboarding complete: {e}")
+
     # ── Step 19: Validate installation ────────────────────────────────────
 
     def step_19_validate(self) -> None:

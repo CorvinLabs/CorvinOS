@@ -818,7 +818,7 @@ class TtsRequest(BaseModel):
     # ADR-0194 Phase 1 — when the caller names its chat session, the synthesised
     # audio is ARCHIVED into that session's workdir instead of being thrown away,
     # so the turn keeps a replayable <audio> player. Optional: every other caller
-    # (e.g. the first-boot greeting in SetupGate) simply omits it and gets today's
+    # (e.g. a caller with no active session) simply omits it and gets today's
     # behaviour. Pattern-bounded because it becomes a path component downstream.
     sid: str | None = Field(None, min_length=1, max_length=128,
                             pattern=r"^[A-Za-z0-9_-]+$")
