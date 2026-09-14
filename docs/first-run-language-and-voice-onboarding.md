@@ -80,6 +80,21 @@ Exception: pass`, voice setup never fails because of it. Tests:
 
 ## 2. Concept 2 — first-boot spoken onboarding + warm-up + self-check
 
+**Status: REMOVED (2026-09-14).** The onboarding wizard (`SetupGate.tsx`, steps
+`welcome → engine → bridge → done`) and its spoken welcome-check
+(`POST /setup/welcome-check` + `/status`, `_run_welcome_check_job`,
+`_build_welcome_greeting`) were deleted so a fresh install lands directly on
+the chat console instead of behind a multi-step gate, and no audio plays on
+first load. The installer now marks onboarding complete itself
+(`corvinOS/installer/core.py::step_18_finalise`) instead of waiting for a
+"Finish" click in the removed wizard — `_SETUP_COMPLETE_PATH`/`onboarding.json`
+and `GET /setup/status` are unchanged and still read by
+`operator/bridges/shared` and `ops/launcher/corvin/cli.py`. Engine selection
+and bridge setup remain fully available in Settings → Engines / Settings →
+Bridges, which already used the same shared endpoints independently of this
+wizard. The section below is kept as a historical design record — its
+described UI no longer exists.
+
 ### Current state (verified in code)
 
 | Piece | What it does | Where |

@@ -12,14 +12,15 @@ import { ChatPage } from '../../fixtures/mock-pages';
 // `src/pages/chat.tsx`. It cannot exercise how that page actually wires
 // `useVoicePlayback` (voiceState / playTts / playBlocked / stopVoice) into the
 // real header controls. The tests below render the ACTUAL `ChatPage` from
-// `@/pages/chat` and the ACTUAL `SetupGate` from
-// `@/components/setup/SetupGate` (mirroring the real-component convention
-// already used by `../voice/voice-status-panel.test.tsx`), with only the
-// heavy, unrelated subsystems (WebSocket chat-registry, IndexedDB task
-// persistence, SSE task updates, auth) mocked out — the voice wiring itself
-// runs through the real `useVoicePlayback` hook.
+// `@/pages/chat` (mirroring the real-component convention already used by
+// `../voice/voice-status-panel.test.tsx`), with only the heavy, unrelated
+// subsystems (WebSocket chat-registry, IndexedDB task persistence, SSE task
+// updates, auth) mocked out — the voice wiring itself runs through the real
+// `useVoicePlayback` hook.
+//
+// (The former "SetupGate WelcomeStep voice wiring" describe block below this
+// section was removed together with the first-run onboarding wizard.)
 import { ChatPage as RealChatPage } from '@/pages/chat';
-import { SetupGate } from '@/components/setup/SetupGate';
 import { useChatSession } from '@/lib/chat-registry';
 import { hydrateChatTurn } from '@/pages/chat';
 import type { ChatTurn } from '@/lib/chat-registry';
@@ -104,11 +105,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
       anthropic_key_set: false,
       bridges_configured: [],
       setup_complete: false,
-    })),
-    runWelcomeCheck: vi.fn(async () => ({
-      state: 'done',
-      lang: 'de',
-      greeting: 'Hallo, ich bin Corvin.',
     })),
   };
 });
@@ -436,71 +432,6 @@ describe('ChatPage TDE inline badge (real components, ADR-0214/0216)', () => {
     );
     expect(msg.engine).toBeUndefined();
     expect(msg.tdeProgress).toBeUndefined();
-  });
-});
-
-describe('SetupGate WelcomeStep voice wiring (real components)', () => {
-  let playMock: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    window.localStorage.clear();
-    if (!('createObjectURL' in URL)) {
-      // @ts-expect-error - happy-dom may not implement this
-      URL.createObjectURL = vi.fn(() => 'blob:fake-url');
-    }
-    if (!('revokeObjectURL' in URL)) {
-      // @ts-expect-error - happy-dom may not implement this
-      URL.revokeObjectURL = vi.fn();
-    }
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('auto-speaks the welcome-check greeting and, when autoplay is blocked, "Tap to hear Corvin" resumes it', async () => {
-    // First play() (the automatic one, no user gesture in scope yet) is
-    // blocked by the browser — exactly the first-boot scenario this
-    // affordance exists for. The second play() (from the user's tap) succeeds.
-    playMock = vi.fn()
-      .mockRejectedValueOnce(new DOMException('blocked', 'NotAllowedError'))
-      .mockResolvedValueOnce(undefined);
-    HTMLMediaElement.prototype.play = playMock;
-    HTMLMediaElement.prototype.pause = vi.fn();
-
-    render(
-      <QueryClientProvider client={createTestQueryClient()}>
-        <SetupGate />
-      </QueryClientProvider>,
-    );
-
-    // runWelcomeCheck resolves and WelcomeStep calls playTts(greeting, "de")
-    // — this is the real useVoicePlayback hook, not a mock.
-    const { runWelcomeCheck, ttsBlob } = await import('@/lib/api');
-    await waitFor(() => expect(runWelcomeCheck).toHaveBeenCalledWith('test-csrf'));
-    // Welcome greeting has no session yet → sid is undefined; the AbortSignal
-    // rides on every playTts since the Stop/supersede fetch-abort fix.
-    // 6th arg: the greeting is system-generated (not an assistant reply), which
-    // the TTS route audits as such.
-    await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
-      'Hallo, ich bin Corvin.', 'de', 'test-csrf',
-      undefined, expect.any(AbortSignal), true,
-    ));
-
-    // Autoplay was blocked -> the "Tap to hear Corvin" banner is shown.
-    const tapButton = await screen.findByRole('button', { name: /tap to hear corvin/i });
-
-    fireEvent.click(tapButton);
-
-    // playBlocked() re-invoked play() on the SAME element; it now succeeds,
-    // so the banner (gated on voiceState === "blocked") disappears.
-    await waitFor(() => expect(playMock).toHaveBeenCalledTimes(2));
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /tap to hear corvin/i })).not.toBeInTheDocument(),
-    );
-    // "Let's go" always remains available regardless of voice outcome — the
-    // onboarding flow is never gated on TTS succeeding.
-    expect(screen.getByRole('button', { name: /let's go/i })).toBeEnabled();
   });
 });
 
