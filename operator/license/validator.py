@@ -677,10 +677,26 @@ def _check_device_fp(claims: dict[str, Any]) -> bool:
         # Compare the CANONICAL tier (review R1 #12): a legacy tier="universal"
         # session_permit canonicalizes to "member" and must NOT bypass the
         # single-device binding (the literal "member" check let it through).
-        # ADR-0092 AMENDED (device binding fix): device_fp missing is a fail-closed
-        # gate for BOTH session_permit AND license tokens when member-tier (HIGH-001).
+        #
+        # HIGH-001 (commit 343b8b5b) extended this gate to type:"license" as a
+        # "device binding asymmetry" fix and was REVERTED on 2026-09-14: the
+        # asymmetry is the token LIFECYCLE, not a hole. Corvin-Features mints the
+        # emailed entitlement in license_issuance._make_license_jwt() with exactly
+        # {type,tier,customer_id,customer_fp,seat,order_fp} and never a device_fp —
+        # the device is unknown at purchase time. The device identity first exists
+        # at /v1/subscriptions/activate, which takes that license JWT PLUS a
+        # machine_fp and mints the device-bound session_permit; seat enforcement
+        # lives there (SubscriptionStore.activate → DeviceAlreadyBound). Demanding
+        # the claim one step earlier does not make member single-device, it makes it
+        # zero-device: every paying member was rejected at "Apply Key", and because
+        # the console writes license.key only after this check passes, the key could
+        # never be stored, so session_refresh never had a token to activate with —
+        # the gate locked out the only path that could have produced a device_fp.
+        # Same failure class as wiring user_backend deny into the credential-less
+        # local-login path (see CLAUDE.md). Keep the fail-closed gate on the
+        # session_permit, where an absent device_fp really is an issuance bug.
         if (canonical_tier(str(claims.get("tier", ""))) == "member"
-                and claims.get("type") in ("session_permit", "license")):
+                and claims.get("type") == "session_permit"):
             log.warning(
                 "license: member-tier %s missing device_fp claim — "
                 "expected device binding per ADR-0098. Free tier active.",
