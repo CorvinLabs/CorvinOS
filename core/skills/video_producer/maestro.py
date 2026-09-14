@@ -25,7 +25,7 @@ class VideoJobPhase(Enum):
     COMPLETE = 6
 
 
-@dataclass
+@dataclass(frozen=True)
 class FeedbackEvent:
     """Immutable feedback event for learning"""
     timestamp: str
@@ -253,11 +253,17 @@ class MaestroOrchestrator:
             feedback_type: Type of feedback (pacing, quality, accuracy, engagement)
             value: Feedback value
             notes: Optional notes
+
+        Raises:
+            ValueError: If feedback values are invalid
         """
 
         job = self.jobs.get(job_id)
         if not job:
             raise ValueError(f"Job {job_id} not found")
+
+        # Validate feedback based on type
+        self._validate_feedback(feedback_type, value, scene_index, job)
 
         feedback = FeedbackEvent(
             timestamp=datetime.now().isoformat(),
@@ -350,6 +356,49 @@ class MaestroOrchestrator:
         Requires: Video must be assembled
         """
         return job.video_result is not None
+
+    def _validate_feedback(self, feedback_type: str, value: Any, scene_index: int, job: VideoJob):
+        """Validate feedback value based on type (fail-closed)
+
+        Raises:
+            ValueError: If feedback is invalid
+        """
+        # Scene index must be valid
+        if scene_index < 0 or scene_index >= len(job.narration):
+            raise ValueError(f"Scene index {scene_index} out of range (0-{len(job.narration)-1})")
+
+        # Feedback type must be known
+        valid_types = ["pacing", "quality", "accuracy", "engagement", "confidence"]
+        if feedback_type not in valid_types:
+            raise ValueError(f"Unknown feedback type: {feedback_type}")
+
+        # Value validation by type
+        if feedback_type == "confidence":
+            # Confidence must be between 0.0 and 1.0
+            if not isinstance(value, (int, float)):
+                raise ValueError(f"Confidence must be numeric, got {type(value)}")
+            if value < 0.0 or value > 1.0:
+                raise ValueError(f"Confidence must be between 0.0 and 1.0, got {value}")
+
+        elif feedback_type in ["quality", "accuracy", "pacing"]:
+            # Quality metrics should be 0-1 or 0-100
+            if isinstance(value, (int, float)):
+                if value < 0:
+                    raise ValueError(f"{feedback_type} score cannot be negative: {value}")
+                if value > 100:
+                    raise ValueError(f"{feedback_type} score cannot exceed 100: {value}")
+            else:
+                raise ValueError(f"{feedback_type} score must be numeric, got {type(value)}")
+
+        elif feedback_type == "engagement":
+            # Engagement can be string (low/medium/high) or numeric
+            if isinstance(value, str):
+                valid_engagement = ["low", "medium", "high"]
+                if value.lower() not in valid_engagement:
+                    raise ValueError(f"Engagement must be low/medium/high, got {value}")
+            elif isinstance(value, (int, float)):
+                if value < 0 or value > 100:
+                    raise ValueError(f"Engagement score must be 0-100, got {value}")
 
     def _audit(self, event_type: str, job_id: str, details: Dict):
         """Emit audit event (hash-chained, immutable)

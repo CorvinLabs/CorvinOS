@@ -109,12 +109,23 @@ class VideoAssemblerWorker:
                     f,
                 )
 
+        # Get actual bitrate
+        actual_bitrate = self._get_video_bitrate(output_path) if os.path.exists(output_path) else 2500
+
+        # QUALITY GATE: Validate video (fail-closed)
+        self._validate_video_quality(
+            output_path=output_path,
+            bitrate_kbps=actual_bitrate,
+            duration_seconds=voice_duration,
+            codec=self.codec,
+        )
+
         return VideoResult(
             video_path=output_path,
             duration_seconds=voice_duration,
-            bitrate_kbps=2500,
+            bitrate_kbps=actual_bitrate,
             codec=self.codec,
-            quality_score=0.91,
+            quality_score=self._calculate_quality_score(actual_bitrate),
         )
 
     def _assemble_with_ffmpeg_real(
@@ -342,3 +353,97 @@ class VideoAssemblerWorker:
             "codec_name": self.codec,
             "bit_rate": "2500000",
         }
+
+    def _validate_video_quality(
+        self,
+        output_path: str,
+        bitrate_kbps: int,
+        duration_seconds: float,
+        codec: str,
+    ):
+        """QUALITY GATE: Validate video meets minimum broadcast standards (fail-closed)
+
+        Args:
+            output_path: Path to video file
+            bitrate_kbps: Video bitrate in kbps
+            duration_seconds: Video duration in seconds
+            codec: Video codec
+
+        Raises:
+            ValueError: If video fails quality checks
+        """
+        # Minimum bitrate: 100 kbps (streaming minimum)
+        if bitrate_kbps < 100:
+            raise ValueError(
+                f"Video bitrate too low: {bitrate_kbps} kbps "
+                f"(minimum: 100 kbps). Video rejected."
+            )
+
+        # Validate codec
+        valid_codecs = ["h264", "h.264", "vp9", "av1"]
+        if codec.lower() not in valid_codecs:
+            raise ValueError(
+                f"Invalid codec: {codec}. "
+                f"Must be one of {valid_codecs}"
+            )
+
+        # Validate file exists
+        if not os.path.exists(output_path):
+            raise ValueError(f"Video file not created: {output_path}")
+
+        # Validate file size (at least 100KB)
+        file_size = os.path.getsize(output_path)
+        if file_size < 100 * 1024:  # 100KB minimum
+            raise ValueError(
+                f"Video file too small: {file_size} bytes "
+                f"(minimum: 102400 bytes). Possible encoding failure."
+            )
+
+    def _get_video_bitrate(self, video_path: str) -> int:
+        """Get video bitrate in kbps from file using ffprobe
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            int: Bitrate in kbps (or 2500 default if unable to determine)
+        """
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=bit_rate",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                video_path,
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+            if result.returncode == 0:
+                bit_rate_str = result.stdout.strip()
+                if bit_rate_str:
+                    bit_rate_bps = int(bit_rate_str)
+                    return bit_rate_bps // 1000  # Convert to kbps
+        except Exception as e:
+            print(f"Unable to determine bitrate: {e}")
+
+        return 2500  # Default fallback
+
+    def _calculate_quality_score(self, bitrate_kbps: int) -> float:
+        """Calculate quality score (0.0-1.0) based on bitrate
+
+        Args:
+            bitrate_kbps: Video bitrate in kbps
+
+        Returns:
+            float: Quality score 0.0-1.0
+        """
+        if bitrate_kbps < 500:
+            return 0.5  # Low quality
+        elif bitrate_kbps < 1000:
+            return 0.7  # Medium quality
+        elif bitrate_kbps < 2000:
+            return 0.85  # Good quality
+        else:
+            return 0.95  # Excellent quality
