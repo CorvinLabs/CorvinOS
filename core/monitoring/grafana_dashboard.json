@@ -1,0 +1,31 @@
+{
+  "dashboard": {
+    "title": "CorvinOS Monitoring",
+    "panels": [
+      {
+        "title": "Skill Execution Count",
+        "targets": [{"expr": "corvinOS_skill_execution_count"}]
+      },
+      {
+        "title": "Skill Latency (p99)",
+        "targets": [{"expr": "histogram_quantile(0.99, corvinOS_skill_latency_ms)"}]
+      },
+      {
+        "title": "Skill Error Rate",
+        "targets": [{"expr": "corvinOS_skill_error_rate"}]
+      },
+      {
+        "title": "Learning Confidence",
+        "targets": [{"expr": "corvinOS_learning_confidence_mean"}]
+      },
+      {
+        "title": "Skills Converged",
+        "targets": [{"expr": "corvinOS_learning_convergence_detected"}]
+      },
+      {
+        "title": "API Latency (p99)",
+        "targets": [{"expr": "histogram_quantile(0.99, corvinOS_api_latency_ms)"}]
+      }
+    ]
+  }
+}
