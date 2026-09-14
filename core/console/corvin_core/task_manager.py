@@ -424,6 +424,46 @@ class TaskManager:
         except Exception:  # noqa: BLE001 — never break the task lifecycle on learning
             logger.debug("learning outcome not recorded for task %s", task.task_id, exc_info=True)
 
+    @staticmethod
+    def _update_model_selection_confidence(
+        task: "Task",
+        event: dict[str, Any],
+        tenant_id: str,
+    ) -> None:
+        """Update model selection confidence scores for task outcome (ADR-0644, fail-soft)."""
+        try:
+            from core.learning.model_selection_learning_listener import (  # noqa: PLC0415
+                get_listener,
+                ModelSelectionOutcome,
+            )
+        except Exception:  # noqa: BLE001 — stripped install or model selection not available
+            return
+
+        try:
+            listener = get_listener()
+
+            # Construct outcome from task completion
+            outcome = ModelSelectionOutcome(
+                task_id=task.task_id,
+                model_used=task.input.get("model_selected", ""),
+                task_type=task.input.get("task_type", "unknown"),
+                status="completed" if event["event"] == "task.completed" else "failed",
+                exit_code=task.exit_code,
+                duration_ms=task.duration_ms,
+                engine=task.input.get("engine"),
+                success=(event["event"] == "task.completed" and task.exit_code in (None, 0)),
+                timestamp=event.get("timestamp", ""),
+            )
+
+            # Process outcome (updates confidence scores)
+            listener.process_outcome(outcome, tenant_id or "_default")
+        except Exception:  # noqa: BLE001 — model selection learning failure never breaks task
+            logger.debug(
+                "Model selection confidence update failed for task %s",
+                task.task_id,
+                exc_info=True,
+            )
+
     def record_event(
         self,
         task_id: str,
@@ -513,6 +553,11 @@ class TaskManager:
                     # the task's OWN metadata (create_task(tenant_id=...)) —
                     # never an env fallback; without it nothing is recorded.
                     self._emit_learning_outcome(task, event)
+
+                    # ADR-0644 Model Selection Learning: process outcome for confidence
+                    # updates (fail-soft: if model selection learning is not available,
+                    # continue without recording).
+                    self._update_model_selection_confidence(task, event, tenant_id)
 
                 self._write_meta(task_id, task)
 
