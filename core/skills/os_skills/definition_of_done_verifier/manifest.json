@@ -1,0 +1,79 @@
+{
+  "skill_id": "assistant.definition_of_done_verifier",
+  "version": "0.1.0",
+  "status": "alpha",
+  "boot_layer": "bundled",
+  "description": "Definition-of-Done Verifier Skill — evaluates task completion against 5 canonical checks",
+
+  "config": {
+    "threshold": 0.80,
+    "timeout_total_ms": 30000,
+    "timeout_per_check_ms": 5000,
+
+    "weights": {
+      "w_reach": 0.20,
+      "w_audit": 0.25,
+      "w_test": 0.20,
+      "w_docs": 0.20,
+      "w_repro": 0.15
+    },
+
+    "check_strategies": {
+      "reachability": "grep_real_call_sites",
+      "audit_trail": "scan_audit_jsonl",
+      "test_evidence": "pytest_captured_output",
+      "docs_sync": "git_diff_keyword",
+      "reproducibility": "commit_msg_reproduce_cmd"
+    }
+  },
+
+  "checks": [
+    {
+      "name": "reachability",
+      "description": "Is there a real call site outside tests?",
+      "weight": 0.20,
+      "timeout_ms": 5000
+    },
+    {
+      "name": "audit_trail",
+      "description": "Are there audit events in audit.jsonl?",
+      "weight": 0.25,
+      "timeout_ms": 5000
+    },
+    {
+      "name": "test_evidence",
+      "description": "Do tests exist, pass, and produce captured output?",
+      "weight": 0.20,
+      "timeout_ms": 5000
+    },
+    {
+      "name": "docs_sync",
+      "description": "Do docs mention the code changes?",
+      "weight": 0.20,
+      "timeout_ms": 5000
+    },
+    {
+      "name": "reproducibility",
+      "description": "Is there a reproducibility command in commit message?",
+      "weight": 0.15,
+      "timeout_ms": 5000
+    }
+  ],
+
+  "audit_events": [
+    "dod_verified",
+    "dod_check_failed"
+  ],
+
+  "integration": {
+    "learning_loop": "ADR-0314",
+    "outcome_sink": "ADR-0613",
+    "audit_chain": "ADR-0232"
+  },
+
+  "tests": {
+    "unit_tests": "tests/test_dod_checks.py",
+    "e2e_tests": "tests/test_dod_e2e.py",
+    "target_coverage": 0.85
+  }
+}
