@@ -213,9 +213,9 @@ class TestF2PIILeakageFix:
 
     def test_api_key_scrubbed(self):
         """E2E: API keys/tokens scrubbed."""
-        text = "API key [TESTKEY_placeholder] is secret"
+        text = "API key [TESTKEY_abc123def456ghi789] is secret"
         scrubbed = _scrub_pii(text)
-        assert "sk_" not in scrubbed, "API key should be scrubbed"
+        assert "[TESTKEY_" not in scrubbed, "API key should be scrubbed"
         assert "[API_KEY]" in scrubbed, "Should be replaced with [API_KEY]"
         print("✅ F2: API key scrubbing works")
 
