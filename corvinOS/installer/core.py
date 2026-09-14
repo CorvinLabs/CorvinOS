@@ -196,8 +196,9 @@ class CorvinInstaller:
     BRIDGES = ["discord", "whatsapp", "telegram", "slack", "email",
                "signal", "teams"]
 
-    def __init__(self, interactive: bool = True, repo_root: "Path | None" = None):
+    def __init__(self, interactive: bool = True, repo_root: "Path | None" = None, quick_install: bool = True):
         self.interactive = interactive
+        self.quick_install = quick_install  # Skip API keys, bridges, 90s warmup
         # Injectable so tests can point destructive uninstall steps (in-repo
         # .corvin, web-next build artifacts) at a sandbox instead of the live
         # dev checkout — a real test run once wiped the production .corvin of
@@ -724,7 +725,7 @@ class CorvinInstaller:
 
     # ── Step 17: Start Web Console server ─────────────────────────────────
 
-    def step_17_start_console(self) -> None:
+    def step_17_start_console(self, quick_mode: bool = False) -> None:
         print("\n[Step 17] Starting Web Console...")
         # Prefer the systemd service registered in step 14 so the server is
         # managed by the init system and survives reboots. Fall back to the
@@ -735,8 +736,9 @@ class CorvinInstaller:
                 # start_service is unsafe here on an upgrade of an existing
                 # install (2026-08-02 finding).
                 self.service_manager.restart_service("webui")
-                # Wait up to 15 s for the port to accept connections.
-                for _ in range(30):
+                # Wait up to 15 s (or 5 s in quick mode) for the port to accept connections.
+                max_waits = 10 if quick_mode else 30
+                for _ in range(max_waits):
                     time.sleep(0.5)
                     try:
                         s = socket.socket()
@@ -757,7 +759,8 @@ class CorvinInstaller:
         # for 8765 in a crash-loop. Wait for the launchd-managed server instead
         # of spawning our own.
         if sys.platform == "darwin" and getattr(self, "_webui_service_registered", False):
-            for _ in range(30):
+            max_waits = 10 if quick_mode else 30
+            for _ in range(max_waits):
                 time.sleep(0.5)
                 try:
                     s = socket.socket()
@@ -806,8 +809,11 @@ class CorvinInstaller:
     # ── Main entry points ──────────────────────────────────────────────────
 
     def install(self) -> None:
-        """Run full installation (19 steps)."""
+        """Run full installation (19 steps, or quick mode with steps 9–12 + 90s warmup skipped)."""
         try:
+            mode = "QUICK" if self.quick_install else "FULL"
+            print(f"\n[Installer Mode] {mode} (--quick-install={self.quick_install})")
+
             self.step_1_detect_platform()
             self.step_2_create_directories()
             self.step_3_system_dependencies()   # Node.js must be installed before Claude Code
@@ -817,15 +823,22 @@ class CorvinInstaller:
             self.step_7_setup_stt()
             self.step_8_setup_piper()
             self.step_8b_setup_browser()        # optional — never hard-fails
-            self.step_9_api_keys()
-            self.step_10_select_bridges()
-            self.step_11_install_bridges()
-            self.step_12_configure_bridges()
+
+            if not self.quick_install:
+                self.step_9_api_keys()
+                self.step_10_select_bridges()
+                self.step_11_install_bridges()
+                self.step_12_configure_bridges()
+            else:
+                print("\n[Step 9] Skipping API key setup (--quick-install mode)")
+                print("[Step 10–12] Skipping bridge selection/installation/configuration (--quick-install mode)")
+                self.selected_bridges = []  # No bridges in quick mode
+
             self.step_13_web_console()
             self.step_14_register_services()
             self.step_15_start_services()
             self.step_16_register_plugins()
-            self.step_17_start_console()
+            self.step_17_start_console(quick_mode=self.quick_install)
             self.step_18_finalise()
             self.step_19_validate()
 
