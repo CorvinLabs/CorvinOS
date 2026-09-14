@@ -294,66 +294,6 @@ class CorvinInstaller:
         print("\n[Step 5] Claude Code login...")
         _deps.ensure_claude_login(interactive=self.interactive)
 
-    # ── Step 6: Hermes (Ollama) bootstrap — optional ──────────────────────
-
-    def step_6_bootstrap_hermes(self) -> None:
-        """Install Ollama and pull the recommended model for this machine's RAM.
-
-        Never hard-fails — Ollama is optional (other engines still work without it).
-        """
-        print("\n[Step 6] Hermes (Ollama) engine bootstrap...")
-        try:
-            try:
-                from corvin_console.hermes_bootstrap import (  # noqa: PLC0415
-                    bootstrap_hermes, get_available_ram_gb, select_model_for_ram,
-                    is_ollama_installed,
-                )
-            except ImportError:
-                from operator.bridges.shared.hermes_bootstrap import (  # noqa: PLC0415
-                    bootstrap_hermes, get_available_ram_gb, select_model_for_ram,
-                    is_ollama_installed,
-                )
-
-            ram = get_available_ram_gb()
-            model = select_model_for_ram(ram)
-            already_installed = is_ollama_installed()
-
-            print(f"  RAM detected : {ram:.1f} GB")
-            print(f"  Model        : {model}")
-            print(f"  Ollama       : {'installed' if already_installed else 'not found'}")
-
-            if not self.interactive:
-                print("  Skipping — run corvin-install in a terminal to set up Hermes.")
-                return
-
-            if not already_installed:
-                answer = input(
-                    f"  Install Ollama + pull {model} (~2–9 GB)? [Y/n]: "
-                ).strip().lower() or "y"
-                if answer.startswith("n"):
-                    print("  Skipping Hermes bootstrap.")
-                    return
-
-            # stream=True + a progress callback so the multi-GB model pull shows
-            # LIVE progress (Ollama's native download bar) instead of looking
-            # frozen at "[Step 6]" — the same on Linux, macOS and Windows.
-            print(f"  Downloading {model} now — live progress below "
-                  f"(this is a one-time ~2–9 GB download):", flush=True)
-            result = bootstrap_hermes(
-                force_model=model, stream=True,
-                progress=lambda m: print(f"  · {m}", flush=True))
-
-            if result.get("error"):
-                print(f"  ⚠ Hermes bootstrap warning: {result['error']}")
-                print(f"  Manual fix: ollama pull {model}")
-            elif result.get("model_pulled"):
-                print(f"  ✓ Hermes ready: {model}")
-            else:
-                print(f"  ⚠ Hermes: model not pulled — run: ollama pull {model}")
-
-        except Exception as exc:
-            print(f"  ⚠ Hermes bootstrap skipped: {exc}")
-            print(f"  Manual: ollama pull <model>   (see https://ollama.ai)")
 
     # ── Step 7: Speech-to-Text (pywhispercpp) ─────────────────────────────
 
@@ -819,7 +759,6 @@ class CorvinInstaller:
             self.step_3_system_dependencies()   # Node.js must be installed before Claude Code
             self.step_4_install_claude_code()
             self.step_5_claude_login()
-            self.step_6_bootstrap_hermes()      # optional — never hard-fails
             self.step_7_setup_stt()
             self.step_8_setup_piper()
             self.step_8b_setup_browser()        # optional — never hard-fails
