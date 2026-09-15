@@ -1,6 +1,6 @@
 """Quality Layers (ADR Gate, docs-as-definition-of-done, etc.) configuration.
 
-Wraps the shared ``operator/bridges/shared/quality_layers.py`` module which owns
+Wraps the shared ``corvin_operator/bridges/shared/quality_layers.py`` module which owns
 the canonical config at ``~/.corvin/global/quality-layers.json``. The module's
 load/save/enable_layer/disable_layer functions are the single source of truth —
 this route only exposes them via REST.

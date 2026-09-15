@@ -52,7 +52,7 @@ def _corvin_home() -> Path:
     # We intentionally do NOT walk ancestor directories here: the ancestor walk
     # (used by path_gate and forge.paths) returns <repo>/.corvin on developer
     # machines, which is the dev data store, not the operator's runtime chain.
-    # wdat_report is an operator/compliance tool — it must read the real runtime
+    # wdat_report is an corvin_operator/compliance tool — it must read the real runtime
     # chain at ~/.corvin unless CORVIN_HOME is explicitly set.
     env = os.environ.get("CORVIN_HOME")
     if env:

@@ -35,7 +35,7 @@ Library use (for an agent or another tool to call directly instead of
 shelling out):
     from scripts.adr_graph import load_graph, adrs_for_path, adrs_for_doc, subgraph
     nodes = load_graph()
-    seeds = adrs_for_path("operator/bundle/skills/ldd/adr_gate/SKILL.md", nodes)
+    seeds = adrs_for_path("corvin_operator/bundle/skills/ldd/adr_gate/SKILL.md", nodes)
     doc_seeds = adrs_for_doc("docs/claude-ref/adr-gate.md", nodes)
     ordered = subgraph([n.id for n in seeds], nodes)
 """

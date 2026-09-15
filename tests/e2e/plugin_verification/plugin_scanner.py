@@ -76,8 +76,8 @@ class PluginScanner:
         if plugin_dirs is None:
             plugin_dirs = [
                 Path("core/plugins/corvin_plugins"),
-                Path("operator/marketplace/plugins/buildin"),
-                Path("operator/marketplace/plugins/contributor"),
+                Path("corvin_operator/marketplace/plugins/buildin"),
+                Path("corvin_operator/marketplace/plugins/contributor"),
             ]
         self.plugin_dirs = [Path(d) for d in plugin_dirs]
         self.discovered_plugins: Dict[str, PluginMetadata] = {}

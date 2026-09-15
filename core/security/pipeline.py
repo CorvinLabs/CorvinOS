@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_operator_on_path() -> None:
-    """Make ``operator/`` importable as bare top-level packages. Idempotent.
+    """Make ``corvin_operator/`` importable as bare top-level packages. Idempotent.
 
     Same pattern as ``core/orchestration/quota_gate.py``: the wheel vendors the
     operator subtrees (``corvin_core._operator_bootstrap``); a source checkout
-    has ``operator/`` as a sibling of ``core/``.
+    has ``corvin_operator/`` as a sibling of ``core/``.
     """
     try:
         from corvin_core._operator_bootstrap import ensure_operator_on_path

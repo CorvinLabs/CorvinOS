@@ -13,7 +13,7 @@ path, so the write would sail through undetected.
 Simulated via ``sys.platform`` mocking (same pattern as this session's other
 Windows-parity tests) since real MSYS/Windows execution isn't available here.
 
-Run: python3 operator/voice/hooks/test_path_gate_windows_msys.py
+Run: python3 corvin_operator/voice/hooks/test_path_gate_windows_msys.py
 """
 from __future__ import annotations
 

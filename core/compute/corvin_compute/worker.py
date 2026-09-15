@@ -50,7 +50,7 @@ _MESSENGER_CHANNELS = frozenset(
 
 def _load_completion_notify():
     """Import the bridge-side completion_notify (best-effort). Adds the bridge
-    shared dir to sys.path — compute lives in core/, the backbone in operator/."""
+    shared dir to sys.path — compute lives in core/, the backbone in corvin_operator/."""
     try:
         shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
         if shared.exists() and str(shared) not in sys.path:

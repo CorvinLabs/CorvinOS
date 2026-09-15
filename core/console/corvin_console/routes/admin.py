@@ -94,7 +94,7 @@ try:
         # append, NOT insert(0): this directory also contains generic top-level
         # names (tests/, templates/) with no __init__.py, so putting it FIRST on
         # sys.path lets them shadow another package's `tests` — the same class as
-        # the operator/ stdlib-shadow trap.  Appending means existing paths win.
+        # the corvin_operator/ stdlib-shadow trap.  Appending means existing paths win.
         sys.path.append(str(_core_plugins))
     from corvin_plugins.manifest import (  # type: ignore[import-not-found]
         BootLayer,

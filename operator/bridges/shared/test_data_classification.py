@@ -2,7 +2,7 @@
 
 Run with::
 
-    python3 operator/bridges/shared/test_data_classification.py
+    python3 corvin_operator/bridges/shared/test_data_classification.py
 
 All tests are pure-Python; no forge / claude / docker dependencies.
 """

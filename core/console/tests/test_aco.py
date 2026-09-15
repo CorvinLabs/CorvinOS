@@ -943,7 +943,7 @@ class TestIntegrityMonitor(unittest.TestCase):
                 "corvin_console.aco.integrity_monitor._save_checksum_state",
             ), mock.patch(
                 "corvin_console.aco.integrity_monitor._COMPLIANCE_FILES",
-                [("operator/bridges/shared/house_rules.py", "house_rules")],
+                [("corvin_operator/bridges/shared/house_rules.py", "house_rules")],
             ):
                 findings = check_compliance_gate_integrity()
                 self.assertEqual(len(findings), 1)

@@ -16,7 +16,7 @@ Three regressions, all observed live on 2026-07-26:
    offending argv, which carries `--task <the user's question>`. The user's
    prompt landed in corvin.log in clear text.
 
-Run: python3 operator/bridges/shared/test_adapter_voice_summarizer_choice.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_voice_summarizer_choice.py
 """
 from __future__ import annotations
 

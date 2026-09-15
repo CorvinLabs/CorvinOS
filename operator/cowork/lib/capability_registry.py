@@ -5,7 +5,7 @@ Single source of truth mapping each user-facing CorvinOS capability to its
 persona-gating flag, MCP tool names, and a description for the self-aware
 capability map (see ``capability_map.py``). Consumed by ``resolver.py``
 (persona wiring) and enforced by
-``operator/cowork/test/test_capability_registry_matches_reality.py``.
+``corvin_operator/cowork/test/test_capability_registry_matches_reality.py``.
 
 Two invariants this file exists to protect (ADR-0190 "What NOT to Do"):
 
@@ -99,7 +99,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         tool_names=("mcp__forge__forge_tool", "mcp__forge__forge_promote",
                     "mcp__forge__forge_list", "mcp__forge__forge_exec"),
         service_fn="operator.forge.forge.mcp_server",
-        test_file="operator/forge/tests/test_mcp_server.py",
+        test_file="corvin_operator/forge/tests/test_mcp_server.py",
     ),
     Capability(
         id="forge.data",
@@ -275,7 +275,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         tool_names=("mcp__forge__compute_submit", "mcp__forge__compute_gate"),
         gate_fn="operator.forge.forge.mcp_server._check_compute_access",
         service_fn="core.compute.corvin_compute.mcp_bridge.compute_engine_tool_definitions",
-        test_file="operator/forge/tests/test_compute_engine_tools.py",
+        test_file="corvin_operator/forge/tests/test_compute_engine_tools.py",
     ),
     Capability(
         id="data.sources",
@@ -287,7 +287,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         tool_names=("mcp__forge__datasource_connect",),
         gate_fn="operator.forge.forge.mcp_server._lic_get_limit",
         service_fn="core.compute.corvin_compute.fabric.datasources.registry.DataSourceRegistry",
-        test_file="operator/forge/tests/test_datasource_connect.py",
+        test_file="corvin_operator/forge/tests/test_datasource_connect.py",
     ),
     Capability(
         id="a2a.send",

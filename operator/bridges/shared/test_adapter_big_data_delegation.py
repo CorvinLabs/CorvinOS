@@ -7,7 +7,7 @@ same task out to ACS. This adds the carve-out — behind a dark flag — and pin
 the property that matters most: **every** failure path degrades to the direct
 turn. A bridge message must never fail because delegation was unavailable.
 
-Run: python3 operator/bridges/shared/test_adapter_big_data_delegation.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_big_data_delegation.py
 """
 from __future__ import annotations
 

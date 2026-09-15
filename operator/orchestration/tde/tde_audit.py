@@ -1,7 +1,7 @@
 """ADR-0214: TDE audit shim — hash-chained, CONTENT-FREE events.
 
 Bridges the TDE package to the canonical audit chain
-(operator/bridges/shared/audit.py → forge.security_events, hash_chain=True).
+(corvin_operator/bridges/shared/audit.py → forge.security_events, hash_chain=True).
 
 Compliance contract (CLAUDE.md baseline):
 - Every emitted event is CONTENT-FREE: only allowlisted scalar metadata

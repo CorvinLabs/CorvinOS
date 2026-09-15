@@ -4,7 +4,7 @@ Two kinds of coverage:
 1. The gate's OWN logic, exercised against synthetic fixtures (so a bug in
    the gate itself can't hide behind "the real repo happens to be clean").
 2. A live run against the real repo's WIRING.yaml files + the real
-   operator/, core/ trees — this is the actual CI gate. It must pass; if it
+   corvin_operator/, core/ trees — this is the actual CI gate. It must pass; if it
    doesn't, either a new orphan module or a new dotted `operator.` import
    was introduced without a manifest update (exactly the two bug classes
    ADR-0215 exists to close).
@@ -174,7 +174,7 @@ def test_lint_catches_dotted_import(tmp_path, monkeypatch):
 def test_lint_ignores_stdlib_operator_import(tmp_path, monkeypatch):
     scan_root = tmp_path / "scan2"
     _write(scan_root / "fine.py", """
-        from operator import attrgetter
+        from corvin_operator_imports import attrgetter
         import operator
     """)
     monkeypatch.setattr(wiring_gate, "_LINT_SCAN_ROOTS", (scan_root,))
@@ -185,7 +185,7 @@ def test_lint_ignores_stdlib_operator_import(tmp_path, monkeypatch):
 
 def test_lint_ignores_docstring_and_comment_mentions(tmp_path, monkeypatch):
     # Regression: an earlier regex-based version of this lint flagged
-    # operator/license/{sob,capability,seal_loader}.py's module docstrings,
+    # corvin_operator/license/{sob,capability,seal_loader}.py's module docstrings,
     # which merely quote a broken import as a usage example, not real code.
     scan_root = tmp_path / "scan3"
     _write(scan_root / "docs.py", '''

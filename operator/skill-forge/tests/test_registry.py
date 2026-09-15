@@ -13,7 +13,7 @@ from skill_forge.registry import (  # noqa: E402
 )
 
 # Sandbox the plugin-slot mirror so this test never touches the real
-# operator/skill-forge/skills/dyn/ tree.
+# corvin_operator/skill-forge/skills/dyn/ tree.
 _SLOT_TMP = tempfile.mkdtemp(prefix="sf-slot-test-")
 os.environ["CORVIN_PLUGIN_SLOT_DIR"] = _SLOT_TMP
 
@@ -166,7 +166,7 @@ def test_audit_chain_verifiable():
         # verify hash chain via forge.security_events (forge is a sibling
         # plugin dir, not on the package path).
         plugins_dir = Path(__file__).resolve().parents[2]   # /plugins
-        forge_top = plugins_dir / "forge"                   # /operator/forge
+        forge_top = plugins_dir / "forge"                   # /corvin_operator/forge
         sys.path.insert(0, str(forge_top))
         from forge.security_events import verify_chain
         ok, problems = verify_chain(audit)

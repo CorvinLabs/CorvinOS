@@ -38,7 +38,7 @@ _log = logging.getLogger(__name__)
 _TENANT_YAML_FILENAME = "tenant.corvin.yaml"
 
 # ADR-0181 — model-provider registry/detection modules live outside the
-# console package (operator/bridges/shared/), shared with the adapter's own
+# console package (corvin_operator/bridges/shared/), shared with the adapter's own
 # provider-redirect resolution (resolve_claude_code_provider_env). Restored
 # 2026-09-10: these routes were dropped in 243690e8 ("rewrite engine.py for
 # Claude Code only") while the console's "Model Providers" UI kept calling
@@ -76,7 +76,7 @@ _ENGINE_METADATA = {
 # that used to keep it current was removed in 243690e8 ("rewrite engine.py for
 # Claude Code only") and was NOT rebuilt here (that is a scope expansion; see
 # ADR discussion). The canonical, already-current source for this same catalog
-# is `operator/bundle/config-templates/engine_model_registry.yaml`
+# is `corvin_operator/bundle/config-templates/engine_model_registry.yaml`
 # (`engines.claude_code.os_models`), read via `engine_models.registry_as_dict()`
 # and served live at GET /models/registry — this list is kept in sync with it
 # by hand until a follow-up wires this route to that source directly.
@@ -159,7 +159,7 @@ class EngineSettingResponse(BaseModel):
     # ADR-0181 — which provider + model serve each engine's OS/worker turn.
     # Restored 2026-09-10 alongside /registry, /providers, /models, /detect:
     # this field existed pre-243690e8 and is what resolve_claude_code_provider_env()
-    # (operator/bridges/shared/engine_models.py) reads at spawn time — writing it
+    # (corvin_operator/bridges/shared/engine_models.py) reads at spawn time — writing it
     # here is not cosmetic, it is the one persistence path that function consults.
     engine_models: dict[str, EngineModelConfig] = Field(
         default_factory=dict,

@@ -56,7 +56,7 @@ print("RESULT " + json.dumps({"ok": ok, "issues": sorted({str(x.get("issue")) fo
 
 _TRIPWIRE = r'''
 import os, sys
-for sub in ("operator/forge", "operator/bridges/shared", "core/compliance"):
+for sub in ("corvin_operator/forge", "corvin_operator/bridges/shared", "core/compliance"):
     sys.path.append(os.path.join(os.environ["REPO"], sub))
 from corvin_compliance_reports import tripwire
 try:
@@ -185,7 +185,7 @@ class TestPrependedRecords:
         FIRST chained record is written today — so that genesis carries a mac.
         "Genesis has a mac ⇒ there can be no prefix" would therefore condemn
         every migrated legacy chain (the shape
-        ``operator/forge/tests/test_tenant_migration_roundtrip.py`` R5 builds).
+        ``corvin_operator/forge/tests/test_tenant_migration_roundtrip.py`` R5 builds).
         The discriminator is the recorded prefix LENGTH, frozen at anchoring —
         so a prefix that was there from the start verifies clean.
         """
@@ -200,7 +200,7 @@ class TestPrependedRecords:
 
 _ROTATE = r'''
 import os, sys, json
-for sub in ("operator/forge", "operator/bridges/shared"):
+for sub in ("corvin_operator/forge", "corvin_operator/bridges/shared"):
     sys.path.insert(0, os.path.join(os.environ["REPO"], sub))
 from pathlib import Path
 import audit_sealer as S

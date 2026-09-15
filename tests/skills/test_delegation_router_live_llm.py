@@ -8,7 +8,7 @@ The path is the production one, not a re-implementation:
 1. ``core.skills.boot.boot_skills`` boots the ACP registry under a throw-away
    ``CORVIN_HOME`` with the REAL core audit writer (``audit.audit_event`` →
    ``forge.security_events`` floor) — nothing mocked;
-2. ``operator/bridges/shared/delegation_policy.resolve_worker_engine`` — the one
+2. ``corvin_operator/bridges/shared/delegation_policy.resolve_worker_engine`` — the one
    shared routing function every surface calls — decides the engine and runs
    ``os.delegation_router`` in SHADOW mode (ADR-0613);
 3. the chosen engine (``native``) is what ``claude -p --model haiku`` is asked
@@ -98,7 +98,7 @@ def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Pat
     assert len(routed) == 1, [r.get("event_type") for r in records]
     d = routed[0]["details"]
     assert d["status"] == "success"
-    assert d["lom"] == "operator/bridges/shared/delegation_policy.py:_acp_shadow_route"
+    assert d["lom"] == "corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route"
     src = (_SHARED / "delegation_policy.py").read_text()
     import ast
     node = next(n for n in ast.walk(ast.parse(src))

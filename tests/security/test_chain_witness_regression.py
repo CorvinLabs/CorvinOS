@@ -91,7 +91,7 @@ print("WITNESS " + json.dumps({
 
 _TRIPWIRE = r'''
 import os, sys
-for sub in ("operator/forge", "operator/bridges/shared", "core/compliance"):
+for sub in ("corvin_operator/forge", "corvin_operator/bridges/shared", "core/compliance"):
     sys.path.append(os.path.join(os.environ["REPO"], sub))
 from corvin_compliance_reports import tripwire
 try:

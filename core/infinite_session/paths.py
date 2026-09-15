@@ -117,7 +117,7 @@ def core_audit(event_type: str, *, tenant_id: str, details: dict[str, Any]) -> s
 
     Delegates to :func:`core.learning.event_persistence.core_audit_event` — the
     shared, verified-commit wrapper over the core writer
-    (``operator/bridges/shared/audit.py``). Raises ``RuntimeError`` when the
+    (``corvin_operator/bridges/shared/audit.py``). Raises ``RuntimeError`` when the
     writer is unavailable or the record did not commit (ADR-0232/0233) — which
     includes the metadata floor dropping a field, so every key written here
     is registered in :data:`AUDIT_EVENT_ALLOWLISTS` first.

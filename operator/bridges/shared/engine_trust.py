@@ -449,7 +449,7 @@ def evaluate_drift_for_spawn(
     enforced = bool(policy["auto_block_on_drift"])
 
     # Lazy import — engine_canary is a sibling script under
-    # operator/voice/scripts/, NOT a top-level adapter import.
+    # corvin_operator/voice/scripts/, NOT a top-level adapter import.
     try:
         scripts_dir = _THIS.parent.parent / "voice" / "scripts"
         if str(scripts_dir) not in sys.path:

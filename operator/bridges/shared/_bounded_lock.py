@@ -1,6 +1,6 @@
 """Bounded advisory file locking for the shared/ registries.
 
-Every registry in ``operator/bridges/shared/`` serialises its
+Every registry in ``corvin_operator/bridges/shared/`` serialises its
 read-modify-write cycles with a POSIX advisory lock on a ``.lock`` sidecar.
 Until 2026-09-07 each of them took that lock as a plain
 ``fcntl.flock(fd, LOCK_EX)`` with **no timeout**. A wedged holder — a crashed

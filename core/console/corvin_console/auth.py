@@ -37,7 +37,7 @@ if str(_FORGE_PATH) not in sys.path:
 from forge import paths as _forge_paths  # noqa: E402
 
 # ADR-0154 M3 (SDLP): the license dir is added lazily so the console can derive
-# a session license-proof. operator/ on path enables `license.feature_lattice`.
+# a session license-proof. corvin_operator/ on path enables `license.feature_lattice`.
 _OPERATOR_PATH = _REPO / "operator"
 if str(_OPERATOR_PATH) not in sys.path:
     sys.path.insert(0, str(_OPERATOR_PATH))

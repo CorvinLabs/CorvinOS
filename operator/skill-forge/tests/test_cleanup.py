@@ -46,7 +46,7 @@ sys.path.insert(0, str(REPO / "operator" / "skill-forge"))
 from skill_forge.registry import SkillRegistry  # noqa: E402
 
 # Sandbox the plugin-slot mirror so this test never touches the real
-# operator/skill-forge/skills/dyn/ tree.
+# corvin_operator/skill-forge/skills/dyn/ tree.
 _SLOT_TMP = tempfile.mkdtemp(prefix="sf-slot-test-")
 os.environ["CORVIN_PLUGIN_SLOT_DIR"] = _SLOT_TMP
 

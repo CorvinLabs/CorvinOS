@@ -12,7 +12,7 @@ Tests the ENTIRE stack:
 This is NOT a mock test — it exercises the real bg_task_worker and
 completion_notify machinery, measuring end-to-end latency.
 
-Run: python3 operator/bridges/shared/test_discord_e2e_complete.py
+Run: python3 corvin_operator/bridges/shared/test_discord_e2e_complete.py
 """
 from __future__ import annotations
 

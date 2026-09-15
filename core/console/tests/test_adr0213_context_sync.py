@@ -52,7 +52,7 @@ class _FakeACSResult:
     workflow_id = "wf-000"
     status = "success"
     summary = "ACS completed OK"
-    # Matches the REAL ACSResult dataclass shape (operator/bridges/shared/
+    # Matches the REAL ACSResult dataclass shape (corvin_operator/bridges/shared/
     # acs_runtime.py): final_output is a dict, not a string. A test double
     # using a string here previously masked a real AttributeError crash in
     # _compress_acs_result_for_context (see the dedicated regression tests

@@ -5,7 +5,7 @@ The forge security_events import is exercised only in the audit emission
 path; tests for audit output are skipped when the audit path doesn't exist.
 
 Run:
-    python3 operator/bridges/shared/test_path_gate_ast.py
+    python3 corvin_operator/bridges/shared/test_path_gate_ast.py
 """
 from __future__ import annotations
 

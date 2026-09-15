@@ -22,7 +22,7 @@ import pytest
 
 _THIS = Path(__file__).resolve()
 _REPO = _THIS.parents[3]
-for p in ("core/console", "operator/bridges/shared", "operator/forge"):
+for p in ("core/console", "corvin_operator/bridges/shared", "corvin_operator/forge"):
     sys.path.insert(0, str(_REPO / p))
 
 import corvin_console.routes.chat as chat_routes  # noqa: E402

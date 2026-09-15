@@ -146,7 +146,7 @@ def _state_dir() -> Path:
 def _plugins_root() -> Path:
     """Resolve <repo>/plugins/ (legacy) or repo root for compat.
 
-    ADR-0035: plugins/ was split into core/ + operator/. Returns the repo root
+    ADR-0035: plugins/ was split into core/ + corvin_operator/. Returns the repo root
     so callers can iterate sub-trees. The legacy plugins/ path is returned when
     it still exists (migration window).
     """
@@ -158,7 +158,7 @@ def _plugins_root() -> Path:
 
 
 def _all_plugin_dirs(repo: Path | None = None) -> list[Path]:
-    """Return all plugin sub-directories across core/ and operator/."""
+    """Return all plugin sub-directories across core/ and corvin_operator/."""
     if repo is None:
         repo = Path(__file__).resolve().parents[3]
     dirs = []

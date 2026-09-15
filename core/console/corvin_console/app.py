@@ -390,7 +390,7 @@ def healthz() -> dict[str, Any]:
 
     ADR-0215 F1: the import below used to be the bare dotted form
     ``from operator.bridges.shared.engine_detection import ...``, which can
-    NEVER resolve — ``operator/`` has no ``__init__.py`` and always loses to
+    NEVER resolve — ``corvin_operator/`` has no ``__init__.py`` and always loses to
     the stdlib ``operator`` module regardless of sys.path order — so this
     unauthenticated liveness probe raised ``ModuleNotFoundError`` on every
     single call. Fixed by using the repo's established working pattern

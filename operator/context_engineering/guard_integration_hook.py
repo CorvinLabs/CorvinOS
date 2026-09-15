@@ -262,12 +262,12 @@ def agent_filter_context_pool_with_guard(
 
 # Key integration points for developers:
 #
-# [CONSOLE] operator/console/chat_handler.py:
+# [CONSOLE] corvin_operator/console/chat_handler.py:
 #   - Before calling task_engine.execute_task(), filter suggested contexts:
 #     approved, blocked = console_suggest_contexts_with_guard(...)
 #     # Only include approved contexts in the turn
 #
-# [AGENT] operator/context_engineering/task_engine.py:
+# [AGENT] corvin_operator/context_engineering/task_engine.py:
 #   - Before building context_pool, filter through guard:
 #     filtered_pool = agent_filter_context_pool_with_guard(...)
 #     # Use filtered_pool instead of raw pool

@@ -146,7 +146,7 @@ def _plugin_builder_continue(text: str, *, tenant_id: str, session_key: str) -> 
 
     The interview state machine, artifact writing and reply text all live in
     ``plugin_builder.turn`` — the messenger bridges drive the exact same
-    module via ``operator/bridges/shared/adapter.py``'s own thin wrapper, so
+    module via ``corvin_operator/bridges/shared/adapter.py``'s own thin wrapper, so
     the two transports can never drift.
     """
     try:

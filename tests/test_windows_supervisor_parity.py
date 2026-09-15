@@ -1,7 +1,7 @@
 """ADR-0184 (Autostart) drift guard: two independent Windows restart-loop
 implementations exist by necessity —
 
-- `operator/bridges/shared/corvin-supervisor.ps1` (dev-checkout path, used by
+- `corvin_operator/bridges/shared/corvin-supervisor.ps1` (dev-checkout path, used by
   `bridge.ps1 install-autostart`)
 - the heredoc-generated supervisor inside `install.ps1`'s
   `Install-CorvinAutostart` (the pip/uv-tool standalone path, which must stay
@@ -504,7 +504,7 @@ class TestWindowsAutostartRegistrationHasNoVisibleWindow:
     2026-08-03: bridge_manager.py's own subprocess.run() call sites (this
     one included) were consolidated behind a single `_run()` wrapper that
     applies CREATE_NO_WINDOW by default for every plain subprocess.run() in
-    the file (see operator/bridges/tests/test_bridge_manager_no_console_
+    the file (see corvin_operator/bridges/tests/test_bridge_manager_no_console_
     window.py, which pins _run() itself and drift-guards that no bare
     subprocess.run() call bypasses it). This test now only pins that
     ensure_windows_autostart routes through that wrapper rather than

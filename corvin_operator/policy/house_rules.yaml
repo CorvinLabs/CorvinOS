@@ -1,0 +1,103 @@
+# CorvinOS House Rules — Acceptable-Use Policy (Layer 44, ADR-0143)
+#
+# THIS FILE IS THE SINGLE SOURCE OF TRUTH for the operator's acceptable-use
+# restrictions. You define the house rules HERE, in the repo, under version
+# control. The L44 gate loads this file at runtime and verifies its sha256
+# against the RS256-signed operator/security/layer-manifest.json (ADR-0141 LIP),
+# so a local edit that weakens the rules is detected (CRITICAL) and the gate
+# fails closed. After editing this file you MUST re-sign the layer manifest:
+#     python operator/security/sign_layer_manifest.py
+#
+# Semantics (load-bearing — see ADR-0143):
+#   * default_action governs anything NOT matched by a rule.
+#   * A rule's `action` is the MOST PERMISSIVE outcome for a match; the gate
+#     may escalate (deny > escalate > warn > allow) but never weaken it.
+#   * Tenants may ADD stricter rules via tenant.corvin.yaml::spec.house_rules,
+#     but can NEVER weaken or remove a rule defined here (floor semantics, like
+#     the compliance baseline). There is deliberately NO disable switch.
+#   * `patterns` are the cheap Tier-0 heuristic pre-filter (case-insensitive
+#     substring / regex). A pre-filter hit is then adjudicated by the Tier-1
+#     helper model with the `allow_exceptions` context before a final decision.
+#
+# action values:
+#   deny      — block the spawn, emit house_rules.denied (CRITICAL).
+#   escalate  — block pending human approval, emit house_rules.escalated
+#               (WARNING). Use for dual-use categories where a hard deny would
+#               also block legitimate work.
+#   warn      — allow but emit house_rules.warned (WARNING) for the audit trail.
+
+version: 1
+default_action: allow
+
+rules:
+  - id: no-military
+    title: "No military / weapons use"
+    action: deny
+    eu_ai_act: "Art.5 (operator-stricter — beyond the national-security carve-out)"
+    forbids: >
+      Weapons design or targeting, fire-control / military command-and-control,
+      munitions or ordnance engineering, autonomous-weapon logic, or operational
+      support to a combat mission.
+    allow_exceptions: >
+      Academic/historical discussion, civilian dual-use logistics with no combat
+      nexus, arms-control and non-proliferation analysis. Tier-0 patterns are
+      intentionally specific: generic terms like "targeting" (marketing/analytics),
+      "fire control" (industrial PLC / fire-safety), or "kill chain"
+      (MITRE ATT&CK security education) do NOT trigger this rule — only
+      explicit military/ordnance compound terms do.
+    patterns:
+      - "(?i)\\b(munition|warhead|loitering munition|missile guidance|missile warhead)\\b"
+      - "(?i)\\bweapon[s]?\\s+(design|guidance|targeting|manufacture|system|schematics)\\b"
+      - "(?i)\\bmilitary\\s+(targeting|fire.control|command.and.control)\\b"
+      - "(?i)\\b(autonomous weapon|armed drone targeting|military c2 system)\\b"
+      - "(?i)\\b(fire.control system).{0,20}\\b(weapon|missile|cannon|artillery)\\b"
+
+  - id: no-offensive-cyber
+    title: "No offensive / unauthorized cyber operations"
+    action: escalate          # dual-use: CorvinOS itself does AUTHORIZED security work
+    eu_ai_act: "Art.5 (operator-stricter)"
+    forbids: >
+      Authoring malware/ransomware for deployment, developing exploits to attack
+      systems you are not authorized to test, unauthorized intrusion, credential
+      theft at scale, mass/indiscriminate targeting, or building C2 for malicious
+      use.
+    allow_exceptions: >
+      Authorized penetration testing with a signed engagement, CTF competitions,
+      defensive security, detection engineering, vulnerability research and
+      responsible disclosure, security education. Also explicitly allowed (these
+      are NOT offensive cyber): data / CSV / log-file analysis, statistics,
+      plotting and visualisation, analytics and reporting, general software
+      engineering and debugging — even when the data or logs concern security,
+      networks, or systems. Only the clear intent to attack, intrude, or deploy
+      malware counts. Tier-0 patterns are intentionally precise: generic terms
+      like "payload" (HTTP/API/CI-CD), "c2" (monitoring dashboards, cloud
+      management), "backdoor" (political usage), or "exploit" without an attack
+      target do NOT trigger — only explicit offensive-tool compound terms do.
+    patterns:
+      - "(?i)\\b(ransomware|keylogger|rootkit|botnet)\\b"
+      - "(?i)\\b(exploit\\s+(kit|code|zero.?day|vulnerability in|chain|payload))\\b"
+      - "(?i)\\b(malicious\\s+payload|attack\\s+payload|malware\\s+payload)\\b"
+      - "(?i)\\b(c2\\s+server|c2\\s+infrastructure|command.and.control\\s+server)\\b"
+      - "(?i)\\b(credential.?theft at scale|mass.targeting.attack|launch.{0,10}ddos\\s+attack)\\b"
+      - "(?i)\\b(build|create|write|deploy|automate|run).{0,30}\\bcredential.?stuffing\\b"
+      - "(?i)\\b(backdoor\\s+(trojan|malware|implant|access to))\\b"
+
+  - id: no-disinformation
+    title: "No disinformation / coordinated inauthentic behavior"
+    action: deny
+    eu_ai_act: "Art.5 (manipulation) + Art.50 (transparency)"
+    forbids: >
+      Generating fake news or fabricated claims for distribution, impersonating
+      real people or outlets, astroturfing / sock-puppet networks, or coordinated
+      inauthentic behavior to deceive at scale.
+    allow_exceptions: >
+      Clearly-labelled fiction/satire, journalism and fact-checking ABOUT
+      disinformation, red-team analysis of influence operations, academic study.
+      Building fake-news detectors, studying disinformation, or asking how
+      influence operations work is explicitly allowed. Tier-0 patterns require
+      an intent-to-produce/spread signal, not just mention of the topic.
+    patterns:
+      - "(?i)\\b(astroturf|sock[- ]?puppet\\s+network|coordinated inauthentic|influence operation|propaganda campaign)\\b"
+      - "(?i)\\b(create|generate|write|produce|spread|publish|distribute).{0,40}\\b(fake news|disinformation|fabricated (claim|story|article))\\b"
+      - "(?i)\\b(spoof(ed)?\\s+(news outlet|journalist account|official account)|deepfake (video|audio) of)\\b"
+      - "(?i)\\bimpersonate\\s+(a |an )?(politician|journalist|government official|news anchor|bank|police)\\b"

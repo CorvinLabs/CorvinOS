@@ -159,7 +159,7 @@ class TestWin32StartServices:
     (step_12_configure_bridges) sat "configured but never started" on
     Windows forever — step_15 just printed a message and returned instead
     of actually starting anything. Fixed by calling the same detached-start
-    engine (operator/bridges/bridge_manager.py) the console's Start button
+    engine (corvin_operator/bridges/bridge_manager.py) the console's Start button
     already uses."""
 
     def _fake_bridge_manager_module(self, adapter_result=None, bridge_result=None):

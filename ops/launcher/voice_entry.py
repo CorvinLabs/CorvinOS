@@ -1,6 +1,6 @@
 """Entry-point shim for the corvin-voice CLI (ADR-0185 M5).
 
-operator/ shadows the Python stdlib 'operator' module, so we use a shim that
+corvin_operator/ shadows the Python stdlib 'operator' module, so we use a shim that
 adds the voice/scripts and bridges/shared directories to sys.path before
 importing the actual implementation — same pattern as corvin-a2a /
 corvin-wdat-report. In a wheel install the operator bootstrap vendored

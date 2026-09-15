@@ -30,7 +30,7 @@ What is NOT session state
 Everything else in the session workdir is a *project file* and survives a
 reset — the ``/new`` reply promises this in so many words ("Project files in
 this chat's session dir are kept; only Claude's memory was cleared"). That
-notably includes ``outputs/``, ``tasks/``, ``operator/`` and the L37-retained
+notably includes ``outputs/``, ``tasks/``, ``corvin_operator/`` and the L37-retained
 ``cel-briefs/`` audit sidecars, which are governed by the retention policy and
 must not be deleted by a user-facing reset.
 """
@@ -72,7 +72,7 @@ def _load_paths():
     """Load the bridge ``paths`` module by FILE PATH, not by module name.
 
     A plain ``import paths`` is not safe here. ``session_reset`` prepends
-    ``operator/forge`` to ``sys.path`` before importing this module, and that
+    ``corvin_operator/forge`` to ``sys.path`` before importing this module, and that
     directory ships its own unrelated ``paths.py`` (FORGE_ROOT / get_forge_home
     / …). Whichever lands in ``sys.path`` first wins, so name-based import
     silently resolved to the forge module, ``voice_session_dir`` came back as

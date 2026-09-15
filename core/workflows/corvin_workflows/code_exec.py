@@ -1,6 +1,6 @@
 """Sandboxed execution for the `code` node type (ADR-0188 M1).
 
-Reuses Forge's bwrap sandbox *primitives* (`operator/forge/forge/sandbox.py`)
+Reuses Forge's bwrap sandbox *primitives* (`corvin_operator/forge/forge/sandbox.py`)
 directly — not the full `run_tool()` orchestration, which is coupled to
 Forge's tool registry / artifact store / audit envelope and does not apply to
 a workflow-local, unregistered code snippet. A `code` node is architecturally

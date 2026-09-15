@@ -15,8 +15,8 @@ CLAUDE.md's feature-flag rule requires both states tested: flag off must
 fall through to a normal engine turn unchanged, flag on must drive the real
 interview end to end through actual inbox->outbox files.
 
-Run: python3 operator/bridges/shared/test_adapter_plugin_builder.py
-  or: pytest -q operator/bridges/shared/test_adapter_plugin_builder.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_plugin_builder.py
+  or: pytest -q corvin_operator/bridges/shared/test_adapter_plugin_builder.py
 """
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ def _sandbox_env(base: Path, inbox: Path, outbox: Path, home: Path) -> dict:
         "ADAPTER_INBOX": str(inbox), "ADAPTER_OUTBOX": str(outbox),
         "ADAPTER_PROCESSED": str(base / "processed"), "CORVIN_HOME": str(home),
         # Without this, _load_channel_settings() falls back to the real
-        # operator's operator/bridges/<channel>/settings.json — a synthetic
+        # operator's corvin_operator/bridges/<channel>/settings.json — a synthetic
         # sender then fails the whitelist re-check and the message is
         # silently dropped as "private" (the exact test-vs-real-config
         # contamination test_adapter_btw.py's own comment documents).

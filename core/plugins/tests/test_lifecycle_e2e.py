@@ -13,7 +13,7 @@ So this module runs the whole chain once, with no doubles at the seams:
 2. the author implements the one TODO the template leaves for them;
 3. it is declared in a real `tenant.corvin.yaml` under `spec.plugins.installed`;
 4. `bootstrap_all()` boots it the way the gateway does;
-5. a real audited action is written through `operator/bridges/shared/audit.py`;
+5. a real audited action is written through `corvin_operator/bridges/shared/audit.py`;
 6. the core hash chain holds the record, the plugin holds a copy, and
    `verify_audit()` still passes.
 

@@ -14,7 +14,7 @@ Driven through the REAL boundaries — the argv builder the spawn uses and a
 recording `claude` stand-in on PATH that `call_claude()` actually execs —
 never through a patched Popen.
 
-Run: python3 operator/bridges/shared/test_adapter_prompt_head.py  (or pytest)
+Run: python3 corvin_operator/bridges/shared/test_adapter_prompt_head.py  (or pytest)
 """
 from __future__ import annotations
 

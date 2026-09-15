@@ -90,12 +90,12 @@ async def task_dead_mechanism_tests(context: TaskContext) -> dict:
     results = {"task": "dead_mechanism_tests", "call_sites": []}
 
     call_sites = [
-        {"file": "operator/bridges/shared/feedback.py", "function": "submit_feedback", "status": "pending"},
+        {"file": "corvin_operator/bridges/shared/feedback.py", "function": "submit_feedback", "status": "pending"},
         {"file": "core/orchestration/subsystems/learning_engine.py", "function": "record_outcome", "status": "pending"},
         {"file": "core/skills/skill_executor.py", "function": "execute_and_feedback", "status": "pending"},
-        {"file": "operator/cowork/remote_trigger_receiver.py", "function": "on_feedback_received", "status": "pending"},
+        {"file": "corvin_operator/cowork/remote_trigger_receiver.py", "function": "on_feedback_received", "status": "pending"},
         {"file": "core/console/feedback_handler.py", "function": "handle_user_feedback", "status": "pending"},
-        {"file": "operator/skill-forge/skill_grader.py", "function": "grade_skill_outcome", "status": "pending"},
+        {"file": "corvin_operator/skill-forge/skill_grader.py", "function": "grade_skill_outcome", "status": "pending"},
     ]
 
     results["call_sites"] = call_sites

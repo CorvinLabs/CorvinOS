@@ -253,7 +253,7 @@ class TestCorvinLogger(unittest.TestCase):
         )
 
     def test_package_is_not_named_logging(self):
-        """A package named `logging` shadows the stdlib — the operator/ trap."""
+        """A package named `logging` shadows the stdlib — the corvin_operator/ trap."""
         import corvin_logging
 
         self.assertTrue(corvin_logging.__name__.startswith("corvin_"))

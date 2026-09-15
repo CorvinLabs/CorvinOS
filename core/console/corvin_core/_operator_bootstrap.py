@@ -3,22 +3,22 @@
 Background
 ----------
 56 modules under ``corvin_console`` reach their runtime dependencies in
-``operator/`` via repo-relative ``sys.path`` injection, e.g.::
+``corvin_operator/`` via repo-relative ``sys.path`` injection, e.g.::
 
     _REPO = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(_REPO / "operator" / "forge"))
     from forge import paths
 
-This works in a *source-tree* checkout (the ``operator/`` directory is a
+This works in a *source-tree* checkout (the ``corvin_operator/`` directory is a
 real sibling of ``core/``).  It breaks in a *wheel* install: the wheel
 ships only ``corvin_console`` / ``core`` / ``ops`` into site-packages, so
-``parents[2]`` resolves into site-packages where no ``operator/`` exists
+``parents[2]`` resolves into site-packages where no ``corvin_operator/`` exists
 and ``from forge import paths`` raises ``ModuleNotFoundError``.
 
 Fix
 ---
 The wheel build vendors the needed operator subtrees into
-``corvin_console/_vendor/operator/<same-relative-layout>`` (see the
+``corvin_console/_vendor/corvin_operator/<same-relative-layout>`` (see the
 ``[tool.hatch.build.targets.wheel.force-include]`` block in the root
 ``pyproject.toml``).  This module locates that vendored tree relative to
 its own ``__file__`` and prepends the mirrored subtree directories onto
@@ -42,8 +42,8 @@ import sys
 from pathlib import Path
 
 # Operator subtree directories that console modules prepend onto sys.path,
-# expressed relative to ``_vendor/operator/``.  These mirror EXACTLY the
-# distinct ``operator/...`` path expressions found across all 56 modules so
+# expressed relative to ``_vendor/corvin_operator/``.  These mirror EXACTLY the
+# distinct ``corvin_operator/...`` path expressions found across all 56 modules so
 # the bare imports they perform resolve from the vendored copy:
 #
 #   ""                    -> ``import license.validator``, ``import agent.keypair``
@@ -53,7 +53,7 @@ from pathlib import Path
 #                            consent.py, disclosure.py, license/validator.py,
 #                            audit_sealer.py and voice_audit.py import clag
 #                            bare, mirroring the source-tree walk-up that
-#                            inserts operator/forge/forge. Without this entry
+#                            inserts corvin_operator/forge/forge. Without this entry
 #                            every one of them failed on a WHEEL install, and
 #                            consent.py's gate is FAIL-CLOSED: is_granted()
 #                            returned (False, 'chain-integrity-failed') for
@@ -69,7 +69,7 @@ from pathlib import Path
 #   "voice/scripts"       -> voice say.py / TTS helpers
 #   "mcp_manager"         -> mcp_plugins route
 #   "skill-forge"         -> promote route (skill promotion)
-#   "license"             -> legacy ADR-0017 license path (operator/license)
+#   "license"             -> legacy ADR-0017 license path (corvin_operator/license)
 #   "cowork"              -> remote-trigger origin/endpoint readers
 #   "orchestration"       -> ``import tde.*``, ``import initial_analysis`` —
 #                            the ADR-0214/0217 Tiered Delegation Engine. Without

@@ -1,7 +1,7 @@
 """Entry-point shim for the corvin-layer CLI (ADR-0142 M4).
 
-operator/ shadows the Python stdlib 'operator' module, so we use a shim that
-adds the shared directory (and operator/forge for the audit chain) to sys.path
+corvin_operator/ shadows the Python stdlib 'operator' module, so we use a shim that
+adds the shared directory (and corvin_operator/forge for the audit chain) to sys.path
 before importing layer_cli.
 """
 import os
@@ -9,7 +9,7 @@ import sys
 
 
 def main() -> None:
-    # Wheel install: operator/ is vendored under corvin_console/_vendor, not
+    # Wheel install: corvin_operator/ is vendored under corvin_console/_vendor, not
     # top-level — this puts the vendored bridges/shared on sys.path so the bare
     # `from layer_cli import main` below resolves. No-op in a source checkout.
     try:

@@ -93,13 +93,13 @@ def _parse_skill_frontmatter(text: str, fallback_id: str) -> tuple:
 @lru_cache(maxsize=1)
 def _load_repo_skills() -> tuple:
     """Real skills the OS actually ships, as scorable dicts: the bundle skills
-    (operator/bundle/skills) + SkillForge dynamic skills (operator/skill-forge/
+    (corvin_operator/bundle/skills) + SkillForge dynamic skills (corvin_operator/skill-forge/
     skills/dyn). Reads each SKILL.md's name/description — the same source the
     skill system injects from. Cached once per process; a missing dir yields
     nothing, never an error. Fixes the empty skill stage: `_map_decisions_to_
     skills` previously returned ONLY package skills (usually none) and the
     ADR-driven path was a TODO, so the stage always found zero."""
-    repo = Path(__file__).resolve().parents[2]  # …/operator/context_engineering → repo
+    repo = Path(__file__).resolve().parents[2]  # …/corvin_operator/context_engineering → repo
     roots = [repo / "operator" / "bundle" / "skills",
              repo / "operator" / "skill-forge" / "skills" / "dyn"]
     out: List[Dict] = []

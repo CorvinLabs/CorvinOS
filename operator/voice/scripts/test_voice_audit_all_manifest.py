@@ -34,7 +34,7 @@ def _load_modules():
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
     # Importing voice_audit first runs its module-level sys.path insert for
-    # operator/bridges/shared, which makes audit_sealer importable.
+    # corvin_operator/bridges/shared, which makes audit_sealer importable.
     import voice_audit as V
     import audit_sealer as S
     return V, S

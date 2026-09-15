@@ -1,0 +1,8 @@
+{
+  "id": "mu1k3k6n_b41838",
+  "channel": "discord",
+  "from": "1299270034849533983",
+  "chat_id": "1502103856740302964",
+  "ts": 1789409304815,
+  "text": "Stell dir mal vor eine Definition of done würde als y_true in runder loss Funktion münden. Mein Problem: Lange tasks behaupten Dinge umgesetzt zu haben und haben die Fertigstellung halluziniert. Wie würde man das mit ldd und refinement lösen können. Quasi Definition of done als Signal um wirklich zu verifizieren ob die Aufgabe erfüllt wurde. Diese soll beim Befehl Done im prompt des Users aktiviert werden als skill der unter quality in der console ist. Lass uns mal eine Idee entwickeln. Was würde es bringen"
+}

@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 # Cross-process file locking (A2 lost-update fix, 2026-07-20) — same
-# platform-independence pattern as operator/license/compute_quota.py:
+# platform-independence pattern as corvin_operator/license/compute_quota.py:
 # fcntl.flock on POSIX, msvcrt.locking on Windows, advisory fail-soft.
 _IS_WINDOWS = sys.platform.startswith("win")
 
@@ -537,7 +537,7 @@ def config_file_lock(*dirs: Path):
     any thread lock) so the read→modify→write cycle is atomic across
     processes.
 
-    Mechanics (pattern from ``operator/license/compute_quota.py`` — the
+    Mechanics (pattern from ``corvin_operator/license/compute_quota.py`` — the
     repo's platform-independence constraint is hard): one ``.a2a_config.lock``
     file per directory, locked via ``fcntl.flock`` on POSIX and
     ``msvcrt.locking`` on Windows. Multiple dirs are locked in sorted path

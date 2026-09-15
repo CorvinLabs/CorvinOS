@@ -4,10 +4,10 @@
 Three confirmed CRITICALs shared one root cause: resolver.py's spawn
 templates assumed the source-checkout layout. On a pip/uv wheel install
 (a) {{REPO_ROOT}} resolves to corvin_console/_vendor, which holds the
-vendored operator/ subtrees but NOT core/ — so PYTHONPATH entries like
+vendored corvin_operator/ subtrees but NOT core/ — so PYTHONPATH entries like
 _vendor/core/orchestration pointed into the void and every
 orchestration/delegate MCP spawn died with ModuleNotFoundError, while the
-capability map kept advertising the tools; (b) operator/forge/forge.py (the
+capability map kept advertising the tools; (b) corvin_operator/forge/forge.py (the
 spawn SCRIPT, not the inner package) was never vendored at all; and (c) the
 PYTHONPATH strings were ':'-joined, which Windows (';' separator) treats as
 one giant unusable path — dead-on-arrival for all three default personas.
@@ -102,7 +102,7 @@ def test_core_root_is_repo_root_in_source_checkout():
 
 
 def test_forge_entry_script_is_vendored_in_wheel_map():
-    """hatch_build must ship operator/forge/forge.py (the spawn script) —
+    """hatch_build must ship corvin_operator/forge/forge.py (the spawn script) —
     vendoring only the inner package left every wheel install with a dead
     forge MCP server."""
     repo_root = Path(__file__).resolve().parents[3]
@@ -112,6 +112,6 @@ def test_forge_entry_script_is_vendored_in_wheel_map():
     finally:
         sys.path.remove(str(repo_root))
     srcs = [src for src, _ in hatch_build._VENDOR_MAP]
-    assert "operator/forge/forge.py" in srcs
+    assert "corvin_operator/forge/forge.py" in srcs
     for src, dest in hatch_build._VENDOR_MAP:
         assert (repo_root / src).exists(), f"vendor map source missing: {src}"

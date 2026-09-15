@@ -67,7 +67,7 @@ SKILL_CREATE_SCHEMA: dict[str, Any] = {
         "scope":       {"type": "string", "enum": list(VALID_SCOPES)},
         "overwrite":   {"type": "boolean", "default": False},
         # scope=project|user bypasses every promotion gate (task->session
-        # ->project->user). Only an operator/wildcard caller may mint there,
+        # ->project->user). Only an corvin_operator/wildcard caller may mint there,
         # and only with an explicit force=True (audited).
         "force":       {"type": "boolean", "default": False},
     },
@@ -75,7 +75,7 @@ SKILL_CREATE_SCHEMA: dict[str, Any] = {
 #: Scopes a NAMESPACED persona may mint into directly. Anything higher must
 #: be earned through skill_promote's grade gates (adversarial review D-05).
 PERSONA_CREATE_SCOPES: tuple[str, ...] = ("task", "session")
-#: Scopes that require operator/wildcard caller AND force=True on create.
+#: Scopes that require corvin_operator/wildcard caller AND force=True on create.
 GATED_CREATE_SCOPES: tuple[str, ...] = ("project", "user")
 SKILL_PROMOTE_SCHEMA: dict[str, Any] = {
     "type": "object",

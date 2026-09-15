@@ -1,0 +1,46 @@
+# ❌ INVALID EXAMPLE: This manifest will fail validation
+#
+# Multiple violations:
+# 1. Hardcoded secret (api_key field)
+# 2. Missing response_schema
+# 3. compliance_zone.required=true but no allowed_regions
+# 4. No erasure handler for CONFIDENTIAL data
+
+api_version: rag.corvin.io/v1
+kind: RAGProvider
+
+metadata:
+  id: bad-provider
+  name: Bad Example
+  version: 1.0.0
+
+spec:
+  retrieval:
+    type: http-api
+    endpoint: https://api.example.com/search
+
+    # ❌ ERROR: Hardcoded secret! Should use token_env_var only
+    api_key: "sk_test_abc123def456"
+
+    timeout_ms: 5000
+    auth:
+      type: bearer-token
+      # ❌ MISSING: token_env_var required
+
+    # ❌ MISSING: response_schema is required!
+
+  classification:
+    # ❌ WARNING: CONFIDENTIAL data
+    data_type: CONFIDENTIAL
+
+    # ❌ WARNING: No requires_approval for CONFIDENTIAL
+    # Should set: requires_approval: true
+
+    pii_risk: high
+
+  # ❌ ERROR: compliance_zone.required=true but no allowed_regions
+  compliance_zone:
+    required: true
+    # allowed_regions missing!
+
+  # ❌ MISSING: no erasure_handler for CONFIDENTIAL data

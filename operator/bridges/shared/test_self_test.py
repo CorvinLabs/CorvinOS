@@ -1,4 +1,4 @@
-"""Tests for ``operator/bridges/shared/self_test.py``.
+"""Tests for ``corvin_operator/bridges/shared/self_test.py``.
 
 Approach: every check runs against a throwaway ``CORVIN_HOME`` so the host's
 real ``~/.corvin`` is never touched. The few checks that probe external

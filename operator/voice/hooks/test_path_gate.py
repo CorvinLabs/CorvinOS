@@ -4,10 +4,10 @@
 Plain-python PASS/FAIL counters in the same style as
 forge/tests/test_namespace_gate.py and skill-forge/tests/. Runs the
 in-process check() function — fast, deterministic, no subprocess. The
-adapter live-E2E lives in operator/bridges/shared/test_adapter_path_gate.py
+adapter live-E2E lives in corvin_operator/bridges/shared/test_adapter_path_gate.py
 (iteration 4) and exercises the hook through a real Claude subprocess.
 
-Run: python3 operator/voice/hooks/test_path_gate.py
+Run: python3 corvin_operator/voice/hooks/test_path_gate.py
 """
 from __future__ import annotations
 
@@ -89,44 +89,44 @@ def main() -> int:
         blocked=True,
     )
 
-    # 4. Write to slot-mirror under repo's operator/skill-forge/skills/dyn/ → DENY
+    # 4. Write to slot-mirror under repo's corvin_operator/skill-forge/skills/dyn/ → DENY
     if REPO is not None:
         expect(
             "Write to slot-mirror SKILL.md",
             {"tool_name": "Write",
              "tool_input": {
-                 "file_path": str(REPO / "operator/skill-forge/skills/dyn/x/SKILL.md"),
+                 "file_path": str(REPO / "corvin_operator/skill-forge/skills/dyn/x/SKILL.md"),
                  "content": "..."}},
             blocked=True,
         )
     else:
         t("Write to slot-mirror SKILL.md", True, detail="skipped: no repo root")
 
-    # 4b. operator/license/ trust tree — code + trust anchors → DENY (SEAL-SHADOW-01).
+    # 4b. corvin_operator/license/ trust tree — code + trust anchors → DENY (SEAL-SHADOW-01).
     if REPO is not None:
         expect(
-            "Write to operator/license validator.py",
+            "Write to corvin_operator/license validator.py",
             {"tool_name": "Write",
-             "tool_input": {"file_path": str(REPO / "operator/license/validator.py"),
+             "tool_input": {"file_path": str(REPO / "corvin_operator/license/validator.py"),
                             "content": "..."}},
             blocked=True,
         )
         expect(
-            "Drop native seal binary operator/license/_corvin_seal.so",
+            "Drop native seal binary corvin_operator/license/_corvin_seal.so",
             {"tool_name": "Write",
-             "tool_input": {"file_path": str(REPO / "operator/license/_corvin_seal.so"),
+             "tool_input": {"file_path": str(REPO / "corvin_operator/license/_corvin_seal.so"),
                             "content": "..."}},
             blocked=True,
         )
         expect(
-            "Overwrite attestation anchor operator/license/a2a_network_pubkey.pem",
+            "Overwrite attestation anchor corvin_operator/license/a2a_network_pubkey.pem",
             {"tool_name": "Write",
-             "tool_input": {"file_path": str(REPO / "operator/license/a2a_network_pubkey.pem"),
+             "tool_input": {"file_path": str(REPO / "corvin_operator/license/a2a_network_pubkey.pem"),
                             "content": "..."}},
             blocked=True,
         )
     else:
-        t("operator/license trust-tree protection", True, detail="skipped: no repo root")
+        t("corvin_operator/license trust-tree protection", True, detail="skipped: no repo root")
 
     # 4c. R4: authoritative license-token files read by validator._find_token
     # are operator-only — global/license.key and corvin-voice/session.key were
@@ -486,7 +486,7 @@ def main() -> int:
             "cp into slot-mirror",
             {"tool_name": "Bash",
              "tool_input": {"command":
-                f"cp /tmp/foo {REPO}/operator/skill-forge/skills/dyn/y/SKILL.md"}},
+                f"cp /tmp/foo {REPO}/corvin_operator/skill-forge/skills/dyn/y/SKILL.md"}},
             blocked=True,
         )
 
@@ -930,7 +930,7 @@ def main() -> int:
 
         # verify_chain across the file
         try:
-            sys.path.insert(0, str(REPO / "operator/forge"))
+            sys.path.insert(0, str(REPO / "corvin_operator/forge"))
             from forge.security_events import verify_chain  # type: ignore
             ok, problems = verify_chain(audit_jsonl)
             t("verify_chain reports (ok, []) over the deny event",

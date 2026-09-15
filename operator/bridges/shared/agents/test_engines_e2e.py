@@ -15,7 +15,7 @@ two real-subprocess tests (useful in CI without API quota).
 
 Run:
 
-    python3 operator/bridges/shared/agents/test_engines_e2e.py
+    python3 corvin_operator/bridges/shared/agents/test_engines_e2e.py
 """
 
 from __future__ import annotations

@@ -405,7 +405,7 @@ def _scope_forge_dir(*, corvin_home: Path | None,
     if scope == "user":
         return home / "global" / "forge"
     if scope == "session" and chat_key:
-        # Mirror of operator/bridges/shared/paths.py::session-scope.
+        # Mirror of corvin_operator/bridges/shared/paths.py::session-scope.
         # Sessions live under <corvin_home>/sessions/<chat_key>/forge/
         return home / "sessions" / str(chat_key) / "forge"
     if scope == "task":

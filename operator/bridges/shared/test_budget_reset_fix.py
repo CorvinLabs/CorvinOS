@@ -3,7 +3,7 @@
 
 Validates that session_reset.py resets the budget quota.
 
-Run: python3 operator/bridges/shared/test_budget_reset_fix.py
+Run: python3 corvin_operator/bridges/shared/test_budget_reset_fix.py
 """
 from __future__ import annotations
 

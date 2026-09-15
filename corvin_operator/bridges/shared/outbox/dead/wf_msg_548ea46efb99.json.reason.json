@@ -1,0 +1,7 @@
+{
+  "reason": "permanent send error",
+  "error": "Invalid Form Body\nchannel_id[NUMBER_TYPE_COERCE]: Value \"owner-chat\" is not snowflake.",
+  "attempts": 1,
+  "channel": "discord",
+  "dead_lettered_at": "2026-07-25T23:40:17.187Z"
+}

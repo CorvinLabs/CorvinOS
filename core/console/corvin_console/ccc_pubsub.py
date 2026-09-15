@@ -29,7 +29,7 @@ _QUEUE_SIZE = 500  # per-subscriber; slow consumers drop their own events
 # Single source of truth: entity_extract.CONFIDENTIAL_ENTITY_TYPES. Imported with
 # a fail-CLOSED fallback (the full set) so a broken import can never widen the
 # payload that reaches subscribers (security review 2026-06-27, C5).
-try:  # entity_extract lives in operator/bridges/shared (on sys.path via CCC)
+try:  # entity_extract lives in corvin_operator/bridges/shared (on sys.path via CCC)
     from entity_extract import CONFIDENTIAL_ENTITY_TYPES as _CONFIDENTIAL_ENTITIES
 except Exception:  # noqa: BLE001 — fail closed with the complete set
     _CONFIDENTIAL_ENTITIES: frozenset[str] = frozenset({

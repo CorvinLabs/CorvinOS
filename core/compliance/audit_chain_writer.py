@@ -157,7 +157,7 @@ class AuditChainWriter:
 
     # ``enforce_retention`` (delete-and-rehash of old records) was REMOVED on
     # 2026-09-07 (F-A13): an audit chain is append-only; retention is the
-    # sealed-segment rotation in ``operator/bridges/shared/audit_sealer.py``
+    # sealed-segment rotation in ``corvin_operator/bridges/shared/audit_sealer.py``
     # (``voice-audit rotate``), which never rewrites a record's hash.
 
     def verify_chain(self) -> bool:

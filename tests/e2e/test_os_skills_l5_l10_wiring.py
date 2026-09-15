@@ -308,7 +308,7 @@ class TestL5ProductionCallSite:
     """E2E: the REAL production boundary for L5.
 
     ``os.delegation_router`` is reached from exactly one production function —
-    ``operator/bridges/shared/delegation_policy.py::_acp_shadow_route``, called
+    ``corvin_operator/bridges/shared/delegation_policy.py::_acp_shadow_route``, called
     by ``resolve_worker_engine``, the single shared routing function every
     surface goes through (ADR-0613). This drives THAT function, not the Skill
     and not ``route_task_l5``, so it fails if the call site is removed, renamed,
@@ -350,7 +350,7 @@ class TestL5ProductionCallSite:
         assert routed[-1]["status"] == "success", routed[-1]
         # ADR-0537: the production call site names its own LoM, not a test's.
         assert routed[-1]["lom"].startswith(
-            "operator/bridges/shared/delegation_policy.py:"
+            "corvin_operator/bridges/shared/delegation_policy.py:"
         ), routed[-1]["lom"]
 
     def test_shadow_mode_never_changes_the_wire_answer(self):
@@ -388,7 +388,7 @@ class TestL10HasNoProductionCallSite:
         """AST-precise: real CALLS only — not docstrings, comments or stubs.
 
         A hit is either ``adapt_context_l10(...)`` or a ``.execute("os.context_adapter", ...)``
-        in a non-test file under core/, operator/ or ops/. String mentions in
+        in a non-test file under core/, corvin_operator/ or ops/. String mentions in
         prose (``core/brain/__init__.py``, ``README_PHASE1.md``, the stub
         dispatch table in ``core/engine/skill_invocation_stubs.py``) are not
         call sites and must not trip the fence.

@@ -414,7 +414,7 @@ def _healing_flag_on(spec: dict) -> bool:
 
 def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
     """Default-ON (opt-OUT). Healing traces (ADR-0180) are enabled unless the
-    operator/user explicitly disables them. Maintainer decision — the aggregation
+    corvin_operator/user explicitly disables them. Maintainer decision — the aggregation
     backend (Corvin-Logs) needs real healing data by default.
 
     Safety: a HealingTrace carries ONLY content-free fields — allowlisted stack
@@ -462,7 +462,7 @@ def ping_enabled(home: Path) -> bool:
     not on a consent gate. This ping differs only in what it carries (a pseudonym
     + coarse enums vs. scrubbed code signatures), not in its default posture.
 
-    To opt out — the operator/user disables it — set
+    To opt out — the corvin_operator/user disables it — set
     ``spec.telemetry.ping_enabled: false`` in
     ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``. Disabled by an
     explicit boolean ``false`` OR a false-like string (false/no/0/off); anything

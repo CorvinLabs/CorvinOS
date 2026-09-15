@@ -30,9 +30,9 @@ from pathlib import Path
 # Path setup — make both forge (security_events) and shared (instance_identity)
 # importable regardless of CWD.
 # ---------------------------------------------------------------------------
-_here = Path(__file__).resolve().parent                      # operator/bridges/shared
-_forge_root = _here.parents[1] / "forge"                    # operator/forge
-_shared = _here                                              # operator/bridges/shared
+_here = Path(__file__).resolve().parent                      # corvin_operator/bridges/shared
+_forge_root = _here.parents[1] / "forge"                    # corvin_operator/forge
+_shared = _here                                              # corvin_operator/bridges/shared
 
 for _p in (str(_forge_root), str(_shared)):
     if _p not in sys.path:

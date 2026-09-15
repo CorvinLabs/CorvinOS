@@ -24,12 +24,12 @@ from .registry import register_stage
 def _skill_registry(tenant_id: str):
     import sys  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
-    # `skill_forge` lives under operator/skill-forge/, which is NOT on the path of
-    # either host process (the console and the bridge only bootstrap operator/forge/
-    # and operator/). Without this the import fails before the class name even
+    # `skill_forge` lives under corvin_operator/skill-forge/, which is NOT on the path of
+    # either host process (the console and the bridge only bootstrap corvin_operator/forge/
+    # and corvin_operator/). Without this the import fails before the class name even
     # matters — the second layer of the same R7 defect. Mirrors the sys.path dance
-    # license_gate.py already uses (project memory: "operator/ stdlib-Shadow-Falle" —
-    # never make operator/ a package, extend sys.path instead).
+    # license_gate.py already uses (project memory: "corvin_operator/ stdlib-Shadow-Falle" —
+    # never make corvin_operator/ a package, extend sys.path instead).
     _sf_dir = str(Path(__file__).resolve().parents[2] / "skill-forge")
     if _sf_dir not in sys.path:
         sys.path.insert(0, _sf_dir)

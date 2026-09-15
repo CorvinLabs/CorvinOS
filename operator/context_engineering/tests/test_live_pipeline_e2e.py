@@ -31,8 +31,8 @@ Two classes:
     calls + ce_llm quota. This is the only shape that can catch defect (1) again:
     the reply format is the boundary, so a mock of it proves nothing.
 
-Run:  python3 operator/context_engineering/tests/test_live_pipeline_e2e.py
-Live: CORVIN_LIVE_E2E=1 python3 operator/context_engineering/tests/test_live_pipeline_e2e.py
+Run:  python3 corvin_operator/context_engineering/tests/test_live_pipeline_e2e.py
+Live: CORVIN_LIVE_E2E=1 python3 corvin_operator/context_engineering/tests/test_live_pipeline_e2e.py
 """
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ engine through that provider (Engines page -> Provider dropdown, ADR-0181).
 
 Before this fix:
   - "openrouter_api_key"/"ollama_api_key" were not valid BYOK key names
-    (operator/agent/byok.py::validate_key_name rejected them), and the
+    (corvin_operator/agent/byok.py::validate_key_name rejected them), and the
     console's API Keys page had no fields for them at all.
   - Even if a value ended up in service.env by hand, adapter.py's
     claude_code provider-routing read the credential via bare
@@ -41,8 +41,8 @@ for _p in (
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from agent import byok as agent_byok  # type: ignore  # operator/agent/byok.py
-import provider_keys  # type: ignore  # operator/bridges/shared/provider_keys.py
+from agent import byok as agent_byok  # type: ignore  # corvin_operator/agent/byok.py
+import provider_keys  # type: ignore  # corvin_operator/bridges/shared/provider_keys.py
 
 
 # ── byok.py: the new key names are now valid ───────────────────────────────
@@ -105,7 +105,7 @@ def test_ollama_key_round_trips_to_canonical_env_var(tmp_path, monkeypatch):
 
 def test_resolve_by_env_var_matches_credential_env_names(tmp_path, monkeypatch):
     """These exact strings ("OPENROUTER_API_KEY", "OLLAMA_API_KEY") are what
-    operator/bundle/config-templates/engine_model_registry.yaml declares as
+    corvin_operator/bundle/config-templates/engine_model_registry.yaml declares as
     credential_env for the openrouter / ollama_cloud providers — the whole
     point of resolve_by_env_var is that adapter.py can look a value up by
     THAT string without knowing the logical BYOK key name."""

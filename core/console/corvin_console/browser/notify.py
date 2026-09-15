@@ -1,6 +1,6 @@
 """ADR-0189 — voice-capable proactive notifications for browser-agent pauses.
 
-Thin wrapper around ``operator/bridges/shared/completion_notify.py``'s
+Thin wrapper around ``corvin_operator/bridges/shared/completion_notify.py``'s
 register/mark_done one-shot pattern: a browser session pausing on
 ``needs_login`` or ``needs_approval`` IS the completion signal itself (there
 is nothing further to wait for before notifying), so each call here is a

@@ -146,7 +146,7 @@ def _shared_profile_module():
     """Import the real, bare-name `profile` module the same way
     `_seed_profile_display_language` (and lang_cli.py / adapter.py) do —
     `operator.bridges.shared.profile` is never actually importable as a
-    dotted path (no `operator/__init__.py`, name collides with stdlib)."""
+    dotted path (no `corvin_operator/__init__.py`, name collides with stdlib)."""
     shared_dir = Path(__file__).resolve().parent.parent / "operator" / "bridges" / "shared"
     if str(shared_dir) not in sys.path:
         sys.path.insert(0, str(shared_dir))

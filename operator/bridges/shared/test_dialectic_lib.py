@@ -12,7 +12,7 @@ Covers:
   - The pre-calibration table (13 fictive tasks → trigger expectations)
   - CI-lint: ``import anthropic`` is forbidden in dialectic.py
 
-Run as: python3 operator/bridges/shared/test_dialectic_lib.py
+Run as: python3 corvin_operator/bridges/shared/test_dialectic_lib.py
 """
 from __future__ import annotations
 

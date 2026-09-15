@@ -60,7 +60,7 @@ if str(_AGENT_PATH) not in sys.path:
 # resolution order (e.g. treating a TTS-only key as satisfying the generic
 # "openai_api_key" presence check). Now delegates to the single canonical
 # resolver — same one say.py / stt/openai_whisper.py / BYOK's write path
-# all agree with. See operator/bridges/shared/provider_keys.py.
+# all agree with. See corvin_operator/bridges/shared/provider_keys.py.
 _SHARED = _REPO / "operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))

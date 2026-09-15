@@ -1,7 +1,7 @@
 """Vibe Engineering — consolidated Context Engineering pipeline (ADR-0275/0280).
 
 As of P-A (ADR-0280) `build_brief` is a **config-driven runner** over a registry
-of `ContextStage`s (operator/context_engineering/stages/), not five hard-coded
+of `ContextStage`s (corvin_operator/context_engineering/stages/), not five hard-coded
 calls. Behaviour is preserved for the default pipeline (parity-tested): the five
 first-party stages run in dependency order (memory → graph → skill →
 approach_synthesis → blocker_id), memory is the non-removable root.

@@ -39,9 +39,9 @@ def _resolve_core_audit():
     """Return the ``audit`` module of the core hash-chained writer.
 
     Mirrors ``corvin_plugins.bootstrap._default_audit_emit``: the writer is the
-    bare leaf module ``operator/bridges/shared/audit.py`` (importable once
+    bare leaf module ``corvin_operator/bridges/shared/audit.py`` (importable once
     ``corvin_console`` put that directory on ``sys.path``). If it is not on
-    the path yet, add the source-tree location. ``operator/`` has no
+    the path yet, add the source-tree location. ``corvin_operator/`` has no
     ``__init__.py`` and always loses to the stdlib ``operator`` module, so a
     dotted import can never work here.
 

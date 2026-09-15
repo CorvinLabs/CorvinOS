@@ -20,7 +20,7 @@ from pathlib import Path
 
 _THIS = Path(__file__).resolve()
 _REPO = _THIS.parents[3]
-for p in ("ops/launcher", "operator/bridges/shared", "operator/forge", "core/console"):
+for p in ("ops/launcher", "corvin_operator/bridges/shared", "corvin_operator/forge", "core/console"):
     sys.path.insert(0, str(_REPO / p))
 
 from corvin import cli  # noqa: E402

@@ -11,7 +11,7 @@ ADAPTER_POLL_INTERVAL is dialed down so the polling cadence doesn't
 dominate walltime.
 
 Run:
-    python3 operator/bridges/shared/test_adapter_parallel.py
+    python3 corvin_operator/bridges/shared/test_adapter_parallel.py
 """
 from __future__ import annotations
 

@@ -3,7 +3,7 @@
 HONESTY NOTE (adversarial review 2026-07-24): _simulate_tokens() hardcodes
 the per-category savings ratios this suite then "finds" — nothing here
 imports or executes TDE. Useful as a reproducible model of the hypothesis,
-NOT as evidence. For measured numbers use operator/orchestration/tde/bench.py.
+NOT as evidence. For measured numbers use corvin_operator/orchestration/tde/bench.py.
 """
 from __future__ import annotations
 

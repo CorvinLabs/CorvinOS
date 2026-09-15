@@ -14,7 +14,7 @@ There was no per-turn signal anywhere in this pipeline to say "the text
 being spoken right now is already de/en, don't force-translate it."
 
 Fix: `_detect_confident_de_en()` (a thin wrapper around the existing
-`operator/voice/scripts/detect_lang.py` function-word heuristic) plus
+`corvin_operator/voice/scripts/detect_lang.py` function-word heuristic) plus
 `_resolve_voice_output_language()`, which only lets a confident de/en
 detection override the static profile pin — ambiguous/non-Latin-script
 text still falls through to the profile default unchanged, so a genuine

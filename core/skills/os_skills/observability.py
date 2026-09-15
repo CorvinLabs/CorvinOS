@@ -56,7 +56,7 @@ def _register_chain_allowlists() -> None:
     try:
         from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]
     except ImportError:
-        # ``operator/`` has no __init__ (it would shadow the stdlib module);
+        # ``corvin_operator/`` has no __init__ (it would shadow the stdlib module);
         # the forge package is reached by its directory, as the writer itself does.
         import sys  # noqa: PLC0415
 

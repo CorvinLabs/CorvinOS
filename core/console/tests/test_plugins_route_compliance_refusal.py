@@ -41,7 +41,7 @@ for _p in [str(_OPERATOR), str(_OPERATOR / "license"), str(_OPERATOR / "forge"),
 
 #: corvin_plugins is NEVER purged (test_plugins_route.py convention): a second
 #: copy forks every enum and steals the audit fan-out sink that
-#: operator/bridges/shared/audit.py bound to the module at import time.
+#: corvin_operator/bridges/shared/audit.py bound to the module at import time.
 _PURGED_PREFIXES = ("corvin_console", "corvin_gateway", "forge")
 
 

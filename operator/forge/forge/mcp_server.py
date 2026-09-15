@@ -177,14 +177,14 @@ except ImportError:
 # wrong direction of coupling for a stdio MCP subprocess).
 #
 # Verification finding: an earlier version of this block imported
-# license.validator without first putting operator/ on sys.path (unlike
+# license.validator without first putting corvin_operator/ on sys.path (unlike
 # data_sources.py, which does `sys.path.insert(0, str(_OPERATOR))` before
 # its own identical import) — the import silently failed every time and
 # EVERY datasource_connect call fell through to the hardcoded free-tier
 # fallback regardless of the tenant's real license tier. The path insertion
 # below is required, not cosmetic.
 _DS_FREE_TIER_FALLBACK: dict = {"datasource_adapters_allowed": ["local_file"]}
-_DS_OPERATOR_ROOT = Path(__file__).resolve().parents[2]  # operator/
+_DS_OPERATOR_ROOT = Path(__file__).resolve().parents[2]  # corvin_operator/
 if _DS_OPERATOR_ROOT.is_dir() and str(_DS_OPERATOR_ROOT) not in sys.path:
     sys.path.insert(0, str(_DS_OPERATOR_ROOT))
 try:
@@ -1152,7 +1152,7 @@ class MCPServer:
                 elif _server_result == "no_credentials":
                     # Free tier or unactivated install — local counter handles quota.
                     # ADR-0144 CMP-02/03 fix: the free-tier compute daily-quota gate
-                    # was DEAD CODE. ``license`` is a package at operator/license whose
+                    # was DEAD CODE. ``license`` is a package at corvin_operator/license whose
                     # compute_quota.py opens with a relative import (``from .limits ...``).
                     # The old code inserted ``parents[3]/"license"`` — i.e. <repo>/license,
                     # which does NOT exist — and then did a bare ``import compute_quota``,
@@ -1160,11 +1160,11 @@ class MCPServer:
                     # ImportError that the broad ``except`` swallowed as an "operational
                     # error" → silent fail-OPEN: free-tier compute_units_per_day was never
                     # enforced via Forge MCP compute_run. Mirror the working a2a_worker
-                    # pattern: put operator/ (parents[2]) on sys.path and import the module
+                    # pattern: put corvin_operator/ (parents[2]) on sys.path and import the module
                     # by its package-qualified name so the relative import resolves.
                     _CQLimitError: type | None = None  # guard isinstance on import failure
                     try:
-                        _lic_root = str(Path(__file__).resolve().parents[2])  # operator/
+                        _lic_root = str(Path(__file__).resolve().parents[2])  # corvin_operator/
                         if _lic_root not in sys.path:
                             sys.path.insert(0, _lic_root)
                         from license.compute_quota import increment_and_check as _cq_check  # type: ignore

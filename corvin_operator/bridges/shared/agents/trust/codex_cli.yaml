@@ -1,0 +1,27 @@
+apiVersion: corvin/v1
+kind: EngineTrust
+metadata:
+  engine_id: codex_cli
+  trust_tier: medium
+  evaluated_at: "2026-05-15T00:00:00Z"
+  evaluated_against: "openai-codex-cli-1.0"
+  valid_until: "2026-11-15T00:00:00Z"
+spec:
+  binary_sha256: null
+  jailbreak_resistance: 0.85
+  system_prompt_respect: 0.90
+  tool_call_fidelity: 0.95
+  tested_refusal_classes:
+    - harmful_content
+    - prompt_injection
+  notes: |
+    Codex CLI ist openai-side moderation-gated; lokale Refusal-
+    Patterns sind weicher als Claude. Trust-Tier auf "medium"
+    gesetzt — Operator soll bewusst entscheiden, ob das für ihren
+    Use-Case reicht.
+
+    binary_sha256 ist null bis ein Operator die installierte
+    codex-Binary pinnt. ACHTUNG: ohne Pin kann OPENAI_BIN auf ein
+    manipuliertes Wrapper-Skript zeigen. Operator sollte vor
+    Production-Deployment via `sha256sum $(which codex)` einen
+    Hash setzen und valid_until entsprechend nachführen.

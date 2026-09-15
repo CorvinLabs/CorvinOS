@@ -20,7 +20,7 @@ subprocess.run() call re-appears in the module outside _run()'s own
 definition -- a static drift guard, since the whole point of this fix is
 that the NEXT call site added to this file must not get to skip it.
 
-Run: python3 operator/bridges/tests/test_bridge_manager_no_console_window.py
+Run: python3 corvin_operator/bridges/tests/test_bridge_manager_no_console_window.py
 """
 from __future__ import annotations
 

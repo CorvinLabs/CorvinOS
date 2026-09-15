@@ -30,15 +30,15 @@ def _home() -> Path | None:
 
 
 def _bridges_shared_dir() -> Path:
-    """Repo-relative ``operator/bridges/shared`` (source-tree mode).
+    """Repo-relative ``corvin_operator/bridges/shared`` (source-tree mode).
 
-    ``operator/`` has no ``__init__.py`` and shadows the stdlib ``operator``
+    ``corvin_operator/`` has no ``__init__.py`` and shadows the stdlib ``operator``
     module, so ``from operator.bridges.shared.x import y`` can NEVER resolve
     (regular stdlib modules always win over namespace-package candidates,
     regardless of sys.path order) — confirmed structurally broken, not just
     theoretically: every prior fiber that tried the dotted form silently
     degraded to "module unavailable" on every single scan. The fix used
-    throughout operator/orchestration/tde/ (e.g. tde_audit.py) is to put the
+    throughout corvin_operator/orchestration/tde/ (e.g. tde_audit.py) is to put the
     leaf directory on sys.path and import the bare module name instead.
     """
     return Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
@@ -332,7 +332,7 @@ class ComplianceFiber(NerveFiber):
             _ensure_bridges_on_path()
             # Bare names, NOT "operator.bridges.shared.X" — see
             # _bridges_shared_dir() docstring: the dotted form can never
-            # resolve because stdlib `operator` shadows the repo's operator/
+            # resolve because stdlib `operator` shadows the repo's corvin_operator/
             # directory. find_spec() on a dotted name whose parent isn't a
             # real package RAISES (not returns None) — every module_name
             # after the first would never even be checked.
@@ -523,7 +523,7 @@ class TdeDelegationFiber(NerveFiber):
     """Beobachtet den Tiered-Delegation-Engine-Runner über die tde.* Audit-Chain.
 
     Liest AUSSCHLIESSLICH bereits content-freie ``tde.*`` Events (siehe
-    ``operator/orchestration/tde/tde_audit.py`` — allowlisted Scalars, niemals
+    ``corvin_operator/orchestration/tde/tde_audit.py`` — allowlisted Scalars, niemals
     Statement-/Snapshot-Inhalte). Diese Fiber fügt der Chain keine neuen Events
     hinzu, sie liest nur; Fehlklassifikationen bleiben also nicht unbemerkt,
     weil TDE selbst schon vor dem Schreiben scrubbt.
@@ -641,7 +641,7 @@ class TdeDelegationFiber(NerveFiber):
                 data={"delegated_total": delegated_total, "delegated_failed": delegated_failed,
                       "failure_rate": round(failure_rate, 3)},
                 repair_hint="claude-Binary/Netzwerk der Worker-Subprozesse prüfen "
-                            "(operator/orchestration/tde/worker_ipc.py)",
+                            "(corvin_operator/orchestration/tde/worker_ipc.py)",
             ))
 
         if avg_measured_loss is not None and len(measured_losses) >= self._MIN_SAMPLES:
@@ -701,7 +701,7 @@ class WiringIntegrityFiber(NerveFiber):
     Two independent checks, re-run on every scan (not just at CI time):
 
     1. **Static re-check.** Re-resolves every `live` entry_point exactly like
-       ``operator/orchestration/wiring_gate.py`` does at CI time. A CI gate
+       ``corvin_operator/orchestration/wiring_gate.py`` does at CI time. A CI gate
        only proves reachability at merge time — a dependency removed later,
        a Python-version bump, or an editable-install gone stale can silently
        break a `live` entry_point AFTER merge. This catches that drift in
@@ -789,7 +789,7 @@ class WiringIntegrityFiber(NerveFiber):
                     f"entry_point ist kaputt: {b['reason']}"
                 ),
                 data=b,
-                repair_hint="operator/orchestration/wiring_gate.py lokal laufen lassen "
+                repair_hint="corvin_operator/orchestration/wiring_gate.py lokal laufen lassen "
                             "und WIRING.yaml oder den Code korrigieren",
             ))
 
@@ -967,7 +967,7 @@ class TokenSavingsFiber(NerveFiber):
                       "sample_delegated": len(delegated_durations),
                       "sample_local": len(local_durations)},
                 repair_hint="RPC-Overhead (DELEGATION_OVERHEAD_TOKENS/Netzwerk) prüfen — "
-                            "siehe operator/orchestration/tde/adaptive_delegation_executor.py",
+                            "siehe corvin_operator/orchestration/tde/adaptive_delegation_executor.py",
             ))
 
         return signals

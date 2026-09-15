@@ -327,7 +327,7 @@ def test_fallback_daily_counter_is_race_safe(tmp_path):
     """D3: _fallback_quota_ok was an unlocked read-modify-write — N parallel
     submissions could each read the same count and overshoot the daily cap
     arbitrarily. The counter must serialize (LIC-1 flock pattern from
-    operator/license/compute_quota.py) so concurrent callers never exceed
+    corvin_operator/license/compute_quota.py) so concurrent callers never exceed
     _FALLBACK_MAX_PER_DAY. The patched slow write widens the read→write
     window; with a correct lock the write happens INSIDE the critical
     section, so the cap still holds."""

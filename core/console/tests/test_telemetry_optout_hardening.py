@@ -204,7 +204,7 @@ class TestRepoPathAnchoring:
             "core/console/corvin_console/aco/x.py"
 
     def test_boundary_at_operator(self):
-        assert to_repo_path("/x/operator/forge/y.py") == "operator/forge/y.py"
+        assert to_repo_path("/x/corvin_operator/forge/y.py") == "corvin_operator/forge/y.py"
 
     def test_word_prefixed_ops_does_not_match(self):
         # "backops/" must not be read as "ops/"

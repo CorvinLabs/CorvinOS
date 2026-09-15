@@ -64,7 +64,7 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
     def _guard_prompt_head(_text):  # type: ignore[misc]
         raise RuntimeError(
             "shared claude-CLI prompt guard unavailable "
-            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "(corvin_operator/bridges/shared/prompt_guard.py) - refusing to build an "
             "unguarded `claude -p` payload"
         )
 
@@ -205,7 +205,7 @@ def _resolve_helper_model_args() -> list[str]:
                 / "helper_model.py"
             )
         # Repo-walk from this file: core/delegate/corvin_delegate/
-        # → up 3 = repo root → + operator/bridges/shared/helper_model.py
+        # → up 3 = repo root → + corvin_operator/bridges/shared/helper_model.py
         candidates.append(
             Path(__file__).resolve().parents[3] / "operator" / "bridges"
             / "shared" / "helper_model.py"

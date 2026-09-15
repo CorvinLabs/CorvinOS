@@ -84,8 +84,8 @@ _ENGINE_SPAWN = re.compile(r"""\.\s*(spawn|inject)\s*\(""")
 #: `@<path>` client-side file-expansion joiner (R3-C2).
 #:
 #: R4 (2026-09-07) closed the whole `_PENDING` backlog. Sites outside
-#: `operator/bridges/shared/` reach the helper through the fail-closed shim
-#: `operator/bridges/shared/prompt_guard.py`, whose `guard_prompt_head` RAISES
+#: `corvin_operator/bridges/shared/` reach the helper through the fail-closed shim
+#: `corvin_operator/bridges/shared/prompt_guard.py`, whose `guard_prompt_head` RAISES
 #: when the underlying helper is unimportable — so "the guard was missing" can
 #: never degrade into "we spawned on raw chat text".
 _MUST_GUARD = {
@@ -93,28 +93,28 @@ _MUST_GUARD = {
     "core/console/corvin_console/chat_runtime.py",
     "core/console/corvin_console/routes/assistant.py",
     "core/console/corvin_console/task_worker_pool.py",
-    "operator/bridges/shared/agents/claude_code.py",   # defines the helper
-    "operator/orchestration/tde/worker_ipc.py",
-    "operator/voice/scripts/summarize.py",
+    "corvin_operator/bridges/shared/agents/claude_code.py",   # defines the helper
+    "corvin_operator/orchestration/tde/worker_ipc.py",
+    "corvin_operator/voice/scripts/summarize.py",
     # round 4 — bridge helper models fed raw public-channel chat text
-    "operator/bridges/shared/acs_classify.py",
-    "operator/bridges/shared/acs_gate_chain.py",
-    "operator/bridges/shared/acs_runtime.py",
-    "operator/bridges/shared/compute_narrator.py",
-    "operator/bridges/shared/dialectic.py",
-    "operator/bridges/shared/house_rules.py",
-    "operator/bridges/shared/memory_bridge.py",
-    "operator/bridges/shared/output_sentinel.py",
-    "operator/bridges/shared/router.py",
-    "operator/bridges/shared/ulo_compliance.py",
-    "operator/bridges/shared/user_model.py",
-    "operator/bridges/shared/user_style.py",
+    "corvin_operator/bridges/shared/acs_classify.py",
+    "corvin_operator/bridges/shared/acs_gate_chain.py",
+    "corvin_operator/bridges/shared/acs_runtime.py",
+    "corvin_operator/bridges/shared/compute_narrator.py",
+    "corvin_operator/bridges/shared/dialectic.py",
+    "corvin_operator/bridges/shared/house_rules.py",
+    "corvin_operator/bridges/shared/memory_bridge.py",
+    "corvin_operator/bridges/shared/output_sentinel.py",
+    "corvin_operator/bridges/shared/router.py",
+    "corvin_operator/bridges/shared/ulo_compliance.py",
+    "corvin_operator/bridges/shared/user_model.py",
+    "corvin_operator/bridges/shared/user_style.py",
     # R4-F4 — the primary Discord/Telegram/WhatsApp/e-mail spawn path. It is
     # engine-mediated (so the engine guards it anyway) but it ALSO assembles
     # `_spawn_prompt` / `_stdin_prompt` itself and writes a raw JSONL user
     # message on the legacy `/btw` stdin path, so its own guard calls are
     # load-bearing and are pinned here rather than in _ENGINE_GUARDED.
-    "operator/bridges/shared/adapter.py",
+    "corvin_operator/bridges/shared/adapter.py",
     # round 4 — console / delegate / workflow / orchestration / voice surfaces
     "core/compute/corvin_compute/fabric/oracle/oracle.py",
     "core/console/corvin_console/browser/agent.py",
@@ -122,13 +122,13 @@ _MUST_GUARD = {
     "core/delegate/corvin_delegate/output_judge.py",
     "core/delegate/corvin_delegate/prompt_safety.py",
     "core/workflows/corvin_workflows/engines_claude.py",
-    "operator/context_engineering/stages/llm_synthesis.py",
-    "operator/orchestration/tde/analysis_runner.py",
-    "operator/orchestration/tde/loss_judge.py",
-    "operator/orchestration/tde/tde_engine.py",
-    "operator/skill_creator/llm_client.py",
-    "operator/voice/hooks/artifact_register.py",
-    "operator/voice/scripts/engine_canary.py",
+    "corvin_operator/context_engineering/stages/llm_synthesis.py",
+    "corvin_operator/orchestration/tde/analysis_runner.py",
+    "corvin_operator/orchestration/tde/loss_judge.py",
+    "corvin_operator/orchestration/tde/tde_engine.py",
+    "corvin_operator/skill_creator/llm_client.py",
+    "corvin_operator/voice/hooks/artifact_register.py",
+    "corvin_operator/voice/scripts/engine_canary.py",
     "scripts/run_spotify_workflow_demo.py",
 }
 
@@ -141,13 +141,13 @@ _NO_CLI_TEXT = {
         "dataclass default for `OracleConfig.subprocess_cmd` — an argv "
         "TEMPLATE with no prompt element. The spawn that uses it lives in "
         "fabric/oracle/oracle.py, which is in _MUST_GUARD.",
-    "operator/bridges/shared/engines/system_prompt_injector.py":
+    "corvin_operator/bridges/shared/engines/system_prompt_injector.py":
         "pure argv-rewriting helper — the two `claude -p` occurrences are "
         "docstring examples; the module has no subprocess call of its own.",
     "core/delegate/corvin_delegate/mcp_config_builder.py":
         "builds an MCP config dict; the single `engine.spawn(...)` occurrence "
         "is a docstring describing the kwargs it returns.",
-    "operator/bridges/shared/engine_registry.py":
+    "corvin_operator/bridges/shared/engine_registry.py":
         "engine factory/registry — the `WorkerEngine.spawn()` occurrence is a "
         "docstring; the registry hands back engine INSTANCES, never a prompt.",
 }
@@ -174,11 +174,11 @@ _ENGINE_GUARDED = {
         "R4-F2 — `POST /v1/tenants/{tid}/runs` drives `engine.spawn(spec.input)` "
         "under `--dangerously-skip-permissions`, behind a TENANT jwt (ADR-0007: "
         "a tenant is not the operator).",
-    "operator/bridges/shared/a2a_worker.py":
+    "corvin_operator/bridges/shared/a2a_worker.py":
         "R4-F3 — remote-authored A2A instruction. The guard MUST run after "
         "`sanitize_instruction` (which strips U+2060); spawning through the "
         "engine is what makes that ordering automatic.",
-    "operator/bridges/shared/awp_walker.py":
+    "corvin_operator/bridges/shared/awp_walker.py":
         "AWP walker — `engine.spawn(prompt=prompt)` over the engine protocol.",
 }
 
@@ -187,7 +187,7 @@ _ENGINE_GUARDED = {
 #: no channel, network or tenant input reaches them. They are NOT guarded on
 #: purpose: the sentinel line would change the very token counts and recall
 #: rates they exist to measure. The `benchmark/` path prefix is asserted below
-#: so this category cannot be used to excuse a `core/` or `operator/` site.
+#: so this category cannot be used to excuse a `core/` or `corvin_operator/` site.
 _OFFLINE_FIXTURE_HARNESS = {
     "benchmark/savings-vs-hallucination/run_benchmark.py":
         "context-pruning vs hallucination benchmark; prompt built from "
@@ -208,13 +208,13 @@ _PENDING: dict[str, str] = {}
 #: Sites that import the guard defensively (`_guard_prompt_head = None` on a
 #: failed import) predate the `prompt_guard` shim and carry their refusal
 #: branch inline. Every other site imports from the shim, whose own contract
-#: test (`operator/bridges/shared/test_spawn_prompt_guard.py::
+#: test (`corvin_operator/bridges/shared/test_spawn_prompt_guard.py::
 #: test_prompt_guard_refuses_instead_of_returning_raw_text`) proves the call
 #: raises rather than returning the caller's text.
 _INLINE_NONE_CHECK = {
     "core/console/corvin_console/task_worker_pool.py",
     "core/console/corvin_console/routes/assistant.py",
-    "operator/orchestration/tde/worker_ipc.py",
+    "corvin_operator/orchestration/tde/worker_ipc.py",
 }
 
 #: Sites that import ``agents.claude_code.guard_prompt_head`` DIRECTLY at the
@@ -223,15 +223,15 @@ _INLINE_NONE_CHECK = {
 #: the test below proves the file binds no ``None`` fallback.
 _DIRECT_HARD_IMPORT = {
     "core/console/corvin_console/chat_runtime.py",
-    "operator/voice/scripts/summarize.py",
+    "corvin_operator/voice/scripts/summarize.py",
 }
 
 #: Sites whose import fallback DEFINES a stand-in that raises. Same contract as
 #: the shim (calling it refuses; nothing returns the caller's text) but written
 #: inline, because these modules predate `prompt_guard.py` and are themselves
-#: inside `operator/bridges/shared/`, where the shim would be a self-import.
+#: inside `corvin_operator/bridges/shared/`, where the shim would be a self-import.
 _RAISING_STUB = {
-    "operator/bridges/shared/adapter.py",
+    "corvin_operator/bridges/shared/adapter.py",
 }
 
 
@@ -289,7 +289,7 @@ def test_guarded_sites_fail_closed_when_the_helper_is_missing():
     * the three round-1..3 sites import ``agents.claude_code`` directly and
       carry an explicit ``_guard_prompt_head is None`` refusal branch;
     * ``adapter.py`` defines a RAISING stand-in in its own import fallback
-      (it lives inside ``operator/bridges/shared/``, where the shim would be
+      (it lives inside ``corvin_operator/bridges/shared/``, where the shim would be
       a self-import);
     * every other site imports ``guard_prompt_head`` from the
       ``prompt_guard`` shim, which RAISES on an unimportable helper — so
@@ -328,7 +328,7 @@ def test_guarded_sites_fail_closed_when_the_helper_is_missing():
             continue
         assert "from prompt_guard import guard_prompt_head" in src, (
             f"{rel} must reach the guard through the fail-closed shim "
-            "`operator/bridges/shared/prompt_guard.py` (or carry an inline "
+            "`corvin_operator/bridges/shared/prompt_guard.py` (or carry an inline "
             "`_guard_prompt_head is None` refusal and be listed in "
             "_INLINE_NONE_CHECK / _DIRECT_HARD_IMPORT)"
         )
@@ -345,7 +345,7 @@ def test_the_shim_itself_never_returns_unguarded_text():
     This is the single assumption every non-inline site above rests on, so it
     is asserted structurally here as well as behaviourally in the bridge test.
     """
-    src = (_REPO / "operator/bridges/shared/prompt_guard.py").read_text(encoding="utf-8")
+    src = (_REPO / "corvin_operator/bridges/shared/prompt_guard.py").read_text(encoding="utf-8")
     body = src[src.index("def guard_prompt_head("):]
     body = body[: body.index("\ndef ")]
     assert "raise PromptGuardUnavailable" in body, body
@@ -385,11 +385,11 @@ def test_the_engine_guards_every_payload_it_emits():
     which is neither of the other two and was completely unguarded.
 
     The behavioural proofs are
-    ``operator/bridges/shared/test_engine_guarded_spawn.py`` (real subprocess,
+    ``corvin_operator/bridges/shared/test_engine_guarded_spawn.py`` (real subprocess,
     real pipe bytes) and ``core/gateway/tests/test_dispatcher_prompt_guard.py``
     (real FastAPI route); this is the cheap source-level tripwire.
     """
-    src = (_REPO / "operator/bridges/shared/agents/claude_code.py").read_text(
+    src = (_REPO / "corvin_operator/bridges/shared/agents/claude_code.py").read_text(
         encoding="utf-8")
     for func in ("_build_args", "spawn", "inject"):
         start = src.index(f"    def {func}(")
@@ -447,7 +447,7 @@ def test_no_unclassified_claude_spawn_site_exists():
         "new `claude -p` spawn site(s) with no ledger entry: " + ", ".join(new)
         + " — spawn through ClaudeCodeEngine (which neutralises the payload "
           "itself) and add the file to _ENGINE_GUARDED, or route the prompt "
-          "through the fail-closed shim operator/bridges/shared/prompt_guard.py "
+          "through the fail-closed shim corvin_operator/bridges/shared/prompt_guard.py "
           "and add it to _MUST_GUARD, or (only when it hands NO text to the "
           "CLI at all) justify it in _NO_CLI_TEXT"
     )

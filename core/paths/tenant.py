@@ -23,7 +23,7 @@ from core.tenants import (
 def corvin_home() -> Path:
     """The runtime root: ``$CORVIN_HOME``, else ``~/.corvin`` (CLAUDE.md § Project Identity).
 
-    Mirrors ``operator/bridges/shared/paths.py::corvin_home`` — the canonical
+    Mirrors ``corvin_operator/bridges/shared/paths.py::corvin_home`` — the canonical
     resolver. Until 2026-09-06 this module hard-wired ``~/.corvin`` and ignored
     ``CORVIN_HOME`` entirely, so every learning/skills path built here (the
     learning event dirs, the per-tenant audit file, skill configs) pointed at
@@ -168,8 +168,8 @@ def tenant_audit_chain(tenant_id: str) -> Path:
     report is generated from — so a record written anywhere else is, from the
     operator's and the auditor's point of view, not in the audit trail at all.
 
-    Byte-identical mirror of ``operator/forge/forge/paths.py::tenant_audit_chain``
-    and ``operator/bridges/shared/paths.py::tenant_audit_chain`` (the established
+    Byte-identical mirror of ``corvin_operator/forge/forge/paths.py::tenant_audit_chain``
+    and ``corvin_operator/bridges/shared/paths.py::tenant_audit_chain`` (the established
     three-copy paths.py pattern; core/ cannot import forge/ at every call site
     and the bridge daemons do not have core/ on sys.path). The guard test
     ``tests/security/test_audit_chain_ssot.py`` fails if the three diverge.

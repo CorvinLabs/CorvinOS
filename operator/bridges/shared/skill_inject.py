@@ -2,7 +2,7 @@
 
 Builds a third skill-availability layer on top of:
   1) canonical workspace (<scope_root>/skill-forge/skills/<name>/)
-  2) plugin-slot mirror (operator/skill-forge/skills/dyn/<sanitized>/)
+  2) plugin-slot mirror (corvin_operator/skill-forge/skills/dyn/<sanitized>/)
 
 This module produces a markdown block that gets concatenated into the
 claude subprocess' `--append-system-prompt`, so the worker has the skill
@@ -33,7 +33,7 @@ _log = logging.getLogger("corvin.skill_inject")
 #
 # Mirror the cowork-import pattern in adapter.py: try, set None on failure.
 # The plugins live as siblings under a common parent — when adapter.py is
-# in operator/bridges/shared/, operator/skill-forge/ is three levels up.
+# in corvin_operator/bridges/shared/, corvin_operator/skill-forge/ is three levels up.
 
 _HERE = Path(__file__).resolve().parent
 _SKILL_FORGE_TOP = _HERE.parent.parent / "skill-forge"
@@ -74,7 +74,7 @@ _SKILL_TO_LAYER = {
 # grades/promotes them through the task->session->project ladder — the same
 # "looks wired, isn't reachable" failure class e2e-wiring-proof itself exists
 # to catch. These two are therefore read directly from the bundled skill
-# files (shipped in every install per the operator/bundle/skills vendor
+# files (shipped in every install per the corvin_operator/bundle/skills vendor
 # entry) and merged into the candidate list unconditionally, still subject
 # to the quality_layers.py on/off gate (so quality-layer-control's
 # disable_layer("adr_gate") keeps working) but NOT subject to SkillForge
@@ -89,15 +89,15 @@ _SKILL_TO_LAYER = {
 # adversarial review of this mechanism found the same day it was built.
 _CORE_QUALITY_SKILL_NAMES: tuple[str, ...] = ("adr_gate", "e2e-wiring-proof", "concept_gate")
 
-# operator/bridges/shared/skill_inject.py -> operator/bundle/skills/ldd/<name>
+# corvin_operator/bridges/shared/skill_inject.py -> corvin_operator/bundle/skills/ldd/<name>
 #
-# Source-tree: _HERE (.../operator/bridges/shared) -> .parent.parent
+# Source-tree: _HERE (.../corvin_operator/bridges/shared) -> .parent.parent
 # (.../operator) -> bundle/skills/ldd.
 #
 # Wheel: this file is vendored to
-# corvin_console/_vendor/operator/bridges/shared/skill_inject.py, so
+# corvin_console/_vendor/corvin_operator/bridges/shared/skill_inject.py, so
 # _HERE.parent.parent.parent (.../corvin_console/_vendor, the vendor root)
-# -> operator/bundle/skills/ldd (matches the parents[3]-from-shared/
+# -> corvin_operator/bundle/skills/ldd (matches the parents[3]-from-shared/
 # convention hatch_build.py documents for every other vendored resource).
 #
 # Plain `.parent` chains only (never `.parents[N]` indexing) — `.parent` on
@@ -110,7 +110,7 @@ _BUNDLE_SKILLS_DIR_CANDIDATES: tuple[Path, ...] = (
 
 
 def _resolve_bundle_skills_dir() -> Path | None:
-    """Locate operator/bundle/skills/ldd/ in source-tree OR wheel layout."""
+    """Locate corvin_operator/bundle/skills/ldd/ in source-tree OR wheel layout."""
     for candidate in _BUNDLE_SKILLS_DIR_CANDIDATES:
         if candidate.is_dir():
             return candidate

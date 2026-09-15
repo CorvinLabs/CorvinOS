@@ -171,7 +171,7 @@ def _clean_env_value(v: str) -> str:
     return v
 
 
-# WA-22: single canonical source of truth (operator/bridges/shared/secrets.py)
+# WA-22: single canonical source of truth (corvin_operator/bridges/shared/secrets.py)
 # — service.env is the ONE config file consulted; the second, independently
 # maintained ~/.config/corvin-voice/.env is retired (nothing writes to it
 # post-consolidation, and it drifted from service.env on every install this

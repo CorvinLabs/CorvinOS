@@ -8,7 +8,7 @@ template. Copy this file, fill in the TODOs, and run it as its own subprocess:
 This is DELIBERATELY not a ``corvin_plugins.CorvinPlugin`` — an MCP server is a
 Tier-C surface (ADR-0156): it runs OUT of process and is reached over stdio
 JSON-RPC, not through the in-process plugin registry. Wiring it into
-CorvinOS is an operator/config step (register the subprocess command with
+CorvinOS is an corvin_operator/config step (register the subprocess command with
 the MCP client that will spawn it), not a ``corvin_plugins`` install.
 
 Transport: line-delimited JSON-RPC 2.0 on stdin/stdout, the same shape every

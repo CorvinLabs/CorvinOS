@@ -361,7 +361,7 @@ class TestBootstrapAllWiring(_BootTestCase):
 
 
 def _git_grep(pattern: str, *, skip_mechanism: bool = False) -> list[str]:
-    """``git grep -nE`` over ``core/`` and ``operator/``, test files removed.
+    """``git grep -nE`` over ``core/`` and ``corvin_operator/``, test files removed.
 
     Same shape as ``test_extension_point_call_sites``: a
     claim about the whole repo is checked against the whole repo, not against

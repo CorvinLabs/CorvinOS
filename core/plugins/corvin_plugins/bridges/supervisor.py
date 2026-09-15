@@ -6,7 +6,7 @@ It is not a rewrite of the bridges. ADR-0238/0242 originally described the seven
 bridges as Python modules under ``adapters/<name>_adapter`` that would be
 refactored into ``CorvinPlugin`` classes. That description was wrong and the ADRs
 have been corrected: every bridge is a **Node.js daemon** at
-``operator/bridges/<channel>/daemon.js``, and ``adapters/discord_adapter`` never
+``corvin_operator/bridges/<channel>/daemon.js``, and ``adapters/discord_adapter`` never
 existed. Rewriting seven working daemons in Python to satisfy a plugin protocol
 would trade a shipped, battle-tested transport layer for a green field — so the
 plugin here **supervises** the existing daemon as a subprocess instead.
@@ -20,7 +20,7 @@ SIGTERM→SIGKILL ladder; ``health_check()`` reports whether the daemon is alive
 
 All process knowledge (home resolution, runtime vs. source dir, service.env
 merge, node discovery, systemd probe) is **borrowed from**
-``operator/bridges/bridge_manager.py`` rather than reimplemented — a second copy
+``corvin_operator/bridges/bridge_manager.py`` rather than reimplemented — a second copy
 of "where does this daemon live" is exactly the reader≠writer split that has
 already cost this repo two incidents.
 
@@ -151,7 +151,7 @@ def _import_bridge_manager() -> Any | None:
     imported from there: ``core/plugins`` must stay importable without the
     Console package (headless core, ADR-0234).
 
-    ``operator/`` deliberately has no ``__init__.py`` — adding one shadows the
+    ``corvin_operator/`` deliberately has no ``__init__.py`` — adding one shadows the
     stdlib ``operator`` module and has already killed the web service once — so
     the directory is put on ``sys.path`` and the module imported by bare name,
     exactly like every other caller does.
@@ -293,7 +293,7 @@ class BridgeSupervisorPlugin:
 
         Requires ``node_modules`` next to ``daemon.js`` (module docstring's
         start-gate #5), not ``daemon.js`` alone: a wheel install's vendored
-        source dir (``corvin_console/_vendor/operator/bridges/<channel>``)
+        source dir (``corvin_console/_vendor/corvin_operator/bridges/<channel>``)
         always has ``daemon.js`` but can never have ``node_modules`` (it is
         deliberately never vendored, and site-packages is typically
         read-only besides). Accepting ``daemon.js`` alone made this "quiet

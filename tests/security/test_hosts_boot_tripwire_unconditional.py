@@ -31,7 +31,7 @@ _BOOT = textwrap.dedent('''
     import importlib.abc, json, os, sys
     home = os.environ["HOME_DIR"]
     for p in ["core/console", "core/gateway", "core/license", "core/compliance",
-              "operator/forge", "operator/skill-forge", "operator/bridges/shared"]:
+              "corvin_operator/forge", "corvin_operator/skill-forge", "corvin_operator/bridges/shared"]:
         sys.path.append(os.path.join(os.environ["REPO"], p))
     class _Strip(importlib.abc.MetaPathFinder):
         def find_spec(self, name, path=None, target=None):

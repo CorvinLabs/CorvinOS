@@ -6,7 +6,7 @@ returning a brand-new empty `SyncCache()` — discarding whatever was cached,
 including a legitimately-synced revocation. A local attacker with chmod
 access to their own cache file could un-revoke a cancelled/revoked license
 on every status check just by making the file world-readable. The correct
-behaviour (mirrored from `operator/license/compute_quota.py::_load`) is to
+behaviour (mirrored from `corvin_operator/license/compute_quota.py::_load`) is to
 log a warning but still honor the cached content; the mode is corrected on
 the next write via `save_sync_cache()`.
 """

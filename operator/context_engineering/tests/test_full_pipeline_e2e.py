@@ -17,7 +17,7 @@ The LLM stage's ``subprocess.run`` and the forge/skill create calls are mocked, 
 this is hermetic (no cloud call, no real Forge/SkillForge write) yet goes through
 the real stage dispatch + gate wiring, not a hand-rolled shortcut.
 
-Run: python3 operator/context_engineering/tests/test_full_pipeline_e2e.py
+Run: python3 corvin_operator/context_engineering/tests/test_full_pipeline_e2e.py
 """
 from __future__ import annotations
 

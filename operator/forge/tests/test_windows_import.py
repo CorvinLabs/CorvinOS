@@ -66,7 +66,7 @@ import mcp_manager.catalog           # noqa: F401  bare fcntl → guarded fallba
 import awpkg.audit                   # noqa: F401  bare fcntl → guarded fallback
 print("SIBLINGS_IMPORT_OK")
 """.replace("{paths}", ", ".join(repr(str(_REPO / p)) for p in (
-    "operator/skill-forge", "operator/mcp_manager", "core/awpkg")))
+    "corvin_operator/skill-forge", "corvin_operator/mcp_manager", "core/awpkg")))
 
 
 def test_forge_imports_under_simulated_windows():

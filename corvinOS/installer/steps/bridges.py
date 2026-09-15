@@ -59,7 +59,7 @@ def whatsapp_qr_pair(repo_root: Path) -> None:
     print("\n  Starting WhatsApp QR pairing...")
     result = subprocess.run(["bash", str(script), "pair"], check=False)
     if result.returncode != 0:
-        print("  ⚠ Pairing exited — retry: bash operator/voice/scripts/whatsapp_cli.sh pair")
+        print("  ⚠ Pairing exited — retry: bash corvin_operator/voice/scripts/whatsapp_cli.sh pair")
 
 
 # ── Internal bridge configurators ──────────────────────────────────────────

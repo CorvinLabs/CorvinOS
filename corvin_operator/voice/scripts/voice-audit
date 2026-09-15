@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# voice-audit — thin wrapper so `voice-audit verify` works without
+# typing `python3 plugins/voice/scripts/voice_audit.py verify`.
+#
+# To get the short form on $PATH:
+#   ln -s "$PWD/plugins/voice/scripts/voice-audit" ~/.local/bin/voice-audit
+# (or any other directory already on $PATH)
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/voice_audit.py" "$@"

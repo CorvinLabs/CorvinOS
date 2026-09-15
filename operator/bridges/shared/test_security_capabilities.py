@@ -7,7 +7,7 @@ Covers the structural contract:
     (incl. the out-of-process path_gate by file presence)
   * module_self_hash() shape + missing-file behaviour
 
-Runnable standalone: ``python3 operator/bridges/shared/test_security_capabilities.py``
+Runnable standalone: ``python3 corvin_operator/bridges/shared/test_security_capabilities.py``
 """
 from __future__ import annotations
 

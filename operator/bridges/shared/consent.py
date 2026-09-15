@@ -58,7 +58,7 @@ Design notes
   ``m.key.participant``). The owner cannot grant on behalf of another
   user because the slash-command runs in the granter's own message.
 
-* Path-gate (``operator/voice/hooks/path_gate.py``) protects this storage
+* Path-gate (``corvin_operator/voice/hooks/path_gate.py``) protects this storage
   from direct ``Write``/``Edit``/``Bash`` writes — only the bridge daemon
   process (which spawns slash-command handlers) and this module itself
   can mutate the file.
@@ -182,7 +182,7 @@ def _import_clag():
     (``from .security_events import …``) bind to forge/forge/security_events.py
     — a bare ``import clag`` falls back to a bare ``import security_events``,
     which resolves to WHICHEVER same-named module the process imported first
-    (operator/forge/security_events.py, the CLI shim, has no
+    (corvin_operator/forge/security_events.py, the CLI shim, has no
     ``get_audit_chain_tail``) and made the gate raise on an INTACT chain.
     The gate and the post-write shadow advance MUST share one module object:
     the shadow hash lives in module state, so importing the gate from
@@ -274,7 +274,7 @@ def _audit(event_type: str, *, channel: str, chat_key: str, uid: str,
 
     The bridge adapter is the same process that calls us, so the forge
     package is already on sys.path in the production case. For
-    standalone tests we walk-up to find ``operator/forge``.
+    standalone tests we walk-up to find ``corvin_operator/forge``.
     """
     try:
         import sys

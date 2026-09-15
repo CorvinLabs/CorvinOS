@@ -81,7 +81,7 @@ except ImportError:
 from forge import security_events as _security_events  # noqa: E402
 
 # L44 acceptable-use (house-rules) pre-spawn gate — ADR-0143, MANDATORY,
-# fail-CLOSED. ``spawn_gates`` lives in operator/bridges/shared, already on
+# fail-CLOSED. ``spawn_gates`` lives in corvin_operator/bridges/shared, already on
 # sys.path above. The module itself audits the deny/escalate decision into the
 # per-tenant L16 forge chain before returning, so the dispatcher only needs to
 # fail the run on a non-None refusal string.
@@ -103,7 +103,7 @@ except Exception:  # noqa: BLE001 — L34/L35 module-absence fails OPEN (parity)
     _check_l34 = None  # type: ignore[assignment]
     _check_l35 = None  # type: ignore[assignment]
 
-# ADR-0171 — universal engine span. operator/bridges/shared is on sys.path
+# ADR-0171 — universal engine span. corvin_operator/bridges/shared is on sys.path
 # (spawn_gates above). Guarded: a missing module degrades to gateway.* events only.
 try:
     import engine_span as _espan  # type: ignore  # noqa: E402

@@ -706,7 +706,7 @@ def _check_license(*, quick: bool) -> list[CheckResult]:
             + "Install: pip install cryptography",
         ))
 
-    # ADR-0092: new operator/license/ module
+    # ADR-0092: new corvin_operator/license/ module
     try:
         import pathlib as _pl
         _lic_root = str(_pl.Path(__file__).resolve().parents[2])
@@ -716,7 +716,7 @@ def _check_license(*, quick: bool) -> list[CheckResult]:
         from license.validator import is_loaded, active_tier  # type: ignore
         from license.validator import _ACTIVE_LICENSE  # type: ignore  # noqa: PLC2701
         # STL-02 (ADR-0146): provenance guard. The adapter's boot B1 check verifies
-        # license.validator/limits load from operator/license/; self_test (doctor /
+        # license.validator/limits load from corvin_operator/license/; self_test (doctor /
         # Docker HEALTHCHECK) did not. Without it a PYTHONPATH-shadowed validator
         # could make doctor CONFIRM a forged 'enterprise' tier as healthy. Treat a
         # shadow as CRITICAL and refuse to vouch for the reported tier.
@@ -748,7 +748,7 @@ def _check_license(*, quick: bool) -> list[CheckResult]:
     except Exception as e:  # noqa: BLE001
         out.append(CheckResult(
             "license.adr0092", WARNING, False,
-            f"operator/license/ unavailable: {type(e).__name__}: {e}",
+            f"corvin_operator/license/ unavailable: {type(e).__name__}: {e}",
         ))
 
     # B3 (ADR-0138 M4 / ADR-0144 F-04): production installs must use the compiled
@@ -1212,8 +1212,8 @@ def _check_social_keypair() -> list[CheckResult]:
 def _check_a2a_key_files() -> list[CheckResult]:
     """Layer 38: verify A2A origin/endpoint key files are mode 0600.
 
-    CRITICAL if any file under ``operator/cowork/remote_origins/`` or
-    ``operator/cowork/remote_endpoints/`` is world-readable — these JSON
+    CRITICAL if any file under ``corvin_operator/cowork/remote_origins/`` or
+    ``corvin_operator/cowork/remote_endpoints/`` is world-readable — these JSON
     files contain HMAC keys and bearer tokens.
     INFO when neither directory exists (A2A not yet provisioned — normal).
     """

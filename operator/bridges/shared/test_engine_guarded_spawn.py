@@ -27,7 +27,7 @@ a recording stand-in binary, asserting on the bytes that reached the child's
 argv and stdin pipe — never on a string the test built itself.
 
 Run:  ../../../.venv/bin/python -m pytest -q -o addopts="" \
-          -p no:cacheprovider operator/bridges/shared/test_engine_guarded_spawn.py
+          -p no:cacheprovider corvin_operator/bridges/shared/test_engine_guarded_spawn.py
 """
 from __future__ import annotations
 

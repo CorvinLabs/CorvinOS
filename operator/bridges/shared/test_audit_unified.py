@@ -78,7 +78,7 @@ def test_voice_default_audit_path_matches_forge_workspace():
         try:
             from paths import tenant_audit_chain  # type: ignore
         except ImportError:
-            sys.path.insert(0, str(REPO_ROOT / "operator/bridges/shared"))
+            sys.path.insert(0, str(REPO_ROOT / "corvin_operator/bridges/shared"))
             from paths import tenant_audit_chain  # type: ignore
         forge_default = tenant_audit_chain()
         t("voice default audit_path is THE tenant audit chain",
@@ -143,7 +143,7 @@ def test_concurrent_processes_do_not_corrupt_chain():
         # each child writes 50 events
         child = (
             'import os, sys, time\n'
-            'sys.path.insert(0, ' + repr(str(REPO_ROOT / "operator/forge")) + ')\n'
+            'sys.path.insert(0, ' + repr(str(REPO_ROOT / "corvin_operator/forge")) + ')\n'
             'from forge import security_events as _se\n'
             'from pathlib import Path\n'
             'p = Path(sys.argv[1])\n'

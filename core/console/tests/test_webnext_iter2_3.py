@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-for sub in ("core/console", "core/gateway", "operator/forge", "operator/bridges/shared"):
+for sub in ("core/console", "core/gateway", "corvin_operator/forge", "corvin_operator/bridges/shared"):
     p = _REPO / sub
     if p.exists() and str(p) not in sys.path:
         sys.path.insert(0, str(p))
@@ -125,7 +125,7 @@ class VoiceMimeStripTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        for sub in ("operator/voice/scripts",):
+        for sub in ("corvin_operator/voice/scripts",):
             p = _REPO / sub
             if p.exists() and str(p) not in sys.path:
                 sys.path.insert(0, str(p))

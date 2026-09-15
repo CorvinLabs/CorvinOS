@@ -10,7 +10,7 @@ Cases:
   * iteration 1 → no brief (injected once).
   * flag off → no brief.
 
-Run: python3 operator/bridges/shared/test_acs_manager_cel.py
+Run: python3 corvin_operator/bridges/shared/test_acs_manager_cel.py
 """
 from __future__ import annotations
 

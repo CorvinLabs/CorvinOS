@@ -1,0 +1,10 @@
+{
+  "id": "sqlite",
+  "name": "SQLite",
+  "description": "Query and manage SQLite databases. Run SQL queries, inspect schemas, and manage data.",
+  "source": "npm:@modelcontextprotocol/server-sqlite",
+  "tags": ["sqlite", "database", "sql", "local", "data"],
+  "compliance": {"locality": "local", "network_egress": "none"},
+  "secrets": [],
+  "install_hint": "corvin-mcp install npm:@modelcontextprotocol/server-sqlite@latest"
+}

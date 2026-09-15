@@ -29,11 +29,11 @@ _PKG_TO_REPO: dict[str, str] = {
     "corvin_console": "core/console/corvin_console",
     "corvin_gateway": "core/gateway/corvin_gateway",
     "corvin_mcp": "core/mcp/corvin_mcp",
-    "forge": "operator/forge",
-    "agents": "operator/bridges/shared/agents",
+    "forge": "corvin_operator/forge",
+    "agents": "corvin_operator/bridges/shared/agents",
 }
 # Segments that are already repo-relative roots (in-tree runs, not installed).
-_REPO_ROOTS = ("core/", "operator/", "shared/", "ops/")
+_REPO_ROOTS = ("core/", "corvin_operator/", "shared/", "ops/")
 # Match a repo root ONLY at a path boundary (start-of-string or right after '/'),
 # so a substring like ".../encore/x.py" cannot false-match "core/" (F11).
 _REPO_ROOT_RE = re.compile(

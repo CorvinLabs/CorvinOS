@@ -52,7 +52,7 @@ FAKE_TOKEN = "MTIzNDU2Nzg5MDEyMzQ1Njc4.GhIjKl.FAKE-DISCORD-TOKEN-do-not-leak"
 
 
 class FakeBridgeManager:
-    """Stand-in for operator/bridges/bridge_manager.py.
+    """Stand-in for corvin_operator/bridges/bridge_manager.py.
 
     Carries a settings dict holding FAKE_TOKEN so the leak test can assert the
     supervisor never reads a credential VALUE — only the boolean answer of
@@ -900,7 +900,7 @@ class TestBridgeManagerProbe(unittest.TestCase):
         for line in (
             "/usr/bin/node /home/u/.corvin/bridges/discord/daemon.js",
             r"C:\node.exe C:\Users\u\.corvin\bridges\discord\daemon.js",
-            "node /repo/operator/bridges/DISCORD/daemon.js",
+            "node /repo/corvin_operator/bridges/DISCORD/daemon.js",
         ):
             with self.subTest(line=line):
                 self.assertTrue(self.bm._cmdline_names_daemon(line, "discord"))

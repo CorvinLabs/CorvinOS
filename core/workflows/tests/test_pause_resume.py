@@ -32,7 +32,7 @@ def _outbox_dir() -> Path:
 
     Must be read per call, not pinned at import: each test redirects
     ADAPTER_OUTBOX to its own tmpdir in setUp. Before that, this pointed at
-    the live `operator/bridges/shared/outbox/`, and the running Discord daemon
+    the live `corvin_operator/bridges/shared/outbox/`, and the running Discord daemon
     polls that directory every 500 ms — it picked the test envelopes up and
     tried to deliver them to a real chat long before tearDown got round to
     unlinking them. 724 of them, all addressed to the placeholder chat_id

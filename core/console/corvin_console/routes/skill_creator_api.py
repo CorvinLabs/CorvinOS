@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Import the Skill-Creator.
 #
-# operator/ has no __init__.py (it would shadow the stdlib `operator`), so the
-# package is reached by putting operator/ on sys.path — but APPENDED, never
+# corvin_operator/ has no __init__.py (it would shadow the stdlib `operator`), so the
+# package is reached by putting corvin_operator/ on sys.path — but APPENDED, never
 # inserted at the front. Inserting it first used to shadow the SkillForge
 # REGISTRY package, which was also called `skill_forge` at the time: every
 # later `from skill_forge.multi_registry import ...` in the process resolved

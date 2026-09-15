@@ -2,7 +2,7 @@
 
 Run with::
 
-    python3 operator/bridges/shared/test_egress_gate.py
+    python3 corvin_operator/bridges/shared/test_egress_gate.py
 
 Pure-Python; no forge / network / docker dependencies.
 """

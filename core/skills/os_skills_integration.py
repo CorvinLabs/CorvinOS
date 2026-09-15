@@ -5,7 +5,7 @@ What is PRODUCTION-WIRED (verified 2026-09-07, adversarial review F-K4):
 - Boot: ``initialize_integration`` is called from ``core.skills.boot.boot_skills``
   (← ``corvin_plugins.bootstrap.boot_platform``) and populates the global registry.
 - L5 (Auto-routing): ``os.delegation_router`` runs in SHADOW mode from the one
-  shared routing function, ``operator/bridges/shared/delegation_policy.py::
+  shared routing function, ``corvin_operator/bridges/shared/delegation_policy.py::
   _acp_shadow_route`` — the bundled engine stands, the Skill's advice is audited
   and learned from. ``route_task_l5`` below is the direct (non-shadow) entry
   point; it has no production caller today and is exercised by tests only.

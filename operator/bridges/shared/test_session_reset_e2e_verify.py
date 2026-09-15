@@ -7,7 +7,7 @@ by simulating the actual workflow:
   2. Call session_reset.py via CLI
   3. Verify budget_reset=True in the output
 
-Run: python3 operator/bridges/shared/test_session_reset_e2e_verify.py
+Run: python3 corvin_operator/bridges/shared/test_session_reset_e2e_verify.py
 """
 from __future__ import annotations
 

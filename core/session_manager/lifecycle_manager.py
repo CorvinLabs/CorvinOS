@@ -95,7 +95,7 @@ class SessionLifecycleManager:
                 reason=f"Context at {context_usage_pct}%",
             )
 
-        # Trigger 2: Phase Exit (operator/task signals)
+        # Trigger 2: Phase Exit (corvin_operator/task signals)
         # (Would be set via explicit call)
 
         # Trigger 3: Token Budget

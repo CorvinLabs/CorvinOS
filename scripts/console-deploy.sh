@@ -30,6 +30,23 @@ done
 
 cd "$WEB_NEXT" || { echo "web-next not found: $WEB_NEXT" >&2; exit 1; }
 
+# Serialise deploys. Two concurrent runs USED TO DELETE dist/ outright and
+# leave it deleted (console 404, observed 2026-09-15 00:46): B's opening
+# `rm -rf dist.next` removes A's finished staging dir, then A's
+# `mv dist dist.prev` succeeds and its `mv dist.next dist` fails with
+# nothing to put back. There is no `set -e`, so A carried on and exited
+# through the "no entry bundle" branch having destroyed the live build.
+#
+# Concurrency is the normal case here, not an edge case: the watcher
+# service, the PostToolUse hook and a hand-run deploy all call this script,
+# and the hook's `pgrep` guard is itself a race. An exclusive lock makes the
+# second caller wait for the first instead of interleaving with it.
+exec 9>".console-deploy.lock"
+if ! flock -w 300 9; then
+  echo "another console-deploy is holding the lock (>300s) — giving up" >&2
+  exit 1
+fi
+
 if [ "$FAST" -eq 0 ]; then
   # A plain rebuild is not sufficient: a stale esbuild pre-bundle can keep
   # serving a module that no longer exists in source.
@@ -71,9 +88,20 @@ if [ ! -f "$STAGE/index.html" ]; then
 fi
 
 # Swap. dist.prev is kept as the rollback copy until the next deploy.
+#
+# The window between the two `mv`s is the only moment dist/ does not exist.
+# If the second one fails there, the console is left with NO build and every
+# /console/ request 404s until someone notices — so roll the previous build
+# back in rather than exiting with the site down.
 rm -rf dist.prev
 [ -d dist ] && mv dist dist.prev
-mv "$STAGE" dist
+if ! mv "$STAGE" dist; then
+  echo "swap failed: could not move $STAGE into place" >&2
+  if [ -d dist.prev ] && [ ! -d dist ]; then
+    mv dist.prev dist && echo "rolled back to the previous build — console still serving" >&2
+  fi
+  exit 1
+fi
 
 BUILT="$(grep -o 'assets/index-[^"]*\.js' dist/index.html | head -1)"
 if [ -z "$BUILT" ]; then

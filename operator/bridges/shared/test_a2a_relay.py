@@ -13,7 +13,7 @@ load-bearing properties the ADR calls non-negotiable:
      pinning, bounded store-and-forward queue, and reconnect-resume — all
      without the relay ever needing durable state.
 
-Run: python3 operator/bridges/shared/test_a2a_relay.py
+Run: python3 corvin_operator/bridges/shared/test_a2a_relay.py
 """
 from __future__ import annotations
 

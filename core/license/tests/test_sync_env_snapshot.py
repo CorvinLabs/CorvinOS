@@ -1,6 +1,6 @@
 """RTL2-LIC-02 (ADR-0147): sync.py snapshots its test-mode env knobs at import,
 so a post-boot in-process os.environ mutation cannot redirect/disable the
-revocation-sync heartbeat (parity with operator/license/session_refresh.py B1).
+revocation-sync heartbeat (parity with corvin_operator/license/session_refresh.py B1).
 """
 from __future__ import annotations
 

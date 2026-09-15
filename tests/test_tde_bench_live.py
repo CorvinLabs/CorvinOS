@@ -6,7 +6,7 @@ DEFAULT_CORPUS, not the full 13-task corpus) — this proves the harness's
 real production entry point (SendIntegration.select_engine_and_execute,
 not a mock) actually works end-to-end with real subprocesses; the full
 corpus is designed for a nightly, budget-owned cron run (see
-operator/orchestration/tde/bench.py module docstring), not for every
+corvin_operator/orchestration/tde/bench.py module docstring), not for every
 CI/test invocation.
 """
 from __future__ import annotations

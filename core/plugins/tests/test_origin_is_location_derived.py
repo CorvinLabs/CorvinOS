@@ -63,8 +63,8 @@ import json, os, sys
 repo = Path = None
 from pathlib import Path
 repo = Path(os.environ["REPO"]); home = Path(os.environ["CORVIN_HOME"])
-for p in ("core/plugins", "operator/bridges/shared", "operator/forge", "operator",
-          "operator/license"):
+for p in ("core/plugins", "corvin_operator/bridges/shared", "corvin_operator/forge", "operator",
+          "corvin_operator/license"):
     sys.path.insert(0, str(repo / p))
 sys.path.insert(0, os.environ["EVIL_DIR"])
 

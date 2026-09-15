@@ -24,7 +24,7 @@ relay           <global>/relay.json
 branding        <global>/branding.yaml
 data_policy     <global>/data_policy.yaml
 engines         ~/.config/corvin-voice/service.env
-bridge.<ch>     operator/bridges/<ch>/settings.json
+bridge.<ch>     corvin_operator/bridges/<ch>/settings.json
 """
 from __future__ import annotations
 

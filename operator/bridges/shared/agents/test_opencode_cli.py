@@ -18,7 +18,7 @@ operators without Ollama see a clear skip line.
 
 Run:
 
-    python3 operator/bridges/shared/agents/test_opencode_cli.py
+    python3 corvin_operator/bridges/shared/agents/test_opencode_cli.py
 """
 
 from __future__ import annotations

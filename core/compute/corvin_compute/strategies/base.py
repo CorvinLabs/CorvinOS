@@ -5,7 +5,7 @@ process executes strategy bodies in-process (not in bwrap) — they are
 operator-curated code, equivalent in trust to the audit chain or
 path-gate hook.
 
-The skill linter (``operator/skill-forge/skill_forge/linter.py``) rejects
+The skill linter (``corvin_operator/skill-forge/skill_forge/linter.py``) rejects
 strategies that import network / subprocess modules. The cost contract
 (``corvin_compute/`` MUST NOT import anthropic) is enforced via AST
 walk in the Phase 13.1 test.

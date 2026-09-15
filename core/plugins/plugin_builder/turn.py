@@ -1,7 +1,7 @@
 """Transport-agnostic ``/plugin-builder`` turn handling (ADR-0253).
 
 Both the Console (``corvin_console/slash_commands.py``) and the messenger
-bridges (``operator/bridges/shared/adapter.py``) drive the SAME interview
+bridges (``corvin_operator/bridges/shared/adapter.py``) drive the SAME interview
 through this module. ``session_store`` is keyed by ``(tenant_id,
 session_key)`` — the console's per-tab/per-chat ``sid`` and the bridge's
 ``channel:chat_key`` are both just an opaque per-CONVERSATION identity string
@@ -147,7 +147,7 @@ def _checkpoint_reply(session: InterviewSession, *, tenant_id: str, session_key:
     **Voice note (ADR-0262 review round 1, Gates finding):** this builds a
     real, tested ``voice_text`` (``checkpoint.py::build_checkpoint``), but
     neither the console (`corvin_console/slash_commands.py`) nor the bridge
-    reply path (`operator/bridges/shared/adapter.py`'s
+    reply path (`corvin_operator/bridges/shared/adapter.py`'s
     `_plugin_builder_bridge_reply` writes straight to the outbox, before the
     point where `extract_voice_override()` runs for a normal engine turn)
     currently extracts a `<voice>` tag from a Plugin-Builder reply at all —

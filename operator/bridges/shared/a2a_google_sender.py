@@ -29,7 +29,7 @@ class sit in?) and belongs in an ADR, not in a review pass.
 Endpoint config
 --------------
 Place a JSON file under
-``operator/cowork/remote_endpoints/<endpoint_id>.json`` (mode 0600)
+``corvin_operator/cowork/remote_endpoints/<endpoint_id>.json`` (mode 0600)
 with a ``google_a2a`` block:
 
   {

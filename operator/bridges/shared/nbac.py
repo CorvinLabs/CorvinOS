@@ -65,7 +65,7 @@ def _find_pubkey_pem() -> bytes | None:
     """Locate nbac_network_pubkey.pem relative to this file's repo layout."""
     candidates = [
         _PUBKEY_PATH,
-        # Fallback: operator/bridges/shared → operator/ (one level up from bridges)
+        # Fallback: corvin_operator/bridges/shared → corvin_operator/ (one level up from bridges)
         Path(__file__).parent.parent / "license" / "nbac_network_pubkey.pem",
     ]
     for p in candidates:

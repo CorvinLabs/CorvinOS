@@ -7,7 +7,7 @@ Findings covered (adversarial review 2026-09-03):
 - L-13: per-user erasure rewrites partitions atomically + tombstone + audit.
 - L-17: retention cleanup is atomic and audited.
 
-The chain is the real ``operator/bridges/shared/audit.py`` writer redirected
+The chain is the real ``corvin_operator/bridges/shared/audit.py`` writer redirected
 to a temp file via ``VOICE_AUDIT_PATH`` — never the live chain.
 """
 

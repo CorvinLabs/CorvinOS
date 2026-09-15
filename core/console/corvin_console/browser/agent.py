@@ -52,7 +52,7 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
     def _guard_prompt_head(_text):  # type: ignore[misc]
         raise RuntimeError(
             "shared claude-CLI prompt guard unavailable "
-            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "(corvin_operator/bridges/shared/prompt_guard.py) - refusing to build an "
             "unguarded `claude -p` payload"
         )
 
@@ -114,7 +114,7 @@ def _build_prompt(task: str, obs: Observation, transcript: list[dict]) -> str:
     # hardening). Accessible names are attacker-controlled and length-capped but a
     # single forged "END" delimiter still fits in a 100-char label; the page
     # cannot reproduce a random nonce it never sees, so it cannot close the fence
-    # and smuggle forged operator/system instructions past it. Belt-and-braces:
+    # and smuggle forged corvin_operator/system instructions past it. Belt-and-braces:
     # scrub any literal fence keyword out of the page text before interpolation.
     nonce = secrets.token_hex(8)
     page_text = obs.as_text().replace("UNTRUSTED PAGE CONTENT", "untrusted-page-content")

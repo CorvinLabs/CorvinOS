@@ -294,7 +294,7 @@ def remove_task(task_id: str) -> bool:
 def _bridges_root() -> Path:
     """Locate the bridges/ root that contains the per-channel outbox dirs.
 
-    `scheduler.py` lives at .../operator/bridges/shared/scheduler.py — so
+    `scheduler.py` lives at .../corvin_operator/bridges/shared/scheduler.py — so
     bridges/ is exactly one level up. The override env `ADAPTER_OUTBOX` is
     honoured by tests (single absolute path → channel-agnostic outbox).
     """
@@ -341,7 +341,7 @@ def _run_workflow_to_outbox(
 
     channel = item["channel"]
     # Write into the SHARED outbox the daemons actually poll, NOT a per-channel
-    # dir. Every messenger daemon polls operator/bridges/shared/outbox
+    # dir. Every messenger daemon polls corvin_operator/bridges/shared/outbox
     # (SHARED=resolve(__dirname,'..','shared')); the per-channel
     # bridges/<channel>/outbox dirs are never polled, so scheduled workflow
     # reports written there were silently orphaned (13 unread sched_wf_*.json

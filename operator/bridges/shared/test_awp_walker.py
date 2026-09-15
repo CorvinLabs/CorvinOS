@@ -39,7 +39,7 @@ Asserts the contract — no AWP-runtime, engines own execution:
   Standards integrity:
     * No import of awp.* from any of the three modules
 
-Run: python3 operator/bridges/shared/test_awp_walker.py
+Run: python3 corvin_operator/bridges/shared/test_awp_walker.py
 """
 from __future__ import annotations
 

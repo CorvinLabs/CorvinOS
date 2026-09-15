@@ -7,7 +7,7 @@ Tests the TokenBudget integration with the context engineering pipeline:
   4. Cascade logic flows unused budget downstream
   5. Backward compatibility: flag OFF disables budget
 
-Run: python3 operator/context_engineering/tests/test_token_budget_pipeline_adr0388.py
+Run: python3 corvin_operator/context_engineering/tests/test_token_budget_pipeline_adr0388.py
 """
 from __future__ import annotations
 

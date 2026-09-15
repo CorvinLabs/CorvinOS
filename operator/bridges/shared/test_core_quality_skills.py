@@ -10,7 +10,7 @@ Covers what test_adapter_skill_inject.py's case-A does not:
   - the previously-double-frontmatter adr_gate/SKILL.md no longer leaks
     raw YAML into the injected body
 
-Run as: python3 operator/bridges/shared/test_core_quality_skills.py
+Run as: python3 corvin_operator/bridges/shared/test_core_quality_skills.py
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def case_bundle_dir_resolves_in_source_tree() -> None:
     print("\n[1] bundle skills dir resolves from a real source-tree checkout")
     bundle_dir = skill_inject._resolve_bundle_skills_dir()
     t("bundle dir found", bundle_dir is not None)
-    t("bundle dir is operator/bundle/skills/ldd",
+    t("bundle dir is corvin_operator/bundle/skills/ldd",
       bundle_dir is not None and bundle_dir.name == "ldd" and bundle_dir.parent.name == "skills")
     for name in skill_inject._CORE_QUALITY_SKILL_NAMES:
         skill_md = bundle_dir / name / "SKILL.md"

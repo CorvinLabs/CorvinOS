@@ -28,7 +28,7 @@ _V1_MODULE = "core.context_engineering.snapshot"
 def _resolve_tenant(tenant_id: Optional[str]) -> str:
     """Validated tenant id: explicit → ``CORVIN_TENANT_ID`` → ``_default``."""
     try:
-        import corvin_core._bootstrap  # noqa: F401 — puts operator/forge on sys.path in a checkout
+        import corvin_core._bootstrap  # noqa: F401 — puts corvin_operator/forge on sys.path in a checkout
     except Exception:  # noqa: BLE001 — packaged layout
         pass
     try:

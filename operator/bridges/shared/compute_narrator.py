@@ -241,7 +241,7 @@ def _run_haiku(system: str, prompt: str, model: str) -> str | None:
         out = subprocess.run(
             [
                 # R4: whole-payload guard — the narration prompt embeds run
-                # metadata and operator/user-authored goal text, and rides
+                # metadata and corvin_operator/user-authored goal text, and rides
                 # POSITIONALLY in argv. Reply contract unaffected: stdout is
                 # returned verbatim to the caller.
                 _bin, "-p", _guard_prompt_head(prompt),

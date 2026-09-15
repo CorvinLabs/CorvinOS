@@ -6,7 +6,7 @@ inbox message, checks dass die fertigen claude-CLI-Args MCP-Config + add-dir +
 allowed-tools aus der Persona enthalten — without dass voice die Persona-Felder
 selber kennen muss.
 
-Run: python3 operator/bridges/shared/test_adapter_cowork.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_cowork.py
 """
 from __future__ import annotations
 

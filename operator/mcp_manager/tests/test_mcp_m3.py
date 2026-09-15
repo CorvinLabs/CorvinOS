@@ -1,7 +1,7 @@
 """Tests for MCP Plugin Manager M3 (ADR-0096) — console routes + persona ACL.
 
 Run with:
-    cd operator/mcp_manager
+    cd corvin_operator/mcp_manager
     python -m pytest tests/test_mcp_m3.py -v
 """
 from __future__ import annotations

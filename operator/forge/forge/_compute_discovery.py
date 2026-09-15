@@ -56,7 +56,7 @@ def _probe(path: Path) -> bool:
     try:
         import sys as _sys
         import os as _os
-        # parents[2] is the `operator` dir (operator/forge/forge/_compute_discovery.py);
+        # parents[2] is the `operator` dir (corvin_operator/forge/forge/_compute_discovery.py);
         # parents[3] overshot to the repo root and omitted `operator`, so this path
         # never existed in source OR wheel (path-audit 2026-06-25 #LOW4).
         _shared = str(Path(__file__).resolve().parents[2] / "bridges" / "shared")

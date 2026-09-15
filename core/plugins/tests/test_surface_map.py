@@ -246,7 +246,7 @@ def test_claimed_consumer_file_exists_and_invokes_the_registry(surface):
     # core/gateway/corvin_gateway/app.py until 2026-07-27, and that file does
     # call the provider — `drain_now()`, once, in a shutdown flush — so this
     # guard would have passed it just as the old one did. The real fan-out is
-    # `fanout()` in operator/bridges/shared/audit.py, after the core write
+    # `fanout()` in corvin_operator/bridges/shared/audit.py, after the core write
     # commits. No cheap static rule separates "calls it on the hot path" from
     # "calls it while shutting down"; that one needed an audit, exactly like
     # user_backend's wrong dead_reason did. What this guard now buys is the
@@ -466,8 +466,8 @@ def test_the_worker_registration_surface_is_still_unreachable_from_a_plugin():
         exclude=(
             "core/compute/corvin_compute/worker.py",
             "core/compute/tests/",
-            "operator/bridges/shared/test_",
-            "operator/bridges/shared/adapter.py",  # _register_engine, different API
+            "corvin_operator/bridges/shared/test_",
+            "corvin_operator/bridges/shared/adapter.py",  # _register_engine, different API
             # Any tests directory: a test fixture that calls its OWN
             # `register_engine` (core/orchestration's FallbackChain has one) is
             # not a production route into the worker.

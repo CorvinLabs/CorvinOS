@@ -3,9 +3,9 @@
 import sys
 from pathlib import Path
 
-# `operator/` deliberately has no __init__.py (it would shadow the stdlib
+# `corvin_operator/` deliberately has no __init__.py (it would shadow the stdlib
 # `operator` module), so `import operator.skill_forge` can never work. Put
-# `operator/` on sys.path and import the package flat — the same shim the
+# `corvin_operator/` on sys.path and import the package flat — the same shim the
 # console route uses (routes/skill_creator_api.py).
 _OPERATOR_DIR = Path(__file__).resolve().parents[2]
 if str(_OPERATOR_DIR) not in sys.path:

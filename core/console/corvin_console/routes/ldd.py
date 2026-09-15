@@ -1,6 +1,6 @@
 """LDD (Loss-Driven-Development) layer-toggle config.
 
-Wraps the shared ``operator/bridges/shared/ldd.py`` module which owns
+Wraps the shared ``corvin_operator/bridges/shared/ldd.py`` module which owns
 the canonical config at ``<tenant>/global/ldd.json``. The module's
 load/save/set_layer/set_master/apply_preset functions are the single
 source of truth — this route only exposes them.

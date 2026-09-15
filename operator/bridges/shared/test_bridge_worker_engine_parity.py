@@ -12,7 +12,7 @@ pins: (1) flag-off is a byte-identical pass-through to the unchanged
 frozen — this ADR does not build TDE execution for bridges), and (5) console
 and bridge agree given identical tenant config and prompt.
 
-Run: python3 operator/bridges/shared/test_bridge_worker_engine_parity.py
+Run: python3 corvin_operator/bridges/shared/test_bridge_worker_engine_parity.py
 """
 from __future__ import annotations
 

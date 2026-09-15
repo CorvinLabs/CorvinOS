@@ -36,7 +36,7 @@ sys.path.insert(0, str(_REPO / "operator" / "voice" / "scripts"))
 # (which self-restores on __exit__), never relies on their env-derived
 # module-level state — forcing them out of sys.modules on every sandbox
 # teardown isn't needed for this file's own correctness, and it broke
-# operator/voice/scripts/test_say_provider_status.py's importlib.reload()
+# corvin_operator/voice/scripts/test_say_provider_status.py's importlib.reload()
 # when both suites ran in the same pytest session (that file keeps a
 # module-level reference to the "say" singleton and expects it to stay
 # registered in sys.modules — a real cross-file test-isolation regression,

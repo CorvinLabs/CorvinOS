@@ -16,7 +16,7 @@ This suite asserts:
   - Schema-smoke: every bundle persona JSON parses + has valid LDD
     fields (preset, layers, enabled types)
 
-Run: python3 operator/cowork/test/test_persona_ldd_resolution.py
+Run: python3 corvin_operator/cowork/test/test_persona_ldd_resolution.py
 """
 from __future__ import annotations
 

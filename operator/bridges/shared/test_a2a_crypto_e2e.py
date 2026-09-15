@@ -31,7 +31,7 @@ Coverage gaps filled by this module
 17. Fail-silent shape: all rejection reasons produce identical wire shape.
 18. Full bidirectional E2E with attachment round-trip (real HTTP).
 
-Run: ``pytest operator/bridges/shared/test_a2a_crypto_e2e.py -v``
+Run: ``pytest corvin_operator/bridges/shared/test_a2a_crypto_e2e.py -v``
 """
 from __future__ import annotations
 

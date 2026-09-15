@@ -46,7 +46,7 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
     def _guard_prompt_head(_text):  # type: ignore[misc]
         raise RuntimeError(
             "shared claude-CLI prompt guard unavailable "
-            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "(corvin_operator/bridges/shared/prompt_guard.py) - refusing to build an "
             "unguarded `claude -p` payload"
         )
 

@@ -18,7 +18,7 @@ Cases:
   3. Idempotent — a second reset on an already-clean chat is a no-op.
   4. The legacy (pre-ADR-0007) session dir is cleared too.
 
-Run: python3 operator/bridges/shared/test_session_reset_adapter_path.py
+Run: python3 corvin_operator/bridges/shared/test_session_reset_adapter_path.py
 """
 from __future__ import annotations
 

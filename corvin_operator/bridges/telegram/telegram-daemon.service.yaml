@@ -1,0 +1,10 @@
+name: telegram-daemon
+type: daemon
+exec_start: "exec node operator/bridges/telegram/daemon.js"
+restart: on-failure
+restart_sec: 3
+backoff: exponential
+max_restarts: 10
+requires:
+  - voice-adapter
+journal: "<corvin_home>/run/log/telegram-daemon.log"

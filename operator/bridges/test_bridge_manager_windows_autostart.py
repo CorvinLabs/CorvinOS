@@ -18,7 +18,7 @@ paths. What IS verified for real: the exact argv built, the idempotent-skip
 cache, and (via source inspection) that start_channel_detached() actually
 calls this function -- not just that the function exists in isolation.
 
-Run with: python3 operator/bridges/test_bridge_manager_windows_autostart.py
+Run with: python3 corvin_operator/bridges/test_bridge_manager_windows_autostart.py
 """
 from __future__ import annotations
 

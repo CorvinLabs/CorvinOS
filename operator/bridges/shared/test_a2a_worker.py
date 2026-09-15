@@ -22,7 +22,7 @@ if str(_here) not in sys.path:
 # collection time was never actually required for the `import a2a_worker`
 # below — and doing it here left "license.compute_quota"/"license.limits"
 # permanently set to None in sys.modules for the rest of the process. In a
-# combined session (`pytest tests/ operator/... core/...`, as CI's coverage
+# combined session (`pytest tests/ corvin_operator/... core/...`, as CI's coverage
 # job runs), every later-collected file doing a real `import license.validator`
 # / `from license.limits import ...` then hit `ModuleNotFoundError: import of
 # license.limits halted; None in sys.modules` instead of importing the real

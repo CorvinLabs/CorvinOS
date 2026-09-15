@@ -3,11 +3,11 @@
 Migrates legacy in-repo bridge state to ``<corvin_home>/bridges/``:
 
   Source (legacy):
-    <repo>/operator/bridges/<channel>/{inbox,outbox,processed,
+    <repo>/corvin_operator/bridges/<channel>/{inbox,outbox,processed,
                                             attachments,auth}/
-    <repo>/operator/bridges/<channel>/settings.json
-    <repo>/operator/bridges/<channel>/voice.log
-    <repo>/operator/bridges/shared/{inbox,outbox,processed}/
+    <repo>/corvin_operator/bridges/<channel>/settings.json
+    <repo>/corvin_operator/bridges/<channel>/voice.log
+    <repo>/corvin_operator/bridges/shared/{inbox,outbox,processed}/
 
   Target (canonical):
     <corvin_home>/bridges/<channel>/{inbox,outbox,processed,attachments,
@@ -426,7 +426,7 @@ def _cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--force", action="store_true",
                     help="ignore the .bridges-migrated marker and re-run")
     ap.add_argument("--repo-root", type=Path, required=True,
-                    help="repository root (contains operator/bridges/)")
+                    help="repository root (contains corvin_operator/bridges/)")
     ap.add_argument("--corvin-home", type=Path, required=True,
                     help="canonical target dir (e.g. ~/.corvin)")
     args = ap.parse_args(argv)

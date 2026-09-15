@@ -12,7 +12,7 @@ that produces user-facing text. Two render strategies live downstream:
     without per-locale source edits.
 
   * **Hard-coded UI strings** (slash-command help, ack lines, error text)
-    — small i18n bundles under `operator/voice/i18n/<lang>.json`. Default
+    — small i18n bundles under `corvin_operator/voice/i18n/<lang>.json`. Default
     bundles are `en` and `de`; missing keys fall back through a base-
     locale chain to `en`. `t(key, lang)` is the look-up helper.
 

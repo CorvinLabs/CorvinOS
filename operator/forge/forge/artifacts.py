@@ -4,7 +4,7 @@ See ADR-0040 and ``docs/claude-ref/layer-33-artifacts.md`` for the full
 contract. This module owns the on-disk manifest, sha-prefix sharding,
 file locking, and the registration / retrieval / pin operations. MCP
 handlers live in ``forge.mcp_server``; the auto-register PostToolUse
-hook lives in ``operator/voice/hooks/path_gate.py``.
+hook lives in ``corvin_operator/voice/hooks/path_gate.py``.
 
 Privacy invariant (load-bearing): no description text and no artifact
 content ever enters audit-event details. Names, sha256, mime, size,

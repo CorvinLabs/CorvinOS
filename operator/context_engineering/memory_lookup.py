@@ -26,7 +26,7 @@ def _default_memory_dir() -> Path:
     though the real directory holds ~180 memories. Derive the path from THIS
     file's location so it is correct on any machine / checkout, not just one.
     """
-    repo_root = Path(__file__).resolve().parents[2]  # …/operator/context_engineering → repo
+    repo_root = Path(__file__).resolve().parents[2]  # …/corvin_operator/context_engineering → repo
     escaped = str(repo_root).replace("/", "-").replace(".", "-")
     return Path.home() / ".claude" / "projects" / escaped / "memory"
 

@@ -6,7 +6,7 @@ HTTP exchange (the hash path is HMAC-bound by the existing envelope machinery,
 already covered by the A2A crypto E2E).
 
 Runnable standalone:
-    python3 operator/bridges/shared/test_layer_integrity_a2a.py
+    python3 corvin_operator/bridges/shared/test_layer_integrity_a2a.py
 """
 from __future__ import annotations
 

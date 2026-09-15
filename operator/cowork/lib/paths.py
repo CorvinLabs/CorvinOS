@@ -58,7 +58,7 @@ def forge_dir() -> Path:
 
 
 # ── ADR-0007 Phase 1.2 — tenant-aware resolvers ───────────────────────────
-# See operator/forge/forge/paths.py for the canonical contract.
+# See corvin_operator/forge/forge/paths.py for the canonical contract.
 import re as _tenants_re
 
 _DEFAULT_TENANT_ID = "_default"
@@ -131,7 +131,7 @@ def tenant_cowork_dir(tenant_id: str | None = None) -> Path:
 # this resolver is a CHARSET rule (_BRIDGE_CHANNEL_RE below), not an enumeration
 # — a frozenset used to sit at this spot, was never read by anything, and had
 # gone stale (no "signal", no "teams"), so a reader took it for the canonical
-# list. The canonical list is operator/bridges/shared/channels.py.
+# list. The canonical list is corvin_operator/bridges/shared/channels.py.
 _BRIDGE_KINDS = frozenset({
     "inbox", "outbox", "processed", "attachments", "auth", "log",
     "settings", "root",
@@ -231,7 +231,7 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     repo = _repo_root()
     if repo is None:
         return None
-    # Try new operator/bridges layout first, fall back to legacy plugins/ location
+    # Try new corvin_operator/bridges layout first, fall back to legacy plugins/ location
     channel_dir = repo / "operator" / "bridges" / channel
     if not channel_dir.exists():
         channel_dir = repo / "operator" / "bridges" / channel

@@ -3,7 +3,7 @@
 Channels: telegram / discord / slack / whatsapp / email / signal / teams.
 Each channel's settings live at:
 
-    <repo>/operator/bridges/<channel>/settings.json
+    <repo>/corvin_operator/bridges/<channel>/settings.json
 
 The bridge daemons hot-reload these files on every inbox message and
 on mtime change (see CLAUDE.md § "Hot-reload convention for bridge
@@ -50,8 +50,8 @@ _REPO = _THIS_DIR.parents[3]
 
 
 def _resolve_bridges_dir() -> Path:
-    # Source-tree path; in a wheel install operator/* is vendored under
-    # corvin_console/_vendor/operator/* and _REPO points outside site-packages, so
+    # Source-tree path; in a wheel install corvin_operator/* is vendored under
+    # corvin_console/_vendor/corvin_operator/* and _REPO points outside site-packages, so
     # bridge.sh / package.json / per-channel dirs were unreachable on a wheel
     # install. Resolve to whichever layout has the files (path-audit #MED9).
     repo = _REPO / "operator" / "bridges"

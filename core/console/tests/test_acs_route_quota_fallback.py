@@ -4,7 +4,7 @@ POST /compute/acs/runs used to hard-402 when compute_units_per_day was spent.
 Now a genuine day-limit stop (detail.reason == "quota_exceeded") degrades to
 run_acs_quota_fallback (single direct Claude Code turn); the fail-closed
 enforcement_unavailable 402 stays a hard error. Companion of
-operator/bridges/shared/test_acs_quota_fallback_adapter.py (chokepoint) and
+corvin_operator/bridges/shared/test_acs_quota_fallback_adapter.py (chokepoint) and
 test_acs_quota_fallback.py (web-chat path).
 """
 from __future__ import annotations

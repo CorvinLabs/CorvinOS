@@ -1,0 +1,23 @@
+# Layer-19 service manifest for the voice bridge adapter.
+#
+# The adapter polls inbox/outbox files written by the per-bridge
+# daemons (whatsapp, telegram, discord, slack, email). 'requires
+# forge-mcp' because the adapter calls into forge for runtime tool
+# generation when forge-enabled personas are pinned.
+#
+# The chat-bridge daemons (telegram-daemon, discord-daemon, etc.)
+# get their own service manifests once Phase-2 of Layer 19 lands;
+# bundling them here would couple them to the adapter's lifecycle
+# in a way that bridge.sh today does NOT.
+name: voice-adapter
+type: daemon
+exec_start: "exec python3 operator/bridges/shared/adapter.py"
+restart: on-failure
+restart_sec: 5
+backoff: exponential
+max_restarts: 10
+requires:
+  - forge-mcp
+wants:
+  - skill-forge-mcp
+journal: "<corvin_home>/run/log/voice-adapter.log"

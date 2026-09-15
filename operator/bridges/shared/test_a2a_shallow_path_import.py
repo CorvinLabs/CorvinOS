@@ -26,7 +26,7 @@ and that the in-repo resolution is byte-identical to before the fix.
 the original 2026-08-01 fix, which only touched the sender/receiver.
 Fixed the same way and added to this suite's coverage below.
 
-Run: python3 operator/bridges/shared/test_a2a_shallow_path_import.py
+Run: python3 corvin_operator/bridges/shared/test_a2a_shallow_path_import.py
 """
 from __future__ import annotations
 

@@ -10,7 +10,7 @@ that answers "what is provider key X" and asserts they return the IDENTICAL
 value under the same environment/file fixtures. If any consumer drifts
 again, this test fails.
 
-The canonical rule (operator/bridges/shared/provider_keys.py): process env
+The canonical rule (corvin_operator/bridges/shared/provider_keys.py): process env
 (dedicated name, then general, then legacy alias) → service.env file in the
 same order. The second `.env` file is retired — nothing reads or writes it
 post-consolidation.
@@ -34,7 +34,7 @@ for _p in (
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import provider_keys as canonical  # type: ignore  # operator/bridges/shared/provider_keys.py
+import provider_keys as canonical  # type: ignore  # corvin_operator/bridges/shared/provider_keys.py
 
 
 def _clean_env(**overrides: str) -> dict:

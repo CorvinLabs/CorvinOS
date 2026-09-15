@@ -2,7 +2,7 @@
 
 Run with::
 
-    python3 operator/voice/scripts/test_audit_rotate.py
+    python3 corvin_operator/voice/scripts/test_audit_rotate.py
 """
 from __future__ import annotations
 

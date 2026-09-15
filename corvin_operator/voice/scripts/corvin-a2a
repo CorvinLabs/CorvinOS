@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# corvin-a2a — manage L38 (A2A) outbound endpoints and inbound origins.
+# Pattern mirrors corvin-erasure / voice-audit.
+#
+# Subcommands:
+#   pair <peer-name> <peer-url>       Generate paired keys for two instances:
+#                                     writes a remote_origin file locally and
+#                                     prints the corresponding remote_endpoint
+#                                     file the peer must install.
+#
+#   send <endpoint-id> "<instruction>" [--ttl N] [--schema PATH]
+#                                     [--attach FILE]... [--attach-out-dir DIR]
+#                                     Send a signed TaskEnvelope to a
+#                                     configured endpoint, verify response.
+#                                     --attach attaches a file to the request
+#                                     (repeatable; protocol v3 cap: 16 files,
+#                                     1 MiB total raw bytes).
+#                                     --attach-out-dir writes returned
+#                                     attachments (digest-verified) into DIR.
+#
+#   list-origins                      List inbound origins (operator/cowork/remote_origins/).
+#   list-endpoints                    List outbound endpoints (operator/cowork/remote_endpoints/).
+#   show-origin <id>                  Print a single origin config (no keys).
+#   show-endpoint <id>                Print a single endpoint config (no keys).
+#
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/corvin_a2a.py" "$@"

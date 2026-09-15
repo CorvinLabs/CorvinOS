@@ -94,7 +94,7 @@ a comparison or overview.
 - **Bridge**: a messaging channel adapter (Discord bot, WhatsApp cloud, \
 Telegram bot). Each bridge has a settings.json that hot-reloads.
 - **Persona**: an AI personality with its own system prompt, LDD config, \
-MCP servers, permission scope. Bundle personas: operator/cowork/personas/.
+MCP servers, permission scope. Bundle personas: corvin_operator/cowork/personas/.
 - **Workflow**: automated multi-step task that runs independently in the \
 background. Triggered manually or via API.
 - **Forge tool**: dynamically generated Python tool, sandboxed in bwrap, \

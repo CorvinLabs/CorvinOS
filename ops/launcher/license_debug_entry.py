@@ -1,6 +1,6 @@
 """Entry-point shim for corvin-license-debug (ADR-0154 OTA diagnostics).
 
-Shim needed because operator/ shadows the Python stdlib 'operator' module name;
+Shim needed because corvin_operator/ shadows the Python stdlib 'operator' module name;
 we put the license + shared dirs on sys.path before importing the CLI module.
 """
 import os
@@ -15,13 +15,13 @@ def main() -> None:
         pass
 
     base = os.path.dirname(os.path.abspath(__file__))
-    # operator/ itself MUST be on the path: validator.py uses package-relative
+    # corvin_operator/ itself MUST be on the path: validator.py uses package-relative
     # imports (`from .limits import ...`), so it resolves ONLY as the package
-    # `license.validator`, which needs operator/ (the parent of license/) on the
+    # `license.validator`, which needs corvin_operator/ (the parent of license/) on the
     # path. Without it _load_license_quietly() silently fails to import the
     # validator and the CLI reports tier=free on a paid install — masking the
     # very tier this diagnostic exists to surface (review MEDIUM). Mirrors
-    # shard_verifier._shared_on_path (here.parents[1] == operator/).
+    # shard_verifier._shared_on_path (here.parents[1] == corvin_operator/).
     _operator = os.path.normpath(os.path.join(base, "..", "..", "operator"))
     _license = os.path.join(_operator, "license")
     _shared = os.path.join(_operator, "bridges", "shared")

@@ -15,7 +15,7 @@ Verifies that ``_inject_capability_awareness`` is reached from
   * "planned" capabilities are always disclosed, even for a persona with
     every wired flag off
 
-Run: python3 operator/cowork/test/test_resolver_capability_awareness.py
+Run: python3 corvin_operator/cowork/test/test_resolver_capability_awareness.py
 """
 from __future__ import annotations
 

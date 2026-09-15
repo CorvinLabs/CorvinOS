@@ -24,7 +24,7 @@ non-UTF-8-locale Windows box remains the only environment that reproduces
 it directly. These tests instead pin the actual code paths' correctness
 against real multi-byte UTF-8 content, which is what the fix guarantees.
 
-Run with: python3 operator/bridges/shared/test_adapter_encoding.py
+Run with: python3 corvin_operator/bridges/shared/test_adapter_encoding.py
 """
 from __future__ import annotations
 

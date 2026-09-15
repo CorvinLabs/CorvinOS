@@ -56,7 +56,7 @@ _CLASS_TO_DIAGNOSIS: dict[str, dict] = {
         ),
         "repro_steps": [
             "Check acs.run.done events for recurring error messages.",
-            "Run `bash operator/bridges/run-all-tests.sh` to verify base ACS health.",
+            "Run `bash corvin_operator/bridges/run-all-tests.sh` to verify base ACS health.",
             "Check L34 data classification thresholds for the worker engine.",
         ],
         "adr_refs": ["ADR-0107", "ADR-0173"],
@@ -76,7 +76,7 @@ _CLASS_TO_DIAGNOSIS: dict[str, dict] = {
         "adr_refs": ["ADR-0174"],
     },
     "ws_instability": {
-        "layers": ["WebSocket", "adapter.py", "operator/bridges/"],
+        "layers": ["WebSocket", "adapter.py", "corvin_operator/bridges/"],
         "hypothesis": (
             "WebSocket connections are closing frequently. Likely causes: "
             "(1) uvicorn idle timeout (default 300 s), (2) proxy/load-balancer "

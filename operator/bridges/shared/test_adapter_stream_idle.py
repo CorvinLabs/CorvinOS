@@ -385,7 +385,7 @@ def test_settings_json_stream_idle_timeout_overrides_env() -> None:
     # 300 s default would let it succeed; with settings.json=2 s the watchdog
     # fires at 2 s — a clear falsifiable signal.
     # _test_* prefix keeps the temp channel dir out of version control
-    # (operator/bridges/.gitignore covers _test_*/).
+    # (corvin_operator/bridges/.gitignore covers _test_*/).
     bridges_dir = ROOT.parent
     ch_dir = bridges_dir / "_test_idle_settings"
     tmp = Path(tempfile.mkdtemp(prefix="adapter-settings-idle-"))

@@ -457,7 +457,7 @@ class TestE2ERoundTrip(unittest.TestCase):
         return (
             "I refactored the retry logic. The new strategy uses exponential backoff "
             "with a base of 2 seconds and a maximum of 32 seconds. "
-            "The implementation lives in operator/utils/retry.py. "
+            "The implementation lives in corvin_operator/utils/retry.py. "
             "Unit tests are in test_retry.py."
         )
 
@@ -469,7 +469,7 @@ class TestE2ERoundTrip(unittest.TestCase):
                 "type": "project",
                 "body": (
                     "Retry logic uses exponential backoff: base 2s, max 32s. "
-                    "Implementation: operator/utils/retry.py. Tests: test_retry.py."
+                    "Implementation: corvin_operator/utils/retry.py. Tests: test_retry.py."
                 ),
             },
         ]

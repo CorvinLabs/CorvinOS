@@ -27,14 +27,14 @@ from pathlib import Path
 
 # Wave 1 target files (8 with actual calls)
 WAVE_1_FILES = [
-    "operator/bridges/shared/adapter.py",
+    "corvin_operator/bridges/shared/adapter.py",
     "core/console/corvin_console/routes/settings.py",
     "tests/test_tde_measurement_k3_decision_collection.py",
-    "operator/bridges/shared/remote_trigger_sender.py",
-    "operator/context_engineering/pipeline.py",
-    "operator/bridges/shared/bg_monitor.py",
-    "operator/bridges/shared/acs_runtime.py",
-    "operator/bridges/shared/a2a_friendship.py",
+    "corvin_operator/bridges/shared/remote_trigger_sender.py",
+    "corvin_operator/context_engineering/pipeline.py",
+    "corvin_operator/bridges/shared/bg_monitor.py",
+    "corvin_operator/bridges/shared/acs_runtime.py",
+    "corvin_operator/bridges/shared/a2a_friendship.py",
 ]
 
 def refactor_is_enabled(content):

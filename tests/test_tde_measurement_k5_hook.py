@@ -167,7 +167,7 @@ def test_spawn_without_event_loop_does_not_raise(monkeypatch):
 
 
 def test_missing_orchestration_tree_is_logged_not_swallowed(monkeypatch):
-    """On a wheel install without operator/orchestration the import fails; that
+    """On a wheel install without corvin_operator/orchestration the import fails; that
     must produce a log line, not silence."""
     logged: list[tuple] = []
     monkeypatch.setattr(cr._log, "warning",

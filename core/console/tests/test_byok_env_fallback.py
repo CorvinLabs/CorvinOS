@@ -2,7 +2,7 @@
 codebase's own docs tell users to configure it (an env var, or a line in
 ~/.config/corvin-voice/service.env) — not only the opt-in BYOK vault that
 nothing writes to by default. Since WA-22, presence is checked via the
-single canonical resolver (operator/bridges/shared/provider_keys.py), the
+single canonical resolver (corvin_operator/bridges/shared/provider_keys.py), the
 same one say.py / stt/openai_whisper.py / BYOK's write path all use.
 """
 from __future__ import annotations

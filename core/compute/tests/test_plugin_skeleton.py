@@ -150,7 +150,7 @@ class CostContractTests(unittest.TestCase):
 class RunAllTestsSkipGateTests(unittest.TestCase):
     """Phase 13.1 acceptance gate #4 — runner skip integration.
 
-    Tests that ``operator/bridges/run-all-tests.sh`` mentions
+    Tests that ``corvin_operator/bridges/run-all-tests.sh`` mentions
     corvin-compute and provides a venv-absent skip path. We don't
     execute the full runner (slow, depends on every other plugin) —
     we just assert the grep finds the wiring.

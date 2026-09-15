@@ -9,7 +9,7 @@ The compliance-critical part of P-B, testable before a producer exists (P-D):
   * MAX_BINDINGS cap is enforced.
   * build_context exposes the bundle; build_brief stays (brief, trace).
 
-Run: python3 operator/context_engineering/tests/test_binding_adr0281.py
+Run: python3 corvin_operator/context_engineering/tests/test_binding_adr0281.py
 """
 from __future__ import annotations
 

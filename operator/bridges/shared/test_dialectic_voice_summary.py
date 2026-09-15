@@ -33,7 +33,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-# summarize.py lives at operator/voice/scripts/summarize.py — relative to
+# summarize.py lives at corvin_operator/voice/scripts/summarize.py — relative to
 # this test file: ../../voice/scripts.
 SCRIPTS = (ROOT.parent.parent / "voice" / "scripts").resolve()
 sys.path.insert(0, str(SCRIPTS))

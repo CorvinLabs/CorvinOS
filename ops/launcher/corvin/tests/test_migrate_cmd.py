@@ -1,7 +1,7 @@
 """Unit tests for Phase D migration CLI commands — ADR-0007.
 
 Tests for helper functions and CLI dispatch. Full migration E2E tests
-are in operator/forge/tests/test_tenant_migrate.py.
+are in corvin_operator/forge/tests/test_tenant_migrate.py.
 
 Test categories:
   1. Helper functions: checksum, file counting, path validation

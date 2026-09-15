@@ -41,11 +41,11 @@ ROOT = Path(__file__).resolve().parent
 def _shared_outbox() -> Path:
     """Resolve the outbox directory the messenger daemons actually poll.
 
-    THE bug this fixes: the daemons poll ``operator/bridges/shared/outbox``
+    THE bug this fixes: the daemons poll ``corvin_operator/bridges/shared/outbox``
     (``discord/daemon.js`` etc.: ``SHARED = resolve(__dirname,'..','shared')``).
-    This hook lives in ``operator/voice/hooks/``, so the polled outbox is TWO
+    This hook lives in ``corvin_operator/voice/hooks/``, so the polled outbox is TWO
     levels up + ``bridges/shared/outbox`` — ``ROOT.parent.parent``. The previous
-    ``ROOT.parent`` pointed at ``operator/voice/bridges/shared/outbox``, a real
+    ``ROOT.parent`` pointed at ``corvin_operator/voice/bridges/shared/outbox``, a real
     but orphan directory no daemon reads, so every relayed notification was
     silently dropped (fire-and-forget with no acknowledgement).
 
@@ -55,7 +55,7 @@ def _shared_outbox() -> Path:
     env = os.environ.get("ADAPTER_OUTBOX")
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env)))
-    # operator/voice/hooks → operator/voice → operator → operator/bridges/shared/outbox
+    # corvin_operator/voice/hooks → corvin_operator/voice → operator → corvin_operator/bridges/shared/outbox
     return ROOT.parent.parent / "bridges" / "shared" / "outbox"
 
 

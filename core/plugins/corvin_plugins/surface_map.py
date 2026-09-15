@@ -95,7 +95,7 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         ctx_handle="router_registry",
         provider_module="router_backend",
         template="router_backend_plugin.py",
-        consumed_by="operator/bridges/shared/adapter.py",
+        consumed_by="corvin_operator/bridges/shared/adapter.py",
         dead_reason=None,
         invariant="route() must NOT raise — return None on no-match or error.",
     ),
@@ -120,7 +120,7 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         ctx_handle="summary_registry",
         provider_module="summary_provider",
         template="summary_provider_plugin.py",
-        consumed_by="operator/bridges/shared/adapter.py",
+        consumed_by="corvin_operator/bridges/shared/adapter.py",
         dead_reason=None,
         invariant="Must degrade to the core summariser rather than raising.",
     ),
@@ -129,7 +129,7 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         ctx_handle="notification_registry",
         provider_module="notification_backend",
         template="notification_backend_plugin.py",
-        consumed_by="operator/bridges/shared/adapter.py",
+        consumed_by="corvin_operator/bridges/shared/adapter.py",
         dead_reason=None,
         invariant=(
             "notify() must not block >100 ms and must carry NO message content "
@@ -141,7 +141,7 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         ctx_handle="recall_registry",
         provider_module="recall_backend",
         template="recall_backend_plugin.py",
-        consumed_by="operator/bridges/shared/adapter.py",
+        consumed_by="corvin_operator/bridges/shared/adapter.py",
         dead_reason=None,
         invariant="Must NOT store un-redacted text.",
     ),
@@ -153,9 +153,9 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         # TWO consuming surfaces (ADR-0599). The map carries one primary
         # `consumed_by` per row; the CEL memory stage is named here because it is
         # the reference seam, and the second surface — the TDE step assembler,
-        # operator/orchestration/tde/worker_ipc.py::_build_prompt — is named in
+        # corvin_operator/orchestration/tde/worker_ipc.py::_build_prompt — is named in
         # the invariant below so both call sites are discoverable from this row.
-        consumed_by="operator/context_engineering/stages/memory.py",
+        consumed_by="corvin_operator/context_engineering/stages/memory.py",
         dead_reason=None,
         invariant=(
             "select() only NARROWS/REORDERS candidates, never adds, and MUST NOT "
@@ -178,7 +178,7 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         # The guard test admitted it because that file contains the string
         # "audit_backend"; a reader following the map landed in a teardown path
         # and found nothing that consumes anything (verified 2026-07-27).
-        consumed_by="operator/bridges/shared/audit.py",
+        consumed_by="corvin_operator/bridges/shared/audit.py",
         dead_reason=None,
         invariant=(
             "ADDITIVE ONLY (ADR-0233): receives a COPY after the core write has "
@@ -266,7 +266,7 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         dead_reason=(
             "The target has no registration API. Engines come from a "
             "hard-coded _ENGINE_BUILDERS dict in "
-            "operator/bridges/shared/engine_registry.py with three entries and "
+            "corvin_operator/bridges/shared/engine_registry.py with three entries and "
             "no register(), so a plugin cannot enter itself even with the "
             "handle populated — passing engine_factory would change nothing. "
             "The compute_engine row was fixed by loading plugins in the "

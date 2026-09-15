@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 import pytest
 
-# Ensure shared/ and operator/ are importable
+# Ensure shared/ and corvin_operator/ are importable
 _SHARED = Path(__file__).resolve().parent
 _OPERATOR = _SHARED.parent
 for _p in (str(_SHARED), str(_OPERATOR)):

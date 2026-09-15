@@ -19,7 +19,7 @@ Asserts:
   * Factory carries diagnostics (corvin_default_engine,
     corvin_context) for /whoami introspection
 
-Run: python3 operator/bridges/shared/test_engine_registry.py
+Run: python3 corvin_operator/bridges/shared/test_engine_registry.py
 """
 from __future__ import annotations
 

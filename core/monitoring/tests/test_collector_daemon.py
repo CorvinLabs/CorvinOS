@@ -16,7 +16,7 @@ _PARENT_DIR = _THIS_DIR.parent
 if str(_PARENT_DIR) not in sys.path:
     sys.path.insert(0, str(_PARENT_DIR))
 
-# Add operator/forge to path
+# Add corvin_operator/forge to path
 _REPO = Path(__file__).resolve().parents[3]
 if str(_REPO / "operator" / "forge") not in sys.path:
     sys.path.insert(0, str(_REPO / "operator" / "forge"))

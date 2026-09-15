@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from core.skill_management.github_exporter import GitHubExporter
 from core.skill_management.github_importer import GitHubImporter, ConflictResolution
-# `operator/` is not importable as a package (stdlib `operator` shadows it),
+# `corvin_operator/` is not importable as a package (stdlib `operator` shadows it),
 # so this module is loaded by file path -- see load_operator_module in conftest.py.
 from corvin_test_support import load_operator_module
 

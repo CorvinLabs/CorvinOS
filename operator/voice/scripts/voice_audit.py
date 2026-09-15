@@ -366,7 +366,7 @@ def cmd_verify(args) -> int:
         # FAIL-CLOSED (R1 finding): an integrity verifier must not treat its own
         # error as "pass". A crash in the manifest check (e.g. crafted manifest
         # content) previously left exit 0; now it fails the verify so the
-        # operator/timer surfaces it instead of a false all-clear.
+        # corvin_operator/timer surfaces it instead of a false all-clear.
         print(f"segment-manifest check ERRORED — failing closed: {e}", file=sys.stderr)
         ok = False
         problems = list(problems) + [{"issue": "manifest_check_errored",
@@ -531,8 +531,8 @@ def _verify_segment_manifest(audit_dir: Path, live_first_prev_hash: str):
         # ADR-0215 F5: the second-level fallback here used to be a dotted
         # `from operator.bridges.shared.audit_sealer import ...`, which can
         # NEVER resolve (stdlib `operator` always shadows the repo's
-        # operator/ directory) — dead code, since module load time this
-        # file already inserts `operator/bridges/shared` onto sys.path
+        # corvin_operator/ directory) — dead code, since module load time this
+        # file already inserts `corvin_operator/bridges/shared` onto sys.path
         # (line 25), so the bare import above should already succeed in
         # every real deployment. No working second-level fallback exists;
         # degrade gracefully instead of pretending one does.
@@ -854,7 +854,7 @@ def _notify_chain_break(path: Path, problems: list,
     Reads relay config from ``--relay-config`` or
     ``$VOICE_RELAY_CONFIG`` / ``~/.config/corvin-voice/relay.json``.
     Outbox dir defaults to
-    ``<repo>/operator/bridges/shared/outbox/`` but can be overridden
+    ``<repo>/corvin_operator/bridges/shared/outbox/`` but can be overridden
     via ``--outbox-dir`` (used in tests).
 
     Both single-target legacy schema and a `targets` list are supported:
@@ -892,7 +892,7 @@ def _notify_chain_break(path: Path, problems: list,
                        / "shared" / "outbox")
     outbox_dir.mkdir(parents=True, exist_ok=True)
 
-    # Plain-language explainer for each issue code so the notified operator/user
+    # Plain-language explainer for each issue code so the notified corvin_operator/user
     # understands WHICH check broke and WHY (metadata-only — codes, never
     # content). Single source of truth lives in clag.explain_reason_code.
     try:
@@ -1086,7 +1086,7 @@ def build_parser() -> argparse.ArgumentParser:
              "~/.config/corvin-voice/relay.json)")
     pv.add_argument("--outbox-dir", default=None,
         help="bridge outbox dir for the warning envelope (default: "
-             "<repo>/operator/bridges/shared/outbox/)")
+             "<repo>/corvin_operator/bridges/shared/outbox/)")
     pv.add_argument("--include-sealed", action="store_true",
         help="ADR-0044 / Layer 37: walk every rotated + sealed audit "
              "segment in the audit dir, unseal each, verify its internal "

@@ -10,7 +10,7 @@ leak a forbidden host).
 
 Note: full production activation also needs the live spawn path to construct the
 ratchet + registry and a descriptor issued into tenant.corvin.yaml
-(spec.elr.capabilities). Those are operator/issuer steps; here we prove the
+(spec.elr.capabilities). Those are corvin_operator/issuer steps; here we prove the
 consumer seam itself is functional.
 """
 from __future__ import annotations

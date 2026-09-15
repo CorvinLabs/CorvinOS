@@ -31,7 +31,7 @@ from typing import Any
 # bypass (BOTH CORVIN_AGENTS_SKIP_LIVE=1 AND CORVIN_INTEGRATION_TEST=1) from
 # os.environ. core/delegate/tests/conftest.py provides this as a pytest autouse
 # fixture, but pytest conftest fixtures do NOT run under the raw-unittest runner
-# (``python3 test_delegation.py``) used by operator/bridges/run-all-tests.sh.
+# (``python3 test_delegation.py``) used by corvin_operator/bridges/run-all-tests.sh.
 # Set the bypass at module import so the suite passes under BOTH runners. Tests
 # that deliberately verify the gate FIRES (test_license_engines_gate.py) pop
 # these in their own setUp/fixture and are unaffected.

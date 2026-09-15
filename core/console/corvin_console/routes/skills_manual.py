@@ -37,7 +37,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
 from pydantic import BaseModel, Field
 
-from .. import _bootstrap  # noqa: F401 — puts operator/skill-forge + forge on sys.path
+from .. import _bootstrap  # noqa: F401 — puts corvin_operator/skill-forge + forge on sys.path
 from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session

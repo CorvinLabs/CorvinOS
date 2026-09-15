@@ -11,7 +11,7 @@ Tests prove:
   * Auth failure audit event (A2A.google_auth_failed)
   * World-readable origin config is skipped (fail-closed)
 
-Run: python3 operator/bridges/shared/test_a2a_google_adapter.py
+Run: python3 corvin_operator/bridges/shared/test_a2a_google_adapter.py
 """
 from __future__ import annotations
 

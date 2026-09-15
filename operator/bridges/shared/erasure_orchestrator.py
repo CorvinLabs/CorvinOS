@@ -273,7 +273,7 @@ class ErasureResult:
                     "status": r.status.value,
                     "count": r.count,
                     # Trail file (0600) keeps BOTH the free-form reason
-                    # (paths/exceptions for the operator/DPO) AND the
+                    # (paths/exceptions for the corvin_operator/DPO) AND the
                     # audit-bound controlled code, so the operator can
                     # correlate a chain entry to its full descriptor.
                     "reason": r.reason,
@@ -338,7 +338,7 @@ _IDENTIFIER_VALUE_KEYS: frozenset[str] = frozenset({"error_type"})
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,127}")
 
 # Caller-supplied identity / hint keys that have ALWAYS been free-form by
-# design (the operator/DPO chooses them). They are exempt from the
+# design (the corvin_operator/DPO chooses them). They are exempt from the
 # path/exception heuristic to avoid false-positives (e.g. a requester
 # "team/ops" or scope "session-only"). They are still length-bounded and
 # subject_id additionally passes validate_subject_id() at request build.

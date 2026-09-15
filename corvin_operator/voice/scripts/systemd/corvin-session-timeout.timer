@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Corvin-OS session-timeout sweep at 03:30 local
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+AccuracySec=10min
+Persistent=true
+Unit=corvin-session-timeout.service
+
+[Install]
+WantedBy=timers.target

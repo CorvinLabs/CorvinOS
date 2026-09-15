@@ -218,10 +218,10 @@ def test_submit_run_talks_to_worker_with_correct_field_names(monkeypatch, tmp_pa
 def test_compute_license_status_reflects_member_tier_without_enterprise_key(monkeypatch):
     """/compute/license must not hardcode tier="free" merely because no Enterprise
     (on-prem) license.jwt is installed — that is the normal case for a Paddle/
-    consumer subscriber, who is licensed through the separate operator/license
+    consumer subscriber, who is licensed through the separate corvin_operator/license
     system (license.key). Previously this endpoint always reported "Trial · free"
     for such a customer even though compute_units_per_day was already correctly
-    unlimited from that same operator/license system on the line above."""
+    unlimited from that same corvin_operator/license system on the line above."""
     import corvin_license.verifier as _clv
     from corvin_console.routes import compute as C
 
@@ -248,7 +248,7 @@ def test_license_status_reflects_member_tier_without_enterprise_key(monkeypatch,
     the identical conflation bug as /compute/license — falling back to a
     hardcoded tier="free" whenever no Enterprise on-prem license.jwt exists,
     even though /license/info (the dedicated License page) correctly showed
-    "member" for the exact same operator/license license.key. Two pages
+    "member" for the exact same corvin_operator/license license.key. Two pages
     disagreeing about the same customer's tier is precisely what read as
     "the license gets lost sometimes"."""
     from corvin_console.routes import license as L
@@ -406,7 +406,7 @@ def test_enforce_chat_turns_leaks_across_tenants_cross_tenant_dos(monkeypatch, t
 def test_acs_chokepoint_charges_daily_quota():
     """ADR-0149 WF-CLI-ACS-01: run_acs_workflow charges the daily counter at the
     single chokepoint, so the CLI and scheduler paths cannot bypass it."""
-    shared = Path("/home/shumway/projects/CorvinOS/operator/bridges/shared")
+    shared = Path("/home/shumway/projects/CorvinOS/corvin_operator/bridges/shared")
     src = (shared / "acs_engine_adapter.py").read_text(encoding="utf-8")
     assert "_enforce_acs_compute_quota" in src and "increment_and_check" in src, (
         "run_acs_workflow must charge compute_units_per_day at the ACS chokepoint"

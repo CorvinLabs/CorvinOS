@@ -26,8 +26,8 @@ Protected paths (match if the absolute path is under one of these roots):
   <corvin_home>/**/instance_cert.jwt     ADR-0145 IBC (Instance Binding Certificate)
   <corvin_home>/**/instance_pubkey.pem   ADR-0145 Ed25519 public key (companion)
   <corvin_home>/**/packages/**       ADR-0032 installed AWPKG packages
-  <repo>/operator/skill-forge/skills/dyn/**   engine-facing slot mirror
-  <repo>/operator/forge/forge/policy.json     bundled default policy
+  <repo>/corvin_operator/skill-forge/skills/dyn/**   engine-facing slot mirror
+  <repo>/corvin_operator/forge/forge/policy.json     bundled default policy
 
 Both directory shapes resolve to the same protected set.
 
@@ -302,8 +302,8 @@ def is_protected_path(path: str | Path) -> bool:
         if abs_str == bundled_default:
             return True
         # ADR-0143 Layer 44 — house-rules acceptable-use policy + its gate module.
-        # An LLM-side write to operator/policy/house_rules.yaml (weaken the rules)
-        # or to operator/bridges/shared/house_rules.py (which holds the
+        # An LLM-side write to corvin_operator/policy/house_rules.yaml (weaken the rules)
+        # or to corvin_operator/bridges/shared/house_rules.py (which holds the
         # EXPECTED_POLICY_SHA256 integrity anchor + the gate logic) would defeat
         # the L44 acceptable-use guarantee without touching the audit chain.
         # Operator-side edits happen via git, not an in-process write tool.
@@ -320,7 +320,7 @@ def is_protected_path(path: str | Path) -> bool:
         if abs_str == license_src_str or abs_str.startswith(license_src_str + sep):
             return True
         # Also protect the CorvinOS-side validator and limits modules under
-        # operator/license/ — patching these has the same effect.
+        # corvin_operator/license/ — patching these has the same effect.
         # ADR-0144 SEAL-SHADOW-01: the original ``.py``-only restriction left the
         # seal root-of-trust unguarded. seal_loader.py PREFERS a native extension
         # (_corvin_seal.so/.dylib/.pyd) and exec_module's it with NO integrity
@@ -341,7 +341,7 @@ def is_protected_path(path: str | Path) -> bool:
         # poison the SBOM (paper-trail forgery). Operator-side updates
         # via `pip-compile --upgrade --generate-hashes`, npm tooling,
         # or `python -m corvin_gateway.cli sbom build`.
-        # Supply-chain manifests live under core/ and operator/ (was plugins/ before ADR-0035)
+        # Supply-chain manifests live under core/ and corvin_operator/ (was plugins/ before ADR-0035)
         _in_plugin_tree = any(
             abs_str.startswith(str(repo / _d) + sep)
             for _d in ("core", "operator", "plugins")
@@ -1300,7 +1300,7 @@ def _ota_structural_deny(tool: str) -> "tuple[bool, str]":
         return False, ""  # free tier / no license — nothing to validate
     try:
         import sys as _sys
-        _op = str(Path(__file__).resolve().parents[2])  # operator/ for license.*
+        _op = str(Path(__file__).resolve().parents[2])  # corvin_operator/ for license.*
         if _op not in _sys.path:
             _sys.path.insert(0, _op)
         from license.validator import load_license_from_env, is_loaded  # type: ignore
@@ -1560,7 +1560,7 @@ def _emit_dialectic(payload: dict, reason: str) -> None:
     try:
         # Make dialectic.py importable.
         here = Path(__file__).resolve().parent
-        # voice/hooks → voice → operator → operator/bridges/shared
+        # voice/hooks → voice → operator → corvin_operator/bridges/shared
         bridges_shared = here.parent.parent / "bridges" / "shared"
         if str(bridges_shared) not in sys.path:
             sys.path.insert(0, str(bridges_shared))

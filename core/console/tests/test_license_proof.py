@@ -18,7 +18,7 @@ import pytest
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 _REPO = Path(__file__).resolve().parents[3]
-# Add operator/ dir so that `license` is importable as a package
+# Add corvin_operator/ dir so that `license` is importable as a package
 _OPERATOR_PATH = str(_REPO / "operator")
 if _OPERATOR_PATH not in sys.path:
     sys.path.insert(0, _OPERATOR_PATH)

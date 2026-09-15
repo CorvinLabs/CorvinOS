@@ -12,7 +12,7 @@ Cases:
   * flag OFF → build_brief NOT called; system prompt carries no brief.
   * CEL raises → turn still composes (fail-safe), no brief, no crash.
 
-Run: python3 operator/bridges/shared/test_adapter_vibe_cel.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_vibe_cel.py
 """
 from __future__ import annotations
 

@@ -505,8 +505,8 @@ def _seed_profile_display_language(lang: str) -> None:
     if not lang:
         return
     try:
-        # `operator/` has no `__init__.py` (the name collides with the stdlib
-        # `operator` module), so put `operator/bridges/shared/` on sys.path and
+        # `corvin_operator/` has no `__init__.py` (the name collides with the stdlib
+        # `operator` module), so put `corvin_operator/bridges/shared/` on sys.path and
         # import bare top-level modules — the established pattern (lang_cli.py,
         # adapter.py). Needed for both the profile writer AND i18n below.
         shared_dir = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"

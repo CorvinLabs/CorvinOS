@@ -16,7 +16,7 @@ handler module — only the final network send is faked, exactly as the bridge's
 own daemon test does. If this is green, a completed background task provably
 produces a delivered messenger notification.
 
-Run: python3 operator/bridges/shared/test_completion_e2e.py
+Run: python3 corvin_operator/bridges/shared/test_completion_e2e.py
 """
 from __future__ import annotations
 

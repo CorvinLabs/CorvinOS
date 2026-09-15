@@ -1,10 +1,10 @@
 """RAG integration test path setup.
 
-The RAG implementation modules live in ``operator/bridges/shared/`` and import
+The RAG implementation modules live in ``corvin_operator/bridges/shared/`` and import
 each other package-relatively (``from .rag_query_engine import ...``), so they
 must be imported via the ``shared`` package — NOT as ``operator.bridges.shared.X``
 (``operator`` is a stdlib module, so that dotted path can never resolve) and NOT
-flat (the relative imports would break). This conftest puts ``operator/bridges``
+flat (the relative imports would break). This conftest puts ``corvin_operator/bridges``
 on ``sys.path`` so ``from shared.rag_X import ...`` works, mirroring the console
 runtime (corvin_console._operator_bootstrap).
 """

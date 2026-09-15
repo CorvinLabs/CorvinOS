@@ -41,7 +41,7 @@ def _register_panel_audit_allowlists() -> None:
     if _panel_allowlists_registered:
         return
     try:
-        # Resolving the core writer first puts operator/bridges/shared (and
+        # Resolving the core writer first puts corvin_operator/bridges/shared (and
         # with it the forge package) on sys.path exactly like every other
         # core-chain emitter does; only then is ``forge`` importable here.
         from core.learning.event_persistence import _resolve_core_audit  # noqa: PLC0415

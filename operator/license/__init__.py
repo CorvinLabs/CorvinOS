@@ -12,7 +12,7 @@ Public surface (ADR-0111 — Sealed Offline Bundle):
     init_capability(sob)    → initialise module-level Capability singleton
     get_capability()        → return module-level Capability singleton
 
-Import path: from operator/bridges/shared/ do
+Import path: from corvin_operator/bridges/shared/ do
     import sys, pathlib
     sys.path.insert(0, str(pathlib.Path(__file__).parents[1]))
     from license.validator import get_limit, assert_limit, load_license_from_env

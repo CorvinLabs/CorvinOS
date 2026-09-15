@@ -39,7 +39,7 @@ _forge_paths = _bootstrap.forge_paths
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
 
-# ADR-0092: operator/license/ module (new, primary)
+# ADR-0092: corvin_operator/license/ module (new, primary)
 _OPERATOR = _REPO / "operator"
 if str(_OPERATOR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR))
@@ -156,7 +156,7 @@ def _compute_license_status() -> LicenseStatus:
         if not lic_file.exists():
             # No Enterprise (on-prem) license.jwt installed — the normal case
             # for a Paddle/consumer subscriber, licensed instead through the
-            # separate operator/license system (license.key, checked above at
+            # separate corvin_operator/license system (license.key, checked above at
             # import time). Falling back to a hardcoded "free" here shadowed
             # an active Member subscription on the Dashboard (GET
             # /license/status) even though /license/info correctly showed
@@ -628,7 +628,7 @@ class LicenseInfo(BaseModel):
 async def get_license_info(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> LicenseInfo:
-    """ADR-0092 — full licence state from operator/license/.
+    """ADR-0092 — full licence state from corvin_operator/license/.
 
     Returns the active SesT claims (limits, features, custom) plus the
     FREE_TIER defaults so the UI can show what each limit means without
@@ -730,7 +730,7 @@ async def apply_license_key(
 
     token = req.key.strip()
 
-    # Validate signature via operator/license/validator
+    # Validate signature via corvin_operator/license/validator
     if not _ADR0092_OK:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

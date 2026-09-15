@@ -46,7 +46,7 @@ _MAX_REPLY_BYTES = 256 * 1024
 
 
 def _forge_sandbox():
-    """Import forge's sandbox layer (operator/forge is not always on sys.path).
+    """Import forge's sandbox layer (corvin_operator/forge is not always on sys.path).
 
     Returns the module or None — None means "no isolation available", which the
     caller must treat as REFUSE, never as "run it anyway"."""

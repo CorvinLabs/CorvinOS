@@ -3,7 +3,7 @@
 The classic context-drift bug is a reader≠writer split: one module writes state
 under ``~/.corvin`` while another reads it under ``<repo>/.corvin`` (or vice
 versa), so persisted state silently vanishes. ``forge.paths.corvin_home()`` is
-the single source of truth; ``operator/bridges/shared/paths.py`` is a byte-copy
+the single source of truth; ``corvin_operator/bridges/shared/paths.py`` is a byte-copy
 that MUST resolve identically.
 
 These tests pin:

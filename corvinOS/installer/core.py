@@ -136,14 +136,14 @@ def _is_source_checkout(root: Path) -> bool:
     """True iff ``root`` is a CorvinOS git/source checkout, not a wheel install.
 
     A checkout is recognised by ALL of: ``pyproject.toml`` at ``root`` whose
-    ``[project].name`` is ``corvinos``, plus the ``core/`` and ``operator/``
+    ``[project].name`` is ``corvinos``, plus the ``core/`` and ``corvin_operator/``
     source directories next to it. A single marker is not enough — until
     2026-09-03 the wheel's ``sources`` mapping lifted core/gateway/pyproject.toml
     to the site-packages ROOT, and the old ``pyproject.toml``-exists check then
     took every pip install for a source tree: it ran npm frontend builds
     against site-packages, and `corvin-uninstall` suggested ``rm -rf
     <site-packages>`` (adversarial installation review, F2). A wheel can never
-    satisfy all three markers: it ships no ``operator/`` directory (operator
+    satisfy all three markers: it ships no ``corvin_operator/`` directory (operator
     code is vendored under corvin_core/_vendor/) and no root pyproject.
     """
     pyproject = root / "pyproject.toml"
@@ -189,8 +189,8 @@ class CorvinInstaller:
     """Full installation orchestrator — driven by corvin-install / corvin-uninstall."""
 
     # All seven shipped channels. Kept in lockstep with
-    # operator/bridges/shared/channels.py::BRIDGE_CHANNELS by
-    # operator/bridges/shared/test_channel_list_ssot.py — this list held five
+    # corvin_operator/bridges/shared/channels.py::BRIDGE_CHANNELS by
+    # corvin_operator/bridges/shared/test_channel_list_ssot.py — this list held five
     # until 2026-07-28, so an installer run could never select Signal or Teams
     # even though both ship complete daemons and are startable from the Console.
     BRIDGES = ["discord", "whatsapp", "telegram", "slack", "email",
@@ -486,7 +486,7 @@ class CorvinInstaller:
         sep = ";" if sys.platform == "win32" else ":"
         pythonpath_dirs = [
             "core/console", "core/gateway", "core/license", "core/compliance",
-            "operator/forge", "operator/skill-forge",
+            "corvin_operator/forge", "corvin_operator/skill-forge",
             "core/plugins",
         ]
         # Only include dirs that actually exist (source-tree install).
@@ -591,7 +591,7 @@ class CorvinInstaller:
         # start path unless the operator separately clicked "Start" in the
         # web console. Fixed by calling the SAME detached-start +
         # Scheduled-Task-autostart engine the console's Start button already
-        # uses (operator/bridges/bridge_manager.py) — hidden window
+        # uses (corvin_operator/bridges/bridge_manager.py) — hidden window
         # (DETACHED_PROCESS, see that module), durable across reboot
         # (ensure_windows_autostart), no new mechanism to keep in sync.
         if sys.platform == "win32":
@@ -1525,7 +1525,7 @@ class CorvinInstaller:
         # the stdlib `operator` module), so the old fallback
         # `-m operator.bridges.shared.adapter` could never start (INST-7). The
         # build hook (hatch_build.py) vendors the subtree into
-        # corvin_console/_vendor/operator/…; resolve that real file instead.
+        # corvin_console/_vendor/corvin_operator/…; resolve that real file instead.
         try:
             import importlib.util as _ilu  # noqa: PLC0415
             spec = _ilu.find_spec("corvin_console")

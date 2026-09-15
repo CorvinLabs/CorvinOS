@@ -21,8 +21,8 @@ registered forge artifact (see the review notes in the task ticket) — the
 underlying `session_reset.collect_unpinned_artifacts` has zero test
 references anywhere in the repo prior to this file.
 
-Run: python3 operator/bridges/shared/test_adapter_reset_prewarn.py
-  or: pytest -q operator/bridges/shared/test_adapter_reset_prewarn.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_reset_prewarn.py
+  or: pytest -q corvin_operator/bridges/shared/test_adapter_reset_prewarn.py
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-REPO = ROOT.parents[2]  # operator/bridges/shared -> repo root
+REPO = ROOT.parents[2]  # corvin_operator/bridges/shared -> repo root
 FORGE_PKG = REPO / "operator" / "forge"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FORGE_PKG))

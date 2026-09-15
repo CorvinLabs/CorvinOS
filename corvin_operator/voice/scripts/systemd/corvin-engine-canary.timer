@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Corvin-OS engine-trust refusal-canary at 06:00 local (ADR-0020 Phase 30.2)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+AccuracySec=15min
+Persistent=true
+Unit=corvin-engine-canary.service
+
+[Install]
+WantedBy=timers.target

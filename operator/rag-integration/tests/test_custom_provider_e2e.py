@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 
 # Fix Python path to load operator.bridges modules
-# Path from test: operator/rag-integration/tests/test_*.py → CorvinOS root
+# Path from test: corvin_operator/rag-integration/tests/test_*.py → CorvinOS root
 repo_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(repo_root))
 # Also add operator directly

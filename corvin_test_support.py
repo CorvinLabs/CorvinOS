@@ -6,13 +6,13 @@ root and ``tests/``) and resolves to whichever was imported first.
 """
 
 # ---------------------------------------------------------------------------
-# Importing modules out of operator/
+# Importing modules out of corvin_operator/
 #
-# `operator/` cannot be imported as a package: `operator` is a Python stdlib
+# `corvin_operator/` cannot be imported as a package: `operator` is a Python stdlib
 # module, so `from operator.marketplace.generate_index import ...` resolves to
 # the stdlib and raises "'operator' is not a package".
 #
-# Putting `operator/` on sys.path and importing bare is not reliable either:
+# Putting `corvin_operator/` on sys.path and importing bare is not reliable either:
 # the repo root is ALSO on sys.path, and several operator subdirectories
 # collide with same-named modules under core/ --
 #
@@ -33,10 +33,10 @@ _OPERATOR_ROOT = _Path(__file__).resolve().parent / "operator"
 
 
 def load_operator_module(relative_path: str, module_name: str | None = None):
-    """Load a module from ``operator/`` by file path, shadow-proof.
+    """Load a module from ``corvin_operator/`` by file path, shadow-proof.
 
     Args:
-        relative_path: path under ``operator/``, e.g. ``"marketplace/generate_index.py"``
+        relative_path: path under ``corvin_operator/``, e.g. ``"marketplace/generate_index.py"``
         module_name: name to register in ``sys.modules``. Defaults to a
             ``corvin_operator.``-prefixed name derived from the path, which
             cannot collide with the stdlib or with anything under ``core/``.
@@ -56,7 +56,7 @@ def load_operator_module(relative_path: str, module_name: str | None = None):
         return cached
 
     # Create the parent packages so RELATIVE imports inside the module resolve.
-    # operator/license/quota_counter.py does `from .validator import get_limit`,
+    # corvin_operator/license/quota_counter.py does `from .validator import get_limit`,
     # which Python resolves against the module's parent package -- registering
     # only the leaf module leaves that parent missing and the relative import
     # raises ModuleNotFoundError. Each synthetic parent gets a __path__ pointing
@@ -67,7 +67,7 @@ def load_operator_module(relative_path: str, module_name: str | None = None):
         if _pkg_name in _sys.modules:
             continue
         _pkg = _types.ModuleType(_pkg_name)
-        # parts[0] is the synthetic "corvin_operator" root -> operator/ itself;
+        # parts[0] is the synthetic "corvin_operator" root -> corvin_operator/ itself;
         # each further part descends one real directory.
         _pkg.__path__ = [str(_OPERATOR_ROOT.joinpath(*_parts[1:_i]))]
         _sys.modules[_pkg_name] = _pkg

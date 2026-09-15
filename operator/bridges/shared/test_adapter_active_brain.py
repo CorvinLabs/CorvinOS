@@ -12,10 +12,10 @@ compose their system prompt through it) and proves:
     even with the flag on — no cloud LLM synthesis under a zero-egress policy.
 
 The run_full_pipeline result is mocked (it has its own hermetic E2E in
-operator/context_engineering/tests/test_full_pipeline_e2e.py); this test's job is
+corvin_operator/context_engineering/tests/test_full_pipeline_e2e.py); this test's job is
 the BRIDGE wiring, not the pipeline internals.
 
-Run: python3 operator/bridges/shared/test_adapter_active_brain.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_active_brain.py
 """
 from __future__ import annotations
 

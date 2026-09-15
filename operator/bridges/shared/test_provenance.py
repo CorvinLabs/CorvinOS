@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_provenance.py — locks the shared Art. 50 §4 marking contract so the
 three delivery paths (adapter._envelope / completion_notify / scheduler) cannot
-drift apart. Run: python3 operator/bridges/shared/test_provenance.py
+drift apart. Run: python3 corvin_operator/bridges/shared/test_provenance.py
 """
 from __future__ import annotations
 

@@ -1,0 +1,22 @@
+{
+  "id": "corvin-batch",
+  "name": "Corvin Batch Compute",
+  "description": "Enables 50% cost reduction for L25 prompt-sweep compute jobs with 100+ candidates by routing them through the Anthropic Message Batches API instead of real-time inference. Results arrive within 1-24 hours. Only suitable for non-interactive, latency-tolerant workloads. Requires ANTHROPIC_API_KEY in vault. L34 compliance: max classification INTERNAL (never CONFIDENTIAL/SECRET).",
+  "source": "builtin",
+  "tags": ["compute", "batch", "anthropic", "cost-optimisation"],
+  "compliance": {
+    "locality": "us_cloud",
+    "network_egress": "required",
+    "max_classification": "INTERNAL"
+  },
+  "secrets": [
+    {"name": "ANTHROPIC_API_KEY", "vault_key": "anthropic_api_key", "required": true}
+  ],
+  "effects": {
+    "tenant_config": {
+      "spec.compute.batch_backend": "anthropic_batch"
+    }
+  },
+  "requires_operator_approval": true,
+  "install_hint": "corvin-mcp install builtin:corvin-batch"
+}

@@ -6,7 +6,7 @@ CTRL_BREAK_EVENT for graceful stop, taskkill /T /F for the hard-kill
 escalation) is simulated via sys.platform + signal.CTRL_BREAK_EVENT
 patching, since no Windows box is available here.
 
-Run with: python3 operator/bridges/test_bridge_manager_shutdown.py
+Run with: python3 corvin_operator/bridges/test_bridge_manager_shutdown.py
 """
 from __future__ import annotations
 

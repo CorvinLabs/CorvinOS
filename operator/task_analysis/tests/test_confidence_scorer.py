@@ -54,7 +54,7 @@ def complex_task():
         components=[
             "core/delegation",
             "core/forge",
-            "operator/task_engine",
+            "corvin_operator/task_engine",
         ],
         affected_layers=["L29", "L30", "L6"],
         memory_context=[],

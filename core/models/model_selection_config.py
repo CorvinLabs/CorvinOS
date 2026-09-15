@@ -6,7 +6,7 @@ Replaces the Phase-1 in-memory ``_MOCK_ENGINE_CONFIG``
 (``core/console/corvin_console/routes/engine_api.py``) — same shape
 (corvinOS/SIMPLE/MEDIUM/COMPLEX → selected_model/provider/alternatives),
 actually written to disk, and actually READ by the shadow classifier
-(``operator/bridges/shared/model_selector_shadow.py`` → ``ModelSelector(overrides=...)``)
+(``corvin_operator/bridges/shared/model_selector_shadow.py`` → ``ModelSelector(overrides=...)``)
 so a saved console preference has a real, observable effect on the next
 turn's classification instead of being cosmetic.
 """

@@ -68,7 +68,7 @@ def _register_stub_session(home: Path, session_id: str,
 
 def _write_channel_settings(bridges_dir: Path, channel: str, settings: dict) -> None:
     """Write bridges/<channel>/settings.json under a SANDBOXED bridges dir
-    (ADAPTER_BRIDGES_DIR), never the live repo's operator/bridges/<channel>/
+    (ADAPTER_BRIDGES_DIR), never the live repo's corvin_operator/bridges/<channel>/
     settings.json. This avoids the test-vs-real-config contamination class
     (adapter.py's _load_channel_settings docstring documents this exact
     failure mode from a prior incident) — a real discord_token/whitelist

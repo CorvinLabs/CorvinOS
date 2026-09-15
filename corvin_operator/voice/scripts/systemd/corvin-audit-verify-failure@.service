@@ -1,0 +1,6 @@
+[Unit]
+Description=Corvin — alert when %i (audit hash-chain verify) failed
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "ALERT: %i FAILED on $(hostname) — the GDPR Art. 30/32 audit chain did not verify; run: voice-audit verify --all" | /usr/bin/logger -t corvin-audit-alert -p daemon.crit'

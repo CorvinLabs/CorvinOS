@@ -9,7 +9,7 @@ commit): ``engine_interface`` / ``engine_registry`` / ``claude_engine`` /
 reachable from nothing but their own package — zero importers outside
 ``core/engines`` and the equally caller-less ``core/orchestration/
 {fallback_cascade,routing_decision,cost_capability_matrix}``, and no tests.
-Real engine routing is ``operator/bridges/shared/engine_registry.py`` (the
+Real engine routing is ``corvin_operator/bridges/shared/engine_registry.py`` (the
 WorkerEngine registry) and the ACP ``os.delegation_router`` skill.
 """
 

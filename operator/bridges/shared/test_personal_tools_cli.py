@@ -1,6 +1,6 @@
 """End-to-end CLI tests for personal_tools (Layer 27).
 
-Drives ``python operator/bridges/shared/personal_tools.py <sub>``
+Drives ``python corvin_operator/bridges/shared/personal_tools.py <sub>``
 via subprocess against a tempdir sandbox.
 """
 from __future__ import annotations

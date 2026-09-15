@@ -192,7 +192,7 @@ def _channel(tmp_path: Path, channel: str = "discord"):
     """Redirect the in-repo bridges dir to a temp copy and seed settings.json.
 
     ``chat_settings._VOICE_BRIDGES`` points at the CHECKED-IN
-    ``operator/bridges/`` tree; a test must never write there.
+    ``corvin_operator/bridges/`` tree; a test must never write there.
     """
     from corvin_console.routes import chat_settings as cs
     bridges = tmp_path / "bridges"

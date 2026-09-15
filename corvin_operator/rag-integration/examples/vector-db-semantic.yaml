@@ -1,0 +1,118 @@
+apiVersion: rag.corvin.io/v1alpha1
+kind: RAGProvider
+metadata:
+  name: vector-db-semantic
+  namespace: production
+  description: Semantic vector search using embeddings
+  version: "1.0"
+  author: ml-team@example.com
+
+spec:
+  # ── Retrieval Configuration ────────────────────────────────
+  retrieval:
+    endpoint: https://vector-db.internal/api/search
+    method: POST
+    timeout_ms: 5000
+    auth:
+      type: api-key
+      token_env_var: VECTOR_DB_API_KEY
+
+    # Vector embedding pipeline
+    embedding:
+      model: text-embedding-3-large
+      dimensions: 1536
+      normalization: L2
+
+    query_format:
+      type: vector-similarity
+      sample: |
+        {
+          "query_vector": {query_embedding},
+          "k": {limit},
+          "distance_metric": "cosine",
+          "filters": {
+            "timestamp": {"$gte": "2026-01-01"}
+          }
+        }
+
+  # ── Response Format ────────────────────────────────────────
+  response_format:
+    content_path: results[].content
+    score_path: results[].similarity_score
+    metadata_path: results[].metadata
+    source_url_path: results[].metadata.source_url
+
+  # ── Classification & Zone ──────────────────────────────────
+  dataClassification: INTERNAL
+  complianceZone: EU
+  compliance_data_residency:
+    required: true
+    allowed_regions:
+      - EU-WEST-1
+      - EU-CENTRAL-1
+
+  # ── Capabilities ───────────────────────────────────────────
+  capabilities:
+    - semantic-search
+    - similarity-matching
+    - vector-filtering
+    - hybrid-search-compatible
+    - batch-embeddings
+
+  # ── Resilience Configuration ───────────────────────────────
+  resilience:
+    circuit_breaker:
+      failure_threshold: 3
+      timeout_seconds: 30
+      half_open_requests: 2
+
+    retry_strategy: linear
+    max_retries: 2
+    backoff_ms: 50
+
+  # ── Quotas & Rate Limiting ─────────────────────────────────
+  quotas:
+    requests_per_second: 50
+    concurrent_requests: 5
+    daily_limit: 500000
+    monthly_limit: 10000000
+
+  # ── Erasure Handler (GDPR Art. 17) ─────────────────────────
+  erasureHandler:
+    type: http-delete
+    endpoint: https://vector-db.internal/api/erase
+    auth:
+      type: api-key
+      token_env_var: VECTOR_DB_API_KEY
+    query_template: |
+      {
+        "filters": {
+          "user_id": "{subject_id}"
+        }
+      }
+
+  # ── Health Check Configuration ─────────────────────────────
+  healthCheck:
+    endpoint: https://vector-db.internal/health
+    interval_seconds: 60
+    timeout_seconds: 3
+    success_http_codes: [200]
+
+  # ── Performance Tuning ─────────────────────────────────────
+  performance:
+    batch_size: 32
+    prefetch_count: 100
+    cache_ttl_seconds: 300
+
+  # ── Metadata ───────────────────────────────────────────────
+  labels:
+    environment: production
+    ml-model: text-embedding-3-large
+    owner: ml-platform
+    cost-center: ai-infrastructure
+
+  annotations:
+    model_update_frequency: "monthly"
+    vector_dimension: "1536"
+    approximate_index_size_gb: "500"
+    sync_frequency: "daily"

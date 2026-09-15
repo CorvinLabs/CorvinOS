@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-# The WorkerEngine layer lives in operator/bridges/shared/agents/. We
+# The WorkerEngine layer lives in corvin_operator/bridges/shared/agents/. We
 # resolve it lazily so this package stays importable even when that tree
 # is absent (e.g. CI runs that only need the delegation library or its
 # MCP-server surface).

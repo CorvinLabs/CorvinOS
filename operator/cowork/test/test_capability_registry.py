@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for capability_registry.py + capability_map.py (ADR-0190).
 
-Run: python3 operator/cowork/test/test_capability_registry.py
+Run: python3 corvin_operator/cowork/test/test_capability_registry.py
 """
 from __future__ import annotations
 

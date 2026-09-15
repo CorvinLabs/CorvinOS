@@ -333,7 +333,7 @@ def test_audit_event_emitted_metadata_only():
 
 
 def test_real_repo_policy_parses_and_matches():
-    # The shipped operator/policy/house_rules.yaml must load and enforce.
+    # The shipped corvin_operator/policy/house_rules.yaml must load and enforce.
     g = H.HouseRulesGate.from_repo()
     assert g.policy.version >= 1
     ids = {r.id for r in g.policy.rules}
@@ -350,7 +350,7 @@ def test_policy_anchor_matches_repo_file():
     assert H.EXPECTED_POLICY_SHA256, "anchor must be pinned in the shipped config"
     assert H.sha256_of(p) == H.EXPECTED_POLICY_SHA256, (
         "house_rules.yaml changed but EXPECTED_POLICY_SHA256 was not updated — "
-        "run: sha256sum operator/policy/house_rules.yaml and paste it into house_rules.py"
+        "run: sha256sum corvin_operator/policy/house_rules.yaml and paste it into house_rules.py"
     )
 
 

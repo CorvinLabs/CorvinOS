@@ -8,7 +8,7 @@ This is a focused integration test (not end-to-end with the real Discord bot,
 which requires network/auth). It validates the envelope shape that the
 Discord daemon's startOutboxPoller() expects.
 
-Run: python3 operator/bridges/shared/test_discord_completion_integration.py
+Run: python3 corvin_operator/bridges/shared/test_discord_completion_integration.py
 """
 from __future__ import annotations
 

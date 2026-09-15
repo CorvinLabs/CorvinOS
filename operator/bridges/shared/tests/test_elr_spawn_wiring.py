@@ -86,8 +86,8 @@ def test_fail_open_to_static_without_license(monkeypatch):
 
 
 def test_wiring_license_dir_anchor_is_correct():
-    # Regression for the HIGH: the wiring resolves operator/license as parents[2]
-    # of spawn_gates (parents[1] == operator/bridges has no license/ — that
+    # Regression for the HIGH: the wiring resolves corvin_operator/license as parents[2]
+    # of spawn_gates (parents[1] == corvin_operator/bridges has no license/ — that
     # import-fail would silently cache a ratchet-less gate).
     sg = Path(SG.__file__).resolve()
     good = sg.parents[2] / "license"

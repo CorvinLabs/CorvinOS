@@ -2,7 +2,7 @@
 
 Run with::
 
-    python3 operator/voice/scripts/test_voice_audit_sealed_verify.py
+    python3 corvin_operator/voice/scripts/test_voice_audit_sealed_verify.py
 
 Uses fake plaintext segments + monkey-patched unseal so the tests
 run without the `age` / `gpg` binary installed.

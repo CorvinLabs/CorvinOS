@@ -171,7 +171,7 @@ _cache_lock = threading.Lock()
 # serialise two processes), and `adapter.py` itself never writes
 # profile.json at all — it only reads it for the system prompt; the
 # bridge-side `/profile set` command instead shells out to
-# `operator/voice/scripts/profile_cli.py` as its own short-lived
+# `corvin_operator/voice/scripts/profile_cli.py` as its own short-lived
 # subprocess. So a genuine CROSS-process race does exist in principle
 # (a console PUT racing a `profile_cli.py` invocation from a chat), but it
 # is not addressed here — deliberately. `save()`'s atomic tmp+rename

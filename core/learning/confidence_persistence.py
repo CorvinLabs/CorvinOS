@@ -4,7 +4,7 @@
 ``{}`` — in-memory only, invisible across process boundaries AND lost on
 every restart. That is fatal for this specific system: the shadow
 classification that produces ``(task_type, model)`` recommendations runs in
-the bridge daemon (``operator/bridges/shared/adapter.py``, its own process),
+the bridge daemon (``corvin_operator/bridges/shared/adapter.py``, its own process),
 while the console that reads confidence via ``get_optimizer()``
 (``core/console/corvin_console/routes/model_selection_analytics.py``) runs
 in ``corvin_gateway.app`` — a SEPARATE process. Two independent in-memory

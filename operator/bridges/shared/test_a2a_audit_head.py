@@ -4,7 +4,7 @@ Covers read_audit_head (head/count from a JSONL chain), build_audit_head
 (unsigned + HMAC-signed against an origin recv_key), and the sender-side
 anomaly streak logic in check_peer_audit_head.
 
-Runnable standalone: ``python3 operator/bridges/shared/test_a2a_audit_head.py``
+Runnable standalone: ``python3 corvin_operator/bridges/shared/test_a2a_audit_head.py``
 """
 from __future__ import annotations
 

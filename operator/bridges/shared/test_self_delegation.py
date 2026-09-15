@@ -21,7 +21,7 @@ Levels:
   5. never-raise: a broken spawn does not break the turn.
   6. Idempotency: a duplicated marker spawns exactly ONE worker.
 
-Run: .venv/bin/python operator/bridges/shared/test_self_delegation.py
+Run: .venv/bin/python corvin_operator/bridges/shared/test_self_delegation.py
 """
 from __future__ import annotations
 

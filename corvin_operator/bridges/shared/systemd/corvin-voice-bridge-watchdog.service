@@ -1,0 +1,9 @@
+[Unit]
+Description=corvin-voice bridge watchdog (heals inactive/unresponsive services)
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash __BRIDGES_DIR__/watchdog.sh
+StandardOutput=journal
+StandardError=journal

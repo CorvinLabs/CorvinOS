@@ -24,7 +24,7 @@ Coverage in this file:
     - prev turn auto-grades a skill, current turn carries "danke, perfekt!"
       → outcome grade lands on disk, audit event written.
 
-Run: python3 operator/bridges/shared/test_skill_outcome_grading.py
+Run: python3 corvin_operator/bridges/shared/test_skill_outcome_grading.py
 """
 from __future__ import annotations
 

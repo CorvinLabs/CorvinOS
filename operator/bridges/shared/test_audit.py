@@ -209,7 +209,7 @@ def test_audit_silent_noop_when_forge_missing(monkeypatch=None):
 def _load_audit_copy(tmp_root: Path, *, forge_present_but_broken: bool, name: str):
     """Load a fresh copy of audit.py whose ``__file__`` lives under
     ``tmp_root``, so its own ``parents[2]`` forge-root resolution points at
-    our sandbox instead of the real ``operator/forge/``.
+    our sandbox instead of the real ``corvin_operator/forge/``.
 
     When ``forge_present_but_broken`` is True, a real (non-empty) ``forge``
     package directory exists in the sandbox, but its ``security_events``
@@ -233,7 +233,7 @@ def _load_audit_copy(tmp_root: Path, *, forge_present_but_broken: bool, name: st
             "raise RuntimeError("
             "'simulated packaging regression: broken transitive dependency')\n"
         )
-    # else: leave tmp_root/operator/forge entirely absent -> genuine absence
+    # else: leave tmp_root/corvin_operator/forge entirely absent -> genuine absence
 
     saved_forge = sys.modules.pop("forge", None)
     saved_forge_se = sys.modules.pop("forge.security_events", None)

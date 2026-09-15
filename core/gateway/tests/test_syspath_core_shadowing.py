@@ -109,7 +109,7 @@ class SysPathCoreShadowing(unittest.TestCase):
         )
 
     def test_bridge_audit_module_is_the_one_with_audit_path(self) -> None:
-        """`operator/bridges/shared/audit.py` — not core/audit — owns audit_path().
+        """`corvin_operator/bridges/shared/audit.py` — not core/audit — owns audit_path().
 
         This is the asymmetry that made the shadow fatal rather than merely
         confusing: both modules are named `audit`, only one has the function

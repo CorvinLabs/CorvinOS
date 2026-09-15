@@ -9,7 +9,7 @@ and diagnoses every non-injection LOUDLY (content-free WARNING + counter).
 
 Drives the real skill-forge MultiSkillRegistry against a tempdir CORVIN_HOME.
 
-Run as: python3 operator/bridges/shared/test_skill_inject_explicit_request.py
+Run as: python3 corvin_operator/bridges/shared/test_skill_inject_explicit_request.py
 """
 from __future__ import annotations
 

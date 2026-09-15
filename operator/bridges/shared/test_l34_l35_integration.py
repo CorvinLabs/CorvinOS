@@ -5,7 +5,7 @@ level, using the same config structure as the shipped EU_PRODUCTION presets.
 
 Run with::
 
-    python3 operator/bridges/shared/test_l34_l35_integration.py
+    python3 corvin_operator/bridges/shared/test_l34_l35_integration.py
 
 Pure-Python; no forge / docker / claude dependencies required.
 """

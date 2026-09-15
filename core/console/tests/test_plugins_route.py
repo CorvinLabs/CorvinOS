@@ -30,7 +30,7 @@ for _p in [str(_OPERATOR), str(_OPERATOR / "license"), str(_OPERATOR / "forge"),
 
 
 #: corvin_plugins is deliberately NOT purged. It resolves CORVIN_HOME per call, so
-#: reloading it buys nothing — and it costs a lot: operator/bridges/shared/audit.py
+#: reloading it buys nothing — and it costs a lot: corvin_operator/bridges/shared/audit.py
 #: binds `_audit_sink` to the audit_backend MODULE at import time and never
 #: re-resolves it, so a copy created inside the purge window becomes the sink that
 #: every later audit_event() fans out into, while the plugin tests hold the original.
@@ -780,7 +780,7 @@ class TestTheSandboxDoesNotPoisonTheRun(unittest.TestCase):
     Two distinct mechanisms, both worth pinning:
       * a second copy of corvin_plugins forks every enum, so
         `record.origin is PluginOrigin.COMMUNITY` compares two different classes;
-      * operator/bridges/shared/audit.py binds `_audit_sink` to the audit_backend
+      * corvin_operator/bridges/shared/audit.py binds `_audit_sink` to the audit_backend
         MODULE at import time and never re-resolves it, so a copy created inside the
         purge window silently becomes the sink every later audit_event() fans into.
     """

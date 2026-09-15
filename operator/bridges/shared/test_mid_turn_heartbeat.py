@@ -2,7 +2,7 @@
 
 Measures the SUM: does a status/liveness envelope actually land in the outbox,
 with the right content, cadence, and bounds.
-Run: .venv/bin/python -m pytest operator/bridges/shared/test_mid_turn_heartbeat.py
+Run: .venv/bin/python -m pytest corvin_operator/bridges/shared/test_mid_turn_heartbeat.py
 """
 from __future__ import annotations
 

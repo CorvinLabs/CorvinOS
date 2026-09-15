@@ -1,0 +1,124 @@
+apiVersion: rag.corvin.io/v1alpha1
+kind: RAGProvider
+metadata:
+  name: elasticsearch-docs
+  namespace: production
+  description: Enterprise Elasticsearch cluster for knowledge base search
+  version: "8.0"
+  author: corvin-ops@example.com
+
+spec:
+  # ── Retrieval Configuration ────────────────────────────────
+  retrieval:
+    endpoint: https://es-cluster.internal/api/search
+    method: POST
+    timeout_ms: 8000
+    auth:
+      type: bearer-token
+      token_env_var: ES_API_TOKEN
+
+    # Query transformation
+    query_format:
+      type: elasticsearch-query-dsl
+      sample: |
+        {
+          "query": {
+            "bool": {
+              "must": [
+                {"match": {"content": "{query}"}},
+                {"range": {"timestamp": {"gte": "now-90d"}}}
+              ]
+            }
+          },
+          "size": {limit}
+        }
+
+  # ── Response Format ────────────────────────────────────────
+  response_format:
+    content_path: hits.hits[]._source.content
+    score_path: hits.hits[]._score
+    metadata_path: hits.hits[]._source
+    source_url_path: hits.hits[]._source.url
+
+  # ── Classification & Zone ──────────────────────────────────
+  dataClassification: INTERNAL
+  complianceZone: EU
+  compliance_data_residency:
+    required: true
+    allowed_regions:
+      - EU-WEST-1
+      - EU-CENTRAL-1
+    forbidden_regions:
+      - US-EAST-1
+      - AP-SOUTHEAST-1
+
+  # ── Capabilities ───────────────────────────────────────────
+  capabilities:
+    - keyword-search
+    - semantic-search
+    - filtering-by-metadata
+    - time-range-queries
+    - faceted-search
+
+  # ── Resilience Configuration ───────────────────────────────
+  resilience:
+    circuit_breaker:
+      failure_threshold: 5
+      timeout_seconds: 60
+      half_open_requests: 1
+
+    retry_strategy: exponential
+    max_retries: 3
+    backoff_ms: 100
+
+    timeouts:
+      connection_timeout_ms: 2000
+      read_timeout_ms: 8000
+      write_timeout_ms: 5000
+
+  # ── Quotas & Rate Limiting ─────────────────────────────────
+  quotas:
+    requests_per_second: 100
+    concurrent_requests: 10
+    daily_limit: 1000000
+    monthly_limit: 20000000
+
+  # ── Data Retention & Deletion ──────────────────────────────
+  dataRetention:
+    default_ttl_days: 90
+    archive_after_days: 365
+    delete_after_days: 2555  # ~7 years
+
+  # ── Erasure Handler (GDPR Art. 17) ─────────────────────────
+  erasureHandler:
+    type: http-delete
+    endpoint: https://es-cluster.internal/api/erase
+    auth:
+      type: bearer-token
+      token_env_var: ES_API_TOKEN
+    query_template: |
+      {
+        "query": {
+          "term": {"user_id": "{subject_id}"}
+        }
+      }
+
+  # ── Health Check Configuration ─────────────────────────────
+  healthCheck:
+    endpoint: https://es-cluster.internal/health
+    interval_seconds: 30
+    timeout_seconds: 5
+    success_http_codes: [200]
+
+  # ── Metadata ───────────────────────────────────────────────
+  labels:
+    environment: production
+    tier: enterprise
+    owner: data-team
+    cost-center: engineering
+
+  annotations:
+    sla: "99.9% uptime"
+    support: "24/7 on-call"
+    backup_frequency: "hourly"
+    last_audit: "2026-05-15"

@@ -127,7 +127,7 @@ def _check_a2a_reconnect(home: Path) -> None:
     of the anonymous instance ping says nothing about wanting stale, dead
     A2A peer connections; see ``start_heartbeat_thread``, which starts this
     loop even for opted-out instances for exactly that reason).
-    Soft-imports operator/bridges/shared, which is not present in every
+    Soft-imports corvin_operator/bridges/shared, which is not present in every
     deployment shape; absence is a silent no-op.
 
     Worst-case duration: ``check_and_broadcast_reconnect`` bounds itself to
@@ -138,7 +138,7 @@ def _check_a2a_reconnect(home: Path) -> None:
         import sys as _sys
         from pathlib import Path as _Path
         _shared = _Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
-        # Append (never insert at 0): prepending would let operator/bridges/
+        # Append (never insert at 0): prepending would let corvin_operator/bridges/
         # shared modules shadow same-named stdlib/site-packages modules for
         # the whole process (2026-07-19 hardening).
         if _shared.is_dir() and str(_shared) not in _sys.path:

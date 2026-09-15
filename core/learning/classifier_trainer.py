@@ -288,7 +288,7 @@ class ClassifierTrainer:
             TrainingDataset with keyword-classifier labels
         """
         # Late import via the registered top-level package (stdlib ``operator``
-        # shadows the ``operator/`` directory — see classifier_model.import_context_engineering)
+        # shadows the ``corvin_operator/`` directory — see classifier_model.import_context_engineering)
         from .classifier_model import import_context_engineering
         import_context_engineering()
         from context_engineering.task_classifier import classify

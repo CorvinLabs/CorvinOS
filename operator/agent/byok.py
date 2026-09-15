@@ -6,7 +6,7 @@ to the L16 vault AND to ~/.config/corvin-voice/service.env (WA-22 —
 the vault's write path was previously disconnected from every actual
 runtime reader; service.env is the single source of truth every
 provider-key consumer resolves through, see
-operator/bridges/shared/provider_keys.py).
+corvin_operator/bridges/shared/provider_keys.py).
 
 Key name rules (per ADR-0047):
   Allowed:  anthropic_api_key, openai_api_key, stt_openai_api_key,

@@ -1,0 +1,17 @@
+{
+  "_INSTALL_NOTE": "Fill in discord_token after install. All other fields are your current config.",
+  "_INSTALL_PATH": "<corvin_home>/bridges/discord/settings.json",
+  "discord_token": "YOUR_DISCORD_BOT_TOKEN_HERE",
+  "whitelist": [],
+  "rate_limit_per_hour": 30,
+  "pin": null,
+  "chat_profiles": {
+    "default": {
+      "add_dirs": [
+        "$HOME/projects",
+        "$HOME/.claude",
+        "/tmp"
+      ]
+    }
+  }
+}

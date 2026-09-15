@@ -18,7 +18,7 @@ _BRIDGE_CANDIDATES = [
     # native_backend.py → repo root = parents[3]); replaces a baked-in personal
     # ~/projects/CorvinOS path that only worked on one dev machine (path-audit #LOW7).
     Path(__file__).resolve().parents[3] / "operator" / "bridges",
-    Path("/opt/corvin-repo/operator/bridges"),
+    Path("/opt/corvin-repo/corvin_operator/bridges"),
 ]
 
 

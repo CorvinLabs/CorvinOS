@@ -1,6 +1,6 @@
 """Windows compatibility shim.
 
-CorvinOS (and the vendored ``operator/`` subtrees) do a module-level
+CorvinOS (and the vendored ``corvin_operator/`` subtrees) do a module-level
 ``import fcntl`` / ``import resource`` in ~30 places for advisory file locking
 and rlimit handling. Those stdlib modules do not exist on Windows, so a fresh
 ``pip install corvinos`` + ``corvin-serve`` would crash at import time on

@@ -16,7 +16,7 @@ import pytest
 def _shared_profile_module():
     """Import the real, bare-name `profile` module the same way
     lang_cli.py / adapter.py do — `operator.bridges.shared.profile` is never
-    importable as a dotted path (no `operator/__init__.py`, name collides
+    importable as a dotted path (no `corvin_operator/__init__.py`, name collides
     with stdlib `operator`). Same helper as tests/test_installer_piper.py."""
     shared_dir = Path(__file__).resolve().parent.parent / "operator" / "bridges" / "shared"
     if str(shared_dir) not in sys.path:

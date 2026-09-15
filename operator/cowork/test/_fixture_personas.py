@@ -1,6 +1,6 @@
 """Fixture personas for the cowork resolver tests.
 
-The bundled persona JSONs (``operator/cowork/personas/*.json``) were removed
+The bundled persona JSONs (``corvin_operator/cowork/personas/*.json``) were removed
 in e7e3560e — 100 % of traffic runs on the new Skills. The resolver itself is
 still live: ``adapter.py`` resolves ``chat_profiles[<chat>].persona`` through
 ``resolver.resolve()`` for personas the OPERATOR ships under
@@ -126,7 +126,7 @@ FORGE = {
     "skill_forge_enabled": True,
     "mcp_servers": {"forge": {
         "command": "{{PYTHON}}",
-        "args": ["{{REPO_ROOT}}/operator/forge/forge.py", "mcp"],
+        "args": ["{{REPO_ROOT}}/corvin_operator/forge/forge.py", "mcp"],
         "env": {"FORGE_PERSONA": "forge"},
     }},
     "append_system": "Forge persona: generate tools.",

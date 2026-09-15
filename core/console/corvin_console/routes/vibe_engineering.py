@@ -30,14 +30,14 @@ except Exception:  # noqa: BLE001 — degrade to an empty view, never 500 the pa
 
 router = APIRouter(prefix="/vibe-engineering", tags=["console-vibe-engineering"])
 
-# CEL stage registry — loaded by file path (operator/ is not on the gateway
+# CEL stage registry — loaded by file path (corvin_operator/ is not on the gateway
 # PYTHONPATH). Used by the pipeline editor (P-E, ADR-0284) for the palette +
 # requires-DAG validation. None → editor degrades to unavailable.
 _CEL_STAGES = None
 _CEL = None  # the context_engineering module itself (prompt_assembly readers)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
-    # Source tree → <repo>/operator/context_engineering; wheel → the vendored
+    # Source tree → <repo>/corvin_operator/context_engineering; wheel → the vendored
     # copy. Without the fallback the editor + inspector degraded to "unavailable"
     # on every pip install (fixed 2026-08-11 alongside the missing vendor entry).
     _ce_dir = Path(__file__).resolve().parents[4] / "operator" / "context_engineering"

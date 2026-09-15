@@ -9,7 +9,7 @@ the default behaviour:
   * a cycle raises; the runner degrades to plain context.
   * memory (the root) failing → no brief (nothing downstream can attach).
 
-Run: python3 operator/context_engineering/tests/test_context_stages_adr0280.py
+Run: python3 corvin_operator/context_engineering/tests/test_context_stages_adr0280.py
 """
 from __future__ import annotations
 

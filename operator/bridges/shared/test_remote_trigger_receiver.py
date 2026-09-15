@@ -1,6 +1,6 @@
 """Tests for Layer 38 — RemoteTriggerReceiver.
 
-Run with: python3 operator/bridges/shared/test_remote_trigger_receiver.py
+Run with: python3 corvin_operator/bridges/shared/test_remote_trigger_receiver.py
 Target: ≥ 40 test cases (ADR-0048 §Validation).
 """
 from __future__ import annotations

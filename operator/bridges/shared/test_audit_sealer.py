@@ -2,7 +2,7 @@
 
 Run with::
 
-    python3 operator/bridges/shared/test_audit_sealer.py
+    python3 corvin_operator/bridges/shared/test_audit_sealer.py
 
 Tests use a fake sealer (XOR cipher) so they pass without `age` /
 `gpg` installed.

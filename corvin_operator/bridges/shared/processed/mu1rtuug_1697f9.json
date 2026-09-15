@@ -1,0 +1,8 @@
+{
+  "id": "mu1rtuug_1697f9",
+  "channel": "discord",
+  "from": "1299270034849533983",
+  "chat_id": "1501540900529246251",
+  "ts": 1789422289000,
+  "text": "ich glaube unter engine-Config sind das hier mock daten. SIMPLE\nFast, straightforward tasks (<500 tokens, <2 code snippets)\n\n62% confident\nDefault Model\n\nClaude Haiku 4.5 (Fast, Low Cost)\nFallback Models\nclaude-sonnet-5\n✓ Learned confidence: 62% (1 real outcome)\n\nExternal Provider\nAdd\nNone configured — using native Anthropic.\n\nSave\nMEDIUM\nBalanced tasks (500–3000 tokens, moderate complexity)\n\nDefault Model\n\nClaude Sonnet 5 (Balanced)\nFallback Models\nclaude-haiku-4-5-20251001\nclaude-opus-5\nNo real outcomes learned for this model yet. Confidence updates live as real turns complete.\nExternal Provider\nAdd\nNone configured — using native Anthropic.\n\nSave\nCOMPLEX\nComplex, reasoning-heavy tasks (>3000 tokens, deep analysis)\n\nDefault Model\n\nClaude Opus 5 (Powerful)\nFallback Models\nclaude-sonnet-5\nNo real outcomes learned for this model yet. Confidence updates live as real turns complete.    Das hier: No real outcomes learned for this model yet. Confidence updates live as real turns  muss auch echte daten anzeigen. ich hab das geführ es ändert sich nichts in der ui alle anzeigen wirken sehr statisch."
+}

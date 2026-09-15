@@ -4,7 +4,7 @@ Tests for the corvin_id_jwt field added to TaskEnvelope and the sender's
 best-effort corvin_id_jwt injection in _build_envelope().
 
 Run:
-    python3 -m pytest operator/bridges/shared/test_corvinid_m5_a2a_v8.py -v --tb=short
+    python3 -m pytest corvin_operator/bridges/shared/test_corvinid_m5_a2a_v8.py -v --tb=short
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Use the main repo's operator/bridges/shared directory (no worktree fallback
+# Use the main repo's corvin_operator/bridges/shared directory (no worktree fallback
 # needed since M5 changes have been merged into the main branch).
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
