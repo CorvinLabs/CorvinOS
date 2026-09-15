@@ -42,7 +42,7 @@ This plan outlines the phased implementation of **ADR-0433: Tenant-Native Data P
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ PHASE B: Critical Pivot (scope_root Refactor)                           │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ operator/forge/forge/scope.py (CRITICAL)                                │
+│ corvin_operator/forge/forge/scope.py (CRITICAL)                                │
 │ └─ Signature change: Add tenant_id parameter                            │
 │ └─ Update ~100 call-sites across the codebase                           │
 │ Deliverable: tenant_id-aware scope_root() + all callers updated         │
@@ -320,9 +320,9 @@ def test_validate_tenant_id_special_chars_rejected():
 
 **Risk Level:** HIGH — this is the critical path. Mistakes here propagate to all subsystems.
 
-#### 2.B.1 Refactor: `operator/forge/forge/scope.py`
+#### 2.B.1 Refactor: `corvin_operator/forge/forge/scope.py`
 
-**File:** `/home/shumway/projects/CorvinOS/operator/forge/forge/scope.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/forge/forge/scope.py`
 
 **Signature change:**
 
@@ -393,8 +393,8 @@ Use regex-based search to find all `scope_root()` call-sites:
 ```bash
 cd /home/shumway/projects/CorvinOS
 grep -r "scope_root(" --include="*.py" \
-  operator/skill-forge \
-  operator/forge \
+  corvin_operator/skill-forge \
+  corvin_operator/forge \
   core/orchestration \
   core/learning \
   core/compliance \
@@ -408,7 +408,7 @@ grep -r "scope_root(" --include="*.py" \
 
 **Example refactoring locations:**
 
-**Location 1: `operator/skill-forge/skill_forge/multi_registry.py`**
+**Location 1: `corvin_operator/skill-forge/skill_forge/multi_registry.py`**
 ```python
 # OLD
 skill_root = scope_root("user", channel_id=channel_id)
@@ -417,7 +417,7 @@ skill_root = scope_root("user", channel_id=channel_id)
 skill_root = scope_root("user", tenant_id=context.tenant_id, channel_id=channel_id)
 ```
 
-**Location 2: `operator/forge/forge/tool_registry.py`**
+**Location 2: `corvin_operator/forge/forge/tool_registry.py`**
 ```python
 # OLD
 forge_root = scope_root("global")
@@ -827,7 +827,7 @@ def migrate_to_tenant_native(dry_run: bool = False, cleanup_ttl: str = "30d"):
     print(f"  To clean up now: corvin migrate --cleanup-old")
 ```
 
-#### 2.D.2 Add CLI commands to `operator/cli/corvin_cli.py`
+#### 2.D.2 Add CLI commands to `corvin_operator/cli/corvin_cli.py`
 
 ```bash
 corvin migrate --to-tenant-native [--dry-run] [--cleanup-ttl 30d]
@@ -1397,9 +1397,9 @@ def test_feature_flag_removed():
 | Module | Depends On | Status | Risk |
 |---|---|---|---|
 | core/paths/tenant.py | None (new) | INDEPENDENT | LOW |
-| operator/forge/forge/scope.py | core/paths/tenant.py | Phase A ✓ Phase B | HIGH |
-| operator/skill-forge/multi_registry.py | scope_root() new signature | Phase B | MEDIUM |
-| operator/forge/tool_registry.py | scope_root() new signature | Phase B | MEDIUM |
+| corvin_operator/forge/forge/scope.py | core/paths/tenant.py | Phase A ✓ Phase B | HIGH |
+| corvin_operator/skill-forge/multi_registry.py | scope_root() new signature | Phase B | MEDIUM |
+| corvin_operator/forge/tool_registry.py | scope_root() new signature | Phase B | MEDIUM |
 | core/orchestration/subsystems/skill_forge_subsystem.py | scope_root() | Phase C | MEDIUM |
 | core/orchestration/subsystems/tool_forge_subsystem.py | scope_root() | Phase C | MEDIUM |
 | core/orchestration/subsystems/learning_engine.py | tenant_audit_file() | Phase C | LOW |

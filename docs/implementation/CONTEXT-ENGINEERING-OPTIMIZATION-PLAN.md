@@ -92,7 +92,7 @@ Each phase ships behind feature flags (default-off); each has ≥1 E2E test prov
 
 | Task | Days | Acceptance Criteria |
 |---|---|---|
-| Backend: `grade_stage(tenant_id, stage_id, score, notes, grader)` function exists | 1 | `operator/context_engineering/grades.py:66` callable; writes to `grades.py`-Store with `grader="operator"` |
+| Backend: `grade_stage(tenant_id, stage_id, score, notes, grader)` function exists | 1 | `corvin_operator/context_engineering/grades.py:66` callable; writes to `grades.py`-Store with `grader="operator"` |
 | Routes: `GET/POST /vibe-engineering/grades[/{stage}]` | 1 | GET returns all grades; POST/{stage} calls `grade_stage`; both auth-gated (require_session) + CSRF |
 | Frontend: `pages/learning-ledger.tsx` (3 sections) | 2 | **Section 1:** CEL-Grade buttons (👎/😐/👍) for each stage; POST updates list; **Section 2:** mount existing TreeOfThoughts (make reachable — proof of reachability C11); **Section 3:** ULO placeholder |
 | E2E Test (reachability + signal) | 2 | Real Console session → visit ledger → POST grade → `GET /grades` → n_grades incremented; TreeOfThoughts nav-reachable; 0 console.error |

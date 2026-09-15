@@ -5,7 +5,7 @@ ADR-0275 (surface), ADR-0276 (license gate), ADR-0277 (ContextStage contract).
 **Status:** Draft — revised after adversarial review R1 (2026-08-07).
 **Build status:** ✅ **P-1 + P0 + P1 IMPLEMENTED + tested (2026-08-10).**
 
-- **P-1** (`78f79ff`): `build_brief` in `operator/context_engineering/pipeline.py` (single
+- **P-1** (`78f79ff`): `build_brief` in `corvin_operator/context_engineering/pipeline.py` (single
   memory→graph→skill boundary, fail-safe, returns brief+trace); wired into
   `chat_runtime.stream_turn` before the pre-spawn gates via the file-path importlib trick
   (sys.modules-registered — the old engine.py load lacked that, matching the C2 "CEL never
@@ -43,9 +43,9 @@ promotion gate, which has no live subject while every stage is `trust=builtin`.
 
 ## HONEST PREMISE (corrected after review)
 The CEL is **built but NOT wired into any live turn**. Verified: `TaskEngine`
-(Phase 5.5, `operator/task_analysis/engine.py`) is imported only by `scripts/*`,
-`operator/orchestration/tde/*`, and `orchestration/{decision_cache,initial_analysis}`
-— grep of the live turn path (`operator/bridges/adapter.py`, `core/console/.../
+(Phase 5.5, `corvin_operator/task_analysis/engine.py`) is imported only by `scripts/*`,
+`corvin_operator/orchestration/tde/*`, and `orchestration/{decision_cache,initial_analysis}`
+— grep of the live turn path (`corvin_operator/bridges/adapter.py`, `core/console/.../
 chat_runtime.py` + routes) for `TaskEngine|enrich_task|RichTaskBrief|MemoryLookup|
 cel_memory` returns ZERO hits. The live path imports `initial_analysis.py`, which only
 builds a *prompt*, never the CEL. ADR-0269 (the CEL foundation) is itself `proposed`.
@@ -73,7 +73,7 @@ This is Phase P-1 below and is a prerequisite for P0/P1 having any call site (av
 
 ## Phase P-1 — Wire the CEL into the live turn (PREREQUISITE, was missing)
 Give the live console/bridge turn an actual CEL pass, behind the flag:
-- Add a single orchestration entry `operator/context_engineering/pipeline.py::
+- Add a single orchestration entry `corvin_operator/context_engineering/pipeline.py::
   build_brief(task, tenant, session) -> (brief, trace)` that runs ALL stages
   (memory → graph → skill) in one place — the true "run all / run none" boundary
   (fixes C1: today memory is built in `memory_lookup.enrich_task` but graph+skill are
@@ -87,9 +87,9 @@ Tests: flag-on → a live turn produces a brief + trace; flag-off → unchanged 
 zero CEL calls (e2e-wiring proof, both states).
 
 ## Phase P0 — License gate (backend; operator priority)
-- `operator/license/limits.py`: add `context_engineering_units_per_day` = 10 to
+- `corvin_operator/license/limits.py`: add `context_engineering_units_per_day` = 10 to
   FREE_TIER (verify the exact FREE_TIER dict shape + how `feature` keys are read).
-- `operator/context_engineering/license_gate.py::enforce_ce_quota(tenant_id) -> bool`.
+- `corvin_operator/context_engineering/license_gate.py::enforce_ce_quota(tenant_id) -> bool`.
   Borrow ONLY the counting + fail-closed-on-import mechanics from
   `acs_engine_adapter._enforce_acs_compute_quota`; the caller semantics are NEW and
   opposite: **True = enrich, False = degrade to plain context and STILL RUN** (never a

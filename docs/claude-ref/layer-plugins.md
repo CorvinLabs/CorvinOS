@@ -5,7 +5,7 @@
 
 ## Cowork plugin (layer 4) — optional, on top of voice
 
-The sister plugin `operator/cowork/` turns the single coder agent into a
+The sister plugin `corvin_operator/cowork/` turns the single coder agent into a
 multi-persona hub: a different role per chat (research, inbox, coder, ...).
 
 **What you, as Claude Code, need to know when editing:**
@@ -21,12 +21,12 @@ multi-persona hub: a different role per chat (research, inbox, coder, ...).
 - READ / WRITE path rules from voice apply unchanged — the cowork resolver
   is called _inside_ `_resolve_chat_profile`, so it benefits from
   hot-reload automatically.
-- Personas live in `operator/cowork/personas/<name>.json` (bundle) and
+- Personas live in `corvin_operator/cowork/personas/<name>.json` (bundle) and
   `<repo>/.corvin/cowork/personas/<name>.json` (user override; legacy
   callers reach it via the back-compat symlink at
   `~/.config/claude-cowork/personas/`; `.corvinOS/` resolves identically
   until Phase 7).
-- Standalone CLI: `operator/cowork/bin/cowork {list,show,run,bind,unbind,add,rm}`
+- Standalone CLI: `corvin_operator/cowork/bin/cowork {list,show,run,bind,unbind,add,rm}`
   is the implementation behind the slash commands AND a standalone tool
   with no bridge dependency.
 
@@ -172,7 +172,7 @@ Builds on ACS-X. Three components:
 
 ## Forge plugin (layer 6) — runtime tool generation
 
-The newest plugin `operator/forge/` lets a chat-pinned persona register
+The newest plugin `corvin_operator/forge/` lets a chat-pinned persona register
 and execute schema-bound tools at runtime, sandboxed.
 
 **What you, as Claude Code, need to know when editing:**
@@ -247,7 +247,7 @@ the maschinerie wired — they actually use it.
 **Persona-aware sandbox.** The default sandbox is strict for every
 persona (no network, no subprocess, fresh /tmp, ro /usr). Policy can
 relax single axes per persona via `persona_sandbox_overrides` in
-`operator/forge/forge/policy.json` or any workspace-level `policy.json`:
+`corvin_operator/forge/forge/policy.json` or any workspace-level `policy.json`:
 
 ```jsonc
 {
@@ -271,7 +271,7 @@ env or persona-not-in-overrides → strict default. The `sandbox_label`
 in the run manifest flips to `bwrap+net` when network was permitted, so
 the audit trail makes the relaxation explicit.
 
-Real-E2E coverage: `operator/forge/tests/test_persona_sandbox.py`
+Real-E2E coverage: `corvin_operator/forge/tests/test_persona_sandbox.py`
 spawns a local HTTP stub, forges a `urllib.request.urlopen` tool, runs
 it under `FORGE_PERSONA=research` (succeeds, body matches) and under
 `FORGE_PERSONA=coder` (fails with `Connection refused`). The test
@@ -314,7 +314,7 @@ rw-binds for the tool itself). A future `mcp__forge__forge_chunk(run_id,
 offset, length)` MCP tool can wrap the same read for clients that
 prefer JSON-RPC over filesystem access.
 
-Real-E2E: `operator/forge/tests/test_output_streaming.py` forges an
+Real-E2E: `corvin_operator/forge/tests/test_output_streaming.py` forges an
 8 MiB-stdout tool with a 1 MiB cap, verifies all four meta fields,
 reads the artifact, asserts byte-identity, and reads the
 `[cap, 2*cap)` chunk to prove the bytes that *would have been*
@@ -328,7 +328,7 @@ confirms the strict default behaviour is unchanged.
   the static check, the policy clamp, the rate limiter, the breaker,
   and the hash-chain audit.
 - Don't disable or weaken the path-gate hook
-  (`operator/voice/hooks/path_gate.py`). It is the structural enforcement
+  (`corvin_operator/voice/hooks/path_gate.py`). It is the structural enforcement
   that makes "forge on every persona" safe. If you must touch it, every
   Bash vector (>, >>, tee, mv, cp, install, sed -i, dd of=, python -c
   open, rsync, eval / exec / `$(...)` fail-closed) needs a fresh E2E
@@ -340,7 +340,7 @@ confirms the strict default behaviour is unchanged.
 
 ## SkillForge plugin (layer 7) — runtime skill generation
 
-The newest plugin `operator/skill-forge/` is the sister to forge: where
+The newest plugin `corvin_operator/skill-forge/` is the sister to forge: where
 forge generates **executable tools** (sandboxed code), skill-forge
 generates **skills** — markdown knowledge that gets prompt-injected into
 sub-agents. Both share the four-scope mechanic and the hash-chain audit
@@ -436,7 +436,7 @@ events.
   The layer-10 path-gate hook keeps this guarantee intact even when a
   persona runs in `bypassPermissions`: direct `Write` / `Edit` / `Bash`
   on `<scope>/skill-forge/**` and on the slot-mirror under
-  `operator/skill-forge/skills/dyn/**` is blocked, so the only write
+  `corvin_operator/skill-forge/skills/dyn/**` is blocked, so the only write
   path is the MCP server, which itself routes everything through
   `lint()`.
 - The persona-level opt-in `skill_forge_enabled: true` is the supported
@@ -457,7 +457,7 @@ Every successful `SkillRegistry.create()` persists the skill **twice**:
    plus `meta.json` with grades and provenance. This is the
    source-of-truth and the file the registry reads back.
 2. **Engine-facing slot mirror** at
-   `<repo>/operator/skill-forge/skills/dyn/<sanitized>/SKILL.md` — only
+   `<repo>/corvin_operator/skill-forge/skills/dyn/<sanitized>/SKILL.md` — only
    `name` + `description` in the front-matter, body verbatim. The dot in
    dotted names is replaced by underscore (`trading.score_reviews` →
    `trading_score_reviews`) because the engine prefers undottered names.
@@ -479,7 +479,7 @@ on our side.
    so its mere presence is unambiguous; every test that exercises
    `create()`/`delete()` sets it explicitly.
 2. Walk-up from `registry.py`'s location for a `.corvin_repo`/`plugins/`
-   marker → `<repo>/operator/skill-forge/skills/dyn/` — the real
+   marker → `<repo>/corvin_operator/skill-forge/skills/dyn/` — the real
    production path, confirmed by `test_engine_visibility.py`'s actual
    `claude -p` subprocess run to be what the native engine loader scans.
 3. Fallback `~/.corvin/plugin-slot/` (no repo marker found — e.g. a
@@ -511,7 +511,7 @@ Production-Readiness Roadmap, item P0-1.
   slot, because the slot write is reached only after the canonical write
   has committed, which itself is gated on the linter.
 
-**Gitignore:** `operator/skill-forge/skills/dyn/` is gitignored — dynamic
+**Gitignore:** `corvin_operator/skill-forge/skills/dyn/` is gitignored — dynamic
 skills are ephemeral and never land in commits. Static plugin-shipped
 skills (e.g. the `cowork` and `voice` skills) live one directory level
 above the `dyn/` subtree, so they remain tracked.
@@ -527,8 +527,8 @@ between subprocess boots, not within them.
 `delete()` MUST set `CORVIN_PLUGIN_SLOT_DIR` before importing —
 `CORVIN_HOME` alone no longer redirects the slot (2026-08-02 fix, above),
 so setting only `CORVIN_HOME` would leave the walk-up fallback writing
-into the real `operator/skill-forge/skills/dyn/` and pollute the
-workspace. The existing tests in `operator/skill-forge/tests/` set
+into the real `corvin_operator/skill-forge/skills/dyn/` and pollute the
+workspace. The existing tests in `corvin_operator/skill-forge/tests/` set
 `CORVIN_PLUGIN_SLOT_DIR` at module load via
 `tempfile.mkdtemp(prefix="sf-slot-test-")`.
 
@@ -539,14 +539,14 @@ each with a different latency / mechanism:
 
 1. **Canonical workspace** — `<scope_root>/skill-forge/skills/<name>/SKILL.md`
    plus `meta.json`. Source of truth for grade / promote / purge.
-2. **Plugin-slot mirror** — `operator/skill-forge/skills/dyn/<sanitized>/SKILL.md`.
+2. **Plugin-slot mirror** — `corvin_operator/skill-forge/skills/dyn/<sanitized>/SKILL.md`.
    Engine-discoverable via the standard plugin-skill loader, but the engine
    caches the plugin list at subprocess boot — visible only on the **next**
    claude subprocess.
 3. **Adapter-injection** — the bridge adapter merges the active skills into
    the claude subprocess' `--append-system-prompt` per inbox-message, so
    the worker has the skill knowledge **on the very next bridge turn**.
-   Implemented in `operator/bridges/shared/skill_inject.py`; voice
+   Implemented in `corvin_operator/bridges/shared/skill_inject.py`; voice
    imports it via `try: import skill_inject` and stays usable when the
    module is absent (mirrors the cowork pattern).
 
@@ -701,7 +701,7 @@ backdated entries while keeping fresh ones intact. Wired into
 ## MCP Plugin Manager (ADR-0096) — user-installable external MCP tools
 
 **Status:** Implemented (M1–M4 complete).  
-**Module:** `operator/mcp_manager/`  
+**Module:** `corvin_operator/mcp_manager/`  
 **CLI:** `corvin-mcp install|activate|deactivate|list|show|remove|update|search|secrets`
 
 The MCP Plugin Manager lets users install and activate external MCP servers
@@ -783,7 +783,7 @@ The result is merged into `mcp_servers` **before** the persona JSON (persona win
 
 ### Bundled manifest library
 
-`operator/mcp_manager/mcp_manager/builtin_manifests/` contains curated manifests
+`corvin_operator/mcp_manager/mcp_manager/builtin_manifests/` contains curated manifests
 for well-known tools: `brave-search`, `filesystem`, `github`, `sqlite`, `fetch`.
 Use `corvin-mcp search <query>` to discover them.
 
@@ -801,7 +801,7 @@ file. The call is best-effort (silent fallback if mcp_manager is absent).
 - Skip SHA256 / Docker digest verification on spawn (mandatory per spawn).
 - Make `mcp_plugin.spawn_blocked` advisory — it blocks the spawn or it is broken.
 - Let a persona bypass `mcp_plugins_allowed` via `append_system`.
-- Use `import anthropic` in any `operator/mcp_manager/` module (CI AST lint enforces).
+- Use `import anthropic` in any `corvin_operator/mcp_manager/` module (CI AST lint enforces).
 
 
 ---
@@ -931,7 +931,7 @@ carrying **four** meanings in this repo:
 | the L1–L44 security/compliance layer stack | CLAUDE.md § Layer Stack Overview, `docs/claude-ref/layer-*.md` |
 | ADR-0124 **audit layers** | `core/console/corvin_console/routes/audit_layers.py` |
 | the ADR-0142 **layer-extension API**, which answers 403 `reason="core_layer_immutable"` | `core/console/corvin_console/routes/extensions.py` |
-| **quality layers** | `routes/quality_layers.py`, `operator/bridges/shared/quality_layers.py` |
+| **quality layers** | `routes/quality_layers.py`, `corvin_operator/bridges/shared/quality_layers.py` |
 
 So the axis is **`boot_layer`**, enum **`BootLayer`**. Values unchanged:
 `compliance` | `core` | `bundled` | `installed`. Renamed surface — all of it live in code:
@@ -1079,7 +1079,7 @@ NOT reached through the bus — those are live. See `docs/EXTENSIBLE_CORE_PLUGIN
 (`DiscordBridgePlugin` … `TeamsBridgePlugin`), each with
 `plugin_id = f"{channel}-bridge"` and `plugin_type = "bridge_channel"`, landing on
 `boot_layer=bundled`. Process management is delegated to
-`operator/bridges/bridge_manager.py` — `channel_daemon_running()`,
+`corvin_operator/bridges/bridge_manager.py` — `channel_daemon_running()`,
 `adapter_running_pid()`, `start_channel_detached()` — never reimplemented.
 
 **Since 2026-07-27** `bootstrap._bundled_bridge_declarations()` injects the seven
@@ -1572,7 +1572,7 @@ Regression test: `test_same_chat_id_on_two_channels_does_not_collide`.
 
 `slash_commands.py`'s `_plugin_builder_continue`/`_plugin_builder_command`
 are thin wrappers around `plugin_builder.turn`;
-`operator/bridges/shared/adapter.py`'s `_plugin_builder_bridge_reply` (defined
+`corvin_operator/bridges/shared/adapter.py`'s `_plugin_builder_bridge_reply` (defined
 just above `process_one`) is the bridge-side twin, called from the plain-text
 `else` branch of `process_one` right after `prompt` is finalized — guarded to
 skip audio/image/document/video turns (a transcription/caption is an
@@ -1836,7 +1836,7 @@ Six findings against the plugin load paths, fixed at the root. Guard tests:
 `core/plugins/tests/test_marketplace_manifests_loadable.py`,
 `core/plugins/tests/test_boot_marketplace_e2e_subprocess.py`,
 `core/console/tests/test_plugins_route.py::TestOriginIsNeverSelfCertified`,
-`tests/unit/operator/cli/test_plugin_runtime_marketplace.py`.
+`tests/unit/corvin_operator/cli/test_plugin_runtime_marketplace.py`.
 
 | # | Defect | Fix (load-bearing rule) |
 |---|---|---|

@@ -122,7 +122,7 @@ corrupt, and a read/write lock pair on disjoint files that never interlocked).
 
 ## P-A — ContextStage contract + config-driven pipeline (ADR-0280)
 
-**New files** `operator/context_engineering/stages/`:
+**New files** `corvin_operator/context_engineering/stages/`:
 - `base.py` — `ContextBundle` (dataclass), `StageCtx` (tenant, session, budget
   handle), `StageTelemetry` (status, confidence_tier, duration_ms, sources, notes),
   `ContextStage` Protocol (`run(bundle, ctx) -> (bundle, telemetry)`).
@@ -156,7 +156,7 @@ the default-config brief byte-matches the pre-refactor brief for sample tasks.
 `skills_to_bind: list[SkillRef]` (bounded; a per-turn cap constant).
 **Changed** the boundary consumers — `chat_runtime._build_args` and
 `adapter._resolve_spawn_inputs`: after `build_brief`, pass the bundle's
-tools/skills to the resolver composition (`operator/cowork/lib/resolver.py`
+tools/skills to the resolver composition (`corvin_operator/cowork/lib/resolver.py`
 `_inject_forge_capability`/`_inject_skill_forge_capability` shape) so they enter
 `--allowedTools` + `mcp_servers` for THIS turn. Record bound ids in the Decision
 Record (ADR-0278).

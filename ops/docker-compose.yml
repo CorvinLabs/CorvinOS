@@ -46,11 +46,11 @@ services:
       # Bridge settings.json files — operator-supplied, hot-reloaded by daemons.
       # Each one is bind-mounted into the in-image bridge directory so the
       # daemon reads it as if it were repo-local.
-      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/discord.json:/opt/corvin-repo/operator/bridges/discord/settings.json:ro
-      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/email.json:/opt/corvin-repo/operator/bridges/email/settings.json:ro
-      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/whatsapp.json:/opt/corvin-repo/operator/bridges/whatsapp/settings.json:ro
-      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/telegram.json:/opt/corvin-repo/operator/bridges/telegram/settings.json:ro
-      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/slack.json:/opt/corvin-repo/operator/bridges/slack/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/discord.json:/opt/corvin-repo/corvin_operator/bridges/discord/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/email.json:/opt/corvin-repo/corvin_operator/bridges/email/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/whatsapp.json:/opt/corvin-repo/corvin_operator/bridges/whatsapp/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/telegram.json:/opt/corvin-repo/corvin_operator/bridges/telegram/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/slack.json:/opt/corvin-repo/corvin_operator/bridges/slack/settings.json:ro
       # Optional: bind-mount the entire repo for live development. In
       # production leave commented — image ships a tag-pinned clone.
       # - ../:/opt/corvin-repo:ro

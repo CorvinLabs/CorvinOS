@@ -57,7 +57,7 @@ Closing these would reverse a maintainer decision, not complete an implementatio
 |---|---|
 | Plugin process isolation / sandboxing | ADR-0249 § "Not decided here" |
 | gRPC admin transport | ADR-0239 |
-| ADR-0236 core extraction out of `operator/bridges/shared/` | ADR-0236 status, ADR-0242 § Overview |
+| ADR-0236 core extraction out of `corvin_operator/bridges/shared/` | ADR-0236 status, ADR-0242 § Overview |
 | ADR-0231 Stage 4 (LDD-tuned healing policies) | needs production MTTR data |
 | `corvin plugin list` | ADR-0244 — dropped, not deferred |
 | Marketplace downloader / `install <name>` / search | ADR-0233 D3, ADR-0248 |
@@ -326,7 +326,7 @@ it is not true of the thing the field would point at.
 | Handle | Target | State |
 |---|---|---|
 | `compute_registry` | `corvin_compute.engine_registry.get_registry()` | **Exists**, has `register(engine)`, and the shipped template calls exactly that. Passing it is the one-line change the stage assumed. |
-| `engine_factory` | `operator/bridges/shared/engine_registry.py` | Engines come from a hard-coded `_ENGINE_BUILDERS` dict with three entries and there is **no `register()`**. A plugin cannot enter itself. Wiring this means designing a registration API for L22 first. |
+| `engine_factory` | `corvin_operator/bridges/shared/engine_registry.py` | Engines come from a hard-coded `_ENGINE_BUILDERS` dict with three entries and there is **no `register()`**. A plugin cannot enter itself. Wiring this means designing a registration API for L22 first. |
 | `channel_registry` | — | **Does not exist.** The only references in the tree are in `templates/bridge_channel_plugin.py`, which calls `ctx.channel_registry.register(self)` against a class nobody wrote. |
 
 So `bridge_channel` is not a populated-handle problem at all: its template targets an
@@ -435,7 +435,7 @@ without taking down the core; flag-off = `bridge_manager.py` manages bridges exa
 today; the ADR-0242 guard test that fails if the supervisor ever reads
 `headless_api_mode` stays green.
 
-**Before commit:** `bash operator/bridges/run-all-tests.sh` (CLAUDE.md). Budget it —
+**Before commit:** `bash corvin_operator/bridges/run-all-tests.sh` (CLAUDE.md). Budget it —
 the previous run exceeded 15 minutes and buffers output until exit.
 
 #### Shipped 2026-07-27
@@ -669,7 +669,7 @@ A stage without its E2E row is not done.
 the real `corvin` CLI scaffolds an `audit_backend`; the author's one TODO is
 implemented; it is declared in a real `tenant.corvin.yaml`; `bootstrap_all()`
 boots it as the gateway does; a real audited action goes through
-`operator/bridges/shared/audit.py`; the core chain holds the record, the plugin
+`corvin_operator/bridges/shared/audit.py`; the core chain holds the record, the plugin
 holds a copy, and `verify_audit()` still passes. A second scenario injects a
 raising `fanout()` and proves the core record survives it — ADR-0233's
 additive-only invariant measured on the real writer instead of asserted about a
@@ -706,10 +706,10 @@ A green E2E for a chain nobody had connected deserves that check.
 
 Checking where to register E1 turned up the fourth occurrence of this plan's
 defect class, at the level of the gates themselves. **`core/plugins/tests/` was
-run by no automation at all** — absent from `operator/bridges/run-all-tests.sh`
+run by no automation at all** — absent from `corvin_operator/bridges/run-all-tests.sh`
 (the CLAUDE.md pre-commit gate) and absent from every `.github/workflows/` file.
-`coverage.yml` lists `tests/`, `operator/bridges/shared/`, `core/console/tests/`,
-`core/compute/tests/` and `operator/mcp_manager/tests/`, and stops there.
+`coverage.yml` lists `tests/`, `corvin_operator/bridges/shared/`, `core/console/tests/`,
+`core/compute/tests/` and `corvin_operator/mcp_manager/tests/`, and stops there.
 
 That is 950+ tests that ran only when somebody typed the path by hand. Among
 them:

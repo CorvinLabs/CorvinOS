@@ -6,12 +6,12 @@ live here.
 → **ADR:** Corvin-ADR: decisions/0043-L35-egress-lockdown.md
 → **ADR-0167 M1:** Corvin-ADR: decisions/0167-entangled-license-ratchet.md (ELR integration)
 → **Modules:** 
-  - `operator/bridges/shared/egress_gate.py` (policy enforcer + ratchet integration)
-  - `operator/license/elr.py` (Entangled License Ratchet core, M1)
+  - `corvin_operator/bridges/shared/egress_gate.py` (policy enforcer + ratchet integration)
+  - `corvin_operator/license/elr.py` (Entangled License Ratchet core, M1)
 → **Tests:** 
-  - `operator/bridges/shared/test_egress_gate.py`
-  - `operator/license/tests/test_elr_m1.py` (34 comprehensive ELR tests)
-→ **Presets:** `operator/bundle/config-templates/tenant.corvin.eu-production-{ollama,http}.yaml`
+  - `corvin_operator/bridges/shared/test_egress_gate.py`
+  - `corvin_operator/license/tests/test_elr_m1.py` (34 comprehensive ELR tests)
+→ **Presets:** `corvin_operator/bundle/config-templates/tenant.corvin.eu-production-{ollama,http}.yaml`
 
 ---
 
@@ -143,7 +143,7 @@ Loader rules:
 ## EU_PRODUCTION presets
 
 Two shipped templates, both under
-`operator/bundle/config-templates/`:
+`corvin_operator/bundle/config-templates/`:
 
 ### `tenant.corvin.eu-production-ollama.yaml` (recommended default)
 
@@ -293,7 +293,7 @@ isolation, both wire into the same adapter compliance-gate point.
 ## Tests
 
 ```bash
-python3 operator/bridges/shared/test_egress_gate.py
+python3 corvin_operator/bridges/shared/test_egress_gate.py
 core/console/tests/test_model_catalog_egress_gate.py   # console model-catalog route gating
 ```
 
@@ -328,13 +328,13 @@ forward-secrecy for distributed tier.
 
 ### Core components (M1)
 
-**`operator/license/elr.py`:**
+**`corvin_operator/license/elr.py`:**
 - `EntangledRatchet` — forward-only state machine, tile derivation, commitments
 - `WrappedCapabilityDescriptor` — wire format (nonce || ciphertext)
 - `CapabilityEnvelope` — ChaCha20-Poly1305 wrap/unwrap (fail-closed)
 - `make_root_from_license_token()` — HKDF-Extract with domain separation
 
-**`operator/bridges/shared/egress_gate.py` (integration stub):**
+**`corvin_operator/bridges/shared/egress_gate.py` (integration stub):**
 - `EgressGate(ratchet=..., capability_label=...)` — optional ratchet binding
 - `_try_ratchet_policy_check()` — returns None in M1 (M2 will unwrap descriptor)
 - Fallback to static policy when ratchet unavailable or fails (fail-closed)
@@ -356,7 +356,7 @@ of root and ratchet re-implementation. ELR does not claim impossibility
 
 ### Testing
 
-`operator/license/tests/test_elr_m1.py` — **34 tests, 100% green:**
+`corvin_operator/license/tests/test_elr_m1.py` — **34 tests, 100% green:**
 - Ratchet core (init, advance, state immutability, cache coherence)
 - AEAD (wire format, roundtrip, encryption/decryption, corruption detection)
 - Root derivation (deterministic, domain-separated, different tokens)

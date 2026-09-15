@@ -156,14 +156,14 @@ a verdict that ADR-0220 then builds on.
 
 | Piece | Where |
 |---|---|
-| `RealTdeOrchestrator` (runs + judges the arms) | `operator/orchestration/tde/tde_measurement.py` |
+| `RealTdeOrchestrator` (runs + judges the arms) | `corvin_operator/orchestration/tde/tde_measurement.py` |
 | `MeasurementSample`, `MeasurementRecorder`, `aggregate_measured_evidence` | same file |
 | `classify_band` + `_COMPLEXITY_TO_BAND` | same file |
 | `MockTdeOrchestrator` | same file — **test double, no production caller** |
-| `whole_task_direct_baseline`, `whole_task_tier_baseline`, shared `_whole_task_single_turn` | `operator/orchestration/tde/tde_engine.py` |
-| Gate verdicts (`evaluate_band`, `evaluate_tde_verdict`) | `operator/orchestration/tde/decision_gate.py` |
+| `whole_task_direct_baseline`, `whole_task_tier_baseline`, shared `_whole_task_single_turn` | `corvin_operator/orchestration/tde/tde_engine.py` |
+| Gate verdicts (`evaluate_band`, `evaluate_tde_verdict`) | `corvin_operator/orchestration/tde/decision_gate.py` |
 | Hook: coverage gate, ctx capture, detached spawn | `core/console/corvin_console/chat_runtime.py` (`_stream_tde_turn`, `_measurement_should_sample`, `_run_tde_measurement`, `_spawn_tde_measurement`) |
-| Wiring declarations | `operator/orchestration/tde/WIRING.yaml` |
+| Wiring declarations | `corvin_operator/orchestration/tde/WIRING.yaml` |
 
 Both baselines share `_whole_task_single_turn` deliberately: they must differ in
 EXACTLY ONE variable, the model. Two code paths would let a prompt or parser
@@ -206,7 +206,7 @@ Recorded because they were load-bearing and would otherwise be inherited again:
   from `sys.modules` to make `operator.orchestration.tde…` imports resolve. That
   hack also made `operator/` a package for any process rooted at the repo, which
   crash-looped `corvin-webui.service` (~80 systemd restarts; `asyncio` needs
-  `operator.eq`). Fixed in `5187bd4` by deleting `operator/__init__.py`, reverting
+  `operator.eq`). Fixed in `5187bd4` by deleting `corvin_operator/__init__.py`, reverting
   the conftest hack, and moving to the repo's existing `tde.X` import convention.
   Without the hack, 10 of those tests failed on collection.
 - **"k=4 Phase 2 wiring complete."** — The k=4 hook could never have run: its

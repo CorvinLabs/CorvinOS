@@ -161,7 +161,7 @@ more than 2x — so the filter must always be quoted with the number.
 
 | Path | LOC (`*.py`, no `node_modules`/`.venv`/`site-packages`) |
 |---|---|
-| `operator/bridges/shared` | 181,127 |
+| `corvin_operator/bridges/shared` | 181,127 |
 | `core/console/corvin_console` | 65,305 |
 | `core/plugins` | 19,151 |
 | `core/plugins/corvin_plugins` (the contract itself) | 7,781 |
@@ -176,16 +176,16 @@ Where the building blocks actually live today:
 
 | Mechanism | Actual location today |
 |---|---|
-| House rules gate (L44) | `operator/bridges/shared/` |
-| Consent gate (L18) | `operator/bridges/shared/` |
-| Erasure orchestrator (L36) | `operator/bridges/shared/` |
+| House rules gate (L44) | `corvin_operator/bridges/shared/` |
+| Consent gate (L18) | `corvin_operator/bridges/shared/` |
+| Erasure orchestrator (L36) | `corvin_operator/bridges/shared/` |
 | Audit writer + hash chain (L16) | `core/compliance/corvin_compliance_reports/` |
 | Boot tripwire (ADR-0232/0233) | `core/compliance/corvin_compliance_reports/tripwire.py` |
 
 **None of** `core/compliance/audit_writer.py`, `core/session/middleware.py`, or
 `core/routing/http_router.py` exists. Earlier drafts of ADR-0236 cited them as if they
 did; they are *target* paths. Moving the compliance mechanisms out of the 181k-LOC
-`operator/bridges/shared/` tree is the reason ADR-0236 is **not** part of this plan: it
+`corvin_operator/bridges/shared/` tree is the reason ADR-0236 is **not** part of this plan: it
 touches the live GDPR hash chain and the running bridges at the same time, and it gets
 its own plan, its own ADR, and its own migration gate.
 

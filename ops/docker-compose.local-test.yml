@@ -65,14 +65,14 @@ services:
 
       # ── bridge settings (sandbox tokens, not production) ─────────────────
       # Copy from ops/bridge-settings-templates/ and fill in sandbox tokens.
-      - ./local-test-data/bridge-settings/discord.json:/opt/corvin-repo/operator/bridges/discord/settings.json:ro
-      - ./local-test-data/bridge-settings/email.json:/opt/corvin-repo/operator/bridges/email/settings.json:ro
-      - ./local-test-data/bridge-settings/whatsapp.json:/opt/corvin-repo/operator/bridges/whatsapp/settings.json:ro
-      - ./local-test-data/bridge-settings/telegram.json:/opt/corvin-repo/operator/bridges/telegram/settings.json:ro
-      - ./local-test-data/bridge-settings/slack.json:/opt/corvin-repo/operator/bridges/slack/settings.json:ro
+      - ./local-test-data/bridge-settings/discord.json:/opt/corvin-repo/corvin_operator/bridges/discord/settings.json:ro
+      - ./local-test-data/bridge-settings/email.json:/opt/corvin-repo/corvin_operator/bridges/email/settings.json:ro
+      - ./local-test-data/bridge-settings/whatsapp.json:/opt/corvin-repo/corvin_operator/bridges/whatsapp/settings.json:ro
+      - ./local-test-data/bridge-settings/telegram.json:/opt/corvin-repo/corvin_operator/bridges/telegram/settings.json:ro
+      - ./local-test-data/bridge-settings/slack.json:/opt/corvin-repo/corvin_operator/bridges/slack/settings.json:ro
 
       # ── live source mount (optional) ──────────────────────────────────────
-      # Uncomment to reflect Python changes in operator/ without a full rebuild.
+      # Uncomment to reflect Python changes in corvin_operator/ without a full rebuild.
       # Leave commented for a clean image-only installation test.
       # JS bridge changes (daemon.js) still require a rebuild even with this mount.
       # - ../:/opt/corvin-repo:ro

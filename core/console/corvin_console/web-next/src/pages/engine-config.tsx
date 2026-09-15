@@ -13,7 +13,7 @@
  *   - confidence_score / run_count — aggregated from the tenant's real
  *     hash-chained audit chain (skill.model_selector.classified events),
  *     emitted by a SHADOW classification wired into
- *     operator/bridges/shared/adapter.py's two real turn call sites
+ *     corvin_operator/bridges/shared/adapter.py's two real turn call sites
  *     (model_selector_shadow.py). Shadow = advisory only: it never decides
  *     which model actually serves a turn, it only observes + records.
  *     0 samples is the honest, expected state until real turns accrue.

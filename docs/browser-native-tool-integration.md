@@ -93,7 +93,7 @@ Verified directly in the repo — this is not a green-field design:
 
 **A new `corvin-browser` MCP server**, following the `imagegen-zero-config` pattern:
 
-1. `operator/mcp_manager/servers/corvin-browser/main.py` — a `FastMCP` server whose
+1. `corvin_operator/mcp_manager/servers/corvin-browser/main.py` — a `FastMCP` server whose
    `@mcp.tool()` functions are thin wrappers translating `BROWSER_TOOLS`' schema into calls
    against the *existing* browser-control surface — no new browser-control logic, just a new
    entry point onto the one that exists.
@@ -187,7 +187,7 @@ classifier's job to enforce in the first place.
   for cases where a browser task genuinely does need to run unattended (the REST/agent-loop
   path); the chat-native path's "pause" is just a normal turn ending with a question, no
   separate notification needed since the user is already in the conversation.
-- **Not touching the L5 cowork persona router** (`operator/bridges/shared/router.py`) — it was
+- **Not touching the L5 cowork persona router** (`corvin_operator/bridges/shared/router.py`) — it was
   investigated and confirmed unrelated to this bug; out of scope here.
 
 ## 7. Phased delivery

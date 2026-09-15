@@ -50,7 +50,7 @@ Replace: require_capability("rag.provider", requested=1, tenant_id=tenant_id, en
 
 ### [SUBSYSTEM: bridges/adapter]
 
-**File:** `operator/bridges/shared/adapter.py:10565-10578`
+**File:** `corvin_operator/bridges/shared/adapter.py:10565-10578`
 ```
 Current: _lic_assert_limit("bridges_allowed", channel)
 Replace: require_capability("bridge.channel", requested=1, tenant_id=tenant_id, entry_point=__file__+":10565")

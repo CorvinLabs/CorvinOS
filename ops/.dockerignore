@@ -35,16 +35,16 @@ outputs
 *.local.env
 
 # operator bridge runtime + tokens
-operator/bridges/*/inbox
-operator/bridges/*/outbox
-operator/bridges/*/processed
-operator/bridges/*/attachments
-operator/bridges/*/settings.json
-operator/bridges/whatsapp/auth
-operator/bridges/shared/inbox
-operator/bridges/shared/outbox
-operator/bridges/shared/processed
-operator/bridges/shared/attachments
+corvin_operator/bridges/*/inbox
+corvin_operator/bridges/*/outbox
+corvin_operator/bridges/*/processed
+corvin_operator/bridges/*/attachments
+corvin_operator/bridges/*/settings.json
+corvin_operator/bridges/whatsapp/auth
+corvin_operator/bridges/shared/inbox
+corvin_operator/bridges/shared/outbox
+corvin_operator/bridges/shared/processed
+corvin_operator/bridges/shared/attachments
 
 # Local installation test data — never enters the production image
 local-test-data/

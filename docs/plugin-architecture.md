@@ -468,7 +468,7 @@ A plugin of one of those types loads, registers, reports healthy, appears in the
 Console — and nothing ever calls it. There is no error and no log line.
 
 **Consumed (6).** `router_backend`, `summary_provider`, `notification_backend` and
-`recall_backend` are all called from `operator/bridges/shared/adapter.py`;
+`recall_backend` are all called from `corvin_operator/bridges/shared/adapter.py`;
 `audit_backend` from the gateway; `compute_engine` from the compute worker
 (`corvin_compute/cli.py`), which is a different PROCESS — the one that
 dispatches engines.

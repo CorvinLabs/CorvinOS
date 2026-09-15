@@ -47,7 +47,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Supports DE/EN: ✅ design supports both languages
 - ≤1500 chars: ✅ validated
 
-**Code Location:** `operator/bridges/` (all engine adapters)
+**Code Location:** `corvin_operator/bridges/` (all engine adapters)
 
 **Deployment Ready:** YES
 
@@ -64,7 +64,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Only metadata (duration, language, confidence): ✅
 - GDPR Art. 5 compliance: ✅
 
-**Code Location:** `operator/voice/scripts/stt/`
+**Code Location:** `corvin_operator/voice/scripts/stt/`
 
 **Deployment Ready:** YES
 
@@ -83,7 +83,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Optional RFC 3161 TSA: ✅ available
 - voice-audit verify works: ✅ per-segment verification
 
-**Code Location:** `operator/bridges/shared/audit_sealer.py`
+**Code Location:** `corvin_operator/bridges/shared/audit_sealer.py`
 
 **Deployment Ready:** YES
 
@@ -102,7 +102,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Binary attachments: ✅ ≤1 MiB per envelope
 - <a2a_instruction> framing: ✅ prompt-injection defence
 
-**Code Location:** `operator/bridges/shared/a2a_worker.py`
+**Code Location:** `corvin_operator/bridges/shared/a2a_worker.py`
 
 **Deployment Ready:** YES
 
@@ -120,7 +120,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Fail-closed: ✅ any protected write rejected
 - Self-test: ✅ implemented (`path_gate.self_test_failed` = CRITICAL)
 
-**Code Location:** `operator/voice/hooks/path_gate.py` (CC) + TEB (others)
+**Code Location:** `corvin_operator/voice/hooks/path_gate.py` (CC) + TEB (others)
 
 **Test Environment Issue:** Module import error (local Python namespace conflict with `operator` built-in)
 
@@ -141,7 +141,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Audit-first invariant: ✅ enforced at TEB level
 - Daily verify: ✅ `voice-audit verify` exit code enforced
 
-**Code Location:** `operator/bridges/shared/audit.py`
+**Code Location:** `corvin_operator/bridges/shared/audit.py`
 
 **Test Environment Issue:** audit.jsonl doesn't exist (no runtime session has emitted events yet)
 
@@ -162,7 +162,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - SECRET → local only, no egress: ✅
 - Per-engine enforcement: ✅ at spawn time
 
-**Code Location:** `operator/bridges/shared/data_classification.py`
+**Code Location:** `corvin_operator/bridges/shared/data_classification.py`
 
 **Test Environment Issue:** Module import error (same Python namespace conflict)
 
@@ -183,7 +183,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Fail-closed: ✅ default=deny
 - EU_PRODUCTION preset: ✅ template available
 
-**Code Location:** `operator/bridges/shared/egress_gate.py`
+**Code Location:** `corvin_operator/bridges/shared/egress_gate.py`
 
 **Test Environment Issue:** Module import error (same namespace conflict)
 
@@ -204,7 +204,7 @@ All **9 required EU AI Act compliance layers (L10–L38)** are **architecturally
 - Pseudonymization: ✅ audit chain remains, untraceable
 - Audit-first: ✅ deletion event written before operation
 
-**Code Location:** `operator/bridges/shared/erasure_orchestrator.py`
+**Code Location:** `corvin_operator/bridges/shared/erasure_orchestrator.py`
 
 **Test Environment Issue:** CLI tool not in PATH (operational setup, not code)
 

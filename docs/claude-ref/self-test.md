@@ -1,7 +1,7 @@
 # Boot self-test — full reference
 
-Module: `operator/bridges/shared/self_test.py`
-Tests:  `operator/bridges/shared/test_self_test.py`
+Module: `corvin_operator/bridges/shared/self_test.py`
+Tests:  `corvin_operator/bridges/shared/test_self_test.py`
 CLAUDE.md anchor: section "Boot self-test (load-bearing)"
 
 This document covers what the file body itself doesn't: the per-check
@@ -79,7 +79,7 @@ Quick budget: ~200 ms on a warm interpreter. Full budget: ~1–2 s.
 | `mcp.skill_forge_importable` | CRITICAL | `import skill_forge.mcp_server` succeeds. |
 | `mcp.forge_constructible` (full) | WARNING | `MCPServer(tmp_root)` returns an object with a callable `serve` attribute. |
 | `mcp.skill_forge_constructible` (full) | WARNING | `SkillForgeMCPServer()` returns an object with a callable `serve` attribute. |
-| `mcp.third_party.<exec>` (full) | WARNING | Every distinct executable referenced in any `mcp_servers[*].command` of `operator/cowork/personas/*.json` resolves via `shutil.which`. `python`/`python3`/`node`/`npx` intermediates are skipped (covered by engine probe). |
+| `mcp.third_party.<exec>` (full) | WARNING | Every distinct executable referenced in any `mcp_servers[*].command` of `corvin_operator/cowork/personas/*.json` resolves via `shutil.which`. `python`/`python3`/`node`/`npx` intermediates are skipped (covered by engine probe). |
 
 Why no JSON-RPC `initialize` probe: in production the MCP servers are
 stdio-spawned **children of the engine** for the duration of a turn —
@@ -112,7 +112,7 @@ side-effect-free.
 | `artifacts.config_readable` | WARNING | If a config file is present: `artifacts.load_config()` succeeds. Absent = INFO (defaults apply). |
 | `artifacts.global_root_writable` | WARNING | If `<global>/artifacts/` exists: `os.access(root, W_OK)`. Not CRITICAL — the directory is created on first `artifact_pin` call. |
 | `artifacts.mcp_handlers_registered` | **CRITICAL** | An ephemeral `MCPServer` instance advertises all six expected tools: `artifact_list`, `artifact_search`, `artifact_get`, `artifact_extract`, `artifact_register`, `artifact_pin`. A missing tool means the documented LLM surface is broken. |
-| `artifacts.auto_register_hook` | INFO | `operator/voice/hooks/artifact_register.py` exists and is referenced in `hooks/hooks.json`. Verifies post-tag-bump wiring. |
+| `artifacts.auto_register_hook` | INFO | `corvin_operator/voice/hooks/artifact_register.py` exists and is referenced in `hooks/hooks.json`. Verifies post-tag-bump wiring. |
 
 ---
 
@@ -121,7 +121,7 @@ side-effect-free.
 | Check | Severity | Pass condition |
 |---|---|---|
 | `layer_integrity.capabilities` | **CRITICAL** | Tier 3 — `security_capabilities.bootstrap_core_capabilities()` registers all mandatory layers. A missing capability (deleted/tamper-removed layer) is CRITICAL; emits `security.capability_missing`. |
-| `layer_integrity.manifest` | **CRITICAL** / WARNING | Tier 1 — on-disk layer hashes match the RS256-signed `operator/security/layer-manifest.json`. Absent manifest = WARNING (pre-rollout, no brick); present+bad-sig = CRITICAL; layer hash mismatch = CRITICAL. Emits `layer_integrity.{verified,manifest_absent,manifest_invalid,mismatch}`. |
+| `layer_integrity.manifest` | **CRITICAL** / WARNING | Tier 1 — on-disk layer hashes match the RS256-signed `corvin_operator/security/layer-manifest.json`. Absent manifest = WARNING (pre-rollout, no brick); present+bad-sig = CRITICAL; layer hash mismatch = CRITICAL. Emits `layer_integrity.{verified,manifest_absent,manifest_invalid,mismatch}`. |
 
 → Full details: `docs/claude-ref/layer-integrity-protocol.md`
 

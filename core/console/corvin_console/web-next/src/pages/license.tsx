@@ -61,7 +61,7 @@ const LIMIT_LABELS: Record<string, string> = {
   engines_allowed:       "Allowed engines",
   data_residency:        "Data residency zone",
   // Reserved tier differentiators with no enforcement chokepoint yet
-  // (cloud-phase features — see operator/license/limits.py). Tagged
+  // (cloud-phase features — see corvin_operator/license/limits.py). Tagged
   // "(roadmap)" so the console does not advertise a paid feature that
   // ships no enforced behaviour.
   audit_export:          "Audit export (roadmap)",

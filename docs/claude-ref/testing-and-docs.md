@@ -5,14 +5,14 @@
 **Run all suites before committing** changes to `adapter.py`, `daemon.js`, or `shared/js/`:
 
 ```bash
-bash operator/bridges/run-all-tests.sh
+bash corvin_operator/bridges/run-all-tests.sh
 ```
 
 This runs:
 - **Console tests** (`core/console/tests/`) — Web UI routing, audit, permissions
-- **Bridge tests** (`operator/bridges/*/test_*.py`) — Message parsing, session lifecycle, engine spawning
-- **Adapter tests** (`operator/bridges/shared/test_*.py`) — Compliance gates, audit chain, data flow
-- **E2E tests** (`operator/bridges/e2e/test_*.py`) — Full message → response cycles
+- **Bridge tests** (`corvin_operator/bridges/*/test_*.py`) — Message parsing, session lifecycle, engine spawning
+- **Adapter tests** (`corvin_operator/bridges/shared/test_*.py`) — Compliance gates, audit chain, data flow
+- **E2E tests** (`corvin_operator/bridges/e2e/test_*.py`) — Full message → response cycles
 - **Playwright tests** (`core/console/web-next/e2e/`) — Frontend browser tests
 
 **Exclusion:** WhatsApp daemon excluded from boot test — verify manually via `bridge.sh restart`.

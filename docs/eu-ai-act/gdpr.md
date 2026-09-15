@@ -7,7 +7,7 @@
 
 ## Lawful basis: Art. 6 + Art. 7 — Consent (Layer 16, Phase 4)
 
-**Module:** `operator/bridges/shared/consent.py`
+**Module:** `corvin_operator/bridges/shared/consent.py`
 
 GDPR Art. 6(1)(a) and Art. 7 require that consent be freely given, specific, informed, and
 unambiguous. Corvin implements a **deny-by-default, per-user, TTL-capped consent gate**.
@@ -74,7 +74,7 @@ All consent operations land in the hash chain:
 
 ### Voice transcription (Layer 23)
 
-**Module:** `operator/voice/scripts/stt/`
+**Module:** `corvin_operator/voice/scripts/stt/`
 
 When a voice note is transcribed, only **metadata** enters the audit chain:
 
@@ -112,7 +112,7 @@ strict anonymisation can be applied:
 
 ### Art. 17 — Right to erasure (Layer 36)
 
-**Module:** `operator/bridges/shared/erasure_orchestrator.py`
+**Module:** `corvin_operator/bridges/shared/erasure_orchestrator.py`
 
 The erasure orchestrator provides a cross-layer deletion mechanism:
 

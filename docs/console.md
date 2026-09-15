@@ -14,7 +14,7 @@ and Docker.
 ### Start the adapter
 
 ```bash
-bash operator/bridges/bridge.sh up
+bash corvin_operator/bridges/bridge.sh up
 ```
 
 This starts the adapter (which includes uvicorn on `127.0.0.1:8765`) plus all
@@ -61,7 +61,7 @@ export CORVIN_ACME_EMAIL=you@example.com
 ### Start the adapter
 
 ```bash
-bash operator/bridges/bridge.sh up
+bash corvin_operator/bridges/bridge.sh up
 ```
 
 This starts uvicorn on `127.0.0.1:8765`. Caddy proxies public HTTPS traffic to it.

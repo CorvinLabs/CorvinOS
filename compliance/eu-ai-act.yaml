@@ -32,8 +32,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L19
-        file: "operator/bridges/shared/disclosure.py"
-        test: "operator/bridges/shared/test_disclosure.py"
+        file: "corvin_operator/bridges/shared/disclosure.py"
+        test: "corvin_operator/bridges/shared/test_disclosure.py"
     invariants:
       - "disclosure card fires exactly once per (channel, chat, uid)"
       - "disclosure cannot be disabled by operator config or env var"
@@ -61,8 +61,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L19
-        file: "operator/bridges/shared/disclosure.py"
-        test: "operator/bridges/shared/test_disclosure.py"
+        file: "corvin_operator/bridges/shared/disclosure.py"
+        test: "corvin_operator/bridges/shared/test_disclosure.py"
     invariants:
       - "every outbound message carries provenance metadata in the adapter envelope"
       - "provenance header is not stripped before delivery to the bridge"
@@ -82,7 +82,7 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0007
-        file: "operator/bridges/shared/compliance_zone_classifier.py"
+        file: "corvin_operator/bridges/shared/compliance_zone_classifier.py"
         test: "core/gateway/tests/test_zone_policy.py"
     invariants:
       - "tenant.corvin.yaml::data_residency.zone constrains engine selection"
@@ -106,7 +106,7 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0007
-        file: "operator/bridges/shared/engine_policy.py"
+        file: "corvin_operator/bridges/shared/engine_policy.py"
         test: "core/gateway/tests/test_zone_policy.py"
     invariants:
       - "engine_policy.check() runs at every WorkerEngine spawn callsite"
@@ -130,8 +130,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L19
-        file: "operator/bridges/shared/adapter.py"
-        test: "operator/bridges/shared/test_content_marking.py"
+        file: "corvin_operator/bridges/shared/adapter.py"
+        test: "corvin_operator/bridges/shared/test_content_marking.py"
     invariants:
       - "provenance block is injected in _envelope() for all _final=True messages"
       - "ai_generated is always true — never false or absent"
@@ -159,8 +159,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L39
-        file: "operator/bridges/shared/incident_tracker.py"
-        test: "operator/bridges/shared/test_incident_tracker.py"
+        file: "corvin_operator/bridges/shared/incident_tracker.py"
+        test: "corvin_operator/bridges/shared/test_incident_tracker.py"
     invariants:
       - "TRIGGER_EVENTS audit events auto-open incident records via IncidentAutoDetector"
       - "incident records stored at <tenant>/global/incidents/<id>.json mode 0600"
@@ -187,8 +187,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0057
-        file: "operator/bridges/shared/operator_declaration.py"
-        test: "operator/bridges/shared/test_operator_declaration.py"
+        file: "corvin_operator/bridges/shared/operator_declaration.py"
+        test: "corvin_operator/bridges/shared/test_operator_declaration.py"
     invariants:
       - "eu_production and eu_production_ollama profiles require operator_declaration in tenant.corvin.yaml"
       - "dpia_completed must be true for eu_production boot to proceed"

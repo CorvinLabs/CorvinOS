@@ -73,7 +73,7 @@ Expected: `+` lines show wrapper import + new wrapper call
 
 ## Step 2: Wire TTS Provider Tracking (10 min)
 
-### File: `operator/voice/scripts/say.py` (or wherever TTS subprocess is called)
+### File: `corvin_operator/voice/scripts/say.py` (or wherever TTS subprocess is called)
 
 **Find:** Where `subprocess.run()` or `asyncio.create_subprocess_exec()` calls the TTS provider
 
@@ -124,7 +124,7 @@ return result if success else None
 **Verify:**
 ```bash
 cd /home/shumway/projects/CorvinOS
-grep -n "pattern_tts_" operator/voice/scripts/say.py
+grep -n "pattern_tts_" corvin_operator/voice/scripts/say.py
 ```
 
 Expected: 1-3 lines showing each provider pattern registered
@@ -161,7 +161,7 @@ cd /home/shumway/projects/CorvinOS
 
 # Stage changes
 git add core/console/corvin_console/chat_runtime.py
-git add operator/voice/scripts/say.py  # Or wherever TTS was wrapped
+git add corvin_operator/voice/scripts/say.py  # Or wherever TTS was wrapped
 
 # Verify nothing else got staged
 git status
@@ -217,7 +217,7 @@ curl -X POST http://localhost:3000/v1/console/chat/turn \
 # Trigger a TTS call (voice response)
 # Or call say.py directly if available
 
-python3 operator/voice/scripts/say.py "Hello world" --provider=openai
+python3 corvin_operator/voice/scripts/say.py "Hello world" --provider=openai
 ```
 
 ### Verify in dashboard:

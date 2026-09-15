@@ -20,9 +20,9 @@ used for. Orthogonal to L34 (data) and L35 (network). Shipped baseline forbids:
 
 ## Mechanism vs content (core design)
 
-- **Mechanism** = `operator/bridges/shared/house_rules.py` — core, fail-closed,
+- **Mechanism** = `corvin_operator/bridges/shared/house_rules.py` — core, fail-closed,
   audit-first, **not disableable** (no env flag, no off-switch).
-- **Content** = `operator/policy/house_rules.yaml` — committed, operator-edited in git.
+- **Content** = `corvin_operator/policy/house_rules.yaml` — committed, operator-edited in git.
   This is the **single source of truth**; you change the rules here.
 
 ## Repo linkage + integrity
@@ -34,7 +34,7 @@ L10-path-gate-protected (runtime writes blocked) and a mandatory Tier-3
 capability. After editing the policy:
 
 ```bash
-sha256sum operator/policy/house_rules.yaml   # paste digest into EXPECTED_POLICY_SHA256
+sha256sum corvin_operator/policy/house_rules.yaml   # paste digest into EXPECTED_POLICY_SHA256
 ```
 
 A CI test (`test_policy_anchor_matches_repo_file`) fails the build if the anchor
@@ -42,7 +42,7 @@ drifts from the shipped file.
 
 **Release-time hardening (Corvin Labs):** add `house_rules.py` and
 `house_rules.yaml` to `layer_integrity.MANDATORY_LAYER_FILES` and re-sign
-`operator/security/layer-manifest.json` (`python operator/security/sign_layer_manifest.py`).
+`corvin_operator/security/layer-manifest.json` (`python corvin_operator/security/sign_layer_manifest.py`).
 This adds the LIP integrity pin on top of the committed-anchor check.
 
 ## Wiring (M2)
@@ -71,7 +71,7 @@ This adds the LIP integrity pin on top of the committed-anchor check.
   fail-open of the acceptable-use control (round-3 review, EU AI Act Art. 5).
   Tests: `core/console/tests/test_chat_house_rules_gate.py`.
 - **A2A worker spawn (third enforcement surface):**
-  `operator/bridges/shared/a2a_worker.py::spawn_a2a_worker()` delegates to
+  `corvin_operator/bridges/shared/a2a_worker.py::spawn_a2a_worker()` delegates to
   `spawn_gates.check_l44(...)` at step **1c.5** — after the L34 (1b) and L35 (1c)
   gates and BEFORE the compute-quota increment (1d) and any scratch-workspace
   creation, so a denied acceptable-use request consumes neither the tenant's
@@ -89,7 +89,7 @@ This adds the LIP integrity pin on top of the committed-anchor check.
   a signed remote origin's instruction reached the worker engine with NO L44
   gate (round-N review finding #5, EU AI Act Art. 5; CLAUDE.md L38 forbids
   bypassing L10/L34/L35 — the same now holds for L44). Tests:
-  `operator/license/tests/test_a2a_license_fixes.py` (the `_allow_l44()` helper
+  `corvin_operator/license/tests/test_a2a_license_fixes.py` (the `_allow_l44()` helper
   neutralises the gate so the compute-quota/env-clearing assertions stay
   isolated).
 - `adapter._house_rules_adjudicator()` is the Tier-1 Haiku call

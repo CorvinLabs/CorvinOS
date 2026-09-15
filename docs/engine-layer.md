@@ -204,7 +204,7 @@ Any Ollama-compatible model works — the alias table is a convenience layer on 
 model pulled (`ollama pull qwen3:1.7b` or similar). Override the URL via
 `CORVIN_OLLAMA_BASE_URL` or `OLLAMA_HOST` for Docker-sidecar scenarios.
 
-**Persona stub** — `operator/cowork/personas/` does not ship a dedicated
+**Persona stub** — `corvin_operator/cowork/personas/` does not ship a dedicated
 hermes persona; route via `default_engine: "hermes"` in `chat_profiles` or
 the `/engine hermes` in-chat command. (A `hermes-worker.json` persona was
 removed in v1.2; use the engine-pin mechanism instead.)
@@ -274,7 +274,7 @@ once an operator tightens the matrix or applies the EU_PRODUCTION preset.
 
 **Self-test:** `_check_copilot_cli()` at INFO severity (binary is optional).
 
-**Delegation persona:** `operator/cowork/personas/copilot-worker.json` — sets
+**Delegation persona:** `corvin_operator/cowork/personas/copilot-worker.json` — sets
 `default_engine: "copilot"` with a shell/git task-type preset.
 
 **File:** `bridges/shared/agents/copilot_cli.py`
@@ -500,17 +500,17 @@ commands per engine. Read-only API: `GET /v1/console/settings/engine/capabilitie
 
 ## Where to look in the code
 
-- `operator/bridges/shared/agents/__init__.py` — `WorkerEngine`
+- `corvin_operator/bridges/shared/agents/__init__.py` — `WorkerEngine`
   Protocol + `StreamEvent` dataclass + tolerant JSONL parser
-- `operator/bridges/shared/agents/claude_code.py` — Claude
+- `corvin_operator/bridges/shared/agents/claude_code.py` — Claude
   implementation (full feature set)
-- `operator/bridges/shared/agents/codex_cli.py` — Codex
+- `corvin_operator/bridges/shared/agents/codex_cli.py` — Codex
   implementation (mcp + stream_json subset)
-- `operator/bridges/shared/agents/opencode_cli.py` — OpenCode
+- `corvin_operator/bridges/shared/agents/opencode_cli.py` — OpenCode
   implementation (provider-agnostic)
-- `operator/bridges/shared/adapter.py::call_claude_streaming` —
+- `corvin_operator/bridges/shared/adapter.py::call_claude_streaming` —
   the dispatch site
-- `operator/cowork/personas/copilot-worker.json` — delegation persona for CopilotCliEngine
+- `corvin_operator/cowork/personas/copilot-worker.json` — delegation persona for CopilotCliEngine
 - `bridges/shared/agents/copilot_cli.py` — CopilotCliEngine implementation
 
 ## Adjacent docs

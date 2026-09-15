@@ -79,9 +79,9 @@ if mgr.needs_migration():
 #### 2. Bridge Readers (Backward Compatible)
 
 **Files:**
-- `operator/bridges/shared/profile.py`
-- `operator/bridges/shared/vault.py`
-- `operator/bridges/shared/memory.py`
+- `corvin_operator/bridges/shared/profile.py`
+- `corvin_operator/bridges/shared/vault.py`
+- `corvin_operator/bridges/shared/memory.py`
 
 These readers automatically find config in either location:
 

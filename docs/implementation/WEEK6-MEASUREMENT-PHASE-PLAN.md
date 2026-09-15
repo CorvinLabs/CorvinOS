@@ -27,11 +27,11 @@ Week 6 operationalizes CEL Phase 4 (ADR-0270–0273) by running four concurrent 
 - [x] K=5 verification complete (zero gaps)
 - [x] All 10 production tests passing
 - [ ] Merge critical_fixes_roundk2.py → main implementation files
-  - Replace: `operator/context_engineering/learning_queue.py`
-  - Replace: `operator/context_engineering/concurrency_model.py`
+  - Replace: `corvin_operator/context_engineering/learning_queue.py`
+  - Replace: `corvin_operator/context_engineering/concurrency_model.py`
 - [ ] Merge guard_integration_hook.py → chat/suggestion layer
 - [ ] Update imports in console + agent code
-- [ ] Run full test suite (pytest operator/ -v)
+- [ ] Run full test suite (pytest corvin_operator/ -v)
 
 ### Infrastructure Setup
 - [ ] Create measurement database schema (Postgres/SQLite)
@@ -324,7 +324,7 @@ git merge --no-ff 4076e1b  # K=5 (verification)
 
 # Install & test
 uv sync
-pytest operator/ -v
+pytest corvin_operator/ -v
 
 # Deploy to staging
 export CORVIN_ENVIRONMENT=measurement-staging
@@ -372,7 +372,7 @@ export CEL_PHASE4_MEASUREMENT=true
 ```bash
 git reset --hard f543d39
 uv sync
-pytest operator/ -v
+pytest corvin_operator/ -v
 ```
 
 ---

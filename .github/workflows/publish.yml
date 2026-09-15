@@ -33,14 +33,14 @@ jobs:
         run: pip install -e ".[dev]" matplotlib itsdangerous
       - name: Install Node deps (all bridges)
         run: |
-          for d in operator/bridges/*/; do
+          for d in corvin_operator/bridges/*/; do
             if [ -f "$d/package.json" ]; then
               npm install --prefix "$d" --silent
             fi
           done
       - name: Run test suite
         run: |
-          bash operator/bridges/run-all-tests.sh 2>&1 | tee /tmp/test-output.log
+          bash corvin_operator/bridges/run-all-tests.sh 2>&1 | tee /tmp/test-output.log
           exit ${PIPESTATUS[0]}
         env:
           CORVIN_AGENTS_SKIP_LIVE: "1"

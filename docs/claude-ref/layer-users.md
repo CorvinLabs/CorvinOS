@@ -682,7 +682,7 @@ chat_profile**, both routed through the unified audit hash chain.
 ### Path-gate protection
 
 `<corvin_home>/**/memory/**` joined the protected-path set in
-`operator/voice/hooks/path_gate.py` (the `"memory" in rel_parts`
+`corvin_operator/voice/hooks/path_gate.py` (the `"memory" in rel_parts`
 check). Direct `Write` / `Edit` / `Bash` writes to the recall DB,
 the user-model JSON, or any future memory artefact are denied by
 the layer-10 hook regardless of permission mode. All writes go
@@ -760,21 +760,21 @@ slash-command land in Phase 28.4.
 
 - `Corvin-ADR: decisions/0016-conversation-recall-and-user-modeling.md` —
   the design ADR
-- `operator/bridges/shared/conversation_recall.py` — recall
+- `corvin_operator/bridges/shared/conversation_recall.py` — recall
   storage + index + redactor + persona-ACL helper
-- `operator/bridges/shared/user_model.py` — schema +
+- `corvin_operator/bridges/shared/user_model.py` — schema +
   load/save + distiller + render_block
-- `operator/bridges/shared/test_conversation_recall.py` —
+- `corvin_operator/bridges/shared/test_conversation_recall.py` —
   13-case E2E (PII redaction, FTS5 escape, audit metadata-only,
   per-tenant isolation, forget cascade, no-SDK lint)
-- `operator/bridges/shared/test_user_model.py` — 18-case
+- `corvin_operator/bridges/shared/test_user_model.py` — 18-case
   E2E (schema, distiller stub, judge failure modes, audit
   field-allowlist, render_block, persona-ACL, no-SDK lint)
-- `operator/bridges/shared/test_adapter_recall.py` — 8-case
+- `corvin_operator/bridges/shared/test_adapter_recall.py` — 8-case
   E2E for the adapter wiring (user_context-block-LAST,
   distill-scheduler, indexing-gate)
-- `operator/voice/hooks/path_gate.py` — `memory` rel-part check
-- `operator/forge/forge/security_events.py` — 6 new
+- `corvin_operator/voice/hooks/path_gate.py` — `memory` rel-part check
+- `corvin_operator/forge/forge/security_events.py` — 6 new
   `memory.*` event types in `EVENT_SEVERITY`
 - L23 (voice-transcribe) — metadata-only-audit precedent
 - L24 (PII detector) — regex backend reused here as text mode

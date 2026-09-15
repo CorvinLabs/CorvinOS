@@ -345,7 +345,7 @@ sudo docker compose -f /opt/corvin/docker-compose.yml restart
 
 ```bash
 sudo docker exec corvin \
-  /opt/corvin-repo/operator/voice/scripts/voice-audit.py verify
+  /opt/corvin-repo/corvin_operator/voice/scripts/voice-audit.py verify
 ```
 
 ### Shell into container
@@ -388,7 +388,7 @@ Check that the env var is set and the settings file exists:
 sudo docker exec corvin env | grep CORVIN_BRIDGE_DISCORD
 
 # Check settings file mounted correctly
-sudo docker exec corvin ls -la /opt/corvin-repo/operator/bridges/discord/settings.json
+sudo docker exec corvin ls -la /opt/corvin-repo/corvin_operator/bridges/discord/settings.json
 
 # Check supervisord status
 sudo docker exec corvin supervisorctl status

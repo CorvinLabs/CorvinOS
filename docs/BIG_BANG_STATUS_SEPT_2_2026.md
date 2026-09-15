@@ -137,7 +137,7 @@ Rewrite `feature_flags.py` (1550 lines) from the monolithic feature flag system 
 ### Code (Pending Decisions)
 | File | Size | Status | Depends On |
 |------|------|--------|---|
-| `operator/bridges/shared/mid_turn_heartbeat.py` | 11K | ⬜ Pending merge | Feature flag architecture |
+| `corvin_operator/bridges/shared/mid_turn_heartbeat.py` | 11K | ⬜ Pending merge | Feature flag architecture |
 | `tests/.../test_mid_turn_heartbeat.py` | — | ⬜ Pending merge | Mid-turn heartbeat feature |
 
 ---
@@ -149,11 +149,11 @@ Rewrite `feature_flags.py` (1550 lines) from the monolithic feature flag system 
    - Status: ✅ Staged for Spike 1 rewrite
    - Contains: 60 feature flags + utilities
 
-2. **operator/bridges/shared/adapter.py** (100+ lines shown)
+2. **corvin_operator/bridges/shared/adapter.py** (100+ lines shown)
    - Status: ✅ CEL integration wired
    - Changes: Context Engineering pipeline hooks, mid-turn heartbeat support
 
-3. **operator/bridges/profiletest/settings.json**
+3. **corvin_operator/bridges/profiletest/settings.json**
    - Status: 🗑️ Deleted
    - Reason: Profile test cleanup
 

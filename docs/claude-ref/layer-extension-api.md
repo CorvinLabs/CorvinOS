@@ -20,7 +20,7 @@ or removing extensions never changes it.
 The ADR writes `from corvin.extension import ...` conceptually, but there is **no
 importable top-level `corvin` package** (`operator/` is deliberately unpackaged —
 it shadows the stdlib `operator`). The real modules live in
-`operator/bridges/shared/`, imported after a `sys.path` insert (the same
+`corvin_operator/bridges/shared/`, imported after a `sys.path` insert (the same
 convention as `engine_trust`, `flow_cli`):
 
 - `extension_api.py` — `ExtensionHook` (ABC, `handle(tool_name, tool_input, ctx)

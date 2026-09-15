@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 
 export CORVIN_HOME="${CORVIN_HOME:-$REPO/.corvin}"
-export PYTHONPATH="$REPO/core/console:$REPO/core/gateway:$REPO/core/license:$REPO/core/compliance:$REPO/operator/forge:$REPO/operator/skill-forge:$REPO/operator/bridges/shared:$REPO/operator:$REPO"
+export PYTHONPATH="$REPO/core/console:$REPO/core/gateway:$REPO/core/license:$REPO/core/compliance:$REPO/corvin_operator/forge:$REPO/corvin_operator/skill-forge:$REPO/corvin_operator/bridges/shared:$REPO/operator:$REPO"
 
 # Prefer the console venv (has the console + worker deps); fall back to python3.
 PY="$REPO/core/console/.venv/bin/python"

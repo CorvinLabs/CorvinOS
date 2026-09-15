@@ -12,7 +12,7 @@ _SHARED_DIR = str(Path(__file__).resolve().parents[3] / "operator" / "bridges" /
 def _windows_shim(argv: list[str]):
     """Best-effort ``agents._win_shim.windows_shim_command`` — see plugins.py's
     ``_run_claude`` for the full writeup of why this needs its own sys.path
-    insert (operator/ is deliberately not a real package). Falls back to argv
+    insert (corvin_operator/ is deliberately not a real package). Falls back to argv
     unchanged if the shared module can't be found, so a validation-only step
     never hard-fails the install over this."""
     if _SHARED_DIR not in sys.path:

@@ -91,7 +91,7 @@ TestLDDMasterReport
 
 **Files Updated:**
 - `~/.corvin/tenants/_default/global/tenant.corvin.yaml`
-- `operator/bundle/config-templates/tenant.corvin.yaml`
+- `corvin_operator/bundle/config-templates/tenant.corvin.yaml`
 
 **Flags Registered:**
 ```yaml
@@ -339,7 +339,7 @@ EOF
 1. `.corvin/tenants/_default/global/tenant.corvin.yaml`
    - Added `learning:` section with 7 feature flags
 
-2. `operator/bundle/config-templates/tenant.corvin.yaml`
+2. `corvin_operator/bundle/config-templates/tenant.corvin.yaml`
    - Added 7 learning gap flags to features_whitelist
 
 ### Existing Code (No Changes Needed)
@@ -390,7 +390,7 @@ All 7 gap implementations already exist and are complete:
 - **Date Completed:** 2026-08-19
 - **Test Suite Location:** `/tests/e2e/`, `/tests/ldd/`, `/tests/unit/`
 - **Documentation:** `/docs/LEARNING_GAPS_*.md`
-- **Configuration:** `operator/bundle/config-templates/tenant.corvin.yaml`
+- **Configuration:** `corvin_operator/bundle/config-templates/tenant.corvin.yaml`
 
 ---
 

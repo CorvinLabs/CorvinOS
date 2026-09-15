@@ -5,8 +5,8 @@ live here so the main CLAUDE.md stays under the per-session size
 budget.
 
 → **ADR:** Corvin-ADR: decisions/0042-L34-data-classification.md
-→ **Module:** `operator/bridges/shared/data_classification.py`
-→ **Tests:** `operator/bridges/shared/test_data_classification.py`
+→ **Module:** `corvin_operator/bridges/shared/data_classification.py`
+→ **Tests:** `corvin_operator/bridges/shared/test_data_classification.py`
 
 ---
 
@@ -339,7 +339,7 @@ ships + tests in isolation from the adapter wiring.
 ## Tests
 
 ```bash
-python3 operator/bridges/shared/test_data_classification.py
+python3 corvin_operator/bridges/shared/test_data_classification.py
 ```
 
 41 tests covering:

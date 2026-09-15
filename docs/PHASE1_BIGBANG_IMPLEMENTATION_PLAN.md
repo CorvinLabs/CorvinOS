@@ -50,7 +50,7 @@
 ```bash
 # Find all references to feature flags
 grep -r "spec\.features\|feature_flag\|flag(" \
-  core/console/ operator/ tests/ \
+  core/console/ corvin_operator/ tests/ \
   --include="*.py" --include="*.js" --include="*.ts" \
   > /tmp/feature_flags_audit.log
 
@@ -63,7 +63,7 @@ grep -r "spec\.features\|feature_flag\|flag(" \
   - `core/vibe_engineering/vibe_manager.py:activate_vibe_mode()` — Vibe panel activation
   - `core/console/corvin_console/app.py:feature_gates` — App startup gates
 - [ ] **MEDIUM RISK** (admin-only, or isolated):
-  - `operator/context_engineering/pipeline.py:stage_selector()` — context pipeline
+  - `corvin_operator/context_engineering/pipeline.py:stage_selector()` — context pipeline
   - `core/console/corvin_console/routes/admin.py:feature_enable()` — admin API
 - [ ] **LOW RISK** (telemetry, logging):
   - Various analytics / health check points
@@ -332,7 +332,7 @@ else:
   git rm core/console/corvin_console/promotion_daemon.py
   git rm ops/launcher/corvin/flag_commands.py
   git rm core/console/tests/test_feature_flags.py
-  git rm operator/bundle/config-templates/tenant.corvin.yaml
+  git rm corvin_operator/bundle/config-templates/tenant.corvin.yaml
   # ... etc (all feature flag files)
   ```
 - [ ] Test script in dry-run mode (git check-rm)

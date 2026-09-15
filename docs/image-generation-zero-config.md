@@ -65,10 +65,10 @@ silently no-ops, depending on how the calling code handles the missing key. This
 | Question | Answer | Where |
 |---|---|---|
 | Zero-config tier today | **None.** 100% BYOK — no key, no image. | `docs/claude-ref/imagegen-mcp.md` |
-| How it's wired | Hardcoded `mcp_servers.imagegen` block in 3 persona JSON files, `npx`-fetches `imagegen-mcp-server@latest` (~50 MB) on first use | `operator/cowork/personas/{assistant,forge,research}.json` |
+| How it's wired | Hardcoded `mcp_servers.imagegen` block in 3 persona JSON files, `npx`-fetches `imagegen-mcp-server@latest` (~50 MB) on first use | `corvin_operator/cowork/personas/{assistant,forge,research}.json` |
 | Compliance gating | **None.** Bypasses the governed MCP tool catalog entirely — no `compliance.locality`/`hosts` declaration, so L34 (data classification) and L35 (egress lockdown) never see this outbound call | n/a — this is the gap |
-| The correct governed path | `operator/mcp_manager/` (ADR-0096): a per-tenant catalog (`<corvin_home>/tenants/<tid>/global/mcp-tools/catalog.json`) where every tool declares `compliance.{locality,hosts}` and is checked by `mcp_manager/compliance.py` at activation **and** spawn time — this is where a first-class tool belongs, not persona JSON | `operator/mcp_manager/mcp_manager/{catalog,compliance,activate}.py` |
-| Key storage if BYOK | `~/.config/corvin-voice/service.env` via the canonical `provider_keys.py` resolver (process env → service.env → legacy aliases) | `operator/bridges/shared/provider_keys.py`, `operator/agent/byok.py` |
+| The correct governed path | `corvin_operator/mcp_manager/` (ADR-0096): a per-tenant catalog (`<corvin_home>/tenants/<tid>/global/mcp-tools/catalog.json`) where every tool declares `compliance.{locality,hosts}` and is checked by `mcp_manager/compliance.py` at activation **and** spawn time — this is where a first-class tool belongs, not persona JSON | `corvin_operator/mcp_manager/mcp_manager/{catalog,compliance,activate}.py` |
+| Key storage if BYOK | `~/.config/corvin-voice/service.env` via the canonical `provider_keys.py` resolver (process env → service.env → legacy aliases) | `corvin_operator/bridges/shared/provider_keys.py`, `corvin_operator/agent/byok.py` |
 | The doc's own warning | *"Don't add ImageGen to the `os`/`forge` personas without explicit ADR reasoning"* — the existing doc already anticipates that broadening this needs governance | `docs/claude-ref/imagegen-mcp.md:159` |
 
 ## 3. What ADR-0185 already proved works (the pattern to mirror)
@@ -82,7 +82,7 @@ config flag:
   optional BYOK cloud TTS.
 - **STT:** Tier 0 = `pywhispercpp` + a bundled quantized model (fully offline, zero-config).
   Tier 1 = optional BYOK cloud Whisper.
-- Selection is a **try/probe cascade inside a resolver** (`operator/voice/scripts/stt/resolver.py`
+- Selection is a **try/probe cascade inside a resolver** (`corvin_operator/voice/scripts/stt/resolver.py`
   and the mirrored TTS logic in `adapter.py`) — env vars only *pin* a provider, they don't
   choose the default path.
 - User-facing surface: a per-provider status row in Console Settings (ready / not-configured
@@ -139,7 +139,7 @@ L35 already fails closed on that.
 
 ### Tier 0 — zero-config default, disclosed
 - Wrap Pollinations' HTTP endpoint as a genuinely first-class MCP tool, registered through
-  `operator/mcp_manager/`'s catalog — **not** persona-hardcoded JSON — so it's subject to
+  `corvin_operator/mcp_manager/`'s catalog — **not** persona-hardcoded JSON — so it's subject to
   L34/L35 like every other governed tool from day one (closing the gap in §2, not repeating it).
 - Declare `compliance.hosts: ["image.pollinations.ai"]` so an EU_PRODUCTION tenant preset can
   forbid it the same way it already forbids `api.openai.com`.

@@ -92,7 +92,7 @@ by `voice-audit verify`.
 
 ### L10 — Path-Gate Hook
 
-**What:** `operator/voice/hooks/path_gate.py` (PreToolUse Claude Code hook)
+**What:** `corvin_operator/voice/hooks/path_gate.py` (PreToolUse Claude Code hook)
 
 **Enforces:** GDPR Art. 32 — prevents writes to protected filesystem locations
 
@@ -114,7 +114,7 @@ command substitution in pipe position (`$(...)` | `tee` with protected hint)
 
 ### L16 — Audit Chain + Consent Gate
 
-**What:** `operator/bridges/shared/audit.py` + `consent.py`
+**What:** `corvin_operator/bridges/shared/audit.py` + `consent.py`
 
 **Enforces:**
 - GDPR Art. 30 — records of processing activities (every event in chain)
@@ -137,7 +137,7 @@ command substitution in pipe position (`$(...)` | `tee` with protected hint)
 
 ### L19 — Disclosure
 
-**What:** `operator/bridges/shared/disclosure.py`
+**What:** `corvin_operator/bridges/shared/disclosure.py`
 
 **Enforces:** EU AI Act Art. 50 §1 — natural persons must know they are interacting with an AI
 
@@ -161,7 +161,7 @@ command substitution in pipe position (`$(...)` | `tee` with protected hint)
 
 ### L34 — Data Classification + Flow Guard
 
-**What:** `operator/bridges/shared/data_classification.py`
+**What:** `corvin_operator/bridges/shared/data_classification.py`
 
 **Enforces:** EU AI Act Art. 14 (human oversight — data sovereignty)
 
@@ -182,7 +182,7 @@ command substitution in pipe position (`$(...)` | `tee` with protected hint)
 
 ### L35 — Egress Lockdown
 
-**What:** `operator/bridges/shared/egress_gate.py`
+**What:** `corvin_operator/bridges/shared/egress_gate.py`
 
 **Enforces:** EU AI Act Art. 14 (human oversight — network boundary), GDPR Art. 32
 
@@ -197,7 +197,7 @@ command substitution in pipe position (`$(...)` | `tee` with protected hint)
 
 ### L36 — GDPR Art. 17 Erasure
 
-**What:** `operator/bridges/shared/erasure_orchestrator.py`
+**What:** `corvin_operator/bridges/shared/erasure_orchestrator.py`
 
 **Enforces:** GDPR Art. 17 (right to be forgotten)
 
@@ -214,7 +214,7 @@ command substitution in pipe position (`$(...)` | `tee` with protected hint)
 
 ### L37 — Audit-at-rest Encryption + Retention
 
-**What:** `operator/bridges/shared/audit_sealer.py`
+**What:** `corvin_operator/bridges/shared/audit_sealer.py`
 
 **Enforces:** GDPR Art. 30 (records of processing), Art. 32 (encryption)
 
@@ -234,7 +234,7 @@ command substitution in pipe position (`$(...)` | `tee` with protected hint)
 
 ### L39 — Incident Tracker (Art. 73)
 
-**What:** `operator/bridges/shared/incident_tracker.py`
+**What:** `corvin_operator/bridges/shared/incident_tracker.py`
 
 **Enforces:** EU AI Act Art. 73 (serious incident reporting)
 

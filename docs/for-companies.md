@@ -21,8 +21,8 @@ the platform adapts:
 
 | You drop … | Corvin does |
 |---|---|
-| `operator/cowork/personas/<name>.json` | New persona with custom system prompt, MCP servers, tool surface, working dir, default engine, TTS voice |
-| `operator/bridges/<channel>/daemon.js` | New messaging channel — Teams, Mattermost, Matrix, in-house — slash-command dispatcher comes free |
+| `corvin_operator/cowork/personas/<name>.json` | New persona with custom system prompt, MCP servers, tool surface, working dir, default engine, TTS voice |
+| `corvin_operator/bridges/<channel>/daemon.js` | New messaging channel — Teams, Mattermost, Matrix, in-house — slash-command dispatcher comes free |
 | `bridges/<channel>/settings.json` → `chat_profiles[<id>]` | Per-chat audience, role list, observer transcript, persona pin |
 | `<corvin_home>/global/engine_policy.json` | Compliance-zone routing — PII to EU engines, code to dev engines, declarative |
 | `<corvin_home>/global/secrets.json` | Capability-style secret vault, per-persona ACL, never reaches the LLM context |
@@ -288,7 +288,7 @@ Secret manifests — never baked into the chart.
 ## Extending Corvin — your plug-in surface
 
 Everything below ships as a file you drop into a directory. No fork,
-no rebuild — `bash operator/bridges/bridge.sh restart` if you
+no rebuild — `bash corvin_operator/bridges/bridge.sh restart` if you
 touched daemon code; hot-reload covers persona / chat / policy /
 skill / tool changes within the next bridge turn.
 
@@ -349,7 +349,7 @@ the engine doesn't speak the full Layer-22 contract.
 
 ### Bridges — your own channel adapter
 
-Each channel is a directory under `operator/bridges/<name>/` with
+Each channel is a directory under `corvin_operator/bridges/<name>/` with
 a `daemon.js`, a `settings.json`, and (optionally) a per-channel
 `README.md`. The daemon needs three responsibilities:
 

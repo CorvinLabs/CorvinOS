@@ -69,7 +69,7 @@ Every status transition emits an audit event into the L16 hash chain.
 
 ## Auto-detection: `IncidentAutoDetector`
 
-**Module:** `operator/bridges/shared/incident_tracker.py`
+**Module:** `corvin_operator/bridges/shared/incident_tracker.py`
 
 The `IncidentAutoDetector` is a PostAudit hook that fires on every CRITICAL audit event:
 
@@ -253,7 +253,7 @@ corvin-incident export --output incidents.json
 ## Test coverage
 
 ```
-operator/bridges/shared/test_incident_tracker.py  — 17 tests
+corvin_operator/bridges/shared/test_incident_tracker.py  — 17 tests
   TestIncidentRecord        — validation (category, severity, roundtrip)
   TestOpenIncident          — file creation, mode 0600, description not in audit
   TestUpdateClose           — status transitions, duration recording

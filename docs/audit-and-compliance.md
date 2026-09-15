@@ -413,15 +413,15 @@ hard rules:
 
 | Mechanism | Module |
 |---|---|
-| Hash chain core | `operator/forge/forge/security_events.py` (`write_event`, `verify_chain`, `EVENT_SEVERITY`) |
-| Disclosure (L19) | `operator/bridges/shared/disclosure.py` |
-| Consent (L16 P4) | `operator/bridges/shared/consent.py` |
+| Hash chain core | `corvin_operator/forge/forge/security_events.py` (`write_event`, `verify_chain`, `EVENT_SEVERITY`) |
+| Disclosure (L19) | `corvin_operator/bridges/shared/disclosure.py` |
+| Consent (L16 P4) | `corvin_operator/bridges/shared/consent.py` |
 | Zone routing | `core/gateway/corvin_gateway/dispatcher.py` (Phase 3.3 gate) |
-| Secret vault | `operator/forge/forge/secret_vault.py` + `runner.py` (env injection + redact) |
-| Path-gate hook | `operator/voice/hooks/path_gate.py` |
-| Daily verify | `operator/voice/scripts/voice_audit.py` + systemd unit `corvin-audit-verify.timer` |
+| Secret vault | `corvin_operator/forge/forge/secret_vault.py` + `runner.py` (env injection + redact) |
+| Path-gate hook | `corvin_operator/voice/hooks/path_gate.py` |
+| Daily verify | `corvin_operator/voice/scripts/voice_audit.py` + systemd unit `corvin-audit-verify.timer` |
 | Prometheus projection | `core/gateway/corvin_gateway/audit_metrics.py` |
-| Bridge-notification | `operator/voice/scripts/voice_audit.py --notify-bridge` + `relay.json` |
+| Bridge-notification | `corvin_operator/voice/scripts/voice_audit.py --notify-bridge` + `relay.json` |
 
 ## Adjacent docs
 

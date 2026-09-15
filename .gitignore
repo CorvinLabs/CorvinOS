@@ -24,71 +24,71 @@ venv
 # Corvin-OS user-state root + auto-update marker (per-checkout, never committed)
 .corvin/
 
-# Channel-specific credentials and tokens (ADR-0035: operator/bridges/)
-operator/bridges/discord/settings.json
-operator/bridges/telegram/settings.json
-operator/bridges/slack/settings.json
-operator/bridges/email/settings.json
-operator/bridges/whatsapp/settings.json
-operator/bridges/whatsapp/auth/
+# Channel-specific credentials and tokens (ADR-0035: corvin_operator/bridges/)
+corvin_operator/bridges/discord/settings.json
+corvin_operator/bridges/telegram/settings.json
+corvin_operator/bridges/slack/settings.json
+corvin_operator/bridges/email/settings.json
+corvin_operator/bridges/whatsapp/settings.json
+corvin_operator/bridges/whatsapp/auth/
 # Timestamped credential backups (created by bridge.sh) — same secrets as auth/,
 # must never be committed.
-operator/bridges/whatsapp/auth.bak.*/
+corvin_operator/bridges/whatsapp/auth.bak.*/
 
 # Session state and message archives (private conversations)
-operator/bridges/shared/inbox/
-operator/bridges/shared/outbox/
-operator/bridges/shared/processed/
+corvin_operator/bridges/shared/inbox/
+corvin_operator/bridges/shared/outbox/
+corvin_operator/bridges/shared/processed/
 # Per-bridge runtime dirs (filled by the daemons, drained by the adapter).
-operator/bridges/discord/inbox/
-operator/bridges/discord/outbox/
-operator/bridges/discord/processed/
-operator/bridges/telegram/inbox/
-operator/bridges/telegram/outbox/
-operator/bridges/telegram/processed/
-operator/bridges/slack/inbox/
-operator/bridges/slack/outbox/
-operator/bridges/slack/processed/
-operator/bridges/email/inbox/
-operator/bridges/email/outbox/
-operator/bridges/email/processed/
-operator/bridges/console/inbox/
-operator/bridges/console/outbox/
-operator/bridges/console/processed/
+corvin_operator/bridges/discord/inbox/
+corvin_operator/bridges/discord/outbox/
+corvin_operator/bridges/discord/processed/
+corvin_operator/bridges/telegram/inbox/
+corvin_operator/bridges/telegram/outbox/
+corvin_operator/bridges/telegram/processed/
+corvin_operator/bridges/slack/inbox/
+corvin_operator/bridges/slack/outbox/
+corvin_operator/bridges/slack/processed/
+corvin_operator/bridges/email/inbox/
+corvin_operator/bridges/email/outbox/
+corvin_operator/bridges/email/processed/
+corvin_operator/bridges/console/inbox/
+corvin_operator/bridges/console/outbox/
+corvin_operator/bridges/console/processed/
 
 # Bridge attachments — user-uploaded content (private by default,
 # may contain chat exports, PDFs, screenshots). NEVER commit.
-operator/bridges/email/attachments/
-operator/bridges/discord/attachments/
-operator/bridges/telegram/attachments/
-operator/bridges/slack/attachments/
-operator/bridges/whatsapp/attachments/
-operator/bridges/shared/attachments/
+corvin_operator/bridges/email/attachments/
+corvin_operator/bridges/discord/attachments/
+corvin_operator/bridges/telegram/attachments/
+corvin_operator/bridges/slack/attachments/
+corvin_operator/bridges/whatsapp/attachments/
+corvin_operator/bridges/shared/attachments/
 
 # A2A pairing records + pending invites — contain HMAC/recv key material
 # (256-bit secrets). Must never be committed; pairing is per-instance via
 # `corvin-a2a pair` / the console. See ADR-0048 (L38).
-operator/cowork/remote_origins/
-operator/cowork/remote_endpoints/
-operator/cowork/pending_invites/
-operator/cowork/remote_pending_friendships/
+corvin_operator/cowork/remote_origins/
+corvin_operator/cowork/remote_endpoints/
+corvin_operator/cowork/pending_invites/
+corvin_operator/cowork/remote_pending_friendships/
 
 # Voice / cowork per-session state (transcripts, recordings, session JSON)
-operator/voice/sessions/
-operator/cowork/sessions/
+corvin_operator/voice/sessions/
+corvin_operator/cowork/sessions/
 
 # Audit logs and runtime state outside .corvin/
 core/**/audit.jsonl
 core/**/*.session.json
-operator/**/audit.jsonl
-operator/**/*.session.json
+corvin_operator/**/audit.jsonl
+corvin_operator/**/*.session.json
 
 # ── Build artifacts ────────────────────────────────────────────────────────
 node_modules/
 # package-lock.json is committed for the web console SPA (reproducible CI builds;
 # npm ci requires the lock file). Only suppress it in operator bridges where npm
 # install runs at container/deploy time and the lock file is environment-specific.
-operator/**/package-lock.json
+corvin_operator/**/package-lock.json
 *.pyc
 __pycache__/
 .pytest_cache/
@@ -115,7 +115,7 @@ Thumbs.db
 # ── Logs and temporary files ───────────────────────────────────────────────
 *.log
 /tmp/
-operator/bridges/**/voice.log
+corvin_operator/bridges/**/voice.log
 # ULO runtime debug logs (CORVIN_ULO_DEBUG=1) — never committed, PII-free but large
 .log/
 
@@ -123,15 +123,15 @@ operator/bridges/**/voice.log
 ~/.cache/corvin-voice/
 
 # Keep example/template files
-!operator/bridges/discord/settings.json.example
-!operator/bridges/telegram/settings.json.example
-!operator/bridges/slack/settings.json.example
-!operator/bridges/email/settings.json.example
-!operator/bridges/whatsapp/settings.json.example
+!corvin_operator/bridges/discord/settings.json.example
+!corvin_operator/bridges/telegram/settings.json.example
+!corvin_operator/bridges/slack/settings.json.example
+!corvin_operator/bridges/email/settings.json.example
+!corvin_operator/bridges/whatsapp/settings.json.example
 
 # ── Dynamic skill-forge slot mirror (engine-discoverable, never committed) ──
-operator/skill-forge/skills/
-operator/skill-forge/skills/dyn/
+corvin_operator/skill-forge/skills/
+corvin_operator/skill-forge/skills/dyn/
 
 # Voice samples / generated artefacts
 outputs/
@@ -166,4 +166,5 @@ dist_release/
 
 # Mid-turn heartbeat markers — legacy location inside the repo tree (F-B8, 2026-09-07):
 # the adapter now writes them under <corvin_home>/bridges/mid_turn_heartbeats/.
-operator/bridges/shared/mid_turn_heartbeats/
+corvin_operator/bridges/shared/mid_turn_heartbeats/
+corvin_operator/bridges/shared/settings.json

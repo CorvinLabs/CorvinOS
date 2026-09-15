@@ -51,7 +51,7 @@ and we will provide the fingerprint and key material.
 ### In scope
 
 - Bridge daemons: Discord, Telegram, WhatsApp, Slack, Email, Microsoft Teams, Signal
-- Python adapter (`operator/bridges/shared/adapter.py` and supporting modules)
+- Python adapter (`corvin_operator/bridges/shared/adapter.py` and supporting modules)
 - Forge sandbox — bwrap confinement, path-gate hook, policy enforcement
 - SkillForge linter — prompt-injection detection, secret-leakage checks
 - Hash-chained audit log and the `voice-audit verify` toolchain

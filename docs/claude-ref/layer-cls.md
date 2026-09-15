@@ -1,6 +1,6 @@
 # Custom Layer System (CLS) — ADR-0156
 
-Three modules in `operator/bridges/shared/`:
+Three modules in `corvin_operator/bridges/shared/`:
 
 | Module | Role |
 |---|---|

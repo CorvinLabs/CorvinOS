@@ -22,16 +22,16 @@ der die Funktionsfähigkeit belegt.
 ### 1.1 Bot-Offenlegung (EU AI Act Art. 50)
 
 - [ ] Bot-Disclosure-Karte wird einmalig pro (Kanal, Chat, uid) gezeigt
-  - Implementiert: **Layer 19** (`operator/bridges/shared/disclosure.py`)
+  - Implementiert: **Layer 19** (`corvin_operator/bridges/shared/disclosure.py`)
   - Audit: `disclosure.shown`
   - Speicherort: `<corvin_home>/tenants/<tid>/global/disclosure/`
 - [ ] Opt-Out-Befehle `/leave` / `/pass` funktionieren strukturell
-  - Test: `python3 operator/bridges/shared/test_disclosure.py`
+  - Test: `python3 corvin_operator/bridges/shared/test_disclosure.py`
 
 ### 1.2 Consent-Gate (GDPR Art. 6, Art. 7)
 
 - [ ] Per-User-Consent ist deny-by-default
-  - Implementiert: **Layer 16 Phase 4** (`operator/bridges/shared/consent.py`)
+  - Implementiert: **Layer 16 Phase 4** (`corvin_operator/bridges/shared/consent.py`)
   - Audit: `consent.granted`, `consent.revoked`, `consent.consumed`
 - [ ] TTL für jeden Consent-Eintrag dokumentiert
 - [ ] Re-Validierung bei Consume verifiziert
@@ -39,7 +39,7 @@ der die Funktionsfähigkeit belegt.
 ### 1.3 Hash-Chained Audit-Log (GDPR Art. 30, Art. 32)
 
 - [ ] `audit.jsonl` mit `prev_hash` + `hash` pro Eintrag
-  - Implementiert: **Layer 16** (`operator/forge/forge/security_events.py`)
+  - Implementiert: **Layer 16** (`corvin_operator/forge/forge/security_events.py`)
   - Daily-Verify: `voice-audit verify` läuft als systemd-Timer
 - [ ] Audit-File chmod 0600
 - [ ] Rotierte Segmente verschlüsselt (siehe 1.7)
@@ -47,7 +47,7 @@ der die Funktionsfähigkeit belegt.
 ### 1.4 Data Classification (orthogonale Sensitivitätsachse)
 
 - [ ] 4-Stufen-Matrix konfiguriert: PUBLIC / INTERNAL / CONFIDENTIAL / SECRET
-  - Implementiert: **Layer 34** (`operator/bridges/shared/data_classification.py`)
+  - Implementiert: **Layer 34** (`corvin_operator/bridges/shared/data_classification.py`)
   - Audit: `data_flow.approved`, `data_flow.blocked`
   - Konfig: `tenant.corvin.yaml::spec.data_classification`
 - [ ] EU_PRODUCTION-Preset matrix tightened auf `[local]` only
@@ -55,7 +55,7 @@ der die Funktionsfähigkeit belegt.
 ### 1.5 Network Egress Lockdown (Three-Layer Defence)
 
 - [ ] `spec.egress.enabled: true`
-  - Implementiert: **Layer 35** (`operator/bridges/shared/egress_gate.py`)
+  - Implementiert: **Layer 35** (`corvin_operator/bridges/shared/egress_gate.py`)
   - Audit: `egress.approved`, `egress.blocked`, `egress.preset_loaded`
 - [ ] `forbidden_hosts` enthält mindestens: `api.anthropic.com`,
   `api.openai.com`, `api.mistral.ai`,
@@ -74,7 +74,7 @@ der die Funktionsfähigkeit belegt.
 ### 1.7 Audit-at-Rest + 7-Jahre-Retention
 
 - [ ] `spec.audit.encryption_at_rest.enabled: true`
-  - Implementiert: **Layer 37** (`operator/bridges/shared/audit_sealer.py`)
+  - Implementiert: **Layer 37** (`corvin_operator/bridges/shared/audit_sealer.py`)
   - Audit: `audit.segment_sealed`, `audit.unseal_requested`
 - [ ] Sealer-Binary (`age` oder `gpg`) installiert + recipient hinterlegt
 - [ ] `spec.audit.retention_years: 7`
@@ -84,7 +84,7 @@ der die Funktionsfähigkeit belegt.
 ### 1.8 GDPR Art. 17 Erasure-Pfad
 
 - [ ] `corvin-erasure <subject_id>` Pfad existiert
-  - Implementiert: **Layer 36** (`operator/bridges/shared/erasure_orchestrator.py`)
+  - Implementiert: **Layer 36** (`corvin_operator/bridges/shared/erasure_orchestrator.py`)
   - Audit: `erasure.requested` / `applied` / `skipped` / `failed` / `completed`
 - [ ] Per-Layer-Handler registriert für L7, L24, L28, L33,
   Identity-Mapping
@@ -92,7 +92,7 @@ der die Funktionsfähigkeit belegt.
 
 ### 1.9 Sandbox / Path-Gate
 
-- [ ] `operator/voice/hooks/path_gate.py` aktiv
+- [ ] `corvin_operator/voice/hooks/path_gate.py` aktiv
   - Implementiert: **Layer 10**
   - Audit: `path_gate.denied`
 - [ ] Boot-Self-Test bestätigt path-gate-self-test

@@ -21,7 +21,7 @@ Operators can now see:
 ## Iteration Results
 
 ### K=1: Backend Talent Calculator ✅
-- **File:** `operator/context_engineering/talent_score.py` (400 lines)
+- **File:** `corvin_operator/context_engineering/talent_score.py` (400 lines)
 - **Features:**
   - `compute_talent_score()`: 0–10 metric from 4 ADR tracks
   - `compute_context_ranking()`: Sort contexts by accuracy + feedback
@@ -77,7 +77,7 @@ Operators can now see:
   - Empty data handling
   - Single-record edge cases
 
-- **Tests:** `pytest operator/context_engineering/tests/test_talent_score.py -v` → 10/10 PASSED ✅
+- **Tests:** `pytest corvin_operator/context_engineering/tests/test_talent_score.py -v` → 10/10 PASSED ✅
 
 ### K=4: Polish & Refinements ✅
 - **CSS Enhancements:**
@@ -141,7 +141,7 @@ Browser Display
 ## Test Results
 
 ```
-pytest operator/context_engineering/tests/test_talent_score.py -v
+pytest corvin_operator/context_engineering/tests/test_talent_score.py -v
 
 test_compute_accuracy .......................... PASSED
 test_compute_learning_rate ..................... PASSED
@@ -163,7 +163,7 @@ test_single_record_each_type ................... PASSED
 
 ### Step 1: Start Backend API
 ```bash
-cd operator/context_engineering
+cd corvin_operator/context_engineering
 python api_server.py
 # Listens on http://localhost:5000
 ```

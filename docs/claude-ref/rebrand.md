@@ -35,9 +35,9 @@ cut would rip the audit chain and orphan user data.
   working as an alias with a one-time `DeprecationWarning` log line per
   process. Same pattern for every `CORVIN_*` var (full list at the
   bottom of this section).
-- Path resolvers in `operator/forge/forge/paths.py`,
-  `operator/bridges/shared/paths.py`, `operator/cowork/lib/paths.py`
-  and `operator/forge/forge/scope.py` resolve `~/.corvin/` first, fall
+- Path resolvers in `corvin_operator/forge/forge/paths.py`,
+  `corvin_operator/bridges/shared/paths.py`, `corvin_operator/cowork/lib/paths.py`
+  and `corvin_operator/forge/forge/scope.py` resolve `~/.corvin/` first, fall
   back to `~/.corvinOS/` if the new dir doesn't exist yet, and log the
   fallback once per process.
 - New tests assert both code paths (new var + new path wins; old var +
@@ -50,17 +50,17 @@ Sub-task status:
 
 | Module / resolver | Status | Session | E2E |
 |---|---|---|---|
-| `operator/forge/forge/paths.py` (3 byte-identical copies in forge / voice / cowork) | ✓ done | 2026-05-09 | `operator/forge/tests/test_paths_compat.py` (31 cases — env precedence, repo-walk, fallback, once-per-process log) |
-| `operator/forge/forge/scope.py` (`CORVIN_FORCE_SCOPE` / `CORVIN_DEFAULT_SCOPE` / `CORVIN_CHANNEL_ID` / `CORVIN_TASK_ID`, plus `<repo>/.corvin` and `/tmp/.corvin/tasks` workspace fallbacks) | ✓ done | 2026-05-09 | `operator/forge/tests/test_scope_compat.py` (37 cases — env precedence per var, repo workspace, /tmp tasks fallback, once-per-process log) |
-| `operator/bridges/shared/adapter.py::_build_spawn_env` (`CORVIN_CHANNEL_ID` / `CORVIN_CALLER_PERSONA` — write-side dual spelling) | ✓ done | 2026-05-09 | `operator/bridges/shared/test_adapter_spawn_env_compat.py` (22 cases — dual write, sanitization parity, persona lookup order, defensive strip on both names) |
-| `operator/forge/forge/secret_vault.py` (`CORVIN_SECRET_VAULT`) | ✓ done | 2026-05-09 | `operator/forge/tests/test_secret_vault_compat.py` (14 cases — env precedence, XDG default, path expansion, once-per-process log) |
-| `operator/skill-forge/skill_forge/registry.py::plugin_slot_dir` (`CORVIN_PLUGIN_SLOT_DIR` + reads `CORVIN_HOME`) | ✓ done | 2026-05-09 | `operator/skill-forge/tests/test_plugin_slot_compat.py` (16 cases — slot env precedence, HOME-derived slot, repo-walk, once-per-process log) |
-| `operator/voice/scripts/session_timeout_sweep.py` (`CORVIN_SESSION_TTL_DAYS`) | ✓ done | 2026-05-09 | `operator/voice/scripts/test_session_timeout_compat.py` (12 cases — env precedence, once-per-process log, argparse default) |
-| `operator/bridges/shared/agents/test_engines_e2e.py` (`CORVIN_AGENTS_SKIP_LIVE`) | ✓ done | 2026-05-09 | `operator/bridges/shared/agents/test_engines_skip_live_compat.py` (10 cases — env precedence, one-shot warning, non-'1' value rejected) |
+| `corvin_operator/forge/forge/paths.py` (3 byte-identical copies in forge / voice / cowork) | ✓ done | 2026-05-09 | `corvin_operator/forge/tests/test_paths_compat.py` (31 cases — env precedence, repo-walk, fallback, once-per-process log) |
+| `corvin_operator/forge/forge/scope.py` (`CORVIN_FORCE_SCOPE` / `CORVIN_DEFAULT_SCOPE` / `CORVIN_CHANNEL_ID` / `CORVIN_TASK_ID`, plus `<repo>/.corvin` and `/tmp/.corvin/tasks` workspace fallbacks) | ✓ done | 2026-05-09 | `corvin_operator/forge/tests/test_scope_compat.py` (37 cases — env precedence per var, repo workspace, /tmp tasks fallback, once-per-process log) |
+| `corvin_operator/bridges/shared/adapter.py::_build_spawn_env` (`CORVIN_CHANNEL_ID` / `CORVIN_CALLER_PERSONA` — write-side dual spelling) | ✓ done | 2026-05-09 | `corvin_operator/bridges/shared/test_adapter_spawn_env_compat.py` (22 cases — dual write, sanitization parity, persona lookup order, defensive strip on both names) |
+| `corvin_operator/forge/forge/secret_vault.py` (`CORVIN_SECRET_VAULT`) | ✓ done | 2026-05-09 | `corvin_operator/forge/tests/test_secret_vault_compat.py` (14 cases — env precedence, XDG default, path expansion, once-per-process log) |
+| `corvin_operator/skill-forge/skill_forge/registry.py::plugin_slot_dir` (`CORVIN_PLUGIN_SLOT_DIR` + reads `CORVIN_HOME`) | ✓ done | 2026-05-09 | `corvin_operator/skill-forge/tests/test_plugin_slot_compat.py` (16 cases — slot env precedence, HOME-derived slot, repo-walk, once-per-process log) |
+| `corvin_operator/voice/scripts/session_timeout_sweep.py` (`CORVIN_SESSION_TTL_DAYS`) | ✓ done | 2026-05-09 | `corvin_operator/voice/scripts/test_session_timeout_compat.py` (12 cases — env precedence, once-per-process log, argparse default) |
+| `corvin_operator/bridges/shared/agents/test_engines_e2e.py` (`CORVIN_AGENTS_SKIP_LIVE`) | ✓ done | 2026-05-09 | `corvin_operator/bridges/shared/agents/test_engines_skip_live_compat.py` (10 cases — env precedence, one-shot warning, non-'1' value rejected) |
 
 Each row above is one bridge-session of work: implement the resolver
 with the once-per-process deprecation log, write a per-subtask E2E,
-run `bash operator/bridges/run-all-tests.sh`, update the inventory
+run `bash corvin_operator/bridges/run-all-tests.sh`, update the inventory
 snapshot below.
 
 **Phase 2 — Identifier migration in non-public code (DONE 2026-05-09)**
@@ -70,7 +70,7 @@ snapshot below.
 - Public surface (env vars, on-disk paths, audit-event names) stays
   dual-named for users — the warnings keep firing.
 - One subsystem per session (forge, skill-forge, voice-adapter, voice-
-  hooks, cowork, daemons). Run `bash operator/bridges/run-all-tests.sh`
+  hooks, cowork, daemons). Run `bash corvin_operator/bridges/run-all-tests.sh`
   after every subsystem before committing.
 
 Sub-task status:
@@ -90,7 +90,7 @@ Sub-task status:
   the rebrand if the original term is preserved for historical accuracy.
 - New audit-event-name aliases (`session.reset` etc. stay; only
   identifiers that contained the literal `corvinos` get renamed —
-  none today, verified via `grep corvinos operator/forge/forge/security_events.py`
+  none today, verified via `grep corvinos corvin_operator/forge/forge/security_events.py`
   → no matches).
 - The `[CORVIN_SIGNAL: <name>]` persona-protocol marker is dual-fired
   alongside `[CORVIN_SIGNAL: <name>]` on the same line in adapter.py;
@@ -111,13 +111,13 @@ Sub-task status:
 - Same for the systemd unit names: introduce `corvin-audit-verify.timer`
   and `corvin-session-timeout.timer` alongside the old ones; `bridge.sh
   up` enables both, `bridge.sh down` disables both.
-- Module: `operator/bridges/shared/corvin_migrate.py` —
+- Module: `corvin_operator/bridges/shared/corvin_migrate.py` —
   `migrate_home_if_needed(*, new_home, legacy_home, dry_run, audit_path)`
   helper, idempotent + opt-out via `CORVIN_MIGRATE=0`. Detects same-FS
   via `st_dev`; falls back to `shutil.copytree` + size-verify + MIGRATED
   marker on cross-FS. Audit event `session.path_migrated` written into
   the unified hash chain (severity INFO, details from/to/method/files).
-- E2E: `operator/bridges/shared/test_corvin_migrate.py` (28 cases —
+- E2E: `corvin_operator/bridges/shared/test_corvin_migrate.py` (28 cases —
   no-legacy no-op, target-exists idempotent, CORVIN_MIGRATE=0 opt-out,
   dry-run, same-FS rename, cross-FS copy via monkey-patched os.rename
   raising EXDEV, MIGRATED marker placement, hash-chain verifiable

@@ -4,10 +4,10 @@
 > **⚠️ Honesty banner (2026-07-24 adversarial review):** every token-savings
 > figure in this document — including "40-70%", "48.8%" and any "p=0.01"
 > mention — comes from a DETERMINISTIC SIMULATION that encodes the assumed
-> savings ratios (`operator/benchmarking/`). Nothing was measured against
+> savings ratios (`corvin_operator/benchmarking/`). Nothing was measured against
 > real LLM usage, and the previously reported p-value was fabricated by the
 > analysis code (since removed). Treat all numbers as modeled hypotheses;
-> `operator/orchestration/tde/bench.py` produces the honest, measured
+> `corvin_operator/orchestration/tde/bench.py` produces the honest, measured
 > (wall-clock-only) counterpart.
 
 > **🎯 Core Promise:** Reduce LLM token consumption by 40-70% through intelligent task routing, backed by scientific benchmarking and live metrics.
@@ -216,7 +216,7 @@ Benefit: Enables entire class of workloads
 
 ```bash
 cd /path/to/CorvinOS
-python3 operator/benchmarking/run_benchmarks.py
+python3 corvin_operator/benchmarking/run_benchmarks.py
 ```
 
 **Output Structure:**
@@ -274,7 +274,7 @@ benchmark/results/2026-07-24_HHMMSS/
 ### Code Structure
 
 ```
-operator/orchestration/tde/
+corvin_operator/orchestration/tde/
 ├── robust_engine_detector.py      (5-signal ensemble, ~340 LoC)
 ├── l34_delegation_gate.py         (data-safety gating, ~260 LoC)
 ├── send_integration.py            (orchestration hookpoint, ~200 LoC)
@@ -315,7 +315,7 @@ tests/
 
 ```python
 import sys
-sys.path.insert(0, "operator/orchestration")  # repo-relative
+sys.path.insert(0, "corvin_operator/orchestration")  # repo-relative
 from tde import SendIntegration
 
 integration = SendIntegration()
@@ -353,7 +353,7 @@ GROUP BY engine
 
 ```bash
 # Test with your tasks
-python3 operator/benchmarking/run_benchmarks.py \
+python3 corvin_operator/benchmarking/run_benchmarks.py \
   --fixture-dir=./my_tasks \
   --output-dir=./my_results
 ```
@@ -382,7 +382,7 @@ python3 operator/benchmarking/run_benchmarks.py \
 
 **Reproduce the Benchmark:**
 ```bash
-python3 operator/benchmarking/run_benchmarks.py
+python3 corvin_operator/benchmarking/run_benchmarks.py
 # See: benchmark/results/2026-07-24_102920/
 ```
 
@@ -395,8 +395,8 @@ cat docs/tde-benchmark-scientific-paper.md
 **Check the Code:**
 ```bash
 # Everything is open-source
-ls -la operator/benchmarking/
-ls -la operator/orchestration/tde/
+ls -la corvin_operator/benchmarking/
+ls -la corvin_operator/orchestration/tde/
 ```
 
 ---
@@ -423,7 +423,7 @@ A: Yes. The routing engine is model-agnostic. Use the plugin registry to add cus
 ## 12. Next Steps
 
 1. **Enable TDE** in your Console settings
-2. **Run the benchmark** on your workload: `python3 operator/benchmarking/run_benchmarks.py`
+2. **Run the benchmark** on your workload: `python3 corvin_operator/benchmarking/run_benchmarks.py`
 3. **Monitor token usage**: Track per-engine metrics in your console dashboard
 4. **Tune weights** based on your loss profile: edit `robust_engine_detector.py` signal weights
 5. **Extend with plugins**: Register custom detectors in the plugin registry
@@ -434,8 +434,8 @@ A: Yes. The routing engine is model-agnostic. Use the plugin registry to add cus
 
 - **[Scientific Benchmark Study](tde-benchmark-scientific-paper.md)** — Methodology, statistics, reproducibility
 - **[TDE Layer Comprehensive Guide](tde-layer-comprehensive-guide.md)** — Architecture deep-dive with diagrams
-- **[Benchmark Harness](../operator/benchmarking/run_benchmarks.py)** — Run your own tests
-- **[Engine Detection Logic](../operator/orchestration/tde/robust_engine_detector.py)** — The 5-signal ensemble
+- **[Benchmark Harness](../corvin_operator/benchmarking/run_benchmarks.py)** — Run your own tests
+- **[Engine Detection Logic](../corvin_operator/orchestration/tde/robust_engine_detector.py)** — The 5-signal ensemble
 - **[Architecture Diagrams](diagrams/)** — Visual reference
 
 ---

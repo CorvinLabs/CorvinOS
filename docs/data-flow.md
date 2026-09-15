@@ -97,8 +97,8 @@ Several files in this dispatch path are read on every message:
 |---|---|---|
 | `bridges/<channel>/settings.json` | daemon (`currentSettings()`) + adapter (`_load_channel_settings`) | Whitelist, rate limits, `chat_profiles`, audience toggle apply on next message |
 | `bridges/shared/settings.json` | adapter | `voice_summary_mode`, `routing.mode`, `progress_updates` apply on next message |
-| `operator/cowork/personas/<name>.json` | resolver, when persona is invoked | Persona's tools, MCP servers, system prompt apply on next message that uses that persona |
-| `operator/forge/policy.json` | forge (mtime cache) | Breaker thresholds and forbidden-name patterns apply on next forge call |
+| `corvin_operator/cowork/personas/<name>.json` | resolver, when persona is invoked | Persona's tools, MCP servers, system prompt apply on next message that uses that persona |
+| `corvin_operator/forge/policy.json` | forge (mtime cache) | Breaker thresholds and forbidden-name patterns apply on next forge call |
 
 Files that do **not** hot-reload — bound at daemon/adapter boot:
 

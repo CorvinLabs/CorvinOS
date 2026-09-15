@@ -10,7 +10,7 @@ nothing in the shipped tree wrote it, so none was ever loaded. The declaration i
 block and no code writes one. So "shipped dark" understates it — this is **shipped, dark,
 and undeclared**.
 **ADRs:** ADR-0238 (bridges as supervised plugins), ADR-0243 (the `boot_layer` axis)
-**Code:** `core/plugins/corvin_plugins/bridges/`, `operator/bridges/bridge_manager.py`
+**Code:** `core/plugins/corvin_plugins/bridges/`, `corvin_operator/bridges/bridge_manager.py`
 **Tests:** `core/plugins/tests/test_bridge_supervisor.py` — **78 passing**, measured
 2026-07-27
 
@@ -25,7 +25,7 @@ and an earlier revision of *this* document described a
 client. **None of that exists.** The verified state of the repository is:
 
 ```
-operator/bridges/
+corvin_operator/bridges/
 ├─ bridge.sh                 ← the operator entry point in daily use
 ├─ bridge_manager.py         ← cross-platform Python launcher (Windows + wheel)
 ├─ shared/

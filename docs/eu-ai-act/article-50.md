@@ -102,7 +102,7 @@ Art. 50 §1 requires the disclosure to be "clear" — naming an operator as `(ow
 
 The `operator_name` field must be set in `tenant.corvin.yaml::spec.operator_name` or the channel-specific settings. Required for Art. 50 compliance in production deployments.
 
-**Test coverage:** `operator/bridges/shared/test_content_marking.py` (14 tests)
+**Test coverage:** `corvin_operator/bridges/shared/test_content_marking.py` (14 tests)
 
 ---
 
@@ -146,7 +146,7 @@ e["provenance"] = {
 | `session_id` format is `<channel>:<chat_key>` | `test_provenance_session_id` |
 | Persona is empty string when no profile active | `test_provenance_empty_persona_without_profile` |
 
-**Test coverage:** `operator/bridges/shared/test_content_marking.py` (14 tests, all green)
+**Test coverage:** `corvin_operator/bridges/shared/test_content_marking.py` (14 tests, all green)
 
 ### What "final message" means
 
@@ -245,16 +245,16 @@ Both obligations are tracked in `compliance/eu-ai-act.yaml`:
   severity: critical
   implemented_by:
     - layer: L19
-      file: operator/bridges/shared/disclosure.py
-      test: operator/bridges/shared/test_disclosure.py
+      file: corvin_operator/bridges/shared/disclosure.py
+      test: corvin_operator/bridges/shared/test_disclosure.py
 
 - id: eua.art50.1.disclosure_persistence
   article: "Art. 50 §1"
   severity: high
   implemented_by:
     - layer: L19
-      file: operator/bridges/shared/disclosure.py
-      test: operator/bridges/shared/test_disclosure.py
+      file: corvin_operator/bridges/shared/disclosure.py
+      test: corvin_operator/bridges/shared/test_disclosure.py
       note: "retry logic ensures seen-state persists under transient FS errors"
 
 - id: eua.art50.4.content_marking_format
@@ -262,8 +262,8 @@ Both obligations are tracked in `compliance/eu-ai-act.yaml`:
   severity: critical
   implemented_by:
     - layer: L19
-      file: operator/bridges/shared/adapter.py
-      test: operator/bridges/shared/test_content_marking.py
+      file: corvin_operator/bridges/shared/adapter.py
+      test: corvin_operator/bridges/shared/test_content_marking.py
 ```
 
 Both rules are checked by `bridge.sh doctor` and blocked by the GitHub Actions

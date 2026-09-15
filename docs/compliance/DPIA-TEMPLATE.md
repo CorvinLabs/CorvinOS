@@ -145,16 +145,16 @@ Verweis auf die Layer-spezifischen Implementierungen:
 
 | TOM | Layer | Datei |
 |---|---|---|
-| Hash-chained tamper-evident Audit | L16 | `operator/forge/forge/security_events.py` |
-| Per-User-Consent (Art. 6 / 7) | L16 Phase 4 | `operator/bridges/shared/consent.py` |
-| Bot-Disclosure (EU AI Act Art. 50) | L19 | `operator/bridges/shared/disclosure.py` |
-| Path-Gate Fail-Closed | L10 | `operator/voice/hooks/path_gate.py` |
-| Engine-Identity-Gate | compliance-zone | `operator/bridges/shared/engine_policy.py` |
-| Data Classification | L34 | `operator/bridges/shared/data_classification.py` |
-| Network Egress Lockdown | L35 | `operator/bridges/shared/egress_gate.py` |
-| GDPR Art. 17 Erasure | L36 | `operator/bridges/shared/erasure_orchestrator.py` |
-| Audit-at-Rest + Retention | L37 | `operator/bridges/shared/audit_sealer.py` |
-| Secret-Vault → bwrap-Env | L16 v3 | `operator/voice/scripts/secret_vault.py` |
+| Hash-chained tamper-evident Audit | L16 | `corvin_operator/forge/forge/security_events.py` |
+| Per-User-Consent (Art. 6 / 7) | L16 Phase 4 | `corvin_operator/bridges/shared/consent.py` |
+| Bot-Disclosure (EU AI Act Art. 50) | L19 | `corvin_operator/bridges/shared/disclosure.py` |
+| Path-Gate Fail-Closed | L10 | `corvin_operator/voice/hooks/path_gate.py` |
+| Engine-Identity-Gate | compliance-zone | `corvin_operator/bridges/shared/engine_policy.py` |
+| Data Classification | L34 | `corvin_operator/bridges/shared/data_classification.py` |
+| Network Egress Lockdown | L35 | `corvin_operator/bridges/shared/egress_gate.py` |
+| GDPR Art. 17 Erasure | L36 | `corvin_operator/bridges/shared/erasure_orchestrator.py` |
+| Audit-at-Rest + Retention | L37 | `corvin_operator/bridges/shared/audit_sealer.py` |
+| Secret-Vault → bwrap-Env | L16 v3 | `corvin_operator/voice/scripts/secret_vault.py` |
 
 ---
 

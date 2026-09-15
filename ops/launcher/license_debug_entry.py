@@ -1,6 +1,6 @@
 """Entry-point shim for corvin-license-debug (ADR-0154 OTA diagnostics).
 
-Shim needed because corvin_operator/ shadows the Python stdlib 'operator' module name;
+Shim needed because the legacy operator/ directory name shadows the Python stdlib 'operator' module name;
 we put the license + shared dirs on sys.path before importing the CLI module.
 """
 import os

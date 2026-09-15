@@ -49,8 +49,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0056
-        file: "operator/bridges/shared/compliance_manifest.py"
-        test: "operator/bridges/shared/test_eu_compliance.py"
+        file: "corvin_operator/bridges/shared/compliance_manifest.py"
+        test: "corvin_operator/bridges/shared/test_eu_compliance.py"
     cross_references:
       - framework: "EU AI Act"
         rule_id: "eua.art14.engine_policy"
@@ -80,11 +80,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L18
-        file: "operator/bridges/shared/roles.py"
-        test: "operator/bridges/shared/test_roles.py"
+        file: "corvin_operator/bridges/shared/roles.py"
+        test: "corvin_operator/bridges/shared/test_roles.py"
       - layer: ADR-0057
-        file: "operator/bridges/shared/operator_declaration.py"
-        test: "operator/bridges/shared/test_operator_declaration.py"
+        file: "corvin_operator/bridges/shared/operator_declaration.py"
+        test: "corvin_operator/bridges/shared/test_operator_declaration.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.5.1.leadership"
@@ -114,8 +114,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L34
-        file: "operator/bridges/shared/data_classification.py"
-        test: "operator/bridges/shared/test_data_classification.py"
+        file: "corvin_operator/bridges/shared/data_classification.py"
+        test: "corvin_operator/bridges/shared/test_data_classification.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.6.1.risk_assessment"
@@ -145,11 +145,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L19
-        file: "operator/bridges/shared/disclosure.py"
-        test: "operator/bridges/shared/test_disclosure.py"
+        file: "corvin_operator/bridges/shared/disclosure.py"
+        test: "corvin_operator/bridges/shared/test_disclosure.py"
       - layer: L16
-        file: "operator/bridges/shared/consent.py"
-        test: "operator/bridges/shared/test_consent_gate.py"
+        file: "corvin_operator/bridges/shared/consent.py"
+        test: "corvin_operator/bridges/shared/test_consent_gate.py"
     cross_references:
       - framework: "EU AI Act"
         rule_id: "eua.art50.1.disclosure"
@@ -182,8 +182,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L39
-        file: "operator/bridges/shared/incident_tracker.py"
-        test: "operator/bridges/shared/test_incident_tracker.py"
+        file: "corvin_operator/bridges/shared/incident_tracker.py"
+        test: "corvin_operator/bridges/shared/test_incident_tracker.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.10.1.nonconformity"
@@ -212,11 +212,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0056
-        file: "operator/bridges/shared/compliance_manifest.py"
-        test: "operator/bridges/shared/test_eu_compliance.py"
+        file: "corvin_operator/bridges/shared/compliance_manifest.py"
+        test: "corvin_operator/bridges/shared/test_eu_compliance.py"
       - layer: L16
-        file: "operator/bridges/shared/audit.py"
-        test: "operator/bridges/shared/test_audit.py"
+        file: "corvin_operator/bridges/shared/audit.py"
+        test: "corvin_operator/bridges/shared/test_audit.py"
     cross_references:
       - framework: "EU AI Act"
         rule_id: "eua.art14.compliance_zone"
@@ -247,11 +247,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0007
-        file: "operator/bridges/shared/engine_policy.py"
-        test: "operator/bridges/shared/test_engine_policy.py"
+        file: "corvin_operator/bridges/shared/engine_policy.py"
+        test: "corvin_operator/bridges/shared/test_engine_policy.py"
       - layer: L35
-        file: "operator/bridges/shared/egress_gate.py"
-        test: "operator/bridges/shared/test_egress_gate.py"
+        file: "corvin_operator/bridges/shared/egress_gate.py"
+        test: "corvin_operator/bridges/shared/test_egress_gate.py"
     cross_references:
       - framework: "EU AI Act"
         rule_id: "eua.art14.engine_policy"
@@ -286,8 +286,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0057
-        file: "operator/bridges/shared/operator_declaration.py"
-        test: "operator/bridges/shared/test_operator_declaration.py"
+        file: "corvin_operator/bridges/shared/operator_declaration.py"
+        test: "corvin_operator/bridges/shared/test_operator_declaration.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.4.3.scope"
@@ -315,8 +315,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L34
-        file: "operator/bridges/shared/data_classification.py"
-        test: "operator/bridges/shared/test_data_classification.py"
+        file: "corvin_operator/bridges/shared/data_classification.py"
+        test: "corvin_operator/bridges/shared/test_data_classification.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.6.1.risk_assessment"
@@ -344,11 +344,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0057
-        file: "operator/bridges/shared/operator_declaration.py"
-        test: "operator/bridges/shared/test_operator_declaration.py"
+        file: "corvin_operator/bridges/shared/operator_declaration.py"
+        test: "corvin_operator/bridges/shared/test_operator_declaration.py"
       - layer: ADR-0057
-        file: "operator/voice/scripts/corvin_annex_iv.py"
-        test: "operator/voice/scripts/test_corvin_annex_iv.py"
+        file: "corvin_operator/voice/scripts/corvin_annex_iv.py"
+        test: "corvin_operator/voice/scripts/test_corvin_annex_iv.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.8.4.impact_assessment"
@@ -379,7 +379,7 @@ rules:
     implemented_by:
       - layer: ADR-0056
         file: "compliance/eu-ai-act.yaml"
-        test: "operator/bridges/shared/test_eu_compliance.py"
+        test: "corvin_operator/bridges/shared/test_eu_compliance.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.8.2.risk_assessment_process"
@@ -406,8 +406,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L39
-        file: "operator/bridges/shared/incident_tracker.py"
-        test: "operator/bridges/shared/test_incident_tracker.py"
+        file: "corvin_operator/bridges/shared/incident_tracker.py"
+        test: "corvin_operator/bridges/shared/test_incident_tracker.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.10.1.nonconformity"
@@ -438,8 +438,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0056
-        file: "operator/bridges/shared/compliance_manifest.py"
-        test: "operator/bridges/shared/test_eu_compliance.py"
+        file: "corvin_operator/bridges/shared/compliance_manifest.py"
+        test: "corvin_operator/bridges/shared/test_eu_compliance.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.9.2.internal_audit"
@@ -467,11 +467,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/audit.py"
-        test: "operator/bridges/shared/test_audit.py"
+        file: "corvin_operator/bridges/shared/audit.py"
+        test: "corvin_operator/bridges/shared/test_audit.py"
       - layer: L37
-        file: "operator/bridges/shared/audit_sealer.py"
-        test: "operator/bridges/shared/test_audit_sealer.py"
+        file: "corvin_operator/bridges/shared/audit_sealer.py"
+        test: "corvin_operator/bridges/shared/test_audit_sealer.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.7.5.documented_information"
@@ -506,11 +506,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L18
-        file: "operator/bridges/shared/roles.py"
-        test: "operator/bridges/shared/test_roles.py"
+        file: "corvin_operator/bridges/shared/roles.py"
+        test: "corvin_operator/bridges/shared/test_roles.py"
       - layer: L21
-        file: "operator/bridges/shared/proposals.py"
-        test: "operator/bridges/shared/test_proposal.py"
+        file: "corvin_operator/bridges/shared/proposals.py"
+        test: "corvin_operator/bridges/shared/test_proposal.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.8.3.risk_treatment"
@@ -539,8 +539,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: "test-suite"
-        file: "operator/bridges/run-all-tests.sh"
-        test: "operator/bridges/run-all-tests.sh"
+        file: "corvin_operator/bridges/run-all-tests.sh"
+        test: "corvin_operator/bridges/run-all-tests.sh"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.9.1.monitoring"
@@ -568,8 +568,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: "self-test"
-        file: "operator/bridges/shared/self_test.py"
-        test: "operator/bridges/shared/self_test.py"
+        file: "corvin_operator/bridges/shared/self_test.py"
+        test: "corvin_operator/bridges/shared/self_test.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.9.2.internal_audit"
@@ -600,8 +600,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/audit.py"
-        test: "operator/bridges/shared/test_audit.py"
+        file: "corvin_operator/bridges/shared/audit.py"
+        test: "corvin_operator/bridges/shared/test_audit.py"
     cross_references: []
     invariants:
       - "every WorkerEngine spawn emits an audit event before the spawn completes"
@@ -632,14 +632,14 @@ rules:
     severity: critical
     implemented_by:
       - layer: L10
-        file: "operator/voice/hooks/path_gate.py"
-        test: "operator/bridges/shared/test_path_gate_ast.py"
+        file: "corvin_operator/voice/hooks/path_gate.py"
+        test: "corvin_operator/bridges/shared/test_path_gate_ast.py"
       - layer: L34
-        file: "operator/bridges/shared/data_classification.py"
-        test: "operator/bridges/shared/test_data_classification.py"
+        file: "corvin_operator/bridges/shared/data_classification.py"
+        test: "corvin_operator/bridges/shared/test_data_classification.py"
       - layer: L35
-        file: "operator/bridges/shared/egress_gate.py"
-        test: "operator/bridges/shared/test_egress_gate.py"
+        file: "corvin_operator/bridges/shared/egress_gate.py"
+        test: "corvin_operator/bridges/shared/test_egress_gate.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.8.3.risk_treatment"
@@ -671,8 +671,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L39
-        file: "operator/bridges/shared/incident_tracker.py"
-        test: "operator/bridges/shared/test_incident_tracker.py"
+        file: "corvin_operator/bridges/shared/incident_tracker.py"
+        test: "corvin_operator/bridges/shared/test_incident_tracker.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.10.1.nonconformity"
@@ -707,11 +707,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L36
-        file: "operator/bridges/shared/erasure_orchestrator.py"
-        test: "operator/bridges/shared/test_erasure_orchestrator.py"
+        file: "corvin_operator/bridges/shared/erasure_orchestrator.py"
+        test: "corvin_operator/bridges/shared/test_erasure_orchestrator.py"
       - layer: L37
-        file: "operator/bridges/shared/audit_sealer.py"
-        test: "operator/bridges/shared/test_audit_sealer.py"
+        file: "corvin_operator/bridges/shared/audit_sealer.py"
+        test: "corvin_operator/bridges/shared/test_audit_sealer.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.8.4.impact_assessment"
@@ -746,8 +746,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L39
-        file: "operator/bridges/shared/incident_tracker.py"
-        test: "operator/bridges/shared/test_incident_tracker.py"
+        file: "corvin_operator/bridges/shared/incident_tracker.py"
+        test: "corvin_operator/bridges/shared/test_incident_tracker.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.10.1.nonconformity"
@@ -777,8 +777,8 @@ rules:
     severity: warning
     implemented_by:
       - layer: ADR-0057
-        file: "operator/voice/scripts/corvin_annex_iv.py"
-        test: "operator/voice/scripts/test_corvin_annex_iv.py"
+        file: "corvin_operator/voice/scripts/corvin_annex_iv.py"
+        test: "corvin_operator/voice/scripts/test_corvin_annex_iv.py"
     cross_references:
       - framework: "ISO 42001"
         rule_id: "iso42001.9.3.management_review"

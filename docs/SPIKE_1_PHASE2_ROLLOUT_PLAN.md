@@ -61,14 +61,14 @@ Layer 3: Skills Implementation (Spike 1 Complete)
 ```bash
 # Find all imports
 grep -r "from corvin_core.feature_flags import\|from corvin_core import feature_flags" \
-  core/ operator/ tests/ --include="*.py" | wc -l
+  core/ corvin_operator/ tests/ --include="*.py" | wc -l
 
 # Find all usage (is_enabled calls)
 grep -r "is_enabled\|set_enabled\|describe_all\|tier_of\|worker_engine_mode" \
-  core/ operator/ tests/ --include="*.py" | grep -v "^Binary" | wc -l
+  core/ corvin_operator/ tests/ --include="*.py" | grep -v "^Binary" | wc -l
 
 # Find high-call-volume sites
-grep -r "is_enabled(" core/ operator/ --include="*.py" \
+grep -r "is_enabled(" core/ corvin_operator/ --include="*.py" \
   -l | xargs wc -l | sort -rn | head -20
 ```
 
@@ -186,7 +186,7 @@ To be populated in Week 1 via grep analysis. Example format:
 |------|------|------|---|
 | `core/console/corvin_console/chat_runtime.py` | 234 | `is_enabled("vibe_engineering")` | 🔴 YES |
 | `core/console/corvin_console/app.py` | 567 | `is_enabled("console_marketplace_panel")` | 🟡 MEDIUM |
-| `operator/bridges/shared/adapter.py` | 123 | `is_enabled("bridge_tde_execution")` | 🟡 MEDIUM |
+| `corvin_operator/bridges/shared/adapter.py` | 123 | `is_enabled("bridge_tde_execution")` | 🟡 MEDIUM |
 | ... | ... | ... | ... |
 
 ---

@@ -326,7 +326,7 @@ if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
 #
 # Self-contained on purpose: this installer runs via `irm | iex` before any
 # repo checkout necessarily exists on disk, so the supervisor script is
-# generated here rather than referencing operator/bridges/shared/ (which the
+# generated here rather than referencing corvin_operator/bridges/shared/ (which the
 # dev-checkout equivalent, bridge.ps1 install-autostart, does instead).
 
 function New-CorvinShortcut {
@@ -489,7 +489,7 @@ if (Get-CorvinAutoUpdate) {
 # spinning forever. Mirrors the systemd StartLimitBurst=5/
 # StartLimitIntervalSec=300 pair used for the Linux user unit
 # (corvinOS/installer/service_manager.py) and the dev-checkout supervisor
-# (operator/bridges/shared/corvin-supervisor.ps1) -- keep this logic
+# (corvin_operator/bridges/shared/corvin-supervisor.ps1) -- keep this logic
 # IDENTICAL across all three; test_windows_supervisor_parity.py checks it.
 `$MaxRestarts = 5
 `$RestartWindowSec = 300
@@ -520,7 +520,7 @@ while (`$true) {
             # process alive-but-not-yet-answering) the same as "free",
             # risking a second competing instance against a slow-to-answer
             # existing one. Kept identical to
-            # operator/bridges/shared/corvin-supervisor.ps1 -- parity is
+            # corvin_operator/bridges/shared/corvin-supervisor.ps1 -- parity is
             # load-bearing (test_windows_supervisor_parity.py).
             `$portBusy = `$false
         } else {

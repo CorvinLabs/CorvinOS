@@ -31,7 +31,7 @@ jobs:
         # dev extra instead of a hand-maintained pip list — that list had
         # drifted, silently omitting the package itself (breaking every
         # corvin_console/corvin_license import), the `limits` rate-limiting
-        # lib (operator/license/validator.py imports it directly), the
+        # lib (corvin_operator/license/validator.py imports it directly), the
         # `hatchling` build backend (needed by tests/test_hatch_build_vendor_
         # ignore.py), and `python-multipart` (FastAPI form-data test routes).
         run: |
@@ -58,14 +58,14 @@ jobs:
           # 2026-07-27 audit: this job named 6 of the repo's 22 test
           # directories. The other 16 ran in NO workflow at all — among them
           # core/gateway (227 tests, the app the always-on service boots),
-          # operator/license (236), core/delegate (317) and ops/launcher.
+          # corvin_operator/license (236), core/delegate (317) and ops/launcher.
           # The ones added below are those verified green when run on their own;
           # four directories are deliberately still absent because they are RED
           # and adding them would just turn the job red without fixing anything:
           #   core/compliance/tests      2 collection errors
-          #   operator/forge/tests       11 collection errors
-          #   operator/rag-integration/  2 collection errors
-          #   operator/voice/tests       3 failures — the voice summariser drops
+          #   corvin_operator/forge/tests       11 collection errors
+          #   corvin_operator/rag-integration/  2 collection errors
+          #   corvin_operator/voice/tests       3 failures — the voice summariser drops
           #                              CRITICAL warnings (real product defect)
           # They are tracked as their own fixes, not hidden by omission.
           #
@@ -75,7 +75,7 @@ jobs:
           # importlib mode ("Plugin already registered under a different name").
           # Those run as their own pytest invocation below rather than being
           # dropped.
-          # operator/bridges/shared/ moved OUT of this invocation — see reason 2
+          # corvin_operator/bridges/shared/ moved OUT of this invocation — see reason 2
           # in the next step. It poisoned the stdlib `operator` module for every
           # directory collected after it, which is why this job used to die
           # ~1.5 s in with "INTERNALERROR ... caught unexpected SystemExit"
@@ -169,7 +169,7 @@ jobs:
           #
           # 2. THE operator/ STDLIB SHADOW. Under --import-mode=importlib pytest
           #    names a test module by its path relative to rootdir, so collecting
-          #    anything under operator/ imports `operator` as a NAMESPACE PACKAGE
+          #    anything under corvin_operator/ imports `operator` as a NAMESPACE PACKAGE
           #    and it replaces the stdlib module in sys.modules for the rest of
           #    the session:
           #        >>> operator.__file__ -> None
@@ -178,8 +178,8 @@ jobs:
           #    Every later import that touches operator.add / itemgetter then
           #    fails with "module 'operator' has no attribute 'add'" — including
           #    inside third-party packages. That is what produced the collection
-          #    errors in operator/bridges/shared, operator/forge and
-          #    operator/rag-integration (diagnosed 2026-07-27; it is the fourth
+          #    errors in corvin_operator/bridges/shared, corvin_operator/forge and
+          #    corvin_operator/rag-integration (diagnosed 2026-07-27; it is the fourth
           #    appearance of the operator/ shadow trap in this repo).
           #    One session per directory contains the damage; it does not remove
           #    the trap, and the real fix is still owed.
@@ -195,12 +195,12 @@ jobs:
           # package (`operator.__file__` is None, `hasattr(operator, "add")` is
           # False); under prepend it stays intact. `consider_namespace_packages`
           # makes no difference either way — the import mode is the lever.
-          # operator/forge/tests went from 11 collection errors to 547 passing
+          # corvin_operator/forge/tests went from 11 collection errors to 547 passing
           # on this one flag.
-          for d in operator/bridges/tests \
-                   operator/agent/tests operator/license/tests \
-                   operator/skill-forge/tests operator/mcp_manager/tests \
-                   operator/forge/tests operator/voice/tests; do
+          for d in corvin_operator/bridges/tests \
+                   corvin_operator/agent/tests corvin_operator/license/tests \
+                   corvin_operator/skill-forge/tests corvin_operator/mcp_manager/tests \
+                   corvin_operator/forge/tests corvin_operator/voice/tests; do
             pytest "$d" --import-mode=prepend \
               --cov=operator --cov=core --cov-append -q
           done
@@ -210,20 +210,20 @@ jobs:
       # core/plugins/tests went 950+ tests without a CI (see the note above).
       # Each of these is a tracked defect, not an oversight:
       #
-      #   operator/bridges/shared/   Runs past 15 minutes even in its own session,
+      #   corvin_operator/bridges/shared/   Runs past 15 minutes even in its own session,
       #                              which is why it is bounded out rather than
       #                              added. It was listed in this job before
       #                              2026-07-27 and never actually ran — the job
       #                              died on it at 1.5 s. run-all-tests.sh drives
       #                              this directory one process per file, which is
       #                              why it works there.
-      #   operator/rag-integration/  2 test modules use relative imports with no
+      #   corvin_operator/rag-integration/  2 test modules use relative imports with no
       #                              parent package (the other 55 collect fine).
       #                              A defect in those two files, not the mode.
       #   core/compliance/tests/     2 collection errors, cause not yet diagnosed.
       #
-      # Fixed and now included: operator/forge/tests (11 collection errors -> 547
-      # passing) and operator/voice/tests (the summariser dropped CRITICAL
+      # Fixed and now included: corvin_operator/forge/tests (11 collection errors -> 547
+      # passing) and corvin_operator/voice/tests (the summariser dropped CRITICAL
       # warnings) — both were listed here and are no longer excluded.
 
       - name: Generate coverage badge

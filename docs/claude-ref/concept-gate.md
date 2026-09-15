@@ -147,7 +147,7 @@ under this heading — only add a new dated sub-entry above it.)_
 ## Namespace Gate for the Companion Skill
 
 `skill_create` enforces a per-persona namespace gate: a skill created under the `assistant`
-persona must be named `assistant.<name>` (see `operator/skill-forge/README.md`). This is not a
+persona must be named `assistant.<name>` (see `corvin_operator/skill-forge/README.md`). This is not a
 naming choice — the tool rejects a bare name with `namespace-gate: persona '<persona>' may only
 register tools starting with '<persona>.'`. Record the actual registered name (with prefix) in
 the concept's `skills:` field, not the name you originally intended.
@@ -191,5 +191,5 @@ not fixed here (shared registry precedence, needs its own investigation).
 - [CLAUDE.md](../../CLAUDE.md) — Main conventions document, "Concept Gate" section
 - [adr-gate.md](adr-gate.md) — Sibling gate for architectural decisions
 - [ldd-mandatory.md](ldd-mandatory.md) — LDD skill dispatch table (Concept Gate's row)
-- `operator/skill-forge/README.md` — SkillForge scopes, grading, promotion, namespace gate
+- `corvin_operator/skill-forge/README.md` — SkillForge scopes, grading, promotion, namespace gate
 - Corvin-ADR repository, `concepts/` directory — the actual archive

@@ -148,7 +148,7 @@ git rm -r core/context_engineering/v1_legacy/
 
 # Final verification
 find core/ -type f -name "*.py" -exec grep -l "from core\.brain\|from core\.vibe\|from core\.context_engineering\.v1" {} \;
-# Expected: only matches in tests/ and operator/bridges/ (using compat layer imports)
+# Expected: only matches in tests/ and corvin_operator/bridges/ (using compat layer imports)
 ```
 
 **Risk Assessment:**

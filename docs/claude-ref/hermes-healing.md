@@ -15,7 +15,7 @@ The Corvin bridge must always have a working fallback engine to guarantee servic
 
 ### Three layers:
 
-1. **hermes_healing.py** (operator/bridges/shared/)
+1. **hermes_healing.py** (corvin_operator/bridges/shared/)
    - Low-level health checks: is Ollama reachable? Are models installed?
    - Repair logic: start Ollama, pull qwen3 model
    - Diagnostics: human-readable status strings
@@ -25,7 +25,7 @@ The Corvin bridge must always have a working fallback engine to guarantee servic
    - Integrates with the unified repair loop in `run_local_repairs()`
    - Loss-gated execution: reverts if no progress
 
-3. **systemd integration** (operator/bridges/systemd/)
+3. **systemd integration** (corvin_operator/bridges/systemd/)
    - `corvin-hermes-health.service` — one-shot repair executor
    - `corvin-hermes-health.timer` — runs every 5 minutes
    - Wired into `bridge.sh up` → installed automatically
@@ -34,7 +34,7 @@ The Corvin bridge must always have a working fallback engine to guarantee servic
 
 **First-time installation:**
 ```bash
-bash operator/bridges/setup-hermes-pib.sh install
+bash corvin_operator/bridges/setup-hermes-pib.sh install
 ```
 
 This:
@@ -45,7 +45,7 @@ This:
 
 **Verify:**
 ```bash
-bash operator/bridges/setup-hermes-pib.sh check
+bash corvin_operator/bridges/setup-hermes-pib.sh check
 ```
 
 Returns:
@@ -57,7 +57,7 @@ Returns:
 
 **Manual repair:**
 ```bash
-bash operator/bridges/setup-hermes-pib.sh repair
+bash corvin_operator/bridges/setup-hermes-pib.sh repair
 ```
 
 ### Runtime behavior
@@ -126,7 +126,7 @@ the operator-level gate; an upload additionally requires the per-user GDPR Art. 
 When `bridge.sh up` runs:
 1. Installs user systemd units for all channels + timers
 2. **Enables Hermes health timer** — prints `✓ corvin hermes-health timer enabled (every 5 minutes)`
-3. If it fails, prints `⚠ corvin hermes-health timer could not be enabled — run 'bash operator/bridges/setup-hermes-pib.sh --check' to diagnose`
+3. If it fails, prints `⚠ corvin hermes-health timer could not be enabled — run 'bash corvin_operator/bridges/setup-hermes-pib.sh --check' to diagnose`
 
 The timer is **not** a channel itself; it's a passive health-check background task.
 
@@ -175,12 +175,12 @@ journalctl --user -u corvin-hermes-health.service -f  # follow live
 
 1. Check if Ollama is installed:
    ```bash
-   bash operator/bridges/setup-hermes-pib.sh check
+   bash corvin_operator/bridges/setup-hermes-pib.sh check
    ```
 
 2. If not installed, install it:
    ```bash
-   bash operator/bridges/setup-hermes-pib.sh install
+   bash corvin_operator/bridges/setup-hermes-pib.sh install
    ```
 
 3. If the timer didn't start (no output in `journalctl --user -u corvin-hermes-health.timer`):
@@ -210,7 +210,7 @@ python3 -c "from corvin_console.aco import repair_actions; repair_actions.run_de
 
 Or use the setup script in foreground mode:
 ```bash
-bash operator/bridges/setup-hermes-pib.sh repair
+bash corvin_operator/bridges/setup-hermes-pib.sh repair
 ```
 
 ## ADR references
@@ -223,7 +223,7 @@ bash operator/bridges/setup-hermes-pib.sh repair
 
 **Unit tests:**
 ```bash
-pytest operator/bridges/shared/test_hermes_healing.py -v
+pytest corvin_operator/bridges/shared/test_hermes_healing.py -v
 pytest core/console/tests/test_aco_hermes_repair.py -v
 ```
 

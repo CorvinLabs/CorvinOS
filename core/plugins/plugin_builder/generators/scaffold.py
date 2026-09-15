@@ -149,7 +149,7 @@ def _scaffold_via_corvin_plugin_new(
         # The import above is cached in sys.modules once it succeeds, so the
         # path entry is only ever needed for this one call — leaving it in
         # place would permanently shadow any bare `import corvin` for the
-        # rest of the process's life (see corvin_operator/-stdlib-shadow incident).
+        # rest of the process's life (see legacy operator/-stdlib-shadow incident).
         if inserted:
             try:
                 sys.path.remove(str(launcher))

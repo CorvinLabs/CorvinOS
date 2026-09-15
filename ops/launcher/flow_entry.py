@@ -1,6 +1,6 @@
 """Entry-point shim for corvin-flow CLI (ADR-0121 M3).
 
-corvin_operator/ shadows the Python stdlib 'operator' module, so we use a shim
+the legacy operator/ directory name shadows the Python stdlib 'operator' module, so we use a shim
 that adds the shared directory to sys.path before importing flow_cli.
 """
 import os

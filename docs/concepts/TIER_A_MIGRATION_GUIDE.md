@@ -3,7 +3,7 @@
 **Status:** **Superseded** by ADR-0233 (see Corvin-ADR repo).
 Every path in this guide points at code that no longer exists
 (`core/orchestration/plugin_system/plugins/`, a `corvin_plugin` SDK, an
-`operator/orchestration/plugin_system/models.py`). Do not follow it.
+`corvin_operator/orchestration/plugin_system/models.py`). Do not follow it.
 
 **Replacement:** built-in extensions implement the `CorvinPlugin` protocol in
 `core/plugins/corvin_plugins/protocol.py` and self-register with their layer registry
@@ -190,4 +190,4 @@ This would automate steps 1-5 above.
 ## References
 
 - [ADR-0XXX Plugin System](./ADR-0XXX-PLUGIN_SYSTEM.md)
-- [Plugin Manifest Specification](../../operator/orchestration/plugin_system/models.py)
+- [Plugin Manifest Specification](../../corvin_operator/orchestration/plugin_system/models.py)

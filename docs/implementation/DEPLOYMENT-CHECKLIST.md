@@ -49,26 +49,26 @@
 ### Unit Tests
 - [ ] Core tests pass
   ```bash
-  uv run pytest operator/context_engineering/tests/test_k3_integration.py -v
+  uv run pytest corvin_operator/context_engineering/tests/test_k3_integration.py -v
   # Expected: 5/5 pass
   ```
 
 ### Integration Tests
 - [ ] Guard wiring tests pass
   ```bash
-  uv run pytest operator/context_engineering/tests/test_cr6_wiring.py -v
+  uv run pytest corvin_operator/context_engineering/tests/test_cr6_wiring.py -v
   # Expected: 5/5 pass
   ```
 
 ### System Integration
 - [ ] Critical fixes in place
   ```bash
-  grep -q "def compute_record_checksum" operator/context_engineering/critical_fixes_roundk2.py
-  grep -q "class AggregatorCheckpoint" operator/context_engineering/critical_fixes_roundk2.py
+  grep -q "def compute_record_checksum" corvin_operator/context_engineering/critical_fixes_roundk2.py
+  grep -q "class AggregatorCheckpoint" corvin_operator/context_engineering/critical_fixes_roundk2.py
   ```
 - [ ] Guard integration hook available
   ```bash
-  grep -q "class ContextSuggestionGate" operator/context_engineering/guard_integration_hook.py
+  grep -q "class ContextSuggestionGate" corvin_operator/context_engineering/guard_integration_hook.py
   ```
 
 ### Staging Smoke Test (If staging available)
@@ -117,7 +117,7 @@
   ```
 - [ ] Run final test
   ```bash
-  uv run pytest operator/context_engineering/tests/test_k3_integration.py operator/context_engineering/tests/test_cr6_wiring.py -v
+  uv run pytest corvin_operator/context_engineering/tests/test_k3_integration.py corvin_operator/context_engineering/tests/test_cr6_wiring.py -v
   # Expected: 10/10 pass
   ```
 

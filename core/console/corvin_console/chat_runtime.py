@@ -127,8 +127,8 @@ _REPO = _THIS_DIR.parents[2]
 
 # Vibe Engineering P-1 (ADR-0275): load the consolidated CEL pipeline by FILE PATH
 # under the top-level name "context_engineering" — NOT via a sys.path insert of
-# corvin_operator/ (that would re-arm the stdlib `operator` shadow, project memory
-# "corvin_operator/ stdlib-Shadow-Falle"). sys.modules registration is required so the
+# corvin_operator/ (a repo-root operator/ would re-arm the stdlib `operator` shadow, project memory
+# "operator/ stdlib-Shadow-Falle"). sys.modules registration is required so the
 # package's own relative imports (`from .memory_lookup import …`) resolve. Absent
 # (e.g. a wheel install without the operator tree) → the feature is simply off.
 _CEL_AVAILABLE = False

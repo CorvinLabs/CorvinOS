@@ -46,7 +46,7 @@ All three stages:
 
 ## Module 1: Selective Injection
 
-**File:** `operator/context_engineering/selective_injection.py`
+**File:** `corvin_operator/context_engineering/selective_injection.py`
 
 **Class:** `SelectiveInjector`
 
@@ -109,7 +109,7 @@ Tuple of:
 
 ## Module 2: Memory Pruning
 
-**File:** `operator/context_engineering/memory_pruning.py`
+**File:** `corvin_operator/context_engineering/memory_pruning.py`
 
 **Class:** `MemoryPruner`
 
@@ -194,7 +194,7 @@ Tuple of:
 
 ## Module 3: ADR Reranking
 
-**File:** `operator/context_engineering/adr_reranking.py`
+**File:** `corvin_operator/context_engineering/adr_reranking.py`
 
 **Class:** `ADRRanker`
 
@@ -419,7 +419,7 @@ Each optimization produces telemetry:
 
 ## Testing
 
-**File:** `operator/context_engineering/tests/test_advanced_optimizations_adr0394.py`
+**File:** `corvin_operator/context_engineering/tests/test_advanced_optimizations_adr0394.py`
 
 **Test Coverage:** 16 comprehensive tests
 
@@ -470,13 +470,13 @@ Each optimization produces telemetry:
 cd /home/shumway/projects/CorvinOS
 
 # Run all Phase 5 tests
-python3 -m pytest operator/context_engineering/tests/test_advanced_optimizations_adr0394.py -v
+python3 -m pytest corvin_operator/context_engineering/tests/test_advanced_optimizations_adr0394.py -v
 
 # Run specific test class
-python3 -m pytest operator/context_engineering/tests/test_advanced_optimizations_adr0394.py::TestSelectiveInjector -v
+python3 -m pytest corvin_operator/context_engineering/tests/test_advanced_optimizations_adr0394.py::TestSelectiveInjector -v
 
 # Run with coverage
-python3 -m pytest operator/context_engineering/tests/test_advanced_optimizations_adr0394.py --cov=operator.context_engineering --cov-report=html
+python3 -m pytest corvin_operator/context_engineering/tests/test_advanced_optimizations_adr0394.py --cov=operator.context_engineering --cov-report=html
 ```
 
 ---
@@ -640,4 +640,4 @@ spec:
 - **ADR-0394:** Advanced Context Optimizations (Phase 5)
 - **ADR-0280:** Config-Driven Pipeline Architecture
 - **CONCEPT-0006:** Context Engineering Unification
-- **Phase 1-4 Docs:** operator/context_engineering/README.md
+- **Phase 1-4 Docs:** corvin_operator/context_engineering/README.md

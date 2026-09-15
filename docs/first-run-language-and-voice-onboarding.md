@@ -27,8 +27,8 @@ independently:
 |---|---|---|
 | Install-time language picker | Detects system locale, shows a numbered menu of 12 languages (or auto-picks in `--yes` mode), downloads the matching Piper TTS voice | `corvinOS/installer/steps/piper.py::_setup_model`/`_detect_language` |
 | Where that choice is saved | `piper_model_<lang>` paths + `lang_default` written to `~/.config/corvin-voice/config.json` | `piper.py::_save_model_config` |
-| What actually controls text/LLM output language | A **separate** file, `profile.json`'s `display_language` key, resolved at runtime via `i18n.py::resolve()`'s fallback chain: explicit override → per-chat `language` → `profile.display_language` → bridge locale → `"en"` | `operator/bridges/shared/profile.py`, `operator/bridges/shared/i18n.py:200` |
-| Runtime language change | `/lang set <code>` — already fully built, writes `profile.display_language` | `operator/voice/scripts/lang_cli.py` |
+| What actually controls text/LLM output language | A **separate** file, `profile.json`'s `display_language` key, resolved at runtime via `i18n.py::resolve()`'s fallback chain: explicit override → per-chat `language` → `profile.display_language` → bridge locale → `"en"` | `corvin_operator/bridges/shared/profile.py`, `corvin_operator/bridges/shared/i18n.py:200` |
+| Runtime language change | `/lang set <code>` — already fully built, writes `profile.display_language` | `corvin_operator/voice/scripts/lang_cli.py` |
 | Per-turn auto-detect (independent layer) | The console frontend already re-detects language from each typed/spoken message and feeds it straight into TTS/STT, regardless of the persistent default | `ConsoleAssistant.tsx:289-410` (`convLang` state) |
 
 **The actual gap:** the installer's language picker only feeds the Piper **voice accent**
@@ -73,7 +73,7 @@ the stdlib `operator` module, which is essentially always already cached in `sys
 process in practice. `_seed_profile_display_language` therefore tries `corvin_console.profile`
 first (a new force-include wheel shim added in `pyproject.toml`, mirroring the existing
 `hermes_bootstrap.py`/`engine_detection.py` shims) and falls back to putting
-`operator/bridges/shared/` on `sys.path` and importing the bare `profile` module — the same
+`corvin_operator/bridges/shared/` on `sys.path` and importing the bare `profile` module — the same
 pattern `lang_cli.py` and `adapter.py` already use. Best-effort: wrapped in `try/except
 Exception: pass`, voice setup never fails because of it. Tests:
 `tests/test_installer_piper.py`.
@@ -89,7 +89,7 @@ first load. The installer now marks onboarding complete itself
 (`corvinOS/installer/core.py::step_18_finalise`) instead of waiting for a
 "Finish" click in the removed wizard — `_SETUP_COMPLETE_PATH`/`onboarding.json`
 and `GET /setup/status` are unchanged and still read by
-`operator/bridges/shared` and `ops/launcher/corvin/cli.py`. Engine selection
+`corvin_operator/bridges/shared` and `ops/launcher/corvin/cli.py`. Engine selection
 and bridge setup remain fully available in Settings → Engines / Settings →
 Bridges, which already used the same shared endpoints independently of this
 wizard. The section below is kept as a historical design record — its
@@ -103,7 +103,7 @@ described UI no longer exists.
 | The current welcome step | A static screen: logo, "Your AI operating system is ready", a "Let's go" button. **No audio, no health check, no warm-up today.** | `SetupGate.tsx::WelcomeStep` (line 133) |
 | Periodic self-healing (already runs, but not synchronously) | ACO Boot-Healer: engine+voice readiness (starts Ollama if offline, installs edge-tts if missing), chat-subsystem liveness check — first cycle 8s after boot, then every 5 min | `core/console/corvin_console/aco/boot_healer.py` |
 | L44 classifier health | Probes Ollama for the house-rules model, logs actionable warnings, never blocks boot | `house_rules.py::house_rules_boot_health_check` |
-| The REAL end-to-end pipeline check to reuse | `corvin-voice doctor` — genuine (non-mocked) STT round-trip on a fixture WAV, genuine TTS round-trip via `synthesize_voice_note`, a dedicated Piper-offline-tier check | `operator/voice/scripts/voice_doctor.py` |
+| The REAL end-to-end pipeline check to reuse | `corvin-voice doctor` — genuine (non-mocked) STT round-trip on a fixture WAV, genuine TTS round-trip via `synthesize_voice_note`, a dedicated Piper-offline-tier check | `corvin_operator/voice/scripts/voice_doctor.py` |
 | Model warm-up (Hermes/local only) | `ensure_hermes_ready()` — starts Ollama if needed, sends a cheap `keep_alive: 30m` warm prompt | `agents/hermes_engine.py:154`; also done once at install time in `install.ps1:216-233` |
 | TTS playback + autoplay-block handling (already built, reusable) | `speak()` → `ttsBlob()` → `audioRef.play()`; on autoplay rejection, sets a `"blocked"` state and shows a tap-to-play banner | `pages/chat.tsx` (~line 1190-1240), same pattern in `browser.tsx` |
 
@@ -199,7 +199,7 @@ resolved default engine, `voice_doctor._check_stt`/`_check_tts` directly (a 45s 
 not the CLI's patient 180s default — this runs unattended, not with a human watching a
 terminal), and the existing `test_engine` route handler reused directly as a plain Python call
 (FastAPI route decorators don't wrap the function, so it's callable as-is). The greeting is
-assembled from new `welcome.*` keys added to `operator/voice/i18n/{de,en}.json` — short,
+assembled from new `welcome.*` keys added to `corvin_operator/voice/i18n/{de,en}.json` — short,
 independent per-component clauses (`check_stt_ok`/`check_stt_bad`, etc.) joined together,
 rather than one grammatically-joined "A, B and C" sentence, so no per-language list-join logic
 was needed. **Per the user's explicit follow-up ask**, the greeting also always includes a
@@ -226,7 +226,7 @@ tap-to-play pattern. "Let's go" is never disabled by check state. Tests:
 1. Concept 1 (language propagation) — `corvinOS/installer/steps/piper.py`, `pyproject.toml`.
 2. Concept 2 backend (`/setup/welcome-check` + status poll, localized greeting with
    capabilities clause) — `core/console/corvin_console/routes/setup.py`,
-   `operator/voice/i18n/{de,en}.json`.
+   `corvin_operator/voice/i18n/{de,en}.json`.
 3. Concept 2 frontend (`WelcomeStep` mount effect, shared `useVoicePlayback` hook used by both
    `SetupGate.tsx` and `chat.tsx`) — `web-next/src/lib/useVoicePlayback.ts`,
    `web-next/src/components/setup/SetupGate.tsx`, `web-next/src/pages/chat.tsx`,

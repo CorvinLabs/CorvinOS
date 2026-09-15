@@ -43,7 +43,7 @@ already taken four times** in this repository:
 * **ADR-0124 audit layers** (`core/console/corvin_console/routes/audit_layers.py`);
 * the **ADR-0142 layer-extension API**, which answers 403 with
   `reason="core_layer_immutable"` (`routes/extensions.py`);
-* **quality layers** (`routes/quality_layers.py`, `operator/bridges/shared/quality_layers.py`).
+* **quality layers** (`routes/quality_layers.py`, `corvin_operator/bridges/shared/quality_layers.py`).
 
 That is the same collision class the move away from "tier" was supposed to end. The axis is
 therefore **`boot_layer`**, enum **`BootLayer`**, with four unchanged values —
@@ -120,7 +120,7 @@ filter with the number or it is not reproducible.
 
 | Path | LOC |
 |---|---|
-| `operator/bridges/shared` | 181,127 |
+| `corvin_operator/bridges/shared` | 181,127 |
 | `core/console/corvin_console` | 65,305 |
 | `core/plugins` | 19,151 |
 | `core/plugins/corvin_plugins` (the contract itself) | 7,781 |
@@ -129,7 +129,7 @@ filter with the number or it is not reproducible.
 
 The compliance mechanisms are **not** where the target layout puts them: house rules
 (L44), consent gate (L18) and the erasure orchestrator (L36) live in
-`operator/bridges/shared/`; the audit writer, its hash chain and the boot tripwire live in
+`corvin_operator/bridges/shared/`; the audit writer, its hash chain and the boot tripwire live in
 `core/compliance/corvin_compliance_reports/`. **None of**
 `core/compliance/audit_writer.py`, `core/session/middleware.py` or
 `core/routing/http_router.py` exists — those are target paths from ADR-0236, which is a
@@ -337,7 +337,7 @@ before Phase 6. See [Phase 6](#phase-6--partial) for what headless mode actually
 │     │  └─ instances/<plugin_id>/
 │     └─ audit.jsonl              (hash-chained audit trail)
 
-operator/bridges/                 (UNCHANGED — the Node daemons)
+corvin_operator/bridges/                 (UNCHANGED — the Node daemons)
 ├─ discord/daemon.js
 ├─ slack/daemon.js
 ├─ telegram/daemon.js
@@ -514,8 +514,8 @@ never measured, and the transport it argued for is not being built.
 ### What the bridges are
 
 All seven bridges — **discord, slack, telegram, whatsapp, signal, teams, email** — are
-**Node.js daemons** at `operator/bridges/<name>/daemon.js`, supervised today by
-`operator/bridges/bridge_manager.py`. They are **not** Python modules, there is no
+**Node.js daemons** at `corvin_operator/bridges/<name>/daemon.js`, supervised today by
+`corvin_operator/bridges/bridge_manager.py`. They are **not** Python modules, there is no
 `adapters/` package, and rewriting them into `CorvinPlugin` subclasses is not on the
 table — it would discard working, tested code for no functional gain (ADR-0238).
 
@@ -604,7 +604,7 @@ CorvinOS Core (fixed, stable)   →   N worker pools (stateless, scale independe
 ### 4. Easier testing
 ```
 pytest core/ -v                          # core without any bridge
-bash operator/bridges/run-all-tests.sh   # bridges on their own (mandatory before
+bash corvin_operator/bridges/run-all-tests.sh   # bridges on their own (mandatory before
                                          # committing adapter.py / daemon.js / shared/js)
 ```
 

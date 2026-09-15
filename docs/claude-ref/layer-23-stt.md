@@ -15,7 +15,7 @@ so engines never see audio — only the resulting text. The implementation is a
 small provider package:
 
 ```
-operator/voice/scripts/stt/
+corvin_operator/voice/scripts/stt/
 ├── base.py            # STTProvider Protocol, TranscriptResult, STTError tree
 ├── openai_whisper.py  # OpenAI audio transcription (default gpt-4o-mini-transcribe)
 ├── local_whisper.py   # pywhispercpp / whisper.cpp — offline, air-gap, EU-residency
@@ -23,9 +23,9 @@ operator/voice/scripts/stt/
 ```
 
 Audit emission and audio deletion live in the bridge adapter:
-`operator/bridges/shared/adapter.py` (`_emit_transcribe_ok`,
+`corvin_operator/bridges/shared/adapter.py` (`_emit_transcribe_ok`,
 `_emit_transcribe_failed`, `_delete_audio_post_stt`). Event severities are
-registered in `operator/forge/forge/security_events.py::EVENT_SEVERITY`; the
+registered in `corvin_operator/forge/forge/security_events.py::EVENT_SEVERITY`; the
 Prometheus counters in `core/gateway/corvin_gateway/audit_metrics.py`.
 
 ## Provider resolution
@@ -56,7 +56,7 @@ and on `STTTimeout` only while a later provider remains. A caller-supplied
 All three ride the unified hash chain through `_audit_event`, so
 `voice-audit verify` covers them; `msg_id` cross-references
 `bridge.message_received` for end-to-end tracing of one voice note.
-`operator/voice/scripts/test_stt.py` fails if a `voice.transcribed` event ever
+`corvin_operator/voice/scripts/test_stt.py` fails if a `voice.transcribed` event ever
 carries a `text` field or the transcript content.
 
 Metrics: `corvin_voice_transcribed_total{stt_provider}` and

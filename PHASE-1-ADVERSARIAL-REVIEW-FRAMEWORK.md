@@ -44,7 +44,7 @@
 
 Findings:
 1. [finding severity: CRITICAL/HIGH/MEDIUM/LOW]
-   File: operator/license/capability_api.py:145
+   File: corvin_operator/license/capability_api.py:145
    Issue: require_capability() returns free allowance on any exception
    Attack: Mock exception handler → attacker gets unlimited compute
    Status: [MITIGATED/OPEN]
@@ -153,7 +153,7 @@ Wiring Audit:
 Dead Code Scan:
 - Grep "enforce_compute_quota" outside _compute_license_gate.py: 0 ✅
 - Grep "_lic_assert_limit" outside fallback: 0 ✅
-- Grep "corvin_license" outside operator/license/: 0 ✅
+- Grep "corvin_license" outside corvin_operator/license/: 0 ✅
 
 Findings:
 1. [severity]

@@ -200,7 +200,7 @@ creation and promotion. The linter rejects:
 
 Linter failure is fail-closed: the skill is not created and not promoted.
 
-**Slot-mirror scope-gate:** The operator's `operator/skill-forge/skills/dyn/`
+**Slot-mirror scope-gate:** The operator's `corvin_operator/skill-forge/skills/dyn/`
 slot mirror only receives `project` and `user` scope skills. `task` and
 `session` skills do not appear in the slot mirror and are not injected into
 subsequent turns after session reset.

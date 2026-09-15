@@ -41,7 +41,7 @@ This is the part that is most counter-intuitive if you come from a stateless-LLM
 
 The very first call to `mcp__forge__forge_tool` registers a new tool. Forge emits `notifications/tools/list_changed`; on the next iteration, my `tools/list` includes the new tool. Practically: I forge, I wait one tick, I call. The tests use a 50 ms sleep to make this deterministic; in production a single message-round-trip with the MCP server is enough.
 
-The agent-side rule is documented in `operator/forge/SKILL.md`:
+The agent-side rule is documented in `corvin_operator/forge/SKILL.md`:
 
 > Calling sequence:
 > 1. `mcp__forge__forge_tool({...})`

@@ -15,7 +15,7 @@ reaches the LLM, while the raw bytes stay sandbox-side and the
 forged tool computes the real answer over the full data via
 ro-bind mount.
 
-**Package:** `operator/forge/forge/corvin_data/` — pure-Python,
+**Package:** `corvin_operator/forge/forge/corvin_data/` — pure-Python,
 zero LLM dependencies, no pandas/polars (CSV/JSON/JSONL via
 stdlib; Parquet via DuckDB read-only).
 
@@ -233,10 +233,10 @@ Three new panels on the security dashboard
 
 **References:**
 - `Corvin-ADR: decisions/0012-large-data-snapshot-layer.md` — ADR
-- `operator/forge/forge/corvin_data/` — package (10 modules)
-- `operator/forge/tests/test_corvin_data_*.py` — 7 suites, 333 cases
-- `operator/voice/hooks/path_gate.py` — protection layer
-- `operator/voice/hooks/test_path_gate.py` — 9 new data_policy cases
+- `corvin_operator/forge/forge/corvin_data/` — package (10 modules)
+- `corvin_operator/forge/tests/test_corvin_data_*.py` — 7 suites, 333 cases
+- `corvin_operator/voice/hooks/path_gate.py` — protection layer
+- `corvin_operator/voice/hooks/test_path_gate.py` — 9 new data_policy cases
 - `core/gateway/corvin_gateway/audit_metrics.py` — 6 metric families
 - `docs/observability/grafana/corvin-security.json` — 3 dashboard panels
 - L23 (voice-transcribe) — metadata-only-audit precedent generalised.
@@ -298,11 +298,11 @@ not advertised**.
 | `corvin_compute/cli.py` | `python -m corvin_compute {serve,submit,status,result}` |
 | `corvin_compute/mcp_bridge.py` | Tool definitions consumed by the Forge MCP server |
 | `corvin_compute/recovery.py` | Phase 13.9 — non-terminal-run resume on worker boot |
-| `operator/forge/forge/_compute_discovery.py` | Socket probe + 5 s TTL cache + one-shot audit |
-| `operator/forge/forge/mcp_server.py` | Tools/list + tools/call wiring (conditional + fail-loud) |
-| `operator/forge/forge/cache.py` | Parametric cache: honours `x-cache-key: true` |
+| `corvin_operator/forge/forge/_compute_discovery.py` | Socket probe + 5 s TTL cache + one-shot audit |
+| `corvin_operator/forge/forge/mcp_server.py` | Tools/list + tools/call wiring (conditional + fail-loud) |
+| `corvin_operator/forge/forge/cache.py` | Parametric cache: honours `x-cache-key: true` |
 | `core/gateway/corvin_gateway/tenant_config.py` | `spec.compute: ComputeConfig` schema slot |
-| `operator/voice/hooks/path_gate.py` | Protects `<corvin_home>/**/compute/**` + worker.sock |
+| `corvin_operator/voice/hooks/path_gate.py` | Protects `<corvin_home>/**/compute/**` + worker.sock |
 | `core/compute/systemd/corvin-compute@.service` | systemd-user template unit |
 | `core/compute/tests/test_*.py` | 98 cases across the 10 sub-phases |
 
@@ -405,7 +405,7 @@ subprocess (subscription-native; mirror of Layer-11 dialectic).
 
 ### Parametric cache (`x-cache-key`)
 
-Forge's cache (`operator/forge/forge/cache.py::cache_key`) now honours
+Forge's cache (`corvin_operator/forge/forge/cache.py::cache_key`) now honours
 `x-cache-key: true` annotations per tool-schema field:
 
 - At least one field opts in → only opted-in fields contribute to the
@@ -632,7 +632,7 @@ event and fails the suite if a raw string value appears in the details.
 ### Module structure
 
 ```
-operator/forge/forge/corvin_data/
+corvin_operator/forge/forge/corvin_data/
 ├── strict_anonymizer.py   # apply_strict_anonymisation() + scan_for_pii_leaks()
 ├── data_policy.py         # extended with 4 new DataPolicy fields
 └── mcp_handlers.py        # _apply_strict_layer() wired into both handlers
@@ -720,11 +720,11 @@ All 102 assertions green. Key test classes:
 ### References
 
 - `Corvin-ADR: decisions/0023-strict-anonymization-snapshot-mode.md` — the ADR
-- `operator/forge/forge/corvin_data/strict_anonymizer.py` — core module
-- `operator/forge/forge/corvin_data/data_policy.py` — policy schema extension
-- `operator/forge/forge/corvin_data/mcp_handlers.py` — MCP pipeline wiring
-- `operator/forge/tests/test_corvin_data_strict_anonymizer.py` — 102-assertion E2E
-- `operator/forge/forge/security_events.py` — 2 new `data.*` event types
+- `corvin_operator/forge/forge/corvin_data/strict_anonymizer.py` — core module
+- `corvin_operator/forge/forge/corvin_data/data_policy.py` — policy schema extension
+- `corvin_operator/forge/forge/corvin_data/mcp_handlers.py` — MCP pipeline wiring
+- `corvin_operator/forge/tests/test_corvin_data_strict_anonymizer.py` — 102-assertion E2E
+- `corvin_operator/forge/forge/security_events.py` — 2 new `data.*` event types
 - Layer 24 (L24) — Large-Data Snapshot Layer; L32 is additive on top of it
 - GDPR Art. 5(1)(c) — data minimisation (k-anonymity bucketing)
 - EU AI Act Art. 15 — accuracy / robustness (post-scan rejection prevents
@@ -866,7 +866,7 @@ React page at `/app/data-sources` with:
 
 ### M4 — DSI Bridge into L24 (`data_register`)
 
-**`operator/forge/forge/corvin_data/mcp_handlers.py`**
+**`corvin_operator/forge/forge/corvin_data/mcp_handlers.py`**
 
 `data_register` now accepts two mutually-exclusive input paths:
 
@@ -944,7 +944,7 @@ Connection config, secrets, and raw error details never appear in audit fields.
 - `core/compute/corvin_compute/fabric/datasources/builtin/` — 13 builtin adapters (all updated)
 - `core/console/corvin_console/routes/data_sources.py` — M3 backend (7 endpoints)
 - `core/console/corvin_console/web-next/src/pages/data-sources.tsx` — M3 frontend
-- `operator/forge/forge/corvin_data/mcp_handlers.py` — M4 `data_register(connection=)` bridge
+- `corvin_operator/forge/forge/corvin_data/mcp_handlers.py` — M4 `data_register(connection=)` bridge
 - `core/compute/corvin_compute/mcp_bridge.py` — M5 `compute_run(datasources=)` schema extension
 - Layer 24 (L24) — `data_register` MCP tool extended by M4
 - Layer 25 (L25) — `compute_run` schema extended by M5

@@ -138,9 +138,9 @@ class TestWindowsInstallerEncoding:
     def test_issue_6_windows_command_quoting_security(self):
         """Issue #6: _run_claude() must use proper cmd.exe quoting."""
         from corvinOS.installer.steps.plugins import _run_claude
-        # operator/ has no __init__.py (deliberately shadows the stdlib
+        # corvin_operator/ has no __init__.py (deliberately shadows the stdlib
         # `operator` module), so the dotted form here can never resolve —
-        # put operator/bridges/shared on sys.path and import bare, matching
+        # put corvin_operator/bridges/shared on sys.path and import bare, matching
         # every other _win_shim call site in this codebase.
         _shared_dir = str(Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared")
         if _shared_dir not in sys.path:

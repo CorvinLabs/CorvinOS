@@ -41,7 +41,7 @@ no gateway, no session, no fixture data. (Historical note, 2026-09-14: SetupGate
 and its overlay were removed together with the first-run onboarding wizard —
 the spec's `/setup/status` mock is now a no-op but harmless.)
 
-**Still not executed:** `operator/bridges/run-all-tests.sh` — it exceeded a
+**Still not executed:** `corvin_operator/bridges/run-all-tests.sh` — it exceeded a
 15-minute budget twice and buffers all output until exit. The `audit.py` fan-out
 change is covered instead by three adapter tests plus 106 forge audit/chain tests
 run directly.
@@ -76,7 +76,7 @@ register the `/plugins` page, and continue with the Phase 3 roadmap
    starts no sandbox. Quota is a dataclass; cgroups, bwrap, signing, and the gradated
    permission model exist only as prose.
 3. **The capability already exists, hardened.** ADR-0096 (MCP Plugin Manager,
-   `operator/mcp_manager/`, M1–M4 shipped) is a working marketplace: install from
+   `corvin_operator/mcp_manager/`, M1–M4 shipped) is a working marketplace: install from
    npm/pip/GitHub/Docker/local, SHA256 + Docker-digest pinning verified **on every
    spawn**, four activation scopes, L10 path-gate, L16 audit events, L34 locality and
    L35 egress checks, vault secret injection, and fail-closed `mcp_plugin.spawn_blocked`.
@@ -102,7 +102,7 @@ lifecycle contract and the hardened distribution path instead of beside them.
 | Concern | Owner (load-bearing) | Not |
 |---|---|---|
 | Lifecycle + runtime registration (`on_load`/`on_unload`/`health_check`) | **ADR-0030 `core/plugins/corvin_plugins/`** — live, imported by `adapter.py:556-559`, 55 tests green | a second `PluginRegistry` |
-| Distribution / install / pinning / spawn verification | **ADR-0096 `operator/mcp_manager/`** for tool-shaped extensions; **ADR-0142/0156** for layer-shaped ones | a new downloader without gates |
+| Distribution / install / pinning / spawn verification | **ADR-0096 `corvin_operator/mcp_manager/`** for tool-shaped extensions; **ADR-0142/0156** for layer-shaped ones | a new downloader without gates |
 | Manifest, settings schema, dependency order, registry persistence | **salvaged** from `models.py` into `corvin_plugins` | left in an unwired parallel package |
 | Fault isolation, health, structured logging, healing | **Compartmentalization ADR** stages 1–4, *additive* on `corvin_plugins` | extraction of L16/L18-21 |
 
@@ -320,7 +320,7 @@ asserting the route 404s and the nav entry is absent.
 Only now does "install something new from outside" become tractable — and it reuses gates
 instead of inventing them.
 
-- **Tool-shaped extensions** → extend `operator/mcp_manager/` (already: pinning, per-spawn
+- **Tool-shaped extensions** → extend `corvin_operator/mcp_manager/` (already: pinning, per-spawn
   SHA256/digest verification, L34 locality, L35 egress, vault secrets, `spawn_blocked`).
   Deliverable is a *catalog surface* in the Console, not a new installer.
 - **Layer-shaped extensions** → ADR-0142/0156 path (`ext.<vendor>.*`, Tier A/B/C, license
@@ -378,7 +378,7 @@ healing) are re-proposed later, per ADR-0231's own gate.
 needs a fifth section once Phase 4 ships), `docs/claude-ref/layer-16-security.md` for
 Phase 1, plus the diagrams under `docs/assets/plugin-*.svg`.
 
-**Test discipline.** `bash operator/bridges/run-all-tests.sh` before any commit touching
+**Test discipline.** `bash corvin_operator/bridges/run-all-tests.sh` before any commit touching
 `adapter.py` / `daemon.js` / `shared/js/`. Audit-touching tests must inherit the
 `conftest.py` `VOICE_AUDIT_PATH` redirect. No `git stash` in the live worktree for a lint
 baseline — use `git show HEAD:file | ruff --stdin-filename`.

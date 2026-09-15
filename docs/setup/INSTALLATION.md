@@ -90,7 +90,7 @@ corvinos-serve          # web console at http://localhost:8765
 > provisioning, API keys, login autostart, messaging-bridge daemons + their system services) both
 > work from the pip wheel — the one-liners run `corvin-install` from the `uv tool install`, no
 > checkout involved. The bridge daemons are vendored inside the wheel
-> (`corvin_core/_vendor/operator/bridges/`) and need Node.js 20+ at runtime. A git checkout
+> (`corvin_core/_vendor/corvin_operator/bridges/`) and need Node.js 20+ at runtime. A git checkout
 > (Method 3) is only needed to develop CorvinOS or rebuild the console frontend.
 
 ### Method 2: With Hermes (fully local, no API key required)

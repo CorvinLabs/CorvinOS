@@ -23,7 +23,7 @@ on:
       - "ops/supervisord.conf"
       - "ops/.dockerignore"
       - "core/**"
-      - "operator/**"
+      - "corvin_operator/**"
       - "pyproject.toml"
       - ".github/workflows/build-image.yml"
   workflow_dispatch:

@@ -331,7 +331,7 @@ docker healthcheck
 ### View Audit Chain
 ```bash
 docker exec corvin \
-  /opt/corvin-repo/operator/voice/scripts/voice-audit.py verify
+  /opt/corvin-repo/corvin_operator/voice/scripts/voice-audit.py verify
 ```
 
 ### Backup State
@@ -389,7 +389,7 @@ The compose file maps:
 | Host Path | Container Path | Purpose | Mount Mode |
 |---|---|---|---|
 | `/opt/corvin/home` | `/home/corvin` | Persistent state (everything) | rw |
-| `/opt/corvin/bridge-settings/*` | `/opt/corvin-repo/operator/bridges/*/settings.json` | Bridge config | ro |
+| `/opt/corvin/bridge-settings/*` | `/opt/corvin-repo/corvin_operator/bridges/*/settings.json` | Bridge config | ro |
 | (optional) `~/Corvin` | `/opt/corvin-repo` | Live development | ro |
 
 ---
@@ -507,7 +507,7 @@ du -sh /opt/corvin/home/.corvin/tenants/_default/global
 
 # Rotate old audit segments
 docker exec corvin \
-  /opt/corvin-repo/operator/bridges/shared/audit_sealer.py \
+  /opt/corvin-repo/corvin_operator/bridges/shared/audit_sealer.py \
   --action rotate
 ```
 

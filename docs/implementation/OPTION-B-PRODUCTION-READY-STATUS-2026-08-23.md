@@ -22,7 +22,7 @@
 - **Tests:** Tier-1 through Tier-4 gates all pass
 - **ADRs:** ADR-0267-MVP (implemented)
 - **Deployment:** ✅ Ready to merge (no blockers, pure local analysis)
-- **Files:** operator/task_analysis/ (5 modules, 300+ LoC)
+- **Files:** corvin_operator/task_analysis/ (5 modules, 300+ LoC)
 
 ### 3. ⚠️ Task A: Orchestration Discord Live-Test — INCOMPLETE (2.5 h work)
 - **Status:** 80% complete

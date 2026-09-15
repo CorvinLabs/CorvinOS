@@ -284,16 +284,16 @@ tokens. The user gets the answer.
 
 ## Where to look in the code
 
-- `operator/forge/forge/corvin_data/` — Layer 24 package
+- `corvin_operator/forge/forge/corvin_data/` — Layer 24 package
   (10 modules: format_sniffer, snapshot, pii_detector, redactor,
   pseudonymize, data_policy, schema_extension, data_registry,
   mcp_handlers, presidio backend)
 - `core/compute/corvin_compute/` — Layer 25 package
   (driver, parallel, state, budget, iteration, audit, strategies/,
   worker, transport, client, cli, mcp_bridge, recovery)
-- `operator/forge/tests/test_corvin_data_*.py` — 7 suites, 333 cases
+- `corvin_operator/forge/tests/test_corvin_data_*.py` — 7 suites, 333 cases
 - `core/compute/tests/test_phase*.py` — Layer 25 E2E
-- `operator/voice/hooks/path_gate.py` — adds `data_policy.{yaml,yml,json}`
+- `corvin_operator/voice/hooks/path_gate.py` — adds `data_policy.{yaml,yml,json}`
   + `compute/` + `worker.sock` to protected hints
 
 ## Adjacent docs

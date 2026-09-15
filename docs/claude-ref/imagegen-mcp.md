@@ -3,7 +3,7 @@
 ## Overview
 
 CorvinOS ships a **first-party image-generation MCP server**,
-`imagegen-zero-config` (`operator/mcp_manager/servers/imagegen-zero-config/`),
+`imagegen-zero-config` (`corvin_operator/mcp_manager/servers/imagegen-zero-config/`),
 registered as a governed `mcp_manager` catalog entry and seeded automatically
 on boot. It exposes ONE tool, `generate_image`, with two tiers:
 
@@ -103,7 +103,7 @@ upgrade to DALL-E 3 automatically.
 
 ## Testing
 
-`operator/mcp_manager/tests/test_imagegen_zero_config.py` — seeding
+`corvin_operator/mcp_manager/tests/test_imagegen_zero_config.py` — seeding
 idempotency + operator-intent (deactivation/uninstall/edit survival), stale
 path refresh, disclosure once-per-tenant + path-injection + read-only-store
 degradation, Tier-0 error taxonomy (429/500/redirect/non-image/connect),

@@ -56,7 +56,7 @@ RUN pip install --no-cache-dir -r /opt/corvin-gateway/requirements.txt
 # security_events). Build context is the repo root.
 COPY --chown=corvin:corvin core/gateway/corvin_gateway \
                              /opt/corvin-gateway/corvin_gateway
-COPY --chown=corvin:corvin operator/forge/forge \
+COPY --chown=corvin:corvin corvin_operator/forge/forge \
                              /opt/corvin-gateway/forge
 
 # Cross-PYTHONPATH so `from forge.tenants import ...` resolves.

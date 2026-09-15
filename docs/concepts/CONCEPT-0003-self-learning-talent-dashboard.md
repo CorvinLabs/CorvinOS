@@ -8,8 +8,8 @@ related: ["ADR-0270", "ADR-0271", "ADR-0272", "ADR-0273"]
 skills: []
 commits: []
 paths:
-  - "operator/console/**"
-  - "operator/context_engineering/**"
+  - "corvin_operator/console/**"
+  - "corvin_operator/context_engineering/**"
 docs:
   - "docs/concepts/CONCEPT-0003-self-learning-talent-dashboard.md"
 ---

@@ -57,7 +57,7 @@ spec:
 **What it does:** Assigns a sensitivity level to every conversation context and blocks engines
 whose jurisdiction or network properties don't match.
 
-**Module:** `operator/bridges/shared/data_classification.py`
+**Module:** `corvin_operator/bridges/shared/data_classification.py`
 
 ### Classification levels
 
@@ -128,7 +128,7 @@ If the engine's locality doesn't satisfy the classification requirement:
 }
 ```
 
-**Test coverage:** `operator/bridges/shared/test_data_classification.py`
+**Test coverage:** `corvin_operator/bridges/shared/test_data_classification.py`
 
 ---
 
@@ -137,7 +137,7 @@ If the engine's locality doesn't satisfy the classification requirement:
 **What it does:** Restricts which hosts the engine is allowed to contact, at the DNS/hostname
 level, enforced before the engine is spawned.
 
-**Module:** `operator/bridges/shared/egress_gate.py`
+**Module:** `corvin_operator/bridges/shared/egress_gate.py`
 
 ### Configuration
 
@@ -163,7 +163,7 @@ spec:
 
 ### EU production presets
 
-Corvin ships two ready-made configurations in `operator/bundle/config-templates/`:
+Corvin ships two ready-made configurations in `corvin_operator/bundle/config-templates/`:
 
 | Preset | Default action | Description |
 |---|---|---|
@@ -191,7 +191,7 @@ If the target host is not permitted:
 }
 ```
 
-**Test coverage:** `operator/bridges/shared/test_egress_gate.py`
+**Test coverage:** `corvin_operator/bridges/shared/test_egress_gate.py`
 
 ---
 
@@ -225,14 +225,14 @@ A deployment with all three controls active is robust against:
     - "data_flow.blocked is CRITICAL, not advisory"
   implemented_by:
     - layer: compliance_zone_routing
-      file: operator/bridges/shared/compliance_zone_classifier.py
+      file: corvin_operator/bridges/shared/compliance_zone_classifier.py
 
 - id: eua.art14.engine_policy
   article: "Art. 14"
   severity: critical
   implemented_by:
     - layer: compliance_zone_routing
-      file: operator/bridges/shared/engine_policy.py
+      file: corvin_operator/bridges/shared/engine_policy.py
 ```
 
 Both rules are verified by `bridge.sh doctor` at every boot and blocked at PR time by

@@ -68,7 +68,7 @@ monitoring_dashboard = True  # ✅ default ON
 
 ## Measurement Infrastructure
 
-### 1. CanaryRouter (`operator/measurement/canary_router.py`)
+### 1. CanaryRouter (`corvin_operator/measurement/canary_router.py`)
 
 Stateless, deterministic routing:
 - No database dependency
@@ -95,7 +95,7 @@ routed_flags = router.route_by_tenant_percentage(
 # if user_42 is in control group, flags unchanged if in canary group
 ```
 
-### 2. TokenMetric & MetricsCollector (`operator/measurement/token_metrics.py`)
+### 2. TokenMetric & MetricsCollector (`corvin_operator/measurement/token_metrics.py`)
 
 Non-blocking fire-and-forget metrics collection:
 - Thread-safe JSON lines appends
@@ -123,7 +123,7 @@ TokenMetric(
 collector.record(TokenMetric(...))
 ```
 
-### 3. Analysis Pipeline (`operator/measurement/analysis.py`)
+### 3. Analysis Pipeline (`corvin_operator/measurement/analysis.py`)
 
 Loads metrics and compares control vs. canary groups:
 ```python
@@ -291,7 +291,7 @@ If measurement discovers serious issues:
 
 ## Test Coverage
 
-**12 comprehensive tests** in `operator/measurement/tests/test_canary_adr0392.py`:
+**12 comprehensive tests** in `corvin_operator/measurement/tests/test_canary_adr0392.py`:
 
 1. Deterministic routing (same tenant always same group)
 2. Percentage distribution (10% assignment)

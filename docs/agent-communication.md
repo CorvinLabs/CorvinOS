@@ -518,7 +518,7 @@ Start the A2A receiver on a node that does not run the full gateway:
 ```bash
 # Bind to all interfaces so remote peers can reach it.
 # Default (127.0.0.1) only accepts loopback connections.
-cd /opt/corvin/operator/bridges/shared
+cd /opt/corvin/corvin_operator/bridges/shared
 CORVIN_HOME=/path/to/.corvin \
 CORVIN_A2A_PUBLIC_URL=https://your-node.example.com \
 python3 a2a_http_server.py \

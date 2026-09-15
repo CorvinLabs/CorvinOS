@@ -10,7 +10,7 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 | Bot-disclosure card (`/join`/`/pass`/`/leave`, one-time per uid) | L19 | EU AI Act Art. 50 | ✅ Locked |
 | Per-user consent gate (`/consent on\|off\|<ttl>`, deny-by-default) | L16 Phase 4 | GDPR Art. 6, 7 | ✅ Locked |
 | Hash-chained tamper-evident audit log (`audit.jsonl` + daily verify) | L16 | GDPR Art. 30, 32 | ✅ Locked |
-| **ONE chain per tenant** at `<corvin_home>/tenants/<tid>/global/forge/audit.jsonl`, resolved by `forge.paths.tenant_audit_chain()` / `core.paths.tenant_audit_chain()` / `operator/bridges/shared/paths.py::tenant_audit_chain()` (three byte-identical mirrors, pinned by `tests/security/test_audit_chain_ssot.py`). Composing an audit path by hand is how one tenant's Art. 30 trail ended up in SIX live files across two roots (R4, 2026-09-07 — ADR-0650) | L16 / ADR-0007 | GDPR Art. 30, 32 | ✅ Locked |
+| **ONE chain per tenant** at `<corvin_home>/tenants/<tid>/global/forge/audit.jsonl`, resolved by `forge.paths.tenant_audit_chain()` / `core.paths.tenant_audit_chain()` / `corvin_operator/bridges/shared/paths.py::tenant_audit_chain()` (three byte-identical mirrors, pinned by `tests/security/test_audit_chain_ssot.py`). Composing an audit path by hand is how one tenant's Art. 30 trail ended up in SIX live files across two roots (R4, 2026-09-07 — ADR-0650) | L16 / ADR-0007 | GDPR Art. 30, 32 | ✅ Locked |
 | A superseded chain is LINKED, never merged: one chained `audit.chain_supersedes` record in the canonical chain carries the sibling's path key, genesis, final tail hash, byte size and record count; the reverse pointer goes in the sibling's out-of-tree identity record. `security_events.chain_seam_links()` walks it in both directions. The boot check reports the condition as `audit_chain_split` and names every live sibling (`tripwire.py::_check_audit_unification`) | L16 / ADR-0650 | GDPR Art. 30, 32 | ✅ Locked |
 | Every emitter has a registered detail vocabulary. `tests/security/test_audit_detail_floor_coverage.py` AST-scans every literal emit site through the real ADR-0640 floor and FAILS on one whose body is emptied — the gap that left `erasure.requested` without `subject_id`/`requester` and `audit.segment_sealed` with nothing but `_dropped_fields` (R4-A/B). `subject_id`/`requester` are pseudonymised (sha256[:8], same namespace as `adapter._pii_fp`) rather than dropped, so an Art. 17 record names its subject without writing an e-mail into a never-erasable file | L16 / ADR-0640 | GDPR Art. 17, 30 | ✅ Locked |
 | `lom_hash` binds to SOURCE or is absent: `security_events.lom_hash_for()` returns `None` for an unresolvable LoM (no `sha256(label)` fallback, `:L<n>` must fall inside the named function, non-repo/non-`.py` paths refused) and the record carries `lom_bound: false` instead of a bound-looking hash. `verify_lom_binding()` re-derives it — ADR-0537 specified that verifier and nothing implemented it (R4-C) | L16 / ADR-0537 | GDPR Art. 30 | ✅ Locked |
@@ -38,7 +38,7 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
    Verify in CLAUDE.md if you're uncertain about disclosure scope.
 
 2. **Don't add house-rules disable switch / env kill-flag.**
-   - The repo policy is `operator/policy/house_rules.yaml`, anchored by `EXPECTED_POLICY_SHA256` in `house_rules.py`.
+   - The repo policy is `corvin_operator/policy/house_rules.yaml`, anchored by `EXPECTED_POLICY_SHA256` in `house_rules.py`.
    - Edit both together; fail-closed always.
    - Don't let a tenant overlay weaken a repo rule.
 
@@ -73,7 +73,7 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
      recorded one is `records_prepended`. NOT a rule: "the genesis carries a mac, so
      there can be no legacy prefix" — a migrated legacy install really does have one and
      its first chained record is written today (see
-     `operator/forge/tests/test_tenant_migration_roundtrip.py` R5). The chain-identity
+     `corvin_operator/forge/tests/test_tenant_migration_roundtrip.py` R5). The chain-identity
      record is keyed on the RESOLVED path (R3-A3), matching `tripwire._current_chain_key`
      — with `abspath` the same physical chain reached through the compat symlink
      `<corvin_home>/global` hashed to a different key and the aliasing reader saw no

@@ -17,7 +17,7 @@
 - **Impact:** List items >350 chars read with … instead of full
 - **Root:** _first_clause() truncates each item to 350 chars
 - **Fix:** Verify COMPLETENESS rule: EVERY list item must be full length
-- **Files:** operator/voice/scripts/summarize.py
+- **Files:** corvin_operator/voice/scripts/summarize.py
 
 ### BUG-2.3: CRITICAL — Voice Result Event Timing (FIXED Iteration 1)
 - **Impact:** Voice summary spoken from intermediate result, not final output
@@ -30,7 +30,7 @@
 - **Impact:** User-setting display_language ignored, no error
 - **Root:** _extract_appendix() fails silently if marker not found
 - **Fix:** Add error logging + re-try with fallback markers
-- **Files:** operator/voice/scripts/summarize.py
+- **Files:** corvin_operator/voice/scripts/summarize.py
 
 ## Remaining High-Severity Bugs (Iteration 2-5)
 

@@ -562,8 +562,8 @@ histogram_quantile(0.95, rate(license.signature_verification_time_ms[5m]))
 ## Documentation
 
 ### Operator Docs
-- `docs/operator/license-administration.md` — how to issue, install, renew licenses
-- `docs/operator/license-dashboard.md` — how to view quota usage, expiring licenses
+- `docs/corvin_operator/license-administration.md` — how to issue, install, renew licenses
+- `docs/corvin_operator/license-dashboard.md` — how to view quota usage, expiring licenses
 - `docs/compliance/licensing-audit.md` — how licenses are audited
 
 ### Developer Docs

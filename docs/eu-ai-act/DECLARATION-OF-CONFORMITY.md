@@ -138,7 +138,7 @@ bridge.sh doctor --json
 voice-audit verify
 
 # Run the full test suite (434 tests)
-bash operator/bridges/run-all-tests.sh
+bash corvin_operator/bridges/run-all-tests.sh
 
 # Generate current Annex IV technical file
 corvin-annex-iv generate --output annex-iv.md
