@@ -87,6 +87,7 @@ from .routes import (
     tools, skills, memory, streams, promote,
     workspaces, members, compute, settings as settings_route,
     features as features_route,
+    features_phase2 as features_phase2_route,
     profile as profile_route, chat_settings as chat_settings_route,
     landing as landing_route,
     bridges as bridges_route,
@@ -221,6 +222,7 @@ router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(marketplace_hub_route.router, tags=["console-marketplace"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
+router.include_router(features_phase2_route.router, tags=["console-phase2-features"])
 router.include_router(deprecated_api_metrics_route.router, tags=["console-deprecated-api-metrics"])
 router.include_router(world_map_route.router, tags=["console-world-map"])
 router.include_router(infinite_session_route.router, tags=["console-infinite-session"])
