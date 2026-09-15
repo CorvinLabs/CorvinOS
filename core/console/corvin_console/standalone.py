@@ -62,6 +62,39 @@ import uuid
 from pathlib import Path
 
 
+def _use_os_trust_store() -> None:
+    """Anchor this process's outbound-TLS verification to the OPERATING-SYSTEM
+    trust store instead of Python's bundled ``certifi`` CA list.
+
+    A TLS-inspecting corporate proxy (e.g. ALLIANZDE, 2026-09-15 live finding)
+    re-signs every outbound HTTPS connection with an internal root CA that lives
+    in the Windows/macOS/Linux OS trust store but NOT in ``certifi/cacert.pem``.
+    Every certifi-based client in the console process then fails with
+    ``CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`` — the
+    marketplace index fetch, A2A pairing, custom-provider probes, GitHub/
+    federation sync and local-stats calls (all ``httpx``/``requests``). Bedrock
+    itself is reached through the ``claude`` CLI child process, which handles its
+    own TLS, so this does not affect chat — it fixes the console's OWN egress.
+
+    ``truststore`` reads the OS store (which HAS the corporate root), so
+    verification stays fully ON — it is NOT disabled, only pointed at the store
+    that actually contains the CA. Guarded: a missing ``truststore`` or any
+    injection error leaves the default ``certifi`` behaviour exactly as before,
+    so this only ever ADDS a working trust path. Mirrors
+    ``operator/voice/scripts/say.py::_use_os_trust_store`` (the same fix for the
+    voice subprocess). Runs at module import — before uvicorn imports the app or
+    ``boot_platform`` runs — so it is in force before any socket opens.
+    """
+    try:
+        import truststore  # type: ignore[import-not-found]
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001 — trust-store setup must never break console boot
+        pass
+
+
+_use_os_trust_store()
+
+
 class _BodyTooLarge(Exception):
     """Raised by the streaming body guard when a chunked body exceeds its cap."""
 
