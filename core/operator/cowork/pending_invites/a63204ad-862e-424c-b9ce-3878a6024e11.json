@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "accept_id": "a63204ad-862e-424c-b9ce-3878a6024e11",
+  "accept_url": "fds/v1/console/remote-trigger/pair/accept",
+  "issuer_instance_id": "56061396-c638-4074-8c02-4bae3951c175",
+  "issuer_url": "fsg",
+  "issuer_label": "Corvin",
+  "origin_id": "dgf",
+  "max_ttl_s": 300,
+  "r2i_hmac_key": "8f3b220bc10bbf8e9aca53d29cca915daea13c0a376896e5a04739ff3d4dc152",
+  "r2i_recv_key": "f7b5691b982baff6a1baa1c1ab17141fe78be64b2f993f48bbeaa73af8189128",
+  "i2r_hmac_key": "a09382f3da5e0b989d2cb00b2be3630ec0467605cb769ce2dc9d4d5fd9d271be",
+  "i2r_recv_key": "3a367b38e01ea90eb49c411c9e69f1ab7ba13da42b41c73d5ba045c356d084ba",
+  "accept_key": "eca37e92382dd5f637cf4b6bb7e11042b5686bf91131797e6955f7066bcf0e38",
+  "expires_at": 1780008757.6932368
+}

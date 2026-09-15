@@ -1,0 +1,23 @@
+{
+  "_HINWEIS": "Default: alle Chats AUS. Der Owner aktiviert pro Chat per /on, deaktiviert per /off, prüft mit /status — alles direkt in WhatsApp. enabled_chats wird vom Daemon gepflegt.",
+  "whitelist": [],
+  "enabled_chats": [
+    "233118090961040@lid"
+  ],
+  "rate_limit_per_hour": 30,
+  "always_voice": false,
+  "voice_threshold_chars": 200,
+  "pin": null,
+  "local_announce_inbound": "off",
+  "local_announce_outbound": "off",
+  "voice_summary_mode": "always",
+  "chat_profiles": {
+    "default": {
+      "add_dirs": [
+        "/home/shumway/projects",
+        "/home/shumway/.claude",
+        "/tmp"
+      ]
+    }
+  }
+}

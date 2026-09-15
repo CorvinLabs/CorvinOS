@@ -23,6 +23,14 @@ _forge_paths = _bootstrap.forge_paths
 
 logger = logging.getLogger(__name__)
 
+# Import VibeOrchestrator for checkpoint writing (Finding #2: Producer wiring)
+try:
+    from core.vibe_engineering.vibe_orchestrator import VibeOrchestrator, SplitTrigger
+    _VIBE_ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    _VIBE_ORCHESTRATOR_AVAILABLE = False
+    logger.warning("⚠️  VibeOrchestrator not available for checkpoint creation")
+
 # Add core to path for imports
 _core_path = Path(__file__).parent.parent.parent.parent / "vibe_engineering"
 if str(_core_path.parent) not in sys.path:
@@ -276,6 +284,75 @@ async def list_tasks_with_graphs(
     ]
     tasks.sort(key=lambda t: t.timestamp, reverse=True)
     return TaskListResponse(tasks=tasks, count=len(tasks))
+
+@router.post("/{task_id}/graph/checkpoint", response_model=Dict[str, Any])
+async def create_task_checkpoint(
+    task_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    session_id: str = Query(..., description="Session ID"),
+    phase: str = Query("initialization", description="Current phase"),
+    iteration_num: int = Query(1, description="Iteration number"),
+):
+    """
+    POST /api/tasks/{task_id}/graph/checkpoint?session_id=...&phase=...&iteration_num=...
+
+    Create a checkpoint for a task (Producer side of Finding #2).
+
+    Allows the Vibe Engineering system to persist task state for resume.
+
+    Args:
+        task_id: Task identifier
+        session_id: Session ID
+        phase: Current execution phase
+        iteration_num: Current iteration number
+
+    Returns:
+        Checkpoint metadata (checkpoint_id, timestamp, etc.)
+
+    Raises:
+        400: Invalid parameters
+        503: Orchestrator unavailable
+    """
+    try:
+        _safe_task_id(task_id)
+
+        if not _VIBE_ORCHESTRATOR_AVAILABLE:
+            raise HTTPException(status_code=503, detail="Vibe Orchestrator unavailable")
+
+        # Create orchestrator for this tenant
+        checkpoint_dir = _forge_paths.tenant_home(rec.tenant_id) / "vibe" / "checkpoints"
+        orchestrator = VibeOrchestrator(checkpoint_dir=checkpoint_dir, tenant_id=rec.tenant_id)
+
+        # Create a minimal TaskExecution for checkpoint (for finding 2: basic producer wiring)
+        from core.vibe_engineering.vibe_orchestrator import TaskExecution
+        task = TaskExecution(
+            task_id=task_id,
+            session_id=session_id,
+            goal=f"Task: {task_id}",
+            constraints=[],
+        )
+        task.current_phase = phase
+        task.iteration_count = iteration_num
+
+        # Create and persist checkpoint
+        trigger = SplitTrigger.MANUAL
+        checkpoint = orchestrator.create_checkpoint(task, trigger)
+
+        return {
+            "checkpoint_id": checkpoint.checkpoint_id,
+            "task_id": checkpoint.task_id,
+            "session_id": checkpoint.session_id,
+            "phase": checkpoint.phase,
+            "iteration_num": checkpoint.iteration_num,
+            "timestamp": checkpoint.timestamp_iso,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create checkpoint for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/{task_id}/graph", response_model=TaskGraphResponse)
 async def get_graph(

@@ -1,0 +1,8 @@
+{
+  "id": "mtwrqw42_73f496",
+  "channel": "discord",
+  "from": "1299270034849533983",
+  "chat_id": "1501540900529246251",
+  "ts": 1789119819794,
+  "text": "in der console unter Quality gibt es adr_gate und concept_gate. da möchte ich auch noch ein gat für idea_gate und implementation_plan_gate. erzeuge ma ein konzept wie man diese kette aus idea, concept, adrs und implementaion plan da gut rein bekommt. und ich will auch einen skill der adversarial review. also md files sollen auch immer dialectic reviewed werden und code adversarial mit ldd.  erzeuge da mal ein konzept wie man das rein bekommt um den software process zu standartisieren. ich will auch einen skill der aus idea, concept, adrs, implemations plan, docs as definition of done und commits einen knowledge graph baut und automatisch im project directory unter docs hinterlegt."
+}

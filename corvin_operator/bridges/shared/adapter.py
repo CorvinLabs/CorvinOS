@@ -823,6 +823,16 @@ except Exception as _lic_exc:  # noqa: BLE001
         )
     def _lic_is_feature_allowed(feature):  # type: ignore[misc]
         return False  # fail-closed: no features granted when module is absent
+    def _lic_active_tier():  # type: ignore[misc]
+        # Incident 2026-09-15: this stub was MISSING while every other alias had
+        # one. The gate at bridges_allowed logs `tier={_lic_active_tier()!r}` on
+        # its deny path, so a failed licence import turned a clean fail-closed
+        # block into a NameError inside the runner — every inbound bridge
+        # message was quarantined as a poison message and no Discord/email turn
+        # ever ran. A missing alias must degrade to a deny, never to a crash.
+        # "unknown" (not "free"): with the module absent we have no tier claim
+        # to make, and the audit record must not assert one.
+        return "unknown"
     class _LicenseLimitError(Exception):  # type: ignore[misc]
         pass
     _LICENSE_OK = False

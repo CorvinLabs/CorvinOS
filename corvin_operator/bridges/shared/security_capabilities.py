@@ -229,8 +229,23 @@ def bootstrap_core_capabilities() -> dict[str, bool]:
 
 
 def _repo_root() -> Path:
-    # operator/bridges/shared/security_capabilities.py -> repo root is parents[3]
+    # <operator-dir>/bridges/shared/security_capabilities.py -> repo root is parents[3]
     return Path(__file__).resolve().parents[3]
+
+
+def _operator_root() -> Path:
+    """The operator package directory this module lives in.
+
+    Derived from ``__file__`` rather than spelled out, because the directory has
+    been renamed once already (``operator/`` -> ``corvin_operator/``, to stop it
+    shadowing the stdlib ``operator`` module). A hard-coded name silently broke
+    :func:`_register_path_gate_by_presence` on 2026-09-15: the hook file was
+    looked up under the old name, was not found, ``path_gate`` stayed
+    unregistered, and the fail-closed spawn gate blocked every bridge turn —
+    Discord and email went mute with no error pointing at the real cause.
+    Deriving the name keeps this correct across the next rename.
+    """
+    return Path(__file__).resolve().parents[2]
 
 
 def _register_path_gate_by_presence() -> None:
@@ -241,7 +256,7 @@ def _register_path_gate_by_presence() -> None:
     present at the canonical location and register it with its on-disk hash. If
     the file is missing, the capability stays absent and the spawn-gate blocks.
     """
-    hook = _repo_root() / "operator" / "voice" / "hooks" / "path_gate.py"
+    hook = _operator_root() / "voice" / "hooks" / "path_gate.py"
     if not hook.is_file():
         return
     version = CAP_VERSIONS.get(CAP_PATH_GATE, "unknown")

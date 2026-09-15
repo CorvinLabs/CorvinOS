@@ -1,0 +1,17 @@
+runner error for mu2juk4m_0789c9 (discord:1501540900529246251):
+Traceback (most recent call last):
+  File "/home/shumway/projects/CorvinOS/corvin_operator/bridges/shared/adapter.py", line 10573, in process_one
+    _lic_assert_limit("bridges_allowed", channel)
+  File "/home/shumway/projects/CorvinOS/corvin_operator/bridges/shared/adapter.py", line 821, in _lic_assert_limit
+    raise _LicenseLimitError(
+_LicenseLimitError: license module unavailable — 'bridges_allowed' blocked (fail-closed)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/shumway/projects/CorvinOS/corvin_operator/bridges/shared/adapter.py", line 12341, in _runner
+    process_one(inbox_file, settings)
+  File "/home/shumway/projects/CorvinOS/corvin_operator/bridges/shared/adapter.py", line 10575, in process_one
+    log(f"license.bridges_allowed: blocked channel={channel!r} tier={_lic_active_tier()!r}")
+                                                                     ^^^^^^^^^^^^^^^^
+NameError: name '_lic_active_tier' is not defined
