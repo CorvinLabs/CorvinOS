@@ -88,7 +88,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
       const data: ValidateTelegramTokenResponse = await response.json()
 
       if (!data.valid) {
-        setError(data.error || 'Token ungültig')
+        setError(data.error || 'Invalid token')
         setStep('error')
         return
       }
@@ -121,7 +121,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
       const data: SaveTokenResponse = await response.json()
 
       if (!data.success) {
-        setError(data.error || 'Speichern fehlgeschlagen')
+        setError(data.error || 'Could not save')
         setStep('error')
         return
       }
@@ -150,7 +150,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
               onClick={onClose}
               disabled={step === 'validating' || step === 'saving'}
               className="text-sky-100 hover:text-white disabled:opacity-40"
-              aria-label="Schließen"
+              aria-label="Close"
             >
               <X className="w-5 h-5" />
             </button>
@@ -173,13 +173,13 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
                   rows={3}
                 />
                 <p className="text-xs text-muted-foreground mt-2">
-                  Token bekommst du so: In Telegram @BotFather öffnen → /newbot senden
-                  (oder /token für einen bestehenden Bot) → Token kopieren
+                  How to get a token: open @BotFather in Telegram → send /newbot
+                  (or /token for an existing bot) → copy the token
                 </p>
               </div>
 
               <Button onClick={handleValidate} className="w-full" variant="accent">
-                Validieren &amp; Weiter
+                Validate &amp; continue
               </Button>
             </>
           )}
@@ -208,17 +208,17 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
 
               <div className="bg-muted/40 border border-border rounded-md p-3">
                 <p className="text-xs text-muted-foreground">
-                  💡 Telegram-Bots brauchen keine zusätzliche Autorisierung: nach dem
-                  Speichern kannst du dem Bot direkt schreiben (@{validationResult.botUsername}).
+                  💡 Telegram bots need no extra authorisation: once saved you can
+                  message the bot directly (@{validationResult.botUsername}).
                 </p>
               </div>
 
               <div className="border-t border-border pt-4">
                 <p className="text-sm text-muted-foreground mb-3">
-                  Der Token wird lokal gespeichert (chmod 600, nie im Klartext angezeigt):
+                  The token is stored locally (chmod 600, never shown in clear text):
                 </p>
                 <Button onClick={handleSaveToken} className="w-full" variant="accent">
-                  Token speichern &amp; Setup abschließen
+                  Save token &amp; finish setup
                 </Button>
               </div>
             </>
@@ -228,7 +228,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
           {step === 'saving' && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-8 h-8 animate-spin text-emerald-600 dark:text-emerald-400 mr-3" />
-              <span className="text-foreground">Speichern...</span>
+              <span className="text-foreground">Saving…</span>
             </div>
           )}
 
@@ -240,13 +240,13 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
               </div>
               <h3 className="text-lg font-semibold text-foreground mb-2">Bot erfolgreich aktiviert! 🎉</h3>
               <p className="text-sm text-muted-foreground mb-4">
-                Dein Telegram-Bot ist jetzt bereit. Der Daemon startet neu und verbindet sich mit Telegram.
+                Your Telegram bot is ready. The daemon restarts and connects to Telegram.
               </p>
               <p className="text-xs text-muted-foreground mb-4">
-                Falls der Bot nicht sofort antwortet, kann es 30 Sekunden dauern bis die Verbindung hergestellt ist.
+                If the bot does not answer right away, the connection can take up to 30 seconds.
               </p>
               <Button onClick={() => (onSuccess ? onSuccess() : window.location.reload())} variant="accent">
-                {onSuccess ? 'Weiter' : 'Schließen & Neu laden'}
+                {onSuccess ? 'Continue' : 'Close & reload'}
               </Button>
             </div>
           )}
@@ -290,7 +290,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
               rel="noopener noreferrer"
               className="text-accent hover:underline inline-flex items-center"
             >
-              Telegram-Bot-Doku öffnen
+              Open the Telegram bot docs
               <ExternalLink className="w-3 h-3 ml-1" />
             </a>
             {' — '}

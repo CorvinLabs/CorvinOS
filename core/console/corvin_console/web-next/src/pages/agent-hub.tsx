@@ -187,7 +187,7 @@ function ViaBadge({ via }: { via: "direct" | "relay" | null }) {
     <Badge
       variant="outline"
       className="border-sky-500/40 text-sky-700 dark:text-sky-400 text-[10px] gap-1"
-      title="Last reached through the encrypted relay fallback (ADR-0258 Stage 3), not a direct connection."
+      title="Last reached through the encrypted relay fallback, not a direct connection."
     >
       <Globe2 className="h-2.5 w-2.5" /> via relay
     </Badge>
@@ -235,7 +235,7 @@ function EnableRelayPrompt({
     return (
       <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs gap-1"
         onClick={() => setOpen(true)}
-        title="Fall back to an encrypted relay when a direct connection to this peer fails (ADR-0258 Stage 3). The relay sees routing metadata (timing, volume) but never message content.">
+        title="Fall back to an encrypted relay when a direct connection to this peer fails. The relay sees routing metadata (timing, volume) but never message content.">
         <Globe2 className="h-3 w-3" /> Enable relay fallback
       </Button>
     );

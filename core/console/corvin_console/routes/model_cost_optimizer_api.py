@@ -65,6 +65,13 @@ class ThresholdStatus(BaseModel):
     # completion reliability, NOT a content-quality assessment.
     success_rate: float = 0.0
     timestamp: str
+    # What this tier actually costs. The threshold above is an internal
+    # parameter with no live consumer; volume, reliability and spend are what an
+    # operator acts on.
+    dominant_model: str = ""
+    actual_usd: float = 0.0
+    baseline_usd: float = 0.0
+    priced_turns: int = 0
 
 
 class DashboardStatusResponse(BaseModel):
@@ -393,6 +400,10 @@ async def get_learning_status(
                     "converged": t.converged,
                     "success_rate": t.success_rate,
                     "timestamp": t.timestamp,
+                    "dominant_model": getattr(t, "dominant_model", "") or "",
+                    "actual_usd": getattr(t, "actual_usd", 0.0) or 0.0,
+                    "baseline_usd": getattr(t, "baseline_usd", 0.0) or 0.0,
+                    "priced_turns": getattr(t, "priced_turns", 0) or 0,
                 }
                 for t in thresholds
             ],

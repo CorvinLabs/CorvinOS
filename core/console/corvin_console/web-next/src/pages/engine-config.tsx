@@ -766,7 +766,7 @@ function ClaudeCodeAuthStatus() {
 const PROVENANCE_NOTE: Record<string, string> = {
   live_catalog: 'strongest — this provider answered with this id when last asked',
   tenant_config: 'you assigned this model to this provider on this page',
-  registry: 'from the shipped ADR-0119 engine registry',
+  registry: 'from the engine registry shipped with this release',
   id_prefix: 'parsed from the model id itself (<provider>/<model>)',
   engine_config: "inferred from the running engine's current provider assignment",
   unresolved: 'no source claims this id — provider genuinely unknown',
@@ -819,10 +819,10 @@ function ModelUsagePanel() {
             {data?.window?.active && (
               <p className="text-xs text-muted-foreground mt-1 flex items-start gap-1.5">
                 <Clock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                Zählfenster seit{' '}
-                {new Date(data.window.since_iso as string).toLocaleString()} — ältere
-                Turns sind weiterhin in der Audit-Chain, werden hier aber nicht
-                gezählt. Zurücksetzen/aufheben im Model Cost Optimizer.
+                Counting since{' '}
+                {new Date(data.window.since_iso as string).toLocaleString()} — older
+                turns are still in the audit trail but are not counted here.
+                Reset or clear the window in Model Cost Optimizer.
               </p>
             )}
           </div>
@@ -1107,7 +1107,7 @@ function LearningStatusBar({ csrf }: { csrf: string }) {
             ) : (
               <p className="text-muted-foreground flex items-start gap-1.5">
                 <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                No outcome-feedback samples yet — this Bayesian confidence tracker (ADR-0644)
+                No outcome-feedback samples yet — this Bayesian confidence tracker
                 needs real quality feedback per turn, which isn't wired into a live turn yet.
                 The classification counts above (from shadow-mode classification) are a
                 separate, already-real signal.
@@ -1180,7 +1180,7 @@ export const EngineConfigPage: React.FC = () => {
         </div>
         <p className="text-muted-foreground">
           Configure which AI models are used for different task types. Confidence
-          reflects real classified turns. (ADR-0641, ADR-0642)
+          reflects real classified turns.
         </p>
       </div>
 

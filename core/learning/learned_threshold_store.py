@@ -69,6 +69,20 @@ class StoredThreshold:
     # records without it just default to 0.0 (backward compatible).
     success_rate: float = 0.0
     notes: str = ""  # Operator notes (e.g., "manual override 2026-09-11")
+    # ── What this tier actually costs. Additive, same backward-compatible
+    # contract as success_rate above (from_dict filters unknown keys, so older
+    # stored records default cleanly).
+    #
+    # The threshold itself is an internal parameter with no live consumer; a
+    # tier's VOLUME, RELIABILITY and SPEND are what an operator acts on, and
+    # those three were computed in the same pass and then discarded.
+    dominant_model: str = ""
+    actual_usd: float = 0.0
+    baseline_usd: float = 0.0
+    #: Turns whose cost was computable. Diverges from sample_count whenever
+    #: token counts are missing, and a $ figure quoted without that ratio reads
+    #: as the tier's whole bill.
+    priced_turns: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""

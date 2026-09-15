@@ -565,7 +565,7 @@ export function DashboardPage() {
             {identity.data && <InstanceIdentityCard status={identity.data} />}
             {!identity.isLoading && !identity.data && (
               <p className="text-sm text-muted-foreground">
-                Instance identity unavailable — this feature requires the ADR-0145
+                Instance identity unavailable — this feature requires the
                 identity module.
               </p>
             )}

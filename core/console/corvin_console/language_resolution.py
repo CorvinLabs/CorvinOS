@@ -81,7 +81,7 @@ def load_profile_language(tenant_id: str) -> Optional[str]:
         import sys
         from pathlib import Path
         repo_root = Path(__file__).parent.parent.parent.parent
-        bridges_shared = repo_root / "operator" / "bridges" / "shared"
+        bridges_shared = repo_root / "corvin_operator" / "bridges" / "shared"
         if str(bridges_shared) not in sys.path:
             sys.path.insert(0, str(bridges_shared))
 

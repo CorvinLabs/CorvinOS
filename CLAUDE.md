@@ -648,6 +648,41 @@ headless run that sets `color_scheme` renders one theme twice.
 
 ---
 
+## Console is a Production Surface (ADR-0763, load-bearing)
+
+**Shipped UI is English, carries no ADR ids, and fabricates nothing.** ADR
+references belong in code comments, never in rendered text. A 404 branch returns
+an EMPTY result plus "not available on this build" — never sample data:
+`quality.tsx` built a seven-day trend from `Math.random()` with invented gate
+failures, and `runAllGates` reported `ok: true, "Gate run initiated"` for a run
+that never started. Language **detection** regexes stay — the bot answering in
+the operator's language is intended runtime behaviour, not UI copy. Installation
+defaults to English (`<html lang>`, narration locale).
+
+**Don't chart a mechanism with no consumer.** The panel headline plotted
+`learned_threshold` against 0.5 while the learner's own docstring says nothing
+reads it to make a routing decision. Chart what the operator acts on — volume,
+reliability, spend — especially when it was computed in the same pass and thrown
+away.
+
+**A recommendation needs a sample.** Withhold it below a real threshold and say
+why; "100% over two turns" is one data point wearing a percentage. Unit cost
+divides by PRICED turns, never by all turns.
+
+**Chart colours are Corvin's amber, in their own `--viz-*` tokens.** Never alias
+`--accent` as a data colour: it is a brand token that may be restyled and at
+L 0.74 it is outside the dark lightness band for a data mark. Never put two
+colour systems in one view (tier ramp + role swatch).
+
+**A zero-findings sweep needs a positive control.** The German/ADR scanner
+resolves `src/` relative to `web-next/`; run from the repo root it sees zero
+files and reports success. Confirm the file count first.
+
+→ Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § The console as a production surface
+→ ADR: See Corvin-ADR for ADR-0763
+
+---
+
 ## Console Frontend — Prove the NEW Build Is What Loads (load-bearing)
 
 Any change under `core/console/corvin_console/web-next/` is **not done when the source is
