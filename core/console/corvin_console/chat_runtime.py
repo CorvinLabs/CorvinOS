@@ -1412,18 +1412,57 @@ def _effective_os_engine(tenant_id: str, *, audit: bool = True) -> str:
         )
     return effective
 
+def _claude_settings_env() -> dict:
+    """The ``env`` block of Claude Code's own settings.json (honouring
+    ``CLAUDE_CONFIG_DIR``, the same override Claude Code itself uses).
+
+    The Bedrock/Vertex/Foundry setup wizards write their ``CLAUDE_CODE_USE_*``
+    flags and credential vars HERE, not into the exported shell environment — so
+    a probe that only reads ``os.environ`` misses every wizard-configured
+    install. Mirrors ``engine_detection._claude_settings_env()``; re-read per
+    call (this is the low-frequency per-turn probe, not a hot loop) so a wizard
+    run since the last turn is picked up without a process restart.
+    """
+    try:
+        config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        base = Path(os.path.expanduser(config_dir)) if config_dir else Path.home() / ".claude"
+        path = base / "settings.json"
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        env = data.get("env")
+        return env if isinstance(env, dict) else {}
+    except Exception:  # noqa: BLE001 — a corrupt/unreadable settings file must not break detection
+        return {}
+
+
 def _claude_authenticated() -> bool:
     """Cheap, subprocess-free Claude Code auth probe — mirrors the credential
     signal used by engine_detection.probe_claude_code() without the `claude
     --version` spawn (this runs on the per-turn engine-selection path).
 
-    Authenticated iff an OAuth session exists in ~/.claude/.credentials.json OR
-    ANTHROPIC_API_KEY is set. Fail-OPEN (returns True) on an unexpected read error
-    so a transient glitch never silently reroutes a genuinely-logged-in user off
-    Claude — the reroute only fires on a clearly-absent credential.
+    Authenticated iff ANY of: ANTHROPIC_API_KEY is set; a 3rd-party platform
+    (Amazon Bedrock / Google Vertex / Microsoft Foundry) is configured; or an
+    OAuth session exists in ~/.claude/.credentials.json. Fail-OPEN (returns True)
+    on an unexpected read error so a transient glitch never silently reroutes a
+    genuinely-logged-in user off Claude — the reroute only fires on a clearly-
+    absent credential.
     """
     if os.environ.get("ANTHROPIC_API_KEY"):
         return True
+    # 3rd-party platform (Bedrock/Vertex/Foundry): auth is via the platform's
+    # OWN credentials (AWS/GCP/Azure), so there is NO ANTHROPIC_API_KEY and NO
+    # ~/.claude/.credentials.json. Checking only those two (the old behaviour)
+    # false-negatived every such install and rerouted it to the "hermes" engine
+    # — which was REMOVED in v2.0 and whose dispatch path now raises NameError
+    # (`last_usage`), the exact live failure this fixes. The setup wizards write
+    # CLAUDE_CODE_USE_* into settings.json's `env` block (not the shell), so
+    # check both — mirroring engine_detection.probe_claude_code(), the canonical
+    # detector this probe's docstring claims to (but did not) mirror.
+    _settings_env = _claude_settings_env()
+    for _flag in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        if (os.environ.get(_flag) or _settings_env.get(_flag)) in ("1", "true", "True"):
+            return True
     try:
         creds_path = Path.home() / ".claude" / ".credentials.json"
         if not creds_path.exists():
