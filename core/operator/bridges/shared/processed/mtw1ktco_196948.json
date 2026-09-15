@@ -1,8 +1,0 @@
-{
-  "id": "mtw1ktco_196948",
-  "channel": "discord",
-  "from": "1299270034849533983",
-  "chat_id": "1502103856740302964",
-  "ts": 1789075866264,
-  "text": "Nächste Schritte: Phase 2 (Windows E2E Docker) + CI/CD Gate (Wochen 2–3) mach auch einen adversarial review für alle platformen. vorallem windows. mach es wirklich production ready und dann alles git push main. räume auch das repo auf. das ist version 1.0.0 kein 2.0. mach das repo release ready. die version 1.0.0 ist etwas besonderes deswegen sei gründlich."
-}

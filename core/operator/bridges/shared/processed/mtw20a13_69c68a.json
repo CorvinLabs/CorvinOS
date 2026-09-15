@@ -1,8 +1,0 @@
-{
-  "id": "mtw20a13_69c68a",
-  "channel": "discord",
-  "from": "1299270034849533983",
-  "chat_id": "1515819896993222867",
-  "ts": 1789076587719,
-  "text": "mach diese grafik The Cost Curve noch als schönes svg diagram. das ist die grafik hier. Monthly Cost vs. Accuracy Trade-off\n\nCost\n ▲\n │       All Opus\n │         •\n │         │\\\n │$900  ────┤ \\  (expensive, high quality)\n │         │   \\\n │         │     •  With CorvinOS\n │         │      \\ (optimized routing)\n │$73   ───┼───────•\n │         │        \\\n │         │         • (all Haiku = bad)\n │         └─────────┼──────────────────→\n │         75%      85%      95%     Accuracy/Quality\n │\n └──────────────────────────────────────  und mach bette diese grafik auch in die readme ein das sie schön rein passt. und ein roter faden beibehalten wird"
-}
