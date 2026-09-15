@@ -385,10 +385,25 @@ class VendorOperatorHook(BuildHookInterface):
             # then served a 404 console and the user could never reach setup
             # ("Einrichtung geht nicht"). A pure `pip install corvinos` has no npm
             # to populate it later, so the SPA must be present at packaging time.
-            # Build it if missing; HARD-FAIL the wheel build if it cannot be
-            # produced — never ship a UI-less wheel again.
-            if not spa_index.is_file():
-                self._build_spa(root / "core/console/corvin_console/web-next")
+            #
+            # It must also ship the CURRENT SPA. dist/ is gitignored and produced
+            # at packaging time, so a STALE dist/ left over in a dev/release
+            # checkout would silently ship an outdated UI even though the
+            # committed web-next/src has moved on — a fresh-install hazard of the
+            # same "works in checkout, broken on wheel" class this hook exists to
+            # prevent. Therefore, whenever npm is available at wheel-build time,
+            # ALWAYS rebuild from the current source (freshness guaranteed, not
+            # merely "built if absent"). Only when npm is ABSENT do we fall back
+            # to an already-present prebuilt dist/ (the CI-prebuilt path: dist
+            # built in a node stage, then packaged in a python-only stage), and
+            # HARD-FAIL the wheel build if there is no SPA at all.
+            web_next = root / "core/console/corvin_console/web-next"
+            if shutil.which("npm") is not None:
+                self._build_spa(web_next)
+            elif not spa_index.is_file():
+                # npm absent and no prebuilt dist — _build_spa is a no-op here;
+                # fall through to the hard-fail below with actionable guidance.
+                self._build_spa(web_next)
             if not spa_index.is_file():
                 raise RuntimeError(
                     "console SPA dist is missing and could not be built — "
