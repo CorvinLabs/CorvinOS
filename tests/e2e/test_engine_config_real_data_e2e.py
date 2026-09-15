@@ -8,8 +8,10 @@ provider list may ship in the panel's bundle.
 
 It also covers the fields the same pass added so the panel can be terse without
 becoming vague: each model source's ``short_label``/``hint`` (one line, full
-error on hover) and each tier's ``classified_count`` (why a tier with no learned
-outcomes is empty). Both are display summaries of data that already existed, so
+error on hover), its ``credential_absent`` flag (a source this host has no key
+for is unused, not broken, and is dropped from that line while another live
+source answers) and each tier's ``classified_count`` (why a tier with no learned
+outcomes is empty). All are display summaries of data that already existed, so
 what is asserted about them is that they cannot DISAGREE with the long form.
 
 Every request here goes over the loopback TCP socket to the RUNNING console and
@@ -186,6 +188,39 @@ def test_claude_model_sources_carry_a_compact_label_and_hint(opener) -> None:
             )
         else:
             assert not hint, f"source {src['id']} is fine but carries a failure hint"
+
+
+def test_credential_absent_sources_are_flagged_rather_than_just_failed(opener) -> None:
+    """A source with no API key on this host must SAY so as a flag, not only in prose.
+
+    ``credential_absent`` is what lets the panel stop printing "Anthropic — no
+    ANTHROPIC_API_KEY configured" on a Bedrock-authenticated install, where that
+    key does not apply and naming it reads as a defect to fix. Parsing the error
+    string for the same conclusion would be the alternative, and a display rule
+    keyed on English text breaks the first time the sentence is reworded.
+
+    The flag must never soften what it describes: a source without its credential
+    fetched nothing, so it stays ``reachable: false`` with its full ``error`` and
+    its ``hint`` intact — those are what the panel falls back to when NO live
+    source answered and the missing key is genuinely the remaining lead.
+    """
+    data = _get_json(opener, "/v1/engine/claude-models")
+    for src in data["sources"]:
+        flag = src.get("credential_absent")
+        assert isinstance(flag, bool), (
+            f"source {src['id']} does not declare credential_absent; the panel "
+            f"would have to guess from the error text"
+        )
+        if not flag:
+            continue
+        assert not src["reachable"], (
+            f"source {src['id']} has no credential but claims to be reachable"
+        )
+        assert src["error"] and src["hint"], (
+            f"source {src['id']} is flagged credential_absent but gives no reason "
+            f"— it is hidden from the compact line, so the hover text and the "
+            f"no-live-source fallback are the only places left to explain it"
+        )
 
 
 def test_claude_models_reports_at_least_one_reachable_source(opener) -> None:

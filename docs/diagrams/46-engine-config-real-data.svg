@@ -38,7 +38,7 @@
 
   <rect x="20" y="204" width="440" height="52" class="box"/>
   <text x="35" y="226" class="lbl" font-weight="bold">anthropic_live — GET {base_url}/v1/models, paginated</text>
-  <text x="35" y="244" class="sub">keyless Claude Code subscription login → reported as an ABSENT key · no egress attempted</text>
+  <text x="35" y="244" class="sub">keyless (subscription/Bedrock login) → credential_absent: unused here, NOT down · no egress</text>
 
   <path class="arr" d="M240 256 V266"/>
 
@@ -59,7 +59,7 @@
   <rect x="20" y="460" width="440" height="62" class="cold"/>
   <text x="35" y="482" class="lbl" font-weight="bold">Console → Engine Configuration → Default Model</text>
   <text x="35" y="500" class="sub">one &lt;select&gt; + ONE line: total, then per source its short_label + count or hint</text>
-  <text x="35" y="516" class="sub">full label, exact count, region + untruncated error on hover — never one "sources down"</text>
+  <text x="35" y="516" class="sub">a credential_absent source drops off that line while anything live answers — hover keeps it</text>
 
   <!-- ───────── Right: GET /v1/engine/model-usage ───────── -->
   <rect x="500" y="70" width="440" height="52" class="box"/>

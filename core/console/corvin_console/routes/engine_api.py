@@ -269,7 +269,9 @@ async def get_claude_models(
     * ``registry`` — the ADR-0119 curated list. Offline, always available, and a
       release-time snapshot, so it is the floor and never the whole answer.
     * ``anthropic_live`` — ``GET /v1/models``. Authoritative on an API-key login;
-      returns nothing on a subscription or Bedrock login, which exposes no key.
+      returns nothing on a subscription or Bedrock login, which exposes no key —
+      flagged ``credential_absent`` there, because an absent key on such a host is
+      the normal state and must not be presented as a broken source.
     * ``bedrock_live`` — ``ListFoundationModels`` + ``ListInferenceProfiles``,
       SigV4-signed. Authoritative on a ``CLAUDE_CODE_USE_BEDROCK=1`` host, and the
       only source that knows the ``us.anthropic.claude-…`` inference-profile ids
@@ -330,6 +332,8 @@ async def get_claude_models(
         "short_label": "Curated registry",
         "reachable": registry_error is None, "count": registry_count,
         "error": registry_error, "hint": _short_reason(registry_error), "live": False,
+        # The registry is on disk; it can never be waiting for a credential.
+        "credential_absent": False,
     })
 
     for provider_id in _CLAUDE_PROVIDERS:
@@ -356,6 +360,11 @@ async def get_claude_models(
             "hint": _short_reason(error),
             "live": True,
             "detail": fetched.get("detail"),
+            # Not a failure: this host authenticates elsewhere and never had a key
+            # for this provider. Reported as a FACT, not as a display decision —
+            # whether it is worth naming in the compact line depends on whether
+            # any other live source answered, which is the panel's call.
+            "credential_absent": bool(fetched.get("credential_absent")),
         })
 
     models = sorted(entries.values(), key=lambda m: m["id"])

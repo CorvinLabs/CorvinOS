@@ -2634,6 +2634,37 @@ is what got the block asked for removal in the first place.
 `test_claude_model_sources_carry_a_compact_label_and_hint` asserts the prefix
 relation rather than any wording.
 
+#### A source with no credential on this host is unused, not down
+
+Compacting the Anthropic line did not make it right, and the operator came back
+for it (2026-09-15): *"kann weg weil alles extern eingeloggt wird. dieser key ist
+sinnlos."* Correct — Claude Code on this host authenticates through Bedrock, so
+`ANTHROPIC_API_KEY` is not a setting that is MISSING, it is a setting that does
+not APPLY. Printing `Anthropic — no ANTHROPIC_API_KEY configured` next to a
+working 40-model Bedrock answer advertises a remedy for a non-problem.
+
+Split into a fact and a display rule, on purpose:
+
+* **Backend fact.** `fetch_models()` sets `credential_absent: True` on the
+  no-key branch (Anthropic and OpenAI both), and `claude-models` forwards it per
+  source. It changes nothing else: the source stays `reachable: false` and keeps
+  its full `error` and its `hint`. The alternative was for the UI to match the
+  error text, and a display rule keyed on an English sentence breaks the first
+  time the sentence is reworded.
+* **Display rule, in `ClaudeSourceLine` only.** A `credential_absent` source is
+  dropped from the line **while another live source is answering**
+  (`sources.some(s => s.live && s.reachable)`). It stays in the response, stays
+  queried, and stays in the hover text — as *"not used on this host"*, not
+  "unreachable". When NO live source answered, it comes back inline: the picker
+  is then down to the shipped snapshot and an API key IS a real remedy.
+
+`anthropic` therefore stays in `_CLAUDE_PROVIDERS` and in `sources[]`. Removing
+it there would look like the same fix and break a second thing:
+`claudeNativeProviders()` derives the native set from
+`sources.filter(s => s.live)`, and the External Provider modal excludes exactly
+that set — so a dropped `anthropic` reappears as an *external* provider to attach.
+It is also the authoritative source on any API-key-authenticated install.
+
 ### An empty confidence tier states its own denominator
 
 Three of four tiers showed "No real outcomes learned for this model yet", and the
@@ -2686,8 +2717,15 @@ decision, 2026-09-15).
   the tenant is configured with.
 - **Don't collapse the per-source status into one "sources unavailable" line.**
   Which source failed, and why, is the whole point of the union. Compacting it to
-  one line that still NAMES every source and its count/reason is fine and is what
-  ships; summarising three sources into a single verdict is not.
+  one line that names each source with its count or reason is fine and is what
+  ships; summarising the sources into a single verdict is not. Exactly ONE source
+  may be left off that line — a `credential_absent` one, and only while another
+  live source is answering. That is not a failure being hidden: it is a source
+  this host never had a credential for, still present in the response and still
+  named on hover, and it returns to the line the moment nothing live answers.
+- **Don't hide a source that actually FAILED,** and don't reach the
+  credential-absent conclusion by matching on `error` text. The flag is the
+  contract; the sentence is for humans and will be reworded.
 - **Don't let `hint` diverge from `error`.** It is `error`'s first clause, nothing
   else. A short message that can say something the long one cannot is a second
   truth, and the one it replaced went stale exactly that way.
@@ -2721,7 +2759,11 @@ running console (session from the loopback GET `/auth/local-login`), covering
 `test_claude_models_reports_at_least_one_reachable_source`,
 `test_claude_model_sources_carry_a_compact_label_and_hint` (`short_label` no
 longer than `label`, `hint` a prefix of `error` and ≤48 chars, no hint without an
-error), `test_engine_config_tiers_account_for_every_classified_turn`
+error), `test_credential_absent_sources_are_flagged_rather_than_just_failed`
+(every source declares the flag as a bool; a flagged one is not reachable and
+still carries its full error + hint, because hover and the no-live-source
+fallback are the only places left to explain it),
+`test_engine_config_tiers_account_for_every_classified_turn`
 (per-tier `classified_count` sums to `total_samples`, and
 `run_count ≤ classified_count` — the card's "0 of 5" must be a true ratio),
 `test_model_usage_shares_are_internally_consistent` (share sets sum to 100%,
@@ -2730,3 +2772,9 @@ model rows), and `test_served_bundle_carries_no_hardcoded_model_list` (transitiv
 crawl of the served chunks, positive control before the negative assertion).
 Assertions are internal-consistency checks against whatever this host has, never
 pinned counts — "47 models" would fail on any other AWS account.
+
+The one thing that cannot be pinned over HTTP from a single host is the OTHER
+half of the credential flag, since this host has no Anthropic key to fail with:
+`test_engine_providers.py::test_absent_key_is_flagged_and_distinguishable_from_a_failed_one`
+drives both branches offline — no key sets the flag and egresses nothing, a
+present-but-rejected key (401) does NOT set it and stays visible.

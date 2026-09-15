@@ -263,7 +263,17 @@ class TestAnthropicFetch:
 
     def test_missing_key_is_explained_not_a_401(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A Claude Code subscription login exposes no API key — the common
-        case must read as an explanation, and must not hit the network."""
+        case must read as an explanation, and must not hit the network.
+
+        The explanation is checked by SHAPE, not by wording: this assertion used
+        to pin the phrase "curated model list", which was removed on 2026-09-15
+        because this response carries ``models: []`` and merging the curated list
+        is the caller's job — the sentence claimed a list it did not contain. What
+        must hold is that the absent credential is NAMED (so the operator knows
+        which key), and that the state is machine-readable via
+        ``credential_absent`` (so the console can tell "no key here" from "the key
+        failed" without matching English text).
+        """
         monkeypatch.setattr(engine_providers._provider_keys, "resolve_by_env_var",
                             lambda _n: None)
         monkeypatch.setattr(engine_providers, "_get_json",
@@ -272,8 +282,9 @@ class TestAnthropicFetch:
             "anthropic", base_url="https://api.anthropic.com",
             model_source="anthropic", credential_env="ANTHROPIC_API_KEY")
         assert res["reachable"] is False
+        assert res["models"] == []
         assert "ANTHROPIC_API_KEY" in res["error"]
-        assert "curated model list" in res["error"]
+        assert res["credential_absent"] is True
 
     def test_http_error_keeps_the_last_good_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
         model_catalog.store_models("anthropic", [{"id": "claude-opus-5", "label": "Opus 5"}])
