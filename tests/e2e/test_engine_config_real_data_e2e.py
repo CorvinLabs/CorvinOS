@@ -6,6 +6,12 @@ Engine-Configuration real-data pass —
 regression guard for the requirement that produced them: no hardcoded model or
 provider list may ship in the panel's bundle.
 
+It also covers the fields the same pass added so the panel can be terse without
+becoming vague: each model source's ``short_label``/``hint`` (one line, full
+error on hover) and each tier's ``classified_count`` (why a tier with no learned
+outcomes is empty). Both are display summaries of data that already existed, so
+what is asserted about them is that they cannot DISAGREE with the long form.
+
 Every request here goes over the loopback TCP socket to the RUNNING console and
 carries a real session cookie from the loopback-only, credential-less
 ``/auth/local-login``. Nothing is imported and called directly: a unit test
@@ -134,6 +140,7 @@ def test_claude_models_unions_declared_sources(opener) -> None:
         if not src["reachable"]:
             assert src["error"], f"source {src['id']} is unreachable but gives no reason"
 
+
     for model in data["models"]:
         assert model["id"], "a model with no id"
         assert model["sources"], f"{model['id']} claims no source"
@@ -153,6 +160,34 @@ def test_claude_models_unions_declared_sources(opener) -> None:
         )
 
 
+def test_claude_model_sources_carry_a_compact_label_and_hint(opener) -> None:
+    """The panel prints ONE line for all sources, so each needs a short form.
+
+    Both fields are display-length summaries and neither may become the only copy
+    of the truth: ``short_label`` must not outgrow the width it exists to save,
+    and ``hint`` must stay a PREFIX of the full ``error`` the UI keeps on hover. A
+    hint that says something the error does not is a second, shorter,
+    unverifiable message — and a second copy of this particular message is
+    exactly what went stale and got the whole block asked for removal.
+    """
+    data = _get_json(opener, "/v1/engine/claude-models")
+    for src in data["sources"]:
+        short = src.get("short_label")
+        assert short, f"source {src['id']} has no short_label"
+        assert len(short) <= len(src["label"])
+        hint = src.get("hint")
+        if src["error"]:
+            assert hint, f"source {src['id']} has an error but no hint for the one-line form"
+            assert len(hint) <= 48, f"hint for {src['id']} is {len(hint)} chars, too long for one line"
+            stem = hint[:-1] if hint.endswith("…") else hint
+            assert src["error"].startswith(stem), (
+                f"hint {hint!r} is not a prefix of error {src['error']!r} — it is a "
+                f"second message, not a shortening of the first"
+            )
+        else:
+            assert not hint, f"source {src['id']} is fine but carries a failure hint"
+
+
 def test_claude_models_reports_at_least_one_reachable_source(opener) -> None:
     """The curated registry is offline, so at minimum IT must answer.
 
@@ -162,6 +197,42 @@ def test_claude_models_reports_at_least_one_reachable_source(opener) -> None:
     data = _get_json(opener, "/v1/engine/claude-models")
     reachable = [s for s in data["sources"] if s["reachable"]]
     assert reachable, f"no model source is reachable: {data['sources']}"
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/engine/config — the per-tier empty state must be explicable
+# ---------------------------------------------------------------------------
+
+
+def test_engine_config_tiers_account_for_every_classified_turn(opener) -> None:
+    """Per-tier ``classified_count`` must sum to ``total_samples``.
+
+    This is the denominator the card uses to explain an empty tier ("0 of 5
+    classified turns landed in MEDIUM"). If the parts do not add up to the whole,
+    that sentence states a false ratio about real audit-chain data — worse than
+    the bare placeholder it replaced, because it looks measured.
+    """
+    data = _get_json(opener, "/v1/engine/config")
+    tiers = data["models"]
+    assert set(tiers) == {"corvinOS", "SIMPLE", "MEDIUM", "COMPLEX"}
+
+    per_tier = 0
+    for name, tier in tiers.items():
+        count = tier["classified_count"]
+        assert isinstance(count, int) and count >= 0, f"{name}: bad classified_count {count!r}"
+        per_tier += count
+        # run_count is outcome samples for (tier, currently-selected model); a
+        # tier cannot have learned from more turns than were ever classified into
+        # it, and an inversion means the two are being read from different keys.
+        assert tier["run_count"] <= count, (
+            f"{name} learned from {tier['run_count']} outcomes but only "
+            f"{count} turns were ever classified into it"
+        )
+
+    assert per_tier == data["total_samples"], (
+        f"tiers account for {per_tier} classified turns, total says "
+        f"{data['total_samples']} — the card's ratio would be wrong"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ ADR-0314: Learning infrastructure
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -182,6 +183,32 @@ def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | N
     return stats, total, last_iso
 
 
+def _short_reason(error: str | None) -> str | None:
+    """A ≤48-char summary of ONE source's failure, for the one-line source label.
+
+    The panel used to print a full line per source, error text and all. Three
+    stacked sentences under a dropdown read as a malfunction rather than as
+    provenance — and the longest of them is the keyless-Anthropic case, which on
+    a Bedrock host is the normal state, not a fault. So the panel now prints one
+    line and keeps the full text on hover; this is the short half.
+
+    ``error`` is always returned unchanged alongside it — a hint NEVER replaces
+    the reason, it only shortens it for a place where the long form does not fit.
+    Cut at the first clause boundary rather than hard-truncating: that keeps the
+    cause ("no ANTHROPIC_API_KEY configured") and drops the remedy ("Add an API
+    key under Settings → API Keys …"), which is the half that doesn't fit and the
+    half the operator doesn't need until they act on it.
+    """
+    if not error:
+        return None
+    # Deliberately NOT splitting on ":" — "unreachable: connection refused" is
+    # already short, and its half before the colon says nothing.
+    head = re.split(r"[,.;]\s|\s[—–]\s", error.strip(), maxsplit=1)[0].strip()
+    if not head:
+        head = error.strip()
+    return head if len(head) <= 48 else head[:47].rstrip() + "…"
+
+
 def _is_claude_model_id(model_id: str) -> bool:
     """Does this id name a Claude model, in ANY of the forms a host addresses one?
 
@@ -298,8 +325,11 @@ async def get_claude_models(
         registry_error = f"{type(exc).__name__}: {str(exc)[:120]}"
     sources.append({
         "id": "registry", "label": "Curated registry (ADR-0119)",
+        # A one-word label for the compact source line, where the ADR reference
+        # costs more width than it earns. The full label stays above it.
+        "short_label": "Curated registry",
         "reachable": registry_error is None, "count": registry_count,
-        "error": registry_error, "live": False,
+        "error": registry_error, "hint": _short_reason(registry_error), "live": False,
     })
 
     for provider_id in _CLAUDE_PROVIDERS:
@@ -310,14 +340,20 @@ async def get_claude_models(
             if model_id and _is_claude_model_id(model_id):
                 _add(model_id, model.get("label") or "", f"{provider_id}_live", provider_id)
                 matched += 1
+        label = fetched.get("provider_label") or provider_id
+        error = fetched.get("error")
         sources.append({
             "id": f"{provider_id}_live",
-            "label": fetched.get("provider_label") or provider_id,
+            "label": label,
+            # "Anthropic (Claude)" → "Anthropic": in the compact line every source
+            # is a Claude source, so the qualifier is noise there.
+            "short_label": re.sub(r"\s*\([^)]*\)$", "", label).strip() or label,
             "reachable": bool(fetched.get("reachable")),
             # Claude models found, not every model the provider offers — Bedrock
             # returns ~160 across every vendor and only a slice is Claude.
             "count": matched,
-            "error": fetched.get("error"),
+            "error": error,
+            "hint": _short_reason(error),
             "live": True,
             "detail": fetched.get("detail"),
         })
@@ -412,7 +448,7 @@ async def get_engine_config(
     tenant_id = _tenant_id(rec)
     cfg_mod = _model_config_module()
     cfg = cfg_mod.load_config(tenant_id)
-    _, total_classified, last_ts = _real_stats(tenant_id)
+    classified, total_classified, last_ts = _real_stats(tenant_id)
 
     from core.learning.model_selection_optimizer import get_optimizer
     optimizer = get_optimizer()
@@ -441,6 +477,16 @@ async def get_engine_config(
             "confidence_score": round(model_stats.confidence_score, 4) if model_stats else 0.0,
             "run_count": n,
             "is_converged": is_converged,
+            # How many real turns the shadow classifier put in THIS tier. It was
+            # already counted here and thrown away, which left the empty state
+            # unable to say anything beyond "nothing learned yet" — and "nothing
+            # learned yet" reads as a defect when three of four tiers show it.
+            # With this number it reads as what it is: every turn so far landed
+            # in one tier, so the others have genuinely never been exercised.
+            # Distinct from run_count on purpose: run_count is outcome samples
+            # for (tier, currently-selected model), so re-pointing a tier at
+            # another model resets it to 0 while classified_count keeps counting.
+            "classified_count": classified.get(task_type, {}).get("run_count", 0),
         }
 
     return {
