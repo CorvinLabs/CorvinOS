@@ -33,6 +33,30 @@
     --destructive: 0 70% 45%;
     --destructive-foreground: 36 38% 96%;
     --radius: 0.75rem;
+
+    /* ── Data-visualisation palette (ADR-0761) ────────────────────────────
+       Kept OUT of the semantic tokens above on purpose: --accent is a brand
+       colour that may be restyled, while these encode DATA and must stay
+       stable and validated. Each set was checked with the dataviz validator
+       against this theme's real chart surface (#ffffff light / #0e1320 dark),
+       not eyeballed:
+
+         roles     #2a78d6 / #eb6834  — categorical, blue vs orange.
+                   Warm/cool, so they read as different KINDS of work rather
+                   than as more/less of one. CVD dE 24.7 light / 26.8 dark.
+         tiers     one blue hue, light -> dark, ordinal.
+                   Model tiers ARE ordered (Haiku < Sonnet < Opus in price), so
+                   darker = more expensive carries real meaning instead of
+                   burning the hue channel on identity alone.
+         baseline  neutral grey — the counterfactual is not a series, it is the
+                   thing the real number is measured against. */
+    --viz-role-os: #2a78d6;
+    --viz-role-worker: #eb6834;
+    --viz-tier-1: #86b6ef;
+    --viz-tier-2: #2a78d6;
+    --viz-tier-3: #104281;
+    --viz-baseline: #98979180;
+    --viz-grid: #e6e5e1;
   }
 
   [data-theme="dark"] {
@@ -54,6 +78,16 @@
     --destructive: 0 65% 55%;
     --destructive-foreground: 36 38% 96%;
     --voice-accent: 201 100% 50%;
+
+    /* Dark steps chosen FOR the dark surface and validated as a set — not an
+       automatic flip of the light values. */
+    --viz-role-os: #3987e5;
+    --viz-role-worker: #d95926;
+    --viz-tier-1: #9ec5f4;
+    --viz-tier-2: #3987e5;
+    --viz-tier-3: #184f95;
+    --viz-baseline: #6b6a6580;
+    --viz-grid: #232a3a;
   }
 
   * {

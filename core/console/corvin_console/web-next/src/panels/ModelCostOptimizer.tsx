@@ -12,7 +12,7 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  BarChart, Bar,
+  BarChart, Bar, Cell, LabelList,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, Area, AreaChart,
 } from 'recharts';
@@ -22,6 +22,11 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import {
+  shortModel, tierOf, TIER_VAR, usd, savingLabel,
+  toModelRows, sharedDomainMax,
+  type ModelCostRow,
+} from '@/panels/cost-viz';
 import { Button } from '@/components/ui/button';
 
 interface ThresholdData {
@@ -74,6 +79,9 @@ interface DashboardStatus {
   acs_total_turns?: number;
   acs_savings_percent?: number;
   acs_worker_model_pin?: string | null;
+  /** ADR-0761 — {model_id: {actual_usd, baseline_usd, turns}} per source. */
+  cost_model_cost?: Record<string, { actual_usd: number; baseline_usd: number; turns: number }>;
+  acs_model_cost?: Record<string, { actual_usd: number; baseline_usd: number; turns: number }>;
   combined_actual_usd?: number;
   combined_baseline_usd?: number;
   combined_savings_percent?: number;
@@ -95,6 +103,222 @@ interface ThresholdHistory {
   task_type: string;
   value: number;
 }
+
+/** Per-model cost: real spend vs the same tokens on the reference model.
+ *
+ *  A floating bar per model, spanning real -> hypothetical. The BAR IS THE
+ *  SAVING. A model that already is the reference (Opus) has a zero-length bar
+ *  and is direct-labelled "Referenz" — the honest rendering of "saved nothing",
+ *  which a grouped two-bar chart would instead show as two equal bars the
+ *  reader has to compare by eye. */
+const ModelCostChart: React.FC<{
+  rows: ModelCostRow[];
+  emptyNote: string;
+  /** SHARED across both facets. Small multiples with independent scales are the
+   *  trap this parameter exists to close: two charts side by side, same unit,
+   *  same visual bar length, silently different axes — a reader compares the
+   *  pictures and draws a conclusion the numbers do not support. One domain
+   *  means a facet that is genuinely small LOOKS small, which is the point. */
+  domainMax: number;
+}> = ({ rows, emptyNote, domainMax }) => {
+  if (rows.length === 0) {
+    return (
+      <div className="py-10 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
+        {emptyNote}
+      </div>
+    );
+  }
+  const max = domainMax;
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(120, rows.length * 46 + 34)}>
+      <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 76, bottom: 4, left: 4 }}>
+        <CartesianGrid horizontal={false} stroke="var(--viz-grid)" />
+        <XAxis
+          type="number"
+          domain={[0, max * 1.12]}
+          tickFormatter={(v) => usd(v as number)}
+          tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+          stroke="var(--viz-grid)"
+        />
+        <YAxis
+          type="category"
+          dataKey="label"
+          width={104}
+          tick={{ fontSize: 12, fill: 'hsl(var(--foreground))' }}
+          stroke="var(--viz-grid)"
+        />
+        <Tooltip content={<ModelCostTooltip />} cursor={{ fill: 'hsl(var(--muted) / 0.4)' }} />
+        {/* Spacer to the low end — never painted, never in the legend. */}
+        <Bar dataKey="lo" stackId="cost" fill="transparent" isAnimationActive={false} />
+        {/* minPointSize is load-bearing, not polish. The bar length IS the
+            saving, so a model that saved nothing (Opus — it IS the reference)
+            has a zero-length bar, and recharts then renders neither the mark
+            NOR its LabelList: the row vanished silently from the chart, which
+            is the one row an operator most needs to see. 2px keeps the row
+            present and anchors the "Referenz" label. */}
+        <Bar dataKey="span" stackId="cost" radius={4} isAnimationActive={false}
+             barSize={12} minPointSize={2}>
+          {rows.map((r) => (
+            <Cell key={r.model} fill={TIER_VAR[r.tier]} />
+          ))}
+          {/* Three outcomes, not two. The pricing table carries families priced
+              ABOVE the Opus reference (Fable, Mythos), so savedPct can be
+              NEGATIVE — and the earlier two-branch formatter fell through to
+              "Referenz" for exactly those, labelling the most expensive turn on
+              the install as the neutral baseline. The floating bar has a
+              positive length either way; only the sign says which side of the
+              reference it sits on, so the sign has to be in the label. */}
+          <LabelList
+            dataKey="savedPct"
+            position="right"
+            formatter={(v: number) => savingLabel(v)}
+            style={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+};
+
+const ModelCostTooltip = ({ active, payload }: any) => {
+  if (!active || !payload?.length) return null;
+  const r: ModelCostRow | undefined = payload[0]?.payload;
+  if (!r) return null;
+  return (
+    <div className="rounded-md border border-border bg-background p-3 text-xs shadow-md">
+      <div className="font-semibold mb-1">{r.label}</div>
+      <div className="flex justify-between gap-4">
+        <span className="text-muted-foreground">real:</span>
+        <span className="font-mono tabular-nums">{usd(r.actual)}</span>
+      </div>
+      <div className="flex justify-between gap-4">
+        <span className="text-muted-foreground">hypothetisch (Opus):</span>
+        <span className="font-mono tabular-nums">{usd(r.baseline)}</span>
+      </div>
+      <div className="flex justify-between gap-4 mt-1 pt-1 border-t border-border">
+        <span className="text-muted-foreground">
+          {r.savedPct < -0.05 ? 'mehr gekostet:' : 'gespart:'}
+        </span>
+        <span className="font-mono tabular-nums">
+          {usd(Math.abs(r.baseline - r.actual))} ({Math.abs(r.savedPct).toFixed(1)} %)
+        </span>
+      </div>
+      <div className="text-muted-foreground mt-1">
+        {r.turns} {r.turns === 1 ? 'Turn' : 'Turns'}
+      </div>
+    </div>
+  );
+};
+
+/** Token-coverage meter: how much of a source the dollars actually rest on.
+ *  A ratio against a limit is a meter, not a chart — and it must be visible,
+ *  because a $ total quoted at 39 % coverage reads as the full bill. */
+const CoverageMeter: React.FC<{ counted: number; total: number; label: string }> = ({
+  counted, total, label,
+}) => {
+  if (!total) return null;
+  const pct = Math.round((counted / total) * 100);
+  const low = pct < 90;
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-muted-foreground w-24 shrink-0">{label}</span>
+      <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+        <div
+          className="h-full rounded-full"
+          style={{
+            width: `${pct}%`,
+            background: low ? 'hsl(var(--destructive))' : 'var(--viz-role-os)',
+          }}
+        />
+      </div>
+      <span className={`tabular-nums shrink-0 ${low ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+        {counted}/{total} ({pct} %)
+      </span>
+    </div>
+  );
+};
+
+/** One source's daily cost: real against the same-token Opus counterfactual.
+ *
+ *  A SEPARATE chart per source, never two sources on one axis. Live measurement
+ *  2026-09-15: OS $0.02 against worker $1.99 — on a shared axis the OS series
+ *  occupies under 2 % of the range and is invisible, which reads as "the OS
+ *  layer is free" rather than "the OS layer is small".
+ *
+ *  Below two days it draws bars: a single point has nothing to connect, and an
+ *  area chart over one day is a trend line asserting a trend nobody measured.
+ *
+ *  The baseline is a recessive grey, not a second series colour — it is the
+ *  thing the real number is measured against, not a peer of it. */
+const DailySource: React.FC<{
+  data: CostDayPoint[];
+  actualKey: string;
+  baselineKey: string;
+  color: string;
+  title: string;
+  singleDay: boolean;
+  /** Shared across both facets — see ModelCostChart.domainMax. */
+  domainMax: number;
+}> = ({ data, actualKey, baselineKey, color, title, singleDay, domainMax }) => {
+  const tip = (
+    <Tooltip
+      formatter={(v: any) => usd(v as number)}
+      cursor={{ fill: 'hsl(var(--muted) / 0.4)' }}
+      contentStyle={{
+        background: 'hsl(var(--background))',
+        border: '1px solid hsl(var(--border))',
+        borderRadius: 6,
+        fontSize: 12,
+      }}
+    />
+  );
+  const axes = (
+    <>
+      <CartesianGrid strokeDasharray="0" stroke="var(--viz-grid)" vertical={false} />
+      <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} stroke="var(--viz-grid)" />
+      <YAxis
+        domain={[0, domainMax]}
+        tickFormatter={(v) => usd(v as number)}
+        tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+        stroke="var(--viz-grid)"
+        width={72}
+      />
+    </>
+  );
+  return (
+    <div>
+      <div className="flex items-center gap-2 text-xs font-medium mb-2">
+        <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: color }} />
+        {title}
+      </div>
+      <ResponsiveContainer width="100%" height={190}>
+        {singleDay ? (
+          <BarChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+            {axes}
+            {tip}
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey={baselineKey} name="hypothetisch (Opus)" fill="var(--viz-baseline)"
+                 radius={[4, 4, 0, 0]} barSize={26} isAnimationActive={false} />
+            <Bar dataKey={actualKey} name="real" fill={color}
+                 radius={[4, 4, 0, 0]} barSize={26} isAnimationActive={false} />
+          </BarChart>
+        ) : (
+          <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+            {axes}
+            {tip}
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Area type="monotone" dataKey={baselineKey} name="hypothetisch (Opus)"
+                  stroke="var(--viz-baseline)" fill="var(--viz-baseline)" fillOpacity={0.18}
+                  strokeWidth={2} isAnimationActive={false} />
+            <Area type="monotone" dataKey={actualKey} name="real"
+                  stroke={color} fill={color} fillOpacity={0.28}
+                  strokeWidth={2} isAnimationActive={false} />
+          </AreaChart>
+        )}
+      </ResponsiveContainer>
+    </div>
+  );
+};
 
 export const ModelCostOptimizer: React.FC = () => {
   const [status, setStatus] = useState<DashboardStatus | null>(null);
@@ -281,6 +505,45 @@ export const ModelCostOptimizer: React.FC = () => {
 
   const win = status.window;
 
+  const osCostRows = toModelRows(status.cost_model_cost);
+  const workerCostRows = toModelRows(status.acs_model_cost);
+  // ONE domain for both model facets, 12 % headroom for the direct labels.
+  const modelDomainMax = sharedDomainMax([...osCostRows, ...workerCostRows]);
+
+  // ONE domain for both daily facets, same reason.
+  const dailyDomainMax = Math.max(
+    0.0001,
+    ...status.cost_history.flatMap((p) => [
+      p.actual_usd, p.baseline_usd, p.acs_actual_usd, p.acs_baseline_usd,
+    ]),
+  ) * 1.1;
+
+  // Days with any recorded turn. With ONE day a line or area draws no line at
+  // all (a single point has nothing to connect), and calling a single day a
+  // "trend" is a lie of form — so the daily view switches to bars below 2 days.
+  const dayCount = status.cost_history.length;
+  const singleDay = dayCount < 2;
+
+  // Routing distribution: turns per model, split by the role that ran them.
+  // This is the "which models were actually routed to" question, and it is
+  // counts — deliberately a different chart from the dollars above, because
+  // mixing a count axis and a dollar axis into one plot is the dual-axis
+  // mistake.
+  const routingRows = (() => {
+    const byModel = new Map<string, { label: string; os: number; worker: number; tier: number }>();
+    for (const [model, n] of Object.entries(status.cost_model_mix || {})) {
+      const e = byModel.get(model) || { label: shortModel(model), os: 0, worker: 0, tier: tierOf(model) };
+      e.os += n;
+      byModel.set(model, e);
+    }
+    for (const [model, n] of Object.entries(status.acs_model_mix || {})) {
+      const e = byModel.get(model) || { label: shortModel(model), os: 0, worker: 0, tier: tierOf(model) };
+      e.worker += n;
+      byModel.set(model, e);
+    }
+    return [...byModel.values()].sort((a, b) => a.tier - b.tier);
+  })();
+
   // Share of seen turns the cost totals are actually computed from.
   const costCoverage =
     status.cost_total_turns && status.cost_total_turns > 0
@@ -296,37 +559,6 @@ export const ModelCostOptimizer: React.FC = () => {
     (p) => p.total_turns > 0 && p.counted_turns / p.total_turns < LOW_COVERAGE_THRESHOLD
   );
 
-  const CostTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload || !payload.length) return null;
-    const point: CostDayPoint | undefined = payload[0]?.payload;
-    const coverage = point && point.total_turns > 0
-      ? Math.round((point.counted_turns / point.total_turns) * 100)
-      : null;
-    const lowCoverage = coverage !== null && coverage < LOW_COVERAGE_THRESHOLD * 100;
-    return (
-      <div className="rounded-md border border-border bg-background p-3 text-xs shadow-md">
-        <div className="font-semibold mb-1">{label}</div>
-        {payload.map((p: any) => (
-          <div key={p.dataKey} className="flex justify-between gap-4">
-            <span className="text-muted-foreground">{p.name}:</span>
-            <span className="font-mono">${(p.value as number).toFixed(4)}</span>
-          </div>
-        ))}
-        {point && (
-          <div className={`mt-1 pt-1 border-t border-border ${lowCoverage ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
-            OS-Manager: {point.counted_turns}/{point.total_turns} Turns erfasst
-            {coverage !== null ? ` (${coverage}%)` : ''}
-            {lowCoverage ? ' — geringe Abdeckung' : ''}
-          </div>
-        )}
-        {point && point.acs_total_turns > 0 && (
-          <div className="text-muted-foreground">
-            ACS-Worker: {point.acs_counted_turns}/{point.acs_total_turns} Turns erfasst
-          </div>
-        )}
-      </div>
-    );
-  };
 
   return (
     <div className="w-full h-full flex flex-col p-6 bg-background">
@@ -625,88 +857,171 @@ export const ModelCostOptimizer: React.FC = () => {
           that produced it. */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Cost Efficiency Trend</CardTitle>
+          <CardTitle>Cost Efficiency</CardTitle>
           <CardDescription>
-            Zwei getrennt gemessene Kostenquellen — OS-Manager (leichte
-            Orchestrierungs-Turns) und ACS-Worker (delegierte Agentic-Runs mit
-            vollem Tool-Zugriff) — nie vermischt, da sie unterschiedliche
-            Arbeit abbilden.
+            Zwei getrennt gemessene Quellen — OS-Turns (leichte Orchestrierung)
+            und Worker-Runs (delegierte Agentic-Runs mit vollem Tool-Zugriff).
+            Nie in einen Plot gemischt: sie unterscheiden sich um Größenordnungen,
+            und auf einer gemeinsamen Achse verschwindet die kleinere Quelle.
+            „Hypothetisch" heißt immer: dieselben real gemessenen Tokens zum
+            Opus-Tarif.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          {status.cost_history.length > 0 ? (
-            <ResponsiveContainer width="100%" height={250}>
-              <AreaChart data={status.cost_history}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip content={<CostTooltip />} />
-                <Legend />
-                <Area
-                  type="monotone"
-                  dataKey="baseline_usd"
-                  name="OS-Manager Baseline (Opus)"
-                  fill="hsl(var(--muted-foreground))"
-                  stroke="hsl(var(--muted-foreground))"
-                  fillOpacity={0.15}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="actual_usd"
-                  name="OS-Manager (real)"
-                  fill="hsl(var(--accent))"
-                  stroke="hsl(var(--accent))"
-                  fillOpacity={0.25}
-                />
-                {/* Only drawn when worker spend was actually measured. With no
-                    acs.engine_completed event every acs_*_usd is 0.0, and a
-                    flat zero line claims delegated workers are free — the most
-                    expensive turns in the system reading as costless. */}
-                {status.acs_data_available && (
-                  <Area
-                    type="monotone"
-                    dataKey="acs_baseline_usd"
-                    name="ACS-Worker Baseline (Opus)"
-                    fill="hsl(217 91% 60%)"
-                    stroke="hsl(217 91% 60%)"
-                    fillOpacity={0.1}
-                  />
-                )}
-                {status.acs_data_available && (
-                  <Area
-                    type="monotone"
-                    dataKey="acs_actual_usd"
-                    name="ACS-Worker (real)"
-                    fill="hsl(217 91% 45%)"
-                    stroke="hsl(217 91% 45%)"
-                    fillOpacity={0.3}
-                  />
-                )}
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="py-16 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
-              No cost data yet — token usage is only recorded on turns
-              completed after this feature shipped (ADR-0696). Once new
-              turns complete, real daily cost will appear here.
-            </div>
-          )}
-          {!status.acs_data_available && (
-            <div className="mt-3 flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 border border-amber-600/30 dark:border-amber-400/30 rounded-lg px-3 py-2">
-              <AlertCircle size={14} className="mt-0.5 shrink-0" />
-              <span>
-                <strong>Keine ACS-Worker-Daten erfasst.</strong> Der Trend oben
-                zeigt ausschließlich die OS-Manager-Turns — die leichte
-                Orchestrierungs-Schicht. Delegierte Worker-Runs (voller
-                Tool-Zugriff, typisch der weitaus größere Teil der Ausgaben)
-                werden aus <code>acs.engine_completed</code>-Events gelesen; für
-                diesen Tenant existiert bisher keines. Die dargestellte Ersparnis
-                ist damit <em>nicht</em> die Gesamt-Ersparnis des Systems.
+        <CardContent className="space-y-8">
+
+          {/* ── 1. Per model: what it cost vs what Opus would have cost ──── */}
+          <div>
+            <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+              <h3 className="text-sm font-semibold">Kosten je Modell</h3>
+              <span className="text-xs text-muted-foreground">
+                Balkenlänge = Ersparnis gegenüber Opus · dunkler = teureres Modell · beide Achsen identisch skaliert
               </span>
             </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-3">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-medium mb-2">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--viz-role-os)' }} />
+                  OS-Turns
+                </div>
+                <ModelCostChart
+                  rows={osCostRows}
+                  domainMax={modelDomainMax}
+                  emptyNote="Kein OS-Turn mit Token-Daten im Zählfenster."
+                />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 text-xs font-medium mb-2">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--viz-role-worker)' }} />
+                  Worker-Runs
+                </div>
+                <ModelCostChart
+                  rows={workerCostRows}
+                  domainMax={modelDomainMax}
+                  emptyNote="Kein delegierter Worker-Turn mit Token-Daten im Zählfenster — nicht „kostenlos“, nicht gemessen."
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* ── 2. Which models were routed to, and by which role ────────── */}
+          {routingRows.length > 0 && (
+            <div>
+              <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                <h3 className="text-sm font-semibold">Geroutete Modelle</h3>
+                <span className="text-xs text-muted-foreground">
+                  Turns je Modell — Anzahl, nicht Kosten (eigene Achse, eigener Chart)
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={Math.max(130, routingRows.length * 42 + 46)}>
+                <BarChart data={routingRows} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 4 }}>
+                  <CartesianGrid horizontal={false} stroke="var(--viz-grid)" />
+                  <XAxis
+                    type="number"
+                    allowDecimals={false}
+                    tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                    stroke="var(--viz-grid)"
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="label"
+                    width={104}
+                    tick={{ fontSize: 12, fill: 'hsl(var(--foreground))' }}
+                    stroke="var(--viz-grid)"
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'hsl(var(--muted) / 0.4)' }}
+                    contentStyle={{
+                      background: 'hsl(var(--background))',
+                      border: '1px solid hsl(var(--border))',
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {/* A 2px surface gap between the two stacked segments, not a
+                      border around them. */}
+                  <Bar dataKey="os" stackId="r" name="OS-Turns" fill="var(--viz-role-os)"
+                       radius={[4, 0, 0, 4]} barSize={14} isAnimationActive={false}
+                       stroke="hsl(var(--card))" strokeWidth={2} />
+                  <Bar dataKey="worker" stackId="r" name="Worker-Runs" fill="var(--viz-role-worker)"
+                       radius={[0, 4, 4, 0]} barSize={14} isAnimationActive={false}
+                       stroke="hsl(var(--card))" strokeWidth={2} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           )}
+
+          {/* ── 3. Per day, as small multiples — never one shared axis ───── */}
+          <div>
+            <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+              <h3 className="text-sm font-semibold">
+                {singleDay ? 'Kosten am erfassten Tag' : 'Täglicher Verlauf'}
+              </h3>
+              <span className="text-xs text-muted-foreground">
+                {singleDay
+                  ? `${dayCount === 0 ? 'Noch kein' : 'Erst ein'} Tag im Zählfenster — als Balken dargestellt, nicht als Trend`
+                  : `${dayCount} Tage`} · beide Achsen identisch skaliert
+              </span>
+            </div>
+            {dayCount > 0 ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-3">
+                <DailySource
+                  data={status.cost_history}
+                  actualKey="actual_usd"
+                  baselineKey="baseline_usd"
+                  color="var(--viz-role-os)"
+                  title="OS-Turns"
+                  singleDay={singleDay}
+                  domainMax={dailyDomainMax}
+                />
+                {status.acs_data_available ? (
+                  <DailySource
+                    data={status.cost_history}
+                    actualKey="acs_actual_usd"
+                    baselineKey="acs_baseline_usd"
+                    color="var(--viz-role-worker)"
+                    title="Worker-Runs"
+                    singleDay={singleDay}
+                    domainMax={dailyDomainMax}
+                  />
+                ) : (
+                  <div className="py-10 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
+                    Keine Worker-Daten im Zählfenster. Bewusst LEER statt einer
+                    Null-Linie — eine flache Null behauptet, delegierte Runs
+                    seien kostenlos.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
+                Noch keine Kostendaten im Zählfenster.
+              </div>
+            )}
+          </div>
+
+          {/* ── 4. Coverage — what the dollars actually rest on ──────────── */}
+          <div>
+            <h3 className="text-sm font-semibold mb-1">Token-Abdeckung</h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              Anteil der Turns, deren Kosten überhaupt berechenbar waren. Alles
+              darunter ist nicht billiger — es ist ungemessen.
+            </p>
+            <div className="space-y-2">
+              <CoverageMeter
+                label="OS-Turns"
+                counted={status.cost_counted_turns ?? 0}
+                total={status.cost_total_turns ?? 0}
+              />
+              <CoverageMeter
+                label="Worker-Runs"
+                counted={status.acs_counted_turns ?? 0}
+                total={status.acs_total_turns ?? 0}
+              />
+            </div>
+          </div>
+
           {status.cost_data_available && lowCoverageDays.length > 0 && (
-            <div className="mt-3 flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 border border-amber-600/30 dark:border-amber-400/30 rounded-lg px-3 py-2">
+            <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 border border-amber-600/30 dark:border-amber-400/30 rounded-lg px-3 py-2">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>
                 Geringe Datenabdeckung an {lowCoverageDays.length === 1 ? 'diesem Tag' : 'diesen Tagen'}:{' '}

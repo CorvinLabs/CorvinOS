@@ -438,6 +438,15 @@ class CostEfficiencyResult:
     acs_total_actual_usd: float = 0.0
     acs_total_baseline_usd: float = 0.0
     acs_model_mix: dict[str, int] = field(default_factory=dict)
+    # ADR-0761 — per-model DOLLARS, not just per-model turn counts.
+    # {model_id: {"actual_usd", "baseline_usd", "turns"}}. The mix above answers
+    # "which models ran"; this answers "what did each one cost, and what would
+    # the same real tokens have cost on the reference model" — the only pairing
+    # from which a reader can see WHERE a saving came from rather than just
+    # that there was one. Same real token counts, same published rates, no new
+    # estimation step.
+    model_cost: dict[str, dict[str, float]] = field(default_factory=dict)
+    acs_model_cost: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 def _price_and_baseline(
@@ -497,6 +506,7 @@ def compute_cost_efficiency(
     by_day_total: dict[str, int] = defaultdict(int)
     by_day_counted: dict[str, int] = defaultdict(int)
     model_mix: dict[str, int] = defaultdict(int)
+    model_cost: dict[str, dict[str, float]] = {}
     counted = 0
     for t in turns:
         ts = t.get("completed_ts")
@@ -517,7 +527,12 @@ def compute_cost_efficiency(
         by_day[day][0] += actual
         by_day[day][1] += baseline
         by_day_counted[day] += 1
-        model_mix[t.get("model") or ""] += 1
+        _model = t.get("model") or ""
+        model_mix[_model] += 1
+        _acc = model_cost.setdefault(_model, {"actual_usd": 0.0, "baseline_usd": 0.0, "turns": 0})
+        _acc["actual_usd"] += actual
+        _acc["baseline_usd"] += baseline
+        _acc["turns"] += 1
         counted += 1
 
     # Every day with at least one completed turn gets a bar — including a day
@@ -569,6 +584,7 @@ def compute_cost_efficiency(
     acs_by_day_total: dict[str, int] = defaultdict(int)
     acs_by_day_counted: dict[str, int] = defaultdict(int)
     acs_model_mix: dict[str, int] = defaultdict(int)
+    acs_model_cost: dict[str, dict[str, float]] = {}
     for c in acs_completions:
         ts = c.get("completed_ts")
         if ts is None:
@@ -592,6 +608,10 @@ def compute_cost_efficiency(
         acs_by_day[day][1] += priced[1]
         acs_by_day_counted[day] += 1
         acs_model_mix[model] += 1
+        _acc = acs_model_cost.setdefault(model, {"actual_usd": 0.0, "baseline_usd": 0.0, "turns": 0})
+        _acc["actual_usd"] += priced[0]
+        _acc["baseline_usd"] += priced[1]
+        _acc["turns"] += 1
 
     acs_daily = [
         CostDayPoint(
@@ -617,7 +637,22 @@ def compute_cost_efficiency(
         acs_total_actual_usd=acs_total_actual,
         acs_total_baseline_usd=acs_total_baseline,
         acs_model_mix=dict(acs_model_mix),
+        model_cost=_round_cost(model_cost),
+        acs_model_cost=_round_cost(acs_model_cost),
     )
+
+
+def _round_cost(acc: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+    """Round the per-model dollars for transport. 4 decimals: a single cheap
+    turn costs ~$0.0002, and rounding to cents would report it as free."""
+    return {
+        model: {
+            "actual_usd": round(v["actual_usd"], 4),
+            "baseline_usd": round(v["baseline_usd"], 4),
+            "turns": int(v["turns"]),
+        }
+        for model, v in acc.items()
+    }
 
 
 def _tier_bounds(tools_called_values: list[int]) -> tuple[float, float]:

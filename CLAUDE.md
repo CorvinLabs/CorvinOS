@@ -613,6 +613,41 @@ erasure (L36 owns those; they change what exists, this changes what is counted).
 
 ---
 
+## Charts in the Console (ADR-0761)
+
+**Load the `dataviz` skill before writing chart code** — it is an explicit
+trigger, and the palette part is computable, so compute it: run the validator
+against the surface the chart actually renders on (`#ffffff` light / `#0e1320`
+dark for this console), never the tool's default surfaces.
+
+**Never a dual axis.** Two measures of different scale → small multiples. And
+give faceted small multiples ONE shared domain: independent scales read as
+comparable while not being comparable, which is worse than the shared-axis chart
+they replace.
+
+**The form degrades with the data.** A line or area over a single point draws
+nothing while still being titled "Trend" — below two points, bars.
+
+**A zero-length mark needs `minPointSize`**, or recharts drops the mark AND its
+label and the row vanishes silently.
+
+**Colour nominal categories by identity, ordered tiers by an ordinal ramp keyed
+on the TIER** — never by the measured value, which double-encodes bar length as
+hue.
+
+**Encodings live in a testable module, not in the component.** A wrong
+number→mark mapping (e.g. a negative saving labelled "Referenz") is invisible in
+a screenshot until a tenant hits the case.
+
+**Verify by looking.** The validator checks colour, not layout. Screenshot it —
+and note the console is `data-theme` driven, NOT `prefers-color-scheme`, so a
+headless run that sets `color_scheme` renders one theme twice.
+
+→ Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Cost-visualisation encodings
+→ ADR: See Corvin-ADR for ADR-0761
+
+---
+
 ## Console Frontend — Prove the NEW Build Is What Loads (load-bearing)
 
 Any change under `core/console/corvin_console/web-next/` is **not done when the source is
