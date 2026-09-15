@@ -555,7 +555,7 @@ async def get_graph_snapshot(
 @router.post("/{task_id}/graph/export")
 async def export_graph(
     task_id: str,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     format: str = Query("json", description="Export format: json|dot"),
 ):
     """
