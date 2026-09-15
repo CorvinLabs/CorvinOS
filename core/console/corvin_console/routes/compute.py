@@ -2698,7 +2698,11 @@ def compute_run_narrative(
     run_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     force: bool = False,
-    locale: str = "de",
+    # English is the product default; an operator who wants another language
+    # passes it explicitly or sets display_language on their profile. This
+    # defaulted to "de", so a fresh install narrated its compute runs in German
+    # regardless of the operator.
+    locale: str = "en",
 ) -> dict[str, Any]:
     """Generate (or return cached) spoken narrative for a compute run.
 
@@ -2804,7 +2808,7 @@ def compute_run_voice(
                                 "narrative not available")
 
         text = narrative.get("text", "")
-        lang = narrative.get("lang", "de")
+        lang = narrative.get("lang", "en")
 
         say_script = _REPO / "operator" / "voice" / "scripts" / "say.py"
         if not say_script.exists():

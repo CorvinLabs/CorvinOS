@@ -243,8 +243,8 @@ export const SkillCreatorPanel: React.FC = () => {
             data-testid="skill-request"
             placeholder={
               refineTarget
-                ? "e.g., 'also report duplicate keys as warnings' or 'kürze die Anleitung auf 5 Schritte'"
-                : "e.g., 'Create a skill that validates JSON files and reports errors' or 'erzeuge einen Skill für CSV-Analyse'"
+                ? "e.g., 'also report duplicate keys as warnings' or 'shorten the instructions to 5 steps'"
+                : "e.g., 'Create a skill that validates JSON files and reports errors' or 'build a skill for CSV analysis'"
             }
             value={userRequest}
             onChange={(e) => setUserRequest(e.target.value)}

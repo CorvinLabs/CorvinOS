@@ -38,6 +38,16 @@ interface ThresholdData {
   converged: boolean;
   success_rate: number;
   timestamp: string;
+  /** What this tier actually costs. The threshold above is an internal
+   *  parameter no live router reads; volume, reliability and spend are what an
+   *  operator acts on. Optional so an older backend still type-checks. */
+  dominant_model?: string;
+  actual_usd?: number;
+  baseline_usd?: number;
+  /** Turns whose cost was computable — diverges from sample_count when token
+   *  counts are missing, and a $ figure without that ratio reads as the whole
+   *  bill for the tier. */
+  priced_turns?: number;
 }
 
 interface CostDayPoint {
@@ -188,23 +198,23 @@ const ModelCostTooltip = ({ active, payload }: any) => {
     <div className="rounded-md border border-border bg-background p-3 text-xs shadow-md">
       <div className="font-semibold mb-1">{r.label}</div>
       <div className="flex justify-between gap-4">
-        <span className="text-muted-foreground">real:</span>
+        <span className="text-muted-foreground">actual:</span>
         <span className="font-mono tabular-nums">{usd(r.actual)}</span>
       </div>
       <div className="flex justify-between gap-4">
-        <span className="text-muted-foreground">hypothetisch (Opus):</span>
+        <span className="text-muted-foreground">on Opus:</span>
         <span className="font-mono tabular-nums">{usd(r.baseline)}</span>
       </div>
       <div className="flex justify-between gap-4 mt-1 pt-1 border-t border-border">
         <span className="text-muted-foreground">
-          {r.savedPct < -0.05 ? 'mehr gekostet:' : 'gespart:'}
+          {r.savedPct < -0.05 ? 'extra cost:' : 'saved:'}
         </span>
         <span className="font-mono tabular-nums">
           {usd(Math.abs(r.baseline - r.actual))} ({Math.abs(r.savedPct).toFixed(1)} %)
         </span>
       </div>
       <div className="text-muted-foreground mt-1">
-        {r.turns} {r.turns === 1 ? 'Turn' : 'Turns'}
+        {r.turns} {r.turns === 1 ? 'turn' : 'turns'}
       </div>
     </div>
   );
@@ -213,9 +223,9 @@ const ModelCostTooltip = ({ active, payload }: any) => {
 /** Token-coverage meter: how much of a source the dollars actually rest on.
  *  A ratio against a limit is a meter, not a chart — and it must be visible,
  *  because a $ total quoted at 39 % coverage reads as the full bill. */
-const CoverageMeter: React.FC<{ counted: number; total: number; label: string }> = ({
-  counted, total, label,
-}) => {
+const CoverageMeter: React.FC<{
+  counted: number; total: number; label: string; color: string;
+}> = ({ counted, total, label, color }) => {
   if (!total) return null;
   const pct = Math.round((counted / total) * 100);
   const low = pct < 90;
@@ -227,7 +237,7 @@ const CoverageMeter: React.FC<{ counted: number; total: number; label: string }>
           className="h-full rounded-full"
           style={{
             width: `${pct}%`,
-            background: low ? 'hsl(var(--destructive))' : 'var(--viz-role-os)',
+            background: low ? 'hsl(var(--destructive))' : color,
           }}
         />
       </div>
@@ -297,9 +307,9 @@ const DailySource: React.FC<{
             {axes}
             {tip}
             <Legend wrapperStyle={{ fontSize: 11 }} />
-            <Bar dataKey={baselineKey} name="hypothetisch (Opus)" fill="var(--viz-baseline)"
+            <Bar dataKey={baselineKey} name="on Opus" fill="var(--viz-baseline)"
                  radius={[4, 4, 0, 0]} barSize={26} isAnimationActive={false} />
-            <Bar dataKey={actualKey} name="real" fill={color}
+            <Bar dataKey={actualKey} name="actual" fill={color}
                  radius={[4, 4, 0, 0]} barSize={26} isAnimationActive={false} />
           </BarChart>
         ) : (
@@ -307,10 +317,10 @@ const DailySource: React.FC<{
             {axes}
             {tip}
             <Legend wrapperStyle={{ fontSize: 11 }} />
-            <Area type="monotone" dataKey={baselineKey} name="hypothetisch (Opus)"
+            <Area type="monotone" dataKey={baselineKey} name="on Opus"
                   stroke="var(--viz-baseline)" fill="var(--viz-baseline)" fillOpacity={0.18}
                   strokeWidth={2} isAnimationActive={false} />
-            <Area type="monotone" dataKey={actualKey} name="real"
+            <Area type="monotone" dataKey={actualKey} name="actual"
                   stroke={color} fill={color} fillOpacity={0.28}
                   strokeWidth={2} isAnimationActive={false} />
           </AreaChart>
@@ -407,13 +417,13 @@ export const ModelCostOptimizer: React.FC = () => {
         }),
       });
       if (!response.ok) {
-        setError(`Zählfenster konnte nicht gesetzt werden (HTTP ${response.status})`);
+        setError(`Could not set the counting window (HTTP ${response.status})`);
         return;
       }
       setWindowConfirm(false);
       await fetchData();
     } catch (err) {
-      setError(`Zählfenster fehlgeschlagen: ${err}`);
+      setError(`Could not set the counting window: ${err}`);
     }
   };
 
@@ -505,6 +515,52 @@ export const ModelCostOptimizer: React.FC = () => {
 
   const win = status.window;
 
+  // Workload per complexity tier: volume, reliability, spend, and which model
+  // served it. Ordered cheapest-tier-first so the list reads simple -> complex.
+  const TIER_RANK: Record<string, number> = { simple: 0, medium: 1, complex: 2 };
+  const tierTurnTotal = status.thresholds.reduce((n, t) => n + t.sample_count, 0);
+  const tierRows = status.thresholds
+    .map((t) => {
+      const priced = t.priced_turns ?? 0;
+      const actual = t.actual_usd ?? 0;
+      const baseline = t.baseline_usd ?? 0;
+      return {
+        tier: t.task_type,
+        turns: t.sample_count,
+        sharePct: tierTurnTotal > 0 ? (t.sample_count / tierTurnTotal) * 100 : 0,
+        successPct: t.success_rate * 100,
+        dominantModel: t.dominant_model ?? '',
+        modelTier: tierOf(t.dominant_model ?? ''),
+        actual,
+        baseline,
+        pricedTurns: priced,
+        // Per PRICED turn, not per turn: dividing by turns that carried no
+        // token counts would quietly understate the unit cost.
+        perTurn: priced > 0 ? actual / priced : 0,
+        savedPct: baseline > 0 ? (1 - actual / baseline) * 100 : 0,
+        learned: t.learned_threshold,
+      };
+    })
+    .sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9));
+
+  // Only claimed when the data says it: the hardest tier is served by the
+  // CHEAPEST model on this install AND succeeds there. Anything less specific
+  // would be advice the numbers do not support.
+  // A recommendation has to rest on evidence. "100% success" over two turns is
+  // one data point wearing a percentage, and a panel that turns it into "you do
+  // not need a bigger model" is giving spend advice on noise. Withheld until
+  // the tier has a sample worth reading.
+  const MIN_SAMPLES_FOR_ADVICE = 25;
+  const hardest = tierRows.find((t) => t.tier === 'complex');
+  const cheapestObserved = tierRows.length
+    ? Math.min(...tierRows.map((t) => t.modelTier))
+    : 0;
+  const cheapestServesHardest =
+    hardest && hardest.turns >= MIN_SAMPLES_FOR_ADVICE && hardest.successPct >= 90 &&
+    hardest.modelTier === cheapestObserved && hardest.dominantModel
+      ? hardest
+      : null;
+
   const osCostRows = toModelRows(status.cost_model_cost);
   const workerCostRows = toModelRows(status.acs_model_cost);
   // ONE domain for both model facets, 12 % headroom for the direct labels.
@@ -572,7 +628,7 @@ export const ModelCostOptimizer: React.FC = () => {
           Learned thresholds &amp; cost optimization for automatic model routing
         </p>
         <p className="text-xs text-muted-foreground mt-2">
-          ADR-0377 Phase 2b • Last updated: {new Date(status.last_updated).toLocaleTimeString()}
+          Last updated: {new Date(status.last_updated).toLocaleTimeString()}
         </p>
       </div>
 
@@ -585,17 +641,17 @@ export const ModelCostOptimizer: React.FC = () => {
             <Clock size={15} className="text-muted-foreground shrink-0" />
             {win?.active ? (
               <span>
-                Zählfenster seit{' '}
+                Counting since{' '}
                 <span className="font-medium">
                   {new Date(win.since_iso as string).toLocaleString()}
                 </span>
                 <span className="text-muted-foreground">
-                  {' '}— OS und Worker starten ab diesem Zeitpunkt bei null
+                  {' '}— OS and worker both start from zero at that point
                 </span>
               </span>
             ) : (
               <span className="text-muted-foreground">
-                Zählfenster: gesamte Historie (kein Reset gesetzt)
+                Counting window: full history (no reset set)
               </span>
             )}
           </div>
@@ -605,23 +661,23 @@ export const ModelCostOptimizer: React.FC = () => {
               variant={windowConfirm ? 'destructive' : 'outline'}
               onClick={() => handleUsageWindow(false)}
             >
-              {windowConfirm ? 'Nochmal klicken zum Bestätigen' : 'Zähler auf jetzt zurücksetzen'}
+              {windowConfirm ? 'Click again to confirm' : 'Reset counters to now'}
             </Button>
             {windowConfirm && (
               <Button size="sm" variant="ghost" onClick={() => setWindowConfirm(false)}>
-                Abbrechen
+                Cancel
               </Button>
             )}
             {win?.active && !windowConfirm && (
               <Button size="sm" variant="ghost" onClick={() => handleUsageWindow(true)}>
-                Ganze Historie zeigen
+                Show full history
               </Button>
             )}
           </div>
           <p className="w-full text-xs text-muted-foreground">
-            Setzt nur das Zählfenster. Die Audit-Chain ist append-only und
-            hash-verkettet (ADR-0232) — es wird nichts gelöscht, und
-            „Ganze Historie zeigen" bringt jeden Turn zurück.
+            This only moves the counting window. The audit trail is append-only
+            and hash-chained — nothing is deleted, and “Show full history”
+            brings every turn back.
           </p>
         </CardContent>
       </Card>
@@ -663,7 +719,7 @@ export const ModelCostOptimizer: React.FC = () => {
           <CardContent className="p-6">
             <div className="text-muted-foreground text-sm font-semibold mb-2 flex items-center gap-2">
               <DollarSign size={16} className="text-accent" />
-              Haiku- vs. Opus-Referenzkosten
+              OS turns vs. Opus reference
             </div>
             {status.cost_data_available ? (
               <>
@@ -671,7 +727,7 @@ export const ModelCostOptimizer: React.FC = () => {
                   {status.cost_savings_percent.toFixed(1)}%
                 </div>
                 <div className="text-xs text-muted-foreground mt-2">
-                  ${status.cost_baseline_usd.toFixed(2)} hypothetisch (Opus) → ${status.cost_current_usd.toFixed(2)} real
+                  ${status.cost_baseline_usd.toFixed(2)} on Opus → ${status.cost_current_usd.toFixed(2)} actual
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
                   {modelMixEntries.map(([id, n]) => (
@@ -685,7 +741,7 @@ export const ModelCostOptimizer: React.FC = () => {
                     is what keeps the big green number from overstating. */}
                 {!status.acs_data_available && (
                   <div className="text-xs text-muted-foreground mt-1">
-                    Nur OS-Manager-Turns — keine Worker-Daten erfasst
+                    OS turns only — no worker data recorded
                   </div>
                 )}
                 {/* The $ figures above rest on the turns that carried token
@@ -695,8 +751,8 @@ export const ModelCostOptimizer: React.FC = () => {
                     token counts existed. */}
                 {costCoverage !== null && (
                   <div className={`mt-1 text-xs ${costCoverage < 90 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
-                    Basis: {status.cost_counted_turns}/{status.cost_total_turns} Turns mit Token-Daten ({costCoverage}%)
-                    {costCoverage < 90 ? ' — reale Kosten liegen höher' : ''}
+                    Based on {status.cost_counted_turns}/{status.cost_total_turns} turns with token data ({costCoverage}%)
+                    {costCoverage < 90 ? ' — real cost is higher' : ''}
                   </div>
                 )}
                 {isSingleModel && (
@@ -704,9 +760,9 @@ export const ModelCostOptimizer: React.FC = () => {
                     <AlertCircle size={12} className="mt-0.5 shrink-0" />
                     <span>
                       {status.cost_os_model_pin ? (
-                        <>Modell fest gepinnt auf <span className="font-mono">{modelMixLabel(status.cost_os_model_pin)}</span> (Settings → AI Engines → OS Model) — keine adaptive Auswahl aktiv. Keine Lizenz-/Tier-Beschränkung.</>
+                        <>Model pinned to <span className="font-mono">{modelMixLabel(status.cost_os_model_pin)}</span> (Engine Config → OS model) — no adaptive selection is running. Not a licence or tier limit.</>
                       ) : (
-                        <>Kein Modellwechsel beobachtet — keine adaptive Auswahl aktiv. Keine Lizenz-/Tier-Beschränkung.</>
+                        <>No model change observed — no adaptive selection is running. Not a licence or tier limit.</>
                       )}
                     </span>
                   </div>
@@ -731,7 +787,7 @@ export const ModelCostOptimizer: React.FC = () => {
           <CardContent className="p-6">
             <div className="text-muted-foreground text-sm font-semibold mb-2 flex items-center gap-2">
               <DollarSign size={16} className="text-accent" />
-              Worker-Engine (delegierte Runs)
+              Worker engine (delegated runs)
             </div>
             {status.acs_data_available ? (
               <>
@@ -739,8 +795,8 @@ export const ModelCostOptimizer: React.FC = () => {
                   {(status.acs_savings_percent ?? 0).toFixed(1)}%
                 </div>
                 <div className="text-xs text-muted-foreground mt-2">
-                  ${status.acs_cost_baseline_usd.toFixed(4)} hypothetisch (Opus) → $
-                  {status.acs_cost_actual_usd.toFixed(4)} real
+                  ${status.acs_cost_baseline_usd.toFixed(4)} on Opus → $
+                  {status.acs_cost_actual_usd.toFixed(4)} actual
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
                   {acsMixEntries.map(([id, n]) => (
@@ -749,7 +805,7 @@ export const ModelCostOptimizer: React.FC = () => {
                 </div>
                 {acsCoverage !== null && (
                   <div className={`mt-1 text-xs ${acsCoverage < 90 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
-                    Basis: {status.acs_counted_turns}/{status.acs_total_turns} Worker-Turns mit Token-Daten ({acsCoverage}%)
+                    Based on {status.acs_counted_turns}/{status.acs_total_turns} worker turns with token data ({acsCoverage}%)
                   </div>
                 )}
                 {acsMixEntries.length === 1 && (
@@ -757,9 +813,9 @@ export const ModelCostOptimizer: React.FC = () => {
                     <AlertCircle size={12} className="mt-0.5 shrink-0" />
                     <span>
                       {status.acs_worker_model_pin ? (
-                        <>Worker-Modell fest gepinnt auf <span className="font-mono">{modelMixLabel(status.acs_worker_model_pin)}</span> (Engine Config → Worker Model) — kein Routing-Ergebnis, eine Preisrelation.</>
+                        <>Worker model pinned to <span className="font-mono">{modelMixLabel(status.acs_worker_model_pin)}</span> (Engine Config → Worker model) — this is a price ratio, not a routing result.</>
                       ) : (
-                        <>Nur ein Worker-Modell beobachtet — kein Modellwechsel, also keine Routing-Entscheidung sichtbar.</>
+                        <>Only one worker model observed — no model change, so no routing decision is visible.</>
                       )}
                     </span>
                   </div>
@@ -769,8 +825,8 @@ export const ModelCostOptimizer: React.FC = () => {
               <>
                 <div className="text-3xl font-bold text-muted-foreground">—</div>
                 <div className="text-xs text-muted-foreground mt-2">
-                  Kein delegierter Worker-Turn mit Token-Daten im Zählfenster.
-                  Nicht „kostenlos" — <strong>nicht gemessen</strong>.
+                  No delegated worker turn with token data in this window.
+                  Not “free” — <strong>not measured</strong>.
                 </div>
               </>
             )}
@@ -785,7 +841,7 @@ export const ModelCostOptimizer: React.FC = () => {
           <CardContent className="p-6">
             <div className="text-muted-foreground text-sm font-semibold mb-2 flex items-center gap-2">
               <TrendingDown size={16} className="text-accent" />
-              Gesamt (OS + Worker)
+              Combined (OS + worker)
             </div>
             {status.combined_data_available ? (
               <>
@@ -793,20 +849,20 @@ export const ModelCostOptimizer: React.FC = () => {
                   {(status.combined_savings_percent ?? 0).toFixed(1)}%
                 </div>
                 <div className="text-xs text-muted-foreground mt-2">
-                  ${(status.combined_baseline_usd ?? 0).toFixed(2)} hypothetisch (Opus) → $
-                  {(status.combined_actual_usd ?? 0).toFixed(2)} real
+                  ${(status.combined_baseline_usd ?? 0).toFixed(2)} on Opus → $
+                  {(status.combined_actual_usd ?? 0).toFixed(2)} actual
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  Summe beider real gemessenen Quellen — kein Mittelwert der
-                  beiden Prozentwerte.
+                  Sum of both measured sources — not an average of the two
+                  percentages.
                 </div>
               </>
             ) : (
               <>
                 <div className="text-3xl font-bold text-muted-foreground">—</div>
                 <div className="text-xs text-muted-foreground mt-2">
-                  Erst verfügbar, wenn BEIDE Quellen im Zählfenster Daten haben.
-                  Eine Gesamtzahl aus nur einer Hälfte wäre keine Gesamtzahl.
+                  Available once both sources have data in this window. A
+                  total computed from one half is not a total.
                 </div>
               </>
             )}
@@ -822,13 +878,13 @@ export const ModelCostOptimizer: React.FC = () => {
               ) : (
                 <AlertCircle size={16} className="text-amber-600 dark:text-amber-400" />
               )}
-              Turn-Erfolgsquote
+              Turn success rate
             </div>
             <div className="text-3xl font-bold">
               {status.accuracy_percent.toFixed(1)}%
             </div>
             <div className="text-xs text-muted-foreground mt-2">
-              Anteil abgeschlossener Turns ohne Fehler/Timeout — keine inhaltliche Qualitätsbewertung
+              Share of turns that finished without an error or timeout — not a content-quality score
             </div>
           </CardContent>
         </Card>
@@ -859,12 +915,11 @@ export const ModelCostOptimizer: React.FC = () => {
         <CardHeader>
           <CardTitle>Cost Efficiency</CardTitle>
           <CardDescription>
-            Zwei getrennt gemessene Quellen — OS-Turns (leichte Orchestrierung)
-            und Worker-Runs (delegierte Agentic-Runs mit vollem Tool-Zugriff).
-            Nie in einen Plot gemischt: sie unterscheiden sich um Größenordnungen,
-            und auf einer gemeinsamen Achse verschwindet die kleinere Quelle.
-            „Hypothetisch" heißt immer: dieselben real gemessenen Tokens zum
-            Opus-Tarif.
+            Two separately measured sources — OS turns (lightweight
+            orchestration) and worker runs (delegated agentic runs with full tool
+            access). Never merged into one plot: they differ by orders of
+            magnitude, and on a shared axis the smaller one disappears. “On Opus”
+            always means the same real tokens at the Opus rate.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-8">
@@ -872,32 +927,34 @@ export const ModelCostOptimizer: React.FC = () => {
           {/* ── 1. Per model: what it cost vs what Opus would have cost ──── */}
           <div>
             <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
-              <h3 className="text-sm font-semibold">Kosten je Modell</h3>
+              <h3 className="text-sm font-semibold">Cost per model</h3>
               <span className="text-xs text-muted-foreground">
-                Balkenlänge = Ersparnis gegenüber Opus · dunkler = teureres Modell · beide Achsen identisch skaliert
+                Bar length = saving vs. Opus · darker = pricier model · both axes share one scale
               </span>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-3">
               <div>
-                <div className="flex items-center gap-2 text-xs font-medium mb-2">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--viz-role-os)' }} />
-                  OS-Turns
+                {/* No role swatch here on purpose: in THIS chart the bars encode
+                    model tier, and a second colour system beside them (teal dot
+                    over amber bars) invites the reader to map one onto the
+                    other. The heading is unambiguous on its own. */}
+                <div className="text-xs font-medium mb-2">
+                  OS turns
                 </div>
                 <ModelCostChart
                   rows={osCostRows}
                   domainMax={modelDomainMax}
-                  emptyNote="Kein OS-Turn mit Token-Daten im Zählfenster."
+                  emptyNote="No OS turn with token data in this window."
                 />
               </div>
               <div>
-                <div className="flex items-center gap-2 text-xs font-medium mb-2">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--viz-role-worker)' }} />
-                  Worker-Runs
+                <div className="text-xs font-medium mb-2">
+                  Worker runs
                 </div>
                 <ModelCostChart
                   rows={workerCostRows}
                   domainMax={modelDomainMax}
-                  emptyNote="Kein delegierter Worker-Turn mit Token-Daten im Zählfenster — nicht „kostenlos“, nicht gemessen."
+                  emptyNote="No delegated worker turn with token data in this window — not “free”, not measured."
                 />
               </div>
             </div>
@@ -907,9 +964,9 @@ export const ModelCostOptimizer: React.FC = () => {
           {routingRows.length > 0 && (
             <div>
               <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
-                <h3 className="text-sm font-semibold">Geroutete Modelle</h3>
+                <h3 className="text-sm font-semibold">Models routed to</h3>
                 <span className="text-xs text-muted-foreground">
-                  Turns je Modell — Anzahl, nicht Kosten (eigene Achse, eigener Chart)
+                  Turns per model — counts, not cost (its own axis, its own chart)
                 </span>
               </div>
               <ResponsiveContainer width="100%" height={Math.max(130, routingRows.length * 42 + 46)}>
@@ -940,10 +997,10 @@ export const ModelCostOptimizer: React.FC = () => {
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   {/* A 2px surface gap between the two stacked segments, not a
                       border around them. */}
-                  <Bar dataKey="os" stackId="r" name="OS-Turns" fill="var(--viz-role-os)"
+                  <Bar dataKey="os" stackId="r" name="OS turns" fill="var(--viz-role-os)"
                        radius={[4, 0, 0, 4]} barSize={14} isAnimationActive={false}
                        stroke="hsl(var(--card))" strokeWidth={2} />
-                  <Bar dataKey="worker" stackId="r" name="Worker-Runs" fill="var(--viz-role-worker)"
+                  <Bar dataKey="worker" stackId="r" name="Worker runs" fill="var(--viz-role-worker)"
                        radius={[0, 4, 4, 0]} barSize={14} isAnimationActive={false}
                        stroke="hsl(var(--card))" strokeWidth={2} />
                 </BarChart>
@@ -955,12 +1012,12 @@ export const ModelCostOptimizer: React.FC = () => {
           <div>
             <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
               <h3 className="text-sm font-semibold">
-                {singleDay ? 'Kosten am erfassten Tag' : 'Täglicher Verlauf'}
+                {singleDay ? 'Cost on the recorded day' : 'Daily trend'}
               </h3>
               <span className="text-xs text-muted-foreground">
                 {singleDay
-                  ? `${dayCount === 0 ? 'Noch kein' : 'Erst ein'} Tag im Zählfenster — als Balken dargestellt, nicht als Trend`
-                  : `${dayCount} Tage`} · beide Achsen identisch skaliert
+                  ? `${dayCount === 0 ? 'No day' : 'Only one day'} in this window — shown as bars, not as a trend`
+                  : `${dayCount} days`} · both axes share one scale
               </span>
             </div>
             {dayCount > 0 ? (
@@ -970,7 +1027,7 @@ export const ModelCostOptimizer: React.FC = () => {
                   actualKey="actual_usd"
                   baselineKey="baseline_usd"
                   color="var(--viz-role-os)"
-                  title="OS-Turns"
+                  title="OS turns"
                   singleDay={singleDay}
                   domainMax={dailyDomainMax}
                 />
@@ -980,40 +1037,42 @@ export const ModelCostOptimizer: React.FC = () => {
                     actualKey="acs_actual_usd"
                     baselineKey="acs_baseline_usd"
                     color="var(--viz-role-worker)"
-                    title="Worker-Runs"
+                    title="Worker runs"
                     singleDay={singleDay}
                     domainMax={dailyDomainMax}
                   />
                 ) : (
                   <div className="py-10 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
-                    Keine Worker-Daten im Zählfenster. Bewusst LEER statt einer
-                    Null-Linie — eine flache Null behauptet, delegierte Runs
-                    seien kostenlos.
+                    No worker data in this window. Deliberately EMPTY rather
+                    than a zero line — a flat zero claims delegated runs are
+                    free.
                   </div>
                 )}
               </div>
             ) : (
               <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
-                Noch keine Kostendaten im Zählfenster.
+                No cost data in this window yet.
               </div>
             )}
           </div>
 
           {/* ── 4. Coverage — what the dollars actually rest on ──────────── */}
           <div>
-            <h3 className="text-sm font-semibold mb-1">Token-Abdeckung</h3>
+            <h3 className="text-sm font-semibold mb-1">Token coverage</h3>
             <p className="text-xs text-muted-foreground mb-3">
-              Anteil der Turns, deren Kosten überhaupt berechenbar waren. Alles
-              darunter ist nicht billiger — es ist ungemessen.
+              Share of turns whose cost could be computed at all. Whatever is
+              missing is not cheaper — it is unmeasured.
             </p>
             <div className="space-y-2">
               <CoverageMeter
-                label="OS-Turns"
+                label="OS turns"
+                color="var(--viz-role-os)"
                 counted={status.cost_counted_turns ?? 0}
                 total={status.cost_total_turns ?? 0}
               />
               <CoverageMeter
-                label="Worker-Runs"
+                label="Worker runs"
+                color="var(--viz-role-worker)"
                 counted={status.acs_counted_turns ?? 0}
                 total={status.acs_total_turns ?? 0}
               />
@@ -1024,92 +1083,158 @@ export const ModelCostOptimizer: React.FC = () => {
             <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 border border-amber-600/30 dark:border-amber-400/30 rounded-lg px-3 py-2">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>
-                Geringe Datenabdeckung an {lowCoverageDays.length === 1 ? 'diesem Tag' : 'diesen Tagen'}:{' '}
+                Low data coverage on {lowCoverageDays.length === 1 ? 'this day' : 'these days'}:{' '}
                 {lowCoverageDays.map((p) => `${p.date} (${p.counted_turns}/${p.total_turns})`).join(', ')}
-                {' '}— die Kosten dort spiegeln keinen echten Trend, sondern eine Lücke in der Token-Erfassung.
+                {' '}— the cost there reflects a gap in token recording, not a real trend.
               </span>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Threshold Convergence Chart */}
+      {/* ── Workload by complexity ──────────────────────────────────────
+          Replaces a bar chart of `learned_threshold` against the 0.5 constant.
+          That number is an internal parameter with no live consumer — the
+          module computing it says so itself: it is a descriptive statistic over
+          past turns, not a value any router reads. Charting it against an
+          arbitrary constant told an operator nothing they could act on, while
+          the three numbers they CAN act on — how much work lands in each tier,
+          whether it succeeds, and what it costs — were computed in the same
+          pass and thrown away. */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Learned Thresholds vs Base</CardTitle>
+          <CardTitle>Workload by complexity</CardTitle>
           <CardDescription>
-            Per-task-type routing threshold, learned value against the 0.5 base default
+            Where the work lands, whether it succeeds there, and what it costs.
+            Tiers are cut at the 33rd and 66th percentile of the observed
+            tool-calls-per-turn distribution, so they describe this install&rsquo;s
+            own traffic rather than a fixed scale.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          {hasThresholds ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={convergenceData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                <YAxis domain={[0, 1]} tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value) => (typeof value === 'number' ? value.toFixed(3) : value)} />
-                <Legend />
-                <Bar dataKey="base" fill="hsl(var(--muted-foreground))" name="Base (0.5)" />
-                <Bar dataKey="learned" fill="hsl(var(--accent))" name="Learned" />
-              </BarChart>
-            </ResponsiveContainer>
+        <CardContent className="space-y-6">
+          {tierRows.length > 0 ? (
+            <>
+              <div>
+                <div className="flex items-baseline justify-between gap-3 flex-wrap mb-3">
+                  <h3 className="text-sm font-semibold">Turns and spend per tier</h3>
+                  <span className="text-xs text-muted-foreground">
+                    Bar = share of turns · darker = pricier model served the tier
+                  </span>
+                </div>
+                <div className="space-y-4">
+                  {tierRows.map((t) => (
+                    <div key={t.tier}>
+                      <div className="flex items-baseline justify-between gap-2 text-sm">
+                        <span className="font-medium capitalize">{t.tier}</span>
+                        <span className="tabular-nums shrink-0">
+                          {t.turns} {t.turns === 1 ? 'turn' : 'turns'}
+                          <span className="text-muted-foreground">
+                            {' '}· {t.successPct.toFixed(0)}% ok
+                            {t.pricedTurns > 0 && <> · {usd(t.actual)} spent</>}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden mt-1">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${t.sharePct}%`,
+                            background: TIER_VAR[t.modelTier],
+                          }}
+                        />
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                        {t.dominantModel && (
+                          <Badge variant="secondary" className="font-normal">
+                            {modelMixLabel(t.dominantModel)}
+                          </Badge>
+                        )}
+                        {t.pricedTurns > 0 ? (
+                          <>
+                            <span className="tabular-nums">
+                              {usd(t.perTurn)}/turn
+                            </span>
+                            <span className="tabular-nums">
+                              {usd(t.baseline)} on Opus
+                            </span>
+                            {t.savedPct > 0.05 && (
+                              <span className="tabular-nums">
+                                {savingLabel(t.savedPct)} vs. Opus
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span>cost not measured on these turns</span>
+                        )}
+                        {t.pricedTurns > 0 && t.pricedTurns < t.turns && (
+                          <span className="text-amber-600 dark:text-amber-400 tabular-nums">
+                            cost from {t.pricedTurns}/{t.turns} turns
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* The one reading an operator can act on, stated only when the
+                  data actually supports it — never as a standing claim. */}
+              {!cheapestServesHardest && hardest && hardest.turns < MIN_SAMPLES_FOR_ADVICE && (
+                <p className="text-xs text-muted-foreground">
+                  Too few turns in this window to say anything about model fit —
+                  a success rate over {hardest.turns}{' '}
+                  {hardest.turns === 1 ? 'turn' : 'turns'} is not evidence.
+                </p>
+              )}
+              {cheapestServesHardest && (
+                <div className="flex items-start gap-2 text-xs border border-border rounded-lg px-3 py-2">
+                  <CheckCircle size={14} className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <span>
+                    The most complex tier is already served by{' '}
+                    <span className="font-mono">{modelMixLabel(cheapestServesHardest.dominantModel)}</span>{' '}
+                    at {cheapestServesHardest.successPct.toFixed(0)}% success. A more
+                    capable model would raise cost without a reliability problem
+                    to solve.
+                  </span>
+                </div>
+              )}
+            </>
           ) : (
-            <div className="py-16 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
-              No learned thresholds yet — the model-selection routing path hasn't
-              recorded any decisions for this tenant, so there is nothing to
-              compare against the base threshold.
+            <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
+              No turns in this window yet.
             </div>
+          )}
+
+          {/* The threshold, kept but demoted and labelled for what it is. */}
+          {tierRows.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                Observed complexity per tier
+              </summary>
+              <div className="mt-3 space-y-1">
+                <p className="text-muted-foreground">
+                  Mean tool-call complexity of the turns that succeeded, per
+                  tier. A descriptive measure of past traffic — no routing
+                  decision reads it, so it does not steer model selection today.
+                </p>
+                <div className="mt-2 space-y-1">
+                  {tierRows.map((t) => (
+                    <div key={t.tier} className="flex justify-between gap-4 tabular-nums">
+                      <span className="text-muted-foreground capitalize">{t.tier}</span>
+                      <span className="font-mono">
+                        {t.learned.toFixed(3)}
+                        <span className="text-muted-foreground">
+                          {' '}({t.turns} {t.turns === 1 ? 'sample' : 'samples'})
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </details>
           )}
         </CardContent>
       </Card>
-
-      {/* Task Type Breakdown */}
-      {hasThresholds ? (
-        <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-          {status.thresholds.map((t) => (
-            <Card key={`${t.task_type}:${t.subsystem}`}>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold">{t.task_type}</h3>
-                  <Badge variant={t.converged ? 'ok' : 'warn'}>
-                    {t.converged ? 'Converged' : 'Learning'}
-                  </Badge>
-                </div>
-
-                <div className="text-sm space-y-1 mb-3">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Threshold:</span>
-                    <span className="font-mono font-semibold">
-                      {t.learned_threshold.toFixed(3)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Base:</span>
-                    <span className="font-mono text-muted-foreground">
-                      {t.base_threshold.toFixed(3)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Samples:</span>
-                    <span className="font-mono font-semibold">{t.sample_count}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Erfolgsquote:</span>
-                    <span className="font-mono font-semibold">{(t.success_rate * 100).toFixed(0)}%</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <Card className="mb-6 border-dashed">
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            No task types tracked yet.
-          </CardContent>
-        </Card>
-      )}
 
       {/* Operator Controls */}
       <Card>

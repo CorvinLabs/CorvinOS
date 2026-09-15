@@ -84,6 +84,13 @@ class _Bucket:
     successes: int = 0
     complexity_sum_success: float = 0.0
     model_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    # Real dollars for this tier's turns, priced exactly as compute_cost_efficiency
+    # prices them (same tokens, same published rates). A tier's volume and its
+    # reliability are only half the operator's question; the other half is what
+    # that volume costs, and the tier bucketing already has every turn in hand.
+    actual_usd: float = 0.0
+    baseline_usd: float = 0.0
+    priced_turns: int = 0
 
 
 def _read_completed_turns(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]:
@@ -705,7 +712,21 @@ def compute_learned_thresholds(
 
         chain_path = _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
 
-    turns = _read_completed_turns(chain_path, _MAX_SCAN_BYTES)
+    # The SAME counting window the cost view uses. Two sections of one card
+    # counting over different periods is precisely what the window exists to
+    # prevent; the honest consequence — few samples right after a reset — is the
+    # one the cost section already carries.
+    try:
+        from core.console.corvin_console import usage_epoch  # noqa: PLC0415
+
+        since_ts = usage_epoch.epoch_ts(tenant_id)
+    except Exception:  # noqa: BLE001
+        since_ts = 0.0
+
+    turns = [
+        t for t in _read_completed_turns(chain_path, _MAX_SCAN_BYTES)
+        if not since_ts or float(t.get("completed_ts") or 0) >= since_ts
+    ]
     if not turns:
         return []
 
@@ -737,6 +758,21 @@ def compute_learned_thresholds(
         if t.get("model"):
             b.model_counts[t["model"]] += 1
 
+        priced = _price_and_baseline(
+            t.get("model") or "",
+            int(t.get("input_tokens") or 0),
+            int(t.get("output_tokens") or 0),
+            int(t.get("cache_creation_input_tokens") or 0),
+            int(t.get("cache_read_input_tokens") or 0),
+        )
+        if priced is not None and any((
+            t.get("input_tokens"), t.get("output_tokens"),
+            t.get("cache_creation_input_tokens"), t.get("cache_read_input_tokens"),
+        )):
+            b.actual_usd += priced[0]
+            b.baseline_usd += priced[1]
+            b.priced_turns += 1
+
     now = datetime.now(timezone.utc).isoformat()
     results: list[StoredThreshold] = []
     for tier, b in sorted(buckets.items()):
@@ -761,6 +797,10 @@ def compute_learned_thresholds(
                     f"({success_rate:.0%} success; dominant model: {dominant_model}); "
                     f"NOT a live routing decision — see module docstring"
                 ),
+                dominant_model=dominant_model,
+                actual_usd=round(b.actual_usd, 4),
+                baseline_usd=round(b.baseline_usd, 4),
+                priced_turns=b.priced_turns,
             )
         )
     return results

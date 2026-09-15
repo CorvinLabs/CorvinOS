@@ -77,7 +77,7 @@ export function LicensingAuditTab() {
       )}
 
       <div className="text-xs text-muted-foreground">
-        Compliance: ADR-0297 PII filtering applied • Last sync: {new Date().toLocaleTimeString()}
+        Compliance: PII filtering applied • Last sync: {new Date().toLocaleTimeString()}
       </div>
     </div>
   );

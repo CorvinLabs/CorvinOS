@@ -86,7 +86,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
       const data: ValidateTokenResponse = await response.json()
 
       if (!data.valid) {
-        setError(data.error || 'Token ungültig')
+        setError(data.error || 'Invalid token')
         setStep('error')
         return
       }
@@ -119,7 +119,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
       const data: SaveTokenResponse = await response.json()
 
       if (!data.success) {
-        setError(data.error || 'Speichern fehlgeschlagen')
+        setError(data.error || 'Could not save')
         setStep('error')
         return
       }
@@ -162,7 +162,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           <button
             onClick={onClose}
             disabled={busy}
-            aria-label="Schließen"
+            aria-label="Close"
             className="text-white/80 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
@@ -192,10 +192,10 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
 
               <div className="flex gap-2">
                 <Button variant="outline" onClick={onClose}>
-                  Abbrechen
+                  Cancel
                 </Button>
                 <Button variant="accent" className="flex-1" onClick={handleValidate}>
-                  Validieren &amp; Weiter
+                  Validate &amp; continue
                 </Button>
               </div>
             </>
@@ -234,7 +234,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               <div>
                 <h3 className="font-semibold text-foreground mb-2">Discord Autorisierung</h3>
                 <p className="text-sm text-muted-foreground mb-3">
-                  Klicke den Button um den Bot zu Discord hinzuzufügen:
+                  Click the button to add the bot to Discord:
                 </p>
                 <a
                   href={validationResult.url}
@@ -242,15 +242,14 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
                   rel="noopener noreferrer"
                   className="inline-flex items-center px-4 py-2 bg-accent text-accent-foreground rounded-md hover:bg-accent/90 transition font-medium"
                 >
-                  Öffne Discord Autorisierung
+                  Open Discord authorisation
                   <ExternalLink className="w-4 h-4 ml-2" />
                 </a>
               </div>
 
               <div className="rounded-md border border-accent/30 bg-accent/10 p-3">
                 <p className="text-xs text-accent-foreground/90">
-                  💡 Alternativ kannst du diese URL kopieren und selbst öffnen:
-                </p>
+                  💡 Alternatively, copy this URL and open it yourself:</p>
                 <div className="mt-2 flex items-center justify-between bg-card border border-border rounded p-2">
                   <code className="text-xs font-mono text-muted-foreground overflow-hidden text-ellipsis">
                     {validationResult.url?.substring(0, 50)}...
@@ -274,7 +273,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
                   Nach der Autorisierung speichern wir den Token lokal:
                 </p>
                 <Button variant="accent" className="w-full" onClick={handleSaveToken}>
-                  Token speichern &amp; Setup abschließen
+                  Save token &amp; finish setup
                 </Button>
               </div>
             </>
@@ -284,7 +283,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           {step === 'saving' && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-8 h-8 animate-spin text-accent mr-3" />
-              <span>Speichern...</span>
+              <span>Saving…</span>
             </div>
           )}
 
@@ -296,13 +295,13 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               </div>
               <h3 className="text-lg font-semibold text-foreground mb-2">Bot erfolgreich aktiviert! 🎉</h3>
               <p className="text-sm text-muted-foreground mb-4">
-                Dein Discord-Bot ist jetzt bereit. Der Daemon startet neu und verbindet sich mit Discord.
+                Your Discord bot is ready. The daemon restarts and connects to Discord.
               </p>
               <p className="text-xs text-muted-foreground mb-4">
-                Falls der Bot nicht sofort antwortet, kann es 30 Sekunden dauern bis die Verbindung hergestellt ist.
+                If the bot does not answer right away, the connection can take up to 30 seconds.
               </p>
               <Button variant="accent" onClick={() => window.location.reload()}>
-                Schließen &amp; Neu laden
+                Close &amp; reload
               </Button>
             </div>
           )}
@@ -346,7 +345,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               rel="noopener noreferrer"
               className="text-accent hover:underline"
             >
-              Discord Developer Portal öffnen
+              Open the Discord Developer Portal
             </a>
             {' → '}
             Applications {' → '} New Application {' → '} Bot {' → '} Copy Token

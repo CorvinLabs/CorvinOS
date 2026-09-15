@@ -68,7 +68,7 @@ export function VibeDashboard() {
       {/* Footer */}
       <div className="border-t bg-muted/50 p-4 text-xs text-muted-foreground">
         Phase 2 Features: Live audit events • System metrics • Model registry • Maturity dashboard
-        — All endpoints PII-safe (ADR-0297) • Last updated: {new Date().toLocaleTimeString()}
+        — All endpoints PII-safe • Last updated: {new Date().toLocaleTimeString()}
       </div>
     </div>
   );

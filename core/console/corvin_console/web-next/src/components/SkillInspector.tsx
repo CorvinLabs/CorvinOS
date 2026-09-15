@@ -92,7 +92,7 @@ export function SkillInspector({
           <CardHeader>
             <CardTitle>Learning Metrics</CardTitle>
             <CardDescription>
-              Skill performance and confidence over time (ADR-0314)
+              Skill performance and confidence over time
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -160,7 +160,7 @@ export function SkillInspector({
           <CardHeader>
             <CardTitle>Audit Trail</CardTitle>
             <CardDescription>
-              Skill execution events (hash-chained, ADR-0232)
+              Skill execution events (hash-chained)
             </CardDescription>
           </CardHeader>
           <CardContent>

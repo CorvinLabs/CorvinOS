@@ -3120,3 +3120,86 @@ palette unverified. Set `data-theme` on `documentElement`.
 - **Don't put the encoding logic in the component.** It goes in
   `panels/cost-viz.ts` so it can be tested; a wrong mapping is invisible in a
   screenshot until a tenant hits the case.
+
+---
+
+## The console as a production surface (ADR-0763, 2026-09-16)
+
+### Do not chart a mechanism that has no consumer
+
+The panel's most prominent chart was "Learned Thresholds vs Base — per-task-type
+routing threshold". `model_selection_learner`'s own docstring says what that
+number is: *"Nothing reads this module's output to make a routing decision
+today."* So the headline plotted an internal parameter with no consumer against
+an arbitrary 0.5 constant, while the three numbers an operator can act on —
+**volume, reliability, spend per tier** — were computed in the same pass and
+discarded.
+
+`_Bucket` now also accumulates real dollars (priced exactly as
+`compute_cost_efficiency` prices them) and `StoredThreshold` carries
+`dominant_model` / `actual_usd` / `baseline_usd` / `priced_turns`. The section is
+**Workload by complexity**; the threshold survives in a collapsed block,
+relabelled as the descriptive statistic it is.
+
+**Cost per turn divides by PRICED turns**, never by all turns — dividing by turns
+that carried no token counts quietly understates the unit cost.
+
+**A recommendation requires a sample.** The one actionable reading is withheld
+below 25 turns, and says why. "100% success" over two turns is one data point
+wearing a percentage.
+
+### The chart palette is Corvin's own, and still validated
+
+Built on Corvin's amber (hue 38): the light role amber sits two hex units from
+`--accent`, the dark one carries `--accent`'s exact hue and saturation stepped
+to L 0.46 to clear the dark lightness band. **`--accent` itself is too light
+(L 0.74) to be a data mark on dark** — that is why the viz tokens are separate
+rather than aliases.
+
+| Role | Light | Dark | Result |
+|---|---|---|---|
+| roles (categorical) | `#c3974b` / `#1295a1` | `#bc882f` / `#1295a1` | PASS — CVD ΔE 13.9 / 15.0 |
+| tiers (ordinal, 3) | `#d6b171` `#ca9b49` `#775822` | `#e6cfa8` `#dab981` `#ae8132` | PASS — monotone, light-end 2.02:1 / 5.28:1 |
+
+The light role amber is 2.68:1 on white — a WARN. The relief rule applies: every
+mark using it carries a visible label.
+
+**Two colour systems must not meet in one view.** In "Cost per model" the bars
+encode model TIER while the facet header carried a ROLE swatch — a teal dot over
+amber bars invites the reader to map one onto the other. Roles keep their colours
+only in the charts that encode role.
+
+### Shipped UI: English, no ADR ids, nothing fabricated
+
+- Panel strings are English. ADR ids stay in code comments (where they earn their
+  place) and never in rendered text.
+- Language **detection** regexes stay — the bot replying in the operator's
+  language is intended runtime behaviour, not UI copy.
+- A 404 returns an empty result and says the feature is unavailable. It must
+  never return sample data: `quality.tsx` built a seven-day trend from
+  `Math.random()` plus invented gate failures citing artifact ids that do not
+  exist, and `runAllGates` answered `ok: true, "Gate run initiated"` for a run
+  that never started.
+- Installation defaults to English: the shipped page declared `<html lang="de">`
+  while being written in English, and compute narration defaulted to
+  `locale="de"`.
+
+### Verifying a sweep — the positive control
+
+The scanner for German text and ADR ids in shipped strings resolves `src/`
+**relative to `web-next/`**. Run from the repo root it sees zero files and
+reports a clean sweep — a vacuous pass. Always confirm the file count is
+non-zero before believing a zero-findings result.
+
+### What you, as Claude Code, must NOT do (ADR-0763)
+
+- **Don't chart an internal parameter against a constant** when the thing an
+  operator acts on was computed in the same pass.
+- **Don't state a recommendation below a real sample**, and say why it is withheld.
+- **Don't divide a total by turns that were never priced.**
+- **Don't alias `--accent` as a data colour**, and don't put two colour systems
+  in one view.
+- **Don't ship German, an ADR id, or a debug string in rendered UI.**
+- **Don't return sample/mock data from a 404 branch** — empty, plus a statement
+  that the feature is unavailable.
+- **Don't trust a zero-findings sweep without a positive control.**

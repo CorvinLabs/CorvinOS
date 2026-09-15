@@ -180,7 +180,7 @@ export function VideoProducerPage() {
         <h2 className="text-xl font-semibold mb-4">Create Video</h2>
         <div className="space-y-4">
           <Textarea
-            placeholder="Task: Erstelle ein Video über Corvin's Plugin System mit Screenshots und Erklärungen. Dauer: 5 Minuten."
+            placeholder="Task: Create a video about the Corvin plugin system with screenshots and explanations. Length: 5 minutes."
             value={userTask}
             onChange={(e) => setUserTask(e.target.value)}
             rows={4}

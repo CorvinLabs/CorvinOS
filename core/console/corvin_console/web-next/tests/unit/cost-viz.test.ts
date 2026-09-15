@@ -61,23 +61,23 @@ describe('tierOf — drives the ORDINAL colour ramp', () => {
 
 describe('savingLabel — three outcomes, not two', () => {
   it('labels a cheaper model with the saving', () => {
-    expect(savingLabel(80)).toBe('−80 %');
+    expect(savingLabel(80)).toBe('−80%');
   });
 
   it('labels the reference model as the reference', () => {
-    expect(savingLabel(0)).toBe('Referenz');
+    expect(savingLabel(0)).toBe('reference');
   });
 
   it('labels a model priced ABOVE the reference as more expensive', () => {
     // The regression this file exists for: -23 is not 0, and must not read as
-    // "Referenz".
-    expect(savingLabel(-23)).toBe('+23 % teurer');
-    expect(savingLabel(-23)).not.toContain('Referenz');
+    // "reference".
+    expect(savingLabel(-23)).toBe('+23% costlier');
+    expect(savingLabel(-23)).not.toContain('reference');
   });
 
   it('treats sub-rounding noise as the reference, in both directions', () => {
-    expect(savingLabel(0.01)).toBe('Referenz');
-    expect(savingLabel(-0.01)).toBe('Referenz');
+    expect(savingLabel(0.01)).toBe('reference');
+    expect(savingLabel(-0.01)).toBe('reference');
   });
 });
 
@@ -116,7 +116,7 @@ describe('toModelRows', () => {
     expect(rows[0].span).toBeCloseTo(0.5, 6);
     expect(rows[0].lo).toBeCloseTo(0.5, 6);
     expect(rows[0].savedPct).toBeLessThan(0);
-    expect(savingLabel(rows[0].savedPct)).toBe('+100 % teurer');
+    expect(savingLabel(rows[0].savedPct)).toBe('+100% costlier');
   });
 
   it('reports no saving rather than dividing by zero on a $0 baseline', () => {

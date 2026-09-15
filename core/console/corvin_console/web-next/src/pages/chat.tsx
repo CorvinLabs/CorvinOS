@@ -1996,7 +1996,7 @@ function ChatPane({
           {/* CCC M6 — entity hint (shown when NLP detects a domain keyword) */}
           {cccEntityHint && !paletteOpen && (
             <p className="text-[10px] text-muted-foreground/70">
-              Erkannt als <span className="font-semibold text-accent-foreground">{cccEntityHint}</span> — wird nach dem Senden im passenden Tab aktualisiert
+              Detected as <span className="font-semibold text-accent-foreground">{cccEntityHint}</span> — the matching tab updates once sent
             </p>
           )}
           {/* Main input row */}

@@ -51,10 +51,10 @@ export const usd = (n: number): string => `$${n.toFixed(n < 1 ? 4 : 2)}`;
  */
 export const savingLabel = (savedPct: number): string =>
   savedPct > 0.05
-    ? `−${savedPct.toFixed(0)} %`
+    ? `−${savedPct.toFixed(0)}%`
     : savedPct < -0.05
-      ? `+${Math.abs(savedPct).toFixed(0)} % teurer`
-      : 'Referenz';
+      ? `+${Math.abs(savedPct).toFixed(0)}% costlier`
+      : 'reference';
 
 export interface ModelCostRow {
   model: string;

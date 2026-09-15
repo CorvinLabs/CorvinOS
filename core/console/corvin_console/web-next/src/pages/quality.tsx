@@ -109,56 +109,15 @@ const fetchGateStatus = async (): Promise<GateStatusResponse> => {
 
     if (!response.ok) {
       if (response.status === 404) {
-        // API not yet implemented, return mock data for development
+        // Not deployed on this build — an empty result, never sample numbers.
         return {
-          statuses: [
-            {
-              gate_name: "ADR Gate",
-              status: "pass",
-              pass_count: 18,
-              fail_count: 2,
-              warn_count: 1,
-              pass_percentage: 90.0,
-              last_updated: new Date().toISOString(),
-              artifact_type: "adr",
-            },
-            {
-              gate_name: "Concept Gate",
-              status: "pass",
-              pass_count: 12,
-              fail_count: 1,
-              warn_count: 2,
-              pass_percentage: 85.7,
-              last_updated: new Date().toISOString(),
-              artifact_type: "concept",
-            },
-            {
-              gate_name: "Implementation Plan",
-              status: "pass",
-              pass_count: 8,
-              fail_count: 0,
-              warn_count: 1,
-              pass_percentage: 88.9,
-              last_updated: new Date().toISOString(),
-              artifact_type: "implementation_plan",
-            },
-            {
-              gate_name: "E2E Wiring Proof",
-              status: "warn",
-              pass_count: 6,
-              fail_count: 1,
-              warn_count: 2,
-              pass_percentage: 75.0,
-              last_updated: new Date().toISOString(),
-              artifact_type: "adr",
-            },
-          ],
+          statuses: [],
           summary: {
-            total_gates: 4,
-            passing_gates: 3,
+            total_gates: 0,
+            passing_gates: 0,
             failing_gates: 0,
-            warning_gates: 1,
-            overall_pass_percentage: 87.4,
+            warning_gates: 0,
+            overall_pass_percentage: 0,
           },
           timestamp: new Date().toISOString(),
         };
@@ -183,53 +142,12 @@ const fetchGateHistory = async (artifactId: string = "_default"): Promise<GateHi
 
     if (!response.ok) {
       if (response.status === 404) {
-        // API not yet implemented, return mock data
-        const today = new Date();
-        const trend = Array.from({ length: 7 }, (_, i) => {
-          const date = new Date(today);
-          date.setDate(date.getDate() - (6 - i));
-          return {
-            date: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-            pass_percentage: 80 + Math.random() * 15,
-            artifact_count: Math.floor(Math.random() * 10) + 5,
-          };
-        });
-
-        return {
-          artifact_id: artifactId,
-          trend,
-          recent_failures: [
-            {
-              failure_id: "f1",
-              gate_name: "E2E Wiring Proof",
-              artifact_id: "ADR-0688",
-              artifact_type: "adr",
-              failure_reason: "New endpoint not wired to real transport layer",
-              severity: "error",
-              timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-              attempted_fix: "Added route to `/v1/console/quality/gates/status`",
-            },
-            {
-              failure_id: "f2",
-              gate_name: "ADR Gate",
-              artifact_id: "ADR-0687",
-              artifact_type: "adr",
-              failure_reason: "Missing dependency declaration for ADR-0686",
-              severity: "warning",
-              timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-            },
-            {
-              failure_id: "f3",
-              gate_name: "Concept Gate",
-              artifact_id: "CONCEPT-0035",
-              artifact_type: "concept",
-              failure_reason: "Duplicate concept — CONCEPT-0025 covers similar territory",
-              severity: "warning",
-              timestamp: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-              attempted_fix: "Merged into CONCEPT-0025 amendments section",
-            },
-          ],
-        };
+        // The endpoint is not deployed on this build. Return an EMPTY history,
+        // never invented rows: the previous branch generated a seven-day trend
+        // from Math.random() and three fabricated failures citing artifact ids
+        // that do not exist, which is indistinguishable from real data on
+        // screen and is exactly what must not ship.
+        return { artifact_id: artifactId, trend: [], recent_failures: [] };
       }
       throw new Error(`API error: ${response.status}`);
     }
@@ -251,9 +169,12 @@ const runAllGates = async (): Promise<{ ok: boolean; message: string }> => {
 
     if (!response.ok) {
       if (response.status === 404) {
+        // The endpoint is not deployed on this build. Say so — reporting
+        // "initiated" for a run that was never started is a false success the
+        // operator would wait on.
         return {
-          ok: true,
-          message: "Gate run initiated (API endpoint not yet implemented)",
+          ok: false,
+          message: "Quality gates are not available on this build.",
         };
       }
       throw new Error(`API error: ${response.status}`);

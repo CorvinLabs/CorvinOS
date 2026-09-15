@@ -34,29 +34,38 @@
     --destructive-foreground: 36 38% 96%;
     --radius: 0.75rem;
 
-    /* ── Data-visualisation palette (ADR-0761) ────────────────────────────
+    /* ── Data-visualisation palette ───────────────────────────────────────
        Kept OUT of the semantic tokens above on purpose: --accent is a brand
        colour that may be restyled, while these encode DATA and must stay
-       stable and validated. Each set was checked with the dataviz validator
-       against this theme's real chart surface (#ffffff light / #0e1320 dark),
-       not eyeballed:
+       stable and validated.
 
-         roles     #2a78d6 / #eb6834  — categorical, blue vs orange.
-                   Warm/cool, so they read as different KINDS of work rather
-                   than as more/less of one. CVD dE 24.7 light / 26.8 dark.
-         tiers     one blue hue, light -> dark, ordinal.
-                   Model tiers ARE ordered (Haiku < Sonnet < Opus in price), so
-                   darker = more expensive carries real meaning instead of
-                   burning the hue channel on identity alone.
+       Built on Corvin's own amber (hue 38) so charts read as part of this
+       console rather than as a foreign widget — the light role amber sits two
+       hex units from --accent, and the dark one carries --accent's exact hue
+       and saturation, stepped darker to clear the dark lightness band.
+
+       Every set was run through the dataviz validator against THIS theme's
+       real chart surfaces (#ffffff light / #0e1320 dark), not the tool's
+       defaults:
+
+         roles   amber vs teal — warm/cool, so they read as different KINDS of
+                 work rather than as more/less of one.
+                 CVD dE 13.9 light / 15.0 dark, normal-vision 20.7 / 20.6.
+                 The light amber is 2.68:1 on white, below the 3:1 bar, so
+                 every mark using it carries a visible label (the relief rule).
+         tiers   one amber hue, light -> dark, ordinal. Model tiers ARE ordered
+                 (Haiku < Sonnet < Opus in price), so darker = more expensive
+                 carries real meaning instead of burning the hue channel on
+                 identity alone.
          baseline  neutral grey — the counterfactual is not a series, it is the
-                   thing the real number is measured against. */
-    --viz-role-os: #2a78d6;
-    --viz-role-worker: #eb6834;
-    --viz-tier-1: #86b6ef;
-    --viz-tier-2: #2a78d6;
-    --viz-tier-3: #104281;
-    --viz-baseline: #98979180;
-    --viz-grid: #e6e5e1;
+                 thing the real number is measured against. */
+    --viz-role-os: #c3974b;
+    --viz-role-worker: #1295a1;
+    --viz-tier-1: #d6b171;
+    --viz-tier-2: #ca9b49;
+    --viz-tier-3: #775822;
+    --viz-baseline: #9b9a9480;
+    --viz-grid: #e3e1dc;
   }
 
   [data-theme="dark"] {
@@ -80,14 +89,16 @@
     --voice-accent: 201 100% 50%;
 
     /* Dark steps chosen FOR the dark surface and validated as a set — not an
-       automatic flip of the light values. */
-    --viz-role-os: #3987e5;
-    --viz-role-worker: #d95926;
-    --viz-tier-1: #9ec5f4;
-    --viz-tier-2: #3987e5;
-    --viz-tier-3: #184f95;
+       automatic flip of the light values. The role amber is --accent's hue and
+       saturation (38 / 60%) stepped to L 0.46 so it sits inside the dark
+       lightness band; --accent itself is too light for a data mark here. */
+    --viz-role-os: #bc882f;
+    --viz-role-worker: #1295a1;
+    --viz-tier-1: #e6cfa8;
+    --viz-tier-2: #dab981;
+    --viz-tier-3: #ae8132;
     --viz-baseline: #6b6a6580;
-    --viz-grid: #232a3a;
+    --viz-grid: #1e2636;
   }
 
   * {

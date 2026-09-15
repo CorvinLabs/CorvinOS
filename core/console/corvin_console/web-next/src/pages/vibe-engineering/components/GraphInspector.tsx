@@ -595,7 +595,7 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
               <div className="text-xs text-muted-foreground space-y-1">
                 <p>• Immutable: Event cannot be modified or deleted</p>
                 <p>• Hash-Chained: Cryptographically linked to prior event</p>
-                <p>• LoM-Bound: Trace back to source code (ADR-0537)</p>
+                <p>• LoM-Bound: Trace back to source code</p>
                 <p>• Tenant-Scoped: GDPR compliant isolation</p>
                 <p>• Audit Trail: Complete record available for verification</p>
               </div>
