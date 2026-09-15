@@ -134,9 +134,11 @@ than shipped.
 /settings/engine` validates the (engine, provider) pair against
 `GET /settings/engine/registry`'s `supported_providers` and answers
 `400 {"detail":"engine 'claude_code' does not support provider 'openai'"}` for a
-pair that does not exist. Claude Code supports `anthropic` and `bedrock` (both
-native — the 2026-09-15 real-data pass registered the second) plus
-`ollama_local`, `ollama_cloud` and `openrouter` **via the built-in
+pair that does not exist. Claude Code supports `anthropic` natively, plus
+`bedrock`, `vertex` and `foundry` natively as `auth_mode: platform` providers
+(ADR-0759 — the 2026-09-15 real-data pass registered `bedrock`, the ADR-0730
+rename sweep then deleted it, and ADR-0759 restored it and added the other two),
+plus `ollama_local`, `ollama_cloud` and `openrouter` **via the built-in
 `anthropic_openai_bridge` translating proxy** — and NOT `openai`. So the assign
 button is disabled for any provider absent from that list, and the routing chain
 lists only drivable ones. This is the pre-ADR-0607 per-engine whitelist still in
@@ -2778,3 +2780,174 @@ half of the credential flag, since this host has no Anthropic key to fail with:
 `test_engine_providers.py::test_absent_key_is_flagged_and_distinguishable_from_a_failed_one`
 drives both branches offline — no key sets the flag and egresses nothing, a
 present-but-rejected key (401) does NOT set it and stays visible.
+
+---
+
+## Worker-engine model routing + platform access (ADR-0759, 2026-09-15)
+
+> Operator report: *"Usage could not be read: Not Found"* on `/app/engine-config`.
+> That was the visible end of a chain in which **no part of worker-engine model
+> routing worked end to end**. Everything below is measured on the live install.
+
+### The gateway refused the file the console writes — every run failed
+
+`tenant.corvin.yaml` is **co-owned**. `corvin_gateway.tenant_config.TenantSpec`
+was `extra="forbid"` and required an AWP envelope (`apiVersion`/`kind`/
+`metadata`); `routes/engine.py::_save_tenant_yaml` writes a bare `spec:` mapping
+carrying `engine_models`, `default_worker_engine`, `web_chat`, `learning`,
+`claude_code_local`, `context_engineering`, `features_whitelist`. Result: 12
+validation errors, `TenantConfigMalformed`, and **100 % of
+`POST /v1/tenants/{tid}/runs` terminal-`failed` before an engine was spawned.**
+
+`TenantSpec` is now `extra="allow"` and the envelope is optional. **The
+relaxation is scoped and must stay scoped:** `DataResidency`, `Budget`,
+`ComputeConfig` and `EngineTrustConfig` keep `extra="forbid"` — those gate engine
+admission and residency, so `forbid_engine:` for `forbid_engines:` must keep
+failing loudly. A file declaring a wrong `apiVersion`/`kind` is still refused;
+only *silence* is accepted, and silence is what a co-writer produces.
+
+### …and the console's own save re-broke it
+
+The gateway reads that file fail-closed on MODE (`want 0o600`).
+`_save_tenant_yaml` used `Path.write_text` + `replace`, i.e. at umask, and
+`os.replace` carries the temp file's mode onto the target — so saving anything on
+the Engine Config page left it `0o664` and disabled every run until someone
+chmod'ed it back by hand. It now `mkstemp` + `chmod 0o600` **before** `replace`
+(same ordering `routes/compute.py` already had).
+
+### The worker span had no model and no tokens — so delegation was invisible
+
+`dispatcher._emit_engine_span()` passed neither, and `model_usage._collect`
+DROPS an observation with no model id. Every delegated worker turn therefore
+vanished from the panel and was priced at $0.00, while the OS turns beside it
+were counted — the panel read as "this install only ever runs OS turns".
+
+Three changes, all load-bearing:
+
+| Change | Why |
+|---|---|
+| `dispatcher._resolve_worker_model()` reads `spec.engine_models.<engine>.worker_model` — the SAME key the console writes — and passes it to `engine.spawn(model=…)` | the console offered a worker-model choice that applied to ACS delegation only; gateway runs used the CLI default |
+| the span closes on the model the engine REPORTS in its `session_started` init frame, falling back to the requested id | an alias, a Bedrock inference profile or a CLI default resolves to something else; auditing the request instead of the fact makes the usage panel confidently wrong |
+| `engine_span.END_FIELDS` gains `input_tokens`/`output_tokens`/`cache_read_tokens`/`cache_write_tokens`; `tokens_used` is DERIVED from them when not passed | a single total cannot be priced — four components, four rates. One real worker turn: 2 input vs 57 353 cache-write |
+
+**`model=` is PROBED on the engine, never passed blindly**
+(`_engine_accepts_model`, cached per class). An engine whose `spawn` predates the
+keyword raises `TypeError` inside the worker thread, which surfaces as a generic
+`status="failed"` — a model *preference* silently converting working dispatches
+into failures is far worse than not honouring the preference.
+
+`model_usage` keeps an observation that has a role but no model id, as
+`(model not reported)`, and adds a **By role** roll-up (`os` / `worker` /
+`manager`) with `tokens_reported` — a role with turns and zero tokens is a role
+whose emitter reports no usage, NOT a role that costs nothing.
+
+### The audit field floor silently dropped ACS worker tokens
+
+`acs_runtime` has emitted the four-way split since ADR-0696, but
+`forge.security_events._EVENT_ALLOWLIST["acs.engine_completed"]` did not list the
+fields — so the positive allowlist dropped all four on every write and only the
+unpriceable `tokens_used` total reached the chain. Three tests in
+`tests/e2e/test_model_selection_cost_efficiency_adr0696_e2e.py` had been red
+against this for exactly that reason.
+
+`acs_runtime._audit_path()` also composed `<home>/tenants/<tid>/global/audit.jsonl`
+by hand — one directory ABOVE the canonical chain (the ADR-0650 split). It now
+resolves through `forge.paths.tenant_audit_chain()`. The historical file is
+**read, never merged or deleted** (`_acs_chain_paths()` returns both, deduped).
+
+### Bedrock / Vertex / Foundry are `auth_mode: platform`, not base-url redirects
+
+ADR-0181 models a provider as *base URL + one credential env var* and redirects
+Claude Code with `ANTHROPIC_BASE_URL`. **That shape is wrong for these three and
+applying it breaks authentication**: Claude Code reaches them natively
+(`CLAUDE_CODE_USE_BEDROCK=1` + SigV4), so a base-url redirect makes it speak
+plain Anthropic to a signed endpoint and every turn 403s.
+
+`ProviderSpec.auth_mode`:
+
+| Value | Spawn env | Credential |
+|---|---|---|
+| `api_key` (default) | `ANTHROPIC_BASE_URL` + the vault key | one env var, `credential_env` |
+| `platform` | the enabling flag + resolved region + the platform's credential CHAIN; **never** `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` | AWS profile / IMDS / IRSA role / GCP ADC / Azure federated token |
+
+`credential_env` is empty for a platform provider **on purpose**: a host
+authenticating by instance role has no env var at all and must not be reported as
+"credential missing".
+
+**The L35 egress gate now uses `ProviderSpec.egress_url`.** The call sites gated
+on `spec.base_url`, which is `""` for a platform provider — so the check was
+skipped entirely. One expression answers both the gate and the spawn, region-
+derived (`https://bedrock.<region>.amazonaws.com`), so enforcement and real
+egress cannot disagree.
+
+**`aws_sigv4.py` was deleted by the ADR-0730 rename sweep and is restored.** It
+was written the same day (commit `be156885`, 370 lines, full boto3-subset
+credential chain incl. `credential_process`, the Windows `interpolation=None`
+fix, `[profile NAME]` handling, one forced refresh on 401/403) and the sweep that
+moved `operator/` → `corvin_operator/` dropped it — together with the registry's
+`bedrock` entry and the `engine_providers` fetch branch — while the docs
+describing all three stayed in place. `test_the_signer_module_is_present_at_all`
+fails if it goes missing again.
+
+### Detection: the platform flag outranks a stale OAuth file
+
+`probe_claude_code` checked `~/.claude/.credentials.json` FIRST, so a working
+Bedrock host with a leftover credentials file reported `credential_source:
+"subscription"` — and nothing removes that file when an operator switches. Claude
+Code itself gives `CLAUDE_CODE_USE_BEDROCK=1` precedence, so the probe now does
+too (`_claude_platform_probe`, checked before `_find_claude_credentials`).
+
+`EngineProbeResult` gains `plan` and `rate_limit_tier`, read from the
+credentials file's `subscriptionType`/`rateLimitTier` — **labels only, never a
+token value**. Pro, Max, Team and Enterprise are four different sets of limits
+and all four used to render as the word "subscription". Live on this host:
+`plan: "max"`, `rate_limit_tier: "default_claude_max_20x"`.
+
+### The worker secret strip must not disarm a platform host
+
+`acs_runtime._strip_worker_secrets` matches on NAME shape (`SECRET`,
+`ACCESS_KEY`, `_TOKEN$`, `_CREDENTIAL`). Correct for an operator secret; fatal on
+Bedrock/Vertex, where those names are the ONLY credential the worker has —
+`CLAUDE_CODE_USE_BEDROCK` is not secret-shaped and survived, so the worker was
+told to use Bedrock and given nothing to sign with.
+
+`_restore_platform_credentials()` runs after the strip, and is deliberately
+narrow: only when the HOST is in platform mode, only names the registry declares
+for that platform, only from the parent's own environment. The OS turn already
+runs with exactly those variables. `OPENAI_API_KEY`, `GITHUB_TOKEN`, `PGPASSWORD`
+and every other operator secret stay stripped — asserted in the E2E.
+
+### `model_catalog_refresh_failed` was the loudest event in the chain
+
+A subscription/Bedrock login exposes no `ANTHROPIC_API_KEY`, so the keyless
+branch is the STEADY STATE of most installs — and the refresh timer runs forever.
+4 671 `model_catalog_refresh_failed` records had accumulated against 490 real
+engine spans. That is not log noise: it buries the events a compliance export is
+for. The credential-absent case is now `model_catalog_refresh_skipped`, once per
+process; a host that really has a key and really is failing still emits the
+original event every cycle.
+
+### What you, as Claude Code, must NOT do (ADR-0759)
+
+- **Don't set `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`
+  for an `auth_mode: platform` provider.** It is not a stricter configuration, it
+  is a 403 on every turn.
+- **Don't gate the L35 egress check on `spec.base_url`.** A platform provider has
+  none; use `spec.egress_url`, which is region-derived.
+- **Don't give a platform provider a `credential_env`.** Its credential is a
+  chain, and an operator prompted for "the Bedrock API key" is already lost.
+- **Don't re-tighten `TenantSpec` to `extra="forbid"`** — it is a shared file.
+  Do keep `extra="forbid"` on `data_residency`, `budget`, `compute` and
+  `engine_trust`; that is where a typo must still fail loudly.
+- **Don't write `tenant.corvin.yaml` at umask.** `chmod 0o600` before `replace`,
+  or the gateway refuses the file and every run fails.
+- **Don't emit an `engine.span.*` without a `model_id`.** The usage roll-up is
+  keyed on it; a span without one is real work that no view will ever show.
+- **Don't pass `model=` to an engine without probing for the keyword.**
+- **Don't add a field to an audit event without adding it to
+  `_EVENT_ALLOWLIST`.** The floor drops it silently and the emitter looks correct.
+- **Don't compose an audit-chain path by hand** — `tenant_audit_chain()`. And
+  don't merge, rewrite or delete the legacy `<global>/audit.jsonl`; read both.
+- **Don't widen `_SECRET_NAME_RE` to get AWS credentials into a worker.** Use
+  `_restore_platform_credentials`, which is scoped to the active platform.
+- **Don't audit a credential-absent catalogue refresh as a failure.**

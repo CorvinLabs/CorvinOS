@@ -691,6 +691,14 @@ const ExternalProviderModal: React.FC<ExternalProviderModalProps> = ({
 // `/login` menu offers).
 // ─────────────────────────────────────────────────────────────────
 
+/** Subscription plans Claude Code reports in its credentials file. */
+const PLAN_LABEL: Record<string, string> = {
+  pro: 'Pro',
+  max: 'Max',
+  team: 'Team',
+  enterprise: 'Enterprise',
+};
+
 const AUTH_METHOD_LABEL: Record<string, string> = {
   subscription: 'Claude subscription',
   env_var: 'Anthropic Console (API key)',
@@ -711,10 +719,20 @@ function ClaudeCodeAuthStatus() {
   if (detectQ.isLoading || !probe) return null;
 
   const methodLabel = probe.credential_source ? AUTH_METHOD_LABEL[probe.credential_source] ?? probe.credential_source : null;
+  // ADR-0759 — the PLAN, not just "a subscription". Pro, Max, Team and
+  // Enterprise are four different sets of limits and entitlements, and an
+  // operator debugging a rate limit or a model they cannot select needs to know
+  // which one this host is on. Shown only for an OAuth subscription: for
+  // Bedrock/Vertex/Foundry the plan field repeats the platform, which the
+  // method label already names.
+  const planLabel =
+    probe.credential_source === 'subscription' && probe.plan
+      ? PLAN_LABEL[probe.plan] ?? probe.plan
+      : null;
 
   return (
     <Card>
-      <CardContent className="pt-4 pb-3 flex items-center gap-2 text-sm">
+      <CardContent className="pt-4 pb-3 flex items-center gap-2 text-sm flex-wrap">
         {probe.authenticated
           ? <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
           : <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />}
@@ -722,6 +740,18 @@ function ClaudeCodeAuthStatus() {
         <span className="font-medium">
           {probe.authenticated ? `Authenticated via ${methodLabel}` : 'Not authenticated'}
         </span>
+        {planLabel && (
+          <Badge variant="secondary" className="font-normal">{planLabel}</Badge>
+        )}
+        {probe.rate_limit_tier && (
+          <Badge
+            variant="outline"
+            className="font-normal"
+            title="Rate-limit tier reported by the vendor for this account"
+          >
+            {probe.rate_limit_tier}
+          </Badge>
+        )}
         {probe.detail && <span className="text-xs text-muted-foreground truncate">— {probe.detail}</span>}
       </CardContent>
     </Card>
@@ -744,6 +774,15 @@ const PROVENANCE_NOTE: Record<string, string> = {
 function fmtInt(n: number): string {
   return n.toLocaleString();
 }
+
+/** ADR-0171 role ids, spelled out. "worker" is the delegated engine run — the
+ *  one an operator is usually actually paying for. */
+const ROLE_LABEL: Record<string, string> = {
+  os: 'OS turn (main conversation)',
+  worker: 'Worker (delegated engine run)',
+  manager: 'Manager (ACS orchestration)',
+  unknown: 'Unattributed',
+};
 
 /** Horizontal share bar. Width is the percentage itself — nothing is normalised
  *  to the largest row, so 100% means 100% of real turns, not "the top row". */
@@ -811,6 +850,61 @@ function ModelUsagePanel() {
           </p>
         ) : (
           <>
+            <div>
+              <Label className="text-sm font-medium mb-3 block">
+                By role — OS turn vs. delegated worker
+              </Label>
+              <div className="space-y-3">
+                {(data.roles ?? []).map((r) => (
+                  <div key={r.role}>
+                    <div className="flex items-baseline justify-between gap-2 text-sm">
+                      <span className="font-medium truncate">
+                        {ROLE_LABEL[r.role] ?? r.role}
+                      </span>
+                      <span className="tabular-nums shrink-0">
+                        {r.share_pct.toFixed(1)}%
+                        <span className="text-muted-foreground">
+                          {' '}· {fmtInt(r.turns)} turn{r.turns === 1 ? '' : 's'} ·{' '}
+                          {r.success_pct.toFixed(0)}% ok ·{' '}
+                          {r.tokens_reported
+                            ? `${fmtInt(r.total_tokens)} tokens`
+                            : 'tokens not reported'}
+                        </span>
+                      </span>
+                    </div>
+                    <ShareBar pct={r.share_pct} />
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      {r.engines.map((engine) => (
+                        <Badge key={engine} variant="outline" className="font-normal">
+                          {engine}
+                        </Badge>
+                      ))}
+                      {r.models.map((model) => (
+                        <Badge key={model} variant="secondary" className="font-normal">
+                          {model}
+                        </Badge>
+                      ))}
+                      {r.avg_duration_ms > 0 && (
+                        <span className="tabular-nums">
+                          ⌀ {(r.avg_duration_ms / 1000).toFixed(1)}s
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {(data.roles ?? []).some((r) => !r.tokens_reported && r.turns > 0) && (
+                <p className="mt-2 text-xs text-muted-foreground flex items-start gap-1.5">
+                  <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  A role marked <span className="font-mono">tokens not reported</span>{' '}
+                  ran real turns whose engine did not record token counts — its
+                  cost is unknown, not zero. Turns recorded before the emitting
+                  engine started reporting usage stay in this state permanently;
+                  new turns on the same role will report.
+                </p>
+              )}
+            </div>
+
             <div>
               <Label className="text-sm font-medium mb-3 block">By provider</Label>
               <div className="space-y-3">

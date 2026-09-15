@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BUNDLE_DIR = REPO_ROOT / "operator" / "bundle"
+BUNDLE_DIR = REPO_ROOT / "corvin_operator" / "bundle"
 INSTALL_SH = BUNDLE_DIR / "install.sh"
 SKILL_NAME = "e2e-wiring-proof"
 SKILL_SOURCE = BUNDLE_DIR / "skills" / "ldd" / SKILL_NAME / "SKILL.md"

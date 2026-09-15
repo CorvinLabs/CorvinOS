@@ -307,7 +307,7 @@ def is_protected_path(path: str | Path) -> bool:
         # EXPECTED_POLICY_SHA256 integrity anchor + the gate logic) would defeat
         # the L44 acceptable-use guarantee without touching the audit chain.
         # Operator-side edits happen via git, not an in-process write tool.
-        house_rules_policy = str(repo / "operator" / "policy" / "house_rules.yaml")
+        house_rules_policy = str(repo / "corvin_operator" / "policy" / "house_rules.yaml")
         house_rules_mod = str(repo / "operator" / "bridges" / "shared" / "house_rules.py")
         if abs_str in (house_rules_policy, house_rules_mod):
             return True

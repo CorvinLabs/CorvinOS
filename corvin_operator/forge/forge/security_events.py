@@ -2213,6 +2213,16 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "acs.engine_completed": frozenset({
         "run_id", "worker_id", "engine_id", "model_id", "locality",
         "duration_ms", "tokens_used", "exit_code",
+        # The four-way token split acs_runtime has EMITTED since ADR-0696.
+        # Absent from this allowlist until 2026-09-15, so the field floor
+        # dropped all four on every write and the only thing that reached the
+        # chain was the undifferentiated `tokens_used` total — which cannot be
+        # priced, because input, output, cache-write and cache-read bill at
+        # four different rates. Result: every ACS-delegated worker turn was
+        # reported at $0.00 in the cost dashboard while still being counted as
+        # a turn. Four integers, no text — the L34/PII posture is unchanged.
+        "input_tokens", "output_tokens",
+        "cache_creation_input_tokens", "cache_read_input_tokens",
     }),
     "acs.engine_error": frozenset({
         "run_id", "worker_id", "engine_id", "model_id", "duration_ms",

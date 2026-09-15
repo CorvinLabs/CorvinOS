@@ -100,7 +100,7 @@ def _load_repo_skills() -> tuple:
     skills` previously returned ONLY package skills (usually none) and the
     ADR-driven path was a TODO, so the stage always found zero."""
     repo = Path(__file__).resolve().parents[2]  # …/operator/context_engineering → repo
-    roots = [repo / "operator" / "bundle" / "skills",
+    roots = [repo / "corvin_operator" / "bundle" / "skills",
              repo / "operator" / "skill-forge" / "skills" / "dyn"]
     out: List[Dict] = []
     seen = set()

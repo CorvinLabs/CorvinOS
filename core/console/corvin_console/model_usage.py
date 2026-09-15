@@ -43,6 +43,12 @@ _OS_TURN_STARTED = "os_turn.started"
 
 _INTERESTING = frozenset({_SPAN_START, _SPAN_END, _OS_TURN_COMPLETED, _OS_TURN_STARTED})
 
+#: Stand-in id for a real engine invocation whose emitter did not record WHICH
+#: model ran. Deliberately not a plausible model id and deliberately not
+#: silently dropped — see _collect. Provider attribution resolves it to
+#: "unknown"/"unresolved" like any other unrecognised id.
+UNREPORTED_MODEL = "(model not reported)"
+
 
 @dataclass
 class _Observation:
@@ -164,6 +170,17 @@ def _collect(path: Path) -> dict[str, _Observation]:
                 obs.finished = True
                 obs.status = str(details.get("status") or "") or obs.status
                 obs.duration_ms = _as_float(details.get("duration_ms")) or obs.duration_ms
+                # ADR-0759 — a WORKER span is the only record of a delegated
+                # turn's token use: there is no os_turn.completed behind it to
+                # fold in below. Read the split here or the row reports real
+                # turns and zero tokens, which reads as "delegation is free".
+                # Guarded on role so an os-role span cannot double-count what
+                # its own os_turn.completed already contributed.
+                if obs.role != "os":
+                    obs.input_tokens += _as_int(details.get("input_tokens"))
+                    obs.output_tokens += _as_int(details.get("output_tokens"))
+                    obs.cache_read_tokens += _as_int(details.get("cache_read_tokens"))
+                    obs.cache_write_tokens += _as_int(details.get("cache_write_tokens"))
             continue
 
         turn_id = str(details.get("turn_id") or "")
@@ -194,7 +211,21 @@ def _collect(path: Path) -> dict[str, _Observation]:
     merged: dict[str, _Observation] = dict(spans)
     for turn_id, obs in os_turns.items():
         merged[f"turn:{turn_id}"] = obs
-    return {k: v for k, v in merged.items() if v.model_id}
+    # A span with no model_id used to be DROPPED here. That silently deleted
+    # real work from every roll-up: the gateway's worker spans carried no
+    # model_id at all until 2026-09-15, so 100% of delegated turns vanished and
+    # the panel reported an install that only ever ran OS turns. An id we do not
+    # have is not the same as a turn that did not happen — keep the observation
+    # and say so. Only an observation with NEITHER an id NOR a role is dropped,
+    # because that carries no information at all.
+    out: dict[str, _Observation] = {}
+    for key, obs in merged.items():
+        if not obs.model_id:
+            if not obs.role:
+                continue
+            obs.model_id = UNREPORTED_MODEL
+        out[key] = obs
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +394,7 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
         "chain_readable": bool(path is not None and path.exists()),
         "models": [],
         "providers": [],
+        "roles": [],
         "totals": {
             "turns": 0, "ok": 0, "failed": 0, "unfinished": 0,
             "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
@@ -460,8 +492,62 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
         entry["share_pct"] = _share(entry["turns"], total_turns)
         entry["token_share_pct"] = _share(entry["total_tokens"], total_tokens_all)
 
+    # ── By role (ADR-0759) ────────────────────────────────────────────────
+    # The OS turn and the WORKER turn it delegates to are two different engines
+    # running two different models against two different budgets, and the panel
+    # showed them added together. On a delegating install that is the number an
+    # operator least wants: the OS row is chatty and cheap, the worker row is
+    # where the capable model and the real spend are. Rolled up here, from the
+    # SAME observations as everything above, so the two views cannot disagree.
+    role_acc: dict[str, dict[str, Any]] = {}
+    for obs in observations.values():
+        role = obs.role or "unknown"
+        acc = role_acc.setdefault(role, {
+            "role": role, "turns": 0, "ok": 0, "failed": 0, "unfinished": 0,
+            "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+            "total_duration_ms": 0.0,
+            "_models": set(), "_engines": set(),
+        })
+        acc["turns"] += 1
+        if not obs.finished:
+            acc["unfinished"] += 1
+        elif obs.status and obs.status != "ok":
+            acc["failed"] += 1
+        else:
+            acc["ok"] += 1
+        acc["input_tokens"] += obs.input_tokens
+        acc["output_tokens"] += obs.output_tokens
+        acc["cache_read_tokens"] += obs.cache_read_tokens
+        acc["cache_write_tokens"] += obs.cache_write_tokens
+        acc["total_duration_ms"] += obs.duration_ms
+        if obs.model_id:
+            acc["_models"].add(obs.model_id)
+        if obs.engine_id:
+            acc["_engines"].add(obs.engine_id)
+
+    roles_out: list[dict[str, Any]] = []
+    for acc in role_acc.values():
+        acc["total_tokens"] = (acc["input_tokens"] + acc["output_tokens"]
+                               + acc["cache_read_tokens"] + acc["cache_write_tokens"])
+        acc["models"] = sorted(acc.pop("_models"))
+        acc["engines"] = sorted(acc.pop("_engines"))
+        acc["share_pct"] = _share(acc["turns"], total_turns)
+        acc["token_share_pct"] = _share(acc["total_tokens"], total_tokens_all)
+        acc["success_pct"] = _share(acc["ok"], acc["ok"] + acc["failed"])
+        acc["avg_duration_ms"] = (
+            round(acc.pop("total_duration_ms") / acc["turns"], 1) if acc["turns"] else 0.0
+        )
+        # A role with real turns and zero tokens is NOT a role that costs
+        # nothing — it is a role whose emitter does not report usage. Named so
+        # the UI can say which, instead of rendering a confident $0.
+        acc["tokens_reported"] = acc["total_tokens"] > 0
+        roles_out.append(acc)
+    roles_out.sort(key=lambda r: (-r["turns"], r["role"]))
+
     result["models"] = models
     result["providers"] = providers
+    result["roles"] = roles_out
     result["totals"] = {
         "turns": total_turns,
         "ok": sum(r.ok for r in rows.values()),

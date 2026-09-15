@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 _REGISTRY_FILE = (
     Path(__file__).resolve().parents[3]
-    / "operator" / "bundle" / "config-templates" / "engine_model_registry.yaml"
+    / "corvin_operator" / "bundle" / "config-templates" / "engine_model_registry.yaml"
 )
 
 
@@ -52,10 +52,75 @@ class ProviderSpec:
     id: str
     label: str
     base_url: str = ""
-    model_source: str = "static"     # static | ollama | openrouter
+    model_source: str = "static"     # static | ollama | openrouter | bedrock | vertex | foundry
     credential_env: str = ""
     kind: str = "cloud"              # local | cloud
     proxy_base_url: str = ""         # Anthropic-compatible endpoint for CC→provider routing
+    #: ADR-0759 — how the engine REACHES this provider.
+    #:   "api_key"  — redirect via ANTHROPIC_BASE_URL + the vault key (every
+    #:                provider that existed before 2026-09-15).
+    #:   "platform" — the engine speaks to it natively (Bedrock/Vertex/Foundry):
+    #:                CorvinOS sets the enabling flag and forwards the platform
+    #:                credential CHAIN, and MUST NOT set ANTHROPIC_BASE_URL /
+    #:                ANTHROPIC_API_KEY. Setting them makes Claude Code speak
+    #:                plain Anthropic to a SigV4 endpoint — every turn 403s.
+    auth_mode: str = "api_key"
+    #: Only meaningful for ``auth_mode == "platform"``. Keys: enable_var,
+    #: region_env, default_region, host_template, runtime_host_template,
+    #: project_env, resource_env, credential_vars.
+    platform_env: dict = field(default_factory=dict)
+
+    @property
+    def is_platform(self) -> bool:
+        return self.auth_mode == "platform"
+
+    @property
+    def egress_url(self) -> str:
+        """The URL the L35 egress gate must validate for THIS provider.
+
+        One expression, so the gate and the spawn can never disagree about where
+        inference actually goes. A platform provider has no static ``base_url``
+        (its host is region-derived), and gating on ``base_url`` alone therefore
+        skipped the check entirely for Bedrock/Vertex — an allowlist that is
+        silently not applied is worse than no allowlist, because it reads as
+        enforced."""
+        if self.proxy_base_url:
+            return self.proxy_base_url
+        if self.is_platform:
+            return self.resolved_host_url()
+        return self.base_url
+
+    def resolved_region(self, env: "dict[str, str] | None" = None) -> str:
+        """The region this platform provider actually addresses, from the first
+        region env-var that is set, else the declared default."""
+        src = env if env is not None else os.environ
+        for name in self.platform_env.get("region_env") or []:
+            val = (src.get(name) or "").strip()
+            if val:
+                return val
+        return str(self.platform_env.get("default_region") or "")
+
+    def resolved_host_url(self, env: "dict[str, str] | None" = None) -> str:
+        """Region/resource-derived endpoint for a platform provider ("" if not
+        derivable). The L35 egress gate validates THIS host, not a static
+        placeholder — enforcement and actual egress must never disagree."""
+        tpl = str(self.platform_env.get("host_template") or "")
+        if not tpl:
+            return self.base_url
+        src = env if env is not None else os.environ
+        fields = {"region": self.resolved_region(src)}
+        if "{resource}" in tpl:
+            resource = ""
+            for name in self.platform_env.get("resource_env") or []:
+                resource = (src.get(name) or "").strip()
+                if resource:
+                    break
+            if not resource:
+                return ""
+            fields["resource"] = resource
+        if "{region}" in tpl and not fields["region"]:
+            return ""
+        return tpl.format(**fields)
 
 
 @dataclass
@@ -152,6 +217,8 @@ def _parse_raw(raw: dict[str, Any]) -> "tuple[dict[str, ProviderSpec], dict[str,
                 credential_env=str(p.get("credential_env") or ""),
                 kind=str(p.get("kind") or "cloud"),
                 proxy_base_url=str(p.get("proxy_base_url") or ""),
+                auth_mode=str(p.get("auth_mode") or "api_key"),
+                platform_env=dict(p.get("platform_env") or {}),
             )
 
     def _parse_models(raw_list: Any) -> list[EngineModelEntry]:
@@ -320,6 +387,22 @@ def providers_as_dict(force_reload: bool = False) -> dict[str, Any]:
             "label": p.label, "base_url": p.base_url, "model_source": p.model_source,
             "credential_env": p.credential_env, "kind": p.kind,
             "proxy_base_url": p.proxy_base_url,
+            # ADR-0759 — the console must be able to tell a redirect provider
+            # from a native platform one: they are configured, tested and
+            # egress-gated differently, and rendering them identically is how
+            # an operator ends up entering an API key for Bedrock.
+            "auth_mode": p.auth_mode,
+            "platform_env": {
+                k: v for k, v in p.platform_env.items()
+                # credential_vars names a credential CHAIN; the names are safe
+                # (never values), and the console needs them to show what the
+                # host must provide.
+                if k in ("enable_var", "region_env", "default_region",
+                         "project_env", "resource_env", "credential_vars",
+                         "host_template", "runtime_host_template")
+            },
+            "resolved_host": p.resolved_host_url() if p.is_platform else p.base_url,
+            "resolved_region": p.resolved_region() if p.is_platform else "",
         }
         for pid, p in load_providers(force_reload=force_reload).items()
     }
@@ -411,6 +494,9 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
     if ps is None:
         return {}
 
+    if ps.is_platform:
+        return platform_provider_env(ps)
+
     import sys
     _shared = str(Path(__file__).resolve().parent)
     if _shared not in sys.path:
@@ -487,6 +573,83 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
     }
 
 
+def platform_provider_env(ps: "ProviderSpec",
+                          source_env: "dict[str, str] | None" = None) -> dict:
+    """ADR-0759 — spawn env for a NATIVE platform provider (Bedrock/Vertex/Foundry).
+
+    Deliberately NOT symmetric with the api_key branch above:
+
+    * No ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_API_KEY``. Claude Code on Bedrock
+      signs SigV4 against a region endpoint it derives itself; a base-url
+      redirect makes it speak plain Anthropic to that endpoint and every turn
+      403s. Under-configuring here is recoverable, over-configuring is not.
+    * The credential is a CHAIN, not one env var: an AWS profile, an IMDS/IRSA
+      role, ``GOOGLE_APPLICATION_CREDENTIALS``, or an Azure federated token. We
+      forward the names the platform's own SDK looks for and let it resolve
+      them — which also means a host authenticating by instance role needs no
+      env var at all and must NOT be reported as "credential missing".
+
+    Returns only vars that are actually present in ``source_env`` (plus the
+    enabling flag and the resolved region), so this never invents a credential.
+    """
+    src = source_env if source_env is not None else os.environ
+    pe = ps.platform_env or {}
+    out: dict[str, str] = {}
+    enable_var = str(pe.get("enable_var") or "")
+    if enable_var:
+        out[enable_var] = "1"
+    for name in pe.get("credential_vars") or []:
+        val = src.get(name)
+        if val:
+            out[name] = val
+    region = ps.resolved_region(src)
+    if region:
+        for name in pe.get("region_env") or []:
+            out.setdefault(name, region)
+    out["CORVIN_CC_PROVIDER"] = ps.id
+    return out
+
+
+#: Every env-var name any platform provider needs in a spawned engine process.
+#: Consumed by the worker/manager spawn paths, whose secret-strip is a NAME
+#: pattern (``ACCESS_KEY``/``SECRET``/``_TOKEN$``) that matches
+#: ``AWS_SECRET_ACCESS_KEY``, ``AWS_SESSION_TOKEN`` and
+#: ``GOOGLE_APPLICATION_CREDENTIALS`` — correct for an ordinary operator secret,
+#: fatal for the ONLY credential a Bedrock/Vertex host has. Forwarding them is
+#: not a weakening of that control: the OS turn already runs with them, so a
+#: worker that cannot see them is strictly less capable than its own parent and
+#: simply cannot authenticate at all.
+def platform_credential_var_names() -> "set[str]":
+    names: set[str] = set()
+    for ps in load_providers().values():
+        if not ps.is_platform:
+            continue
+        pe = ps.platform_env or {}
+        enable = pe.get("enable_var")
+        if enable:
+            names.add(str(enable))
+        for key in ("credential_vars", "region_env", "project_env", "resource_env"):
+            for n in pe.get(key) or []:
+                names.add(str(n))
+    return names
+
+
+def active_platform_provider(source_env: "dict[str, str] | None" = None) -> "ProviderSpec | None":
+    """The platform provider this HOST is configured for, read from the enabling
+    flag alone (``CLAUDE_CODE_USE_BEDROCK=1`` …). Independent of tenant config:
+    it is a property of the machine's Claude Code install, and it is what makes
+    a leftover OAuth credentials file the WRONG answer to "how is this host
+    authenticated" (engine_detection ordering, ADR-0759)."""
+    src = source_env if source_env is not None else os.environ
+    for ps in load_providers().values():
+        if not ps.is_platform:
+            continue
+        enable = str((ps.platform_env or {}).get("enable_var") or "")
+        if enable and (src.get(enable) or "").strip() in ("1", "true", "True", "TRUE"):
+            return ps
+    return None
+
+
 def resolve_engine_egress(tenant_id: str, engine_id: str) -> "ProviderSpec | None":
     """ADR-0181 M3 — the effective provider an engine egresses to for this tenant
     (or None to fall back to the engine's default host). The single source of
@@ -496,12 +659,20 @@ def resolve_engine_egress(tenant_id: str, engine_id: str) -> "ProviderSpec | Non
     if not pid:
         return None
     spec = load_providers().get(pid)
+    if spec is None:
+        return None
     # The effective egress target is `proxy_base_url or base_url` (see
     # resolve_engine_egress_host). Gate on the SAME expression so a proxy-only
     # provider (proxy_base_url set, base_url empty) still resolves — otherwise
     # L35 would validate the engine's default host while the adapter redirects
     # egress to the proxy host, silently bypassing the deny/forbid policy.
-    return spec if (spec and (spec.proxy_base_url or spec.base_url)) else None
+    # A platform provider (ADR-0759) has NO static base_url at all — its host is
+    # region-derived — so it resolves on that derived host instead. Returning
+    # None for it would have L35 validate api.anthropic.com while the engine
+    # actually talks to bedrock-runtime.<region>.amazonaws.com.
+    if spec.is_platform:
+        return spec if spec.resolved_host_url() else None
+    return spec if (spec.proxy_base_url or spec.base_url) else None
 
 
 def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
@@ -511,7 +682,9 @@ def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
     if spec is None:
         return None
     from urllib.parse import urlparse
-    return urlparse(spec.proxy_base_url or spec.base_url).hostname or None
+    target = spec.resolved_host_url() if spec.is_platform else (
+        spec.proxy_base_url or spec.base_url)
+    return urlparse(target).hostname or None
 
 
 # ---------------------------------------------------------------------------

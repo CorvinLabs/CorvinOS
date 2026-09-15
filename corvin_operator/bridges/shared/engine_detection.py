@@ -90,6 +90,14 @@ class EngineProbeResult:
     models: List[str] = field(default_factory=list)
     # Human-readable single-line status for the console UI.
     detail: Optional[str] = None
+    #: ADR-0759 — which PLAN/tier backs an authenticated engine, when the host
+    #: can say: "pro" / "max" / "team" / "enterprise" for an OAuth subscription
+    #: (read from the credentials file's ``subscriptionType``), the platform id
+    #: for Bedrock/Vertex/Foundry. "" when unknown. Never a credential value.
+    plan: str = ""
+    #: The vendor's own rate-limit tier string when it publishes one. Opaque
+    #: label, used only for display — never parsed into a quota decision.
+    rate_limit_tier: str = ""
 
 
 def _claude_settings_path() -> Path:
@@ -184,6 +192,72 @@ def _find_claude_credentials() -> Path | None:
     return None
 
 
+def _claude_subscription_info(path: Path) -> "tuple[str, str]":
+    """(plan, rate_limit_tier) from a Claude credentials file — names only.
+
+    Claude Code writes ``subscriptionType`` ("pro" | "max" | "team" |
+    "enterprise") next to the OAuth tokens. Reporting a bare "subscription"
+    for all four throws away the one fact that decides what the install may
+    actually do — an Enterprise seat and a Pro seat are not interchangeable,
+    and an operator debugging a rate limit needs to know which one they are on.
+
+    Reads ONLY these two labels. The tokens in the same file are never read,
+    never logged and never returned.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — a corrupt file is still an authenticated one
+        return "", ""
+    oauth = data.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        oauth = data if isinstance(data, dict) else {}
+    plan = str(oauth.get("subscriptionType") or "").strip().lower()
+    tier = str(oauth.get("rateLimitTier") or "").strip()
+    return plan, tier
+
+
+#: The three 3rd-party platforms, in the order Claude Code itself resolves them.
+#: (enabling flag, credential_source id, human label, extra-context env vars)
+_CLAUDE_PLATFORMS = (
+    ("CLAUDE_CODE_USE_BEDROCK", "bedrock", "Amazon Bedrock",
+     ("AWS_REGION", "AWS_DEFAULT_REGION")),
+    ("CLAUDE_CODE_USE_VERTEX", "vertex", "Google Vertex AI",
+     ("ANTHROPIC_VERTEX_PROJECT_ID",)),
+    ("CLAUDE_CODE_USE_FOUNDRY", "foundry", "Microsoft Foundry",
+     ("ANTHROPIC_FOUNDRY_RESOURCE",)),
+)
+
+
+def _claude_platform_probe(engine_id: str, version: "str | None",
+                           settings_env: dict) -> "EngineProbeResult | None":
+    """The platform this host is configured for, or None.
+
+    Checked BEFORE the OAuth credentials file, and that order is the whole
+    point (ADR-0759). Claude Code gives ``CLAUDE_CODE_USE_BEDROCK=1``
+    precedence over a stored subscription login: with the flag set it signs
+    SigV4 against Bedrock and never touches the OAuth token. Probing the file
+    first therefore reported "subscription" on a working Bedrock host — a
+    leftover ``~/.claude/.credentials.json`` from an earlier login is enough,
+    and nothing removes it when an operator switches to Bedrock. Everything
+    keyed on ``credential_source`` (the console's auth panel, the model-source
+    list, the worker spawn env) then made the wrong call, and the one that
+    matters is silent: the worker is handed no AWS credentials at all.
+    """
+    for enable_var, source_id, label, context_vars in _CLAUDE_PLATFORMS:
+        if _env_lookup(enable_var, settings_env) not in ("1", "true", "True", "TRUE"):
+            continue
+        detail = f"Authenticated via {label}"
+        context = [v for v in (_env_lookup(n, settings_env) for n in context_vars) if v]
+        if context:
+            detail += f" ({context[0]})"
+        return EngineProbeResult(
+            engine_id=engine_id, installed=True, authenticated=True,
+            credential_source=source_id, version=version, detail=detail,
+            plan=source_id,
+        )
+    return None
+
+
 def probe_claude_code() -> EngineProbeResult:
     engine_id = "claude_code"
 
@@ -212,48 +286,26 @@ def probe_claude_code() -> EngineProbeResult:
             detail="claude binary not found (tried: claude, claude-code)",
         )
 
-    # Subscription-First: check OAuth session before API key (v0.10.60: unified search).
-    creds_path = _find_claude_credentials()
-    if creds_path:
-        return EngineProbeResult(
-            engine_id=engine_id, installed=True, authenticated=True,
-            credential_source="subscription", version=version,
-            detail=f"Authenticated via Claude subscription (OAuth) — {creds_path}",
-        )
-
-    # 3rd-party platform (checked before the plain env_var/API-key case: a
-    # Bedrock/Vertex/Foundry install often has NO ANTHROPIC_API_KEY at all —
-    # falling through to "not authenticated" below was the actual bug).
     # Each wizard (`/setup-bedrock`, `/setup-vertex`) writes its result to
     # settings.json's `env` block, not the shell — check both.
     settings_env = _claude_settings_env()
 
-    if _env_lookup("CLAUDE_CODE_USE_BEDROCK", settings_env) in ("1", "true", "True"):
-        detail = "Authenticated via Amazon Bedrock"
-        region = _env_lookup("AWS_REGION", settings_env) or _env_lookup("AWS_DEFAULT_REGION", settings_env)
-        if region:
-            detail += f" ({region})"
-        return EngineProbeResult(
-            engine_id=engine_id, installed=True, authenticated=True,
-            credential_source="bedrock", version=version, detail=detail,
-        )
+    # 3rd-party platform FIRST — see _claude_platform_probe for why this must
+    # outrank the OAuth credentials file (ADR-0759).
+    platform = _claude_platform_probe(engine_id, version, settings_env)
+    if platform is not None:
+        return platform
 
-    if _env_lookup("CLAUDE_CODE_USE_VERTEX", settings_env) in ("1", "true", "True"):
-        project = _env_lookup("ANTHROPIC_VERTEX_PROJECT_ID", settings_env)
-        detail = f"Authenticated via Google Vertex AI (project {project})" if project else \
-            "Authenticated via Google Vertex AI"
+    # Subscription (v0.10.60: unified search), reported WITH its plan.
+    creds_path = _find_claude_credentials()
+    if creds_path:
+        plan, tier = _claude_subscription_info(creds_path)
+        label = f"Claude {plan.capitalize()}" if plan else "Claude subscription"
         return EngineProbeResult(
             engine_id=engine_id, installed=True, authenticated=True,
-            credential_source="vertex", version=version, detail=detail,
-        )
-
-    if _env_lookup("CLAUDE_CODE_USE_FOUNDRY", settings_env) in ("1", "true", "True"):
-        resource = _env_lookup("ANTHROPIC_FOUNDRY_RESOURCE", settings_env)
-        detail = f"Authenticated via Microsoft Foundry (resource {resource})" if resource else \
-            "Authenticated via Microsoft Foundry"
-        return EngineProbeResult(
-            engine_id=engine_id, installed=True, authenticated=True,
-            credential_source="foundry", version=version, detail=detail,
+            credential_source="subscription", version=version,
+            detail=f"Authenticated via {label} (OAuth) — {creds_path}",
+            plan=plan, rate_limit_tier=tier,
         )
 
     env_key = _env_lookup("ANTHROPIC_API_KEY", settings_env)

@@ -105,7 +105,7 @@ _CORE_QUALITY_SKILL_NAMES: tuple[str, ...] = ("adr_gate", "e2e-wiring-proof", "c
 # never IndexError regardless of how shallow the actual path turns out to be.
 _BUNDLE_SKILLS_DIR_CANDIDATES: tuple[Path, ...] = (
     _HERE.parent.parent / "bundle" / "skills" / "ldd",
-    _HERE.parent.parent.parent / "operator" / "bundle" / "skills" / "ldd",
+    _HERE.parent.parent.parent / "corvin_operator" / "bundle" / "skills" / "ldd",
 )
 
 

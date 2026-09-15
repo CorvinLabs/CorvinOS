@@ -115,7 +115,7 @@ class SysPathCoreShadowing(unittest.TestCase):
         confusing: both modules are named `audit`, only one has the function
         the tripwire calls.
         """
-        bridge = _REPO / "operator" / "bridges" / "shared" / "audit.py"
+        bridge = _REPO / "corvin_operator" / "bridges" / "shared" / "audit.py"
         self.assertTrue(bridge.is_file(), "bridge audit module missing")
         self.assertIn("def audit_path", bridge.read_text(encoding="utf-8"))
 

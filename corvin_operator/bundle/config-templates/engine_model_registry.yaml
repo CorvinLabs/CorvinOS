@@ -25,6 +25,21 @@
 #   model_source   — static | ollama | openrouter (how the live list is fetched)
 #   credential_env — env-var NAME for the API key (value lives in the L16 vault; never here)
 #   kind           — local | cloud (cloud = network egress → L34/L35 re-evaluated on assign)
+#   auth_mode      — api_key | platform   (ADR-0759)
+#       api_key  (default) — the engine is REDIRECTED to this provider by setting
+#                 ANTHROPIC_BASE_URL + the vault key. base_url is a fixed host and
+#                 credential_env names the single API key.
+#       platform — the engine speaks to this provider NATIVELY via its own flag
+#                 (CLAUDE_CODE_USE_BEDROCK / _VERTEX / _FOUNDRY) and the platform
+#                 credential CHAIN (AWS profile / IAM role / ADC / az login).
+#                 ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY MUST NOT be set for
+#                 these — doing so makes Claude Code speak plain Anthropic to a
+#                 SigV4 endpoint and every turn 403s. The endpoint host is
+#                 REGION-DERIVED at fetch time (platform_env.region_env), so the
+#                 L35 egress gate validates the host actually contacted rather
+#                 than a static placeholder.
+#   platform_env   — for auth_mode: platform — the enabling flag, the region/project
+#                 env-var names, and the host template used for egress + live fetch.
 # supported_providers per engine: {provider, native, note}. native=false means the
 # engine reaches the provider via a proxy/redirect (labelled as such in the UI).
 
@@ -70,6 +85,80 @@ providers:
     credential_env: "OPENROUTER_API_KEY"
     kind: "cloud"
 
+  # ── Enterprise / platform access (ADR-0759) ────────────────────────────
+  # These are NOT base_url redirects. Claude Code reaches them natively; CorvinOS
+  # only sets the enabling flag and lets the platform credential chain
+  # (AWS profile/role, GCP ADC, Azure login) authenticate. Model ids here are the
+  # platform's own spelling (`eu.anthropic.claude-sonnet-5` inference profiles);
+  # cost accounting strips the routing prefix and prices them as the same family.
+  bedrock:
+    label: "Amazon Bedrock"
+    base_url: ""
+    model_source: "bedrock"
+    credential_env: ""
+    kind: "cloud"
+    auth_mode: "platform"
+    platform_env:
+      enable_var: "CLAUDE_CODE_USE_BEDROCK"
+      region_env: ["AWS_REGION", "AWS_DEFAULT_REGION"]
+      default_region: "us-east-1"
+      host_template: "https://bedrock.{region}.amazonaws.com"
+      runtime_host_template: "https://bedrock-runtime.{region}.amazonaws.com"
+      credential_vars:
+        - "AWS_PROFILE"
+        - "AWS_REGION"
+        - "AWS_DEFAULT_REGION"
+        - "AWS_ACCESS_KEY_ID"
+        - "AWS_SECRET_ACCESS_KEY"
+        - "AWS_SESSION_TOKEN"
+        - "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+        - "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"
+        - "AWS_WEB_IDENTITY_TOKEN_FILE"
+        - "AWS_ROLE_ARN"
+        - "AWS_SHARED_CREDENTIALS_FILE"
+        - "AWS_CONFIG_FILE"
+        - "AWS_BEARER_TOKEN_BEDROCK"
+  vertex:
+    label: "Google Vertex AI"
+    base_url: ""
+    model_source: "vertex"
+    credential_env: ""
+    kind: "cloud"
+    auth_mode: "platform"
+    platform_env:
+      enable_var: "CLAUDE_CODE_USE_VERTEX"
+      region_env: ["CLOUD_ML_REGION", "ANTHROPIC_VERTEX_REGION"]
+      default_region: "us-east5"
+      project_env: ["ANTHROPIC_VERTEX_PROJECT_ID"]
+      host_template: "https://{region}-aiplatform.googleapis.com"
+      credential_vars:
+        - "ANTHROPIC_VERTEX_PROJECT_ID"
+        - "CLOUD_ML_REGION"
+        - "ANTHROPIC_VERTEX_REGION"
+        - "GOOGLE_APPLICATION_CREDENTIALS"
+        - "GOOGLE_CLOUD_PROJECT"
+        - "GCLOUD_PROJECT"
+  foundry:
+    label: "Microsoft Foundry"
+    base_url: ""
+    model_source: "foundry"
+    credential_env: ""
+    kind: "cloud"
+    auth_mode: "platform"
+    platform_env:
+      enable_var: "CLAUDE_CODE_USE_FOUNDRY"
+      region_env: ["ANTHROPIC_FOUNDRY_REGION"]
+      default_region: "eastus"
+      host_template: "https://{resource}.services.ai.azure.com"
+      resource_env: ["ANTHROPIC_FOUNDRY_RESOURCE"]
+      credential_vars:
+        - "ANTHROPIC_FOUNDRY_RESOURCE"
+        - "ANTHROPIC_FOUNDRY_REGION"
+        - "AZURE_CLIENT_ID"
+        - "AZURE_TENANT_ID"
+        - "AZURE_CLIENT_SECRET"
+        - "AZURE_FEDERATED_TOKEN_FILE"
+
 engines:
   claude_code:
     label: "Claude Code"
@@ -97,6 +186,15 @@ engines:
       - provider: "openrouter"
         native: false
         note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
+      - provider: "bedrock"
+        native: true
+        note: "native CLAUDE_CODE_USE_BEDROCK=1 + AWS credential chain (no base-url redirect)"
+      - provider: "vertex"
+        native: true
+        note: "native CLAUDE_CODE_USE_VERTEX=1 + Google ADC (no base-url redirect)"
+      - provider: "foundry"
+        native: true
+        note: "native CLAUDE_CODE_USE_FOUNDRY=1 + Azure credential chain (no base-url redirect)"
     os_models:
       - id: ""
         label: "Adaptive — Haiku ≤60K chars, Sonnet above (default)"

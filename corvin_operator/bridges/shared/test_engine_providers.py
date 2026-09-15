@@ -16,7 +16,22 @@ import engine_providers as EP  # type: ignore
 
 def test_providers_registry_loaded():
     prov = EM.providers_as_dict(force_reload=True)
-    assert set(prov) == {"anthropic", "openai", "ollama_local", "ollama_cloud", "openrouter"}
+    # ADR-0759 added the three native platform providers alongside the five
+    # api_key ones. Asserted as an exact set on purpose: a provider silently
+    # vanishing from the registry is exactly the failure this file exists for.
+    assert set(prov) == {
+        "anthropic", "openai", "ollama_local", "ollama_cloud", "openrouter",
+        "bedrock", "vertex", "foundry",
+    }
+    assert {p["auth_mode"] for p in prov.values()} == {"api_key", "platform"}
+    assert {k for k, v in prov.items() if v["auth_mode"] == "platform"} == {
+        "bedrock", "vertex", "foundry"}
+    # A platform provider must NOT advertise a single credential env var — its
+    # credential is a chain, and an operator prompted for "the Bedrock API key"
+    # has already been sent down the wrong path.
+    for pid in ("bedrock", "vertex", "foundry"):
+        assert prov[pid]["credential_env"] == ""
+        assert prov[pid]["platform_env"]["enable_var"].startswith("CLAUDE_CODE_USE_")
     assert prov["openrouter"]["kind"] == "cloud"
     assert prov["ollama_local"]["kind"] == "local"
     # credential_env is a NAME, never a secret value
@@ -117,7 +132,7 @@ def test_bad_reload_does_not_wipe_good_cache(tmp_path):
     importlib.reload(EM)
     EM.load_registry(force_reload=True)
     good = len(EM.load_providers())
-    assert good == 5
+    assert good == 8
     orig = EM._REGISTRY_FILE
     try:
         EM._REGISTRY_FILE = tmp_path / "missing.yaml"

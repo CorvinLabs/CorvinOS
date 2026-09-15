@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -120,13 +121,41 @@ def _load_tenant_yaml(tenant_id: str) -> dict[str, Any]:
 
 
 def _save_tenant_yaml(tenant_id: str, data: dict[str, Any]) -> None:
-    """Save tenant configuration to YAML atomically."""
+    """Save tenant configuration to YAML atomically, mode 0o600.
+
+    The mode is NOT cosmetic. ``corvin_gateway.tenant_config`` reads this same
+    file fail-closed and REFUSES any file whose mode is wider than 0o600
+    ("tenant-config-malformed: … has mode 0o664, want 0o600"), so a writer that
+    honours the process umask does not merely relax a permission — it makes the
+    file unreadable to the gateway and every subsequent run terminates as
+    ``failed`` before an engine is ever spawned.
+
+    That is exactly what happened here: this function wrote through
+    ``Path.write_text`` + ``replace``, i.e. at umask (0o664 on this host), and
+    ``os.replace`` carries the TEMP file's mode onto the target — so saving
+    anything on the Engine Configuration page silently disabled every gateway
+    worker run until an operator chmod'ed the file back by hand. Measured
+    2026-09-15: the file was 0o664 and 100% of submitted runs failed.
+
+    ``chmod`` happens BEFORE ``replace`` so there is never a window in which the
+    live path is world-readable (same ordering as ``routes/compute.py``'s
+    writer, which had this right).
+    """
     path = _tenant_yaml_path(tenant_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write via temp file
-    tmp = path.with_suffix(".yaml.tmp")
-    tmp.write_text(yaml.safe_dump(data, default_flow_style=False))
-    tmp.replace(path)
+    raw = yaml.safe_dump(data, default_flow_style=False)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tenant.corvin.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(raw)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -477,12 +506,13 @@ def _refresh_model_catalog_now(provider: str, tenant_id: str) -> None:
         spec = load_providers(force_reload=True).get(provider)
         if spec is None:
             return
-        if spec.kind == "cloud" and spec.base_url:
-            if _egress_denied(spec.base_url, tenant_id):
+        if spec.kind == "cloud" and spec.egress_url:
+            if _egress_denied(spec.egress_url, tenant_id):
                 return  # L35 applies to the background refresh too
         result = fetch_models(provider, base_url=spec.base_url,
                               model_source=spec.model_source,
-                              credential_env=spec.credential_env) or {}
+                              credential_env=spec.credential_env,
+                              platform_env=spec.platform_env) or {}
         models = result.get("models") or []
         if models:
             model_catalog.store_models(provider, models)
@@ -570,13 +600,15 @@ def get_provider_models(
     if spec is None:
         return {"provider": provider, "reachable": False, "models": [],
                 "count": 0, "error": f"unknown provider '{provider}'"}
-    if spec.kind == "cloud" and spec.base_url:
-        denied = _egress_denied(spec.base_url, getattr(_rec, "tenant_id", "_default"))
+    if spec.kind == "cloud" and spec.egress_url:
+        denied = _egress_denied(spec.egress_url, getattr(_rec, "tenant_id", "_default"))
         if denied:
             return {"provider": provider, "reachable": False, "models": [],
                      "count": 0, "error": denied}
     return fetch_models(provider, base_url=spec.base_url,
-                        model_source=spec.model_source, credential_env=spec.credential_env)
+                        model_source=spec.model_source,
+                        credential_env=spec.credential_env,
+                        platform_env=spec.platform_env)
 
 
 @router.get("/detect")
@@ -612,6 +644,12 @@ def detect_engines(
                 "version": r.version,
                 "models": r.models,
                 "detail": r.detail,
+                # ADR-0759 — WHICH subscription/platform, not just "a
+                # subscription". Both are labels the vendor publishes about the
+                # account tier; neither is or contains a credential value, so
+                # the no-secrets contract above still holds.
+                "plan": getattr(r, "plan", "") or "",
+                "rate_limit_tier": getattr(r, "rate_limit_tier", "") or "",
             }
             for r in results
         ]

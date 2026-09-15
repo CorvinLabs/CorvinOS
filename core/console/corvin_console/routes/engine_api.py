@@ -45,7 +45,7 @@ from ..deps import require_csrf, require_session
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 
@@ -53,11 +53,31 @@ router = APIRouter()
 
 TASK_TYPES = ("corvinOS", "SIMPLE", "MEDIUM", "COMPLEX")
 
-#: Which provider ids can serve a "native Claude" model on this host. Both are
-#: real, live sources; which one applies depends on how Claude Code is logged in
-#: (an API key vs. CLAUDE_CODE_USE_BEDROCK=1), so both are always offered and
-#: each reports its own reachability.
-_CLAUDE_PROVIDERS = ("anthropic", "bedrock")
+#: Fallback list of provider ids that can serve a "native Claude" model, used
+#: only when the registry cannot be read. The live answer comes from
+#: :func:`_claude_provider_ids` — hardcoding it here meant a provider added to
+#: the registry (Vertex, Foundry — ADR-0759) was configurable but never queried,
+#: so its models never appeared and its reachability was never reported.
+_CLAUDE_PROVIDERS_FALLBACK = ("anthropic", "bedrock")
+
+
+def _claude_provider_ids() -> tuple[str, ...]:
+    """Every provider that can serve a native Claude model on this host.
+
+    Which one APPLIES depends on how Claude Code is logged in (API key vs.
+    ``CLAUDE_CODE_USE_BEDROCK=1`` vs. Vertex/Foundry), so all of them are always
+    queried and each reports its own reachability — an install must be able to
+    see that a source it is not using is simply not credentialed here, rather
+    than see a list that silently omits it.
+    """
+    try:
+        from engine_models import load_providers  # type: ignore[import]  # noqa: PLC0415
+        providers = load_providers()
+    except Exception:  # noqa: BLE001
+        return _CLAUDE_PROVIDERS_FALLBACK
+    ids = [pid for pid, spec in providers.items()
+           if pid == "anthropic" or getattr(spec, "is_platform", False)]
+    return tuple(ids) or _CLAUDE_PROVIDERS_FALLBACK
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -243,7 +263,7 @@ def _claude_catalog_offline() -> set[str]:
         pass
     try:
         import model_catalog  # type: ignore[import]  # noqa: PLC0415
-        for provider_id in _CLAUDE_PROVIDERS:
+        for provider_id in _claude_provider_ids():
             for entry in model_catalog.catalog_models(provider_id) or []:
                 entry_id = entry.get("id") if isinstance(entry, dict) else None
                 if entry_id and _is_claude_model_id(entry_id):
@@ -336,7 +356,7 @@ async def get_claude_models(
         "credential_absent": False,
     })
 
-    for provider_id in _CLAUDE_PROVIDERS:
+    for provider_id in _claude_provider_ids():
         fetched = _fetch_provider_models(provider_id, tenant_id)
         matched = 0
         for model in fetched.get("models") or []:
@@ -394,10 +414,10 @@ def _fetch_provider_models(provider_id: str, tenant_id: str) -> dict[str, Any]:
     if spec is None:
         return {"reachable": False, "models": [], "error": f"unknown provider '{provider_id}'"}
 
-    if spec.kind == "cloud" and spec.base_url:
+    if spec.kind == "cloud" and spec.egress_url:
         try:
             from .engine import _egress_denied  # noqa: PLC0415
-            denied = _egress_denied(spec.base_url, tenant_id)
+            denied = _egress_denied(spec.egress_url, tenant_id)
         except Exception:  # noqa: BLE001
             denied = None
         if denied:
@@ -407,6 +427,7 @@ def _fetch_provider_models(provider_id: str, tenant_id: str) -> dict[str, Any]:
     result = fetch_models(
         provider_id, base_url=spec.base_url,
         model_source=spec.model_source, credential_env=spec.credential_env,
+        platform_env=spec.platform_env,
     )
     result["provider_label"] = spec.label
     # Bedrock resolves its endpoint + credential at fetch time; naming both lets
@@ -620,6 +641,7 @@ async def test_external_provider(
     result = fetch_models(
         test_req.provider, base_url=spec.base_url,
         model_source=spec.model_source, credential_env=spec.credential_env,
+        platform_env=spec.platform_env,
     )
     latency_ms = (time.time() - start) * 1000
     return {

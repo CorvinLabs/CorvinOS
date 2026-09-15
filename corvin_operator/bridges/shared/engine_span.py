@@ -35,6 +35,15 @@ END_FIELDS = frozenset({
     "span_id", "parent_span_id", "role", "engine_id", "model_id",
     "run_id", "turn_id", "status", "duration_ms", "tokens_used", "tool_call_count",
     "trace_available",  # ADR-0172 M1: True when a worker-trace.jsonl was written
+    # ADR-0759 — the four-way token split, additive to the ``tokens_used``
+    # total. A single total cannot be priced: Anthropic bills input, output,
+    # cache-write and cache-read at four different rates (the cache-read
+    # multiplier alone is 10x apart from input), and on a cache-heavy turn the
+    # cache fields dwarf the other two. ``os_turn.completed`` has carried the
+    # split since 2026-09-13; a WORKER span carried nothing, so every delegated
+    # turn was priced at $0.00 while still counting as a turn. Still metadata
+    # only — four integers, no text.
+    "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
 })
 
 
@@ -74,15 +83,30 @@ def end_details(*, span_id: str, role: str, engine_id: str, model_id: str = "",
                 parent_span_id: str = "", run_id: str = "", turn_id: str = "",
                 status: str = "ok", duration_ms: int = 0, tokens_used: int = 0,
                 tool_call_count: int = 0,
-                trace_available: bool = False) -> dict[str, Any]:
-    """Build the metadata dict for an engine.span.end event."""
+                trace_available: bool = False,
+                input_tokens: int = 0, output_tokens: int = 0,
+                cache_read_tokens: int = 0,
+                cache_write_tokens: int = 0) -> dict[str, Any]:
+    """Build the metadata dict for an engine.span.end event.
+
+    ``tokens_used`` stays the single total for readers that only want one
+    number; when it is not given explicitly it is DERIVED from the four-way
+    split rather than left at 0, so the two can never disagree.
+    """
+    split_total = (int(input_tokens) + int(output_tokens)
+                   + int(cache_read_tokens) + int(cache_write_tokens))
     return {
         "span_id": span_id, "parent_span_id": parent_span_id, "role": role,
         "engine_id": engine_id, "model_id": model_id or "",
         "run_id": run_id, "turn_id": turn_id, "status": status,
-        "duration_ms": int(duration_ms), "tokens_used": int(tokens_used),
+        "duration_ms": int(duration_ms),
+        "tokens_used": int(tokens_used) or split_total,
         "tool_call_count": int(tool_call_count),
         "trace_available": bool(trace_available),
+        "input_tokens": int(input_tokens),
+        "output_tokens": int(output_tokens),
+        "cache_read_tokens": int(cache_read_tokens),
+        "cache_write_tokens": int(cache_write_tokens),
     }
 
 

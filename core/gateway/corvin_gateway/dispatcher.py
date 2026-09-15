@@ -38,6 +38,7 @@ What this module does NOT do
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import sys
 import time
@@ -137,6 +138,13 @@ class _EngineLike(Protocol):
         *,
         env: dict[str, str] | None = None,
         timeout: float = 120.0,
+        # OPTIONAL on purpose. The real ClaudeCodeEngine takes it; a minimal
+        # engine (and every test stub written before 2026-09-15) does not, and
+        # an engine that cannot be steered to a model is a supported engine —
+        # not a broken one. _spawn_collect probes for the parameter rather than
+        # passing it unconditionally, so adding it here widens the protocol
+        # without invalidating any existing implementation.
+        model: str | None = None,
     ) -> Iterator[Any]:
         ...
 
@@ -146,6 +154,36 @@ class _EngineLike(Protocol):
 
 DEFAULT_BUDGET_S = 60
 """Wall-clock cap when ``budget_override.max_wall_clock_s`` is absent."""
+
+
+def _engine_accepts_model(engine: Any) -> bool:
+    """Does this engine's ``spawn`` take a ``model`` keyword?
+
+    Passing it blindly turned every engine WITHOUT the parameter into a
+    ``TypeError`` inside the worker thread, which surfaced as a generic
+    ``status="failed"`` run — a model preference silently converting working
+    dispatches into failures is a far worse outcome than not honouring the
+    preference. Probed, not assumed, and the result cached per class because
+    ``inspect.signature`` is not free and the engine is constructed per run.
+    """
+    cls = type(engine)
+    cached = _MODEL_KW_SUPPORT.get(cls)
+    if cached is not None:
+        return cached
+    try:
+        params = inspect.signature(engine.spawn).parameters
+        supported = "model" in params or any(
+            prm.kind is inspect.Parameter.VAR_KEYWORD for prm in params.values()
+        )
+    except (TypeError, ValueError):  # builtin / C-level callable
+        supported = False
+    _MODEL_KW_SUPPORT[cls] = supported
+    return supported
+
+
+#: type -> does its spawn() accept model=. Bounded by the number of engine
+#: classes in the process, which is a handful.
+_MODEL_KW_SUPPORT: dict[type, bool] = {}
 
 
 def _default_engine_factory() -> _EngineLike:
@@ -220,11 +258,50 @@ class RunDispatcher:
         except Exception:
             pass
 
+    @staticmethod
+    def _usage_split(usage: "dict[str, Any] | None") -> dict[str, int]:
+        """The four token counts from an engine's raw usage object.
+
+        Key names differ between the CLI's ``result`` frame
+        (``cache_read_input_tokens``) and the shorter span field
+        (``cache_read_tokens``); both spellings are accepted so a future engine
+        that reports either lands in the same columns. Missing keys are 0 — an
+        absent count is never inferred from another one.
+        """
+        if not isinstance(usage, dict):
+            return {"input_tokens": 0, "output_tokens": 0,
+                    "cache_read_tokens": 0, "cache_write_tokens": 0}
+
+        def _pick(*names: str) -> int:
+            for name in names:
+                val = usage.get(name)
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    return int(val)
+            return 0
+
+        return {
+            "input_tokens":      _pick("input_tokens"),
+            "output_tokens":     _pick("output_tokens"),
+            "cache_read_tokens": _pick("cache_read_input_tokens", "cache_read_tokens"),
+            "cache_write_tokens": _pick("cache_creation_input_tokens", "cache_write_tokens"),
+        }
+
     def _emit_engine_span(self, kind: str, *, tenant_id: str, run_id: str,
-                          engine_id: str, status: str = "ok",
-                          duration_ms: int = 0) -> None:
+                          engine_id: str, model_id: str = "", status: str = "ok",
+                          duration_ms: int = 0,
+                          usage: "dict[str, Any] | None" = None) -> None:
         """ADR-0171 — engine.span.start/end (role=worker) for the gateway run on
-        the tenant's unified chain. Best-effort; never wedges dispatch."""
+        the tenant's unified chain. Best-effort; never wedges dispatch.
+
+        ``model_id`` is NOT optional in practice even though the parameter is.
+        It was omitted entirely until 2026-09-15, and the consequence was not a
+        missing field: ``console/model_usage.py`` keys every row on the model id
+        and DROPS an observation that has none, so 100% of delegated worker
+        spend was invisible in the Engine Configuration panel while the OS turns
+        next to it were counted. The panel read as "this install only ever runs
+        OS turns", which is exactly the opposite of what a delegating install
+        does. Pass the real id at every call site.
+        """
         if _espan is None:
             return
         span_id = f"spn-{run_id}-w0"
@@ -232,13 +309,44 @@ class RunDispatcher:
             self._audit_policy(
                 _espan.ENGINE_SPAN_START, tenant_id=tenant_id, severity="INFO",
                 details=_espan.start_details(span_id=span_id, role="worker",
-                                             engine_id=engine_id, run_id=run_id))
+                                             engine_id=engine_id,
+                                             model_id=model_id, run_id=run_id))
         else:
             self._audit_policy(
                 _espan.ENGINE_SPAN_END, tenant_id=tenant_id, severity="INFO",
                 details=_espan.end_details(span_id=span_id, role="worker",
-                                           engine_id=engine_id, run_id=run_id,
-                                           status=status, duration_ms=int(duration_ms)))
+                                           engine_id=engine_id,
+                                           model_id=model_id, run_id=run_id,
+                                           status=status, duration_ms=int(duration_ms),
+                                           **self._usage_split(usage)))
+
+    @staticmethod
+    def _resolve_worker_model(tenant_id: str, engine_id: str) -> str:
+        """The worker model this tenant configured for ``engine_id``, or "".
+
+        Reads the SAME key the console writes (``spec.engine_models.<engine>.
+        worker_model``, PUT /settings/engine) and the same registry default the
+        picker marks, so "what the operator selected" and "what the gateway
+        spawns" cannot drift apart. Before this, the gateway passed no model at
+        all: the console offered a worker-model choice that silently applied to
+        ACS delegation only, while every gateway run used the CLI default.
+        "" means "no configured preference" and is passed through as None so the
+        engine keeps its own default — never a guessed id.
+        """
+        try:
+            from engine_models import (  # type: ignore[import]  # noqa: PLC0415
+                get_tenant_engine_model, load_registry,
+            )
+        except Exception:  # noqa: BLE001 — bridges subtree absent (unit sandbox)
+            return ""
+        try:
+            configured = get_tenant_engine_model(tenant_id, engine_id, "worker_model")
+            if configured:
+                return configured
+            spec = load_registry().get(engine_id)
+            return (spec.default_worker_model() or "") if spec is not None else ""
+        except Exception:  # noqa: BLE001
+            return ""
 
     # ------------------------------------------------------------------
     # Public surface
@@ -630,10 +738,11 @@ class RunDispatcher:
                 pass
 
         start = time.time()
+        worker_model = self._resolve_worker_model(tenant_id, _gw_engine_id)
         # ADR-0171 — engine.span.start (role=worker): every gateway engine run is
         # auditable as a span regardless of outcome (paired at all 4 exits below).
         self._emit_engine_span("start", tenant_id=tenant_id, run_id=run_id,
-                               engine_id=engine_name)
+                               engine_id=engine_name, model_id=worker_model)
         try:
             outcome = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -642,6 +751,7 @@ class RunDispatcher:
                     prompt=prompt,
                     env=spawn_env,
                     event_buffer=event_buffer,
+                    model=worker_model or None,
                 ),
                 timeout=float(budget_s),
             )
@@ -655,7 +765,8 @@ class RunDispatcher:
             except Exception:
                 pass
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                                   engine_id=engine_name, status="error",
+                                   engine_id=engine_name, model_id=worker_model,
+                                   status="error",
                                    duration_ms=int(duration * 1000))
             # Record timeout error metric
             if EngineMetricsCollector is not None:
@@ -688,7 +799,8 @@ class RunDispatcher:
             except Exception:
                 pass
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                                   engine_id=engine_name, status="error",
+                                   engine_id=engine_name, model_id=worker_model,
+                                   status="error",
                                    duration_ms=int(duration * 1000))
             # Record cancellation metric
             if EngineMetricsCollector is not None:
@@ -713,7 +825,8 @@ class RunDispatcher:
         except Exception as exc:  # engine crash, import error, etc.
             duration = time.time() - start
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                                   engine_id=engine_name, status="error",
+                                   engine_id=engine_name, model_id=worker_model,
+                                   status="error",
                                    duration_ms=int(duration * 1000))
             # Record error metric
             if EngineMetricsCollector is not None:
@@ -735,8 +848,11 @@ class RunDispatcher:
         if outcome.get("error"):
             duration_ms = int(outcome.get("duration_ms", 0))
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                                   engine_id=engine_name, status="error",
-                                   duration_ms=duration_ms)
+                                   engine_id=engine_name,
+                                   model_id=outcome.get("model") or worker_model,
+                                   status="error",
+                                   duration_ms=duration_ms,
+                                   usage=outcome.get("usage"))
             # Record engine-level error metric
             if EngineMetricsCollector is not None:
                 EngineMetricsCollector.record_error(
@@ -754,7 +870,10 @@ class RunDispatcher:
         duration_ms = int(outcome.get("duration_ms", 0))
         tokens_used = outcome.get("usage", {}).get("output_tokens")
         self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
-                               engine_id=engine_name, status="ok",
+                               engine_id=engine_name,
+                               model_id=outcome.get("model") or worker_model,
+                               status="ok",
+                               usage=outcome.get("usage"),
                                duration_ms=duration_ms)
         # Record successful execution metric
         if EngineMetricsCollector is not None:
@@ -827,6 +946,7 @@ class RunDispatcher:
         prompt: str,
         env: dict[str, str],
         event_buffer: RunEventBuffer | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """Sync wrapper: drain the engine stream, project to dict.
 
@@ -841,6 +961,12 @@ class RunDispatcher:
         text_chunks: list[str] = []
         usage: dict[str, Any] = {}
         error: str | None = None
+        # The model the ENGINE reports it is running, from its own
+        # session_started/init frame. Preferred over the id we asked for when
+        # closing the span: an alias, a Bedrock inference profile or a CLI
+        # default resolves to something else, and auditing the request instead
+        # of the fact would make the usage panel confidently wrong.
+        reported_model: str = ""
 
         try:
             # ADR-0648 amendment 2 (round 4, 2026-09-07): `prompt` is the raw
@@ -855,8 +981,15 @@ class RunDispatcher:
             # Do NOT re-introduce a bespoke argv build here: it would leave the
             # engine's guard behind. Proof:
             # `core/gateway/tests/test_dispatcher_prompt_guard.py`.
-            for event in engine.spawn(prompt, env=env):
+            spawn_kwargs: dict[str, Any] = {"env": env}
+            if model and _engine_accepts_model(engine):
+                spawn_kwargs["model"] = model
+            for event in engine.spawn(prompt, **spawn_kwargs):
                 ev_type = getattr(event, "type", None)
+                if ev_type == "session_started" and not reported_model:
+                    raw = getattr(event, "raw", None)
+                    if isinstance(raw, dict):
+                        reported_model = str(raw.get("model") or "")
                 ev_text = getattr(event, "text", "") or ""
                 ev_usage = getattr(event, "usage", None) or {}
                 ev_error = getattr(event, "error", None)
@@ -889,4 +1022,10 @@ class RunDispatcher:
             "usage":       usage,
             "duration_ms": int((time.time() - start) * 1000),
             "error":       error,
+            # "" when the engine never announced one (a crash before its init
+            # frame). The caller falls back to the REQUESTED id rather than
+            # writing an empty model into the span — an empty id is dropped
+            # from every usage roll-up, so it is the one value that must not
+            # reach the chain.
+            "model":       reported_model,
         }
