@@ -35,12 +35,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Optional, Any
 from datetime import datetime
 
 from .types import AssetAnalysisResult, Storyboard, Scene
 from .exceptions import AnalysisGateFailedError
+
+logger = logging.getLogger(__name__)
 
 # Import AssetAnalyzer from workers (dynamic to avoid circular imports)
 # Will be imported when needed in orchestrate() method
@@ -123,6 +126,11 @@ class VideoProducerOrchestrator:
                 video_path = result.get("video_path")
                 video_metadata = result.get("metadata")
 
+            # Phase 6.5: Video Validation (NEW - validate before upload)
+            validation_result = None
+            if video_path:
+                validation_result = await self._execute_phase_6_5_video_validation(video_path)
+
             # Phase 7: YouTube Upload (NEW - Phase 4a, optional, non-blocking)
             youtube_task_id = None
             if 7 not in skip_phases and video_path:
@@ -135,6 +143,7 @@ class VideoProducerOrchestrator:
                 "storyboard": storyboard.to_dict() if storyboard else None,
                 "slides_metadata": slides_metadata,
                 "video_path": video_path,
+                "validation": validation_result if validation_result else None,
                 "youtube_task_id": youtube_task_id,
                 "status": "success" if video_path else "partial",
                 "message": "Video production complete" if video_path else "Partial completion (phases 5+ pending)",
@@ -359,6 +368,84 @@ class VideoProducerOrchestrator:
                 "video_path": None,
                 "metadata": {"error": str(e)},
                 "timing_issues": [],
+            }
+
+    async def _execute_phase_6_5_video_validation(
+        self,
+        video_path: str,
+    ) -> dict[str, Any]:
+        """
+        Phase 6.5: Video Validation (Quality checks before upload).
+
+        Validate generated video for known issues (solid background, audio quality, metadata).
+        Returns validation result that gets merged into orchestration response.
+
+        Args:
+            video_path: Path to generated video MP4
+
+        Returns:
+            {
+                "video_path": str,
+                "is_valid": bool,
+                "severity": "ok" | "warning" | "error",
+                "file_size_mb": float,
+                "duration_s": float,
+                "resolution": str,
+                "fps": float,
+                "codecs": dict,
+                "issues": list,
+                "recommendations": list,
+                "timestamp": str,
+                "skill_id": str,
+                "manifest_version": str,
+            }
+        """
+        try:
+            # Import validator skill dynamically (like other workers in this orchestrator)
+            try:
+                from core.plugins.buildin.data_processing.video_producer.skills.video_validator_v1 import (
+                    VideoValidatorSkill,
+                )
+            except ImportError:
+                # Fallback: try alternate path
+                import sys
+                from pathlib import Path as PathlibPath
+
+                plugin_path = PathlibPath(__file__).parent.parent.parent.parent / "plugins" / "buildin" / "data_processing" / "video_producer" / "skills"
+                if str(plugin_path) not in sys.path:
+                    sys.path.insert(0, str(plugin_path.parent.parent.parent))
+
+                from core.plugins.buildin.data_processing.video_producer.skills.video_validator_v1 import (
+                    VideoValidatorSkill,
+                )
+
+            validator = VideoValidatorSkill()
+            result = validator.execute(video_path)
+
+            # Log validation event to audit trail
+            logger.info(
+                f"Video validation complete: {video_path} | severity={result.get('severity')} | "
+                f"issues={len(result.get('issues', []))}"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Video validation failed: {e}")
+            return {
+                "video_path": video_path,
+                "is_valid": False,
+                "severity": "error",
+                "file_size_mb": 0,
+                "duration_s": 0,
+                "resolution": "unknown",
+                "fps": 0.0,
+                "codecs": {},
+                "issues": [{"level": "error", "message": f"Validation error: {str(e)}"}],
+                "recommendations": ["Check video generation logs"],
+                "timestamp": datetime.utcnow().isoformat(),
+                "skill_id": "video-producer:video-validator",
+                "manifest_version": "1.0.0",
             }
 
     async def _execute_phase_7_youtube_upload(
