@@ -5,11 +5,11 @@ Endpoints
   POST /v1/console/voice/transcribe   audio blob (multipart) → text
   POST /v1/console/voice/tts          {text, lang?} → audio/ogg blob
 
-STT delegates to ``operator/voice/scripts/stt/`` (the same provider
+STT delegates to ``corvin_operator/voice/scripts/stt/`` (the same provider
 chain bridges use). TTS first summarizes and resolves the user's
 provider/voice pins, then synthesizes via an in-process OpenAI branch
 (only when the resolved provider is OpenAI and CORVIN_TTS_LOCAL_ONLY
-permits cloud egress) with ``operator/voice/scripts/say.py`` as the
+permits cloud egress) with ``corvin_operator/voice/scripts/say.py`` as the
 subprocess fallback chain (openai → edge → piper).
 
 Audit policy (load-bearing — CLAUDE.md § Layer 23):
@@ -46,9 +46,9 @@ _log = logging.getLogger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-# Source-tree path; in a wheel install operator/* is vendored under
-# corvin_console/_vendor/operator/* (hatch_build.py) and _REPO points at
-# site-packages/.. where no operator/ exists — so say.py was "not found" and TTS
+# Source-tree path; in a wheel install corvin_operator/* is vendored under
+# corvin_console/_vendor/corvin_operator/* (hatch_build.py) and _REPO points at
+# site-packages/.. where no corvin_operator/ exists — so say.py was "not found" and TTS
 # failed on every pip install. Resolve to whichever layout actually has the files.
 _VENDOR_OPERATOR = _THIS_DIR.parent / "_vendor" / "operator"
 
@@ -1295,7 +1295,7 @@ def _voice_tts_sync(
 # theoretical, and that DELIBERATELY comes back worded differently every time
 # it's pressed (rotating "angle" below) — the opposite of every other voice
 # endpoint's determinism convention, and intentionally so; see
-# operator/voice/scripts/summarize.py's generate_session_recap() docstring.
+# corvin_operator/voice/scripts/summarize.py's generate_session_recap() docstring.
 
 _SESSION_RECAP_MAX_CHARS = 700
 # Budget for the built User:/Assistant: transcript fed to the LLM — well

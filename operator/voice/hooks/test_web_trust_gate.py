@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-subtask E2E for operator/voice/hooks/web_trust_gate.py — the
+"""Per-subtask E2E for corvin_operator/voice/hooks/web_trust_gate.py — the
 PreToolUse hook that powers the Quiet Dialectic Layer (QDL).
 
 Asserts:
@@ -16,7 +16,7 @@ Asserts:
   - audit emission writes one event per classified source, with the
     expected shape (best-effort — failure is silent)
 
-Run: python3 operator/voice/hooks/test_web_trust_gate.py
+Run: python3 corvin_operator/voice/hooks/test_web_trust_gate.py
 """
 from __future__ import annotations
 

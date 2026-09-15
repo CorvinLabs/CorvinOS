@@ -12,7 +12,7 @@ Verifies that ``_inject_delegate_capability`` is reached from
   * the ``orchestrator`` fixture persona opts in (regression gate
     against a future persona edit that drops the flag)
 
-Run: python3 operator/cowork/test/test_resolver_delegate.py
+Run: python3 corvin_operator/cowork/test/test_resolver_delegate.py
 """
 
 from __future__ import annotations
@@ -89,8 +89,8 @@ def main() -> int:
         py = env.get("PYTHONPATH", "")
         expect("core/delegate" in py,
                "PYTHONPATH carries core/delegate")
-        expect("operator/forge" in py,
-               "PYTHONPATH carries operator/forge")
+        expect("corvin_operator/forge" in py,
+               "PYTHONPATH carries corvin_operator/forge")
         expect(env.get("CORVIN_CALLER_PERSONA") == "orchestrator",
                "CORVIN_CALLER_PERSONA tag set to persona name")
 

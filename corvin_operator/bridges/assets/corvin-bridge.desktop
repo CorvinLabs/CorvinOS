@@ -1,0 +1,45 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CorvinOS Bridge
+GenericName=WhatsApp / Telegram / Discord / Slack / Email ↔ Claude
+Comment=CorvinOS multi-channel bridge — control tasks via messenger
+Exec=gnome-terminal --title="CorvinOS Bridge" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh status; echo; read -p 'Press Enter to close…'"
+Icon=__REPO_ROOT__/operator/bridges/assets/corvin-mark.png
+Terminal=false
+Categories=Network;InstantMessaging;Utility;Development;
+StartupNotify=true
+Keywords=corvin;corvinos;claude;bridge;whatsapp;telegram;discord;slack;email;bot;
+Actions=Up;Down;Restart;Status;Doctor;Tail;Logs;Console;
+
+[Desktop Action Up]
+Name=Start bridge (all services)
+Exec=gnome-terminal --title="CorvinOS Bridge — Start" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh up; echo; read -p 'Press Enter to close…'"
+
+[Desktop Action Down]
+Name=Stop bridge
+Exec=gnome-terminal --title="CorvinOS Bridge — Stop" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh down; echo; read -p 'Press Enter to close…'"
+
+[Desktop Action Restart]
+Name=Restart bridge
+Exec=gnome-terminal --title="CorvinOS Bridge — Restart" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh restart; echo; read -p 'Press Enter to close…'"
+
+[Desktop Action Status]
+Name=Show status
+Exec=gnome-terminal --title="CorvinOS Bridge — Status" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh status; echo; read -p 'Press Enter to close…'"
+
+[Desktop Action Doctor]
+Name=Self-test (doctor)
+Exec=gnome-terminal --title="CorvinOS Bridge — Doctor" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh doctor; echo; read -p 'Press Enter to close…'"
+
+[Desktop Action Tail]
+Name=Live log (tail -f)
+Exec=gnome-terminal --title="CorvinOS Bridge — Live log" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh tail"
+
+[Desktop Action Logs]
+Name=Last 100 log lines
+Exec=gnome-terminal --title="CorvinOS Bridge — Logs" -- bash -c "__REPO_ROOT__/operator/bridges/bridge.sh logs 100; echo; read -p 'Press Enter to close…'"
+
+[Desktop Action Console]
+Name=Open web console
+Exec=xdg-open http://localhost:8484

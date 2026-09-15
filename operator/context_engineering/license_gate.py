@@ -25,7 +25,7 @@ import os
 import sys
 from pathlib import Path
 
-_OPERATOR = str(Path(__file__).resolve().parents[1])  # operator/
+_OPERATOR = str(Path(__file__).resolve().parents[1])  # corvin_operator/
 
 
 def _corvin_home() -> Path:

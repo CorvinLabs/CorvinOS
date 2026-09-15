@@ -1,0 +1,17 @@
+[Unit]
+Description=corvin-voice Email bridge daemon (IMAP + SMTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__/operator/bridges/email
+ExecStart=__NODE_BIN__ daemon.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env
+
+[Install]
+WantedBy=default.target

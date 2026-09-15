@@ -21,7 +21,7 @@ not enforced" but worse:
   returned ``{"success": False}`` with a ModuleNotFoundError as its message.
 
 The working convention in this repo (used by ``corvin_console`` and by
-``corvin_orchestration/mcp_server.py``) is to put ``operator/`` itself on
+``corvin_orchestration/mcp_server.py``) is to put ``corvin_operator/`` itself on
 ``sys.path`` and then import the subtree *bare* -- ``from license.quota_counter
 import ...``. Centralising that here keeps the sys.path handling in one place
 instead of three, so the next call site cannot reinvent a broken path.
@@ -36,9 +36,9 @@ from typing import Any, Optional
 
 
 def _ensure_operator_on_path() -> None:
-    """Make ``operator/`` importable as bare top-level packages. Idempotent."""
+    """Make ``corvin_operator/`` importable as bare top-level packages. Idempotent."""
     # Wheel install: the operator subtrees are vendored under
-    # corvin_console/_vendor/operator/ and this bootstrap mirrors them onto
+    # corvin_console/_vendor/corvin_operator/ and this bootstrap mirrors them onto
     # sys.path. No-op in a source checkout (the _vendor dir does not exist).
     try:
         from corvin_core._operator_bootstrap import ensure_operator_on_path
@@ -47,7 +47,7 @@ def _ensure_operator_on_path() -> None:
     except ImportError:
         pass
 
-    # Source checkout: operator/ is a real sibling of core/.
+    # Source checkout: corvin_operator/ is a real sibling of core/.
     # core/orchestration/quota_gate.py -> parents[2] == repo root
     operator_root = Path(__file__).resolve().parents[2] / "operator"
     if operator_root.is_dir() and str(operator_root) not in sys.path:

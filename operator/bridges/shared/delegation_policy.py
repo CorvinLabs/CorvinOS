@@ -187,7 +187,7 @@ def _acp_shadow_route(
                 "bundled_engine": engine,
             },
             timeout_ms=1000,
-            lom="operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
+            lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
             tenant_id=tenant_id,
         )
     except Exception as exc:  # noqa: BLE001 — advisory only; routing already decided

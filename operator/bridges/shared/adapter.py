@@ -3,7 +3,7 @@
 
 Polls the inbox/ directory for new message JSON files written by daemon.js.
 For each:
-  1. If audio_path is set: transcribe via operator/voice/scripts/transcribe.py.
+  1. If audio_path is set: transcribe via corvin_operator/voice/scripts/transcribe.py.
   2. Send the resulting text to Claude (subprocess call to `claude` CLI).
   3. Write the response to outbox/<id>.json with optional voice_path (an OGG
      produced via OpenAI TTS, response_format="opus").
@@ -61,10 +61,10 @@ try:
 except ImportError:  # pragma: no cover
     _context_budget = None
 
-# ADR-0221 P1 — put operator/orchestration on the path so the bridge CAN reach
+# ADR-0221 P1 — put corvin_operator/orchestration on the path so the bridge CAN reach
 # the engine-agnostic TDE modules (`from tde....`) the console already uses. This
 # only makes them importable; actual bridge→TDE routing is gated behind
-# CORVIN_BRIDGE_TDE (P3) and not wired here. `operator/bridges/shared` (this dir)
+# CORVIN_BRIDGE_TDE (P3) and not wired here. `corvin_operator/bridges/shared` (this dir)
 # is already on the path via the daemon launcher, so `delegation_policy` imports.
 try:
     _orch_root = Path(__file__).resolve().parents[2] / "orchestration"
@@ -74,7 +74,7 @@ except Exception:  # noqa: BLE001 — path prep must never break adapter boot
     pass
 
 # Vibe Engineering (ADR-0275/0278) — Context Engineering Layer, loaded by file
-# path (NOT via sys.path: operator/ is not on the bridge PYTHONPATH, and inserting
+# path (NOT via sys.path: corvin_operator/ is not on the bridge PYTHONPATH, and inserting
 # it would re-open the stdlib `operator` shadow trap). sys.modules-registered so
 # the package's relative imports resolve. Bridge parity with the web-chat wiring
 # in chat_runtime.py — same CEL, same trace, same audit-complete Decision Record.
@@ -120,7 +120,7 @@ try:
     from corvin_core import task_manager as _task_manager  # type: ignore
 except ImportError:  # pragma: no cover
     try:
-        # Fallback: local operator/bridges/shared (if duplicated)
+        # Fallback: local corvin_operator/bridges/shared (if duplicated)
         import task_manager as _task_manager  # type: ignore
     except ImportError:  # pragma: no cover
         _task_manager = None
@@ -371,7 +371,7 @@ if not _IS_TEST_SANDBOX:
         print(f"[tenant-migrate] non-fatal: {type(_tenant_exc).__name__}: "
               f"{_tenant_exc}", file=sys.stderr, flush=True)
 
-# This adapter lives in bridges/shared/ — scripts dir is in operator/voice/scripts.
+# This adapter lives in bridges/shared/ — scripts dir is in corvin_operator/voice/scripts.
 SCRIPTS_DIR = ROOT.parent.parent / "voice" / "scripts"
 
 # MCP Plugin Manager (ADR-0096 M1) — optional, hot-reload via active.json mtime cache.
@@ -386,7 +386,7 @@ if _MCP_MANAGER_ROOT.is_dir():
         _mcp_manager_activate = None
 
 # Cowork ist ein optionales on-top-Plugin. Wenn installiert (Schwester-Dir
-# operator/cowork/lib/resolver.py existiert), nutzt der Adapter es zum
+# corvin_operator/cowork/lib/resolver.py existiert), nutzt der Adapter es zum
 # resolves a persona; otherwise the `persona` field in chat_profiles
 # is simply ignored. Voice remains fully usable without cowork.
 _COWORK_LIB = ROOT.parent.parent / "cowork" / "lib"
@@ -775,8 +775,16 @@ try:
     )
     from license.limits import LicenseLimitError as _LicenseLimitError  # type: ignore
     _lic_load()   # Activate licence from env / disk at import time
+    # ADR-0703 §1.5 — Start the license refresh daemon (after load_license_from_env).
+    # This wires the permit/CRL/ASRL refresh cycles into the bridge adapter process.
+    # Only starts if a credential file exists; safe to call multiple times.
+    try:
+        from license.session_refresh import boot_refresh as _lic_boot_refresh
+        _lic_boot_refresh()
+    except Exception:
+        pass  # best-effort — license daemon failure does not block adapter startup
     # B1 (ADR-0138 M4): verify license.validator AND license.limits were imported
-    # from the expected operator/license/ directory (PYTHONPATH-injection defence).
+    # from the expected corvin_operator/license/ directory (PYTHONPATH-injection defence).
     # Use SystemExit (not ImportError) so the outer except Exception cannot catch
     # this and install fail-open stubs — a shadow module must abort the process.
     # __file__=None (zip/namespace imports) is also rejected.
@@ -1047,7 +1055,7 @@ CANCEL_GRACE_SEC   = float(os.environ.get("ADAPTER_CANCEL_GRACE_SEC",   "2.0"))
 
 
 # ── Logging ─────────────────────────────────────────────────────────────
-# Routes through operator/bridges/shared/debug_logging.py so every
+# Routes through corvin_operator/bridges/shared/debug_logging.py so every
 # bridge / engine / forge component shares one rotating log file and one
 # PII-redaction discipline. CORVIN_DEBUG=1 (default) → DEBUG level;
 # CORVIN_DEBUG=0 → INFO. CORVIN_LOG_LEVEL overrides outright.
@@ -5314,7 +5322,7 @@ def _call_claude_streaming_via_engine(
             tm = None
 
     # Resolution order (highest → lowest precedence):
-    #   1. ADAPTER_STREAM_IDLE_TIMEOUT env var (explicit operator/test override)
+    #   1. ADAPTER_STREAM_IDLE_TIMEOUT env var (explicit corvin_operator/test override)
     #   2. channel settings.json::stream_idle_timeout_seconds (per-bridge default)
     #   3. built-in fallback of 300 s
     # Reads settings.json fresh each turn so bridge.sh hot-reload applies
@@ -7962,7 +7970,7 @@ def _has_lern_zugabe_suffix(text: str, window: int = 900) -> bool:
 def _detect_confident_de_en(text: str) -> str | None:
     """Auto-detect language with high confidence (returns None if unsure).
 
-    Supports 20 languages via operator/voice/scripts/detect_lang.py:
+    Supports 20 languages via corvin_operator/voice/scripts/detect_lang.py:
     en, de, es, fr, it, pt, nl, pl, ru, ja, zh, ko, ar, tr, sv, da, no, fi, el, cs.
 
     Used as a per-turn auto-detection when user has NOT pinned a language
@@ -7970,7 +7978,7 @@ def _detect_confident_de_en(text: str) -> str | None:
     is weak (ambiguous, insufficient function words) so the profile default
     still applies — but can now detect any of 20 languages, not just de/en.
 
-    Reuses operator/voice/scripts/detect_lang.py's tiny, dependency-free
+    Reuses corvin_operator/voice/scripts/detect_lang.py's tiny, dependency-free
     function-word heuristic (already used for STT locale hints) rather
     than adding a new detector — same "good enough to pick a TTS voice"
     bar applies here.
@@ -8701,7 +8709,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
                          task: str = "") -> str:
     """Return a short spoken summary suitable for a WhatsApp voice-note.
 
-    Strategy: pipe through operator/voice/scripts/summarize.py which uses the
+    Strategy: pipe through corvin_operator/voice/scripts/summarize.py which uses the
     Claude CLI (no API key needed) or falls back to structural compression.
     Strip Markdown afterward so TTS doesn't read asterisks aloud.
 
@@ -9166,7 +9174,7 @@ def _resolve_ffmpeg_bin() -> str | None:
         return None
 
 
-# Kept in lock-step with the CANONICAL table in operator/voice/scripts/say.py
+# Kept in lock-step with the CANONICAL table in corvin_operator/voice/scripts/say.py
 # (``_EDGE_VOICES``). This bridge-side copy previously carried only 15 of the 29
 # languages and a DIFFERENT Arabic voice (ar-SA vs ar-EG), so uk/cs/ro/he/hi/…
 # spoken on the bridge path silently fell back to English while the console TTS
@@ -9386,7 +9394,7 @@ def _try_openai_tts(
 # BCP-47 prefix → Piper model stem. Byte-identical twin of
 # say.py::_PIPER_MODELS (SSOT invariant VOICE-6: the stems must equal the
 # names installer/steps/piper.py::_MODELS actually downloads). Duplicated here
-# because the bridge adapter cannot import operator/voice/scripts/say.py
+# because the bridge adapter cannot import corvin_operator/voice/scripts/say.py
 # (separate entry-point tree, no shared package); parity guarded by
 # test_adapter_piper_parity.py::test_stem_table_matches_say_py_ssot.
 _PIPER_MODELS: dict[str, str] = {
@@ -12003,7 +12011,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # has been queued for the user. Best-effort, never blocks the adapter.
     mode = settings.get("local_announce_outbound", "off")
     if mode in ("earcon", "voice", "text"):
-        plugin_root = ROOT.parent.parent / "voice"  # bridges/shared → bridges → operator/ → voice/
+        plugin_root = ROOT.parent.parent / "voice"  # bridges/shared → bridges → corvin_operator/ → voice/
         from_short = sender.replace("@s.whatsapp.net", "").replace("@lid", "")
         try:
             if mode == "earcon":

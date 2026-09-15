@@ -12,7 +12,7 @@ server enforces when a ``CORVIN_CALLER_PERSONA`` env var is present:
 
 Style mirrors test_voice_persona_acl.py (plain-python PASS / FAIL counters).
 
-Run as: python3 operator/forge/tests/test_namespace_gate.py
+Run as: python3 corvin_operator/forge/tests/test_namespace_gate.py
 """
 from __future__ import annotations
 

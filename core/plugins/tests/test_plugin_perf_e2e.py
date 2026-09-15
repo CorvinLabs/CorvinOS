@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # --import-mode=importlib: sibling not on sys.path
 
 # NO `sys.path.insert(0, <repo>/core)` here (2026-09-03 finding A11): with
 # core/ first on sys.path, `import audit` resolved to core/audit instead of
-# operator/bridges/shared/audit.py for every test collected AFTER this file,
+# corvin_operator/bridges/shared/audit.py for every test collected AFTER this file,
 # and 26 tests went red order-dependently. Package imports only — see
 # test_adversarial_fixes_2026_09_03.py::test_no_test_puts_core_first_on_sys_path.
 

@@ -8,7 +8,7 @@ all (faster-whisper relied on huggingface_hub's implicit lazy cache).
 
 These tests are hermetic — the real network-backed round trip (actually
 downloading the GGML model and transcribing real audio through
-``pywhispercpp``) lives in ``operator/voice/scripts/test_stt.py``'s
+``pywhispercpp``) lives in ``corvin_operator/voice/scripts/test_stt.py``'s
 ``LocalWhisperPywhispercppTests``, not here.
 """
 from __future__ import annotations

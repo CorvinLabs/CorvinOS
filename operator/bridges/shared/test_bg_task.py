@@ -9,7 +9,7 @@ Two levels:
      completion, spawns the worker with the correct spec, and ACKs — without
      actually running the engine (Popen captured).
 
-Run: python3 operator/bridges/shared/test_bg_task.py
+Run: python3 corvin_operator/bridges/shared/test_bg_task.py
 """
 from __future__ import annotations
 

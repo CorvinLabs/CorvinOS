@@ -37,7 +37,7 @@ from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
 
 # ADR-0147 CON-DS-V2-01: license gate parity with the DSI-v1 register path.
-# _bootstrap (imported above) already put operator/ and operator/license/ on
+# _bootstrap (imported above) already put corvin_operator/ and corvin_operator/license/ on
 # sys.path, so the license import resolves without per-file path math.
 # Fail-closed FREE_TIER fallback for the limits this route reads. A bare
 # ``{}.get`` would return None for every feature, and None is the "unlimited"

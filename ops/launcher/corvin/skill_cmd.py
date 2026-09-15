@@ -3,9 +3,9 @@
 The tenant-native skill management CLI already exists as two fully built,
 unit-tested ``click`` groups:
 
-  * ``operator/cli/skill_commands.py``      → ``skill`` group
+  * ``corvin_operator/cli/skill_commands.py``      → ``skill`` group
     (list / info / validate / deps / migrate / init)
-  * ``operator/cli/skill_sync_commands.py`` → ``skill-sync`` group
+  * ``corvin_operator/cli/skill_sync_commands.py`` → ``skill-sync`` group
     (push / pull / configure / status)
 
 Both exposed ``register_skill_commands`` / ``register_sync_commands`` entry
@@ -45,7 +45,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-# operator/cli lives at <repo-root>/operator/cli. This file is at
+# corvin_operator/cli lives at <repo-root>/corvin_operator/cli. This file is at
 # <repo-root>/ops/launcher/corvin/skill_cmd.py → parents[3] is the repo root.
 _OPERATOR_CLI = Path(__file__).resolve().parents[3] / "operator" / "cli"
 
@@ -81,7 +81,7 @@ def add_parser(parent_subparsers: argparse._SubParsersAction) -> None:
 
 
 def _load_by_path(module_name: str, filename: str) -> ModuleType:
-    """Load a module in operator/cli by file path (avoids the stdlib
+    """Load a module in corvin_operator/cli by file path (avoids the stdlib
     ``operator`` shadow — see module docstring)."""
     path = _OPERATOR_CLI / filename
     spec = importlib.util.spec_from_file_location(module_name, path)

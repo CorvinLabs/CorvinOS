@@ -4,7 +4,7 @@ Why this module exists
 ----------------------
 The channel list was copy-pasted into at least six places and three of them had
 gone stale in the same direction: ``signal`` and ``teams`` ship complete daemons
-(``operator/bridges/{signal,teams}/daemon.js``), are startable through
+(``corvin_operator/bridges/{signal,teams}/daemon.js``), are startable through
 ``bridge_manager``, and are configurable from the Console — yet
 
 * ``session_reset.VALID_CHANNELS`` listed five, so ``/new`` and ``/reset``
@@ -28,13 +28,13 @@ Adding a channel
 ----------------
 Append it here. ``core/plugins/corvin_plugins/bridges/supervisor.py`` keeps its
 own ``BRIDGE_CHANNELS`` because it lives in a different distribution package
-(``corvin_plugins``) that must import cleanly without ``operator/`` on the path;
-``operator/bridges/tests/test_channel_list_ssot.py`` pins the two together, so a
+(``corvin_plugins``) that must import cleanly without ``corvin_operator/`` on the path;
+``corvin_operator/bridges/tests/test_channel_list_ssot.py`` pins the two together, so a
 divergence is a red test rather than a silent half-wiring.
 """
 from __future__ import annotations
 
-#: Every channel with a shipped daemon under ``operator/bridges/<channel>/``.
+#: Every channel with a shipped daemon under ``corvin_operator/bridges/<channel>/``.
 #: Order is stable and is the order surfaces render them in.
 BRIDGE_CHANNELS: tuple[str, ...] = (
     "whatsapp",

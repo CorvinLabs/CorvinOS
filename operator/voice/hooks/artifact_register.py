@@ -57,13 +57,13 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
     def _guard_prompt_head(_text):  # type: ignore[misc]
         raise RuntimeError(
             "shared claude-CLI prompt guard unavailable "
-            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "(corvin_operator/bridges/shared/prompt_guard.py) - refusing to build an "
             "unguarded `claude -p` payload"
         )
 
 
 HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parents[2]  # operator/voice/hooks/ → repo root
+REPO_ROOT = HERE.parents[2]  # corvin_operator/voice/hooks/ → repo root
 
 for p in (
     REPO_ROOT / "operator" / "forge",

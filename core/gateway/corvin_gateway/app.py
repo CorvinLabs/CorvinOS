@@ -79,7 +79,7 @@ def _tripwire_assert_all() -> None:
 # features, monitoring -- that shadow the bridge/PYTHONPATH modules of the same
 # name. Adding it on 2026-08-31 (commit 6ab97601) made the tripwire's
 # `import audit` resolve to core/audit/ instead of
-# operator/bridges/shared/audit.py; core/audit has no `audit_path`, so
+# corvin_operator/bridges/shared/audit.py; core/audit has no `audit_path`, so
 # audit_writer_reachable + audit_chain_intact both failed with AttributeError
 # and the boot tripwire refused to boot -- the console served nothing for ~45
 # restart cycles. APPEND, never insert(0): the repo root also exposes generic
@@ -249,6 +249,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # why each step sits where it does.
     _plugins_loaded = _boot_platform()  # raises TripwireError -> boot aborts
 
+    # ADR-0703 §1.5 — Start the license refresh daemon (after boot_platform).
+    # This wires the permit/CRL/ASRL refresh cycles into the gateway process.
+    # Only starts if a credential file exists; safe to call multiple times.
+    try:
+        from license.session_refresh import boot_refresh as _lic_boot_refresh
+        _lic_boot_refresh()
+    except Exception:
+        pass  # best-effort — license daemon failure does not block gateway startup
+
     # ADR-0231 Stage 2/3 — health polling + self-healing are started BY
     # boot_platform() (corvin_plugins.bootstrap.start_health_monitoring),
     # so the standalone console gets them too. This lifespan only keeps
@@ -299,7 +308,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         import sys as _sys, os as _os
         # Importing corvin_console first is load-bearing: its
-        # _operator_bootstrap puts the operator/ subtrees on sys.path in BOTH
+        # _operator_bootstrap puts the corvin_operator/ subtrees on sys.path in BOTH
         # layouts (repo checkout and wheel-install _vendor). The explicit
         # repo-relative insert below is only the fallback for a checkout
         # without the console package installed. (A previous version used
@@ -698,7 +707,7 @@ except Exception as _plugin_exc:
 # remote origin. HMAC-authenticated; no bearer token required.
 # Transport wiring for ADR-0048 (RemoteTriggerReceiver, M1+).
 #
-# The shared module lives at operator/bridges/shared/ relative to the
+# The shared module lives at corvin_operator/bridges/shared/ relative to the
 # repo root; the gateway's PYTHONPATH already includes /opt/corvin-repo,
 # so we locate it via __file__ parents to work in both dev and Docker.
 try:

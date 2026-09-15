@@ -194,7 +194,7 @@ def default_state_dir() -> Path:
     """Where the adapter keeps heartbeat markers: ``<corvin_home>/bridges``.
 
     F-B8 (adversarial hardening 2026-09-07): the adapter used to pass its own
-    source directory (``operator/bridges/shared/``) as ``state_dir``, so the
+    source directory (``corvin_operator/bridges/shared/``) as ``state_dir``, so the
     markers — which carry chat ids, sender ids and task labels — landed INSIDE
     the repo tree, un-ignored by git and world-readable. Runtime state belongs
     under CORVIN_HOME (``paths.bridges_home()``), like every other bridge queue.

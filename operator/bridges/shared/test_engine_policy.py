@@ -2,7 +2,7 @@
 """Per-subtask E2E for engine_policy.py + compliance_zone_classifier.py
 (ADR-0004 Phase 5 skeleton).
 
-Run: python3 operator/bridges/shared/test_engine_policy.py
+Run: python3 corvin_operator/bridges/shared/test_engine_policy.py
 """
 from __future__ import annotations
 

@@ -15,7 +15,7 @@ Environment variables required:
   CHANGED_FILES       — space-separated list of changed file paths
 
 This script MAY import anthropic — it is a CI tool, not an Corvin module.
-The "no import anthropic" AST lint applies only to operator/bridges/shared/*.
+The "no import anthropic" AST lint applies only to corvin_operator/bridges/shared/*.
 """
 from __future__ import annotations
 
@@ -34,24 +34,24 @@ from compliance_manifest import run_compliance_check, resolve_manifest_dir  # no
 # ── Layer → file path pattern mapping ────────────────────────────────────────
 
 _LAYER_PATTERNS: dict[str, list[str]] = {
-    "L10":                ["operator/voice/hooks/path_gate"],
-    "L16":                ["operator/bridges/shared/audit",
-                           "operator/bridges/shared/consent",
-                           "operator/bridges/shared/vault"],
-    "L19":                ["operator/bridges/shared/disclosure"],
-    "L22":                ["operator/bridges/shared/adapter",
-                           "operator/bridges/shared/engine"],
-    "L23":                ["operator/voice/scripts/stt"],
-    "L32":                ["operator/bridges/shared/data_classification"],
-    "L34":                ["operator/bridges/shared/data_classification"],
-    "L35":                ["operator/bridges/shared/egress_gate"],
-    "L36":                ["operator/bridges/shared/erasure"],
-    "L37":                ["operator/bridges/shared/audit_sealer"],
-    "L38":                ["operator/bridges/shared/remote_trigger",
-                           "operator/bridges/shared/a2a_"],
-    "L39":                ["operator/bridges/shared/incident_tracker"],
-    "ADR-0007":           ["operator/bridges/shared/compliance_zone",
-                           "operator/bridges/shared/engine_policy"],
+    "L10":                ["corvin_operator/voice/hooks/path_gate"],
+    "L16":                ["corvin_operator/bridges/shared/audit",
+                           "corvin_operator/bridges/shared/consent",
+                           "corvin_operator/bridges/shared/vault"],
+    "L19":                ["corvin_operator/bridges/shared/disclosure"],
+    "L22":                ["corvin_operator/bridges/shared/adapter",
+                           "corvin_operator/bridges/shared/engine"],
+    "L23":                ["corvin_operator/voice/scripts/stt"],
+    "L32":                ["corvin_operator/bridges/shared/data_classification"],
+    "L34":                ["corvin_operator/bridges/shared/data_classification"],
+    "L35":                ["corvin_operator/bridges/shared/egress_gate"],
+    "L36":                ["corvin_operator/bridges/shared/erasure"],
+    "L37":                ["corvin_operator/bridges/shared/audit_sealer"],
+    "L38":                ["corvin_operator/bridges/shared/remote_trigger",
+                           "corvin_operator/bridges/shared/a2a_"],
+    "L39":                ["corvin_operator/bridges/shared/incident_tracker"],
+    "ADR-0007":           ["corvin_operator/bridges/shared/compliance_zone",
+                           "corvin_operator/bridges/shared/engine_policy"],
     "compliance-reports": ["core/compliance"],
     "CLAUDE.md":          ["CLAUDE.md"],
     "docs/decisions":     ["docs/decisions/"],

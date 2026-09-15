@@ -45,7 +45,7 @@ Three severity levels based on keyword presence:
 Components are extracted via regex patterns:
 
     - File paths: `path/to/file.py`, `core/compliance/layer.tsx`
-    - Module roots: `core/`, `operator/`, `console/`, `bridge/`, `forge/`, `voice/`
+    - Module roots: `core/`, `corvin_operator/`, `console/`, `bridge/`, `forge/`, `voice/`
     - Layer references: `L1` through `L44`
 
 ## Memory Enrichment
@@ -510,8 +510,8 @@ class TaskNormalizer:
         """Extract affected components (files, modules, paths).
 
         Looks for:
-        - File paths: core/module/file.py, operator/bridges/adapter.py
-        - Module roots: core/, operator/, console/, bridge/, forge/, voice/
+        - File paths: core/module/file.py, corvin_operator/bridges/adapter.py
+        - Module roots: core/, corvin_operator/, console/, bridge/, forge/, voice/
         - Infers module root from nested paths
 
         Args:

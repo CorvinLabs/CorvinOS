@@ -1,0 +1,11 @@
+{
+  "_NOTE": "Voice listener profile (Layer 12). Install to: ~/.config/corvin-voice/profile.json. Tunes TTS for your specific listening context.",
+  "_INSTALL_PATH": "~/.config/corvin-voice/profile.json",
+  "voice_audience_level": "novice",
+  "voice_audience_jargon": 0,
+  "voice_audience_style": "direct",
+  "voice_audience_background": "software engineer, experienced with LLMs and distributed systems",
+  "voice_audience_metaphors": "on",
+  "voice_audience_domains": ["engineering", "trading", "AI/ML"],
+  "voice_audience_learning": 3
+}

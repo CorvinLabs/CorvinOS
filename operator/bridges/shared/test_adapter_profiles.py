@@ -6,7 +6,7 @@ inbox messages mit unterschiedlichen Sender-IDs, und checks dass adapter.py die
 korrekten claude-CLI-Args baut. Nutzt ADAPTER_FAKE_CLAUDE + ADAPTER_FAKE_ARGS_DUMP.
 
 Run:
-    python3 operator/bridges/shared/test_adapter_profiles.py
+    python3 corvin_operator/bridges/shared/test_adapter_profiles.py
 """
 from __future__ import annotations
 

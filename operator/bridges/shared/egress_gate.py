@@ -512,10 +512,10 @@ class EgressGate:
 
         try:
             # NOTE: `operator` is the Python stdlib module, NOT a package for the
-            # repo's operator/ dir — `from operator.license.elr import …` ALWAYS
+            # repo's corvin_operator/ dir — `from operator.license.elr import …` ALWAYS
             # raised ModuleNotFoundError, so the ratchet could never load (dead
             # code; security review 2026-06-27). Resolve elr the way the rest of
-            # the bridge does: operator/license on sys.path, then `import elr`.
+            # the bridge does: corvin_operator/license on sys.path, then `import elr`.
             import sys as _sys
             from pathlib import Path as _Path
             _lic_dir = _Path(__file__).resolve().parents[2] / "license"

@@ -14,7 +14,7 @@ Covers:
     off (explicit-opt-in beats master-gate, mirroring the existing
     profile.dialectic_mode_<site> semantics)
 
-Run as: python3 operator/bridges/shared/test_ldd_dialectic_coupling.py
+Run as: python3 corvin_operator/bridges/shared/test_ldd_dialectic_coupling.py
 """
 from __future__ import annotations
 

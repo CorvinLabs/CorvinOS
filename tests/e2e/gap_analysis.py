@@ -178,7 +178,7 @@ class CriticalPathMapper:
                     name="skill_injection",
                     system="learning",
                     entry_point="SkillSystemIntegration.inject_skill()",
-                    file_path="operator/skill-forge/skill_injection.py",
+                    file_path="corvin_operator/skill-forge/skill_injection.py",
                     line_number=30,
                     risk_level="medium",
                 ),

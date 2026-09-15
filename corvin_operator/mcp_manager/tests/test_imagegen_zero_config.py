@@ -1,0 +1,707 @@
+"""Tests for the ADR-0191 zero-config image-generation tool: the disclosure
+gate, the builtin catalog seeding, and the Tier-0 rate-limit handling.
+
+Not a full adversarial pass (see docs/image-generation-zero-config.md +
+Corvin-ADR 0191 for the design) — targeted regression coverage for the bugs
+actually found while live-testing this feature in a real chat turn:
+  1. seed_builtin must use an absolute, dependency-guaranteed interpreter
+     path (sys.executable), not a bare "python3" resolved via PATH.
+  2. seed_builtin must declare NO catalog secrets — claude does not resolve
+     ${VAR} templates in MCP server env, so declaring one would inject a
+     literal, garbage "${OPENAI_API_KEY}" string that looks truthy to
+     provider_keys.resolve_key() and always breaks Tier-1 selection.
+  3. imagegen_disclosure is one-time-per-tenant and survives a missing
+     CORVIN_HOME env var via the on-disk repo-marker fallback.
+  4. main.py's Tier 0 path surfaces a friendly message on 429/503, not a
+     raw httpx stack trace.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+_MCP_MANAGER_ROOT = Path(__file__).resolve().parents[1]
+if str(_MCP_MANAGER_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MCP_MANAGER_ROOT))
+
+_BRIDGES_SHARED = Path(__file__).resolve().parents[3] / "bridges" / "shared"
+if str(_BRIDGES_SHARED) not in sys.path:
+    sys.path.insert(0, str(_BRIDGES_SHARED))
+
+_IMAGEGEN_SERVER_DIR = Path(__file__).resolve().parents[1] / "servers" / "imagegen-zero-config"
+if str(_IMAGEGEN_SERVER_DIR) not in sys.path:
+    sys.path.insert(0, str(_IMAGEGEN_SERVER_DIR))
+
+
+# ── seed_builtin ──────────────────────────────────────────────────────────
+
+def test_seed_builtin_uses_absolute_sys_executable_not_bare_python3(monkeypatch, tmp_path):
+    """Regression: a bare "python3" command resolves via the SPAWNING
+    process's PATH, not this one's — confirmed live to resolve to a system
+    interpreter lacking the mcp/httpx dependencies, with the MCP connection
+    failing silently (status "failed", no diagnostic surfaced to chat)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    result = seed_builtin.ensure_imagegen_zero_config("_default")
+    assert result["installed"] is True
+    assert result["activated"] is True
+    assert result["error"] is None
+
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry is not None
+    command = entry["runtime"]["command"]
+    assert command == sys.executable
+    assert Path(command).is_absolute()
+
+
+def test_seed_builtin_declares_no_secrets(monkeypatch, tmp_path):
+    """Regression: declaring OPENAI_API_KEY as a catalog secret makes
+    get_active_mcp_servers() inject env={"OPENAI_API_KEY": "${OPENAI_API_KEY}"}
+    — claude does not resolve that template, so the literal string lands in
+    this server's own env and provider_keys.resolve_key() (which checks
+    process env first) treats it as a genuinely-configured key, always
+    attempting (and failing) Tier 1 instead of correctly using Tier 0.
+
+    The seeded entry DOES carry a plaintext runtime.env (CORVIN_HOME /
+    CORVIN_TENANT_ID passthrough) — the invariant is: no secrets, and no
+    unresolved ${VAR} template values."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog, activate
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry["secrets"] == []
+
+    servers = activate.get_active_mcp_servers("_default")
+    assert "imagegen-zero-config" in servers
+    env = servers["imagegen-zero-config"].get("env") or {}
+    assert "OPENAI_API_KEY" not in env
+    assert not any("${" in v for v in env.values())
+    assert env.get("CORVIN_HOME") == str(tmp_path)
+    assert env.get("CORVIN_TENANT_ID") == "_default"
+
+
+def test_seed_builtin_idempotent(monkeypatch, tmp_path):
+    """Calling ensure_ twice (mirrors it running on every boot) must not
+    error, duplicate anything, or flip activation state."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog, activate
+
+    r1 = seed_builtin.ensure_imagegen_zero_config("_default")
+    assert r1["installed"] is True and r1["activated"] is True
+    r2 = seed_builtin.ensure_imagegen_zero_config("_default")
+    assert r2["installed"] is True and r2["error"] is None
+    assert len(catalog.list_tools("_default")) == 1
+    assert "imagegen-zero-config" in activate.get_active_tool_ids("_default")
+
+
+def test_seed_builtin_respects_user_deactivation(monkeypatch, tmp_path):
+    """Adversarial-review finding: the previous unconditional seed re-
+    activated the tool on every boot, silently overriding an explicit
+    user/operator deactivation of a tool that sends prompts to a third
+    party — a non-respectable opt-out is also a compliance problem."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, activate
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    assert activate.deactivate("_default", "imagegen-zero-config", scope="tenant")
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    assert "imagegen-zero-config" not in activate.get_active_tool_ids("_default")
+
+
+def test_seed_builtin_respects_operator_uninstall(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    assert catalog.remove_tool("_default", "imagegen-zero-config")
+    r = seed_builtin.ensure_imagegen_zero_config("_default")
+    assert r["installed"] is False
+    assert catalog.get_tool("_default", "imagegen-zero-config") is None
+
+
+def test_seed_builtin_preserves_operator_compliance_edit(monkeypatch, tmp_path):
+    """An operator who tightened the entry (e.g. removed api.openai.com from
+    hosts) must not get clobbered back to the shipped shape on next boot."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    entry["compliance"]["hosts"] = ["image.pollinations.ai"]
+    catalog.add_tool("_default", entry)
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry2 = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry2["compliance"]["hosts"] == ["image.pollinations.ai"]
+
+
+def test_corvin_browser_seed_version_bump_does_not_touch_imagegen(monkeypatch, tmp_path):
+    """ADR-0193 adversarial-review regression (round 2): seed_builtin used to
+    share ONE `_SEED_VERSION` constant across every builtin tool. Bumping it
+    for a corvin-browser-only shape change ALSO forced every already-seeded
+    imagegen-zero-config install through the generic "seed-shape upgrade"
+    branch, which does an unconditional `_catalog.add_tool(tid, entry)` —
+    silently discarding an operator's own compliance edit to an entry whose
+    shape never actually changed. Each builtin tool now owns its own
+    constant (`_IMAGEGEN_SEED_VERSION` / `_BROWSER_SEED_VERSION`); bumping
+    one must never re-trigger the other's re-seed path."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    entry["compliance"]["hosts"] = ["image.pollinations.ai"]
+    catalog.add_tool("_default", entry)
+
+    seed_builtin.ensure_corvin_browser("_default")
+    # Simulate a future corvin-browser-only shape change by bumping ONLY its
+    # own constant, then re-seeding both tools on the same "boot".
+    monkeypatch.setattr(seed_builtin, "_BROWSER_SEED_VERSION",
+                        seed_builtin._BROWSER_SEED_VERSION + 1)
+    seed_builtin.ensure_corvin_browser("_default")
+    seed_builtin.ensure_imagegen_zero_config("_default")
+
+    entry2 = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry2["compliance"]["hosts"] == ["image.pollinations.ai"]
+
+
+def test_seed_builtin_refreshes_stale_interpreter_path(monkeypatch, tmp_path):
+    """Upgrade case: the recorded venv interpreter no longer exists (new
+    venv after a version upgrade) — the runtime block must be refreshed to
+    the current interpreter without touching activation state."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    entry["runtime"]["command"] = str(tmp_path / "gone-venv" / "bin" / "python")
+    catalog.add_tool("_default", entry)
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry2 = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry2["runtime"]["command"] == sys.executable
+
+
+def test_seed_builtin_args_path_is_absolute(monkeypatch, tmp_path):
+    """Regression: mcp-tool.yaml's relative "main.py" arg only gets resolved
+    via the generic local: installer's runtime.command rewrite, which does
+    NOT touch entries inside runtime.args — a relative arg breaks the moment
+    the spawning claude process's cwd isn't this tool's own directory."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    for arg in entry["runtime"]["args"]:
+        assert Path(arg).is_absolute(), f"non-absolute arg would break under a foreign cwd: {arg!r}"
+
+
+# ── imagegen_disclosure ───────────────────────────────────────────────────
+
+def test_disclosure_fires_exactly_once_per_tenant(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import imagegen_disclosure as d
+
+    assert d.has_disclosed("_default") is False
+    first = d.ensure_disclosed("_default")
+    assert first == d.DISCLOSURE_TEXT
+    assert d.has_disclosed("_default") is True
+    second = d.ensure_disclosed("_default")
+    assert second is None
+
+
+def test_disclosure_is_tenant_scoped(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import imagegen_disclosure as d
+
+    d.ensure_disclosed("tenant-a")
+    assert d.has_disclosed("tenant-a") is True
+    assert d.has_disclosed("tenant-b") is False
+
+
+def test_disclosure_falls_back_to_repo_marker_without_corvin_home(monkeypatch):
+    """CORVIN_HOME is not guaranteed to reach an MCP server subprocess
+    (verified live) — the on-disk .corvin_repo-marker walk-up must still
+    resolve a usable, writable path."""
+    monkeypatch.delenv("CORVIN_HOME", raising=False)
+    import imagegen_disclosure as d
+
+    home = d._corvin_home()
+    assert home.name == ".corvin"
+    assert (home.parent / ".corvin_repo").exists() or home.parent == Path.home()
+
+
+# ── main.py Tier 0 rate-limit handling ────────────────────────────────────
+
+def test_pollinations_429_raises_friendly_message_not_raw_http_error(monkeypatch):
+    import httpx
+    import main as m
+
+    fake_resp = httpx.Response(
+        429, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        text="rate limited",
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+
+    with pytest.raises(m.Tier0RateLimited) as exc_info:
+        m._generate_pollinations("x")
+    assert "rate-limited" in str(exc_info.value)
+    assert "OpenAI" in str(exc_info.value)
+
+
+def test_pollinations_500_degrades_to_friendly_message(monkeypatch):
+    """502/504/500 are routine for a community CDN — they must surface the
+    same friendly no-SLA message as 429/503, not a raw httpx stack trace."""
+    import httpx
+    import main as m
+
+    fake_resp = httpx.Response(
+        500, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        text="server error",
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_pollinations("x")
+
+
+def test_pollinations_connect_error_degrades_to_friendly_message(monkeypatch):
+    import httpx
+    import main as m
+
+    def _boom(self, *a, **k):
+        raise httpx.ConnectError("dns down")
+
+    monkeypatch.setattr(httpx.Client, "get", _boom)
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_pollinations("x")
+
+
+def test_pollinations_redirect_not_followed(monkeypatch):
+    """The prompt travels in the URL path — a redirect would re-send user
+    content to an undeclared host (the 0.10.25 ping-redirect-leak class).
+    Redirects must be refused, not followed."""
+    import httpx
+    import main as m
+
+    fake_resp = httpx.Response(
+        302, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        headers={"location": "https://evil.example/prompt/x"},
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_pollinations("x")
+
+
+def test_pollinations_non_image_200_rejected(monkeypatch):
+    """A 200 whose body is an HTML error page must not be relayed as a
+    broken image content block."""
+    import httpx
+    import main as m
+
+    fake_resp = httpx.Response(
+        200, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        text="<html>maintenance</html>",
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_pollinations("x")
+
+
+def test_pollinations_mime_matches_actual_bytes(monkeypatch):
+    """Regression (live finding): Pollinations serves JPEG; the old code
+    stamped format="png" on it, producing a wrong mimeType on the MCP image
+    block. The declared format must be sniffed from the real bytes."""
+    import httpx
+    import main as m
+
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+    fake_resp = httpx.Response(
+        200, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        content=jpeg,
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+    img = m._generate_pollinations("x")
+    assert img._format == "jpeg" or getattr(img, "format", None) == "jpeg" or \
+        img._mime_type == "image/jpeg"
+
+
+def test_prompt_stays_single_path_segment():
+    """quote(safe='') — a prompt containing '/' must not span URL path
+    segments (path-traversal shape / silently altered request)."""
+    import urllib.parse
+    assert "/" not in urllib.parse.quote("a cat / a dog", safe="")
+
+
+def test_generate_image_rejects_empty_and_overlong_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    with pytest.raises(m.ImageGenRefused):
+        m.generate_image("   ")
+    with pytest.raises(m.ImageGenRefused):
+        m.generate_image("x" * (m._MAX_PROMPT_CHARS + 1))
+
+
+def test_broken_tier1_key_falls_back_to_tier0(monkeypatch, tmp_path):
+    """A configured-but-broken OpenAI key must not leave the user worse off
+    than having no key: degrade to Tier 0 with an explanatory note."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: None)
+    monkeypatch.setattr(m, "resolve_key", lambda name: "sk-broken")
+
+    def _openai_boom(prompt, key):
+        raise RuntimeError("401 invalid key")
+
+    sentinel = object()
+    monkeypatch.setattr(m, "_generate_openai", _openai_boom)
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: sentinel)
+    monkeypatch.setattr(m, "ensure_disclosed", lambda tid: None)
+
+    blocks = m.generate_image("a nice tree")
+    assert sentinel in blocks
+    assert any(isinstance(b, str) and "fell back" in b for b in blocks)
+
+
+# ── _save_image_bytes + CORVIN_IMAGE_OUTDIR ────────────────────────────────
+# Bug report 2026-07-12: generated images not showing inline in chat. This
+# function's own docstring already documents that it relies on implicit
+# Path.cwd() inheritance through the claude CLI subprocess when no explicit
+# outdir is given -- exactly the class of cross-process assumption this
+# server's env vars (CORVIN_HOME/CORVIN_TENANT_ID) already needed an
+# explicit workaround for. get_active_mcp_servers() now sets
+# CORVIN_IMAGE_OUTDIR explicitly (see operator/mcp_manager/tests/
+# test_mcp_m4.py::TestImageOutdirInjection) -- these tests prove the WRITE
+# side actually honours it, closing the round trip end to end.
+
+def test_save_image_bytes_honours_corvin_image_outdir(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    explicit_outdir = tmp_path / "session-workdir" / "outputs"
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(explicit_outdir))
+    import main as m
+
+    saved = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert saved is not None
+    saved_path = Path(saved)
+    assert saved_path.parent == explicit_outdir
+    assert saved_path.exists()
+    assert saved_path.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+
+
+def test_save_image_bytes_falls_back_to_cwd_outputs_without_env(monkeypatch, tmp_path):
+    """Regression guard: the pre-existing cwd-relative behavior must survive
+    unchanged for callers that don't set the new env var (e.g. the messenger
+    bridges before this fix's rollout reaches them, or a future MCP host
+    that doesn't wire it)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.delenv("CORVIN_IMAGE_OUTDIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    import main as m
+
+    saved = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert saved is not None
+    assert Path(saved).parent == tmp_path / "outputs"
+
+
+def test_save_image_bytes_produces_a_file_chat_runtime_classifies_as_image(monkeypatch, tmp_path):
+    """The other half of the round trip: chat_runtime.py's post-turn scan
+    calls _artifact_mime() on every new file under the session workdir. This
+    proves a file _save_image_bytes actually writes (under CORVIN_IMAGE_OUTDIR
+    pointed at a session workdir's outputs/, exactly what the new
+    get_active_mcp_servers(image_outdir=...) wiring provides) is classified
+    as image/jpeg by that exact function -- not a synthetic path, the real
+    saved file."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    workdir = tmp_path / "session-workdir"
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(workdir / "outputs"))
+    import main as m
+
+    saved = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert saved is not None
+
+    _console_root = Path(__file__).resolve().parents[3] / "core" / "console"
+    if str(_console_root) not in sys.path:
+        sys.path.insert(0, str(_console_root))
+    from corvin_console import chat_runtime
+
+    mime = chat_runtime._artifact_mime(Path(saved))
+    assert mime == "image/jpeg"
+
+
+def test_disclosure_survives_readonly_store(monkeypatch, tmp_path):
+    """ensure_disclosed's 'never raises' contract: a storage failure must
+    degrade to 'shown again next time', not fail the tool call after the
+    image was already generated."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import imagegen_disclosure as d
+
+    target = tmp_path / "tenants" / "_default" / "global"
+    target.mkdir(parents=True)
+    target.chmod(0o500)
+    try:
+        text = d.ensure_disclosed("_default")
+        assert text == d.DISCLOSURE_TEXT
+    finally:
+        target.chmod(0o700)
+
+
+def test_disclosure_rejects_path_injection_tenant(monkeypatch, tmp_path):
+    """Tenant ids are path components — a crafted value must fall back to
+    _default instead of escaping the tenants dir (or crashing on ':' under
+    Windows)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import imagegen_disclosure as d
+
+    p = d._store_path("../../../etc")
+    assert "tenants/_default" in str(p).replace("\\", "/")
+
+
+# ── Bounded timeouts (bug report 2026-07-13: hangs forever on Windows) ─────
+# Root cause confirmed by investigation: _save_image_bytes's mkdir/write_bytes
+# had no timeout (a try/except cannot interrupt a syscall stuck inside the
+# kernel -- e.g. a stalled OneDrive-synced or network-mapped folder backing
+# the session workdir, both common on Windows), and NOTHING downstream (the
+# console's stdout-reading loop, the bridge's subprocess.communicate()) ever
+# times out a hanging turn either. These tests simulate a genuinely stuck
+# write / a stuck implementation and prove the tool now returns within a
+# bounded time instead of hanging -- using real threading.Thread.join()
+# timeouts, not just asserting the constant exists.
+
+def test_save_image_bytes_abandons_a_stuck_write_instead_of_hanging(monkeypatch, tmp_path):
+    import time as _time
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(tmp_path / "outputs"))
+    import main as m
+
+    monkeypatch.setattr(m, "_SAVE_TIMEOUT_S", 0.3)
+
+    real_mkdir = Path.mkdir
+
+    def _stuck_mkdir(self, *a, **k):
+        _time.sleep(5)  # simulate a hung/offline synced or mapped drive
+        return real_mkdir(self, *a, **k)
+
+    monkeypatch.setattr(Path, "mkdir", _stuck_mkdir)
+
+    t0 = _time.monotonic()
+    result = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    elapsed = _time.monotonic() - t0
+
+    assert result is None, "a stuck write must degrade to 'not saved', not hang"
+    assert elapsed < 2.0, (
+        f"_save_image_bytes must return promptly after _SAVE_TIMEOUT_S "
+        f"(0.3s) even though the write itself takes 5s -- took {elapsed:.2f}s"
+    )
+
+
+def test_generate_image_returns_timeout_error_instead_of_hanging_forever(monkeypatch, tmp_path):
+    """The holistic safety net: even if something OTHER than the save step
+    hangs (a future bug, an unknown OS quirk), generate_image() itself must
+    still return -- with a clear, catchable error -- instead of leaving the
+    caller waiting forever with zero feedback (the exact reported symptom)."""
+    import time as _time
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    monkeypatch.setattr(m, "_TOTAL_TIMEOUT_S", 0.3)
+
+    def _stuck_impl(prompt):
+        _time.sleep(5)
+        return ["never gets here"]
+
+    monkeypatch.setattr(m, "_generate_image_impl", _stuck_impl)
+
+    t0 = _time.monotonic()
+    with pytest.raises(m.ImageGenTimeout) as exc_info:
+        m.generate_image("a nice tree")
+    elapsed = _time.monotonic() - t0
+
+    assert "timed out" in str(exc_info.value).lower()
+    assert elapsed < 2.0, (
+        f"generate_image() must return within _TOTAL_TIMEOUT_S (0.3s) even "
+        f"though the implementation hangs for 5s -- took {elapsed:.2f}s"
+    )
+
+
+def test_generate_image_timeout_is_not_an_image_gen_refused(monkeypatch, tmp_path):
+    """Adversarial review (2026-07-14): a timeout must be a DISTINCT
+    exception type from ImageGenRefused (the L44 content-policy refusal) --
+    reusing ImageGenRefused for an infrastructural hang would let any
+    exception-type-based refusal-rate accounting misclassify a stalled
+    network drive as a content-policy block."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    assert not issubclass(m.ImageGenTimeout, m.ImageGenRefused)
+    assert not issubclass(m.ImageGenRefused, m.ImageGenTimeout)
+
+
+def test_save_image_bytes_never_raises_even_if_path_construction_fails(monkeypatch, tmp_path):
+    """Regression (adversarial review, 2026-07-14): a prior version moved
+    the path/env construction (os.environ.get, Path(), the f-string) OUTSIDE
+    the try/except into the calling thread, so an error in THAT setup code
+    (not just the background write) propagated uncaught -- turning a
+    cosmetic display-persistence failure into a hard crash of the whole
+    generate_image() call. The whole function body must be covered."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(tmp_path / "outputs"))
+    import main as m
+
+    def _boom(*a, **k):
+        raise ValueError("simulated path-construction failure")
+
+    monkeypatch.setattr(m, "Path", _boom)
+    result = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert result is None, "a path-construction failure must degrade to 'not saved', never raise"
+
+
+def test_generate_image_still_works_normally_through_the_timeout_wrapper(monkeypatch, tmp_path):
+    """Regression guard: wrapping generate_image() in a timeout must not
+    change its behavior on the normal (fast, successful) path."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: None)
+    monkeypatch.setattr(m, "resolve_key", lambda name: None)
+    monkeypatch.setattr(m, "ensure_disclosed", lambda tid: None)
+    sentinel = object()
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: sentinel)
+    monkeypatch.setattr(m, "_save_image_bytes", lambda data, fmt, timeout_s=None: None)
+
+    blocks = m.generate_image("a nice tree")
+    assert sentinel in blocks
+
+
+def test_provider_hang_is_bounded_not_whole_call_timeout(monkeypatch):
+    """A provider stuck past its own httpx timeout (the reported 240s fresh-install
+    hang) must fail at ~_PROVIDER_TIMEOUT_S via the friendly unavailable message —
+    NOT wait out the whole-call _TOTAL_TIMEOUT_S backstop."""
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: None)      # no refusal
+    monkeypatch.setattr(m, "resolve_key", lambda *a, **k: None)    # no OpenAI key → Tier 0
+    monkeypatch.setattr(m, "ensure_disclosed", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: time.sleep(30))
+    monkeypatch.setattr(m, "_PROVIDER_TIMEOUT_S", 0.4)
+
+    t0 = time.monotonic()
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_image_impl("a queen bee")
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, f"provider bound did not fire fast (took {elapsed:.1f}s)"
+
+
+# ── deadline-aware step budgets (2026-07-14) ────────────────────────────────
+#
+# Bug report: three consecutive generate_image() calls each hit EXACTLY
+# _TOTAL_TIMEOUT_S (the generic "please try again" backstop) instead of one
+# of the specific, more actionable per-step friendly messages. Root cause:
+# check_l44() had no bound of its own inside this module (its real worst case
+# chains a cloud classifier spawn — 3 attempts x 20s + backoff — THEN a local
+# Hermes/Ollama fallback, up to ~93s, not the "~35s" this module used to
+# assume), and each provider step was handed its own FULL static budget
+# regardless of how much of the shared total the earlier steps had already
+# spent — so the legitimate (non-infinite) worst-case sum of every step could
+# exceed the old 180s ultimate backstop even with no true hang anywhere.
+
+def test_l44_hang_is_bounded_fast_and_degrades_to_the_floor(monkeypatch):
+    """A stuck/slow check_l44() must be bounded at ~_L44_TIMEOUT_S (not consume
+    most of _TOTAL_TIMEOUT_S), AND then degrade to the deterministic Tier-0 floor
+    — NOT hard-refuse. The old behaviour refused EVERY image when the classifier
+    was slow (FREE tier / no local Ollama), killing the feature; a benign prompt
+    must instead fall through the floor and proceed to generation.
+    """
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: time.sleep(30))
+    monkeypatch.setattr(m, "_L44_TIMEOUT_S", 0.4)
+    # Floor PERMITS the benign prompt (as the real Tier-0 floor does for "queen bee").
+    monkeypatch.setattr(m, "check_l44_floor", lambda *a, **k: None)
+    # Stop right after the gate so the test doesn't depend on a live provider —
+    # a distinctive error proves we got PAST the safety gate rather than refused.
+    monkeypatch.setattr(m, "resolve_key", lambda *_a, **_k: None)  # no OpenAI
+    monkeypatch.setattr(m, "_generate_pollinations",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("PAST_GATE_MARKER")))
+
+    t0 = time.monotonic()
+    with pytest.raises(Exception) as ei:
+        m._generate_image_impl("a queen bee")
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, f"L44 bound did not fire fast (took {elapsed:.1f}s)"
+    # The point: it did NOT hard-refuse with "safety-checked"; it reached generation.
+    assert "safety-checked" not in str(ei.value), \
+        "a benign prompt on L44 timeout must degrade to the floor, not be refused"
+
+
+def test_l44_timeout_still_blocks_a_prohibited_prompt_via_the_floor(monkeypatch):
+    """Fail-TO-FLOOR, not fail-open: when check_l44 times out, a prompt the
+    Tier-0 floor rejects must still be refused — the degradation must not become
+    a bypass for pattern-matched prohibited content."""
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: time.sleep(30))
+    monkeypatch.setattr(m, "_L44_TIMEOUT_S", 0.4)
+    monkeypatch.setattr(m, "check_l44_floor",
+                        lambda *a, **k: "[house-rules] This request is not permitted (rule 'x').")
+
+    with pytest.raises(m.ImageGenRefused, match="not permitted"):
+        m._generate_image_impl("a prohibited thing")
+
+
+def test_provider_budget_shrinks_by_how_much_l44_already_spent(monkeypatch):
+    """The total budget is shared, not per-step-independent: if the L44 gate
+    (bounded, but genuinely slow) already consumed most of _TOTAL_TIMEOUT_S,
+    the provider step below it must only get what's actually left — proving
+    the steps are deadline-aware, not each given their own fresh full budget
+    regardless of what already elapsed (which is exactly how the old code let
+    the legitimate worst-case sum exceed the outer backstop)."""
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "_TOTAL_TIMEOUT_S", 10.0)
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: (time.sleep(2.0), None)[1])
+    monkeypatch.setattr(m, "resolve_key", lambda *a, **k: None)
+    monkeypatch.setattr(m, "ensure_disclosed", lambda *a, **k: None)
+
+    seen_timeout = {}
+    _real_run_bounded = m._run_bounded
+
+    def _fake_run_bounded(fn, timeout_s, thread_name):
+        if thread_name == "imagegen-pollinations":
+            seen_timeout["value"] = timeout_s
+        return _real_run_bounded(fn, timeout_s, thread_name)
+
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: None)
+    monkeypatch.setattr(m, "_run_bounded", _fake_run_bounded)
+
+    m._generate_image_impl("a queen bee")
+
+    assert "value" in seen_timeout, "pollinations step never ran"
+    # _PROVIDER_TIMEOUT_S defaults to 75s, but only ~8s of the 10s total
+    # budget remains after L44's 2s — the clamp must reflect that, not 75.
+    assert seen_timeout["value"] < 75.0, (
+        f"pollinations was handed {seen_timeout['value']:.2f}s — a fresh full "
+        "provider budget, not the actual remainder of the shared deadline"
+    )
+    assert seen_timeout["value"] < 9.5, (
+        f"pollinations was handed {seen_timeout['value']:.2f}s, too close to "
+        "the full 10s total to prove the L44 step's 2s was actually deducted"
+    )
+
+
+def test_remaining_never_goes_below_the_floor(monkeypatch):
+    import time
+    import main as m
+
+    deadline = time.monotonic() - 100  # already long past
+    assert m._remaining(deadline) == 5.0
+    assert m._remaining(deadline, floor=1.0) == 1.0

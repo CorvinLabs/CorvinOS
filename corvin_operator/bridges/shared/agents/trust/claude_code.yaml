@@ -1,0 +1,23 @@
+apiVersion: corvin/v1
+kind: EngineTrust
+metadata:
+  engine_id: claude_code
+  trust_tier: high
+  evaluated_at: "2026-05-15T00:00:00Z"
+  evaluated_against: "claude-opus-4-7"
+  valid_until: "2026-11-15T00:00:00Z"
+spec:
+  binary_sha256: null
+  jailbreak_resistance: 0.95
+  system_prompt_respect: 0.98
+  tool_call_fidelity: 0.99
+  tested_refusal_classes:
+    - harmful_content
+    - prompt_injection
+    - system_prompt_override
+    - role_switching
+  notes: |
+    Manuelle Eval gegen claude-opus-4-7 / 4-6 / 4-5 (2026-05).
+    binary_sha256 ist null weil claude im PATH des Operators ist
+    und nicht von Corvin verwaltet wird (subscription-native).
+    Re-Evaluation pflicht alle 6 Monate; valid_until ist load-bearing.

@@ -6,7 +6,7 @@ from pathlib import Path
 from .dependencies import pip_install as _pip_install
 
 
-# Keep in sync with operator/voice/scripts/stt/local_whisper.py — the provider
+# Keep in sync with corvin_operator/voice/scripts/stt/local_whisper.py — the provider
 # must load the exact model this step downloaded, or a fresh install pays a
 # silent first-use download delay instead of the visible one below (ADR-0185
 # Decision 3: models are fetched once during install, not on first use).
@@ -14,7 +14,7 @@ from .dependencies import pip_install as _pip_install
 # 3–16 GB (the quality default — `base` mis-transcribes German/accented audio),
 # `medium-q5_0` ≥ 16 GB. Prefetching whatever `_default_model()` resolves keeps
 # install-time download and runtime load on the SAME file.
-# Mirror of operator/voice/scripts/stt/local_whisper.py's tier constants. The
+# Mirror of corvin_operator/voice/scripts/stt/local_whisper.py's tier constants. The
 # runtime provider is the Single Source of Truth (`_default_model()` below
 # delegates to it); these locals are only the offline fallback used when the
 # provider module can't be imported in this install layout. The test
@@ -49,7 +49,7 @@ def _provider_default_model() -> "str | None":
         ensure_operator_on_path()
     except Exception:  # noqa: BLE001
         pass
-    # Repo layout: <root>/corvinOS/installer/steps/ → <root>/operator/voice/scripts
+    # Repo layout: <root>/corvinOS/installer/steps/ → <root>/corvin_operator/voice/scripts
     scripts = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..", "..", "operator", "voice", "scripts",

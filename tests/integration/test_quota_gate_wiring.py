@@ -126,10 +126,10 @@ class TestQuotaGateWiring:
         # Call the setup function
         _ensure_operator_on_path()
 
-        # Verify operator/ is now on sys.path
+        # Verify corvin_operator/ is now on sys.path
         operator_root = Path(__file__).resolve().parents[3] / "operator"
         assert str(operator_root) in sys.path or not operator_root.is_dir(), (
-            "operator/ should be on sys.path after _ensure_operator_on_path()"
+            "corvin_operator/ should be on sys.path after _ensure_operator_on_path()"
         )
 
         # Verify we can now import from operator
@@ -140,7 +140,7 @@ class TestQuotaGateWiring:
             assert callable(op_increment), "Should be able to import quota_counter"
             assert op_error is not None, "Should be able to import LicenseLimitError"
         except ImportError as e:
-            pytest.skip(f"operator/ module not available in test environment: {e}")
+            pytest.skip(f"corvin_operator/ module not available in test environment: {e}")
 
     def test_quota_gate_multiple_call_sites_use_same_path(self, monkeypatch):
         """Verify all three subsystems (brain, skill_forge, tool_forge) use quota_gate.

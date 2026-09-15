@@ -18,7 +18,7 @@ Then we run two structural-defence assertions:
   * Prompt-injection attempt (literal closing tag) is rejected before
     any worker spawn.
 
-Run: ``python3 operator/bridges/shared/test_a2a_bidirectional.py``
+Run: ``python3 corvin_operator/bridges/shared/test_a2a_bidirectional.py``
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ if str(_here) not in sys.path:
 # below (test-execution time only) rather than here at collection/import time.
 # Poisoning it here used to leave "license.compute_quota"/"license.limits"
 # permanently set to None in sys.modules for the rest of the process — in a
-# combined session (`pytest tests/ operator/... core/...`, as CI's coverage
+# combined session (`pytest tests/ corvin_operator/... core/...`, as CI's coverage
 # job runs), every later-collected file doing a real `import license.validator`
 # / `from license.limits import ...` then hit `ModuleNotFoundError: import of
 # license.limits halted; None in sys.modules` instead of importing the real

@@ -36,8 +36,8 @@ def _resolve_env() -> str | None:
     new = new.strip()
     # A whitespace-only value (" ", "\t", "\n") is not a real override —
     # treat it the same as unset rather than resolving to a bogus path like
-    # Path(" ") relative to the cwd. Mirrors operator/cowork/lib/paths.py and
-    # operator/forge/forge/paths.py — the a111d09 sweep fixed those two but
+    # Path(" ") relative to the cwd. Mirrors corvin_operator/cowork/lib/paths.py and
+    # corvin_operator/forge/forge/paths.py — the a111d09 sweep fixed those two but
     # missed this third copy (found closing the red test_paths suite).
     if not new:
         return None
@@ -80,7 +80,7 @@ def forge_dir() -> Path:
 
 
 # ── ADR-0007 Phase 1.2 — tenant-aware resolvers ───────────────────────────
-# See operator/forge/forge/paths.py for the canonical contract.
+# See corvin_operator/forge/forge/paths.py for the canonical contract.
 import re as _tenants_re
 
 _DEFAULT_TENANT_ID = "_default"
@@ -173,7 +173,7 @@ def voice_session_dir(channel: str, safe_chat_key: str, tenant_id: str | None = 
 # this resolver is a CHARSET rule (_BRIDGE_CHANNEL_RE below), not an enumeration
 # — a frozenset used to sit at this spot, was never read by anything, and had
 # gone stale (no "signal", no "teams"), so a reader took it for the canonical
-# list. The canonical list is operator/bridges/shared/channels.py.
+# list. The canonical list is corvin_operator/bridges/shared/channels.py.
 _BRIDGE_KINDS = frozenset({
     "inbox", "outbox", "processed", "attachments", "auth", "log",
     "settings", "root",
@@ -273,7 +273,7 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     repo = _repo_root()
     if repo is None:
         return None
-    # Try new operator/bridges layout first, fall back to legacy plugins/ location
+    # Try new corvin_operator/bridges layout first, fall back to legacy plugins/ location
     channel_dir = repo / "operator" / "bridges" / channel
     if not channel_dir.exists():
         channel_dir = repo / "operator" / "bridges" / channel
@@ -283,7 +283,7 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
 
 
 # ── R4 — THE audit chain resolver (byte-identical mirror) ────────────────────
-# Mirrors ``operator/forge/forge/paths.py::tenant_audit_chain`` /
+# Mirrors ``corvin_operator/forge/forge/paths.py::tenant_audit_chain`` /
 # ``legacy_audit_chains`` / ``all_audit_chains`` and
 # ``core/paths/tenant.py``'s copies. There is exactly ONE hash-chained audit
 # file per tenant and this names it; see the forge copy for the measured

@@ -63,7 +63,7 @@ def _resolvers():
     # bridge_manager merges service.env into every spawned daemon env — it is a
     # first-class consumer and was the 6th divergent resolver (round-2 finding).
     import importlib
-    bm = importlib.import_module("bridge_manager")  # operator/bridges on sys.path
+    bm = importlib.import_module("bridge_manager")  # corvin_operator/bridges on sys.path
     resolvers["bridge_manager"] = bm._voice_config_dir
 
     # profile/memory/vault stores (V-2 audit finding 2026-07-12): these three

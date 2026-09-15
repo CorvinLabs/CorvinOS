@@ -58,7 +58,7 @@ _BRIDGE_DIR = Path(__file__).parent
 # `audit`, `paths`, `profile`, `types` and `channels`, and prepending that
 # directory makes every one of them shadow a stdlib or site-packages module for
 # the whole launcher process. That exact mistake killed the webui service once
-# (`operator/__init__.py` shadowing stdlib `operator`, 5187bd4) and was fixed
+# (`corvin_operator/__init__.py` shadowing stdlib `operator`, 5187bd4) and was fixed
 # once already in the plugin loader (94325c8).
 _SHARED_DIR = str(_BRIDGE_DIR / "shared")
 if _SHARED_DIR not in sys.path:
@@ -542,7 +542,7 @@ def _npm_install_cmd(npm_bin: str) -> list[str]:
 
 
 def _materialise_shared_js() -> Optional[Path]:
-    """Copy operator/bridges/shared/js/ into ~/.corvin/bridges/shared/js/.
+    """Copy corvin_operator/bridges/shared/js/ into ~/.corvin/bridges/shared/js/.
 
     The per-channel daemons `require('../shared/js/...')` relative to their own
     dir, so when a daemon runs from the RUNTIME dir (~/.corvin/bridges/<ch>/) the
@@ -1238,8 +1238,8 @@ def ensure_windows_autostart(channel: str) -> dict:
     every time a channel is started this way. Reuses bridge.ps1 --
     `_BRIDGE_DIR` always resolves to bridge_manager.py's OWN directory, so
     `_BRIDGE_DIR / "bridge.ps1"` finds the right sibling copy whether this
-    is a dev checkout (operator/bridges/) or a vendored wheel install
-    (corvin_console/_vendor/operator/bridges/) -- no separate resolution
+    is a dev checkout (corvin_operator/bridges/) or a vendored wheel install
+    (corvin_console/_vendor/corvin_operator/bridges/) -- no separate resolution
     needed, no duplicated PowerShell logic to drift out of sync with
     bridge.ps1's own Install-AutostartTask.
 

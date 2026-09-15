@@ -13,7 +13,7 @@ Skips with a clear marker when bwrap is missing — without bwrap the
 sandbox falls back to rlimits-only and the network test would trivially
 pass under both personas (no namespace isolation), defeating the point.
 
-Run as: python3 operator/forge/tests/test_persona_sandbox.py
+Run as: python3 corvin_operator/forge/tests/test_persona_sandbox.py
 """
 from __future__ import annotations
 

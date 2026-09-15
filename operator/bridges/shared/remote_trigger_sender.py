@@ -131,7 +131,7 @@ _REMOTE_ENDPOINTS_ENV = "REMOTE_ENDPOINTS_DIR"
 
 
 def _default_endpoints_dir() -> Path:
-    """<repo_root>/operator/cowork/remote_endpoints.
+    """<repo_root>/corvin_operator/cowork/remote_endpoints.
 
     2026-08-04: anchors off the INSTALLED ``corvin_console`` package's own
     location first, when importable — mirrors the identical fix (same
@@ -220,7 +220,7 @@ class ResponseVerificationError(SendError):
 class RemoteEndpointRegistry:
     """Per-call config loader for outbound endpoints.
 
-    File layout: ``operator/cowork/remote_endpoints/<endpoint_id>.json``,
+    File layout: ``corvin_operator/cowork/remote_endpoints/<endpoint_id>.json``,
     mode 0600. Schema::
 
         {

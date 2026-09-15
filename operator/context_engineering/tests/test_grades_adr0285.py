@@ -6,7 +6,7 @@
   * bootstrap_seed is capped.
   * record_turn_outcome attributes success to the stages that ran.
 
-Run: python3 operator/context_engineering/tests/test_grades_adr0285.py
+Run: python3 corvin_operator/context_engineering/tests/test_grades_adr0285.py
 """
 from __future__ import annotations
 

@@ -229,7 +229,7 @@ def bootstrap_core_capabilities() -> dict[str, bool]:
 
 
 def _repo_root() -> Path:
-    # operator/bridges/shared/security_capabilities.py -> repo root is parents[3]
+    # corvin_operator/bridges/shared/security_capabilities.py -> repo root is parents[3]
     return Path(__file__).resolve().parents[3]
 
 

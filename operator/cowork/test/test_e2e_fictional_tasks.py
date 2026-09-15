@@ -19,7 +19,7 @@ actually walks for a made-up user request:
          name is present in a list
 
 Every "wired" and "planned" ADR-0190 capability is covered by at least
-one fictional task below. Run: python3 operator/cowork/test/test_e2e_fictional_tasks.py
+one fictional task below. Run: python3 corvin_operator/cowork/test/test_e2e_fictional_tasks.py
 """
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def _capability_gating_cases() -> None:
     def _covers(allowed: list[str], tool: str) -> bool:
         # A server-level wildcard (e.g. "mcp__forge__*") covers any tool
         # from that server, same semantics Claude Code's --allowedTools
-        # itself applies (see operator/skill-forge/personas/skill-forge.json
+        # itself applies (see corvin_operator/skill-forge/personas/skill-forge.json
         # for the established wildcard convention this mirrors).
         if tool in allowed:
             return True

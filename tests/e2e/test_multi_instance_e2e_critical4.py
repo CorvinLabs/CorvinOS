@@ -1,7 +1,7 @@
 """E2E tests for CRITICAL-4: A2A Console Wiring (Tier 4, Iteration 3).
 
 Tests full multi-instance workflow including envelope dispatch and registry.
-Note: Requires operator/bridges/shared on path for RemoteTriggerSender integration.
+Note: Requires corvin_operator/bridges/shared on path for RemoteTriggerSender integration.
 """
 
 import asyncio

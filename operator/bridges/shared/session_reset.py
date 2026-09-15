@@ -5,7 +5,7 @@ operation that purges the four cleanup layers a chat owns:
 
   1. SkillForge skills in the **session** scope (canonical workspace
      SKILL.md/meta.json + plugin-slot mirror under
-     ``operator/skill-forge/skills/dyn/``).
+     ``corvin_operator/skill-forge/skills/dyn/``).
   2. Forge tools in the **session** scope (manifest + impl files).
   3. Forge session workspace dir at
      ``<corvin_home>/tenants/<tid>/sessions/<channel>:<chat>/`` — defensive
@@ -50,9 +50,9 @@ from typing import Any
 
 # Make the forge + skill-forge top dirs importable without polluting the
 # parent process's sys.path beyond this module — mirror the pattern used
-# in operator/forge/scripts/forge_cleanup.py.
+# in corvin_operator/forge/scripts/forge_cleanup.py.
 HERE = Path(__file__).resolve().parent
-# bridges/shared → bridges → operator/. forge + skill-forge live here.
+# bridges/shared → bridges → corvin_operator/. forge + skill-forge live here.
 PLUGINS = HERE.parent.parent
 _FORGE_TOP = PLUGINS / "forge"
 _SKILL_FORGE_TOP = PLUGINS / "skill-forge"
@@ -62,7 +62,7 @@ for _p in (_FORGE_TOP, _SKILL_FORGE_TOP):
 
 # ...and then put OUR OWN directory back in front of them.
 #
-# ``operator/forge/`` ships a legacy top-level ``paths.py`` (FORGE_ROOT /
+# ``corvin_operator/forge/`` ships a legacy top-level ``paths.py`` (FORGE_ROOT /
 # get_forge_home / …) that is unrelated to ``bridges/shared/paths.py`` and
 # shadows it whenever it sits earlier in sys.path. Roughly 25 sibling modules
 # do ``from paths import corvin_home`` (or tenant_global_dir / voice_dir) at
@@ -213,7 +213,7 @@ def _audit_path_unified() -> Path:
     env = os.environ.get("VOICE_AUDIT_PATH")
     if env:
         return Path(env)
-    # Always use absolute import to avoid conflicts with operator/forge/paths.py
+    # Always use absolute import to avoid conflicts with corvin_operator/forge/paths.py
     # when this module is loaded directly (not as part of a package).
     # Add HERE to sys.path first so local audit + paths imports work reliably.
     if str(HERE) not in sys.path:

@@ -116,7 +116,7 @@ def _isolated_bridge_outbox(monkeypatch, tmp_path):
 
     Fourth incarnation of the class this file guards: the workflow
     `deliver`/`ask_human`/`answer` node types write their envelope straight
-    into `operator/bridges/shared/outbox/`, which the LIVE Discord/WhatsApp
+    into `corvin_operator/bridges/shared/outbox/`, which the LIVE Discord/WhatsApp
     daemons poll. Every test run of those nodes therefore handed the running
     bridge a real send job — 724 of them, addressed to the test placeholder
     chat_id "owner-chat", were sitting in the Discord dead-letter dir on

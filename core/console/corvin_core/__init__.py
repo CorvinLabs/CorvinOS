@@ -2,7 +2,7 @@
 core/bridge never imports the Console (ADR-0352).
 
 Importing corvin_core runs the operator-dependency bootstrap (Windows fcntl/resource
-shim → vendored operator/ subtrees on sys.path → source-tree injection) so
+shim → vendored corvin_operator/ subtrees on sys.path → source-tree injection) so
 ``from forge import paths`` / ``import license.validator`` / ``import engine_switch``
 resolve WITHOUT the Console being imported first. This is exactly what makes headless
 mode (``corvinos run``) possible — the P2.2 verification found the coupling and P2.3
@@ -18,7 +18,7 @@ from __future__ import annotations
 # any submodule (or vendored operator subtree) does a module-level ``import fcntl``.
 from . import _wincompat  # noqa: F401
 
-# Put the vendored operator/ subtrees on sys.path (wheel install); no-op in a
+# Put the vendored corvin_operator/ subtrees on sys.path (wheel install); no-op in a
 # source-tree checkout. MUST run before _bootstrap (which eagerly does
 # ``from forge import paths``).
 from ._operator_bootstrap import ensure_operator_on_path as _ensure_operator_on_path

@@ -89,7 +89,7 @@ def _enforce_acs_compute_quota(tenant_id: str, run_id: "str | None") -> "dict[st
     proceed. Transient I/O is swallowed by increment_and_check (operational fail-open).
     """
     try:
-        _lic_root = str(Path(__file__).resolve().parents[2])  # operator/
+        _lic_root = str(Path(__file__).resolve().parents[2])  # corvin_operator/
         if _lic_root not in sys.path:
             sys.path.insert(0, _lic_root)
         from license.compute_quota import increment_and_check as _cq_inc  # type: ignore
@@ -149,7 +149,7 @@ _FALLBACK_MAX_PER_DAY = 50
 # D3 (adversarial review): the counter below is a read-modify-write; unlocked,
 # N parallel submissions each read the same count and overshoot the daily cap
 # arbitrarily. Serialize with the LIC-1 pattern from
-# operator/license/compute_quota.py: an in-process threading.Lock around the
+# corvin_operator/license/compute_quota.py: an in-process threading.Lock around the
 # ENTIRE read-modify-write plus an advisory file lock (POSIX fcntl.flock;
 # msvcrt.locking range lock on Windows) for cross-process safety.
 _FALLBACK_COUNT_LOCK = threading.Lock()

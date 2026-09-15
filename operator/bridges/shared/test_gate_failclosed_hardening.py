@@ -12,7 +12,7 @@ turns red:
 
 Run with::
 
-    python -m pytest operator/bridges/shared/test_gate_failclosed_hardening.py -q
+    python -m pytest corvin_operator/bridges/shared/test_gate_failclosed_hardening.py -q
 """
 from __future__ import annotations
 

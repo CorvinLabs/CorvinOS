@@ -30,7 +30,7 @@ from unittest.mock import MagicMock, patch
 
 _THIS = Path(__file__).resolve()
 _REPO = _THIS.parents[3]
-for p in ("core/console", "operator/bridges/shared", "operator/forge"):
+for p in ("core/console", "corvin_operator/bridges/shared", "corvin_operator/forge"):
     sys.path.insert(0, str(_REPO / p))
 
 from fastapi import FastAPI  # noqa: E402

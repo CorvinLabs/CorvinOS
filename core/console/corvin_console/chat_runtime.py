@@ -3,7 +3,7 @@
 ⚠ Scope of this v1 (Iter 3a, intentionally minimal)
 ----------------------------------------------------
 This is NOT the full bridge-adapter integration. The 5,300-line
-``operator/bridges/shared/adapter.py`` owns:
+``corvin_operator/bridges/shared/adapter.py`` owns:
   * persona resolution (bundle + user overrides + auto-routing)
   * compliance gates (disclosure, consent, quota, observer-transcript)
   * path-gate hook activation, audit-chain emissions
@@ -127,8 +127,8 @@ _REPO = _THIS_DIR.parents[2]
 
 # Vibe Engineering P-1 (ADR-0275): load the consolidated CEL pipeline by FILE PATH
 # under the top-level name "context_engineering" — NOT via a sys.path insert of
-# operator/ (that would re-arm the stdlib `operator` shadow, project memory
-# "operator/ stdlib-Shadow-Falle"). sys.modules registration is required so the
+# corvin_operator/ (that would re-arm the stdlib `operator` shadow, project memory
+# "corvin_operator/ stdlib-Shadow-Falle"). sys.modules registration is required so the
 # package's own relative imports (`from .memory_lookup import …`) resolve. Absent
 # (e.g. a wheel install without the operator tree) → the feature is simply off.
 _CEL_AVAILABLE = False
@@ -142,8 +142,8 @@ _cel_record_outcome = None  # G4: outcome-feedback loop (ADR-0269 Phase-4b)
 _cel_capture_decision = None  # ADR-0407: decision-point capture (outbound hook)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
-    # Source tree → <repo>/operator/context_engineering. Wheel → the vendored
-    # copy under _vendor/operator/. Resolving only the first left the CEL
+    # Source tree → <repo>/corvin_operator/context_engineering. Wheel → the vendored
+    # copy under _vendor/corvin_operator/. Resolving only the first left the CEL
     # unimportable on every pip install, and because the load sits in a
     # try/except the feature just reported itself unavailable (fixed 2026-08-11).
     _cel_dir = _REPO / "operator" / "context_engineering"
@@ -252,7 +252,7 @@ except Exception:  # noqa: BLE001
     _voice_profile = None
 
 # Cowork persona resolver (optional on-top plugin) — the SAME resolver the
-# bridge adapter uses (operator/cowork/lib/resolver.py) so the console web-chat
+# bridge adapter uses (corvin_operator/cowork/lib/resolver.py) so the console web-chat
 # resolves the SAME persona system-prompt the Discord/WhatsApp pipeline does
 # instead of running a persona-less prompt (ADR-0114 parity slice). Best-effort,
 # mirroring the other bridge-tree imports: absence degrades to "no persona
@@ -261,7 +261,7 @@ _cowork = None
 try:
     _cowork_lib = _REPO / "operator" / "cowork" / "lib"
     if not (_cowork_lib / "resolver.py").is_file():
-        # Wheel layout: operator/ lives in the vendored copy, not repo-relative.
+        # Wheel layout: corvin_operator/ lives in the vendored copy, not repo-relative.
         try:
             from ._operator_bootstrap import vendor_operator_root  # noqa: PLC0415
             _vroot = vendor_operator_root()
@@ -353,8 +353,8 @@ _SID_BYTES = 16  # → 22-char url-safe base64
 # ── Voice annotation pipeline (LERN-ZUGABE + METAPHER) ────────────────
 
 def _resolve_voice_scripts_dir() -> Path:
-    """Locate operator/voice/scripts in source OR wheel layout. In a wheel the
-    repo-relative path lands in site-packages (no operator/), so fall back to the
+    """Locate corvin_operator/voice/scripts in source OR wheel layout. In a wheel the
+    repo-relative path lands in site-packages (no corvin_operator/), so fall back to the
     vendored copy — else the LERN-ZUGABE / METAPHER voice annotation (summarize.py)
     silently no-ops on a pip install (the 'Konsolen-Learning schlug nicht durch'
     class). Mirrors personas.py / landing.py."""
@@ -3107,7 +3107,7 @@ def _acs_x_blueprint(prompt: str):
     its own regex rules alone). Heuristic stage ONLY: the triage path must
     stay 0 ms / no-subprocess, so the Haiku fallback stage is never invoked
     here. Import is lazy + path-inserted because chat_runtime lives in
-    core/console while acs_classify lives in operator/bridges/shared.
+    core/console while acs_classify lives in corvin_operator/bridges/shared.
     """
     try:
         _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
@@ -3170,7 +3170,7 @@ def _should_delegate(prompt: str, *, tenant_id: str) -> bool:
 def should_delegate_bundled(prompt: str) -> bool:
     """Public re-export of the ADR-0202/0203 triage heuristic (ADR-0255).
 
-    The bridge adapter (``operator/bridges/shared/adapter.py``) imports this
+    The bridge adapter (``corvin_operator/bridges/shared/adapter.py``) imports this
     directly — precedent for a cross-package `corvin_console` import already
     exists there (``feature_flags``, ``task_manager``, ``aco.htrace_uploader``)
     — so a bridge turn and a console turn classify with the SAME function
@@ -3320,7 +3320,7 @@ def _tde_available() -> bool:
     RUN a TDE turn? Two conditions, both required (2026-07-24 review):
 
     1. The full TDE module set imports. Covers the source tree (repo-relative
-       injection) and wheel installs (vendored `_vendor/operator/orchestration`
+       injection) and wheel installs (vendored `_vendor/corvin_operator/orchestration`
        — now on sys.path via `_operator_bootstrap._OPERATOR_SUBTREES`).
     2. The `claude` CLI resolves. `_stream_tde_turn`'s very first action is a
        real `claude -p` InitialAnalysis call (analysis_runner → helper_model.
@@ -5249,7 +5249,7 @@ async def stream_turn(
     # console conversation because this call site never existed here).
     # Advisory only: never alters routing, never raises. Paired with
     # report_turn_outcome() in _os_emit_completed() below. See
-    # operator/bridges/shared/model_selector_shadow.py for the contract.
+    # corvin_operator/bridges/shared/model_selector_shadow.py for the contract.
     try:
         _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
         if str(_bridge_shared) not in sys.path:
@@ -5812,8 +5812,8 @@ async def stream_turn(
         # native OS-turn below handles the task (ladder ends at native, not ACS).
         _quota_fallback = (_tde_degraded_reason is not None)
         try:
-            # Ensure operator/bridges/shared is in path for spawn_gates and other deps
-            # Path: core/console/corvin_console/chat_runtime.py → CorvinOS/operator/bridges/shared
+            # Ensure corvin_operator/bridges/shared is in path for spawn_gates and other deps
+            # Path: core/console/corvin_console/chat_runtime.py → CorvinOS/corvin_operator/bridges/shared
             _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
             if str(_bridge_shared) not in sys.path:
                 sys.path.insert(0, str(_bridge_shared))

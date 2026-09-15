@@ -1,0 +1,9 @@
+{
+  "name": "corvin-bridge-discord",
+  "version": "0.1.0",
+  "private": true,
+  "main": "daemon.js",
+  "dependencies": {
+    "discord.js": "^14.16.0"
+  }
+}

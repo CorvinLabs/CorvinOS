@@ -4,7 +4,7 @@ Per-subtask E2E for the vault → runner → bwrap path. Spawns real bwrap
 where available, real tool subprocess, real audit chain. Mock-free
 except for the vault file itself (which IS the vault).
 
-Run as: python3 operator/forge/tests/test_secret_injection.py
+Run as: python3 corvin_operator/forge/tests/test_secret_injection.py
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "operator" / "forge"))
 # ADR-0153 M3 — the additive instance_sig audit decoration lives in
 # security_events.py and imports ``instance_identity`` from the shared
-# package. Under the bare ``cd operator/forge && python3 tests/...``
+# package. Under the bare ``cd corvin_operator/forge && python3 tests/...``
 # invocation that dir is NOT on sys.path, so the signing was skipped
 # silently (logged "instance_sig not added — ... not importable"). Put
 # the shared dir on the path here so the instance_sig path is exercised

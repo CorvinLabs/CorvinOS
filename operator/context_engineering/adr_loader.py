@@ -89,7 +89,7 @@ class ADRLoader:
         # Detect project root if not provided
         if project_root is None:
             # Start from this file's location and find project root
-            current = Path(__file__).parent.parent.parent  # operator/ → /
+            current = Path(__file__).parent.parent.parent  # corvin_operator/ → /
             project_root = str(current)
 
         self.project_root = Path(project_root)

@@ -47,14 +47,14 @@ def test_full_layout_is_source(tmp_path: Path) -> None:
 
 def test_stray_pyproject_alone_is_wheel(tmp_path: Path) -> None:
     """The exact F2 shape: a foreign pyproject.toml sitting at the site-packages
-    root, no core/ or operator/ dirs → wheel."""
+    root, no core/ or corvin_operator/ dirs → wheel."""
     site = _checkout(tmp_path / "site-packages", pyproject=_GATEWAY_PYPROJECT, core=False, operator=False)
     assert installer_core._is_source_checkout(site) is False
 
 
 def test_stray_pyproject_with_core_but_no_operator_is_wheel(tmp_path: Path) -> None:
     """A wheel install DOES have core/ in site-packages (it is a packaged
-    root); it never has operator/. The name check must hold on its own too."""
+    root); it never has corvin_operator/. The name check must hold on its own too."""
     site = _checkout(tmp_path / "site-packages", pyproject=_GATEWAY_PYPROJECT, core=True, operator=False)
     assert installer_core._is_source_checkout(site) is False
     site2 = _checkout(tmp_path / "site-packages2", pyproject=_CORVINOS_PYPROJECT, core=True, operator=False)

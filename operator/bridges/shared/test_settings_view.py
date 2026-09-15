@@ -206,7 +206,7 @@ class SystemBlockTests(_SettingsTestBase):
 
     def test_bridges_check_legacy_location(self):
         """settings.json under the legacy in-repo path is also detected."""
-        # Seed the legacy whatsapp path: <repo>/operator/bridges/whatsapp/settings.json
+        # Seed the legacy whatsapp path: <repo>/corvin_operator/bridges/whatsapp/settings.json
         legacy = paths.legacy_bridge_runtime_dir("whatsapp", "root")
         self.assertIsNotNone(legacy, "legacy path resolver returned None — repo root not found")
         legacy_settings = legacy / "settings.json"

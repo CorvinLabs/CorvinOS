@@ -51,14 +51,14 @@ _STORE_OBJECT_NAMES = {"session_store", "_pb_store", "ideation", "_ideation", "_
 #: justification the module docstring above requires.
 ALLOWED_UNCONDITIONAL = {
     ("core/console/corvin_console/slash_commands.py", "_plugin_builder_continue"),
-    ("operator/bridges/shared/adapter.py", "_plugin_builder_bridge_reply"),
+    ("corvin_operator/bridges/shared/adapter.py", "_plugin_builder_bridge_reply"),
 }
 
 _FILES_TO_CHECK = (
     "core/plugins/plugin_builder/ideation.py",
     "core/plugins/plugin_builder/turn.py",
     "core/console/corvin_console/slash_commands.py",
-    "operator/bridges/shared/adapter.py",
+    "corvin_operator/bridges/shared/adapter.py",
 )
 
 

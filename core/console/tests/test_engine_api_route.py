@@ -8,7 +8,7 @@ repeatedly (built, unit-tested in isolation, never proven against real
 state). This suite pins the REAL FastAPI router with a real tenant JSON
 config file under a temp CORVIN_HOME, and proves the run_count/confidence
 numbers come from real audit-chain aggregation (via
-operator/bridges/shared/model_selector_shadow.py), not from constants.
+corvin_operator/bridges/shared/model_selector_shadow.py), not from constants.
 """
 from __future__ import annotations
 

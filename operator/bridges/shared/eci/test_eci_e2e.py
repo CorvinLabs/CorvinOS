@@ -21,7 +21,7 @@ Coverage:
   18. drain_btw_buffer in adapter returns joined text, empties buffer.
 
 Run:
-    python3 operator/bridges/shared/eci/test_eci_e2e.py
+    python3 corvin_operator/bridges/shared/eci/test_eci_e2e.py
 """
 
 from __future__ import annotations

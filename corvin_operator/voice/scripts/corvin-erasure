@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# corvin-erasure — thin wrapper around ErasureOrchestrator for DPO use.
+# Pattern mirrors voice-audit.
+#
+# Symlink onto $PATH:
+#   ln -s "$PWD/operator/voice/scripts/corvin-erasure" ~/.local/bin/corvin-erasure
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/corvin_erasure.py" "$@"

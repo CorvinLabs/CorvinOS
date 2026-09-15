@@ -1,0 +1,12 @@
+{
+  "_NOTE": "Forge sandbox policy (Layer 6). Install to: <corvin_home>/global/forge/policy.json (mode 0600). Hot-reloads per MCP call. Operator-only — never written by bridge/adapter code.",
+  "_INSTALL_PATH": "<corvin_home>/global/forge/policy.json",
+  "allow_network_by_default": false,
+  "persona_sandbox_overrides": {
+    "browser":   { "network": "allow" },
+    "research":  { "network": "allow" }
+  },
+  "blocked_tool_patterns": [],
+  "max_output_bytes": 65536,
+  "allow_promoted_user_tools": true
+}

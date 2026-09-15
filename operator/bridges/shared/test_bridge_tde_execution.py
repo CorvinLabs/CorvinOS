@@ -14,7 +14,7 @@ background on real tasks. Pins:
       console probes pass; any probe failure keeps the frozen default,
   (5) the tde flag ALONE does not unlock ACS (that needs its own parity flag).
 
-Run: python3 operator/bridges/shared/test_bridge_tde_execution.py
+Run: python3 corvin_operator/bridges/shared/test_bridge_tde_execution.py
 """
 from __future__ import annotations
 

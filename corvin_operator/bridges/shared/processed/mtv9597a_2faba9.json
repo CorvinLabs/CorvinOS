@@ -1,0 +1,8 @@
+{
+  "id": "mtv9597a_2faba9",
+  "channel": "discord",
+  "from": "1299270034849533983",
+  "chat_id": "1502103856740302964",
+  "ts": 1789028111062,
+  "text": "es geht darum: What's Ready for Phase 2 Start\n(1/2)\n✅ ADR-0528 (complete, approved)\n✅ Design document (4 refinement candidates analyzed, hybrid strategy selected)\n✅ Risk matrix (3 medium risks, all mitigations documented)\n✅ Testing strategy (50+ tests planned, 15 adversarial)\n✅ Handoff checklist (code review, timeline, success criteria)Phase 2 (Context Filtering) — Design Kickoff 🚀\n| Deliverable | Status |\n|---|---|\n| ADR-0528 | ✅ Written + in Corvin-ADR (Context Filter Architecture) |\n| Design Doc | ✅ PHASE2_DESIGN_KICKOFF_2026-09-10.md (ADR-0345 Steps 1–2) |\n| Handoff Doc | ✅ PHASE1_COMPLETION_PHASE2_HANDOFF_2026-09-10.md |\n| Memory | ✅ phase1_complete_phase2_kickoff_2026_09_10.md |\n\nStrategy: Hybrid (Static relevance scoring + optional LLM + Phase 2b learning)\nGoal: 30%+ noise reduction in injected context\nSkill: os.context_filter (200–300 LoC)\nTimeline: Week 1–4 (design finalization → implementation → adversarial review)"
+}

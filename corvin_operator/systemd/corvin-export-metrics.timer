@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily GitHub Pages Metrics Export Timer (ADR-0637)
+Documentation=https://github.com/CorvinLabs/Corvin-ADR/decisions/ADR-0637-github-pages-daily-export.md
+After=network.target
+
+[Timer]
+# Run every day at 00:00 UTC (midnight)
+# Aligned with the beginning of the day so plots reflect 7-day rolling window
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+Unit=corvin-export-metrics.service
+
+# Also run on system boot (if the scheduled time has passed)
+OnBootSec=5min
+
+[Install]
+WantedBy=timers.target

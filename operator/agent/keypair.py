@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 def _agent_dir(tenant_id: str | None = None) -> Path:
     """Resolve the agent state directory for the current tenant."""
     here = Path(__file__).resolve()
-    # Walk up to find repo root (contains .corvin_repo marker or operator/)
+    # Walk up to find repo root (contains .corvin_repo marker or corvin_operator/)
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "operator").is_dir():
             repo = parent

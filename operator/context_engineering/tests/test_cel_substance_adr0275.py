@@ -7,7 +7,7 @@ turn produced stages_ok=3 but top_score=0.0 and an empty brief, because
   * SkillInjection returned only package skills (usually none) with the ADR path
     a TODO, and scored every skill a constant 0.7 (no ranking).
 
-Run: python3 operator/context_engineering/tests/test_cel_substance_adr0275.py
+Run: python3 corvin_operator/context_engineering/tests/test_cel_substance_adr0275.py
 """
 from __future__ import annotations
 

@@ -11,7 +11,7 @@ Corvin-ADR/decisions/0142-layer-extension-api.md and the must-NOT rules:
   * disabled-by-default after `add`
   * audit events emit allow-listed fields only (no hook payload content)
 
-Runnable standalone:  python3 operator/bridges/shared/test_extension_registry.py
+Runnable standalone:  python3 corvin_operator/bridges/shared/test_extension_registry.py
 Exits non-zero on any FAIL.
 """
 from __future__ import annotations

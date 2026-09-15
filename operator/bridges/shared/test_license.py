@@ -1,4 +1,4 @@
-"""Unit tests for ADR-0092 — operator/license/ package (M1 + M2.5).
+"""Unit tests for ADR-0092 — corvin_operator/license/ package (M1 + M2.5).
 
 Tests cover:
 - FREE_TIER defaults when no key is loaded
@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-# Ensure operator/ is on the path regardless of where pytest is invoked.
+# Ensure corvin_operator/ is on the path regardless of where pytest is invoked.
 _HERE = Path(__file__).resolve().parent
 _OPERATOR = _HERE.parents[1]
 if str(_OPERATOR) not in sys.path:

@@ -40,7 +40,7 @@ def console_home(tmp_path, monkeypatch):
     # Resolve the SAME module object auth uses (sys.modules['license.feature_lattice']).
     # `from license import feature_lattice` would read the package *attribute*, which
     # can diverge from sys.modules after another test surgically reimports license.*
-    # (see operator/license/tests/conftest.py) — importlib always returns the
+    # (see corvin_operator/license/tests/conftest.py) — importlib always returns the
     # sys.modules entry, matching auth's `from license.feature_lattice import …`.
     import importlib
 

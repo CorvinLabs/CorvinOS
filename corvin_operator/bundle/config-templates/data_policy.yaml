@@ -1,0 +1,26 @@
+# data_policy.yaml — Data snapshot privacy policy (Layer 24 / ADR-0012)
+# Install to: <corvin_home>/global/data_policy.yaml (mode 0600)
+# Protected by path-gate; hot-reloads per snapshot call.
+
+# Max token budget for a single snapshot response
+snapshot_token_cap: 4000
+
+# Strict anonymisation (k-Anonymity + Laplace noise, ADR-0023)
+# Set true in regulated environments (GDPR, HIPAA).
+strict_anonymization: false
+
+# k value for k-Anonymity bucketing (only used when strict_anonymization: true)
+k_anonymity: 5
+
+# Column patterns to always redact (regex)
+pii_redact_patterns:
+  - "email"
+  - "phone"
+  - "name"
+  - "address"
+  - "ip_address"
+  - "user_id"
+  - "account_number"
+
+# Connector allowlist — empty means all connectors allowed
+connector_allowlist: []

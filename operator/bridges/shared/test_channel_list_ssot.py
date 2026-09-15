@@ -18,7 +18,7 @@ recording an EARLIER incarnation of the same bug ("the console saved their
 settings and then NOTHING could ever start the daemons"). Two independent
 occurrences of one omission is what makes this a test rather than a fix.
 
-Run: python3 operator/bridges/shared/test_channel_list_ssot.py
+Run: python3 corvin_operator/bridges/shared/test_channel_list_ssot.py
 """
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ class ChannelListSSOT(unittest.TestCase):
 
     def test_supervisor_plugin_declarations_agree(self):
         """`corvin_plugins.bridges` keeps its own copy on purpose (different
-        distribution package, must import without `operator/` on the path).
+        distribution package, must import without `corvin_operator/` on the path).
         Pin the two together so the copy cannot drift."""
         repo = _HERE.parents[2]
         sys.path.insert(0, str(repo / "core" / "plugins"))
@@ -95,7 +95,7 @@ class ChannelListSSOT(unittest.TestCase):
         self.assertEqual(
             sorted(SUP), sorted(BRIDGE_CHANNELS),
             "corvin_plugins.bridges.supervisor.BRIDGE_CHANNELS drifted from "
-            "operator/bridges/shared/channels.py",
+            "corvin_operator/bridges/shared/channels.py",
         )
 
     def test_installer_offers_every_channel(self):
@@ -116,9 +116,9 @@ class ChannelListSSOT(unittest.TestCase):
         read by humans as the canonical list. They must not come back."""
         repo = _HERE.parents[2]
         for rel in (
-            "operator/bridges/shared/paths.py",
-            "operator/cowork/lib/paths.py",
-            "operator/forge/forge/paths.py",
+            "corvin_operator/bridges/shared/paths.py",
+            "corvin_operator/cowork/lib/paths.py",
+            "corvin_operator/forge/forge/paths.py",
             "corvinOS/shared/paths.py",
         ):
             text = (repo / rel).read_text(encoding="utf-8")
@@ -126,7 +126,7 @@ class ChannelListSSOT(unittest.TestCase):
                 "_BRIDGE_CHANNELS = frozenset", text,
                 f"{rel} re-introduced a private channel allow-list; channel "
                 f"identity there is a charset rule, and the canonical list "
-                f"lives in operator/bridges/shared/channels.py",
+                f"lives in corvin_operator/bridges/shared/channels.py",
             )
 
 

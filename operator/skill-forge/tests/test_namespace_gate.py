@@ -1,6 +1,6 @@
 """Layer 9 — namespace gate for skill-forge.
 
-Mirrors operator/forge/tests/test_namespace_gate.py for SkillForge:
+Mirrors corvin_operator/forge/tests/test_namespace_gate.py for SkillForge:
 
   1. ``coder`` may register ``code.review_checklist``.
   2. ``coder`` may NOT register ``inbox.foo`` — error envelope, audit
@@ -38,7 +38,7 @@ SKILL_FORGE = REPO_ROOT / "operator" / "skill-forge"
 FORGE = REPO_ROOT / "operator" / "forge"
 
 # Sandbox the plugin-slot mirror so this test never touches the real
-# operator/skill-forge/skills/dyn/ tree (test_registry.py does the same).
+# corvin_operator/skill-forge/skills/dyn/ tree (test_registry.py does the same).
 _SLOT_TMP = tempfile.mkdtemp(prefix="sf-ns-gate-slot-")
 os.environ["CORVIN_PLUGIN_SLOT_DIR"] = _SLOT_TMP
 

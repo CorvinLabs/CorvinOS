@@ -8,7 +8,7 @@ asserts the *interactions* between them.
 
 Run with::
 
-    python3 operator/bridges/shared/test_eu_compliance.py
+    python3 corvin_operator/bridges/shared/test_eu_compliance.py
 
 Hard rule: every test in this file must fail loudly if any structural
 defence is weakened. These are the regression gates the operator

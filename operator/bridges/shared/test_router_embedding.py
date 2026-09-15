@@ -1,7 +1,7 @@
 """Tests for router_embedding.py — anchor cache + cosine routing.
 
 Uses the fake embedding (deterministic hash) so no real API call.
-Run: python3 operator/bridges/shared/test_router_embedding.py
+Run: python3 corvin_operator/bridges/shared/test_router_embedding.py
 """
 from __future__ import annotations
 

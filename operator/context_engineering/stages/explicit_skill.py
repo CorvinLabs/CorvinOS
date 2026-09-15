@@ -22,7 +22,7 @@ by a PURE pre-Gate-1 stage — a Gate-1-denied turn would otherwise still render
 runs only AFTER Gate-1 approved the task, and Gate-2 still inspects every body it adds.
 
 Parse / namespace / diagnostics / caps are REUSED from the bridge's
-``operator/bridges/shared/skill_inject.py`` (one choke point — no third copy of the
+``corvin_operator/bridges/shared/skill_inject.py`` (one choke point — no third copy of the
 regex). Fail-safe throughout: any error degrades to "no explicit skill bound", never
 breaks the turn.
 """
@@ -37,7 +37,7 @@ from .registry import register_stage
 
 
 # ── Optional shared-helper import (bridge skill_inject) ─────────────────────────
-# Mirrors core/delegate/.../skill_context.py: add operator/bridges/shared to sys.path
+# Mirrors core/delegate/.../skill_context.py: add corvin_operator/bridges/shared to sys.path
 # and import skill_inject. Optional — a host without it simply cannot honor explicit
 # requests (the stage no-ops), never raises.
 def _load_helpers():
@@ -53,7 +53,7 @@ def _load_helpers():
 
 def _skill_registry(tenant_id: str):
     """Tenant-native MultiSkillRegistry across the task→session→project→user ladder.
-    Mirrors skillforge.py's sys.path dance (operator/skill-forge is on neither host's
+    Mirrors skillforge.py's sys.path dance (corvin_operator/skill-forge is on neither host's
     path by default). Returns None on any import failure (fail-safe)."""
     try:
         _sf_dir = str(Path(__file__).resolve().parents[2] / "skill-forge")

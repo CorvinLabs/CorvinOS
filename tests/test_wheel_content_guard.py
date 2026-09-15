@@ -280,14 +280,14 @@ def test_wheel_ships_top_level_aliases_and_skill_creator(built_wheel: Path) -> N
     assert "vibe_engineering/task_graph.py" in names
     assert "vibe_engineering/__init__.py" in names
     assert "corvin_skills/resolver.py" in names
-    assert "corvin_core/_vendor/operator/skill_creator/skill_creator.py" in names
-    assert "corvin_core/_vendor/operator/skill_creator/__init__.py" in names
+    assert "corvin_core/_vendor/corvin_operator/skill_creator/skill_creator.py" in names
+    assert "corvin_core/_vendor/corvin_operator/skill_creator/__init__.py" in names
     # alias copies are Python-only and test-free
     for n in names:
         if n.startswith(("vibe_engineering/", "corvin_skills/")):
             assert not n.endswith((".md", ".json", ".txt")), f"non-code file in alias copy: {n}"
             assert "/tests/" not in n, f"test file in alias copy: {n}"
-        if n.startswith("corvin_core/_vendor/operator/skill_creator/"):
+        if n.startswith("corvin_core/_vendor/corvin_operator/skill_creator/"):
             assert "/tests/" not in n, f"test file vendored: {n}"
     # the git-tracked test artifacts must not ship anywhere
     assert not any(n.endswith(("test_results.json", "coverage_report.json")) for n in names)

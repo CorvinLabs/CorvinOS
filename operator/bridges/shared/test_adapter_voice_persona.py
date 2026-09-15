@@ -17,7 +17,7 @@ WhatsApp/Telegram/Slack/E-mail voice-note. This test pins the contract:
     voice resolution from profile dict prefers tts_voice_<lang>
         over tts_voice (lang-agnostic)
 
-Run: python3 operator/bridges/shared/test_adapter_voice_persona.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_voice_persona.py
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ sys.path.insert(0, str(HERE))
 # is right. Under PYTEST it is catastrophic: `sys.exit` raises SystemExit during
 # collection, which the collector does not catch, so pytest aborts the whole
 # session with "INTERNALERROR ... caught unexpected SystemExit". Since
-# operator/bridges/shared/ is one of the paths the coverage workflow passes,
+# corvin_operator/bridges/shared/ is one of the paths the coverage workflow passes,
 # that killed the entire job ~1.5 s in — no tests, no coverage, and an error
 # that names this file rather than the missing dependency (found 2026-07-27).
 try:

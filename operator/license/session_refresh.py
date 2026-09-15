@@ -298,7 +298,7 @@ def _do_refresh(*, timeout: int) -> bool:
         _log.warning(
             "session_refresh: license.validator not importable — "
             "cannot verify received token; NOT writing to disk (fail-closed). "
-            "Check that operator/license/ is intact. (ADR-0144)"
+            "Check that corvin_operator/license/ is intact. (ADR-0144)"
         )
     if not _sr_verified:
         return False
@@ -533,19 +533,32 @@ def check_public_key_integrity() -> bool:
 
 # ── Boot-time synchronous refresh ────────────────────────────────────────────
 
-def boot_refresh() -> bool:
-    """Attempt a blocking refresh at boot time (5 s timeout).
+def boot_refresh() -> None:
+    """Perform boot-time refresh and start the background daemon.
 
-    Runs check_public_key_integrity() first (non-blocking — emits audit on
-    mismatch but never prevents startup). Then refreshes the session permit.
-    Returns True if the session.key was successfully refreshed.
+    ADR-0703 §1.5: extends boot_refresh to start the background refresh daemon
+    (which runs every 3h for permits, 1h for CRL, 1d for ASRL) and wires it
+    from three entry points (gateway, console, adapter).
+
+    Sequence:
+    1. Check key integrity (non-blocking — audit on mismatch, never prevents startup)
+    2. Refresh the session permit (5s timeout, best-effort)
+    3. Start background daemon thread (only when credential exists)
+
+    Safe to call multiple times — the daemon is idempotent and checks for
+    prior startup before creating a thread.
+
     Never raises — all errors are logged and suppressed.
     """
     check_public_key_integrity()
     try:
-        if not should_refresh():
-            return False   # fresh key, no need to refresh
-        return refresh_once(timeout=_BOOT_TIMEOUT)
+        if should_refresh():
+            refresh_once(timeout=_BOOT_TIMEOUT)  # best-effort, don't fail boot
     except Exception as exc:
         _log.debug("session_refresh: boot refresh failed: %s", exc)
-        return False
+    # Start background daemon (only when credential exists; safe to call multiple times)
+    try:
+        from . import refresh_daemon as _rd
+        _rd.start_background_daemon()
+    except Exception as exc:
+        _log.debug("session_refresh: refresh daemon startup failed: %s", exc)

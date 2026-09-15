@@ -6,7 +6,7 @@ Enforces the operator's *acceptable-use* policy: what PURPOSES CorvinOS may be
 used for. Orthogonal to L34 (what DATA can go where) and L35 (what NETWORK is
 reachable). The shipped baseline forbids military/weapons use, unauthorized
 offensive cyber operations, and disinformation — but the rule SET is data, not
-code: it lives in ``operator/policy/house_rules.yaml`` (see ADR-0143).
+code: it lives in ``corvin_operator/policy/house_rules.yaml`` (see ADR-0143).
 
 MECHANISM vs CONTENT (the core design decision)
 -----------------------------------------------
@@ -15,7 +15,7 @@ MECHANISM vs CONTENT (the core design decision)
   like the compliance baseline.
 * The CONTENT (the rules) lives in a signed repo file. The operator defines the
   rules in git; ``verify_policy_integrity`` checks the file's sha256 against the
-  RS256-signed ``operator/security/layer-manifest.json`` (ADR-0141 LIP) so a
+  RS256-signed ``corvin_operator/security/layer-manifest.json`` (ADR-0141 LIP) so a
   local edit that weakens the rules is detected and the gate fails closed.
 * Tenants may ADD stricter rules but never weaken the repo baseline (floor
   semantics).
@@ -275,7 +275,7 @@ _REASON_NO_MATCH = "no_rule_matched"
 
 # ── repo policy file location + integrity ────────────────────────────────────
 
-REPO_POLICY_RELPATH = "operator/policy/house_rules.yaml"
+REPO_POLICY_RELPATH = "corvin_operator/policy/house_rules.yaml"
 
 # ADR-0143 M2 integrity anchor. The expected sha256 of the committed
 # house_rules.yaml. The gate refuses to run (fail-closed deny) when the file on
@@ -286,8 +286,8 @@ REPO_POLICY_RELPATH = "operator/policy/house_rules.yaml"
 # Corvin Labs with the offline key (see ADR-0143 "Must NOT do" + layer-44 doc).
 #
 # WORKFLOW when you legitimately edit house_rules.yaml:
-#   1. edit operator/policy/house_rules.yaml
-#   2. sha256sum operator/policy/house_rules.yaml
+#   1. edit corvin_operator/policy/house_rules.yaml
+#   2. sha256sum corvin_operator/policy/house_rules.yaml
 #   3. paste the digest below and commit both files together
 # (CI lint test_house_rules.py::test_policy_anchor_matches_repo_file enforces
 # that this constant matches the committed file, so a drift fails the build.)
@@ -295,7 +295,7 @@ EXPECTED_POLICY_SHA256 = "c001cbd3f78b714fc415d598b9352003b5aa20987199d66df76cba
 
 
 def _repo_root() -> Path:
-    # operator/bridges/shared/house_rules.py → repo root is parents[3].
+    # corvin_operator/bridges/shared/house_rules.py → repo root is parents[3].
     return Path(__file__).resolve().parents[3]
 
 

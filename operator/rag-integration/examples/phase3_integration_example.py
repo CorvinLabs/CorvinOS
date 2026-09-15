@@ -13,16 +13,16 @@ from pathlib import Path
 
 # ADR-0215 F5: the dotted `from operator.bridges.shared...` imports below
 # used to be the only import path in this example — they can never resolve
-# (stdlib `operator` always shadows the repo's operator/ directory), so
+# (stdlib `operator` always shadows the repo's corvin_operator/ directory), so
 # this example script itself was broken from inception, exactly the kind of
 # "looks done but was never actually run" bug this ADR closes.
 #
-# Unlike most operator/bridges/shared modules (which use bare imports and
+# Unlike most corvin_operator/bridges/shared modules (which use bare imports and
 # are fixed by putting shared/ itself on sys.path), rag_orchestrator.py
 # does `from .rag_query_engine import ...` — a package-relative import that
 # only resolves when the module is loaded AS PART OF a package. shared/
-# does have an __init__.py (unlike operator/ itself), so the fix is to put
-# its PARENT (operator/bridges) on sys.path and import `shared.rag_orchestrator`
+# does have an __init__.py (unlike corvin_operator/ itself), so the fix is to put
+# its PARENT (corvin_operator/bridges) on sys.path and import `shared.rag_orchestrator`
 # — the exact pattern core/console/corvin_console/routes/rag.py already
 # uses in production (`from shared.rag_orchestrator import RAGOrchestrator`).
 _bridges = Path(__file__).resolve().parents[2] / "bridges"

@@ -28,7 +28,7 @@ fix at both layers:
     traceback.
 
 Uses the same subprocess-through-XDG_CONFIG_HOME sandboxing convention as
-`operator/bridges/shared/test_i18n.py::LangCliTests`.
+`corvin_operator/bridges/shared/test_i18n.py::LangCliTests`.
 """
 from __future__ import annotations
 

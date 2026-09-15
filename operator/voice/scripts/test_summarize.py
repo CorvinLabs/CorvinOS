@@ -1125,7 +1125,7 @@ def test_appendix_markers_agree_between_summarize_and_adapter_lern_zugabe() -> N
 
 
 def _load_adapter_module():
-    """Import operator/bridges/shared/adapter.py by path, mirroring the
+    """Import corvin_operator/bridges/shared/adapter.py by path, mirroring the
     isolation pattern used by test_adapter_voice_annex_dedup.py in that same
     directory (pop cached module first so re-imports pick up any monkeypatch
     of sys.path)."""

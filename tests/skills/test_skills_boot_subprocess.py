@@ -46,7 +46,7 @@ def test_boot_skills_in_fresh_interpreter(tmp_path: Path) -> None:
         "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
         "CORVIN_TENANT_ID": "_default",
         "PYTHONPATH": ":".join(str(REPO / p) for p in (
-            ".", "operator/bridges/shared", "operator/forge", "core/plugins", "core/console",
+            ".", "corvin_operator/bridges/shared", "corvin_operator/forge", "core/plugins", "core/console",
         )),
     }
     proc = subprocess.run(
@@ -135,7 +135,7 @@ print(json.dumps({
 def _run(script: str, tmp_path: Path, *, extra_env: dict | None = None) -> dict:
     home = tmp_path / "corvin-home"
     home.mkdir(exist_ok=True)
-    parts = [".", "operator/bridges/shared", "operator/forge", "core/plugins", "core/console"]
+    parts = [".", "corvin_operator/bridges/shared", "corvin_operator/forge", "core/plugins", "core/console"]
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": str(tmp_path),

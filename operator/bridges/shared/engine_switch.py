@@ -56,7 +56,7 @@ The adapter's ``_build_spawn_env`` reads ``current(...)`` per inbox
 message and, when set, injects two env-vars into the OS-turn
 subprocess: ``CORVIN_DELEGATE_PREF_ENGINE`` and (optionally)
 ``CORVIN_DELEGATE_PREF_MODEL``. The orchestrator persona's brief
-(``operator/cowork/personas/orchestrator.json::append_system``)
+(``corvin_operator/cowork/personas/orchestrator.json::append_system``)
 tells the OS-turn to honour these when picking which
 ``mcp__corvin_delegate__delegate_*`` tool to call.
 

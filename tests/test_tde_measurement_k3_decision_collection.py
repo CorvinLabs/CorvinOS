@@ -40,7 +40,7 @@ sys.path.insert(0, str(_REPO / "core" / "console"))
 sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
 
 # Import the tde package FIRST: importing corvin_console mutates sys.path (adds
-# operator/), which shadows operator/orchestration/initial_analysis.py with a
+# corvin_operator/), which shadows corvin_operator/orchestration/initial_analysis.py with a
 # same-named module and breaks a later `from tde...`. Loading tde first caches
 # the correct modules before that mutation happens.
 from tde.tde_measurement import (  # noqa: E402

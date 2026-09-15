@@ -25,7 +25,7 @@ via mocked subprocess output — they cannot run the real Windows-only tools
 on this dev machine, but they DO validate the parsing/wiring logic that
 would otherwise only be discovered on a real, affected Windows box.
 
-Run: python3 operator/bridges/tests/test_win_process_snapshot.py
+Run: python3 corvin_operator/bridges/tests/test_win_process_snapshot.py
 """
 from __future__ import annotations
 

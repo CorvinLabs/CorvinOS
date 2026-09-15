@@ -1852,7 +1852,7 @@ class DatasourceConnectionHandler:
 
 
 def _cel_safe_key(session_key: str) -> str:
-    """Mirror ``operator/context_engineering/anchor.py::_safe_key``.
+    """Mirror ``corvin_operator/context_engineering/anchor.py::_safe_key``.
 
     The CEL anchor store is ``cel_anchors/<safe_key(session_key)>.jsonl`` — the
     session key with every character outside ``[A-Za-z0-9_.-]`` replaced by
@@ -1876,7 +1876,7 @@ def _cel_safe_key(session_key: str) -> str:
 class CELAnchorHandler:
     """GDPR Art. 17 erasure for the CEL load-bearing-anchor store (R4-F1).
 
-    ``operator/context_engineering/anchor.py::_store_path`` writes
+    ``corvin_operator/context_engineering/anchor.py::_store_path`` writes
     ``<tenant>/cel_anchors/<safe_key>.jsonl`` on every turn where the
     ``cel_load_bearing_anchor`` flag is on (it is, in the live capability
     snapshot). Each line is ``{"id", "kind", "text", "added_at", "hash"}`` and

@@ -1,4 +1,4 @@
-"""Unit tests for ``operator/forge/forge/artifacts.py`` (Layer 33).
+"""Unit tests for ``corvin_operator/forge/forge/artifacts.py`` (Layer 33).
 
 Every test runs against a sandboxed CORVIN_HOME so the host's real
 artifact tree is never touched. Audit emission is mocked so we can
@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))  # operator/forge
+sys.path.insert(0, str(HERE.parent))  # corvin_operator/forge
 
 from forge import artifacts  # noqa: E402
 

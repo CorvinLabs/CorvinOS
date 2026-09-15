@@ -1,6 +1,6 @@
 """provider_keys.py — canonical provider-key resolver. Single source of truth.
 
-Named provider_keys, not secrets, deliberately: operator/bridges/shared is on
+Named provider_keys, not secrets, deliberately: corvin_operator/bridges/shared is on
 sys.path for adapter.py and other modules in this tree, and a module named
 `secrets.py` here would shadow the Python stdlib `secrets` module for anyone
 importing it unqualified (caught in review: adapter.py's own
@@ -11,7 +11,7 @@ key used for STT") was independently resolved by say.py, stt/openai_whisper.py,
 console byok.py, and console setup.py — four copies, three different
 precedence orders, two different candidate-file lists (some checked `.env`
 AND `service.env`, some only `service.env`). BYOK's own write path
-(operator/agent/byok.py) wrote into a *fifth*, completely disconnected store
+(corvin_operator/agent/byok.py) wrote into a *fifth*, completely disconnected store
 (the vault) that none of the four readers ever consulted — so a key saved
 through the BYOK UI silently vanished.
 
@@ -75,7 +75,7 @@ CANONICAL_ENV_VAR: dict[str, str] = {
     "stt_openai_api_key": "CORVIN_STT_OPENAI_KEY",
     "stt_local_whisper_api_key": "CORVIN_STT_LOCAL_WHISPER_KEY",
     # ADR-0181 provider routing — names MUST match the `credential_env`
-    # fields in operator/bundle/config-templates/engine_model_registry.yaml
+    # fields in corvin_operator/bundle/config-templates/engine_model_registry.yaml
     # (openrouter / ollama_cloud providers) exactly, or a saved key silently
     # never matches what the engine-spawn code looks up.
     "openrouter_api_key": "OPENROUTER_API_KEY",
@@ -273,7 +273,7 @@ def write_key(key_name: str, value: str, *, path_override: Path | None = None) -
     *path_override* lets callers (tests, explicit-vault_dir-style overrides)
     target an isolated file instead of the real
     ~/.config/corvin-voice/service.env — mirrors the vault_dir parameter
-    operator/agent/byok.py's vault-write path already has, for the same
+    corvin_operator/agent/byok.py's vault-write path already has, for the same
     reason: a live-service-mutating test run is a real incident class, not
     a hypothetical (path-audit 2026-07-06, WA-22)."""
     candidates = _candidates_for(key_name)

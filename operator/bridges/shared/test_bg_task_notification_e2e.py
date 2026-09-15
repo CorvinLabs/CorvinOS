@@ -13,7 +13,7 @@ Flow:
 
 Proves the fix: second message latency is <5s, not 60s.
 
-Run: python3 operator/bridges/shared/test_bg_task_notification_e2e.py
+Run: python3 corvin_operator/bridges/shared/test_bg_task_notification_e2e.py
      (or via pytest — ``test_bg_task_notification_delivers_within_seconds``)
 
 2026-09-07 (adversarial hardening): converted from a print-and-return-0 script

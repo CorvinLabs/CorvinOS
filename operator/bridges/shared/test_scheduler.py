@@ -1,6 +1,6 @@
 """Tests for scheduler.py — cron parser, materialise, recurring + one-shot.
 
-Run: python3 operator/bridges/shared/test_scheduler.py
+Run: python3 corvin_operator/bridges/shared/test_scheduler.py
 """
 from __future__ import annotations
 

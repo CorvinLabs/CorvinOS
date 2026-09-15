@@ -5,7 +5,7 @@ Exercises the full verify_integrity() path against a fully-synthetic repo root
 aggregate-hash consistency property and the no-brick MANIFEST_ABSENT behaviour
 on the real checkout.
 
-Runnable standalone: ``python3 operator/bridges/shared/test_layer_integrity.py``
+Runnable standalone: ``python3 corvin_operator/bridges/shared/test_layer_integrity.py``
 """
 from __future__ import annotations
 

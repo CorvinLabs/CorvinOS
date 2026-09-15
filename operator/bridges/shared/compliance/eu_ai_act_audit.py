@@ -79,8 +79,8 @@ class ComplianceAuditor:
         L10: Verify path-gate hook blocks writes to protected paths.
 
         Protected paths:
-          - operator/bridges/shared/forge/
-          - operator/bridges/shared/skill-forge/
+          - corvin_operator/bridges/shared/forge/
+          - corvin_operator/bridges/shared/skill-forge/
           - audit.jsonl
           - policy.json
           - license/
@@ -353,7 +353,7 @@ class ComplianceAuditor:
             # ADR-0215 F5: dotted `from operator.bridges.shared...` can never
             # resolve — this L34 check has structurally always failed. Fixed
             # via repo-relative sys.path insert + bare leaf-module import
-            # (this file already lives inside operator/bridges/shared/, so
+            # (this file already lives inside corvin_operator/bridges/shared/, so
             # the sibling directory itself is the target).
             _shared_dir = Path(__file__).resolve().parents[1]
             if str(_shared_dir) not in sys.path:

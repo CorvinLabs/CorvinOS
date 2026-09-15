@@ -551,7 +551,7 @@ class TestR1Fixes:
 class TestPingDefaultOnOptOut:
     """The anonymous instance-count ping is default-ON (opt-out). It sends only a
     random uuid4 instance id + version (no PII); legal basis GDPR Art. 6(1)(f)
-    legitimate interest. The operator/user can disable it explicitly."""
+    legitimate interest. The corvin_operator/user can disable it explicitly."""
 
     def _write_cfg(self, home: Path, value) -> None:
         import yaml

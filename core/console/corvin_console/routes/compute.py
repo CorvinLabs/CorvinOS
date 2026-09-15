@@ -732,13 +732,13 @@ def compute_license_status(
         except LicenseFileMissing:
             # No Enterprise (on-prem) license.jwt installed — this is the
             # normal case for a Paddle/consumer subscriber, who is licensed
-            # through the SEPARATE operator/license system (license.key,
+            # through the SEPARATE corvin_operator/license system (license.key,
             # EdDSA, corvinlabs.io) instead. Missing Enterprise license must
             # not shadow an active consumer subscription: fall back to that
             # tier before reporting "free" (previously hardcoded here, so a
             # paying Member-tier customer always saw "Trial · free" on this
             # panel even though their daily_limit above was already correctly
-            # unlimited from the same operator/license system).
+            # unlimited from the same corvin_operator/license system).
             _op_tier = _lic_active_tier() if _lic_active_tier is not None else "free"
             if _op_tier != "free":
                 return {**_base(), "mode": "licensed", "tier": _op_tier,
@@ -2808,7 +2808,7 @@ def compute_run_voice(
 
         say_script = _REPO / "operator" / "voice" / "scripts" / "say.py"
         if not say_script.exists():
-            # Wheel install: operator/ is vendored under _vendor/operator.
+            # Wheel install: corvin_operator/ is vendored under _vendor/operator.
             try:
                 from .._operator_bootstrap import vendor_operator_root  # noqa: PLC0415
                 _vr = vendor_operator_root()
@@ -3813,7 +3813,7 @@ def compute_acs_run_graph(
 # segment covering this turn's events verifies intact.
 #
 # NOTE (tenant scoping): tde_audit.py emits through
-# operator/bridges/shared/audit.py, whose ``audit_path()`` is the
+# corvin_operator/bridges/shared/audit.py, whose ``audit_path()`` is the
 # scope-independent workspace root (corvin_home()/global/forge/audit.jsonl —
 # see that module's docstring), NOT ``_forge_paths.tenant_home(rec.tenant_id)``
 # like the rest of this file. This endpoint reads from the exact same

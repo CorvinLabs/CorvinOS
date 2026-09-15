@@ -1,0 +1,30 @@
+[Unit]
+Description=Audit Chain Verification Service (Phase B, ADR-0541)
+Documentation=https://github.com/CorvinLabs/Corvin-ADR/decisions/ADR-0541-session-bridging-eventstore-protocol.md
+After=network.target
+
+[Service]
+Type=oneshot
+User=%u
+WorkingDirectory=%h/.corvin
+
+# Run verification script
+ExecStart=%h/projects/CorvinOS/operator/scripts/run-audit-verify.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-audit-verify
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=%h/.corvin/verification_logs
+
+# Timeout
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

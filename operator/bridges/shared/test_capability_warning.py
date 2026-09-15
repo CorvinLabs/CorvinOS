@@ -3,7 +3,7 @@ design `forge` persona. The warning must only fire when the persona is
 actually mapped in policy.persona_namespaces AND the persona JSON
 forgot to set tool_namespace — i.e. a real config inconsistency.
 
-Run: python3 operator/bridges/shared/test_capability_warning.py
+Run: python3 corvin_operator/bridges/shared/test_capability_warning.py
 """
 from __future__ import annotations
 

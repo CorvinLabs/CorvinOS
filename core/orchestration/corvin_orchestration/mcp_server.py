@@ -9,9 +9,9 @@ Six tools across three previously chat-unreachable subsystems:
   - ``workflow_run`` / ``workflow_resume`` / ``workflow_list_paused``
     (AWP DAG-Workflows, ``core/workflows/corvin_workflows``)
   - ``a2a_send`` / ``a2a_list_endpoints``
-    (instance-to-instance, ``operator/bridges/shared/remote_trigger_sender``)
+    (instance-to-instance, ``corvin_operator/bridges/shared/remote_trigger_sender``)
   - ``acs_delegate``
-    (Autonomous Compute Shell, ``operator/bridges/shared/acs_engine_adapter``)
+    (Autonomous Compute Shell, ``corvin_operator/bridges/shared/acs_engine_adapter``)
 
 Each group's external dependency is imported defensively (try/except at
 module load) — a missing plugin (e.g. base install without the workflows
@@ -103,11 +103,11 @@ def _clamp(value: Any, *, lo: int, hi: int, default: int) -> int:
 def _replier_from_channel_id(channel_id: str) -> str:
     """Derive the WF-A3 `replier` identity from a trusted `CORVIN_CHANNEL_ID`
     value ("<bridge>:<chat_key>", set by the bridge adapter at spawn time —
-    see operator/bridges/shared/adapter.py::_build_spawn_env). Strips the
+    see corvin_operator/bridges/shared/adapter.py::_build_spawn_env). Strips the
     bridge prefix because a workflow checkpoint's recorded `approver` is
     always a bare chat_id (corvin_workflows/node_types.py::_execute_ask_human
     stores `pause.chat_id` verbatim, never bridge-prefixed) — the same split
-    already used by operator/bridges/shared/phase3_cli.py's debug-channel
+    already used by corvin_operator/bridges/shared/phase3_cli.py's debug-channel
     identity check.
 
     Always returns a string, never None: an empty/missing channel_id yields
@@ -130,7 +130,7 @@ def _replier_from_channel_id(channel_id: str) -> str:
 # turn could start unlimited parallel runs the console would refuse
 # (adversarial-review finding, 2026-07-12). Same import + fail-closed
 # FREE_TIER fallback chain as forge/mcp_server.py's datasource gate — the
-# resolver's PYTHONPATH does not carry operator/, so put it on sys.path
+# resolver's PYTHONPATH does not carry corvin_operator/, so put it on sys.path
 # first (the datasource_connect lesson: an unguarded import silently fell
 # back to free-tier for every licensed tenant).
 # ---------------------------------------------------------------------------
@@ -392,12 +392,12 @@ def _run_with_budget(
 # Background-completion contract (ADR-0192) — lets a run that outlives
 # _run_with_budget's timeout still notify the originating messenger, the same
 # way the scheduler / `/task` / console task-worker-pool / L25 compute worker
-# already do via operator/bridges/shared/completion_notify.py. This MCP
+# already do via corvin_operator/bridges/shared/completion_notify.py. This MCP
 # server is spawned as a child of the per-turn `claude -p` subprocess
 # (docs/personas-and-routing.md) and does not itself know the originating
 # channel/chat_id/sender as tool-call arguments — instead it recovers them
 # from the SAME env vars the adapter's spawn already injects into every
-# child process (`_build_spawn_env`, operator/bridges/shared/adapter.py),
+# child process (`_build_spawn_env`, corvin_operator/bridges/shared/adapter.py),
 # mirroring core/compute/corvin_compute/worker.py's `notify={channel,
 # chat_id, sender}` gate but sourced from env instead of an explicit submit
 # param (this MCP server has no such param in its tool schemas).
@@ -1206,7 +1206,7 @@ class OrchestrationServer:
 
     def _call_a2a_send(self, msgid: Any, args: dict) -> None:
         if not _A2A_AVAILABLE:
-            self._error(msgid, METHOD_NOT_FOUND, "A2A sender not installed (operator/bridges/shared/)")
+            self._error(msgid, METHOD_NOT_FOUND, "A2A sender not installed (corvin_operator/bridges/shared/)")
             return
         endpoint_ref = str(args.get("endpoint_id") or "")
         instruction = str(args.get("instruction") or "")
@@ -1256,7 +1256,7 @@ class OrchestrationServer:
 
     def _call_a2a_list_endpoints(self, msgid: Any, args: dict) -> None:
         if not _A2A_AVAILABLE:
-            self._error(msgid, METHOD_NOT_FOUND, "A2A sender not installed (operator/bridges/shared/)")
+            self._error(msgid, METHOD_NOT_FOUND, "A2A sender not installed (corvin_operator/bridges/shared/)")
             return
         registry = _RemoteEndpointRegistry()
         out: list[dict] = []
@@ -1285,7 +1285,7 @@ class OrchestrationServer:
 
     def _call_acs_delegate(self, msgid: Any, args: dict) -> None:
         if not _ACS_AVAILABLE:
-            self._error(msgid, METHOD_NOT_FOUND, "ACS engine not installed (operator/bridges/shared/)")
+            self._error(msgid, METHOD_NOT_FOUND, "ACS engine not installed (corvin_operator/bridges/shared/)")
             return
         task = str(args.get("task") or "")
         if not task:

@@ -29,8 +29,8 @@ import sys
 from pathlib import Path
 
 BUNDLE_DIR = Path(__file__).resolve().parent.parent / "personas"
-# REPO_ROOT = the directory holding operator/cowork/ and (optionally)
-# operator/forge/, operator/voice/ alongside it. Used for {{REPO_ROOT}}
+# REPO_ROOT = the directory holding corvin_operator/cowork/ and (optionally)
+# corvin_operator/forge/, corvin_operator/voice/ alongside it. Used for {{REPO_ROOT}}
 # substitution in mcp_servers.command/args/env values so personas can
 # reference plugin executables without hard-coding absolute paths.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -39,10 +39,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 def _compute_core_root() -> Path:
     """Root directory holding the ``core/`` package tree, for {{CORE_ROOT}}.
 
-    Source checkout: same as REPO_ROOT (core/ sits next to operator/).
-    Wheel install: this module lives under corvin_console/_vendor/operator/
+    Source checkout: same as REPO_ROOT (core/ sits next to corvin_operator/).
+    Wheel install: this module lives under corvin_console/_vendor/corvin_operator/
     cowork/lib, so REPO_ROOT resolves to .../_vendor — which contains the
-    vendored operator/ subtrees but NOT core/ (core ships as a top-level
+    vendored corvin_operator/ subtrees but NOT core/ (core ships as a top-level
     package tree directly in site-packages). Pointing PYTHONPATH at
     ``_vendor/core/...`` was the adversarial-review CRITICAL that made every
     orchestration/delegate MCP spawn a ModuleNotFoundError on every pip/uv
@@ -62,7 +62,7 @@ CORE_ROOT = _compute_core_root()
 
 # Lazy import keeps module-load cheap and tolerant of test environments
 # that pre-set COWORK_USER_DIR / COWORK_MCP_CACHE without paths.py being
-# importable. paths.py sits next to resolver.py in operator/cowork/lib/.
+# importable. paths.py sits next to resolver.py in corvin_operator/cowork/lib/.
 def _cowork_default() -> Path:
     try:
         from paths import cowork_dir  # type: ignore
@@ -574,7 +574,7 @@ def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
     # custom tool (whose name isn't knowable ahead of time at all). A
     # forge_enabled persona under a non-bypassPermissions mode would have
     # had those silently blocked by --allowedTools. Mirror skill-forge's
-    # own persona convention (operator/skill-forge/personas/skill-forge.json
+    # own persona convention (corvin_operator/skill-forge/personas/skill-forge.json
     # uses "mcp__skill_forge__*") — a wildcard is the only pattern that
     # stays correct as the server's tool surface grows.
     for t in ("mcp__forge__forge_tool", "mcp__forge__forge_promote",
@@ -597,7 +597,7 @@ def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
             # import forge (the venv/wheel Python running the bridge), not an
             # arbitrary bare-PATH one. Mirror of mcp_config_builder.py.
             "command": sys.executable,
-            "args": ["{{REPO_ROOT}}/operator/forge/forge.py",
+            "args": ["{{REPO_ROOT}}/corvin_operator/forge/forge.py",
                      "mcp", "--permission-mode", "yes"],
             "env": env,
         }
@@ -647,14 +647,14 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str) -> dict:
         env: dict[str, str] = {
             "SKILL_FORGE_PERSONA": persona_name,
             # The skill-forge MCP server lives at
-            # `<repo>/operator/skill-forge/skill_forge/mcp_server.py` and
+            # `<repo>/corvin_operator/skill-forge/skill_forge/mcp_server.py` and
             # imports `forge.policy` for the namespace gate. Both packages
             # need to be importable when claude spawns the subprocess, so
             # we inject the two plugin roots onto PYTHONPATH explicitly —
             # joined with os.pathsep (';' on Windows, ':' on POSIX).
             "PYTHONPATH": os.pathsep.join((
-                "{{REPO_ROOT}}/operator/skill-forge",
-                "{{REPO_ROOT}}/operator/forge",
+                "{{REPO_ROOT}}/corvin_operator/skill-forge",
+                "{{REPO_ROOT}}/corvin_operator/forge",
             )),
         }
         mcp["skill_forge"] = {
@@ -771,8 +771,8 @@ def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
                 "PYTHONPATH": os.pathsep.join((
                     "{{CORE_ROOT}}/core/orchestration",
                     "{{CORE_ROOT}}/core/workflows",
-                    "{{REPO_ROOT}}/operator/bridges/shared",
-                    "{{REPO_ROOT}}/operator/forge",
+                    "{{REPO_ROOT}}/corvin_operator/bridges/shared",
+                    "{{REPO_ROOT}}/corvin_operator/forge",
                 )),
                 "CORVIN_CALLER_PERSONA": persona_name,
             },
@@ -818,8 +818,8 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
             # {{CORE_ROOT}} + os.pathsep — see _inject_orchestration_capability.
             "PYTHONPATH": os.pathsep.join((
                 "{{CORE_ROOT}}/core/delegate",
-                "{{REPO_ROOT}}/operator/forge",
-                "{{REPO_ROOT}}/operator/bridges/shared",
+                "{{REPO_ROOT}}/corvin_operator/forge",
+                "{{REPO_ROOT}}/corvin_operator/bridges/shared",
             )),
             "CORVIN_CALLER_PERSONA": persona_name,
         }
@@ -916,8 +916,8 @@ def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
         try:
             import mcp_manager.activate as _mcp_activate  # type: ignore
         except ImportError:
-            # REPO_ROOT/operator/mcp_manager exists in BOTH layouts (repo
-            # checkout, and _vendor/operator/mcp_manager in a wheel where
+            # REPO_ROOT/corvin_operator/mcp_manager exists in BOTH layouts (repo
+            # checkout, and _vendor/corvin_operator/mcp_manager in a wheel where
             # REPO_ROOT == _vendor).
             _mm_root = REPO_ROOT / "operator" / "mcp_manager"
             if str(_mm_root) not in sys.path and _mm_root.is_dir():

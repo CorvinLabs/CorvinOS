@@ -9,7 +9,7 @@ Mirror:   https://github.com/CorvinLabs/CorvinOS/releases/latest/download/a2a-ma
 Cache:    <corvin_home>/global/a2a_manifest.json  (mode 0600)
 TTL:      7 days maximum; ≥3 days triggers ``a2a.manifest_stale`` WARNING.
 Signature: RS256 over canonical JSON (without the ``"signature"`` field itself)
-           verified against ``operator/license/a2a_network_pubkey.pem``.
+           verified against ``corvin_operator/license/a2a_network_pubkey.pem``.
 
 Offline behaviour
 -----------------

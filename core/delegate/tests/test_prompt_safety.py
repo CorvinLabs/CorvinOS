@@ -17,7 +17,7 @@ from pathlib import Path
 # bypass (BOTH CORVIN_AGENTS_SKIP_LIVE=1 AND CORVIN_INTEGRATION_TEST=1) from
 # os.environ. conftest.py provides this as a pytest autouse fixture, but pytest
 # conftest fixtures do NOT run under the raw-unittest runner
-# (``python3 test_prompt_safety.py``) used by operator/bridges/run-all-tests.sh.
+# (``python3 test_prompt_safety.py``) used by corvin_operator/bridges/run-all-tests.sh.
 # Set the bypass at module import so the suite passes under BOTH runners.
 os.environ.setdefault("CORVIN_AGENTS_SKIP_LIVE", "1")
 os.environ.setdefault("CORVIN_INTEGRATION_TEST", "1")

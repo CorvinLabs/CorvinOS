@@ -8,7 +8,7 @@ The resolver still serves operator-shipped personas from
 through it), so every case below runs against fixture personas in a temp
 user dir — see ``_fixture_personas.py``.
 
-Run: python3 operator/cowork/test/test_resolver.py
+Run: python3 corvin_operator/cowork/test/test_resolver.py
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ def main() -> int:
     forge = cfg["mcpServers"]["forge"]
     expect(forge["command"] == sys.executable,
            "{{PYTHON}} expands to sys.executable", f"got {forge['command']}")
-    expect(forge["args"][0].startswith("/") and forge["args"][0].endswith("operator/forge/forge.py"),
+    expect(forge["args"][0].startswith("/") and forge["args"][0].endswith("corvin_operator/forge/forge.py"),
            "{{REPO_ROOT}} expands to an absolute repo path", f"got {forge['args'][0]}")
     expect("{{" not in json.dumps(cfg), "no unexpanded template var left in the MCP file")
 

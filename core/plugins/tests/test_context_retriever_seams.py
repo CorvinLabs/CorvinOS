@@ -224,13 +224,13 @@ def _make_envelope(snapshot: dict):
 class TestTDESeam(unittest.TestCase):
     def setUp(self):
         # Repo-wide module-name collision: two initial_analysis.py exist —
-        # operator/initial_analysis.py and operator/orchestration/initial_analysis.py
+        # corvin_operator/initial_analysis.py and corvin_operator/orchestration/initial_analysis.py
         # (the latter defines make_task_analysis_prompt/GlobalPlan/Step). In a FULL
         # test run an earlier module can cache the former as
         # sys.modules["initial_analysis"], so worker_ipc -> analysis_runner's
         # `from initial_analysis import make_task_analysis_prompt` raises ImportError
         # and every TDE seam test fails though each passes in isolation. Normalise the
-        # import state: put operator/orchestration first and evict the stale
+        # import state: put corvin_operator/orchestration first and evict the stale
         # initial_analysis / tde modules so they re-import from the correct path.
         import sys as _sys
         _orch = str(_REPO / "operator" / "orchestration")

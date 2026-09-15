@@ -2,12 +2,12 @@
 
 Why a build hook instead of plain ``force-include``?
 ----------------------------------------------------
-The console's 56 modules reach runtime deps in ``operator/`` via repo-relative
+The console's 56 modules reach runtime deps in ``corvin_operator/`` via repo-relative
 ``sys.path`` injection. In a wheel install that path resolves into site-packages
-where no ``operator/`` exists → ``ModuleNotFoundError: No module named 'forge'``.
+where no ``corvin_operator/`` exists → ``ModuleNotFoundError: No module named 'forge'``.
 
 We fix that by vendoring the needed operator subtrees into
-``corvin_core/_vendor/operator/<same-relative-layout>`` so the
+``corvin_core/_vendor/corvin_operator/<same-relative-layout>`` so the
 ``_operator_bootstrap.py`` module can prepend them onto ``sys.path``.
 
 A plain ``[tool.hatch.build.targets.wheel.force-include]`` entry would ship the
@@ -30,7 +30,7 @@ untracked ``settings.json`` with real credentials -- ships to every real
 ``pip install`` simply because it was present on disk. This was demonstrated
 in practice in the published 0.10.33 wheel/sdist (adversarial release-
 readiness review, 2026-07-13): a stray untracked
-``operator/voice/scripts/Testnachricht mit Nova.`` file rode along inside the
+``corvin_operator/voice/scripts/Testnachricht mit Nova.`` file rode along inside the
 vendored copy, and the sdist -- built straight from the raw working tree --
 picked up several more untracked scratch files that were simply sitting in
 the tree.
@@ -135,35 +135,35 @@ def _install_git_tracked_filter(config: object, root: Path) -> None:
 
 # (source subtree relative to repo root, destination relative to wheel root).
 # Mirror layout EXACTLY so the bootstrap's relative paths resolve. ``forge`` is
-# the inner package at operator/forge/forge so ``from forge import paths`` works
-# once ``_vendor/operator/forge`` is on sys.path.
+# the inner package at corvin_operator/forge/forge so ``from forge import paths`` works
+# once ``_vendor/corvin_operator/forge`` is on sys.path.
 #
-# operator/bridges is included so that bridge_manager.py and the per-channel
+# corvin_operator/bridges is included so that bridge_manager.py and the per-channel
 # daemon.js entry points are available from a pure pip install (ADR-0130).
 # node_modules/, auth/, systemd/, and settings.json are excluded — see
 # _BRIDGE_RUNTIME_SKIP and _BRIDGE_WHEEL_SKIP below.
 _VENDOR_MAP: tuple[tuple[str, str], ...] = (
-    ("operator/forge/forge", "corvin_core/_vendor/operator/forge/forge"),
+    ("corvin_operator/forge/forge", "corvin_core/_vendor/corvin_operator/forge/forge"),
     # The forge CLI/MCP entry SCRIPT (not the inner package): resolver.py
-    # spawns the forge MCP server as `<python> {{REPO_ROOT}}/operator/forge/
+    # spawns the forge MCP server as `<python> {{REPO_ROOT}}/corvin_operator/forge/
     # forge.py mcp ...`. Vendoring only the inner package left every wheel
     # install with a dead forge MCP server ("can't open file ..._vendor/
-    # operator/forge/forge.py") — which also killed ADR-0190 M2/M3
+    # corvin_operator/forge/forge.py") — which also killed ADR-0190 M2/M3
     # (compute_submit/compute_gate/datasource_connect) on fresh installs.
-    ("operator/forge/forge.py", "corvin_core/_vendor/operator/forge/forge.py"),
-    ("operator/bridges", "corvin_core/_vendor/operator/bridges"),
-    ("operator/license", "corvin_core/_vendor/operator/license"),
-    ("operator/agent", "corvin_core/_vendor/operator/agent"),
-    ("operator/voice/scripts", "corvin_core/_vendor/operator/voice/scripts"),
+    ("corvin_operator/forge/forge.py", "corvin_core/_vendor/corvin_operator/forge/forge.py"),
+    ("corvin_operator/bridges", "corvin_core/_vendor/corvin_operator/bridges"),
+    ("corvin_operator/license", "corvin_core/_vendor/corvin_operator/license"),
+    ("corvin_operator/agent", "corvin_core/_vendor/corvin_operator/agent"),
+    ("corvin_operator/voice/scripts", "corvin_core/_vendor/corvin_operator/voice/scripts"),
     # ADR-0141 / L10: the path-gate hook file. The mandatory CAP_PATH_GATE
     # capability is registered by FILE PRESENCE at
-    # _repo_root()/operator/voice/hooks/path_gate.py (security_capabilities.
+    # _repo_root()/corvin_operator/voice/hooks/path_gate.py (security_capabilities.
     # _register_path_gate_by_presence). Without vendoring voice/hooks the file is
     # absent in a wheel install → CAP_PATH_GATE unregistered → "mandatory security
     # layer missing" fail-closed block of every request on a fresh install.
-    ("operator/voice/hooks", "corvin_core/_vendor/operator/voice/hooks"),
+    ("corvin_operator/voice/hooks", "corvin_core/_vendor/corvin_operator/voice/hooks"),
     # Bug found 2026-07-12 while verifying the 0.10.33 build: i18n.py's
-    # _BUNDLE_DIR resolves to _repo_root()/operator/voice/i18n (de.json,
+    # _BUNDLE_DIR resolves to _repo_root()/corvin_operator/voice/i18n (de.json,
     # en.json, zh-Hans.json — the /lang, /consent and welcome-greeting
     # strings). Without vendoring this dir, _load_bundle() finds no file
     # on EVERY wheel install, so i18n.t() always falls through to its
@@ -172,42 +172,42 @@ _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     # "welcome.intro") verbatim, in every language, on every pip install
     # to date. Never caught because dev/source-tree checkouts always find
     # the file directly via the repo-relative path.
-    ("operator/voice/i18n", "corvin_core/_vendor/operator/voice/i18n"),
-    ("operator/mcp_manager", "corvin_core/_vendor/operator/mcp_manager"),
+    ("corvin_operator/voice/i18n", "corvin_core/_vendor/corvin_operator/voice/i18n"),
+    ("corvin_operator/mcp_manager", "corvin_core/_vendor/corvin_operator/mcp_manager"),
     # ADR-0210/0214: orchestration layer (InitialAnalysis, ParallelExecutor,
     # TDE package). Without this, `from tde import ...` and the ADR-0214
     # engine registry are absent from every wheel install (found in the
     # 2026-07-23 ADR-0214 adversarial review).
-    ("operator/orchestration", "corvin_core/_vendor/operator/orchestration"),
-    ("operator/skill-forge", "corvin_core/_vendor/operator/skill-forge"),
-    ("operator/cowork", "corvin_core/_vendor/operator/cowork"),
+    ("corvin_operator/orchestration", "corvin_core/_vendor/corvin_operator/orchestration"),
+    ("corvin_operator/skill-forge", "corvin_core/_vendor/corvin_operator/skill-forge"),
+    ("corvin_operator/cowork", "corvin_core/_vendor/corvin_operator/cowork"),
     # ADR-0141: the RS256-signed layer-integrity manifest. Without this the
     # vendored layer_integrity.py resolves MANIFEST_REL_PATH to a missing file,
     # leaving every wheel install permanently in the pre-rollout (T1-disabled)
     # state. layer_integrity._repo_root() = parents[3] = _vendor, so the
-    # manifest must land at _vendor/operator/security/layer-manifest.json.
-    ("operator/security", "corvin_core/_vendor/operator/security"),
+    # manifest must land at _vendor/corvin_operator/security/layer-manifest.json.
+    ("corvin_operator/security", "corvin_core/_vendor/corvin_operator/security"),
     # ADR-0143: the SHA-anchored L44 acceptable-use policy. Without this the
     # vendored house_rules.py resolves repo_policy_path() to a missing file and
     # the gate fail-closes — blocking EVERY chat/workflow/assistant OS-turn on a
     # fresh pip install. house_rules._repo_root() = parents[3] = _vendor, so the
-    # policy must land at _vendor/operator/policy/house_rules.yaml.
-    ("operator/policy", "corvin_core/_vendor/operator/policy"),
+    # policy must land at _vendor/corvin_operator/policy/house_rules.yaml.
+    ("corvin_operator/policy", "corvin_core/_vendor/corvin_operator/policy"),
     # Config-template resources resolved at runtime by vendored modules via
     # parents[3] (= _vendor on a wheel install): engine_models.py reads
     # engine_model_registry.yaml (Engine Control Center + per-persona model
     # dropdown), and the EU_PRODUCTION presets are referenced by the egress/
     # compliance paths. Without this the model dropdowns come up empty on a
     # fresh pip install.
-    ("operator/bundle/config-templates", "corvin_core/_vendor/operator/bundle/config-templates"),
+    ("corvin_operator/bundle/config-templates", "corvin_core/_vendor/corvin_operator/bundle/config-templates"),
     # The 12 LDD quality-discipline skills (adr_gate, e2e-wiring-proof, etc.)
     # plus the bundle's own manifest.yaml and install.sh. Same class of bug as
     # the i18n/personas fixes above: docs/claude-ref/quality-discipline.md
     # documents these as "bundled with the product... available on every
-    # installation", but only operator/bundle/config-templates was ever
+    # installation", but only corvin_operator/bundle/config-templates was ever
     # vendored — a fresh `pip install corvinos` never carried
-    # operator/bundle/skills at all, so `install.sh` (which a source checkout
-    # or `corvin pkg install ./operator/bundle/` runs to seed
+    # corvin_operator/bundle/skills at all, so `install.sh` (which a source checkout
+    # or `corvin pkg install ./corvin_operator/bundle/` runs to seed
     # ~/.claude/skills/) had nothing to copy on a pip-only install. Found
     # 2026-07-29 while adding the e2e-wiring-proof skill and applying that
     # skill's own reachability-proof rule to itself.
@@ -220,17 +220,17 @@ _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     # source checkout it was developed in worked perfectly. Found 2026-08-11 by
     # inspecting the built wheel's contents before an upload (project memory:
     # "Source-Tree vs. Runtime-Dir — im Checkout korrekt, auf Wheel kaputt").
-    ("operator/context_engineering", "corvin_core/_vendor/operator/context_engineering"),
-    ("operator/bundle/skills", "corvin_core/_vendor/operator/bundle/skills"),
-    ("operator/bundle/install.sh", "corvin_core/_vendor/operator/bundle/install.sh"),
-    ("operator/bundle/manifest.yaml", "corvin_core/_vendor/operator/bundle/manifest.yaml"),
+    ("corvin_operator/context_engineering", "corvin_core/_vendor/corvin_operator/context_engineering"),
+    ("corvin_operator/bundle/skills", "corvin_core/_vendor/corvin_operator/bundle/skills"),
+    ("corvin_operator/bundle/install.sh", "corvin_core/_vendor/corvin_operator/bundle/install.sh"),
+    ("corvin_operator/bundle/manifest.yaml", "corvin_core/_vendor/corvin_operator/bundle/manifest.yaml"),
     # ADR-0405 Skill-Creator (the console's /skill-creator API). The route
     # appends <repo>/operator to sys.path and does `from skill_creator...`;
     # the vendored operator root ("" in _OPERATOR_SUBTREES) is already on
     # sys.path on a wheel install, so vendoring the package is all that is
     # needed. Without it every pip install logged "SkillCreatorOrchestrator
     # import failed: No module named 'skill_creator'" (2026-09-03 review, F4).
-    ("operator/skill_creator", "corvin_core/_vendor/operator/skill_creator"),
+    ("corvin_operator/skill_creator", "corvin_core/_vendor/corvin_operator/skill_creator"),
 )
 
 # core/ packages the console imports by a TOP-LEVEL name that differs from
@@ -324,7 +324,7 @@ def _is_test_path(rel: Path) -> bool:
     """True for test files / test dirs / dev-only files we never want in the wheel."""
     parts = rel.parts
     # .pytest_cache/.ldd are CI/dev-only state dirs that exist in real
-    # checkouts today (operator/bridges/.pytest_cache, .ldd/heartbeat) but
+    # checkouts today (corvin_operator/bridges/.pytest_cache, .ldd/heartbeat) but
     # used a different literal string than "tests"/"test"/"__pycache__", so
     # they were never matched here and could ship inside a force-included
     # vendored subtree's wheel copy (adversarial review finding).
@@ -530,7 +530,7 @@ class VendorOperatorHook(BuildHookInterface):
         neither a git-tracked file nor a directory containing git-tracked
         content is skipped too -- this is what keeps a stray UNTRACKED file
         sitting in the vendored source subtree (e.g. the
-        `operator/voice/scripts/Testnachricht mit Nova.` audio file found in
+        `corvin_operator/voice/scripts/Testnachricht mit Nova.` audio file found in
         the published 0.10.33 wheel) out of the copy, regardless of whether
         any denylist pattern happens to match its name.
         """

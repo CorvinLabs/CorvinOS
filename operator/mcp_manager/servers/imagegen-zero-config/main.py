@@ -61,7 +61,7 @@ _MAX_PROMPT_CHARS = 4000
 #
 # _SAVE_TIMEOUT_S / _TOTAL_TIMEOUT_S bound it, on a plain daemon=True
 # threading.Thread — deliberately NOT concurrent.futures.ThreadPoolExecutor.
-# operator/voice/scripts/stt/local_whisper.py::_load_model() already hit
+# corvin_operator/voice/scripts/stt/local_whisper.py::_load_model() already hit
 # this exact same "bound a blocking call, cross-platform, no signal.alarm on
 # Windows" problem and its docstring documents why ThreadPoolExecutor was
 # rejected there after a review found two real races in it: (a) releasing a
@@ -71,7 +71,7 @@ _MAX_PROMPT_CHARS = 4000
 # worker thread ever created, so one stalled call can hang the whole
 # long-lived server at shutdown. Both were reason enough to use the same
 # plain-Thread pattern here rather than reach for the "obvious" stdlib tool.
-# A genuinely cross-package shared helper (operator/bridges/shared/ would be
+# A genuinely cross-package shared helper (corvin_operator/bridges/shared/ would be
 # the natural home) is a reasonable follow-up, out of scope for this fix.
 #
 # _run_bounded() below is the ONE local implementation both call sites use

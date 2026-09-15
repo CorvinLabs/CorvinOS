@@ -94,7 +94,7 @@ class WorkerEnginePluginTemplate:
         self._ctx = ctx
 
         # ── NOTE 2026-07-27: engine_factory has no register() to call ─────────
-        # `operator/bridges/shared/engine_registry.py` builds engines from a
+        # `corvin_operator/bridges/shared/engine_registry.py` builds engines from a
         # hard-coded `_ENGINE_BUILDERS` dict with three entries. There is no
         # registration API, so a plugin cannot enter itself — populating this
         # handle would not help (see surface_map.py's worker_engine row, and

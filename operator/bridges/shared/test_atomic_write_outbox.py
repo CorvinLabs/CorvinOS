@@ -5,7 +5,7 @@ outbox poller, ticking every 500ms) can never observe a partially-written
 file. Real concurrent read/write via a background thread, not a mock — this
 is exactly the race outbox.js's poller lives inside.
 
-Run with: python3 operator/bridges/shared/test_atomic_write_outbox.py
+Run with: python3 corvin_operator/bridges/shared/test_atomic_write_outbox.py
 """
 from __future__ import annotations
 

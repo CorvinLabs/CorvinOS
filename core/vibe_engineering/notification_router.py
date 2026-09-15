@@ -20,7 +20,7 @@ never arrive:
 THE TRANSPORT NOW
 -----------------
 The primary transport is the durable outbox backbone the messenger daemons
-actually poll (``operator/bridges/shared/task_progress``) — the same one the
+actually poll (``corvin_operator/bridges/shared/task_progress``) — the same one the
 completion path uses, routed from the task's own origin record. That is the
 only path in this repo with a live consumer.
 

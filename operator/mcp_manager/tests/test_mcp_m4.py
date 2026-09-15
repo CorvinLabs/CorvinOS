@@ -12,7 +12,7 @@ Covers:
   - corvin-mcp search command (builtin manifests)
 
 Run with:
-    cd operator/mcp_manager
+    cd corvin_operator/mcp_manager
     python -m pytest tests/test_mcp_m4.py -v
 """
 from __future__ import annotations

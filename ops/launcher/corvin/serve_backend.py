@@ -798,7 +798,7 @@ def _seed_builtin_tools() -> None:
     catalog stayed empty after a full corvin-serve boot). Same failure
     class as the startup-ping finding above. Importing corvin_console
     first is load-bearing: its _operator_bootstrap puts the vendored
-    operator/ subtrees (wheel install) or the repo operator/ paths
+    corvin_operator/ subtrees (wheel install) or the repo corvin_operator/ paths
     (source tree) on sys.path so ``mcp_manager`` resolves in both modes.
     Fail-soft: seeding problems must never block the console from starting.
     """

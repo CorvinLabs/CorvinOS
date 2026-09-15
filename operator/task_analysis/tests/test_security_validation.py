@@ -25,7 +25,7 @@ class TestPathValidation:
     def test_valid_relative_path(self, repo_root):
         """Valid relative paths should pass."""
         assert validate_path("core/voice/renderer.py", repo_root)
-        assert validate_path("operator/task_analysis/normalizer.py", repo_root)
+        assert validate_path("corvin_operator/task_analysis/normalizer.py", repo_root)
         assert validate_path("tests/test_engine.py", repo_root)
 
     def test_absolute_path_rejected(self, repo_root):

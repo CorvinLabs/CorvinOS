@@ -35,8 +35,8 @@ def run_tests() -> Dict[str, Any]:
     # Run tests
     result = subprocess.run(
         ["uv", "run", "pytest",
-         "operator/task_analysis/tests/",
-         "operator/context_engineering/tests/",
+         "corvin_operator/task_analysis/tests/",
+         "corvin_operator/context_engineering/tests/",
          "-v", "--tb=no", "--quiet"],
         capture_output=True,
         text=True,

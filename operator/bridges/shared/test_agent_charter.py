@@ -1,9 +1,9 @@
 """Unit tests for agent_charter.py (ADR-0131).
 
 Run:
-  python3 -m pytest operator/bridges/shared/test_agent_charter.py -v
+  python3 -m pytest corvin_operator/bridges/shared/test_agent_charter.py -v
   or:
-  python3 operator/bridges/shared/test_agent_charter.py
+  python3 corvin_operator/bridges/shared/test_agent_charter.py
 """
 from __future__ import annotations
 

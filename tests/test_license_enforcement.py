@@ -16,7 +16,7 @@ Verify:
 import pytest
 from pathlib import Path
 from datetime import datetime, timezone
-# `operator/` is not importable as a package (stdlib `operator` shadows it),
+# `corvin_operator/` is not importable as a package (stdlib `operator` shadows it),
 # so this module is loaded by file path -- see load_operator_module in conftest.py.
 from corvin_test_support import load_operator_module
 

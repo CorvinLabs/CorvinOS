@@ -24,7 +24,7 @@ otherwise so the deterministic suite stays offline.
 
 Run:
     CLAUDE_LIVE_E2E=1 .venv/bin/python -m pytest -q -o addopts="" \\
-        -p no:cacheprovider operator/bridges/shared/test_adapter_live_llm_e2e.py
+        -p no:cacheprovider corvin_operator/bridges/shared/test_adapter_live_llm_e2e.py
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ Confirmed test blind spot: ``create_session()`` only checks
 ``if not tenant_id: raise SessionError(...)`` (auth.py:304) — it never runs
 ``tenant_id`` through the ``_TENANT_ID_RE`` / ``validate_tenant_id`` charset
 contract (``[a-z0-9_][a-z0-9_-]{0,62}``, no path-traversal / uppercase /
-whitespace / unicode) that ``operator/forge/forge/tenants.py`` defines and
+whitespace / unicode) that ``corvin_operator/forge/forge/tenants.py`` defines and
 that ``core/console/corvin_console/routes/license.py`` has to defensively
 re-check before it will build a filesystem path from ``rec.tenant_id``.
 

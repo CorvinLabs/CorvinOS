@@ -12,7 +12,7 @@ Proves the whole contract in isolation (no live engine):
   6. purge_user (GDPR Art. 17) drops a user's records.
   7. delivered records prune after TTL; abandoned pending prune after MAX_AGE.
 
-Run: python3 operator/bridges/shared/test_completion_notify.py
+Run: python3 corvin_operator/bridges/shared/test_completion_notify.py
 """
 from __future__ import annotations
 

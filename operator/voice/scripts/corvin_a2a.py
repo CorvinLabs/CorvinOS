@@ -161,7 +161,7 @@ def _check_local_a2a_peer_quota() -> str | None:
 def _cmd_pair(args: argparse.Namespace) -> int:
     """Generate a paired key set for a peer relationship.
 
-    Writes locally:  operator/cowork/remote_origins/<peer>.json
+    Writes locally:  corvin_operator/cowork/remote_origins/<peer>.json
                     (the peer signs *outbound* envelopes to us with hmac_key;
                      we sign *responses* back with recv_key — they verify
                      responses with the same recv_key.)
@@ -288,7 +288,7 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     print(f"# OK: wrote local origin file: {origin_path}")
     print()
     print("# Peer-side endpoint file — copy to the peer instance at:")
-    print(f"#   operator/cowork/remote_endpoints/{peer_endpoint['endpoint_id']}.json")
+    print(f"#   corvin_operator/cowork/remote_endpoints/{peer_endpoint['endpoint_id']}.json")
     print("#")
     print("# Use a secure channel (signed email, age-encrypted file, etc.).")
     print("# Set mode 0600 after writing.")

@@ -12,10 +12,10 @@ The live tests require:
     or GH_TOKEN / GITHUB_TOKEN env var.
 
 Run:
-    python3 operator/bridges/shared/agents/test_copilot_cli.py
+    python3 corvin_operator/bridges/shared/agents/test_copilot_cli.py
 
 Skip live tests:
-    CORVIN_AGENTS_SKIP_LIVE=1 python3 operator/bridges/shared/agents/test_copilot_cli.py
+    CORVIN_AGENTS_SKIP_LIVE=1 python3 corvin_operator/bridges/shared/agents/test_copilot_cli.py
 """
 
 from __future__ import annotations

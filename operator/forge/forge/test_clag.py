@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-# Make sibling modules importable directly (operator/forge/forge/ is the package dir).
+# Make sibling modules importable directly (corvin_operator/forge/forge/ is the package dir).
 import sys
 _here = Path(__file__).resolve().parent
 if str(_here) not in sys.path:

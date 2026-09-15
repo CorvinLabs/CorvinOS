@@ -1,0 +1,12 @@
+{
+  "id": "brave-search",
+  "name": "Brave Search",
+  "description": "Web search via Brave Search API. Provides web, news, and image search without tracking.",
+  "source": "npm:@modelcontextprotocol/server-brave-search",
+  "tags": ["search", "web", "news", "brave"],
+  "compliance": {"locality": "us_cloud", "network_egress": "required"},
+  "secrets": [
+    {"name": "BRAVE_API_KEY", "vault_key": "brave_api_key", "required": true}
+  ],
+  "install_hint": "corvin-mcp install npm:@modelcontextprotocol/server-brave-search@latest"
+}

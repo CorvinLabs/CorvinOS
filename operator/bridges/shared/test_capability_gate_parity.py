@@ -2,7 +2,7 @@
 adapter and the owner console.
 
 The gate is implemented as two independent, hand-copied blocks:
-  * ``operator/bridges/shared/adapter.py::_check_capabilities_or_fail``
+  * ``corvin_operator/bridges/shared/adapter.py::_check_capabilities_or_fail``
   * ``core/console/corvin_console/_spawn_gates.py::_check_capabilities_or_fail``
     (whose own docstring says the capability block is "lifted VERBATIM from
     chat_runtime" rather than imported).
@@ -13,7 +13,7 @@ try/except/bootstrap/reassert control flow. Nothing anywhere previously
 cross-checked that the two copies actually behave the same way on the SAME
 missing-capability condition — this suite closes that blind spot.
 
-Run: python3 operator/bridges/shared/test_capability_gate_parity.py
+Run: python3 corvin_operator/bridges/shared/test_capability_gate_parity.py
 """
 from __future__ import annotations
 

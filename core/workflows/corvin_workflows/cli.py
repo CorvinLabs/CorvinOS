@@ -6,7 +6,7 @@ Subcommands:
   validate <name>                       run R1..R10 against the workflow
   run <name> [key=value ...]            execute the workflow (Stub-Engine MVP)
 
-The slash-command layer (operator/bridges/shared/js/in_chat_commands.js)
+The slash-command layer (corvin_operator/bridges/shared/js/in_chat_commands.js)
 shells out to this CLI with spawnSync — same pattern as /quota, /ldd-status,
 /settings. Stdout is the user-facing reply; stderr carries diagnostics.
 

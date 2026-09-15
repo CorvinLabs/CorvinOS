@@ -1,0 +1,1000 @@
+"""Persistent skill registry — markdown + meta.json on disk.
+
+Workspace layout (per scope root, e.g. <scope_root>/skill-forge/):
+
+    <root>/
+    ├── skills_registry.json     manifest of all skills in this scope
+    ├── manifest.json            ADR-0420 resolver manifest (same data,
+    │                            {"skills": [{"name", "metadata"}]} shape —
+    │                            what core.skills.corvin_skills reads)
+    ├── skills/<name>/
+    │   ├── SKILL.md             body with YAML front-matter
+    │   └── meta.json            {sha256, created_at, ..., grades:[]}
+    └── (audit lives ONE LEVEL UP at <scope_root>/audit.jsonl —
+         shared with the forge plugin's audit trail.)
+"""
+from __future__ import annotations
+
+import contextlib
+try:
+    import fcntl
+except ImportError:  # Windows — POSIX advisory locks unavailable; degrade to no-op
+    import types as _types
+    fcntl = _types.SimpleNamespace(  # type: ignore[assignment]
+        LOCK_SH=1, LOCK_EX=2, LOCK_NB=4, LOCK_UN=8,
+        flock=lambda *a, **k: None, lockf=lambda *a, **k: None,
+    )
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Iterator
+
+from .linter import lint, LintResult
+
+
+def _yaml_quote(s: str) -> str:
+    """Quote a string safely for YAML embedded in front-matter.
+
+    Handles special chars, newlines, and colon-prefixed values.
+    """
+    if not s:
+        return "''"
+    # If contains special chars or starts with special markers, use single-quoted form.
+    if any(c in s for c in '\n:@#|>&*![]{}') or s.startswith(('-', '?', '!')):
+        # Escape single quotes inside the string.
+        escaped = s.replace("'", "''")
+        return f"'{escaped}'"
+    return s
+
+
+# Forge ships with the hash-chain audit writer. Reuse it so SkillForge and
+# Forge share one verifiable chain per scope_root. Insert the forge package
+# into sys.path lazily; if it's missing we fall back to a JSONL append-only
+# writer so the registry still works in standalone tests.
+def _import_forge_audit():
+    # registry.py lives at <plugins>/skill-forge/skill_forge/registry.py
+    # We want the forge plugin's TOP DIR on sys.path so that
+    # ``from forge.security_events import ...`` resolves to its
+    # security_events submodule.
+    plugins_dir = Path(__file__).resolve().parents[2]    # /plugins
+    forge_top = plugins_dir / "forge"                    # /operator/forge
+    if forge_top.is_dir() and str(forge_top) not in sys.path:
+        sys.path.insert(0, str(forge_top))
+    try:
+        from forge.security_events import write_event, verify_chain
+    except ImportError:
+        return None, None
+    try:
+        from forge.security_events import register_event_allowlist
+    except ImportError:  # older forge without the M2 registry
+        return write_event, verify_chain
+    # The core writer's key floor is default-deny; register the exact field
+    # set of every SkillForge event so its metadata survives the write.
+    # Metadata only: hashes, scope/type codes, run ids, scores, the persona
+    # attribution — never a skill body.
+    for event_type, fields in SKILL_FORGE_AUDIT_ALLOWLISTS.items():
+        register_event_allowlist(event_type, fields)
+    return write_event, verify_chain
+
+
+_SKILL_EVENT_FIELDS = frozenset({
+    "sha", "scope", "type", "persona", "caller_persona", "reason", "run_id", "score",
+    "organic", "capped", "from_scope", "to_scope", "force", "n_grades", "mean_score",
+})
+SKILL_FORGE_AUDIT_ALLOWLISTS: dict[str, frozenset[str]] = {
+    "skill.create": _SKILL_EVENT_FIELDS,
+    "skill.delete": _SKILL_EVENT_FIELDS,
+    "skill.grade": _SKILL_EVENT_FIELDS,
+    "skill.promote": _SKILL_EVENT_FIELDS,
+    "skill.namespace_denied": frozenset({
+        "skill_name", "operation", "caller_persona", "allowed_prefix", "reason",
+        "requested_scope",
+    }),
+    "skill.scope_denied": frozenset({
+        "reason", "operation", "requested_scope", "caller_persona",
+    }),
+    "skill.create_forced_scope": frozenset({"scope", "force", "caller_persona", "sha"}),
+    "skill_forge.content_drift": frozenset({"skill_name", "scope"}),
+    "skill_forge.content_rehash": frozenset({"skill_name", "scope"}),
+    "skill_forge.injection_suspended": frozenset({"skill_name", "scope", "lint_errors"}),
+}
+
+_write_event, _verify_chain = _import_forge_audit()
+
+
+# -- plugin-slot mirror ------------------------------------------------------
+#
+# Every successful create() also lands a stripped-down SKILL.md in the
+# plugin-source ``skills/dyn/<sanitized>/`` directory so the *next* claude
+# subprocess discovers the dynamic skill via the engine's plugin-skill loader.
+# The slot is gitignored — dynamic skills never land in a commit.
+#
+# The slot is per-repo (not per-scope). When the same skill exists in
+# multiple scopes, the slot reflects whichever scope wrote last; promote()
+# in MultiSkillRegistry re-writes after the source-side delete to make the
+# higher scope "win".
+
+
+def plugin_slot_dir() -> Path:
+    """Resolve the plugin-source ``dyn/`` directory for slot mirrors.
+
+    Resolution order:
+      1. ``CORVIN_PLUGIN_SLOT_DIR`` env override — the ONLY test-isolation
+         signal for this function. Every test in this codebase that
+         exercises create()/delete() already sets this explicitly (see
+         docs/claude-ref/layer-plugins.md's "Test isolation" note) — it is a
+         dedicated, single-purpose variable used nowhere else, so its mere
+         presence is an unambiguous "redirect me" signal on its own.
+      2. Walk up from this file's location for a ``.corvin_repo``/``plugins/``
+         marker → ``<repo>/operator/skill-forge/skills/dyn/`` — the REAL
+         production path. Confirmed by `test_engine_visibility.py`'s actual
+         `claude -p` subprocess run: the native engine's plugin-skill loader
+         only ever sees skills mirrored here, not anywhere CORVIN_HOME-derived.
+      3. Fallback ``~/.corvin/plugin-slot/`` (no repo marker found — e.g. a
+         pip-installed wheel with no `plugins/` directory on disk).
+
+    2026-08-02 fix (adversarial review of the Concept Gate mechanism, found
+    while verifying a freshly-seeded SkillForge skill's actual reachability):
+    a prior branch here treated bare ``CORVIN_HOME`` presence as a
+    test-sandbox signal and redirected the slot to ``<CORVIN_HOME>/
+    plugin-slot/`` too — but CORVIN_HOME is the canonical runtime root set in
+    EVERY real CorvinOS session (CLAUDE.md: "Canonical runtime root:
+    ~/.corvin/"), not just tests. That branch therefore silently redirected
+    every real production install's plugin-slot mirror away from the path
+    the native engine actually scans, making every freshly created
+    project/user-scope skill invisible to Claude Code's own plugin loader —
+    the exact "looks wired, isn't reachable" failure class this codebase's
+    own `e2e-wiring-proof` skill exists to catch, just one level deeper than
+    that skill's own file-tree checks would find. Removed the CORVIN_HOME
+    branch entirely rather than gating it behind a second flag (e.g.
+    CORVIN_TEST_MODE): every existing test already sets the more specific
+    CORVIN_PLUGIN_SLOT_DIR directly (verified across all 15 call sites before
+    this change), so removing it changes zero test behavior while fixing
+    production. See Corvin-ADR/concepts/0001-self-learning-project-concept-
+    archive.md's Production-Readiness Roadmap, item P0-1, for the fuller
+    writeup and the two stale test assertions this change corrects in
+    test_plugin_slot_compat.py.
+    """
+    env = os.environ.get("CORVIN_PLUGIN_SLOT_DIR")
+    if env:
+        return Path(os.path.expanduser(os.path.expandvars(env)))
+    # Walk up from this file looking for the plugins/ marker — same heuristic
+    # as forge.paths.corvin_home, but we don't import it to keep registry.py
+    # standalone.
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+            return parent / "operator" / "skill-forge" / "skills" / "dyn"
+    return Path.home() / ".corvin" / "plugin-slot"
+
+
+def _sanitize_slot_name(name: str) -> str:
+    """Map a dotted skill name to an undottered slot directory name.
+
+    The engine prefers undottered skill names; we replace ``.`` with ``_``.
+    All other characters are already constrained by SkillRegistry.create()'s
+    validator (alnum + ``.`` + ``_``).
+    """
+    return name.replace(".", "_")
+
+
+def _render_slot_md(sanitized_name: str, description: str, body_md: str) -> str:
+    """Render the engine-facing SKILL.md — only ``name`` + ``description`` in
+    the front-matter, then the source body verbatim.
+
+    The canonical SKILL.md (with ``claim``, ``type``, ``references``) lives
+    in the scope workspace. The slot is a projection that the engine can
+    consume without being confused by SkillForge-specific keys.
+    """
+    body_md = body_md.lstrip()
+    if not body_md.endswith("\n"):
+        body_md += "\n"
+    fm = (
+        "---\n"
+        f"name: {sanitized_name}\n"
+        f"description: {description}\n"
+        "---\n\n"
+    )
+    return fm + body_md
+
+
+def _write_slot(name: str, description: str, body_md: str) -> None:
+    """Mirror ``body_md`` into the plugin slot under a sanitized directory.
+
+    Idempotent — overwrites any prior slot for the same sanitized name.
+    """
+    slot_dir = plugin_slot_dir() / _sanitize_slot_name(name)
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    SkillRegistry._atomic_write_text(  # type: ignore[attr-defined]
+        slot_dir / "SKILL.md",
+        _render_slot_md(_sanitize_slot_name(name), description, body_md),
+    )
+
+
+def _purge_slot(name: str) -> None:
+    """Remove the slot directory for ``name`` if it exists."""
+    slot_dir = plugin_slot_dir() / _sanitize_slot_name(name)
+    if slot_dir.exists():
+        shutil.rmtree(slot_dir, ignore_errors=True)
+
+
+class LinterError(Exception):
+    """Linter rejected the skill body — see ``violations`` for details."""
+
+    def __init__(self, violations: list[str]):
+        super().__init__("linter rejected skill body: " + "; ".join(violations))
+        self.violations = list(violations)
+
+
+class PromotionGateError(Exception):
+    """Promotion gate refused the requested move."""
+
+
+class NamespaceDenied(PermissionError):
+    """Layer 9 namespace gate: the caller persona does not own this name."""
+
+
+# ── Bounded registry locking (never hang an operator request) ───────────
+# ``SkillRegistry._locked`` used to be a plain ``fcntl.flock(fd, LOCK_EX)`` with
+# no timeout, no ``LOCK_NB``. It guards every mutation reachable from the
+# console (``routes/skills_manual.py`` create/update/delete) — a wedged
+# holder (a crashed CLI whose fd the kernel had not reaped, an NFS mount, a
+# debugger-stopped process) hung the operator's HTTP request FOREVER, and no
+# ``try/except`` can catch a hang. `create`/`delete`/`grade`/`set_grades`/
+# `bind_content_hash` are sync ``def`` handlers on the console side, so this
+# burned a threadpool worker rather than the event loop — still an unbounded
+# hang with no 503.
+#
+# Bounded now (``LOCK_EX | LOCK_NB`` + hard deadline), matching
+# ``core.infinite_session.event_store``, ``corvin_plugins.state`` and
+# ``core.skills.os_skills.skill_adapter``. Refusing at the deadline is the
+# only safe direction: proceeding without the lock is precisely the lost
+# update the lock exists to prevent, and a write that answered 200 without
+# actually landing would tell the operator a skill was created/updated/
+# deleted when it was not.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.02
+
+
+class SkillRegistryLockBusy(TimeoutError):
+    """The SkillForge registry lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    A ``TimeoutError`` (hence an ``OSError``), matching
+    :class:`core.infinite_session.event_store.SnapshotLockBusy` and
+    :class:`core.skills.os_skills.skill_adapter.SkillConfigLockBusy`. Callers
+    that also catch ``OSError`` for storage failures MUST check this (or its
+    superclass ``TimeoutError``) FIRST — see ``routes/skills_manual.py``.
+    """
+
+
+#: Hard cap for a NON-organic grade — one the grading party awards itself
+#: (a persona grading a skill it just used through the MCP tool without a real
+#: run behind it, the post-turn auto-grade, a bootstrap seed). Mirrors
+#: ``skill_inject._AUTO_GRADE_CAP_MAX``; the registry is the last line, so a
+#: caller that forgot to cap cannot promote a skill on its own word
+#: (adversarial review F-K8: ``grade()`` accepted 1.0 from anyone).
+AUTO_GRADE_CAP_MAX = 0.3
+
+
+@dataclass
+class Grade:
+    run_id: str
+    score: float
+    ts: float
+    notes: str = ""
+
+
+@dataclass
+class SkillSpec:
+    name: str
+    type: str  # domain | persona-style | repo-context | learned-experience
+    description: str
+    claim: dict[str, Any]
+    scope: str = "session"
+    created_at: float = field(default_factory=time.time)
+    created_by: str = ""
+    sha256: str = ""
+    grades: list[dict[str, Any]] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "SkillSpec":
+        # tolerate legacy/extra fields
+        known = {f for f in cls.__dataclass_fields__}
+        kept = {k: v for k, v in d.items() if k in known}
+        return cls(**kept)
+
+    @property
+    def n_grades(self) -> int:
+        return len(self.grades)
+
+    @property
+    def mean_score(self) -> float:
+        if not self.grades:
+            return 0.0
+        return sum(g.get("score", 0.0) for g in self.grades) / len(self.grades)
+
+
+VALID_TYPES = ("domain", "persona-style", "repo-context", "learned-experience")
+
+
+class SkillRegistry:
+    MANIFEST_NAME = "skills_registry.json"
+    SKILLS_DIR = "skills"
+
+    # The audit lives ONE LEVEL UP from the SkillForge workspace so the
+    # hash-chain is shared with forge in the same scope_root. The caller
+    # passes a ``root`` like ``<scope_root>/skill-forge/`` and the audit
+    # ends up at ``<scope_root>/audit.jsonl``.
+    AUDIT_NAME = "audit.jsonl"
+
+    # ADR-0420 unified manifest — the file ``core.skills.corvin_skills``
+    # (resolver / cache / hardening / console monitoring / ``corvin skills``)
+    # reads. Emitted on every ``_save`` so the resolver never reads a file
+    # nothing writes (adversarial review D-11).
+    RESOLVER_MANIFEST_NAME = "manifest.json"
+
+    def __init__(
+        self, root: Path, *, hash_chain: bool = True,
+        audit_path: Path | None = None,
+        caller_persona: str | None = None,
+        policy: Any = None,
+    ):
+        """``audit_path`` overrides the default ``<root>/../audit.jsonl``.
+
+        ``caller_persona`` is the persona on whose behalf this registry
+        mutates skills — passed by the CALLER (the MCP server from its turn
+        env, the console routes as their acting persona), never read from
+        the environment here. When set and the persona owns a namespace in
+        ``forge.policy.Policy.persona_namespaces``, every mutating call
+        (create / update / delete / grade / promote) is gated on the name
+        prefix and a violation raises :class:`NamespaceDenied` after an
+        audited ``skill.namespace_denied``. ``None`` = wildcard (CLI,
+        operator). Until 2026-09-07 the gate lived only in the MCP server, so
+        the console routes minted and deleted any name (F-K6).
+        ``policy`` injects a Policy (tests); default loads the sibling forge
+        workspace policy with bundle defaults.
+
+        ``MultiSkillRegistry`` passes the TENANT CORE CHAIN
+        (``<tenant_home>/global/forge/audit.jsonl`` — what the boot tripwire,
+        ``audit_query`` and the compliance reports read) so SkillForge events
+        are links in the same verifiable chain as every other tenant event.
+        A bare ``SkillRegistry(root)`` (standalone / tests) keeps the sibling
+        default.
+        """
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / self.SKILLS_DIR).mkdir(exist_ok=True)
+        self.manifest_path = self.root / self.MANIFEST_NAME
+        self.resolver_manifest_path = self.root / self.RESOLVER_MANIFEST_NAME
+        self.lock_path = self.root / ".lock"
+        self.hash_chain = hash_chain
+        self._audit_path_override = Path(audit_path) if audit_path is not None else None
+        self.caller_persona = caller_persona or None
+        self._policy = policy
+        if not self.manifest_path.exists():
+            self._atomic_write_text(self.manifest_path, "{}\n")
+        if not self.resolver_manifest_path.exists():
+            self._write_resolver_manifest({})
+
+    # -- Layer 9 namespace gate --------------------------------------------
+
+    def _get_policy(self) -> Any:
+        """The forge Policy (bundle defaults + ``<scope_root>/forge/policy.json``).
+
+        Fail-CLOSED for a gated caller: when a persona is attached and the
+        policy cannot be loaded the gate cannot be evaluated, so the mutation
+        is refused — a missing policy must not silently widen a persona's
+        reach to every name.
+        """
+        if self._policy is not None:
+            return self._policy
+        try:
+            from forge.policy import Policy  # type: ignore  # forge on sys.path via _import_forge_audit
+        except ImportError:
+            return None
+        try:
+            self._policy = Policy.load(self.root.parent / "forge")
+        except Exception:  # noqa: BLE001 — unreadable/malformed workspace policy
+            # A bare ``Policy()`` has EMPTY persona namespaces (the bundle defaults
+            # are loaded by ``Policy.load``, not by the constructor), which turned a
+            # corrupt policy.json into a wildcard (2026-09-07 round-2 review, R2-B2).
+            # ``namespace_check`` treats ``None`` as fail-closed — return that.
+            return None
+        return self._policy
+
+    def namespace_check(self, name: str) -> tuple[bool, str]:
+        """(allowed, reason) for ``name`` under the attached caller persona."""
+        if not self.caller_persona:
+            return True, ""
+        policy = self._get_policy()
+        if policy is None:
+            return False, (
+                f"namespace-gate: policy unavailable — cannot evaluate persona "
+                f"{self.caller_persona!r} for {name!r} (fail-closed)"
+            )
+        return policy.namespace_check(self.caller_persona, name)
+
+    def allowed_prefix(self) -> str | None:
+        """The prefix the attached persona owns, or None (wildcard)."""
+        if not self.caller_persona:
+            return None
+        policy = self._get_policy()
+        return policy.namespace_for(self.caller_persona) if policy is not None else None
+
+    def _namespace_gate(self, name: str, *, operation: str) -> None:
+        allowed, reason = self.namespace_check(name)
+        if allowed:
+            return
+        self._audit_event(
+            "skill.namespace_denied",
+            severity="WARNING",
+            details={
+                "skill_name": name,
+                "operation": operation,
+                "caller_persona": self.caller_persona,
+                "allowed_prefix": self.allowed_prefix(),
+                "reason": reason,
+            },
+        )
+        raise NamespaceDenied(reason)
+
+    # -- locking + atomic IO ----------------------------------------------
+
+    @contextlib.contextmanager
+    def _locked(self, *, timeout: float | None = None) -> Iterator[None]:
+        """``LOCK_EX | LOCK_NB`` with a hard deadline — never blocks forever.
+
+        Raises :class:`SkillRegistryLockBusy` at ``LOCK_TIMEOUT_SECONDS``
+        (or ``timeout`` when given, e.g. by a test shortening the deadline)
+        instead of hanging the caller — see the module-level comment above
+        ``LOCK_TIMEOUT_SECONDS`` for why an unbounded flock here was unsafe.
+        """
+        limit = LOCK_TIMEOUT_SECONDS if timeout is None else float(timeout)
+        deadline = time.monotonic() + limit
+        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
+        try:
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise SkillRegistryLockBusy(
+                            f"skill-forge registry lock busy: still held after "
+                            f"{limit:g}s — refusing to block the caller"
+                        ) from None
+                    time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
+            yield
+        finally:
+            if locked:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    @staticmethod
+    def _atomic_write_text(path: Path, text: str) -> None:
+        directory = path.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(directory))
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
+
+    # -- manifest IO -------------------------------------------------------
+
+    def _load(self) -> dict[str, dict]:
+        try:
+            text = self.manifest_path.read_text() or "{}"
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"skill registry manifest corrupted at "
+                f"{self.manifest_path}: {e}"
+            ) from e
+
+    def _save(self, data: dict[str, dict]) -> None:
+        self._atomic_write_text(
+            self.manifest_path, json.dumps(data, indent=2) + "\n"
+        )
+        # Same generation, second shape: the ADR-0420 resolver manifest.
+        self._write_resolver_manifest(data)
+
+    def _write_resolver_manifest(self, data: dict[str, dict]) -> None:
+        """Emit ``manifest.json`` in the shape ``SkillCache`` expects.
+
+        ``{"skills": [{"name": ..., "metadata": {...}}], ...}`` — one entry
+        per registered skill, metadata = the SkillSpec fields (grades kept as
+        counts + mean, never the notes). Atomic replace, so a reader either
+        sees the previous generation or this one; the resolver cache keys on
+        the file identity and drops stale entries on the next lookup.
+        """
+        skills = []
+        for name, d in sorted(data.items()):
+            try:
+                spec = SkillSpec.from_dict(d)
+            except TypeError:
+                continue
+            skills.append({
+                "name": name,
+                "origin": "skill-forge",
+                "lifecycle": "active",
+                "quality_score": round(spec.mean_score, 4),
+                "metadata": {
+                    "type": spec.type,
+                    "description": spec.description,
+                    "scope": spec.scope,
+                    "created_at": spec.created_at,
+                    "created_by": spec.created_by,
+                    "sha256": spec.sha256,
+                    "n_grades": spec.n_grades,
+                    "mean_score": round(spec.mean_score, 4),
+                    "content_hash_sha256": d.get("content_hash_sha256", ""),
+                },
+            })
+        self._atomic_write_text(
+            self.resolver_manifest_path,
+            json.dumps({
+                "schema": "ADR-0420",
+                "generated_at": time.time(),
+                "skills": skills,
+            }, indent=2) + "\n",
+        )
+
+    def set_grades(self, name: str, grades: list[dict[str, Any]]) -> SkillSpec:
+        """Replace a skill's grade history WITHOUT emitting per-grade audit.
+
+        Used by ``MultiSkillRegistry.promote`` to carry grades into the target
+        scope: the grades were already audited when they were given; re-running
+        ``grade()`` produced N fresh ``skill.grade`` records with old run_ids
+        and new timestamps (adversarial review D-18). The promotion itself is
+        audited once by the caller.
+        """
+        with self._locked():
+            data = self._load()
+            if name not in data:
+                raise KeyError(name)
+            clean = [asdict(Grade(
+                run_id=str(g.get("run_id", "")),
+                score=float(g.get("score", 0.0)),
+                ts=float(g.get("ts", time.time())),
+                notes=str(g.get("notes", "")),
+            )) for g in grades]
+            data[name]["grades"] = clean
+            self._save(data)
+            meta_path = self.root / self.SKILLS_DIR / name / "meta.json"
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text())
+                meta["grades"] = clean
+                self._atomic_write_text(
+                    meta_path, json.dumps(meta, indent=2) + "\n"
+                )
+            return SkillSpec.from_dict(data[name])
+
+    # -- public API --------------------------------------------------------
+
+    def list(self) -> list[SkillSpec]:
+        return [SkillSpec.from_dict(v) for v in self._load().values()]
+
+    def get(self, name: str) -> SkillSpec | None:
+        d = self._load().get(name)
+        return SkillSpec.from_dict(d) if d else None
+
+    def get_body(self, name: str) -> str | None:
+        skill_dir = self.root / self.SKILLS_DIR / name
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return None
+        return skill_md.read_text()
+
+    # ADR-0052 F9 — content hash binding ─────────────────────────────────────
+
+    @staticmethod
+    def _full_sha256(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def bind_content_hash(self, name: str) -> str | None:
+        """Compute and store the full SHA-256 of the current SKILL.md.
+
+        Called at promotion time. Returns the hex digest, or None if the
+        skill does not exist.
+        """
+        body = self.get_body(name)
+        if body is None:
+            return None
+        h = self._full_sha256(body)
+        with self._locked():
+            data = self._load()
+            if name not in data:
+                return None
+            data[name]["content_hash_sha256"] = h
+            self._save(data)
+            # Also update meta.json
+            skill_dir = self.root / self.SKILLS_DIR / name
+            meta_path = skill_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    meta["content_hash_sha256"] = h
+                    self._atomic_write_text(meta_path, json.dumps(meta, indent=2) + "\n")
+                except Exception:
+                    pass
+        return h
+
+    def get_body_verified(self, name: str) -> tuple[str | None, str]:
+        """Return (body, status) where status is one of:
+        'ok'           — hash present and matches
+        'no_hash'      — no stored hash yet (pre-ADR-0052 skill)
+        'drift'        — hash mismatch detected
+        'missing'      — SKILL.md does not exist
+
+        On 'drift': emits skill_forge.content_drift WARNING. If re-lint
+        passes, updates stored hash and emits skill_forge.content_rehash.
+        If re-lint fails, does NOT update hash and emits
+        skill_forge.injection_suspended CRITICAL — returns (None, 'suspended').
+        """
+        spec = self.get(name)
+        if spec is None:
+            return None, "missing"
+        body = self.get_body(name)
+        if body is None:
+            return None, "missing"
+
+        stored_hash = spec.meta.get("content_hash_sha256") if isinstance(spec.meta, dict) else None
+        if stored_hash is None:
+            # Fall back to manifest field (populated by bind_content_hash)
+            d = self._load().get(name, {})
+            stored_hash = d.get("content_hash_sha256")
+
+        if stored_hash is None:
+            return body, "no_hash"
+
+        current_hash = self._full_sha256(body)
+        if current_hash == stored_hash:
+            return body, "ok"
+
+        # Hash mismatch — emit drift event
+        self._audit_event(
+            "skill_forge.content_drift",
+            severity="WARNING",
+            details={"skill_name": name, "scope": spec.scope},
+        )
+
+        # Re-lint
+        lint_result = lint(body)
+        if not lint_result.ok:
+            self._audit_event(
+                "skill_forge.injection_suspended",
+                severity="CRITICAL",
+                details={"skill_name": name, "scope": spec.scope,
+                         "lint_errors": lint_result.errors[:5]},
+            )
+            return None, "suspended"
+
+        # Linter passed — rehash and continue
+        self.bind_content_hash(name)
+        self._audit_event(
+            "skill_forge.content_rehash",
+            severity="INFO",
+            details={"skill_name": name, "scope": spec.scope},
+        )
+        return body, "drift_revalidated"
+
+    def _audit_event(
+        self, event_type: str, *, severity: str = "INFO", details: dict | None = None
+    ) -> None:
+        """Emit a standalone audit event (not tied to a SkillSpec)."""
+        path = self.audit_path()
+        if _write_event is not None:
+            try:
+                _write_event(
+                    path, event_type,
+                    severity=severity,
+                    tool="",
+                    details=details or {},
+                    hash_chain=self.hash_chain,
+                )
+                return
+            except OSError:
+                pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as fh:
+            fh.write(json.dumps({
+                "ts": time.time(),
+                "event_type": event_type,
+                "severity": severity,
+                "details": details or {},
+            }) + "\n")
+
+    def create(
+        self,
+        *,
+        name: str,
+        type: str,
+        body_md: str,
+        description: str,
+        claim: dict[str, Any] | None = None,
+        scope: str = "session",
+        overwrite: bool = False,
+        created_by: str = "",
+        meta: dict[str, Any] | None = None,
+    ) -> SkillSpec:
+        # Name validation — same shape as forge.registry.create
+        if not name or len(name) > 128:
+            raise ValueError(f"skill name must be 1..128 chars: {name!r}")
+        if "/" in name or ".." in name \
+                or name.startswith(".") or name.endswith("."):
+            raise ValueError(f"skill name has illegal sequence: {name!r}")
+        if not all(c.isalnum() or c in "._" for c in name):
+            raise ValueError(
+                f"skill name must be alphanumeric + . + _ : {name!r}"
+            )
+        if type not in VALID_TYPES:
+            raise ValueError(
+                f"unsupported skill type: {type!r} (valid: {VALID_TYPES})"
+            )
+
+        self._namespace_gate(name, operation="update" if overwrite else "create")
+
+        # Linter — fail-closed: violations block the write
+        result = lint(body_md)
+        if not result.ok:
+            raise LinterError(result.errors)
+
+        with self._locked():
+            data = self._load()
+            if name in data and not overwrite:
+                raise FileExistsError(
+                    f"skill {name!r} already exists (use overwrite=True)"
+                )
+
+            skill_dir = self.root / self.SKILLS_DIR / name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+
+            sha = hashlib.sha256(body_md.encode("utf-8")).hexdigest()[:16]
+            spec = SkillSpec(
+                name=name,
+                type=type,
+                description=description,
+                claim=claim or {},
+                scope=scope,
+                created_by=created_by or os.environ.get("SKILL_FORGE_PERSONA", ""),
+                sha256=sha,
+                grades=[],
+                meta=dict(meta or {}),
+            )
+
+            # Write SKILL.md atomically with front-matter, then meta.json
+            full_md = _render_skill_md(spec, body_md)
+            self._atomic_write_text(skill_dir / "SKILL.md", full_md)
+            self._atomic_write_text(
+                skill_dir / "meta.json",
+                json.dumps(asdict(spec), indent=2) + "\n",
+            )
+
+            data[name] = asdict(spec)
+            self._save(data)
+            # Mirror to plugin slot so the next claude subprocess discovers
+            # it. Layer-16 v2 scope-gate: only project- and user-scope skills
+            # land in the engine plugin tree. Task/session skills stay
+            # reachable in their origin chat via adapter-injection but
+            # cannot leak across chats through the engine plugin loader.
+            # Slot writes are best-effort — a slot failure must not
+            # invalidate the canonical workspace write that already
+            # happened.
+            if scope in ("project", "user"):
+                try:
+                    _write_slot(name, description, body_md)
+                except OSError:
+                    pass
+            self._audit("skill.create", spec)
+            # ADR-0052 F9 — bind content hash at creation (baseline for drift detection)
+            # Hash the rendered full_md, not body_md, so get_body_verified()
+            # can compare against the same bytes that live in SKILL.md.
+            try:
+                data[name]["content_hash_sha256"] = self._full_sha256(full_md)
+                self._save(data)
+            except Exception:
+                pass
+            return spec
+
+    def delete(
+        self, name: str, *, reason: str = "", purge_slot: bool = True,
+    ) -> bool:
+        """Remove a skill from disk + manifest. Returns True if it existed.
+
+        ``purge_slot=False`` keeps the plugin-slot mirror — used by
+        MultiSkillRegistry.promote() so the higher-scope copy keeps its
+        slot when the lower-scope source is dropped.
+        """
+        self._namespace_gate(name, operation="delete")
+        with self._locked():
+            data = self._load()
+            d = data.pop(name, None)
+            if d is None:
+                return False
+            spec = SkillSpec.from_dict(d)
+            skill_dir = self.root / self.SKILLS_DIR / name
+            if skill_dir.exists():
+                shutil.rmtree(skill_dir, ignore_errors=False)
+            self._save(data)
+            if purge_slot:
+                try:
+                    _purge_slot(name)
+                except OSError:
+                    pass
+            self._audit("skill.delete", spec, extra={"reason": reason})
+            return True
+
+    def grade(
+        self, name: str, run_id: str, score: float, *, notes: str = "",
+        organic: bool = False,
+    ) -> SkillSpec:
+        """Append a grade to a skill's history. Score in [0.0, 1.0].
+
+        ``organic=False`` (the default — fail-closed) clamps the score to
+        :data:`AUTO_GRADE_CAP_MAX`: a self-awarded, automatic or bootstrap
+        grade can never on its own lift a skill over the ``session->project``
+        promotion bar (mean >= 0.5). Only a caller that vouches for a REAL
+        usage outcome passes ``organic=True``; the clamp is recorded in the
+        ``skill.grade`` audit record (``organic`` / ``capped``).
+        """
+        if not (0.0 <= score <= 1.0):
+            raise ValueError(f"score must be in [0,1], got {score!r}")
+        self._namespace_gate(name, operation="grade")
+        requested = float(score)
+        if not organic and score > AUTO_GRADE_CAP_MAX:
+            score = AUTO_GRADE_CAP_MAX
+        capped = score != requested
+        with self._locked():
+            data = self._load()
+            if name not in data:
+                raise KeyError(name)
+            grades = list(data[name].get("grades") or [])
+            grades.append(asdict(Grade(
+                run_id=run_id, score=float(score), ts=time.time(), notes=notes
+            )))
+            data[name]["grades"] = grades
+            self._save(data)
+
+            # Persist into meta.json too so it stays human-readable
+            skill_dir = self.root / self.SKILLS_DIR / name
+            meta_path = skill_dir / "meta.json"
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text())
+                meta["grades"] = grades
+                self._atomic_write_text(
+                    meta_path, json.dumps(meta, indent=2) + "\n"
+                )
+
+            spec = SkillSpec.from_dict(data[name])
+            self._audit(
+                "skill.grade", spec,
+                extra={"run_id": run_id, "score": float(score),
+                       "organic": bool(organic), "capped": capped},
+            )
+            return spec
+
+    # -- audit -------------------------------------------------------------
+
+    def audit_path(self) -> Path:
+        """The chain this registry appends to.
+
+        With an ``audit_path`` override (MultiSkillRegistry): the tenant core
+        chain. Without: ONE LEVEL UP, sibling to the forge workspace — the
+        standalone layout.
+        """
+        if self._audit_path_override is not None:
+            return self._audit_path_override
+        # R4 (2026-09-07): the sibling default put SkillForge records in
+        # ``<tenant_home>/audit.jsonl`` — a seventh chain file for one tenant
+        # that nothing verifies (757 ``skill.create`` records sat there on the
+        # maintainer install). ``MultiSkillRegistry`` already passed the tenant
+        # core chain explicitly; every OTHER construction path
+        # (context_engineering's skillforge stage + prompt_assembly, the
+        # skill_creator bridge, the cleanup script) used this default. A root
+        # outside ``corvin_home`` — a test sandbox — keeps the sibling, so a
+        # unit test can never append to the operator's real chain.
+        fallback = self.root.parent / self.AUDIT_NAME
+        try:
+            import sys as _sys  # noqa: PLC0415
+            from pathlib import Path as _P  # noqa: PLC0415
+            _fd = str(_P(__file__).resolve().parents[3] / "forge")
+            if _fd not in _sys.path:
+                _sys.path.append(_fd)
+            from forge.paths import audit_chain_for_workspace  # noqa: PLC0415
+            return audit_chain_for_workspace(self.root, fallback=fallback)
+        except Exception:  # noqa: BLE001 — never lose a record over path resolution
+            return fallback
+
+    def _audit(
+        self,
+        action: str,
+        spec: SkillSpec,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        details: dict[str, Any] = {
+            "sha":   spec.sha256,
+            "scope": spec.scope,
+            "type":  spec.type,
+        }
+        persona = os.environ.get("SKILL_FORGE_PERSONA", "")
+        if persona:
+            details["persona"] = persona
+        # Layer 9 — caller-persona attribution. The bridge adapter exports
+        # CORVIN_CALLER_PERSONA per turn so the audit chain shows which
+        # cowork persona created / graded / promoted / deleted a skill.
+        # Empty value means the call ran without an attached persona
+        # (CLI use).
+        caller_persona = self.caller_persona or os.environ.get("CORVIN_CALLER_PERSONA") or ""
+        if caller_persona:
+            details["caller_persona"] = caller_persona
+        if extra:
+            details.update(extra)
+
+        path = self.audit_path()
+        if _write_event is not None:
+            try:
+                _write_event(
+                    path, action,
+                    tool=spec.name,
+                    details=details,
+                    hash_chain=self.hash_chain,
+                )
+                return
+            except OSError:
+                pass
+        # Fallback when forge isn't on PYTHONPATH at all.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as fh:
+            fh.write(json.dumps({
+                "ts": time.time(),
+                "event_type": action,
+                "tool": spec.name,
+                "details": details,
+            }) + "\n")
+
+
+def _render_skill_md(spec: SkillSpec, body_md: str) -> str:
+    """Render a SkillSpec + body into a SKILL.md with YAML front-matter.
+
+    The body may already start with ``---``-fenced front-matter; if it does
+    we trust the caller and pass it through. Otherwise we emit the canonical
+    block.
+    """
+    body_md = body_md.lstrip()
+    if body_md.startswith("---"):
+        return body_md if body_md.endswith("\n") else body_md + "\n"
+    fm_lines = [
+        "---",
+        f"name: {_yaml_quote(spec.name)}",
+        f"type: {_yaml_quote(spec.type)}",
+        f"description: {_yaml_quote(spec.description)}",
+        "claim:",
+    ]
+    for k, v in (spec.claim or {}).items():
+        fm_lines.append(f"  {_yaml_quote(str(k))}: {_yaml_quote(str(v))}")
+    fm_lines.append("references: []")
+    fm_lines.append("---")
+    fm_lines.append("")
+    fm = "\n".join(fm_lines) + "\n"
+    if not body_md.endswith("\n"):
+        body_md += "\n"
+    return fm + body_md

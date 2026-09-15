@@ -376,7 +376,7 @@ def test_broken_tier1_key_falls_back_to_tier0(monkeypatch, tmp_path):
 # outdir is given -- exactly the class of cross-process assumption this
 # server's env vars (CORVIN_HOME/CORVIN_TENANT_ID) already needed an
 # explicit workaround for. get_active_mcp_servers() now sets
-# CORVIN_IMAGE_OUTDIR explicitly (see operator/mcp_manager/tests/
+# CORVIN_IMAGE_OUTDIR explicitly (see corvin_operator/mcp_manager/tests/
 # test_mcp_m4.py::TestImageOutdirInjection) -- these tests prove the WRITE
 # side actually honours it, closing the round trip end to end.
 

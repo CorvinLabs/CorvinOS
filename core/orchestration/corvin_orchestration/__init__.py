@@ -9,9 +9,9 @@ without tripling stdio-JSON-RPC boilerplate:
   "workflow" engine per ADR-0190), driven directly via ``DAGRunner`` /
   ``resume_workflow`` — NOT the console's separate hand-rolled executor.
 - ``a2a_send`` / ``a2a_list_endpoints`` — instance-to-instance task
-  delegation (``operator/bridges/shared/remote_trigger_sender.py``).
+  delegation (``corvin_operator/bridges/shared/remote_trigger_sender.py``).
 - ``acs_delegate`` — the Autonomous Compute Shell delegation_loop engine
-  (``operator/bridges/shared/acs_engine_adapter.py::run_acs_workflow``).
+  (``corvin_operator/bridges/shared/acs_engine_adapter.py::run_acs_workflow``).
 
 Each of the three groups degrades independently and gracefully: if its
 external package isn't importable (e.g. a base install without the

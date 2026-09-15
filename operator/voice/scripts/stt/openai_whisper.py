@@ -85,7 +85,7 @@ def _load_env_value(key: str, env_path: Path) -> str | None:
     return None
 
 
-# WA-22: single canonical source of truth (operator/bridges/shared/secrets.py)
+# WA-22: single canonical source of truth (corvin_operator/bridges/shared/secrets.py)
 # — service.env is the ONE config file consulted; the second, independently
 # maintained ~/.config/corvin-voice/.env is retired (nothing writes to it
 # post-consolidation, and it drifted from service.env on every install this

@@ -2,7 +2,7 @@
 
 Companion to ``test_route_lock_nonblocking.py``, which covered the three
 ``fcntl.flock(LOCK_EX)`` calls that lived in the console package itself. The
-same defect class also sat in the ``operator/bridges/shared/`` registries the
+same defect class also sat in the ``corvin_operator/bridges/shared/`` registries the
 console routes import, plus the plugin registry:
 
   * ``engine_switch._save_store``          — PUT /settings/engine-pref/{chat_key}

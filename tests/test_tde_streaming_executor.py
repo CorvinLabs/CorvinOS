@@ -1,4 +1,4 @@
-"""Tests for TDE Phase 3 (partial): StreamingExecutor (operator/orchestration/tde/streaming_executor.py).
+"""Tests for TDE Phase 3 (partial): StreamingExecutor (corvin_operator/orchestration/tde/streaming_executor.py).
 
 Regression coverage for a round-4 finding: the module's own reason to exist
 (values >BIG_DATA_THRESHOLD, i.e. >1GB) was UNREACHABLE before this fix —

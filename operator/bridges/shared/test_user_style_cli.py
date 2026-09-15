@@ -1,6 +1,6 @@
 """End-to-end CLI tests for user_style.
 
-Drives ``python operator/bridges/shared/user_style.py <subcmd>``
+Drives ``python corvin_operator/bridges/shared/user_style.py <subcmd>``
 via subprocess against a tempdir sandbox. Verifies:
 
   - status returns valid JSON with all expected keys

@@ -21,7 +21,7 @@ User scope (``<corvin_home>/global/``) and project scope
 Run by ``corvin-session-timeout.timer`` (daily at 03:30 local) or by
 hand for a manual sweep:
 
-  python3 operator/voice/scripts/session_timeout_sweep.py [--ttl-days N]
+  python3 corvin_operator/voice/scripts/session_timeout_sweep.py [--ttl-days N]
 """
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ from pathlib import Path
 # module without copy-pasting its logic. Mirrors the layout the adapter
 # uses to import its own siblings.
 HERE = Path(__file__).resolve().parent
-PLUGIN_ROOT = HERE.parent  # operator/voice/
-# operator/bridges/shared/ lives next to operator/voice/, so step up once.
+PLUGIN_ROOT = HERE.parent  # corvin_operator/voice/
+# corvin_operator/bridges/shared/ lives next to corvin_operator/voice/, so step up once.
 SHARED_DIR = PLUGIN_ROOT.parent / "bridges" / "shared"
 sys.path.insert(0, str(SHARED_DIR))
 

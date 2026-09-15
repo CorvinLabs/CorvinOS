@@ -4,7 +4,7 @@ Dogfoods the skill's own rubric: Phase 1 (reachability — is the skill actually
 picked up by the real install mechanism, not just present on disk?) and Phase 2
 (a real subprocess run of the installer, not a direct import of its logic).
 
-No mocks: this runs the real ``operator/bundle/install.sh`` as a subprocess
+No mocks: this runs the real ``corvin_operator/bundle/install.sh`` as a subprocess
 against a throwaway ``$HOME``/``$CORVIN_HOME``, exactly as a fresh install would.
 """
 from __future__ import annotations

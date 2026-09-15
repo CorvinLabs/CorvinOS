@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Corvin-OS audit-rotation + retention at 03:15 local
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+AccuracySec=10min
+Persistent=true
+Unit=corvin-audit-rotate.service
+
+[Install]
+WantedBy=timers.target

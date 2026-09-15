@@ -37,7 +37,7 @@ from pathlib import Path
 # run standalone — same self-sufficiency pattern already used by
 # transcribe.py/say.py in this directory — so `corvin-voice doctor` works
 # whether invoked via the ops.launcher entry-point shim or directly as a
-# script (e.g. `python operator/voice/scripts/voice_doctor.py doctor`).
+# script (e.g. `python corvin_operator/voice/scripts/voice_doctor.py doctor`).
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _SHARED_DIR = (_SCRIPT_DIR / ".." / ".." / "bridges" / "shared").resolve()
 for _p in (_SCRIPT_DIR, _SHARED_DIR):

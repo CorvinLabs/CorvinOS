@@ -3,7 +3,7 @@
 Before this fix, ``healthz()`` did an unguarded dotted
 ``from operator.bridges.shared.engine_detection import ...`` at the top of
 the function body — that import can NEVER resolve (stdlib ``operator``
-always wins over the repo's ``operator/`` directory regardless of sys.path
+always wins over the repo's ``corvin_operator/`` directory regardless of sys.path
 order), so this unauthenticated liveness probe raised
 ``ModuleNotFoundError`` on every single call. The regression introduced by a
 commit literally titled "... Healthcheck" and went unnoticed since.

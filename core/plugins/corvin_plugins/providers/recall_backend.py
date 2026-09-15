@@ -23,7 +23,7 @@ _log = logging.getLogger("corvin.recall")
 # ── Default implementation ────────────────────────────────────────────────────
 
 class SqliteRecallBackend:
-    """Default: delegate to operator/bridges/shared/conversation_recall.py.
+    """Default: delegate to corvin_operator/bridges/shared/conversation_recall.py.
 
     Lazy-imports conversation_recall to avoid a hard dependency at module load
     time. Falls back to a no-op with a warning if the module is unavailable.
@@ -51,7 +51,7 @@ class SqliteRecallBackend:
                 # conversation_recall` succeed before this fallback is ever
                 # reached).
                 Path(__file__).resolve().parents[4]
-                / "operator/bridges/shared/conversation_recall.py",
+                / "corvin_operator/bridges/shared/conversation_recall.py",
             ]:
                 if _p.exists():
                     spec = importlib.util.spec_from_file_location(

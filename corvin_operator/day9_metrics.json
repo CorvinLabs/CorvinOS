@@ -1,0 +1,281 @@
+{
+  "timestamp": "2026-08-07T12:51:16.860367",
+  "day": 9,
+  "success_rate": 1.0,
+  "avg_latency_ms": 0.17621113608280817,
+  "p95_latency_ms": 0.2695270231924951,
+  "avg_memory_matches": 0.0,
+  "cache_hit_rate": 0.0,
+  "measurements": [
+    {
+      "task_id": 1,
+      "decision": "native",
+      "latency_ms": 0.9774189966265112,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 2,
+      "decision": "native",
+      "latency_ms": 0.2695270231924951,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 3,
+      "decision": "native",
+      "latency_ms": 0.18511901726014912,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 4,
+      "decision": "native",
+      "latency_ms": 0.16648400924168527,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 5,
+      "decision": "native",
+      "latency_ms": 0.15229699783958495,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 6,
+      "decision": "native",
+      "latency_ms": 0.15604301006533206,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 7,
+      "decision": "native",
+      "latency_ms": 0.14667600044049323,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 8,
+      "decision": "native",
+      "latency_ms": 0.21458399714902043,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 9,
+      "decision": "native",
+      "latency_ms": 0.15931899542920291,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 10,
+      "decision": "native",
+      "latency_ms": 0.14207701315172017,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 11,
+      "decision": "native",
+      "latency_ms": 0.13878100435249507,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 12,
+      "decision": "native",
+      "latency_ms": 0.13735902030020952,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 13,
+      "decision": "native",
+      "latency_ms": 0.133730995003134,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 14,
+      "decision": "native",
+      "latency_ms": 0.132348999613896,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 15,
+      "decision": "native",
+      "latency_ms": 0.13121598749421537,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 16,
+      "decision": "native",
+      "latency_ms": 0.133730995003134,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 17,
+      "decision": "native",
+      "latency_ms": 0.12835199595429003,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 18,
+      "decision": "native",
+      "latency_ms": 0.1312569947913289,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 19,
+      "decision": "native",
+      "latency_ms": 0.1347539946436882,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 20,
+      "decision": "native",
+      "latency_ms": 0.1336109999101609,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 21,
+      "decision": "native",
+      "latency_ms": 0.13127701822668314,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 22,
+      "decision": "native",
+      "latency_ms": 0.14509298489429057,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 23,
+      "decision": "native",
+      "latency_ms": 0.20640800357796252,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 24,
+      "decision": "native",
+      "latency_ms": 0.13348102220334113,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 25,
+      "decision": "native",
+      "latency_ms": 0.12337201042100787,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 26,
+      "decision": "native",
+      "latency_ms": 0.12800999684259295,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 27,
+      "decision": "native",
+      "latency_ms": 0.1296339905820787,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 28,
+      "decision": "native",
+      "latency_ms": 0.12592700659297407,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 29,
+      "decision": "native",
+      "latency_ms": 0.12392300413921475,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    },
+    {
+      "task_id": 30,
+      "decision": "native",
+      "latency_ms": 0.1345229975413531,
+      "memory_matches": 0,
+      "confidence": 0.0,
+      "cache_hit": false,
+      "success": true
+    }
+  ]
+}

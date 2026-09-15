@@ -8,7 +8,7 @@ inline-notice integration in process_one is exercised by the existing
 adapter tests (test_adapter_parallel etc.) which set
 ADAPTER_DISABLE_VOICE=1 and don't go through synthesize at all.
 
-Run: python3 operator/bridges/shared/test_voice_quota.py
+Run: python3 corvin_operator/bridges/shared/test_voice_quota.py
 """
 from __future__ import annotations
 

@@ -11,7 +11,7 @@ Covers:
 - Compute counter: concurrent access (flock)
 - security_events.py: new events registered
 
-Run from the operator/ directory:
+Run from the corvin_operator/ directory:
     python -m pytest bridges/shared/test_resource_quotas.py -v
 """
 from __future__ import annotations
@@ -26,11 +26,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 # ── Path bootstrap ────────────────────────────────────────────────────────────
-# _HERE = operator/bridges/shared/
-# _OPERATOR = operator/  (parents[1])
+# _HERE = corvin_operator/bridges/shared/
+# _OPERATOR = corvin_operator/  (parents[1])
 
 _HERE = Path(__file__).resolve().parent
-_OPERATOR = _HERE.parents[1]  # operator/
+_OPERATOR = _HERE.parents[1]  # corvin_operator/
 
 for _p in [
     str(_OPERATOR),                       # enables  import license.xxx

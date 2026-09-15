@@ -10,7 +10,7 @@ E2E covering the `voice_audit.py verify --notify-bridge` path:
   4. Negative-control: a clean chain → exit 0 + no envelope.
   5. Negative-control: relay disabled / missing → exit 1 + no envelope.
 
-Run as: python3 operator/voice/scripts/test_audit_verify_notify.py
+Run as: python3 corvin_operator/voice/scripts/test_audit_verify_notify.py
 """
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 
 Why a bridge and not a bare import
 ----------------------------------
-``operator/skill-forge/`` is not guaranteed to be on ``sys.path``: it is
+``corvin_operator/skill-forge/`` is not guaranteed to be on ``sys.path``: it is
 there for the console service (PYTHONPATH) but not for a plain ``pytest``
 run or a CLI invocation of this package. A normal import is tried first and
 a load from the explicit file location is the fallback, so the Skill-Creator
@@ -66,14 +66,14 @@ class RegistryUnavailable(RuntimeError):
 
 
 def _repo_root() -> Path:
-    # operator/skill_creator/registry_bridge.py → <repo>
+    # corvin_operator/skill_creator/registry_bridge.py → <repo>
     return Path(__file__).resolve().parents[2]
 
 
 def _load_registry_module():
     """Return the SkillForge registry module.
 
-    Tries a normal import first; when ``operator/skill-forge`` is not on
+    Tries a normal import first; when ``corvin_operator/skill-forge`` is not on
     ``sys.path`` the package is loaded from its explicit file location under
     a private name, with ``submodule_search_locations`` set so the registry's
     own relative imports (``from .linter import lint``) resolve inside it.

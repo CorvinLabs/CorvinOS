@@ -438,7 +438,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # (canary-drift) and 30.3 (output-sentinel) register their own
     # event-types when they land. Metadata only — manifest body /
     # binary bytes / output text NEVER in chain. Per-event allow-list
-    # in operator/bridges/shared/engine_trust.py.
+    # in corvin_operator/bridges/shared/engine_trust.py.
     "engine.trust_tier_violated":    "WARNING",
     "engine.trust_manifest_expired": "WARNING",
     "engine.binary_hash_mismatch":   "WARNING",
@@ -446,7 +446,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-0020 Layer 30 Phase 30.2 — Refusal-Canary-Loop.
     # Daily-probed engine refusal scores + drift detection. Metadata
     # only — probe text / LLM output / verdict text NEVER in chain.
-    # Per-event allow-list in operator/voice/scripts/engine_canary.py.
+    # Per-event allow-list in corvin_operator/voice/scripts/engine_canary.py.
     "engine.refusal_probe_completed": "INFO",
     "engine.refusal_probe_failed":    "WARNING",
     "engine.canary_probes_updated":   "INFO",
@@ -454,7 +454,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-0020 Layer 30 Phase 30.3 — Output-Sentinel.
     # Per-spawn second-sight LLM judge against assistant output.
     # Metadata only — judge verdict text + LLM output NEVER in chain.
-    # Per-event allow-list in operator/bridges/shared/output_sentinel.py.
+    # Per-event allow-list in corvin_operator/bridges/shared/output_sentinel.py.
     "engine.sentinel_blocked":      "WARNING",
     "engine.sentinel_passed":       "INFO",
     "engine.sentinel_unparseable":  "WARNING",
@@ -463,7 +463,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # only — dependency lists, CVE bodies, exploit text, signature
     # bytes, private keys NEVER in chain. Per-event allow-list in
     # core/gateway/corvin_gateway/sbom.py and
-    # operator/voice/scripts/supply_chain_verify.py.
+    # corvin_operator/voice/scripts/supply_chain_verify.py.
     "supply_chain.sbom_verified":           "INFO",
     "supply_chain.sbom_missing":            "WARNING",
     "supply_chain.dep_hashes_updated":      "INFO",
@@ -490,7 +490,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # Layer-29 companion — per-chat worker-engine preference switch.
     # Metadata only — engine_id + model alias land in the chain; no
     # prompt / output / user-free-text. Per-event allow-list in
-    # operator/bridges/shared/engine_switch.py::_AUDIT_ALLOWED.
+    # corvin_operator/bridges/shared/engine_switch.py::_AUDIT_ALLOWED.
     "engine.pref_switched":                 "INFO",
     # ADR-0052 F1 — Compliance Assertion Layer (CAL)
     # Emitted when a CAL predicate denies an action. CRITICAL severity ensures
@@ -840,7 +840,7 @@ def _current_tenant_id() -> str:
             except ImportError:
                 # Loaded as a top-level module (adapter runtime): the sibling
                 # tenants.py — but NOT the 3-line compat stub at
-                # operator/forge/tenants.py, which has no resolver.
+                # corvin_operator/forge/tenants.py, which has no resolver.
                 import tenants as _t  # type: ignore[import]
                 current_tenant = getattr(_t, "current_tenant", None)
         if current_tenant is not None:
@@ -2439,7 +2439,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "action", "target_id", "target_type", "tenant_id", "sid_fingerprint", "ok", "reason_code", "reason",
     }),
     # ── R4-A: GDPR Art. 17 erasure (L36, ADR-0045) ──────────────────────────
-    # The orchestrator (operator/bridges/shared/erasure_orchestrator.py) built a
+    # The orchestrator (corvin_operator/bridges/shared/erasure_orchestrator.py) built a
     # careful metadata-only vocabulary — a closed ``ReasonCode`` enum, a
     # fail-closed ``_assert_safe_audit_value`` that refuses any value carrying a
     # path separator or exception shape — and then had NO allowlist here, so the
@@ -2498,7 +2498,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "audit.unseal_requested": frozenset({
         "sealed_segment", "requester", "sealer_cmd",
     }),
-    # ── R4-B: supply-chain verifier (operator/voice/scripts/supply_chain_verify.py)
+    # ── R4-B: supply-chain verifier (corvin_operator/voice/scripts/supply_chain_verify.py)
     # It carries its own ``_ALLOWED_FIELDS`` map and never registered it here, so
     # ``supply_chain.cve_detected`` reached the chain without ``cve_id`` or
     # ``package_name`` and ``capability_drift`` landed empty. Mirrored verbatim.
@@ -2602,7 +2602,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "compute.checkpoint_written": frozenset({
         "checkpoint_path_hash", "epoch", "run_id", "tenant_id",
-        # A SECOND emitter, operator/bridges/shared/compute_awp_importer.py:732
+        # A SECOND emitter, corvin_operator/bridges/shared/compute_awp_importer.py:732
         # (awpkg watermark restore), carries the checkpoint's file NAME and a
         # controlled provenance token instead of a run/epoch. The floor is the
         # UNION of what every legitimate emitter needs — an allowlist narrower
@@ -3550,7 +3550,7 @@ def write_event(
                         # ADR-0215 F5: the dotted `from operator.bridges.shared
                         # import ...` primary attempt below can NEVER
                         # resolve (stdlib `operator` always shadows the
-                        # repo's operator/ directory) — this whole block is
+                        # repo's corvin_operator/ directory) — this whole block is
                         # best-effort already, so a self-contained
                         # sys.path insert (rather than relying on some
                         # other module having already done it) makes the
@@ -4143,7 +4143,7 @@ def verify_chain(path: Path, *, initial_prev: str = "",
     # NOT a rule here: "the genesis carries a mac, therefore the chain can have
     # no legacy prefix". It reads well and is false — a legacy install really
     # does carry a hash-less prefix, and its FIRST chained record is written
-    # today, hence mac'd (operator/forge/tests/test_tenant_migration_roundtrip.py
+    # today, hence mac'd (corvin_operator/forge/tests/test_tenant_migration_roundtrip.py
     # R5 is exactly that shape). The mac on the genesis dates the genesis, not
     # the prefix. The recorded prefix LENGTH above is the discriminator: it is
     # frozen when the chain is first anchored, and it lives beside the anchor

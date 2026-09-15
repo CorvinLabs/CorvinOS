@@ -12,7 +12,7 @@ Ship-dark behind the SAME ``cel_load_bearing_anchor`` flag (default OFF).
 Tests measure the SUM ("is the option text present?"), never an internal trace.
 
 Run: .venv/bin/python -m pytest \
-     operator/context_engineering/tests/test_decision_point_anchor.py
+     corvin_operator/context_engineering/tests/test_decision_point_anchor.py
 """
 from __future__ import annotations
 

@@ -513,7 +513,7 @@ def _set_telemetry_config(key: str, value: str) -> int:
         import yaml  # type: ignore[import]
 
         # corvin_console FIRST: importing it runs _operator_bootstrap, which puts the
-        # vendored operator/ subtrees on sys.path. `forge` is a bare import that only
+        # vendored corvin_operator/ subtrees on sys.path. `forge` is a bare import that only
         # resolves afterwards. With the two lines the other way round this whole
         # function died on a fresh wheel install with "telemetry config requires the
         # console extras: No module named 'forge'" — i.e. the exact command the boot
@@ -601,7 +601,7 @@ def _set_feature_flag_config(key: str, value: str) -> int:
 
     try:
         # corvin_console FIRST — importing it runs _operator_bootstrap, which puts
-        # the vendored operator/ subtrees on sys.path so the bare `forge` import
+        # the vendored corvin_operator/ subtrees on sys.path so the bare `forge` import
         # below resolves on a wheel install. Same ordering hazard as
         # _set_telemetry_config; see its docstring for the incident.
         from corvin_console import feature_flags  # noqa: PLC0415
@@ -851,7 +851,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _compliance_cmd.add_parser(sub)
 
     # skill + skill-sync (ADR-0446) — tenant-native skill management CLI,
-    # bridged from the click-based operator/cli groups. Purely additive: the
+    # bridged from the click-based corvin_operator/cli groups. Purely additive: the
     # verbs are inert until explicitly typed, so a default install is unchanged.
     from . import skill_cmd as _skill_cmd
     _skill_cmd.add_parser(sub)

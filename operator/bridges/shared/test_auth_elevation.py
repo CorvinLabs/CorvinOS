@@ -13,8 +13,8 @@ Each test exercises the gate from a different angle:
   case 6  audit chain carries auth.elevation_grant / .required / .revoke
           events; verify_chain stays clean
 
-The hook lives at operator/voice/hooks/auth_elevation_gate.py. The library
-that owns the elevation-store is operator/bridges/shared/auth_elevation.py.
+The hook lives at corvin_operator/voice/hooks/auth_elevation_gate.py. The library
+that owns the elevation-store is corvin_operator/bridges/shared/auth_elevation.py.
 The two are wired with the same on-disk store
 (``<corvin_home>/global/auth/elevation.json``).
 """

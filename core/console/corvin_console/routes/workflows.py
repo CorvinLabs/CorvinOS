@@ -119,7 +119,7 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
     def _guard_prompt_head(_text):  # type: ignore[misc]
         raise RuntimeError(
             "shared claude-CLI prompt guard unavailable "
-            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "(corvin_operator/bridges/shared/prompt_guard.py) - refusing to build an "
             "unguarded `claude -p` payload"
         )
 
@@ -3512,7 +3512,7 @@ def start_run(
     # client before any node spawns. dry_run spawns no claude → exempt. The two
     # gates are orthogonal: concurrency (above) and daily volume (here).
     if not body.dry_run:
-        from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
+        from license.capability_api import require_capability, LicenseDenied  # noqa: PLC0415
 
         enforce_compute_quota(
             rec.tenant_id, rec.sid_fingerprint,

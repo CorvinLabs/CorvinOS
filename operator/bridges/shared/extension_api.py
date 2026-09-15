@@ -11,9 +11,9 @@ Public import path
 ==================
 The ADR text uses ``from corvin.extension import ...`` as the conceptual
 name. CorvinOS has **no** importable top-level ``corvin`` package today
-(``operator/`` is deliberately not packaged because it shadows the stdlib
+(``corvin_operator/`` is deliberately not packaged because it shadows the stdlib
 ``operator`` module), so the real, supported import path mirrors the existing
-``engine_trust`` convention: callers insert ``operator/bridges/shared`` on
+``engine_trust`` convention: callers insert ``corvin_operator/bridges/shared`` on
 ``sys.path`` and ``import extension_api`` (and ``import extension_registry``).
 See ``docs/claude-ref`` for the documented seam.
 
@@ -60,7 +60,7 @@ def _resolve_audit_writer():
     """Return ``(write_event, audit_path_fn)`` from the forge plugin, or
     ``(None, None)`` when forge is not importable (standalone mode).
 
-    Mirrors operator/bridges/shared/audit.py exactly: insert operator/forge
+    Mirrors corvin_operator/bridges/shared/audit.py exactly: insert corvin_operator/forge
     on sys.path then import forge.security_events. The audit-chain path is the
     unified, scope-independent chain at ``<corvin_home>/global/forge/audit.jsonl``
     (env override ``VOICE_AUDIT_PATH`` / ``FORGE_ROOT`` honoured by audit.py).

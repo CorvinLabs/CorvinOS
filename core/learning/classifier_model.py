@@ -30,9 +30,9 @@ from core.learning.task_features import TaskFeatureExtractor, FeatureVector
 logger = logging.getLogger(__name__)
 
 def import_context_engineering():
-    """Return the ``context_engineering`` package (operator/context_engineering).
+    """Return the ``context_engineering`` package (corvin_operator/context_engineering).
 
-    ``operator/`` has no ``__init__.py`` and always loses to the stdlib
+    ``corvin_operator/`` has no ``__init__.py`` and always loses to the stdlib
     ``operator`` module, so ``from operator.context_engineering ...`` can NEVER
     resolve (ADR-0215 F1). The package is importable under its own top-level
     name once it has been registered — the console does this at boot
@@ -52,7 +52,7 @@ def import_context_engineering():
     cel_dir = Path(__file__).resolve().parents[2] / "operator" / "context_engineering"
     init = cel_dir / "__init__.py"
     if not init.is_file():
-        raise ImportError("context_engineering package not found (operator/context_engineering)")
+        raise ImportError("context_engineering package not found (corvin_operator/context_engineering)")
     spec = _ilu.spec_from_file_location(
         "context_engineering", str(init), submodule_search_locations=[str(cel_dir)]
     )

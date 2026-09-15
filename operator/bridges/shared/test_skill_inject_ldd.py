@@ -11,7 +11,7 @@ they become eligible for injection, and asserts that the filter:
   - profile.ldd_enabled=False  → master kill per chat
   - auto_grade respects the same filter (no grades flow to OFF layers)
 
-Run as: python3 operator/bridges/shared/test_skill_inject_ldd.py
+Run as: python3 corvin_operator/bridges/shared/test_skill_inject_ldd.py
 """
 from __future__ import annotations
 

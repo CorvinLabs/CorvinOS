@@ -7,7 +7,7 @@ covers. Without a Windows-specific candidate list, a bare "claude"
 spawn on a Windows box whose PATH lacks the npm global bin dir raises
 FileNotFoundError even though the CLI is installed.
 
-Run with: python3 operator/bridges/shared/agents/test_claude_bin_resolution.py
+Run with: python3 corvin_operator/bridges/shared/agents/test_claude_bin_resolution.py
 """
 from __future__ import annotations
 

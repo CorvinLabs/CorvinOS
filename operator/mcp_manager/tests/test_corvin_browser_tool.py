@@ -1,4 +1,4 @@
-"""Tests for the ADR-0193 corvin-browser MCP server (operator/mcp_manager/
+"""Tests for the ADR-0193 corvin-browser MCP server (corvin_operator/mcp_manager/
 servers/corvin-browser/main.py).
 
 Adversarial-review regression coverage (round 2 found this module had ZERO

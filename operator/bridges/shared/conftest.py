@@ -1,4 +1,4 @@
-"""conftest.py — pytest session fixtures for operator/bridges/shared/ tests.
+"""conftest.py — pytest session fixtures for corvin_operator/bridges/shared/ tests.
 
 Autouse fixture 1: reset CLAG shadow hashes before each test so that
 cross-test shadow contamination does not produce false ChainIntegrityFailure
@@ -39,7 +39,7 @@ test in either file runs, `ADAPTER_BRIDGES_DIR` stays set in os.environ
 for the REST OF THE PYTEST PROCESS, pointing at a now-deleted temp dir.
 `test_adapter_security_hardening.py::test_whitelist_missing_logs_warning`
 (and 10 sibling tests) write their fixture settings to the REAL
-`operator/bridges/telegram/settings.json` (no ADAPTER_BRIDGES_DIR of
+`corvin_operator/bridges/telegram/settings.json` (no ADAPTER_BRIDGES_DIR of
 their own) — but `adapter._load_channel_settings()` honours the leaked,
 stale ADAPTER_BRIDGES_DIR first, resolves to the deleted temp dir, gets
 FileNotFoundError, and returns `{}` — silently the wrong config source.

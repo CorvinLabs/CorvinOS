@@ -24,7 +24,7 @@ from corvin_console.routes import compute as compute_mod  # noqa: E402
 from forge import security_events as se  # noqa: E402
 
 # The tde.* details vocabulary is owned by the emitter module
-# (operator/orchestration/tde/tde_audit.py) and registered with the writer's
+# (corvin_operator/orchestration/tde/tde_audit.py) and registered with the writer's
 # ADR-0129/ADR-0640 positive allowlist at ITS import — the floor is
 # default-deny, so without this every ``tde_run_id`` below would be dropped on
 # write and the route would 404 on a run that is right there in the chain

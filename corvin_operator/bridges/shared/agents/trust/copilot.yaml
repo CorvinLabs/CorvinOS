@@ -1,0 +1,31 @@
+apiVersion: corvin/v1
+kind: EngineTrust
+metadata:
+  engine_id: copilot
+  trust_tier: medium
+  evaluated_at: "2026-05-31T00:00:00Z"
+  evaluated_against: "GitHub Copilot CLI v1.0.56+ (copilot -p, gpt-4o backend)"
+  valid_until: "2026-11-30T00:00:00Z"
+spec:
+  binary_sha256: null
+  jailbreak_resistance: 0.78
+  system_prompt_respect: 0.80
+  tool_call_fidelity: 0.82
+  tested_refusal_classes:
+    - harmful_content
+    - prompt_injection
+  notes: |
+    CopilotCliEngine wraps GitHub Copilot CLI (worker-only / delegation-only,
+    ADR-0071). Locality: us_cloud (GitHub Copilot infrastructure).
+    Trust-Tier "medium": worker-only engine — lacks /btw, hooks, and skills
+    for OS-turns. Not suitable for CONFIDENTIAL-classified tasks.
+
+    Zero incremental cost for Copilot Business/Enterprise subscribers.
+    Auth: ~/.copilot/config.json or GH_TOKEN env var.
+
+    binary_sha256: null until operator pins the installed copilot binary.
+    Operator can pin via: sha256sum $(which copilot) and set it in
+    <corvin_home>/global/engine_trust/copilot.yaml.
+
+    Task-type steering: pass model="shell"|"git"|"gh" to get prompt-prefix
+    optimisation for those task types (ADR-0071 ECI).

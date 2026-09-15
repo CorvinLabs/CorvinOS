@@ -29,7 +29,7 @@ Every test holds the lock from an INDEPENDENT file description — exactly what 
 foreign process holding it looks like to ``flock`` — and every compliance site
 additionally asserts the busy path did not GRANT anything.
 
-Run:  cd operator/bridges && ../../.venv/bin/python shared/test_registry_lock_nonblocking.py
+Run:  cd corvin_operator/bridges && ../../.venv/bin/python shared/test_registry_lock_nonblocking.py
 """
 from __future__ import annotations
 

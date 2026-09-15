@@ -6,7 +6,7 @@ a third, it calls forge_list to see what's there. Verifies the wire
 shape: tools/list contains forge_list, tools/call returns the two
 existing tools as structured content, scope filter narrows the result.
 
-Run: python3 operator/forge/tests/test_forge_list.py
+Run: python3 corvin_operator/forge/tests/test_forge_list.py
 """
 from __future__ import annotations
 

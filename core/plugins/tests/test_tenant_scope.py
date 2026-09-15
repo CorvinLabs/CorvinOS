@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-# The real hash-chained writer lives in `operator/bridges/shared/audit.py`, which
+# The real hash-chained writer lives in `corvin_operator/bridges/shared/audit.py`, which
 # is not on the path of a bare pytest run. Without this the audit assertion below
 # passes through `_default_audit_emit`'s ImportError branch and the refusal looks
 # unaudited — a test failure that says nothing about the code under test. Same

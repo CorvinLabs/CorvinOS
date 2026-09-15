@@ -7,7 +7,7 @@ Replaces the Phase-2 placeholders with executable engines:
 - ClaudeCodeLocalEngine  — sequential local execution with full context
   (the "no delegation" baseline; every step runs in-process).
 - AcsEngineBridge        — bridges to the existing ACS runtime
-  (operator/bridges/shared/acs_engine_adapter.run_acs_workflow). When the
+  (corvin_operator/bridges/shared/acs_engine_adapter.run_acs_workflow). When the
   ACS stack is unavailable it returns an explicit error result — it never
   fakes success.
 
@@ -64,7 +64,7 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
     def _guard_prompt_head(_text):  # type: ignore[misc]
         raise RuntimeError(
             "shared claude-CLI prompt guard unavailable "
-            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "(corvin_operator/bridges/shared/prompt_guard.py) - refusing to build an "
             "unguarded `claude -p` payload"
         )
 
@@ -331,7 +331,7 @@ def _license_corvin_home() -> Path:
     """Resolve corvin_home the same way the other quota chokepoints do
     (forge.paths → env → ~/.corvin), so TDE charges the SAME counter file
     as ACS / compute runs."""
-    _op_root = Path(__file__).resolve().parents[2]  # operator/
+    _op_root = Path(__file__).resolve().parents[2]  # corvin_operator/
     for _p in (str(_op_root), str(_op_root / "forge")):
         if _p not in sys.path:
             sys.path.insert(0, _p)

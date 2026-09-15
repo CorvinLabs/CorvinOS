@@ -30,9 +30,9 @@ _PYTHONPATH_DIRS = [
     "core/gateway",
     "core/license",
     "core/compliance",
-    "operator/forge",
-    "operator/skill-forge",
-    "operator/bridges/shared",
+    "corvin_operator/forge",
+    "corvin_operator/skill-forge",
+    "corvin_operator/bridges/shared",
     # core/plugins (the PARENT dir) makes bare `import plugin_builder` find
     # core/plugins/plugin_builder/__init__.py — mirroring the wheel build's
     # path remap of that directory to top-level plugin_builder/. This list

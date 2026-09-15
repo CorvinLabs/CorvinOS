@@ -18,7 +18,7 @@ def _quality_layers_path() -> Path:
     Path.home()/.corvin constant ignored CORVIN_HOME and froze at import
     (path-audit 2026-06-25 #MEDIUM5)."""
     try:
-        from paths import corvin_home as _ch  # operator/bridges/shared/paths.py
+        from paths import corvin_home as _ch  # corvin_operator/bridges/shared/paths.py
         home = _ch()
     except Exception:  # noqa: BLE001
         env = os.environ.get("CORVIN_HOME")

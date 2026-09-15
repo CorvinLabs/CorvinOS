@@ -33,7 +33,7 @@ _WORKER_TIMEOUT_S = 120
 
 # ── shared prompt neutraliser (R3-C2, adversarial review 2026-09-07) ─────────
 # The step prompt handed to `claude -p` here still originates, transitively,
-# from operator/chat text. The CLI expands `@<path>` into that file's CONTENT
+# from corvin_operator/chat text. The CLI expands `@<path>` into that file's CONTENT
 # client-side, anywhere in the message, before the model runs — no tool policy
 # (`--disallowedTools "*"` included) restricts it. Route the prompt through the
 # ONE shared helper. Fail-closed: no helper ⇒ no spawn (see `_run_worker`).

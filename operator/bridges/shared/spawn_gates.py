@@ -590,8 +590,8 @@ def _load_l35_gate(tenant_id: str, corvin_home: "Path | None"):
     if gate is not None and mtime > 0.0:
         try:
             import sys as _sys
-            # operator/bridges/shared/ → parents[2] == operator/, then /license.
-            # (parents[1] would be operator/bridges, which has no license/ — that
+            # corvin_operator/bridges/shared/ → parents[2] == corvin_operator/, then /license.
+            # (parents[1] would be corvin_operator/bridges, which has no license/ — that
             # import-fail would silently cache a ratchet-less gate.)
             _lic_dir = str(Path(__file__).resolve().parents[2] / "license")
             if _lic_dir not in _sys.path:

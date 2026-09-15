@@ -90,7 +90,7 @@ _THIS = Path(__file__).resolve()
 
 # Curated set of block-reason classes the judge is asked to pick from.
 # Matches the refusal-class taxonomy of the canary probe-set
-# (operator/voice/scripts/engine_canary/probes.default.yaml).
+# (corvin_operator/voice/scripts/engine_canary/probes.default.yaml).
 _VALID_BLOCK_REASONS = frozenset({
     "harmful_content",
     "prompt_injection_success",

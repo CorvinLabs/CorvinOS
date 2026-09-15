@@ -5,7 +5,7 @@ active skill set, suitable for prepending to a worker engine's prompt.
 
 This is the **engine-agnostic equivalent** of the Claude-Code-only
 ``--append-system-prompt`` block that
-``operator/bridges/shared/skill_inject.py`` produces for the bridge
+``corvin_operator/bridges/shared/skill_inject.py`` produces for the bridge
 adapter. We reuse the **same skill-selection logic** (so a skill the OS
 layer would inject for a Claude turn lands in a Codex/OpenCode delegate
 spawn too) but wrap it in a distinct ``<delegated_skill>`` tag and a
@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Optional skill_inject import (lives in operator/bridges/shared/)
+# Optional skill_inject import (lives in corvin_operator/bridges/shared/)
 # ---------------------------------------------------------------------------
 
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]

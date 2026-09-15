@@ -41,7 +41,7 @@ class _Sandbox:
         self._saved["CORVIN_HOME"] = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = str(self.home)
         # Make sure the forge package is importable for audit-chain
-        # round-trip checks. We walk up to find operator/forge — same
+        # round-trip checks. We walk up to find corvin_operator/forge — same
         # heuristic the production engine_switch._audit uses.
         here = Path(__file__).resolve()
         for parent in here.parents:

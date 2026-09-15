@@ -33,8 +33,8 @@ _BOOT = r'''
 import json, os, sys
 home = os.environ["HOME_DIR"]
 for p in ["core/console", "core/gateway", "core/license", "core/compliance",
-          "core/plugins", "operator/forge", "operator/skill-forge",
-          "operator/bridges/shared"]:
+          "core/plugins", "corvin_operator/forge", "corvin_operator/skill-forge",
+          "corvin_operator/bridges/shared"]:
     sys.path.append(os.path.join(os.environ["REPO"], p))
 
 from corvin_compliance_reports import tripwire
@@ -101,7 +101,7 @@ def test_a_second_assert_reruns_for_a_different_chain(tmp_path):
 def test_failure_is_never_recorded_as_asserted(tmp_path, monkeypatch):
     """A refused boot must not be skippable by a later caller."""
     import sys as _sys
-    for p in ("operator/forge", "operator/bridges/shared", "core/compliance"):
+    for p in ("corvin_operator/forge", "corvin_operator/bridges/shared", "core/compliance"):
         _p = str(_REPO / p)
         if _p not in _sys.path:
             _sys.path.append(_p)

@@ -1,0 +1,408 @@
+PS C:\Users\sjurk\projects\CorvinOS> git pull
+remote: Enumerating objects: 12, done.
+remote: Counting objects: 100% (12/12), done.
+remote: Compressing objects: 100% (1/1), done.
+remote: Total 7 (delta 5), reused 7 (delta 5), pack-reused 0 (from 0)
+Unpacking objects: 100% (7/7), 1.30 KiB | 88.00 KiB/s, done.
+From https://github.com/CorvinLabs/CorvinOS
+   03cb057b..044344f6  main       -> origin/main
+Updating 03cb057b..044344f6
+Fast-forward
+ corvinOS/installer/core.py | 35 ++++++++++++++++++++++++-----------
+ operator/__init__.py       |  1 +
+ 2 files changed, 25 insertions(+), 11 deletions(-)
+ create mode 100644 operator/__init__.py
+PS C:\Users\sjurk\projects\CorvinOS> .\install.ps1 -Editable .\
+
+CorvinOS installer -- self-hosted, local-first AI voice agent
+  uv 0.11.26 -- OK
+  Installing CorvinOS (editable) from C:\Users\sjurk\projects\CorvinOS ...
+Resolved 89 packages in 404ms
+      Built corvinos @ file:///C:/Users/sjurk/projects/CorvinOS
+Prepared 1 package in 1.67s
+Installed 89 packages in 4.03s
+ + aiohappyeyeballs==2.7.1
+ + aiohttp==3.14.3
+ + aiosignal==1.4.0
+ + annotated-doc==0.0.5
+ + annotated-types==0.8.0
+ + anthropic==1.5.0
+ + anyio==4.15.1
+ + attrs==26.1.0
+ + blinker==1.9.0
+ + certifi==2026.7.22
+ + cffi==2.1.1
+ + charset-normalizer==3.5.1
+ + click==8.5.0
+ + cloudpickle==3.1.2
+ + colorama==0.4.6
+ + corvinos==2.0.0 (from file:///C:/Users/sjurk/projects/CorvinOS)
+ + cryptography==50.0.1
+ + docstring-parser==0.18.0
+ + edge-tts==7.2.8
+ + fastapi==0.141.1
+ + flask==3.1.3
+ + flask-cors==6.0.5
+ + flatbuffers==25.12.19
+ + frozenlist==1.8.0
+ + greenlet==3.5.5
+ + h11==0.16.0
+ + httpcore==1.0.9
+ + httpcore2==2.12.0
+ + httptools==0.8.0
+ + httpx==0.28.1
+ + httpx2==2.12.0
+ + idna==3.19
+ + imageio-ffmpeg==0.6.0
+ + itsdangerous==2.2.0
+ + jinja2==3.1.6
+ + jiter==0.17.0
+ + joblib==1.6.0
+ + jsonschema==4.26.0
+ + jsonschema-specifications==2025.9.1
+ + markupsafe==3.0.3
+ + mcp==2.2.0
+ + mcp-types==2.2.0
+ + multidict==6.8.0
+ + narwhals==2.26.0
+ + numpy==2.5.3
+ + onnxruntime==1.30.0
+ + openai==3.13.0
+ + opentelemetry-api==1.44.0
+ + packaging==26.3
+ + pathvalidate==3.3.1
+ + pillow==12.3.0
+ + piper-tts==1.8.0
+ + platformdirs==4.11.8
+ + playwright==1.62.0
+ + propcache==0.5.2
+ + protobuf==7.36.1
+ + pycparser==3.0
+ + pydantic==2.13.5
+ + pydantic-core==2.46.5
+ + pyee==13.0.1
+ + pyjwt==2.14.0
+ + python-dotenv==1.2.3
+ + python-multipart==0.0.32
+ + pywhispercpp==1.5.1
+ + pywin32==312
+ + pyyaml==6.0.3
+ + qrcode==8.2
+ + referencing==0.37.0
+ + reportlab==5.0.1
+ + requests==2.34.2
+ + rpds-py==2026.6.3
+ + scikit-learn==1.9.1
+ + scipy==1.18.1
+ + semver==3.1.0
+ + sniffio==1.3.1
+ + sse-starlette==3.4.11
+ + starlette==1.6.0
+ + tabulate==0.10.0
+ + threadpoolctl==3.6.0
+ + tqdm==4.70.1
+ + truststore==0.10.4
+ + typing-extensions==4.16.0
+ + typing-inspection==0.4.4
+ + urllib3==2.7.0
+ + uvicorn==0.53.0
+ + watchfiles==1.2.0
+ + websockets==17.1
+ + werkzeug==3.1.8
+ + yarl==1.24.5
+Installed 21 executables: corvin, corvin-a2a, corvin-flow, corvin-id, corvin-install, corvin-instance-id, corvin-layer, corvin-license-debug, corvin-live-collector, corvin-maintainer, corvin-preset-setup, corvin-restore, corvin-run, corvin-serve, corvin-service, corvin-uninstall, corvin-voice, corvin-wdat-report, corvinos, corvinos-run, corvinos-serve
+
+  Package installed.
+  Claude Code found at C:\Users\sjurk\.local\bin\claude.exe
+
+  Launching setup wizard ...
+
+
+[Installer Mode] QUICK (--quick-install=True)
+
+============================================================
+CorvinOS Installer
+============================================================
+Python  : 3.14.6
+Repo    : C:\Users\sjurk\projects\CorvinOS
+OS      : windows
+Pkg mgr : winget
+systemd : False
+
+[Step 2] Creating directories...
+  ✓ C:\Users\sjurk\projects\CorvinOS\.corvin
+  ✓ C:\Users\sjurk\.config\corvin-voice
+  ✓ C:\Users\sjurk\projects\CorvinOS\.corvin\logs
+  ✓ C:\Users\sjurk\projects\CorvinOS\.corvin\sessions
+  ✓ C:\Users\sjurk\projects\CorvinOS\.corvin\bridges
+  ✓ C:\Users\sjurk\projects\CorvinOS\.corvin\tenants\_default\global
+  ✓ C:\Users\sjurk\.config\corvin-voice\profile.json (defaults seeded)
+
+[Step 3] System dependencies...
+  ℹ Skipping system tools on Windows — ffmpeg is bundled automatically (imageio-ffmpeg) for TTS/voice-note conversion; install jq manually only if you need it for shell scripts.
+✓ node v24.18.0 + npm
+
+[Step 4] Claude Code CLI...
+✓ Claude Code already installed: 2.1.250 (Claude Code)
+
+[Step 5] Claude Code login...
+✓ Claude Code logged in (C:\Users\sjurk\.claude\.credentials.json)
+
+[Step 6] Hermes (Ollama) engine bootstrap...
+  ⚠ Hermes bootstrap skipped: No module named 'operator.bridges'; 'operator' is not a package
+  Manual: ollama pull <model>   (see https://ollama.ai)
+
+[Step 7] Speech-to-Text (pywhispercpp)...
+  ✓ pywhispercpp available (local STT, no API key needed)
+  Downloading Whisper STT model 'medium-q5_0' (one-time)...
+    (this can take a minute on a slow connection — it only happens once)
+Downloading Model medium-q5_0 ...: 100%|███████████████████████████████████████████| 514M/514M [00:57<00:00, 9.30MiB/s]
+  ✓ Downloaded ggml-medium-q5_0.bin
+
+[Step 8] Text-to-Speech (edge-tts + Piper)...
+  ✓ edge-tts already installed (keyless cloud TTS fallback)
+  ✓ Piper TTS already installed
+
+  Piper needs a voice model (~60–100 MB). Detected language: en.
+
+    [1] English     — Lessac (female)  ← system language (auto-detected)
+    [2] Deutsch     — Kerstin (female)
+    [3] Español     — Sharvard medium
+    [4] Français    — SIWIS (female)
+    [5] Italiano    — Paola (female)
+    [6] Nederlands  — MLS medium
+    [7] Polski      — Gosia (female)
+    [8] Português   — Faber medium (BR)
+    [9] Русский     — Irina medium
+    [10] Türkçe      — DFKI medium
+    [11] Українська  — Lada x_low
+    [12] 中文         — Huayan x_low
+    [0] Skip — configure later in config.json
+
+  Download voice model? [1]: 2
+  Downloading de_DE-kerstin-low.onnx (this may take a minute)...
+  100%  60 MB / 60 MB
+  ✓ Downloaded de_DE-kerstin-low.onnx
+  (retry 1/2 for model config...)
+  ✓ Saved piper_model_de in config.json
+  ✓ PIPER_BIN=C:\Users\sjurk\AppData\Roaming\uv\tools\corvinos\Scripts\piper.exe written to service.env
+
+[Step 8b] Browser automation (Playwright + Chromium)...
+  Browser automation (Playwright + Chromium)...
+  ✓ Chromium already present
+
+[Step 9] Skipping API key setup (--quick-install mode)
+[Step 10–12] Skipping bridge selection/installation/configuration (--quick-install mode)
+
+[Step 13] Web Console...
+
+[Console] Installing Python dependencies...
+
+[notice] A new release of pip is available: 26.1.2 -> 26.2.1
+[notice] To update, run: C:\Users\sjurk\AppData\Roaming\uv\tools\corvinos\Scripts\python.exe -m pip install --upgrade pip
+✓ Console Python dependencies installed
+
+[Console] Building frontend at C:\Users\sjurk\projects\CorvinOS\core\console\corvin_console\web-next ...
+  Running npm install...
+
+added 774 packages, and audited 775 packages in 18s
+
+284 packages are looking for funding
+  run `npm fund` for details
+
+4 moderate severity vulnerabilities
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+npm warn allow-scripts 2 packages have install scripts not yet covered by allowScripts:
+npm warn allow-scripts   esbuild@0.25.12 (postinstall: node install.js)
+npm warn allow-scripts   msw@2.14.6 (postinstall: node -e "import('./config/scripts/postinstall.js').catch(() => void 0)")
+npm warn allow-scripts
+npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+  Running npm run build...
+
+> corvin-console-web-next@0.1.0 build
+> tsc -b && vite build
+
+vite v6.4.3 building for production...
+✓ 4381 modules transformed.
+[plugin vite:reporter]
+(!) C:/Users/sjurk/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/vibe-engineering/index.tsx is dynamically imported by C:/Users/sjurk/projects/CorvinOS/core/console/corvin_console/web-next/src/lazy-pages.ts but also statically imported by C:/Users/sjurk/projects/CorvinOS/core/console/corvin_console/web-next/src/panels/registry.tsx, dynamic import will not move module into another chunk.
+
+dist/index.html                                                 3.62 kB │ gzip:   1.48 kB
+dist/assets/inter-vietnamese-wght-normal-CBcvBZtf.woff2        10.25 kB
+dist/assets/inter-greek-ext-wght-normal-DlzME5K_.woff2         11.23 kB
+dist/assets/fraunces-vietnamese-wght-normal-CnvboYUG.woff2     11.57 kB
+dist/assets/inter-cyrillic-wght-normal-DqGufNeO.woff2          18.75 kB
+dist/assets/inter-greek-wght-normal-CkhJZR-_.woff2             19.00 kB
+dist/assets/inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2      25.96 kB
+dist/assets/fraunces-latin-ext-wght-normal-Ca2vKHc0.woff2      33.58 kB
+dist/assets/fraunces-latin-wght-normal-ukD16Tqj.woff2          36.62 kB
+dist/assets/inter-latin-wght-normal-Dx4kXJAl.woff2             48.26 kB
+dist/assets/inter-latin-ext-wght-normal-DO1Apj_S.woff2         85.07 kB
+dist/assets/highlight-BEHUn5zE.css                              1.32 kB │ gzip:   0.61 kB
+dist/assets/ComputeGraphView-Fd0xVSp_.css                       7.04 kB │ gzip:   1.58 kB
+dist/assets/index-fHUYYj0e.css                                113.70 kB │ gzip:  18.21 kB
+dist/assets/ccc-bus-DZ054FzJ.js                                 0.41 kB │ gzip:   0.27 kB
+dist/assets/profile-C9GoDXza.js                                 0.54 kB │ gzip:   0.25 kB
+dist/assets/mcp-BPZyEMR8.js                                     0.59 kB │ gzip:   0.27 kB
+dist/assets/acs-BXYX8Z2E.js                                     0.61 kB │ gzip:   0.42 kB
+dist/assets/login-7MRjMngJ.js                                   0.64 kB │ gzip:   0.42 kB
+dist/assets/extensions-DEX-QDrj.js                              0.68 kB │ gzip:   0.31 kB
+dist/assets/ldd_quality-CsRXwHy-.js                             0.72 kB │ gzip:   0.27 kB
+dist/assets/plugins-DpI25YT0.js                                 0.72 kB │ gzip:   0.29 kB
+dist/assets/switch-CjWoBTYm.js                                  0.75 kB │ gzip:   0.45 kB
+dist/assets/connectors-YOuMibJT.js                              0.78 kB │ gzip:   0.40 kB
+dist/assets/agents-DQFNes0i.js                                  0.87 kB │ gzip:   0.38 kB
+dist/assets/audit-Byp_I0Kh.js                                   0.97 kB │ gzip:   0.43 kB
+dist/assets/custom_registry-C8Gc_mIs.js                         1.02 kB │ gzip:   0.30 kB
+dist/assets/tabs-CnFxKZAR.js                                    1.08 kB │ gzip:   0.49 kB
+dist/assets/datasources-XzvNFjI5.js                             1.15 kB │ gzip:   0.34 kB
+dist/assets/settings-BiQKlBjm.js                                1.20 kB │ gzip:   0.39 kB
+dist/assets/not-found-CEeXHunV.js                               1.27 kB │ gzip:   0.68 kB
+dist/assets/reauth-dialog-DinSkbz6.js                           1.33 kB │ gzip:   0.74 kB
+dist/assets/skills-DgEEXc_U.js                                  1.91 kB │ gzip:   0.51 kB
+dist/assets/dialog-p870szhV.js                                  1.99 kB │ gzip:   0.81 kB
+dist/assets/compute-DFn46e8R.js                                 2.54 kB │ gzip:   0.63 kB
+dist/assets/a2a-DIm0jpOA.js                                     2.90 kB │ gzip:   0.67 kB
+dist/assets/data-D5L7KdnE.js                                    3.36 kB │ gzip:   0.97 kB
+dist/assets/hubs-clST5NcH.js                                    3.81 kB │ gzip:   1.02 kB
+dist/assets/chat-7_3Homod.js                                    4.18 kB │ gzip:   1.21 kB
+dist/assets/landing-Cy9wsltT.js                                 5.72 kB │ gzip:   2.41 kB
+dist/assets/releases-Bnxvq1la.js                                5.99 kB │ gzip:   2.09 kB
+dist/assets/rag-hub-CwUewzaQ.js                                 6.44 kB │ gzip:   2.17 kB
+dist/assets/memory-CyHnAJ2g.js                                  7.94 kB │ gzip:   2.82 kB
+dist/assets/ldd-igJ8sEz9.js                                     8.11 kB │ gzip:   2.43 kB
+dist/assets/people-DhK21ltJ.js                                  8.14 kB │ gzip:   2.56 kB
+dist/assets/mcp-plugins-D1ILe4Fz.js                             8.34 kB │ gzip:   2.77 kB
+dist/assets/audit-Dj_ld5SI.js                                   8.39 kB │ gzip:   2.67 kB
+dist/assets/FlowGraphView-B8Wxt2mv.js                           8.85 kB │ gzip:   3.25 kB
+dist/assets/webhooks-BveiFAJG.js                                9.74 kB │ gzip:   3.19 kB
+dist/assets/rag-BAvxZOTf.js                                    10.08 kB │ gzip:   3.02 kB
+dist/assets/index-iCZ8BMsI.js                                  10.40 kB │ gzip:   2.58 kB
+dist/assets/packages-MpON84HI.js                               10.82 kB │ gzip:   3.09 kB
+dist/assets/video-producer-CAXshZJ1.js                         11.32 kB │ gzip:   3.51 kB
+dist/assets/license-lPAU7x4G.js                                11.49 kB │ gzip:   3.59 kB
+dist/assets/plugins-BD-8f9uf.js                                11.86 kB │ gzip:   3.62 kB
+dist/assets/extensions-B0LlVdj6.js                             12.04 kB │ gzip:   3.26 kB
+dist/assets/api-keys-D8Hjsim2.js                               12.98 kB │ gzip:   4.26 kB
+dist/assets/api-DBnJGsVr.js                                    13.00 kB │ gzip:   4.67 kB
+dist/assets/files-DEZYsvDR.js                                  13.02 kB │ gzip:   4.19 kB
+dist/assets/quality-D7-1fu_V.js                                13.36 kB │ gzip:   3.67 kB
+dist/assets/ModelCostOptimizer-CeR6SXxe.js                     13.96 kB │ gzip:   4.42 kB
+dist/assets/engine-config-CGRnl2iI.js                          14.12 kB │ gzip:   4.58 kB
+dist/assets/index-B1UbYvAR.js                                  14.19 kB │ gzip:   4.28 kB
+dist/assets/custom-provider-DDrmPn1s.js                        15.14 kB │ gzip:   4.23 kB
+dist/assets/agents-BbBKdfq0.js                                 15.52 kB │ gzip:   4.45 kB
+dist/assets/connectors-DkcJkmF8.js                             15.89 kB │ gzip:   4.62 kB
+dist/assets/forge-GgmF02Yw.js                                  20.08 kB │ gzip:   4.44 kB
+dist/assets/dashboard-BSyKcd40.js                              20.23 kB │ gzip:   5.88 kB
+dist/assets/voice-m511YwBo.js                                  20.89 kB │ gzip:   6.51 kB
+dist/assets/settings-CFzWM3sT.js                               21.71 kB │ gzip:   6.11 kB
+dist/assets/skills-CDep3O1k.js                                 27.70 kB │ gzip:   7.64 kB
+dist/assets/space-Cj2VYzb1.js                                  29.02 kB │ gzip:   6.59 kB
+dist/assets/page-2r3LMawt.js                                   31.55 kB │ gzip:   7.82 kB
+dist/assets/orgs-DOIrdlv4.js                                   32.56 kB │ gzip:   8.25 kB
+dist/assets/plugin-center-CNIlnYy0.js                          33.19 kB │ gzip:   8.51 kB
+dist/assets/data-sources-CGKAaoqa.js                           34.95 kB │ gzip:   9.25 kB
+dist/assets/compliance-CjySvYfN.js                             36.23 kB │ gzip:   8.65 kB
+dist/assets/icons-DoCkUaPW.js                                  39.15 kB │ gzip:  12.66 kB
+dist/assets/bridges-CDcwzr_P.js                                41.12 kB │ gzip:  11.18 kB
+dist/assets/tanstack-DnyIUEZS.js                               53.90 kB │ gzip:  15.98 kB
+dist/assets/agent-hub-C2Vq4fH1.js                              54.72 kB │ gzip:  12.08 kB
+dist/assets/workflows-NgZKUWVZ.js                              85.50 kB │ gzip:  23.05 kB
+dist/assets/ComputeGraphView-BqZtuNAk.js                      117.70 kB │ gzip:  35.61 kB
+dist/assets/chat-BQpP4Y9X.js                                  135.39 kB │ gzip:  37.71 kB
+dist/assets/compute-DVelJFkV.js                               142.00 kB │ gzip:  32.35 kB
+dist/assets/markdown-B0J8sZFM.js                              162.67 kB │ gzip:  48.05 kB
+dist/assets/highlight-C7gbC25c.js                             167.72 kB │ gzip:  49.88 kB
+dist/assets/radix-CnZ4_ZDI.js                                 175.31 kB │ gzip:  55.34 kB
+dist/assets/katex-lljLFT0G.js                                 262.61 kB │ gzip:  76.91 kB
+dist/assets/index-DyJitCOz.js                                 271.60 kB │ gzip:  74.01 kB
+dist/assets/charts-DLezfzxm.js                                497.38 kB │ gzip: 138.91 kB
+dist/assets/index-CHZ8DNWJ.js                                 614.48 kB │ gzip: 145.86 kB
+dist/assets/mermaid-yeQt2QpH.js                             2,965.51 kB │ gzip: 862.81 kB
+✓ built in 54.31s
+✓ Frontend built — C:\Users\sjurk\projects\CorvinOS\core\console\corvin_console\web-next\dist
+
+[Step 14] Registering services...
+  ℹ Windows: service registration requires admin rights — skipped
+    Start services manually from the web console, or run with admin PowerShell:
+      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+      corvin-install
+
+[Step 15] Starting services...
+  ✓ Adapter started
+
+[Plugins] Registering Claude Code plugins...
+
+✗ Installation failed: No module named 'operator.bridges'; 'operator' is not a package
+Traceback (most recent call last):
+  File "C:\Users\sjurk\projects\CorvinOS\corvinOS\installer\core.py", line 840, in install
+    self.step_16_register_plugins()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\sjurk\projects\CorvinOS\corvinOS\installer\core.py", line 724, in step_16_register_plugins
+    _plugins.ensure_plugins(self.repo_root, interactive=self.interactive)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sjurk\projects\CorvinOS\corvinOS\installer\steps\plugins.py", line 44, in ensure_plugins
+    _sync_marketplace(repo_root)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\sjurk\projects\CorvinOS\corvinOS\installer\steps\plugins.py", line 66, in _sync_marketplace
+    _run_claude(
+    ~~~~~~~~~~~^
+        ["plugin", "marketplace", "add", str(repo_root)],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        capture_output=True,
+        ^^^^^^^^^^^^^^^^^^^^
+        check=False,
+        ^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\sjurk\projects\CorvinOS\corvinOS\installer\steps\plugins.py", line 18, in _run_claude
+    from operator.bridges.shared.agents._win_shim import windows_shim_command
+ModuleNotFoundError: No module named 'operator.bridges'; 'operator' is not a package
+Task was destroyed but it is pending!
+task: <Task cancelling name='Task-3' coro=<Connection.run.<locals>.init() running at C:\Users\sjurk\AppData\Roaming\uv\tools\corvinos\Lib\site-packages\playwright\_impl\_connection.py:344> wait_for=<Future finished result=None>>
+Future exception was never retrieved
+future: <Future finished exception=TargetClosedError('Target page, context or browser has been closed')>
+playwright._impl._errors.TargetClosedError: Target page, context or browser has been closed
+  Setup wizard exited early. Re-run later with: corvin-install
+
+  Starting CorvinOS console server ...
+  Scheduled Task registration denied (Access is denied.
+) -- falling back to a Startup-folder shortcut (no admin rights needed).
+  Console will auto-start on login via a Startup-folder shortcut (this account can't register Scheduled Tasks).
+    Firewall untouched (console listens on 127.0.0.1). For A2A pairing over your LAN re-run with -Lan or allow inbound TCP 8765 yourself.
+  Desktop shortcut created: CorvinOS.lnk
+  Server is taking longer than expected to answer -- opening the console anyway; reload the tab if it doesn't connect immediately: http://localhost:8765/console/
+    A background check will open the console automatically once it's ready (up to 5 more minutes).
+
+========================================================
+ CorvinOS installed -- console hasn't answered yet
+========================================================
+
+ Autostart was registered and a start was attempted, but the console
+ did not respond within 90s. It may still be coming up (slow first
+ boot / Defender scan), or it could be crash-looping. Check:
+
+    http://localhost:8765/console/   # try reloading in a few seconds
+    # see why it isn't starting:  Get-Content "C:\Users\sjurk\.corvin\logs\console-supervisor.log" -Tail 40
+    # check task status:          Get-ScheduledTask CorvinOS-Console
+    # restart it by hand:         Start-ScheduledTask CorvinOS-Console
+
+========================================================
+ Commands
+========================================================
+
+   corvinos-serve     Start the web console manually (already auto-started, see above)
+   corvin-install     Setup wizard (bridges, tokens, voice)
+   corvin-uninstall   Remove CorvinOS
+   corvin-a2a         Agent-to-agent pairing and messaging
+
+
+Press any key to continue . . .

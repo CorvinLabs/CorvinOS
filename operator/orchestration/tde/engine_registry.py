@@ -3,7 +3,7 @@
 Central registry of all Agentic Compute Engines (TDE, ACS, Claude-Code).
 Registers REAL engines (tde_engine.py) — no fake-success placeholders.
 
-Naming note: operator/bridges/shared/engine_registry.py is a DIFFERENT,
+Naming note: corvin_operator/bridges/shared/engine_registry.py is a DIFFERENT,
 lower-level registry (concrete WorkerEngine builders: claude_code/codex_cli/
 opencode binaries). This one maps agentic-compute strategies onto plans.
 """

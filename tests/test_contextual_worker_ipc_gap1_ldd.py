@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 
-# Import the TDE package the way every other tde test does (operator/orchestration
+# Import the TDE package the way every other tde test does (corvin_operator/orchestration
 # on sys.path, `tde` as a top-level package). Importing it as `orchestration.tde`
 # collided with `core/orchestration` when the full suite had already bound the
 # name `orchestration` to that package (collection error, 2026-09-07).

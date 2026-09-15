@@ -1,6 +1,6 @@
 """Entry-point shim for corvin-wdat-report CLI (ADR-0109 M5).
 
-operator/ shadows the Python stdlib 'operator' module, so we cannot use a dotted
+corvin_operator/ shadows the Python stdlib 'operator' module, so we cannot use a dotted
 import path like operator.bridges.shared.wdat_report. This shim adds the shared
 directory to sys.path and delegates to the actual implementation.
 """
@@ -9,7 +9,7 @@ import sys
 
 
 def main() -> None:
-    # Wheel install: operator/ is vendored under corvin_console/_vendor, not
+    # Wheel install: corvin_operator/ is vendored under corvin_console/_vendor, not
     # top-level — this puts the vendored bridges/shared on sys.path so the bare
     # `from wdat_report import main` below resolves. No-op in a source checkout.
     try:

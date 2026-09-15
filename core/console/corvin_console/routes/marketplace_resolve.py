@@ -1,6 +1,6 @@
 """Resolve a marketplace index-id to a local builtin plugin directory + manifest.
 
-The console marketplace index (``operator/marketplace/index/plugins.json``,
+The console marketplace index (``corvin_operator/marketplace/index/plugins.json``,
 ADR-0511) identifies a plugin as ``plugin:<tier>-<category>-<name>`` — e.g.
 ``plugin:buildin-memory-semantic_context_retriever``. The plugin's SOURCE lives
 in the Corvin-Marketplace repo, not in CorvinOS (operator rule), one nested tree

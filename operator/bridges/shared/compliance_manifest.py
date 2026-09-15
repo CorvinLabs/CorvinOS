@@ -124,7 +124,7 @@ def _repo_root() -> Path:
     env = os.environ.get("CORVIN_REPO_ROOT")
     if env:
         return Path(env)
-    # __file__ = operator/bridges/shared/compliance_manifest.py  → 3 parents up
+    # __file__ = corvin_operator/bridges/shared/compliance_manifest.py  → 3 parents up
     return Path(__file__).resolve().parents[3]
 
 

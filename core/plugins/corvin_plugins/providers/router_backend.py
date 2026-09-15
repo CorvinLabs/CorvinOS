@@ -25,7 +25,7 @@ _log = logging.getLogger("corvin.router")
 # ── Default implementation ────────────────────────────────────────────────────
 
 class ChainRouterBackend:
-    """Default: delegate to operator/bridges/shared/router.py (ADR-0033).
+    """Default: delegate to corvin_operator/bridges/shared/router.py (ADR-0033).
 
     Wraps the existing fake → heuristic → embeddings → Anthropic SDK → CLI
     chain with zero behavior change.  All parameters (model, mode, timeout,
@@ -41,7 +41,7 @@ class ChainRouterBackend:
             pass
         _shared = (
             Path(__file__).resolve().parents[6]
-            / "operator/bridges/shared"
+            / "corvin_operator/bridges/shared"
         )
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))

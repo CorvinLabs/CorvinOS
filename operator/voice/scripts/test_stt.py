@@ -181,7 +181,7 @@ class OpenAIKeyEnvFileFallbackTests(unittest.TestCase):
 
     WA-22: the second, independently-drifting ~/.config/corvin-voice/.env
     file is retired — service.env is the ONE canonical file consulted
-    (see operator/bridges/shared/provider_keys.py).
+    (see corvin_operator/bridges/shared/provider_keys.py).
     """
 
     def setUp(self):

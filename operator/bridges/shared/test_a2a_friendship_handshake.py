@@ -22,7 +22,7 @@ test_a2a_bidirectional.py):
   * The ack endpoint is single-use (a2a_friendship-level: the pending record
     is consumed) and rejects a forged signature.
 
-Run: ``python3 operator/bridges/shared/test_a2a_friendship_handshake.py``
+Run: ``python3 corvin_operator/bridges/shared/test_a2a_friendship_handshake.py``
 """
 from __future__ import annotations
 

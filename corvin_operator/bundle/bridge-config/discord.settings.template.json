@@ -1,0 +1,13 @@
+{
+  "_NOTE": "Discord bot token from discord.com/developers/applications. Whitelist contains Discord user-ids (strings). Enable Developer Mode in Discord: Settings -> Advanced -> Developer Mode. Then right-click a user -> Copy User ID.",
+  "_NOTE_chat_profiles": "Default is MAXIMUM OPEN (--dangerously-skip-permissions, all tools). To RESTRICT bot behaviour in individual channels (e.g. only Read in a shared server channel), add a 'chat_profiles' object. Hot-reload applies immediately. Schema and examples: see CLAUDE.md.",
+  "discord_token": "YOUR_DISCORD_BOT_TOKEN_HERE",
+  "_NOTE_read_only": "OPTIONAL — user-ids in `read_only` may sit in the chat but CANNOT trigger the bot. Whitelist beats read_only on collisions. First drop per (chat, user) sends a polite '🔒 read-only' ACK; subsequent drops are silent. Every drop is audited as bridge.read_only_drop.",
+  "_NOTE_observer_visibility": "OPTIONAL chat_profiles[<id>].observer_visibility = 'off' (default — read-only senders are dropped, LLM blind) | 'transcript' (read-only sender messages buffered per-chat, prepended as a framed CONTEXT block on the next OWNER turn). Observers still cannot trigger inference; transcript mode just makes them visible. Buffer cap: 20 lines / 4 KiB, oldest first.",
+  "_NOTE_stream_idle_timeout_seconds": "OPTIONAL (default 300 s = 5 min). Increase for long-running tasks (Deep Research, complex Workflows). Example: 3600 s = 1 hour. Prevents 'Stream-Idle-Watchdog' timeouts on slow operations.",
+  "whitelist": [],
+  "read_only": [],
+  "rate_limit_per_hour": 30,
+  "stream_idle_timeout_seconds": 3600,
+  "pin": null
+}

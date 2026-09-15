@@ -1,7 +1,7 @@
 """ADR-0215 Phase 2: WiringIntegrityFiber + TokenSavingsFiber.
 
 These are the runtime ("Nervensystem") half of ADR-0215's proof mechanism —
-operator/orchestration/wiring_gate.py is the CI-time half. Both read the
+corvin_operator/orchestration/wiring_gate.py is the CI-time half. Both read the
 same WIRING.yaml manifests; this Fiber additionally re-checks reachability
 at scan time (catches post-merge drift) and cross-references real tde.*
 audit traffic.
@@ -33,7 +33,7 @@ class TestWiringIntegrityFiber(unittest.TestCase):
         components = _load_wiring_manifests()
         names = {c["name"] for c in components}
         # Spot-check a few components we know are declared in the real
-        # manifests (see operator/orchestration/{,tde/}WIRING.yaml).
+        # manifests (see corvin_operator/orchestration/{,tde/}WIRING.yaml).
         self.assertIn("tde_engine", names)
         self.assertIn("streaming_executor", names)
         self.assertIn("initial_analysis", names)

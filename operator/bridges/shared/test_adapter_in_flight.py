@@ -15,7 +15,7 @@ IN_FLIGHT_TTL (1 s) and a fast cleanup cadence (0.5 s), then asserts the
 turn ran exactly once and nothing was quarantined.
 
 Run:
-    python3 operator/bridges/shared/test_adapter_in_flight.py
+    python3 corvin_operator/bridges/shared/test_adapter_in_flight.py
 """
 from __future__ import annotations
 

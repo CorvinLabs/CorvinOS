@@ -62,7 +62,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
 
 # house_rules / egress_gate / security_capabilities / spawn_gates / data_classification
-# all live under operator/bridges/shared; forge.* under operator/forge. chat_runtime
+# all live under corvin_operator/bridges/shared; forge.* under corvin_operator/forge. chat_runtime
 # already adds these at import, but make it explicit so a direct import of this
 # module (tests, other callers) resolves the same modules.
 _BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
@@ -71,7 +71,7 @@ for _p in (str(_BRIDGES_SHARED), str(_FORGE_PATH)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# Re-export the delegation-fanout engine_id SSOT (operator/bridges/shared/
+# Re-export the delegation-fanout engine_id SSOT (corvin_operator/bridges/shared/
 # data_classification). chat_runtime classifies a delegated turn under this id;
 # importing it here keeps the producer (chat_runtime) and the L34 registry from
 # drifting — the drift that silently blocked every delegated web-chat turn

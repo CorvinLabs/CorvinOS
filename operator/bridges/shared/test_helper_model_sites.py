@@ -32,7 +32,7 @@ from unittest.mock import patch
 
 THIS = Path(__file__).resolve()
 SHARED = THIS.parent
-PLUGIN_ROOT = SHARED.parent.parent / "voice"  # operator/voice
+PLUGIN_ROOT = SHARED.parent.parent / "voice"  # corvin_operator/voice
 sys.path.insert(0, str(SHARED))
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 

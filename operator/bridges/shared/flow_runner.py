@@ -390,7 +390,7 @@ class FlowRunner:
 # ── license validator shim ─────────────────────────────────────────────────
 
 class _LicenseValidatorShim:
-    """Thin adapter — wraps operator/license/validator for M1."""
+    """Thin adapter — wraps corvin_operator/license/validator for M1."""
 
     def __init__(self) -> None:
         try:

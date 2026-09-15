@@ -7,7 +7,7 @@
   * SkillForge: needs.skills → a SkillRef on the skill channel (not tools).
   * a forge failure is fail-safe (turn proceeds).
 
-Run: python3 operator/context_engineering/tests/test_forge_stages_adr0283.py
+Run: python3 corvin_operator/context_engineering/tests/test_forge_stages_adr0283.py
 """
 from __future__ import annotations
 

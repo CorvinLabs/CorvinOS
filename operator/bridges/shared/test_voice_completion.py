@@ -31,7 +31,7 @@ TTS helpers):
      want_voice on BOTH the record and the worker spec when the flag+preference
      allow, and leaves them false when the flag is off.
 
-Run: python3 operator/bridges/shared/test_voice_completion.py
+Run: python3 corvin_operator/bridges/shared/test_voice_completion.py
 """
 from __future__ import annotations
 

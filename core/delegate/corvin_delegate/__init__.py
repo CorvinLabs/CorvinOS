@@ -8,7 +8,7 @@ state, no audit, no skills.
 
 This plugin gives Claude OS three MCP tools — ``delegate_claude_code``,
 ``delegate_codex`` and ``delegate_opencode`` — that wrap the existing
-``WorkerEngine`` layer (Layer 22, ``operator/bridges/shared/agents/``)
+``WorkerEngine`` layer (Layer 22, ``corvin_operator/bridges/shared/agents/``)
 and surface the result as a single structured envelope. The OS turn
 decides whether to delegate; the worker turn executes; the OS turn
 formats the answer and replies through the bridge.

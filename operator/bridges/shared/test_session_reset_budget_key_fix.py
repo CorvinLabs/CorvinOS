@@ -9,7 +9,7 @@ The bug: adapter.py registers budgets with bare chat_id ("1540066.."),
 but session_reset.py was trying to delete with forge_channel_id ("discord:1540066.."),
 so the budget was never deleted and next turn still showed budget exhausted.
 
-Run: python3 operator/bridges/shared/test_session_reset_budget_key_fix.py
+Run: python3 corvin_operator/bridges/shared/test_session_reset_budget_key_fix.py
 """
 from __future__ import annotations
 

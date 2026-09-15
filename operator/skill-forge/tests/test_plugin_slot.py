@@ -4,7 +4,7 @@ subprocess sees it via the engine's plugin-skill-discovery.
 
 Test-only path override: ``CORVIN_PLUGIN_SLOT_DIR`` redirects the slot
 directory to ``tmp_path/dyn`` — no test ever writes the real
-``operator/skill-forge/skills/dyn/``.
+``corvin_operator/skill-forge/skills/dyn/``.
 """
 from __future__ import annotations
 

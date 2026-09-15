@@ -11,7 +11,7 @@ Drei Symptome derselben Ursache:
   3. Generelle Race: Hook für Turn N läuft so spät, dass Turn N+1 schon
      User-Antwort hat → wir würden alten Inhalt vorlesen.
 
-Run: python3 operator/voice/scripts/test_voice_freshness.py
+Run: python3 corvin_operator/voice/scripts/test_voice_freshness.py
 """
 from __future__ import annotations
 

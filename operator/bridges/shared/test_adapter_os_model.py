@@ -297,13 +297,13 @@ class ForgePersonaShapeTests(_EnvGuard, unittest.TestCase):
         """forge persona must declare os_model_floor: sonnet per ADR-0024 §Floor.
 
         If only the outputs/ version has the field, the operator still needs
-        to copy `outputs/forge.json` → `operator/cowork/personas/forge.json`.
+        to copy `outputs/forge.json` → `corvin_operator/cowork/personas/forge.json`.
         """
         persona = self._load_best_persona()
         self.assertEqual(
             persona.get("os_model_floor"), "sonnet",
             "forge persona must set os_model_floor=sonnet (safety-critical operations). "
-            "Copy outputs/forge.json → operator/cowork/personas/forge.json.",
+            "Copy outputs/forge.json → corvin_operator/cowork/personas/forge.json.",
         )
 
 

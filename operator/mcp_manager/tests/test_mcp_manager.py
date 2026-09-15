@@ -1,7 +1,7 @@
 """Tests for MCP Plugin Manager M1 (ADR-0096).
 
 Run with:
-    cd operator/mcp_manager
+    cd corvin_operator/mcp_manager
     python -m pytest tests/ -v
 """
 from __future__ import annotations

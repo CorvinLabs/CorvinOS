@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unit-Tests for router.py — alles via ROUTER_FAKE-Hook, kein LLM-Call.
 
-Run: python3 operator/bridges/shared/test_router.py
+Run: python3 corvin_operator/bridges/shared/test_router.py
 """
 from __future__ import annotations
 

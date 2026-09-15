@@ -29,9 +29,9 @@ one summary line.
 
 Hand-invocation::
 
-    python3 operator/voice/scripts/audit_rotate.py
-    python3 operator/voice/scripts/audit_rotate.py --tenant my_tenant
-    python3 operator/voice/scripts/audit_rotate.py --dry-run
+    python3 corvin_operator/voice/scripts/audit_rotate.py
+    python3 corvin_operator/voice/scripts/audit_rotate.py --tenant my_tenant
+    python3 corvin_operator/voice/scripts/audit_rotate.py --dry-run
 """
 from __future__ import annotations
 

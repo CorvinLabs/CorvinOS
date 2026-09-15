@@ -78,7 +78,7 @@ class Policy:
     # persona_namespaces — per-persona registration prefix. ``coder`` may only
     # register tool names that start with ``code.`` etc. Missing persona name
     # OR empty / missing prefix → wildcard (no gate, legacy behaviour).
-    # The bundle default at operator/forge/forge/policy.json defines the
+    # The bundle default at corvin_operator/forge/forge/policy.json defines the
     # standard cowork personas; a workspace-level policy.json can override.
     persona_namespaces: dict[str, str] = field(default_factory=dict)
     # persona_secret_allow — per-persona allow-list of vault keys the persona's
@@ -97,7 +97,7 @@ class Policy:
     #   {"browser": {"network": "allow"}}
     # means the browser persona's forged tools share the host network
     # namespace (loopback + outbound). Default = deny for any persona without
-    # an entry. The bundle default at operator/forge/forge/policy.json lists
+    # an entry. The bundle default at corvin_operator/forge/forge/policy.json lists
     # browser+research; workspace-level policy.json can append/override.
     persona_sandbox_overrides: dict[str, dict] = field(default_factory=dict)
 

@@ -1,0 +1,13 @@
+runner error for mrhj4h5j_b03818 (discord:1501540900529246251):
+Traceback (most recent call last):
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 9804, in _runner
+    return f"{channel}:{chat}"
+                    ^^^^^^^^^^^
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 9174, in process_one
+    try:
+         
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 6729, in call_claude_streaming
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 5018, in _call_claude_streaming_via_engine
+    except Exception:  # noqa: BLE001
+      ^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.

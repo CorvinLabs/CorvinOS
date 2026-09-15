@@ -8,7 +8,7 @@ the CORRECT Windows API calls are made, which is the actual bug this fixes
 (previously: proc.terminate()/proc.kill() on the tracked PID only, leaking
 the real node.exe/claude grandchild the .cmd shim spawns under cmd.exe).
 
-Run with: python3 operator/bridges/shared/agents/test_terminate_process_tree.py
+Run with: python3 corvin_operator/bridges/shared/agents/test_terminate_process_tree.py
 """
 from __future__ import annotations
 

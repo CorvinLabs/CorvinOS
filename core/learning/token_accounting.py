@@ -14,7 +14,7 @@ cache_creation=38060 — i.e. it captured 0.003% of the true input.
 
 This module is the ONE place that sums them, so the benchmark, the dashboard fix, and any
 cost model agree. It matches the existing inline canon at
-`operator/orchestration/tde/worker_ipc.py` and `operator/orchestration/tde/tde_engine.py`
+`corvin_operator/orchestration/tde/worker_ipc.py` and `corvin_operator/orchestration/tde/tde_engine.py`
 (which the TDE engine derived independently); those inline copies should eventually be
 refactored to call this. Prices are deliberately NOT hardcoded here — there is no trustworthy
 price table in the repo (the only one, claude_engine.py, is a ~10x-off placeholder with no

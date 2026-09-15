@@ -56,7 +56,7 @@ try:
 except ImportError:  # Windows — no fcntl module.
     # This module is reachable from adapter.py/chat_runtime.py/dispatcher.py/
     # routes/compute*.py via lazy, function-local imports with no guaranteed
-    # ordering against operator/forge's or corvin_console's own _wincompat
+    # ordering against corvin_operator/forge's or corvin_console's own _wincompat
     # shim install — a bare top-level `import fcntl` here crashed the first
     # Windows caller to reach it with ModuleNotFoundError (adversarial review
     # finding; same bug class as the 17-module Windows sweep, this file was

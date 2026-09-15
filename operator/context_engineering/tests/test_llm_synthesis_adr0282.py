@@ -7,7 +7,7 @@
   * over budget → skipped, deterministic brief stands (degrade, never block).
   * subprocess failure (timeout/nonzero) → failed, no synthesised_prompt.
 
-Run: python3 operator/context_engineering/tests/test_llm_synthesis_adr0282.py
+Run: python3 corvin_operator/context_engineering/tests/test_llm_synthesis_adr0282.py
 """
 from __future__ import annotations
 

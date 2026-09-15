@@ -100,7 +100,7 @@ def _hermes_reachable() -> bool:
     try:
         # ADR-0215 F5: the dotted `from operator.bridges.shared...` import
         # here could never resolve (stdlib `operator` always shadows the
-        # repo's operator/ directory) — this silently skipped straight to
+        # repo's corvin_operator/ directory) — this silently skipped straight to
         # the generic HTTP fallback below on every call, never exercising
         # hermes_bootstrap's actual reachability logic. Fixed via the
         # repo's working sys.path + bare-import pattern.

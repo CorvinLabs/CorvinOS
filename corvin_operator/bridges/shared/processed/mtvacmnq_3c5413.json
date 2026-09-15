@@ -1,0 +1,8 @@
+{
+  "id": "mtvacmnq_3c5413",
+  "channel": "discord",
+  "from": "1299270034849533983",
+  "chat_id": "1502103856740302964",
+  "ts": 1789030134710,
+  "text": "ok next: Next Steps (Phase 3+)\nDeploy to Canary (5% traffic, 2h monitoring)\nVerify: 30%+ context noise reduction achieved\nWire Learning Loop (ADR-0314: feedback → score optimization)\nExpand LM Fallback (Phase 2b expansion to all categories)"
+}

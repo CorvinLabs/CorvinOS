@@ -5,7 +5,7 @@ Real-conditions test using two CorvinOS instances:
   Worker    : Hetzner corvin-test-b, 62.238.13.40 (hel1)
 
 Run with:
-    CORVINFLOW_E2E=1 pytest operator/bridges/shared/tests/test_corvinflow_e2e.py -v
+    CORVINFLOW_E2E=1 pytest corvin_operator/bridges/shared/tests/test_corvinflow_e2e.py -v
 
 Without CORVINFLOW_E2E=1 all tests are skipped (unit tests only run via normal suite).
 
@@ -41,7 +41,7 @@ pytestmark = pytest.mark.skipif(not E2E, reason="set CORVINFLOW_E2E=1 to run")
 
 # ── Repo root ────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
-_REPO = _HERE.parents[3]  # operator/bridges/shared/tests/ → repo root
+_REPO = _HERE.parents[3]  # corvin_operator/bridges/shared/tests/ → repo root
 _LIC = _REPO / "operator" / "license"
 sys.path.insert(0, str(_REPO / "operator"))
 sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
@@ -63,7 +63,7 @@ from flow_definition import (
 class MinimalFlowRunner:
     """Proof-of-concept FlowRunner for E2E testing (ADR-0121 M1 skeleton).
 
-    In production, this logic lives in operator/bridges/shared/flow_runner.py.
+    In production, this logic lives in corvin_operator/bridges/shared/flow_runner.py.
     This minimal version skips A2A envelope construction and uses direct SSH
     to simulate the worker execution — enough to validate the pre-spawn gate,
     budget tracking, manifest writing, and audit ordering.

@@ -33,14 +33,14 @@ from forge import mcp_server as srv  # noqa: E402
 
 class TestLicenseGateRealImport(unittest.TestCase):
     """Verification finding: an earlier version of the license-gate import
-    block in mcp_server.py imported license.validator BEFORE operator/ was
+    block in mcp_server.py imported license.validator BEFORE corvin_operator/ was
     on sys.path, so the import always failed and every datasource_connect
     call silently fell through to the hardcoded local_file-only fallback
     regardless of the tenant's real license tier. This spawns a REAL
     subprocess with the EXACT PYTHONPATH resolver.py's
-    _inject_forge_capability sets (operator/forge only) — an in-process
+    _inject_forge_capability sets (corvin_operator/forge only) — an in-process
     import here would be misleadingly green, since pytest's own sys.path
-    already carries operator/ transitively from unrelated test setup."""
+    already carries corvin_operator/ transitively from unrelated test setup."""
 
     def test_license_validator_resolves_for_real_with_resolver_pythonpath(self):
         script = (

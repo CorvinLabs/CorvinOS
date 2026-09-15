@@ -1,0 +1,18 @@
+# Layer-19 service manifest for the skill-forge MCP server.
+#
+# Sister to forge-mcp.service.yaml. Same lifecycle pattern.
+# 'wants forge-mcp' because skill-forge appends to the unified
+# audit chain via forge.security_events; the chain is intact even
+# when forge-mcp itself is down (skill-forge falls back to a plain
+# JSONL writer), but having it up keeps the chain unified.
+name: skill-forge-mcp
+type: daemon
+exec_start: "exec python3 operator/skill-forge/skill_forge.py mcp"
+restart: on-failure
+restart_sec: 2
+backoff: exponential
+max_restarts: 5
+wants:
+  - forge-mcp
+journal: "<corvin_home>/run/log/skill-forge-mcp.log"
+hot_reload: SIGHUP

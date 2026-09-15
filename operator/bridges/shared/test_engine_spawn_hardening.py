@@ -19,7 +19,7 @@ the codex/opencode siblings:
        then CLAUDE_BIN, then "claude".
 
 Run:
-    python -m pytest operator/bridges/shared/test_engine_spawn_hardening.py -q
+    python -m pytest corvin_operator/bridges/shared/test_engine_spawn_hardening.py -q
 """
 
 from __future__ import annotations

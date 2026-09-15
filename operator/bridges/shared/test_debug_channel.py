@@ -102,7 +102,7 @@ def _setup_sandbox() -> tuple[Path, Path, Path, Path]:
     """Create plugins/<channel>/settings.json + outbox + home dirs.
     Returns (sandbox_root, channel_dir, outbox, home).
 
-    Layout matches the real repo: <sandbox>/operator/bridges/<channel>
+    Layout matches the real repo: <sandbox>/corvin_operator/bridges/<channel>
     so that paths.py's walk-up to a 'plugins/' marker resolves to the
     sandbox, not the real repo.
     """

@@ -10,7 +10,7 @@ Spawns the skill-forge MCP server as a subprocess, drives it over stdio
 JSON-RPC, and verifies the notification arrives after each mutating
 call: skill_create, skill_promote, skill_purge, skill_grade.
 
-Run as: python3 operator/skill-forge/tests/test_mcp_notification.py
+Run as: python3 corvin_operator/skill-forge/tests/test_mcp_notification.py
 """
 from __future__ import annotations
 

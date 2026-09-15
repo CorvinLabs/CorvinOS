@@ -1,0 +1,314 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rag.corvin.io/schemas/v1/provider-manifest",
+  "title": "CorvinOS RAG Provider Manifest",
+  "description": "Standard contract for RAG providers (Elasticsearch, Vector DB, Custom APIs, etc.)",
+  "type": "object",
+  "required": ["api_version", "kind", "metadata", "spec"],
+  "properties": {
+    "api_version": {
+      "type": "string",
+      "pattern": "^rag\\.corvin\\.io/v[0-9]+$",
+      "enum": ["rag.corvin.io/v1"],
+      "description": "API version. Must be rag.corvin.io/v1 for this schema."
+    },
+    "kind": {
+      "type": "string",
+      "const": "RAGProvider",
+      "description": "Resource kind. Must be RAGProvider."
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{3,64}$",
+          "description": "Unique provider ID (lowercase alphanumeric + hyphen)"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Human-readable provider name"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Detailed description of the RAG provider"
+        },
+        "provider": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Organization or owner (company name)"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version (e.g., 1.0.0)"
+        },
+        "contact": {
+          "type": "object",
+          "properties": {
+            "email": {
+              "type": "string",
+              "format": "email",
+              "description": "Contact email for support"
+            },
+            "support_url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Support documentation URL"
+            }
+          }
+        },
+        "documentation_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Link to technical documentation"
+        }
+      },
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "required": ["retrieval", "classification"],
+      "properties": {
+        "retrieval": {
+          "type": "object",
+          "required": ["type", "endpoint", "timeout_ms", "auth", "response_schema"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["http-api", "grpc", "kafka-topic", "file-search"],
+              "description": "Retrieval transport type"
+            },
+            "endpoint": {
+              "type": "string",
+              "format": "uri",
+              "description": "HTTP endpoint or service address"
+            },
+            "method": {
+              "type": "string",
+              "enum": ["GET", "POST"],
+              "default": "POST",
+              "description": "HTTP method for http-api type"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 30000,
+              "default": 5000,
+              "description": "Query timeout in milliseconds"
+            },
+            "rate_limit": {
+              "type": "object",
+              "properties": {
+                "requests_per_minute": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 100
+                },
+                "burst_size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 10
+                }
+              },
+              "additionalProperties": false
+            },
+            "auth": {
+              "type": "object",
+              "required": ["type", "token_env_var"],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["bearer-token", "api-key", "oauth2", "mTLS", "none"],
+                  "description": "Authentication mechanism"
+                },
+                "token_env_var": {
+                  "type": "string",
+                  "pattern": "^[A-Z_][A-Z0-9_]*$",
+                  "description": "Environment variable name (from vault). Never literal secrets!"
+                }
+              },
+              "additionalProperties": false
+            },
+            "query_schema": {
+              "type": "object",
+              "description": "JSON Schema for query input validation"
+            },
+            "response_schema": {
+              "type": "object",
+              "required": ["type"],
+              "description": "JSON Schema for response validation"
+            }
+          },
+          "additionalProperties": false
+        },
+        "classification": {
+          "type": "object",
+          "required": ["data_type"],
+          "properties": {
+            "data_type": {
+              "type": "string",
+              "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET"],
+              "description": "Data classification level (Layer 34)"
+            },
+            "pii_risk": {
+              "type": "string",
+              "enum": ["none", "low", "medium", "high"],
+              "default": "low",
+              "description": "PII risk level of results"
+            },
+            "requires_approval": {
+              "type": "boolean",
+              "default": false,
+              "description": "Tenant must approve before first use"
+            }
+          },
+          "additionalProperties": false
+        },
+        "compliance_zone": {
+          "type": "object",
+          "properties": {
+            "required": {
+              "type": "boolean",
+              "default": false,
+              "description": "If true, provider enforces data residency"
+            },
+            "allowed_regions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["EU", "DE", "FR", "CH", "AT", "BE", "NL", "SE", "FI", "DK", "NO", "US", "APAC"]
+              },
+              "minItems": 1,
+              "description": "Allowed data residency regions (Art. 14 zone gate)"
+            }
+          },
+          "additionalProperties": false
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "semantic-search",
+              "full-text-search",
+              "filtering",
+              "keyword-matching",
+              "hybrid-search"
+            ]
+          },
+          "description": "Advertised capabilities"
+        },
+        "resilience": {
+          "type": "object",
+          "properties": {
+            "fallback_enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable fallback to next provider on error"
+            },
+            "fallback_to": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of fallback provider IDs"
+            },
+            "circuit_breaker": {
+              "type": "object",
+              "properties": {
+                "failure_threshold": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 5,
+                  "description": "Errors before circuit opens"
+                },
+                "timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "default": 30,
+                  "description": "Time before circuit attempts reset"
+                }
+              },
+              "additionalProperties": false
+            },
+            "cache_ttl_seconds": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 300,
+              "description": "Cache TTL (0 = no cache)"
+            }
+          },
+          "additionalProperties": false
+        },
+        "quotas": {
+          "type": "object",
+          "properties": {
+            "daily_queries": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Max queries per day"
+            },
+            "monthly_cost_usd": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "description": "Estimated monthly cost (informational)"
+            },
+            "free_tier": {
+              "type": "boolean",
+              "default": true,
+              "description": "Is this provider free-tier eligible?"
+            }
+          },
+          "additionalProperties": false
+        },
+        "erasure_handler": {
+          "type": "object",
+          "description": "GDPR Art. 17 (Right to be Forgotten) handler",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["http-api", "none"],
+              "default": "none"
+            },
+            "endpoint": {
+              "type": "string",
+              "format": "uri",
+              "description": "Delete endpoint URL"
+            },
+            "request_schema": {
+              "type": "object",
+              "description": "Schema for erasure request body"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "object",
+      "description": "Status fields (set by CorvinOS, not by provider)",
+      "properties": {
+        "registered_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of registration"
+        },
+        "last_health_check": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Last successful health check"
+        },
+        "health_status": {
+          "type": "string",
+          "enum": ["healthy", "degraded", "unavailable"],
+          "default": "healthy"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

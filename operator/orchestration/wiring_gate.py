@@ -12,7 +12,7 @@ ADR exists to close (see ADR-0215 in Corvin-ADR/decisions/):
    ``streaming_executor.py`` / ``detector_plugin_registry.py`` staying
    unwired through 4+ review rounds.
 
-2. **Dotted ``operator.`` import lint.** ``operator/`` has no
+2. **Dotted ``operator.`` import lint.** ``corvin_operator/`` has no
    ``__init__.py`` and always loses to the stdlib ``operator`` module
    regardless of sys.path order — ``from operator.X.Y import Z`` /
    ``import operator.X.Y`` can NEVER resolve. This scans real import
@@ -60,7 +60,7 @@ _MANIFESTS: tuple[tuple[Path, Path, Path], ...] = (
     ),
 )
 
-# Repo-wide dotted-import lint scope. Kept narrow (operator/, core/) rather
+# Repo-wide dotted-import lint scope. Kept narrow (corvin_operator/, core/) rather
 # than the whole tree — vendored/third-party code (node_modules, .venv) must
 # never be scanned, and would produce meaningless noise if it were.
 _LINT_SCAN_ROOTS: tuple[Path, ...] = (
@@ -227,7 +227,7 @@ def _dotted_operator_import_lines(text: str) -> list[tuple[int, str]]:
     Y` statements — deliberately NOT a regex over raw text, so docstring
     usage examples and comments (which regularly quote import lines as
     documentation) can never produce a false positive. A regex-based first
-    version of this lint flagged operator/license/{sob,capability,
+    version of this lint flagged corvin_operator/license/{sob,capability,
     seal_loader}.py's module docstrings, which merely *show* the (broken)
     dotted form as a — since-corrected — usage example; ``ast`` only sees
     real statement nodes, which are immune to that whole class of mistake."""
@@ -238,7 +238,7 @@ def _dotted_operator_import_lines(text: str) -> list[tuple[int, str]]:
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            # `from operator import X` (bare, the real stdlib module) is
+            # `from corvin_operator_imports import X` (bare, the real stdlib module) is
             # fine and deliberately excluded — only the dotted submodule
             # form (`from operator.X... import Y`) can never resolve.
             if (node.module or "").startswith("operator."):
@@ -275,7 +275,7 @@ def lint_dotted_operator_imports(result: GateResult) -> None:
                     message=(
                         f"{display_path}:{lineno}: dotted "
                         f"`operator.` import can never resolve (stdlib "
-                        f"`operator` shadows the repo's operator/ "
+                        f"`operator` shadows the repo's corvin_operator/ "
                         f"directory) — use the repo-relative sys.path + "
                         f"bare-import pattern instead: {snippet!r}"
                     ),

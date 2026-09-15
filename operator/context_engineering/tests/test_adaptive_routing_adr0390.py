@@ -3,7 +3,7 @@
 Tests cover: task classification, adaptive budget allocation, performance metrics
 tracking, and pipeline integration.
 
-Run: python3 operator/context_engineering/tests/test_adaptive_routing_adr0390.py
+Run: python3 corvin_operator/context_engineering/tests/test_adaptive_routing_adr0390.py
 """
 from __future__ import annotations
 

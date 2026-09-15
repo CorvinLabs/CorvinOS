@@ -1,0 +1,9 @@
+{
+  "name": "corvin-bridge-slack",
+  "version": "0.1.0",
+  "private": true,
+  "main": "daemon.js",
+  "dependencies": {
+    "@slack/bolt": "^3.21.4"
+  }
+}

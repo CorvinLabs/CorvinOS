@@ -15,7 +15,7 @@ Covers:
   4. ensure_adapter_detached: spawns once, second call is already_running,
      pidfile written; a boot-crash adapter is reported as error.
 
-Run: python3 operator/bridges/tests/test_fresh_install_paths.py
+Run: python3 corvin_operator/bridges/tests/test_fresh_install_paths.py
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Marketplace index path resolution (ADR-0512 amendment, 2026-09-01).
 
-ADR-0512 moved `operator/marketplace/` out of CorvinOS into the sibling
+ADR-0512 moved `corvin_operator/marketplace/` out of CorvinOS into the sibling
 Corvin-Marketplace repository, but the console kept resolving the index at the
 in-repo path. Every branch created after that move served `count: 0` and the
 panel rendered "No extensions found" — a silent empty marketplace, because a
@@ -53,7 +53,7 @@ def test_legacy_in_repo_index_wins_over_sibling(tmp_path, monkeypatch):
 
 def test_falls_back_to_sibling_checkout(tmp_path, monkeypatch):
     """The normal developer layout after ADR-0512: no in-repo index at all."""
-    monkeypatch.chdir(tmp_path)  # no operator/marketplace here
+    monkeypatch.chdir(tmp_path)  # no corvin_operator/marketplace here
     resolved = resolve_index_path()
     sibling = Path(
         __import__("corvin_console.routes.marketplace", fromlist=["x"]).__file__

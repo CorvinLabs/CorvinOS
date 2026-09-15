@@ -221,7 +221,7 @@ def _engine_allowed_by_license(engine_id: str) -> bool:
     try:
         import sys as _sys
         from pathlib import Path as _P
-        _op = str(_P(__file__).resolve().parents[2])  # operator/
+        _op = str(_P(__file__).resolve().parents[2])  # corvin_operator/
         if _op not in _sys.path:
             _sys.path.insert(0, _op)
         from license.validator import assert_limit as _al  # type: ignore

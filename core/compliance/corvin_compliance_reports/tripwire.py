@@ -60,7 +60,7 @@ def _audit_module():
     """Import the bridge audit module without making core depend on the bridge.
 
     Mirrors the optional-import convention used by ``adapter.py`` for
-    ``corvin_plugins``: the module lives in ``operator/bridges/shared`` and is not
+    ``corvin_plugins``: the module lives in ``corvin_operator/bridges/shared`` and is not
     guaranteed to be importable in every packaging layout.
     """
     try:
@@ -76,7 +76,7 @@ def _audit_module():
         # append, NOT insert(0): this directory also contains generic top-level
         # names (tests/, templates/) with no __init__.py, so putting it FIRST on
         # sys.path lets them shadow another package's `tests` — the same class as
-        # the operator/ stdlib-shadow trap. Appending means existing paths win.
+        # the corvin_operator/ stdlib-shadow trap. Appending means existing paths win.
         sys.path.append(str(shared))
     try:
         import audit as _audit  # type: ignore[import-not-found]
@@ -593,7 +593,7 @@ def core_audit_owns_the_trail() -> TripwireResult:
 
 
 def _shared_module(name: str):
-    """Import a module from ``operator/bridges/shared`` (the gates live there)."""
+    """Import a module from ``corvin_operator/bridges/shared`` (the gates live there)."""
     try:
         return __import__(name)
     except ImportError:
@@ -753,7 +753,7 @@ def _hooks_mention_path_gate(cfg: dict) -> bool:
 def l10_hook_registered() -> TripwireResult:
     """REPORTING (F-A8): is the L10 path-gate wired as a Claude Code PreToolUse hook?
 
-    ``operator/voice/hooks/hooks.json`` only takes effect when the ``voice``
+    ``corvin_operator/voice/hooks/hooks.json`` only takes effect when the ``voice``
     plugin is enabled in the operator's Claude Code, or when the hook is
     registered directly in a settings file. Neither is something the platform
     can do for the operator, so this probe REPORTS (it never blocks a boot):

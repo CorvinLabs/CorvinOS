@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 def _ensure_operator_on_path() -> None:
     """Make ``forge`` importable in a source checkout (no-op in a wheel)."""
     try:
-        import corvin_core._bootstrap  # noqa: F401  — inserts operator/forge etc.
+        import corvin_core._bootstrap  # noqa: F401  — inserts corvin_operator/forge etc.
     except Exception:  # noqa: BLE001 — packaged layout without corvin_core
         pass
 

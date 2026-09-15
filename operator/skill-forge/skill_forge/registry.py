@@ -63,7 +63,7 @@ def _import_forge_audit():
     # ``from forge.security_events import ...`` resolves to its
     # security_events submodule.
     plugins_dir = Path(__file__).resolve().parents[2]    # /plugins
-    forge_top = plugins_dir / "forge"                    # /operator/forge
+    forge_top = plugins_dir / "forge"                    # /corvin_operator/forge
     if forge_top.is_dir() and str(forge_top) not in sys.path:
         sys.path.insert(0, str(forge_top))
     try:
@@ -132,7 +132,7 @@ def plugin_slot_dir() -> Path:
          dedicated, single-purpose variable used nowhere else, so its mere
          presence is an unambiguous "redirect me" signal on its own.
       2. Walk up from this file's location for a ``.corvin_repo``/``plugins/``
-         marker → ``<repo>/operator/skill-forge/skills/dyn/`` — the REAL
+         marker → ``<repo>/corvin_operator/skill-forge/skills/dyn/`` — the REAL
          production path. Confirmed by `test_engine_visibility.py`'s actual
          `claude -p` subprocess run: the native engine's plugin-skill loader
          only ever sees skills mirrored here, not anywhere CORVIN_HOME-derived.

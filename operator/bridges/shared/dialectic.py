@@ -23,7 +23,7 @@ For every potential decision a single value is computed:
 
 When ``heat`` is below the per-site threshold, the call returns the
 thesis as-is (no antithesis built, no audit overhead). Thresholds were
-calibrated against 13 fictive tasks (see operator/bridges/shared/
+calibrated against 13 fictive tasks (see corvin_operator/bridges/shared/
 test_dialectic_lib.py for the calibration table). Default 0.5 — except
 ``path_gate`` which uses 0.6 because false-positive denies are costly.
 

@@ -4,7 +4,7 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-# ``operator/`` is shadowed by the stdlib module; register the package under
+# ``corvin_operator/`` is shadowed by the stdlib module; register the package under
 # its own top-level name (same mechanism the console uses at boot).
 from core.learning.classifier_model import import_context_engineering
 

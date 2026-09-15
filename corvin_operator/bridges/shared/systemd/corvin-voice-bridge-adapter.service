@@ -1,0 +1,27 @@
+[Unit]
+Description=corvin-voice multi-channel bridge adapter (inbox -> claude -> outbox)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=__BRIDGES_DIR__/shared
+ExecStart=__PYTHON_BIN__ adapter.py
+Restart=always
+RestartSec=5
+# 120s stop budget: the adapter's SIGTERM handler drains in-flight engine
+# runs (up to ~90s) before exiting; 20s forced a SIGKILL of every running
+# claude subprocess on each restart, crashing all active sessions.
+TimeoutStopSec=120
+# mixed: SIGTERM goes to the main process only, so in-flight claude runs
+# keep streaming during the drain window instead of dying instantly with
+# exit 143; the final SIGKILL (after TimeoutStopSec) still sweeps the cgroup.
+KillMode=mixed
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env
+
+[Install]
+WantedBy=default.target

@@ -161,7 +161,7 @@ def classify(
     }
     _loop_params: dict[str, dict[str, Any]] = {
         "iterative_fix": {"k_max": 5, "convergence": "test passing + no regressions",
-                          "loss_signal_command": "bash operator/bridges/run-all-tests.sh"},
+                          "loss_signal_command": "bash corvin_operator/bridges/run-all-tests.sh"},
         "multi_agent":   {"k_max": 3, "convergence": "dry-streak 2 rounds without new CRITICAL/HIGH",
                           "severity_gate": "CRITICAL + HIGH block convergence; MED/LOW to backlog"},
         "exploration":   {"k_max": 1, "convergence": "thesis + antithesis + synthesis complete"},

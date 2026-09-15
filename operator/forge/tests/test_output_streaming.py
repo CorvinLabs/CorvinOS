@@ -20,7 +20,7 @@ MCP call.
 Negative case: a tool whose stdout fits under the cap behaves exactly
 as before — no truncation, no artifact, no meta entries.
 
-Run as: python3 operator/forge/tests/test_output_streaming.py
+Run as: python3 corvin_operator/forge/tests/test_output_streaming.py
 """
 from __future__ import annotations
 

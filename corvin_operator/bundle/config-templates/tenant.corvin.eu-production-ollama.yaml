@@ -1,0 +1,111 @@
+# tenant.corvin.eu-production-ollama.yaml — EU_PRODUCTION preset (Ollama).
+# Install to: <corvin_home>/tenants/_default/global/tenant.corvin.yaml
+# (Replaces or extends the default tenant.corvin.yaml for EU-strict deployments.)
+#
+# Default EU-compliant profile per ADR-0041 / ADR-0043. The engine runs
+# locally via Ollama, no data leaves the host network, and the L35
+# egress gate refuses any host that isn't the local Ollama socket or
+# loopback.
+#
+# Out of scope for this file (operator responsibility):
+#   * iptables / docker network / cloud security-group rules at the
+#     perimeter — L35 ships *intent*; real enforcement lives there.
+#   * The Ollama daemon itself (systemd unit, model pull).
+#   * The DPIA, DSB sign-off, external pentest, 3-month soak.
+#
+# Hot-reloads on mtime change.
+
+apiVersion: corvin/v1
+kind: Tenant
+metadata:
+  id: _default
+  display_name: "EU Production (Ollama)"
+  created_at: "2026-05-19T00:00:00Z"
+  preset: eu-production-ollama
+
+spec:
+  # ── Compliance zone (EU AI Act Art. 14) ─────────────────────────────────────
+  # Lock the engine universe to the single local Ollama engine.
+  # claude_code / codex_cli / generic opencode are explicit refusals.
+  data_residency:
+    zone: EU
+    allowed_engines:
+      - opencode_ollama
+    forbid_engines:
+      - claude_code
+      - codex_cli
+      - opencode            # generic opencode — provider-unknown; refuse
+
+  # ── Data classification matrix (Layer 34 / ADR-0042) ────────────────────────
+  # Tightened from module default: INTERNAL also requires local engine.
+  # The default registry has opencode_ollama tagged locality=local,
+  # network_egress=local — which satisfies CONFIDENTIAL but NOT SECRET
+  # (SECRET requires egress=none). For SECRET work the operator must
+  # register an air-gapped engine and add it to engine_compliance.
+  data_classification:
+    matrix:
+      PUBLIC:       [local]
+      INTERNAL:     [local]
+      CONFIDENTIAL: [local]
+      SECRET:       [local]
+    engine_compliance:
+      - engine_id: opencode_ollama
+        locality: local
+        network_egress: local
+        notes: "qwen3:8b via local Ollama daemon on loopback"
+
+  # ── Network egress lockdown (Layer 35 / ADR-0043) ───────────────────────────
+  # deny everything except loopback + the Ollama socket name. Operators
+  # who run Ollama on a remote LAN host should add that host's FQDN
+  # to allowed_hosts.
+  egress:
+    enabled: true
+    default_action: deny
+    allowed_hosts:
+      - localhost
+      - 127.0.0.1
+    forbidden_hosts:
+      - api.anthropic.com
+      - api.openai.com
+      - api.mistral.ai
+      - generativelanguage.googleapis.com
+
+  # ── Budget caps ──────────────────────────────────────────────────────────────
+  # Inherited from default; operators can tighten as needed.
+  budget:
+    max_runs_per_day: null
+    max_tokens_per_day: null
+    max_wall_clock_per_run_s: null
+
+  # ── Compute worker (ADR-0013) ─────────────────────────────────────────────────
+  # Local compute — no compliance impact under EU_PRODUCTION.
+  compute:
+    enabled: true
+    max_parallel_iterations: 4
+    max_concurrent_runs: 2
+    max_iterations_per_run: 200
+    max_wall_clock_per_run_s: 600
+    top_k_size: 5
+    disallow_llm_strategies: false
+    strategies_allowed:
+      - grid
+      - random
+      - bayesian
+
+  # ── Audit retention (Layer 37 / ADR-0044) ───────────────────────────────────
+  # 7-year retention floor + encryption-at-rest for rotated segments.
+  # NOTE: L37 is M3 in the roadmap; this block is forward-declared and
+  # ignored by current code, but kept here so the preset is complete
+  # the moment L37 ships.
+  audit:
+    retention_years: 7
+    encryption_at_rest:
+      enabled: false        # operator MUST set true + provide a recipient
+      recipient: null       # e.g. "age1..." or a gpg key id
+    rotation:
+      max_size_mb: 100
+      max_age_days: 30
+
+  # ── Plugin list (ADR-0030 + ADR-0033) ────────────────────────────────────────
+  plugins:
+    installed: []

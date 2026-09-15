@@ -8,7 +8,7 @@ Tests the full BYOK pipeline without any Management API or real vault:
   5. Key-name validation rules
 
 Run:
-    pytest operator/agent/tests/test_agent_e2e.py -v
+    pytest corvin_operator/agent/tests/test_agent_e2e.py -v
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ sys.path.insert(0, str(_REPO / "operator" / "forge"))
 @pytest.fixture(autouse=True)
 def _isolate_voice_config_dir(tmp_path, monkeypatch):
     """WA-22 incident: apply_byok_secret() now also writes into
-    service.env (operator/bridges/shared/provider_keys.py) — without this
+    service.env (corvin_operator/bridges/shared/provider_keys.py) — without this
     fixture, every BYOK test in this file silently wrote its fixture
     plaintext into the REAL ~/.config/corvin-voice/service.env, once
     clobbering a working CORVIN_STT_OPENAI_KEY with test garbage. Every

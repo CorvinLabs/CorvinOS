@@ -9,8 +9,8 @@ Tests cover all six normalization phases:
 6. Incident linking (incident-*.md discovery)
 
 Run with:
-    python -m pytest operator/task_analysis/tests/test_normalizer.py -v
-    python -m pytest operator/task_analysis/tests/test_normalizer.py::TestTaskTypeDetection -v
+    python -m pytest corvin_operator/task_analysis/tests/test_normalizer.py -v
+    python -m pytest corvin_operator/task_analysis/tests/test_normalizer.py::TestTaskTypeDetection -v
 """
 
 import unittest
@@ -198,15 +198,15 @@ class TestComponentExtraction(unittest.TestCase):
 
     def test_extract_multiple_file_paths(self):
         """Test extraction of multiple file paths."""
-        task = "Fix in core/compliance/tripwire.py and operator/bridges/adapter.py"
+        task = "Fix in core/compliance/tripwire.py and corvin_operator/bridges/adapter.py"
         components = self.normalizer._extract_components(task)
 
         self.assertIn("core/compliance/tripwire.py", components)
-        self.assertIn("operator/bridges/adapter.py", components)
+        self.assertIn("corvin_operator/bridges/adapter.py", components)
 
     def test_extract_module_paths(self):
         """Test extraction of module paths (not just files)."""
-        task = "Issue in core/plugins/ and operator/task_analysis/"
+        task = "Issue in core/plugins/ and corvin_operator/task_analysis/"
         components = self.normalizer._extract_components(task)
 
         # Should extract module-level paths
@@ -215,7 +215,7 @@ class TestComponentExtraction(unittest.TestCase):
 
     def test_extract_module_roots(self):
         """Test inference of module root names from nested paths."""
-        task = "core/compliance/layer.py and operator/voice/renderer.py"
+        task = "core/compliance/layer.py and corvin_operator/voice/renderer.py"
         components = self.normalizer._extract_components(task)
 
         # Should include deduced module roots
@@ -630,12 +630,12 @@ class TestIncidentLinking(unittest.TestCase):
             memory_dir = Path(tmpdir)
 
             (memory_dir / "incident-1.md").write_text("core/voice crash\n")
-            (memory_dir / "incident-2.md").write_text("operator/bridge failure\n")
+            (memory_dir / "incident-2.md").write_text("corvin_operator/bridge failure\n")
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
 
             incidents = normalizer._find_related_incidents(
-                ["core/voice/renderer.py", "operator/bridges/adapter.py"], []
+                ["core/voice/renderer.py", "corvin_operator/bridges/adapter.py"], []
             )
 
             self.assertIn("incident-1.md", incidents)

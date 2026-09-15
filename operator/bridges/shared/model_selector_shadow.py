@@ -13,7 +13,7 @@ Until 2026-09-10 core.models.model_selection_routing.ModelSelectionRouter had
 zero production callers: the classifier was built, unit-tested, and never
 reached by a real turn — the exact gap class ADR-0532 Phase 1's adversarial
 review (F1) found for os.delegation_router before its own 2026-09-06 shadow
-wiring. operator/bridges/shared/adapter.py::call_claude_streaming is the one
+wiring. corvin_operator/bridges/shared/adapter.py::call_claude_streaming is the one
 call site every streaming turn passes through with the real prompt text
 available, so it is the honest place to attach this — same reasoning
 _acp_shadow_route already established for engine routing.

@@ -2,7 +2,7 @@
 
 Run with::
 
-    python3 operator/bridges/shared/test_erasure_orchestrator.py
+    python3 corvin_operator/bridges/shared/test_erasure_orchestrator.py
 """
 from __future__ import annotations
 

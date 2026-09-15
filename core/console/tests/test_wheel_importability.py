@@ -145,7 +145,7 @@ class TestCorePackagesAreImportableTopLevel(unittest.TestCase):
 
 
 class TestBareImportsResolveFromTheVendorBootstrap(unittest.TestCase):
-    """Bare ``import X`` inside operator/ needs a vendor subtree that provides X."""
+    """Bare ``import X`` inside corvin_operator/ needs a vendor subtree that provides X."""
 
     def _subtrees(self) -> tuple[str, ...]:
         sys.path.insert(0, str(REPO / "core" / "console"))

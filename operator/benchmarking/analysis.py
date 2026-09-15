@@ -1,14 +1,14 @@
 """Descriptive analysis and reporting for TDE benchmark SIMULATION results.
 
 HONESTY NOTE (adversarial review 2026-07-24): the numbers analyzed here come
-from operator/benchmarking/harness.py's _simulate_tokens() — a deterministic
+from corvin_operator/benchmarking/harness.py's _simulate_tokens() — a deterministic
 model that ENCODES the assumed per-category savings ratios; nothing in this
 package executes TDE or measures real token usage. Consequently this module
 reports DESCRIPTIVE statistics of the simulation only and never claims
 statistical significance: an earlier revision bucketed a pseudo p-value and
 then unconditionally overrode it to 0.01 for any mean delta > 500 — that
 fabrication has been removed. For honest, measured numbers use
-operator/orchestration/tde/bench.py (real SendIntegration runs, wall-clock
+corvin_operator/orchestration/tde/bench.py (real SendIntegration runs, wall-clock
 only until token instrumentation exists).
 """
 from __future__ import annotations

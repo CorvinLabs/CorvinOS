@@ -297,7 +297,7 @@ class TestCLICommands(unittest.TestCase):
     def _run_cli(self, args: list[str]) -> tuple[int, str, str]:
         """Run corvin_instance_id CLI, capture stdout/stderr, return (rc, out, err)."""
         import io
-        from operator import attrgetter
+        from corvin_operator_imports import attrgetter
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]
                                 / "voice" / "scripts"))
         import corvin_instance_id as cli

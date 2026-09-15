@@ -17,7 +17,7 @@ Covers:
   - CLI: status / on / off / set / preset round-trip
   - CI-lint: ``import anthropic`` is forbidden
 
-Run as: python3 operator/bridges/shared/test_ldd_lib.py
+Run as: python3 corvin_operator/bridges/shared/test_ldd_lib.py
 """
 from __future__ import annotations
 
@@ -322,7 +322,7 @@ def case_filter_skills():
 
 def _run_cli(*args):
     return subprocess.run(
-        [sys.executable, str(REPO / "operator/bridges/shared/ldd.py"),
+        [sys.executable, str(REPO / "corvin_operator/bridges/shared/ldd.py"),
          *args],
         capture_output=True, text=True, env={**os.environ},
     )
@@ -452,7 +452,7 @@ def case_ldd_auto_optin():
 def case_no_anthropic_sdk_import():
     print("\n[14] ldd.py must NOT import the Anthropic SDK")
     import ast
-    src_path = REPO / "operator/bridges/shared/ldd.py"
+    src_path = REPO / "corvin_operator/bridges/shared/ldd.py"
     tree = ast.parse(src_path.read_text())
     bad = []
     for node in ast.walk(tree):

@@ -72,7 +72,7 @@ except Exception:  # pragma: no cover - fail-closed: absent capability blocks sp
 
 def _load_corvin_home():
     """Load ``corvin_home`` from the sibling ``paths.py`` by file path (avoids
-    the sys.path collision with ``operator/forge/paths.py``)."""
+    the sys.path collision with ``corvin_operator/forge/paths.py``)."""
     _audit_dir = Path(__file__).resolve().parent
     _local_paths_file = _audit_dir / "paths.py"
     try:
@@ -183,8 +183,8 @@ def _forge_workspace_root() -> Path:
     env = os.environ.get("FORGE_ROOT")
     if env:
         return Path(env).expanduser()
-    # paths.py sits next to audit.py in operator/bridges/shared/. Direct load by
-    # file path to avoid sys.path conflicts with operator/forge/paths.py (a stub
+    # paths.py sits next to audit.py in corvin_operator/bridges/shared/. Direct load by
+    # file path to avoid sys.path conflicts with corvin_operator/forge/paths.py (a stub
     # without corvin_home).
     return _load_tenant_audit_chain()().parent
 
@@ -210,7 +210,7 @@ DEFAULT_AUDIT_PATH = _forge_workspace_root() / "audit.jsonl"
 # Optional forge dependency — silent fallback when absent.
 _se = None
 try:
-    _voice_plugin_root = Path(__file__).resolve().parents[2]  # operator/bridges/shared/audit.py → operator/
+    _voice_plugin_root = Path(__file__).resolve().parents[2]  # corvin_operator/bridges/shared/audit.py → corvin_operator/
     _forge_root = _voice_plugin_root / "forge"
     if _forge_root.is_dir() and (_forge_root / "forge").is_dir():
         sys.path.insert(0, str(_forge_root))
@@ -267,7 +267,7 @@ try:
             # templates/ without __init__.py. audit.py is imported by every
             # adapter process, so putting that directory first on sys.path would
             # let `import tests` resolve there instead of the caller's own —
-            # the operator/ stdlib-shadow trap, one level over.
+            # the corvin_operator/ stdlib-shadow trap, one level over.
             sys.path.append(str(_core_plugins))
         from corvin_plugins.providers import audit_backend as _audit_sink  # type: ignore
 except Exception:  # noqa: BLE001 - absent plugin package must never break audit

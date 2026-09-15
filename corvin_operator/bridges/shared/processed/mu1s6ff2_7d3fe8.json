@@ -1,0 +1,8 @@
+{
+  "id": "mu1s6ff2_7d3fe8",
+  "channel": "discord",
+  "from": "1299270034849533983",
+  "chat_id": "1501540900529246251",
+  "ts": 1789422875534,
+  "text": "in der console unter model selector schau mal ob das hier wirklich richtig ist. das sieht aus wie mock daten. da ändert sich nie was: Haiku- vs. Opus-Referenzkosten\n80.0%\n$83.95 hypothetisch (Opus) → $16.79 real\n100% haiku-4-5\nModell fest gepinnt auf haiku-4-5 (Settings → AI Engines → OS Model) — keine adaptive Auswahl aktiv. Keine Lizenz-/Tier-Beschränkung."
+}

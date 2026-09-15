@@ -5,7 +5,7 @@
   * a missing turn / erased sidecar reads as None (never raises).
   * the turn-id key is sanitised (no path traversal in the sidecar filename).
 
-Run: python3 operator/context_engineering/tests/test_prompt_assembly.py
+Run: python3 corvin_operator/context_engineering/tests/test_prompt_assembly.py
 """
 from __future__ import annotations
 

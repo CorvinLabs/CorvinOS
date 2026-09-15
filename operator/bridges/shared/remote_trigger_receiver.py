@@ -112,7 +112,7 @@ except Exception:
     _load_a2a_manifest = None  # type: ignore[assignment]
 
 def _default_repo_relative(*parts: str) -> Path:
-    """<repo_root>/operator/<parts>.
+    """<repo_root>/corvin_operator/<parts>.
 
     Resolution order (2026-08-04 — found live debugging a real installed
     deployment where this landed on a DIFFERENT directory than
@@ -126,7 +126,7 @@ def _default_repo_relative(*parts: str) -> Path:
        when importable. ``corvin_console`` always sits at the same fixed
        depth under the interpreter's site-packages/venv root regardless of
        how deeply *this* file (vendored under
-       ``corvin_console/_vendor/operator/bridges/shared/``) ends up nested
+       ``corvin_console/_vendor/corvin_operator/bridges/shared/``) ends up nested
        — so anchoring off it, not off ``__file__``, is what actually
        guarantees agreement with ``a2a_pair.py``'s own
        ``Path(__file__).resolve().parents[3]`` (identical nesting depth
@@ -1528,7 +1528,7 @@ class RemoteTriggerReceiver:
         ``sest_fp`` = hex-encoded SHA-256(jwt_header + "." + jwt_payload).
         ``sest_sig`` = base64url-encoded RS256 signature bytes (from the JWT).
 
-        Uses the embedded ``operator/license/a2a_network_pubkey.pem`` as the
+        Uses the embedded ``corvin_operator/license/a2a_network_pubkey.pem`` as the
         trust anchor.  Raises ValidationError on any failure (bad encoding,
         bad sig, missing pubkey, missing crypto library).
         """
@@ -1581,13 +1581,13 @@ class RemoteTriggerReceiver:
     def _load_a2a_network_pubkey(self) -> str | None:
         """Return the A2A network public key PEM string, or None if unavailable.
 
-        Search order: embedded path under operator/license/, then
+        Search order: embedded path under corvin_operator/license/, then
         CORVIN_IBC_PUBKEY_PEM env var (useful in test environments).
         """
         # Try the well-known embedded path first (set at module level).
         if _A2A_NETWORK_PUBKEY_PATH.exists():
             return _A2A_NETWORK_PUBKEY_PATH.read_text()
-        # Fallback: walk up from this file looking for the operator/license/ tree
+        # Fallback: walk up from this file looking for the corvin_operator/license/ tree
         # (handles worktree layouts where __file__ is not at the shared/ level).
         here = Path(__file__).resolve()
         for parent in here.parents:

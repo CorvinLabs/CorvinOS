@@ -10,7 +10,7 @@ Verifies the two-layer trail:
     `prev_hash`) and contains NO brief text.
   * emit never raises into the turn.
 
-Run: python3 operator/context_engineering/tests/test_decision_record_adr0278.py
+Run: python3 corvin_operator/context_engineering/tests/test_decision_record_adr0278.py
 """
 from __future__ import annotations
 

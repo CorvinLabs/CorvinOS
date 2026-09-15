@@ -15,7 +15,7 @@ talks about something else entirely → no auto-grade.
 Opt-out: the chat profile carries inject_skills=false → no grades
 written even if the output mentions every skill.
 
-Run as: python3 operator/bridges/shared/test_skill_auto_grade.py
+Run as: python3 corvin_operator/bridges/shared/test_skill_auto_grade.py
 """
 from __future__ import annotations
 

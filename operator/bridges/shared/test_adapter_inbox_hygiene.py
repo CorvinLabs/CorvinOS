@@ -17,7 +17,7 @@ the JSON parser:
      envelope — ``submit_inbox_item`` still routes it, the runner quarantines
      it, and the msg_id is NOT pinned in ``_in_flight`` for 3600 s
 
-Run: python3 operator/bridges/shared/test_adapter_inbox_hygiene.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_inbox_hygiene.py
      (or pytest)
 """
 from __future__ import annotations

@@ -3,7 +3,7 @@
 ADR-0119/0181: 243690e8 ("rewrite engine.py for Claude Code only") dropped the
 whole per-engine provider/model persistence path (`engine_models`) along with
 the multi-engine machinery it was bundled with. `resolve_claude_code_provider_env`
-(operator/bridges/shared/engine_models.py) — the function the adapter's spawn
+(corvin_operator/bridges/shared/engine_models.py) — the function the adapter's spawn
 path calls on every turn — still reads `spec.engine_models.<engine_id>.provider`
 from tenant.corvin.yaml; nothing wrote that shape anymore. Restored 2026-09-10
 alongside the /registry, /providers, /models, /detect routes, additively (no

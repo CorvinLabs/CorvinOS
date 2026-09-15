@@ -81,7 +81,7 @@ from .runs import RunRecord
 # that already ships in the console's datasource route (resolves every A/AAAA
 # record and rejects loopback / link-local 169.254/16 / private / reserved /
 # IPv4-mapped / cloud-IMDS targets, fail-closed). It lives in a console module;
-# add ``core/console`` + ``operator/bridges/shared`` to the path (the gateway
+# add ``core/console`` + ``corvin_operator/bridges/shared`` to the path (the gateway
 # already mounts the console in-process, so the import is available) and import
 # the resolver + the L35 EgressGate engine spawns use.
 _BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"

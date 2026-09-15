@@ -23,7 +23,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[3]
 # The console package and its sibling MUST be importable; mirror the
 # pattern used by ``test_profile_routes.py``.
-for sub in ("core/console", "core/gateway", "operator/forge"):
+for sub in ("core/console", "core/gateway", "corvin_operator/forge"):
     p = _REPO / sub
     if p.exists() and str(p) not in sys.path:
         sys.path.insert(0, str(p))

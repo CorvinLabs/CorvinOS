@@ -26,7 +26,7 @@ Tests here measure the SUM ("is the fact present?"), never an internal trace:
     watchdog-readable Move-2 injection counter goes positive on injection, and
     muting it (the mutation) is caught.
 
-Run: .venv/bin/python -m pytest operator/context_engineering/tests/test_load_bearing_anchor.py
+Run: .venv/bin/python -m pytest corvin_operator/context_engineering/tests/test_load_bearing_anchor.py
 """
 from __future__ import annotations
 

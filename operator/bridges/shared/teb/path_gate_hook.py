@@ -5,7 +5,7 @@ non-CC engines.  Runs inside the ToolExecutionBroker before any tool
 execution; denies any path argument that points at a structurally
 protected Corvin location.
 
-Protected patterns (mirror of operator/voice/hooks/path_gate.py):
+Protected patterns (mirror of corvin_operator/voice/hooks/path_gate.py):
   - **/audit.jsonl        — tamper-evident audit chain
   - **/policy.json        — operator-only forge policy
   - **/forge/**           — forge workspaces (may not be written directly)

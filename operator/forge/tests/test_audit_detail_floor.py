@@ -207,7 +207,7 @@ def test_write_event_binds_lom_hash():
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "audit.jsonl"
         write_event(path, "test.event",
-                    details={"lom": "operator/forge/forge/security_events.py:write_event"})
+                    details={"lom": "corvin_operator/forge/forge/security_events.py:write_event"})
         rec = json.loads(path.read_text().strip().splitlines()[-1])
         assert len(rec["details"]["lom_hash"]) == 64
         ok, problems = verify_chain(path)

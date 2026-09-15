@@ -34,7 +34,7 @@ def _err(msg: str) -> None:
 
 
 def _ensure_bridge_shared_on_path() -> None:
-    """Put ``operator/bridges/shared`` on sys.path so the bridge top-level modules
+    """Put ``corvin_operator/bridges/shared`` on sys.path so the bridge top-level modules
     (``audit``, ``consent``) import even when the CLI runs WITHOUT the bridge/forge
     bootstrap (the `corvin` console-script does not import corvin_console). Mirrors
     the boot tripwire's ``_audit_module`` convention exactly — APPEND, not insert(0),

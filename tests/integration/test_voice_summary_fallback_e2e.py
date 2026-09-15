@@ -37,7 +37,7 @@ def test_voice_summary_context_preservation(tmp_path):
     shared = proj_root / "operator" / "bridges" / "shared"
 
     # Fresh interpreter: adapter.py must be importable as a bare module with
-    # <repo>/operator/bridges/shared on sys.path (no dotted operator.* import).
+    # <repo>/corvin_operator/bridges/shared on sys.path (no dotted operator.* import).
     script = tmp_path / "voice_test.py"
     script.write_text(f"""
 import sys

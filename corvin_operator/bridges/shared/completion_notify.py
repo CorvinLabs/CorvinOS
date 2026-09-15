@@ -1,0 +1,884 @@
+"""completion_notify.py — durable, acknowledged background-completion notifications.
+
+THE PROBLEM this solves
+-----------------------
+Background work that finishes AFTER the originating turn's ``claude -p``
+subprocess has already exited had no reliable way to reach the user's
+messenger:
+
+* The Claude Code SDK background-agent + ``bg_monitor`` idle-wakeup path cannot
+  carry a result across the per-turn process boundary — ``claude -p`` is a
+  one-shot subprocess that dies at turn end; a later ``--resume`` restores
+  conversation history, not a dead process's in-flight background agent.
+* The task-engine, scheduler-workflow and notification-relay paths each wrote
+  their "done" envelope into an outbox directory no messenger daemon polls.
+
+THE MECHANISM
+-------------
+A durable backbone with an acknowledgement (exactly-once) guarantee:
+
+1. A producer that starts long-running work calls :func:`register` with the
+   ORIGINATING channel + routing id + tenant, getting back a stable task id.
+2. When the work finishes (success OR failure) it calls :func:`mark_done` with
+   the result text.
+3. A poller — the adapter main loop AND the ``bg_monitor`` systemd timer, both
+   idempotent — calls :func:`deliver_ready`, which writes a correctly-routed
+   envelope into the SHARED outbox the daemons poll and then ACKNOWLEDGES the
+   record (marks it delivered) so it is sent exactly once, even with two
+   concurrent pollers (per-record ``O_EXCL`` lock).
+
+Records live in ``CORVIN_HOME/pending_notifications/<id>.json``. They carry
+routing PII (chat_id, sender uid), so :func:`purge_user` honours GDPR Art. 17,
+mirroring ``bg_monitor.purge_user``. Pure stdlib, no subprocess, no network —
+runs identically on Linux / macOS / Windows.
+"""
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import sys
+import time
+from pathlib import Path
+from typing import Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from voice_tag import extract_voice_override  # type: ignore  # noqa: E402
+
+# Delivered records are kept briefly for idempotency/forensics, then pruned.
+CN_DELIVERED_TTL = float(os.environ.get("CN_DELIVERED_TTL", str(24 * 3600)))
+# A pending record never marked done is pruned after this — a producer that
+# crashed without calling mark_done must not leak a record forever. Also caps
+# how long a wedged `ready` record may linger before it is force-pruned.
+CN_PENDING_MAX_AGE = float(os.environ.get("CN_PENDING_MAX_AGE", str(7 * 24 * 3600)))
+# A per-record delivery lock older than this belonged to a poller that crashed
+# mid-delivery; steal it so the record is not wedged forever.
+CN_LOCK_STALE = float(os.environ.get("CN_LOCK_STALE", "600"))
+# A pending record whose producer (the detached bg_task_worker) died WITHOUT
+# calling mark_done — SIGKILL/OOM/reboot, which no except: can catch — is reaped
+# into a failed completion after this grace so (a) the user is still told the
+# task stopped and (b) it stops counting against the /task concurrency cap. Far
+# shorter than CN_PENDING_MAX_AGE (7d) which used to leave a hard-killed worker's
+# record wedged for a week, locking the user out of /task.
+CN_PENDING_REAP = float(os.environ.get("CN_PENDING_REAP", str(30 * 60)))
+# Deadline for the OPT-IN orphan reaper (reap_orphan_pending, gated by the
+# ship-dark `bridge_orphan_task_reaper` flag). Deliberately far longer than
+# CN_PENDING_REAP (30 min): the reaper's UNCLAIMED branch cannot distinguish a
+# dead worker from a legitimately long compute job that never claims, so the
+# window must be generous. Default 2 h.
+CN_ORPHAN_DEADLINE = float(os.environ.get("CN_ORPHAN_DEADLINE", str(2 * 3600)))
+# Text delivered when an abandoned task is reaped. Runtime user-facing string.
+CN_ORPHAN_TEXT = os.environ.get(
+    "CN_ORPHAN_TEXT",
+    "❌ Task abgebrochen (Worker gestorben) — es kam kein Ergebnis zurück.",
+)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort, NON-DESTRUCTIVE liveness of a producer pid on THIS host.
+
+    CRITICAL: `os.kill(pid, 0)` is NOT a probe on Windows — CPython maps it to
+    TerminateProcess, so it would KILL the very worker we are checking. Use the
+    platform-appropriate non-destructive check.
+    """
+    if not pid or pid <= 0:
+        return False
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes  # noqa: PLC0415
+            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not h:
+                return False  # no such process (or access denied → treat as gone)
+            exit_code = ctypes.c_ulong(0)
+            ok = k32.GetExitCodeProcess(h, ctypes.byref(exit_code))
+            k32.CloseHandle(h)
+            STILL_ACTIVE = 259
+            return bool(ok) and exit_code.value == STILL_ACTIVE
+        except Exception:  # noqa: BLE001 — unknown → assume alive (don't reap)
+            return True
+    try:
+        os.kill(pid, 0)  # POSIX signal 0 = existence check, genuinely a no-op
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by another user
+    except OSError:
+        return True  # unknown → assume alive (conservative: don't reap)
+
+
+def _pid_from_rec(pid) -> "int | None":
+    """Parse a record's ``producer_pid`` to an int, or None when it is missing /
+    malformed. A None result must be treated as "unknown → alive" by callers
+    (do NOT reap) — never let a garbage pid raise out of the reap path."""
+    try:
+        return int(pid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _host_boot_id() -> str:
+    """Best-effort host boot identifier so a reused pid after a reboot is not
+    mistaken for a live producer. Empty string when unavailable (Windows/mac):
+    the pid check + grace still bound the lockout."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
+
+_STATE_PENDING = "pending"
+_STATE_READY = "ready"
+_STATE_DELIVERED = "delivered"
+
+# Channels that route on chat_id vs. the whatsapp `to` (JID). Mirrors the
+# per-daemon routing keys documented in the delivery map.
+_CHAT_ID_CHANNELS = frozenset(
+    {"discord", "telegram", "slack", "signal", "email", "teams"}
+)
+
+
+# ─── paths ─────────────────────────────────────────────────────────────────
+
+
+def _corvin_home() -> Path:
+    v = os.environ.get("CORVIN_HOME")
+    if v:
+        return Path(os.path.expanduser(os.path.expandvars(v)))
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from paths import corvin_home as _ch  # type: ignore
+
+        return _ch()
+    except Exception:  # noqa: BLE001
+        return Path.home() / ".corvin"
+
+
+def _queue_dir() -> Path:
+    d = _corvin_home() / "pending_notifications"
+    return d
+
+
+def _record_path(task_id: str) -> Path:
+    # task_id is caller-supplied; keep the filename filesystem-safe.
+    safe = "".join(c for c in str(task_id) if c.isalnum() or c in "-_")[:80]
+    if not safe:
+        safe = secrets.token_hex(8)
+    return _queue_dir() / f"{safe}.json"
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".tmp{secrets.token_hex(4)}")
+    # encoding= explicit: rec["text"] is the model answer (emoji are routine);
+    # without it Windows writes cp1252 and a finished result dies in
+    # UnicodeEncodeError — the reaper then falsely reports "worker stopped
+    # without reporting a result".
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Records carry routing PII (sender uid, chat_id, instruction label). Lock
+    # them to owner-only, matching the 0600 the /task spec file gets — otherwise
+    # they land world-readable (umask-default 0644) on a shared host.
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(path)  # atomic on POSIX + Windows
+
+
+def _read(path: Path) -> dict | None:
+    try:
+        # encoding pinned to match _atomic_write: without it Windows reads
+        # cp1252 and an emoji-bearing result record dies in UnicodeDecodeError
+        # (a ValueError, not caught below) — moving the "worker stopped
+        # without reporting a result" symptom from write- to read-side.
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return None
+
+
+# ─── producer API ──────────────────────────────────────────────────────────
+
+
+def register(
+    task_id: str | None = None,
+    *,
+    channel: str,
+    chat_id: str | int | None = None,
+    to: str | None = None,
+    sender: str = "",
+    tenant_id: str = "_default",
+    label: str = "",
+    want_voice: bool = False,
+) -> str:
+    """Register a pending completion notification and return its task id.
+
+    Capture the originating routing context NOW, while it is still available in
+    the turn, so the later (out-of-band) completion can be routed. ``chat_id``
+    is required for chat_id-routed channels; ``to`` for whatsapp.
+
+    ``want_voice`` (ADR-0189): ask the delivering poller to also synthesize a
+    spoken voice note for this record's text, IF the poller was given a
+    synthesizer (see ``deliver_ready``'s ``synthesize_voice`` param) — this
+    module stays pure-stdlib/no-subprocess either way; it only carries the
+    flag, it never calls into the (heavy, subprocess-based) TTS pipeline
+    itself. A poller with no synthesizer configured silently delivers
+    text-only, exactly as before this flag existed.
+    """
+    tid = str(task_id) if task_id else f"cn_{secrets.token_hex(8)}"
+    rec = {
+        "id": tid,
+        "channel": str(channel),
+        "chat_id": chat_id,
+        "to": to,
+        "sender": str(sender or ""),
+        "tenant_id": str(tenant_id or "_default"),
+        "label": str(label or ""),
+        "want_voice": bool(want_voice),
+        "state": _STATE_PENDING,
+        "text": None,
+        "voice_text": None,
+        # ADR-0554 Phase 0 (approach (a)): a pre-synthesized voice-note path,
+        # stamped by attach_voice() when a producer (bg_task_worker) synthesizes
+        # a spoken summary at completion time. When set, deliver_ready attaches
+        # it to the envelope regardless of which poller delivers (no callback
+        # needed) — poller-independent. None => text-only unless a want_voice
+        # synthesize_voice callback is injected (the pre-existing ADR-0189 path).
+        "voice_path": None,
+        "ok": None,
+        "created_at": time.time(),
+        "ready_at": None,
+        "delivered_at": None,
+        # Set by the worker via claim() once it starts, so a hard-killed worker
+        # can be reaped (see CN_PENDING_REAP / deliver_ready).
+        "producer_pid": None,
+        "producer_boot": None,
+    }
+    _atomic_write(_record_path(tid), rec)
+    return tid
+
+
+def claim(task_id: str) -> bool:
+    """Stamp the calling process as the producer of *task_id* (the detached
+    worker calls this at startup). Enables dead-producer reaping. No-op if the
+    record is gone or already done."""
+    path = _record_path(task_id)
+    rec = _read(path)
+    if rec is None or rec.get("state") != _STATE_PENDING:
+        return False
+    rec["producer_pid"] = os.getpid()
+    rec["producer_boot"] = _host_boot_id()
+    _atomic_write(path, rec)
+    return True
+
+
+def attach_voice(task_id: str, voice_path: str) -> bool:
+    """Stamp a pre-synthesized voice-note path onto a registered record.
+
+    ADR-0554 Phase 0 (approach (a)): the detached ``bg_task_worker`` condenses
+    its result into a spoken summary and synthesizes an OGG-Opus note at
+    COMPLETION time, then calls this BEFORE :func:`mark_done`. Because the path
+    is written while the record is still ``pending`` (never delivered until
+    mark_done flips it to ``ready``), the ready record already carries
+    ``voice_path`` and :func:`deliver_ready` attaches it to the outbox envelope
+    regardless of WHICH poller (adapter loop or bg_monitor timer) delivers — no
+    ``synthesize_voice`` callback needed, no delivery race.
+
+    ``mark_done`` preserves this field (it re-reads the whole record and only
+    rewrites text/state/ok), so the ordering attach_voice → mark_done is safe.
+
+    No-op if the record is gone or already delivered. Best-effort: never raises
+    — a voice note is an enhancement, never a delivery precondition.
+    """
+    if not task_id or not voice_path:
+        return False
+    try:
+        path = _record_path(task_id)
+        rec = _read(path)
+        if rec is None or rec.get("state") == _STATE_DELIVERED:
+            return False
+        rec["voice_path"] = str(voice_path)
+        _atomic_write(path, rec)
+        return True
+    except Exception:  # noqa: BLE001 — voice is an enhancement, never a blocker
+        return False
+
+
+def count_active(sender: str | None = None) -> int:
+    """Count not-yet-delivered records (pending + ready), optionally for one
+    sender. Used to cap concurrent background tasks so `/task` can't fork-bomb.
+    """
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    n = 0
+    for path in qdir.glob("*.json"):
+        rec = _read(path)
+        if rec is None or rec.get("state") == _STATE_DELIVERED:
+            continue
+        if sender is not None and rec.get("sender") != sender:
+            continue
+        n += 1
+    return n
+
+
+def mark_done(task_id: str, *, text: str, ok: bool = True) -> bool:
+    """Mark a registered task's work as finished and ready to deliver.
+
+    Idempotent: a second call updates the text but never resurrects an
+    already-delivered record. Returns False if no such pending record exists
+    (e.g. the producer never called register).
+
+    ``text`` may carry a `<voice>…</voice>` override (the same mechanism the
+    adapter's main turn handler strips before displaying/speaking a reply —
+    see voice_tag.py) — a producer like bg_task_worker.py passes through
+    whatever call_claude_streaming() returned verbatim, and that can include
+    an engine-fallback string with such a tag. Stripping it HERE, once, at
+    the single choke point every producer already calls, means no producer
+    needs to remember to do it itself: the visible text (``rec["text"]``)
+    never carries the raw tag, and the spoken override (``rec["voice_text"]``)
+    is available for deliver_ready's synthesize_voice callback.
+    """
+    path = _record_path(task_id)
+    rec = _read(path)
+    if rec is None:
+        return False
+    if rec.get("state") == _STATE_DELIVERED:
+        return False
+    visible, spoken = extract_voice_override(str(text))
+    rec["state"] = _STATE_READY
+    rec["text"] = visible
+    rec["voice_text"] = spoken
+    rec["ok"] = bool(ok)
+    rec["ready_at"] = time.time()
+    _atomic_write(path, rec)
+    return True
+
+
+# ─── delivery (poller) API ─────────────────────────────────────────────────
+
+
+def _supervised(task_id) -> bool:
+    """True when *task_id* is an ACTIVE run owned by ``task_supervisor``.
+
+    Lazy import, and False on any failure: when the supervisor is unavailable
+    nobody will resume the task, so the dead-producer reap below is exactly the
+    right behaviour and must still run.
+    """
+    if not task_id:
+        return False
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        # Guarded: this runs once per pending record per poll tick, and an
+        # unguarded insert grew sys.path without bound in the long-running
+        # adapter process (slowing every subsequent import).
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import task_supervisor as _sup  # type: ignore
+
+        run = _sup.get_run(str(task_id))
+    except Exception:  # noqa: BLE001
+        return False
+    if not run:
+        return False
+    return run.get("state") == "active" and bool(run.get("supervise", True))
+
+
+def _envelope_for(rec: dict, *, voice_path: str | None = None) -> dict:
+    """Build the outbox envelope with the correct per-channel routing key.
+
+    ``voice_path`` (ADR-0189): when the caller already synthesized a voice
+    note for this record's text (see deliver_ready's synthesize_voice
+    callback), attach it here — the outbox consumer already knows how to
+    turn a voice_path into an attached voice note for any envelope that has
+    one, so no daemon-side change is needed to make this audible.
+    """
+    channel = rec.get("channel") or "discord"
+    label = rec.get("label") or "background task"
+    ok = rec.get("ok")
+    status = "✅" if ok else "⚠️"
+    body = rec.get("text") or ""
+    text = f"{status} {label} finished.\n\n{body}".strip()
+    env: dict = {
+        "msg_id": f"cn_{rec.get('id')}",
+        "channel": channel,
+        "text": text,
+        "_completion_notify": True,
+        "ts": time.time(),
+    }
+    if voice_path:
+        env["voice_path"] = voice_path
+    # Route: chat_id for most channels; `to` (JID) for whatsapp. Stamp both when
+    # available so a channel that reads either key still delivers.
+    #
+    # chat_id stays a STRING — never int-coerce. The daemons pass it straight to
+    # their client (discord.js channels.fetch, telegram sendMessage, …), all of
+    # which accept string ids. A Discord channel snowflake is 19 digits (> 2^53);
+    # emitting it as a JSON number loses precision when the daemon re-parses it
+    # with JSON.parse (float64) and the completion lands in the wrong/no channel.
+    chat_id = rec.get("chat_id")
+    if chat_id is not None and chat_id != "":
+        env["chat_id"] = str(chat_id)
+    to = rec.get("to")
+    if to:
+        env["to"] = to
+    elif channel == "whatsapp" and chat_id:
+        env["to"] = str(chat_id)
+    if rec.get("tenant_id"):
+        env["tenant_id"] = rec["tenant_id"]
+    # ADR-0057 / EU AI Act Art. 50 §4 — the body is AI-generated content (the
+    # engine's result), so it carries the same provenance marking + _final flag
+    # every normal final reply gets. Shared build_provenance keeps the marking
+    # contract identical across adapter / completion_notify / scheduler.
+    from provenance import build_provenance  # type: ignore
+    env["_final"] = True
+    env["provenance"] = build_provenance(channel, chat_id or to or "")
+    return env
+
+
+def _proactive_flag_on(tenant_id: str) -> bool:
+    """Resolve the ship-dark ``proactive_communication`` flag for ``tenant_id``.
+
+    OFF (default / unresolved) → the migrated delivery path uses the
+    pre-migration DIRECT outbox write (byte-identical, ship-dark: a default
+    install is never routed through the proactive choke point). ON → the
+    completion routes through the governed gate. Never raises."""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import proactive as _p  # type: ignore
+        return bool(_p._flag_on(tenant_id or "_default"))
+    except Exception:  # noqa: BLE001 — primitive/console absent → OFF (direct write)
+        return False
+
+
+def _write_outbox_direct(env: dict, voice_path: str | None,
+                         outbox: "str | Path", out_file_name: str) -> bool:
+    """Byte-identical pre-migration DIRECT outbox write (atomic tmp-replace, 0600).
+
+    Used for the ship-dark default (flag OFF) AND as the DENIED/unavailable
+    fallback under flag ON — a SOLICITED completion the user is waiting for must
+    never be silently lost to a house-rules false-positive or a broken gate.
+    Never raises."""
+    try:
+        e = dict(env)
+        if voice_path and not e.get("voice_path"):
+            e["voice_path"] = str(voice_path)
+        out_file = Path(outbox) / out_file_name
+        tmp = out_file.with_suffix(out_file.suffix + ".tmp")
+        tmp.write_text(json.dumps(e, ensure_ascii=False), encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)  # envelope carries routing PII
+        except OSError:
+            pass
+        tmp.replace(out_file)
+        return True
+    except Exception as ex:  # noqa: BLE001 — never raise
+        print(f"completion_notify: direct outbox write failed {out_file_name}: {ex}",
+              file=sys.stderr)
+        return False
+
+
+def _emit_via_proactive(env: dict, rec: dict, *, voice_path: str | None,
+                        outbox: "str | Path", out_file_name: str) -> str:
+    """Route ONE ready completion envelope through the proactive gate (ADR-0554
+    Phase 2 / ADR-0553 amendment). Only reached when the ``proactive_communication``
+    flag is ON for the record's tenant.
+
+    ``solicited=True``: a completion answers an explicit ``/task`` command, so
+    the flag / consent / disclosure gates are SKIPPED — House-rules + rate/flood
+    + the content-free ``proactive.emitted`` audit STILL apply. The pre-built
+    ``env`` is written verbatim (so the ``_completion_notify`` / ``_final`` /
+    provenance shape + ``cn_`` filename are byte-identical) and ``voice_path`` is
+    attached by the primitive as the single delivery site.
+
+    Returns a status string: ``"emitted"`` (envelope written), ``"rate_limited"``
+    (transient — leave READY, retry next poll), or ``"denied"`` (house-rules
+    fail-closed / false-positive / primitive unavailable — the caller MUST fall
+    back to a direct write so the solicited completion is never lost). Never
+    raises.
+    """
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import proactive as _p  # type: ignore
+    except Exception as e:  # noqa: BLE001 — primitive missing → deny → direct fallback
+        print(f"completion_notify: proactive gate unavailable {out_file_name}: {e}",
+              file=sys.stderr)
+        return "denied"
+    try:
+        res = _p.emit_proactive(
+            channel=env.get("channel") or rec.get("channel") or "discord",
+            chat_id=rec.get("chat_id"), to=rec.get("to"),
+            tenant_id=rec.get("tenant_id") or "_default",
+            uid=str(rec.get("sender") or ""),
+            text=env.get("text") or "",
+            kind="completion", voice_path=voice_path, solicited=True,
+            envelope=env, out_file_name=out_file_name, outbox_dir=outbox,
+        )
+        if res == _p.EmitResult.EMITTED:
+            return "emitted"
+        if res == _p.EmitResult.RATE_LIMITED:
+            return "rate_limited"
+        # DENIED or ERROR → a solicited completion must still reach the user.
+        return "denied"
+    except Exception as e:  # noqa: BLE001 — emit_proactive never raises; belt + braces
+        print(f"completion_notify: proactive emit failed {out_file_name}: {e}",
+              file=sys.stderr)
+        return "denied"
+
+
+def deliver_ready(
+    outbox_dir: str | Path, *, now: float | None = None,
+    synthesize_voice: "Callable[[str], str | None] | None" = None,
+) -> int:
+    """Deliver every ready notification to *outbox_dir* exactly once.
+
+    For each ready record: acquire a per-record ``O_EXCL`` lock (so the adapter
+    loop and the bg_monitor timer never double-send), write the outbox envelope,
+    then mark the record delivered (the acknowledgement). Also prunes delivered
+    records past ``CN_DELIVERED_TTL`` and abandoned pending records past
+    ``CN_PENDING_MAX_AGE``. Fail-safe: any per-record error is logged to stderr
+    and skipped; never raises. Returns the count delivered this call.
+
+    ``synthesize_voice`` (ADR-0189): optional ``text -> voice_path | None``
+    callback, injected by a caller that HAS the (heavy, subprocess-based) TTS
+    pipeline available — this module itself stays pure-stdlib/no-subprocess.
+    Only called for records with ``want_voice=True`` (see ``register``).
+    Synthesis failure degrades to text-only delivery, never blocks it — a
+    voice note is an enhancement, not a delivery precondition.
+    """
+    now = time.time() if now is None else now
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    outbox = Path(outbox_dir)
+    try:
+        outbox.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return 0
+
+    delivered = 0
+    for path in sorted(qdir.glob("*.json")):
+        rec = _read(path)
+        if rec is None:
+            # Malformed/partial record — prune when clearly stale so it is not
+            # re-scanned every poll forever.
+            try:
+                if now - path.stat().st_mtime > CN_PENDING_MAX_AGE:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+        state = rec.get("state")
+
+        # Prune terminal / abandoned records.
+        if state == _STATE_DELIVERED:
+            da = rec.get("delivered_at") or 0
+            if now - float(da or 0) > CN_DELIVERED_TTL:
+                path.unlink(missing_ok=True)
+            continue
+        if state == _STATE_PENDING:
+            ca = rec.get("created_at") or 0
+            age = now - float(ca or 0)
+            if age > CN_PENDING_MAX_AGE:
+                path.unlink(missing_ok=True)
+                continue
+            # Dead-producer reap: after a grace, if the worker that owned this
+            # record is provably gone (host rebooted since claim, or the claimed
+            # pid is no longer alive, or it never claimed at all), convert it to
+            # a failed completion so the user is notified and the /task cap frees
+            # — instead of leaving it wedged for CN_PENDING_MAX_AGE (7d).
+            if age > CN_PENDING_REAP:
+                pid = rec.get("producer_pid")
+                boot = rec.get("producer_boot")
+                # ONLY reap a record whose producer actually CLAIMED it (stamped
+                # its pid). A record with pid=None is one whose producer never
+                # claims — e.g. the compute worker for a legitimately long
+                # (>30min) L24/L25 job. Reaping those by "no pid" produced a
+                # false "worker stopped" AND dropped the real result when the job
+                # later finished (mark_done found it DELIVERED). Unclaimed records
+                # are left to the CN_PENDING_MAX_AGE prune instead. A claimed
+                # record is reaped only when its host rebooted or its pid is dead.
+                pid_int = _pid_from_rec(pid)
+                # An unparseable pid → treat as unknown/alive (don't reap).
+                producer_gone = bool(pid) and pid_int is not None and (
+                    (boot and boot != _host_boot_id())
+                    or not _pid_alive(pid_int)
+                )
+                # A SUPERVISED run has an owner for exactly this situation:
+                # task_supervisor will relaunch the worker. Reaping it here
+                # would tell the user "the worker stopped" while the resume
+                # that fixes it is already in flight — and worse, mark the
+                # record ready, so the real result would be dropped by
+                # mark_done later. The supervisor calls mark_done itself once
+                # its attempt/time budget is genuinely spent.
+                if producer_gone and _supervised(rec.get("id")):
+                    producer_gone = False
+                if producer_gone:
+                    # TOCTOU guard: a real mark_done() may have flipped this
+                    # record to READY (with a genuine result) between the _read()
+                    # at the top of the loop and here. Take the SAME per-record
+                    # O_EXCL lock the delivery path uses, RE-READ under it, and
+                    # only write the abort record if it is STILL pending — a
+                    # real completion must NEVER be overwritten by the reaper.
+                    lock = path.with_suffix(".json.lock")
+                    try:
+                        fd = os.open(str(lock),
+                                     os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    except OSError:
+                        continue  # someone else holds it — leave the record be
+                    try:
+                        os.close(fd)
+                        rec2 = _read(path)
+                        if rec2 is not None and rec2.get("state") == _STATE_PENDING:
+                            rec2["state"] = _STATE_READY
+                            rec2["ok"] = False
+                            rec2["text"] = ("the background worker stopped without "
+                                            "reporting a result (it was killed or "
+                                            "the host restarted).")
+                            rec2["ready_at"] = now
+                            _atomic_write(path, rec2)
+                            # fall through into the ready-delivery path below
+                    finally:
+                        try:
+                            os.unlink(str(lock))
+                        except OSError:
+                            pass
+            continue
+        if state != _STATE_READY:
+            continue
+
+        lock = path.with_suffix(".json.lock")
+
+        # Force-prune a ready record stuck undelivered far too long (e.g. wedged
+        # by a crash between outbox-write and mark-delivered) so it neither leaks
+        # PII nor lingers forever.
+        ra = rec.get("ready_at") or rec.get("created_at") or 0
+        if now - float(ra or 0) > CN_PENDING_MAX_AGE:
+            path.unlink(missing_ok=True)
+            lock.unlink(missing_ok=True)
+            continue
+
+        # Recover an orphaned lock: if it is older than CN_LOCK_STALE the poller
+        # that held it died mid-delivery — steal it ATOMICALLY. A plain unlink
+        # here was racy: poller B (having already stat'd the stale lock) could
+        # unlink poller A's FRESH lock created a microsecond earlier, so both
+        # entered the critical section → double delivery. Renaming is atomic:
+        # exactly one poller moves the stale file away; the other's rename fails
+        # (source gone) and it falls through to the O_EXCL claim below, which is
+        # the real single mutex. (at-least-once on crash-after-outbox-write.)
+        try:
+            if now - lock.stat().st_mtime > CN_LOCK_STALE:
+                steal = str(lock) + f".steal{secrets.token_hex(4)}"
+                try:
+                    os.rename(str(lock), steal)
+                    os.unlink(steal)
+                except OSError:
+                    pass  # another poller stole it first
+        except OSError:
+            pass
+
+        # Claim: O_EXCL create wins the race; the loser skips this record.
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue  # another poller is delivering it
+        except OSError as e:
+            print(f"completion_notify: lock failed {path.name}: {e}", file=sys.stderr)
+            continue
+        try:
+            os.close(fd)
+            # Re-read under lock in case it was delivered between list and claim.
+            rec = _read(path)
+            if rec is None or rec.get("state") != _STATE_READY:
+                continue
+            # ADR-0554 Phase 0 (approach (a)): a producer may have pre-synthesized
+            # a voice note at completion time and stamped its path on the record
+            # (attach_voice). Prefer it — this is poller-INDEPENDENT (attached by
+            # ANY poller's deliver_ready, with or without a callback). Fall back to
+            # the injected synthesize_voice callback for records that opted into
+            # want_voice but have no pre-synthesized path (the ADR-0189 path).
+            voice_path = rec.get("voice_path")
+            if not voice_path and synthesize_voice is not None and rec.get("want_voice"):
+                try:
+                    voice_path = synthesize_voice(
+                        rec.get("voice_text") or rec.get("text") or ""
+                    )
+                except Exception as ve:  # noqa: BLE001 — never let a TTS failure
+                    # block the (already-ready) text delivery this record is
+                    # about to get; log and fall through voice-less.
+                    print(f"completion_notify: voice synth failed {path.name}: {ve}",
+                          file=sys.stderr)
+                    voice_path = None
+            # ADR-0554 Phase 2 — SHIP-DARK (ADR-0553 amendment): the envelope is
+            # built here (preserving the exact completion shape). The default
+            # (proactive_communication OFF) writes it DIRECTLY (byte-identical to
+            # before the migration — no gate, no silent loss). Only when the
+            # operator turned the flag ON does the completion route through the
+            # governed gate; and even then a DENIED / unavailable outcome falls
+            # back to a direct write, because a SOLICITED completion the user is
+            # waiting for must never be dropped by a house-rules false-positive
+            # or a broken primitive. A transient RATE_LIMITED leaves the record
+            # READY to retry next poll.
+            env = _envelope_for(rec)
+            out_name = f"cn_{rec.get('id')}_{secrets.token_hex(4)}.json"
+            if _proactive_flag_on(rec.get("tenant_id") or "_default"):
+                status = _emit_via_proactive(env, rec, voice_path=voice_path,
+                                             outbox=outbox, out_file_name=out_name)
+                if status == "rate_limited":
+                    # Leave READY; next poll retries. NOT marked delivered, so
+                    # exactly-once (O_EXCL) is preserved.
+                    continue
+                if status != "emitted":
+                    # DENIED / unavailable → deliver directly (never lose it).
+                    _write_outbox_direct(env, voice_path, outbox, out_name)
+            else:
+                _write_outbox_direct(env, voice_path, outbox, out_name)
+            # GDPR: a concurrent purge_user may have unlinked this record between
+            # the re-read above and here; don't resurrect it with PII if so.
+            if not path.exists():
+                continue
+            rec["state"] = _STATE_DELIVERED
+            rec["delivered_at"] = now
+            _atomic_write(path, rec)
+            delivered += 1
+        except Exception as e:  # noqa: BLE001 — per-record isolation: one poisoned
+            # record (e.g. an unexpected data shape, or a provenance import error
+            # in _envelope_for) must not abort the loop and starve every record
+            # sorted after it. Log and skip, as the docstring promises.
+            print(
+                f"completion_notify: deliver failed {path.name}: {e}",
+                file=sys.stderr,
+            )
+        finally:
+            try:
+                os.unlink(str(lock))
+            except OSError:
+                pass
+    return delivered
+
+
+# ─── opt-in orphan reaper (ship-dark) ──────────────────────────────────────
+
+
+def reap_orphan_pending(
+    *, now: float | None = None, enabled: bool = False,
+    deadline: float | None = None,
+) -> int:
+    """Convert ABANDONED pending records into a loud failure notice.
+
+    SHIP-DARK: ``enabled=False`` (the default) is a byte-identical no-op — the
+    caller resolves the ``bridge_orphan_task_reaper`` flag and passes it in, so
+    a default install never runs this. When enabled, a pending record is reaped
+    (marked ready + ok=False + CN_ORPHAN_TEXT) so the next ``deliver_ready``
+    tick tells the user the task was aborted and closes the record, instead of
+    leaving it wedged until ``CN_PENDING_MAX_AGE`` (7 d) with no ping.
+
+    A record is reaped only when ALL hold:
+      * state is still ``pending`` and older than ``deadline``
+        (``CN_ORPHAN_DEADLINE``, default 2 h);
+      * it is NOT an active supervised run (``_supervised`` — the supervisor
+        owns those and will resume or fail them itself);
+      * its producer is provably gone — the host rebooted since it claimed, or
+        its claimed pid is dead — OR it was NEVER claimed at all (pid=None).
+
+    The last clause is the only NEW risk over completion_notify's own
+    dead-producer reap, which deliberately skips unclaimed records: an
+    unclaimed record could be a legitimately long compute worker that never
+    claims. That is exactly why this whole function is gated behind an opt-in
+    flag and uses a generous deadline. Best-effort, per-record isolated, never
+    raises.
+    """
+    if not enabled:
+        return 0
+    now = time.time() if now is None else now
+    deadline = CN_ORPHAN_DEADLINE if deadline is None else deadline
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    reaped = 0
+    for path in sorted(qdir.glob("*.json")):
+        try:
+            rec = _read(path)
+            if rec is None or rec.get("state") != _STATE_PENDING:
+                continue
+            age = now - float(rec.get("created_at") or 0)
+            if age <= deadline:
+                continue
+            # A supervised run has an owner for exactly this situation — leave
+            # it to task_supervisor (mirrors deliver_ready's dead-producer reap).
+            if _supervised(rec.get("id")):
+                continue
+            pid = rec.get("producer_pid")
+            boot = rec.get("producer_boot")
+            if pid:
+                pid_int = _pid_from_rec(pid)
+                if pid_int is None:
+                    # Unparseable pid → unknown/alive; don't reap.
+                    producer_gone = False
+                else:
+                    producer_gone = (
+                        (boot and boot != _host_boot_id())
+                        or not _pid_alive(pid_int)
+                    )
+            else:
+                # Never claimed: past the (generous) deadline with no live
+                # producer signal at all — treat as abandoned. THIS is the
+                # branch the flag gates (see docstring).
+                producer_gone = True
+            if not producer_gone:
+                continue
+            # TOCTOU guard (mirrors deliver_ready's dead-producer reap): take the
+            # per-record O_EXCL lock and RE-READ before writing the abort record,
+            # so a genuine mark_done() READY completion that landed between the
+            # _read() above and here is never overwritten with CN_ORPHAN_TEXT.
+            lock = path.with_suffix(".json.lock")
+            try:
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except OSError:
+                continue  # someone else holds it — leave the record be
+            try:
+                os.close(fd)
+                rec2 = _read(path)
+                if rec2 is None or rec2.get("state") != _STATE_PENDING:
+                    continue  # completed/delivered/gone under us — do not clobber
+                rec2["state"] = _STATE_READY
+                rec2["ok"] = False
+                rec2["text"] = CN_ORPHAN_TEXT
+                rec2["voice_text"] = None
+                rec2["ready_at"] = now
+                _atomic_write(path, rec2)
+                reaped += 1
+            finally:
+                try:
+                    os.unlink(str(lock))
+                except OSError:
+                    pass
+        except Exception as e:  # noqa: BLE001 — per-record isolation, never raise
+            print(f"completion_notify: orphan reap failed {path.name}: {e}",
+                  file=sys.stderr)
+    return reaped
+
+
+# ─── GDPR Art. 17 ──────────────────────────────────────────────────────────
+
+
+def purge_user(uid: str) -> int:
+    """Remove all pending-notification records whose sender matches *uid*.
+
+    Mirrors bg_monitor.purge_user for the Right-to-Erasure path — these records
+    hold routing PII (sender uid + chat_id). Returns the number removed.
+    """
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    removed = 0
+    for path in qdir.glob("*.json"):
+        rec = _read(path)
+        if rec is not None and rec.get("sender") == uid:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed

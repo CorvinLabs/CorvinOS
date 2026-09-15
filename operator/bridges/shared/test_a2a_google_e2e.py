@@ -23,7 +23,7 @@ Architecture:
   - All HTTP runs on 127.0.0.1; no real network.
   - No real WorkerEngine (force_m1_only=True); deterministic unit-speed.
 
-Run: python3 operator/bridges/shared/test_a2a_google_e2e.py
+Run: python3 corvin_operator/bridges/shared/test_a2a_google_e2e.py
 """
 from __future__ import annotations
 

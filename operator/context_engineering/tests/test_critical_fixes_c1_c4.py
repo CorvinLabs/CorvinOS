@@ -17,7 +17,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 # `operator` is the STDLIB module — `operator.context_engineering` can never
-# import (project memory: never add operator/__init__.py, it shadows stdlib and
+# import (project memory: never add corvin_operator/__init__.py, it shadows stdlib and
 # killed the webui service). These four tests were UNCOLLECTABLE since bd13c5b;
 # use the package-relative form conftest.py already uses (review R6).
 from ..learning_queue import (

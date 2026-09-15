@@ -14,7 +14,7 @@ Eight cases:
   8. Engine-E2E (opt-in SKILL_FORGE_ENGINE_E2E=1) — see docstring at
      case_engine_e2e for the full flow.
 
-Run: python3 operator/bridges/shared/test_session_reset.py
+Run: python3 corvin_operator/bridges/shared/test_session_reset.py
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 SESSION_RESET_PY = ROOT / "session_reset.py"
 TIMEOUT_SWEEP_PY = ROOT.parent.parent / "voice" / "scripts" / "session_timeout_sweep.py"
-REPO = ROOT.parent.parent.parent  # ADR-0035: operator/bridges/shared/ -> repo
+REPO = ROOT.parent.parent.parent  # ADR-0035: corvin_operator/bridges/shared/ -> repo
 SKILL_FORGE_PKG = REPO / "operator" / "skill-forge"
 FORGE_PKG = REPO / "operator" / "forge"
 

@@ -1,4 +1,4 @@
-"""Unit tests for ``operator/voice/hooks/artifact_register.py``.
+"""Unit tests for ``corvin_operator/voice/hooks/artifact_register.py``.
 
 The hook itself is best-effort and always returns rc=0. These tests
 exercise the predicates (path-convention, MIME-detect) and the

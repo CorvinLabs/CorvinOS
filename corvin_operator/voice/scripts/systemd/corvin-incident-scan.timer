@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Corvin-OS incident scan at 03:45 UTC (ADR-0057 M2)
+
+[Timer]
+OnCalendar=*-*-* 03:45:00
+AccuracySec=10min
+Persistent=true
+Unit=corvin-incident-scan.service
+
+[Install]
+WantedBy=timers.target

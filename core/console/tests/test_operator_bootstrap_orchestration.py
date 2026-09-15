@@ -1,6 +1,6 @@
 """ADR-0217: the TDE orchestration tree must be reachable on WHEEL installs.
 
-Regression guard for the 2026-07-24 review finding: `operator/orchestration`
+Regression guard for the 2026-07-24 review finding: `corvin_operator/orchestration`
 was vendored into the wheel (hatch_build.py) but never added to
 `_operator_bootstrap._OPERATOR_SUBTREES`, so `import tde.*` failed on every
 pip install → `chat_runtime._tde_available()` returned False → the ADR-0217

@@ -358,6 +358,15 @@ def create_app() -> FastAPI:
             )
             raise
 
+        # ADR-0703 §1.5 — Start the license refresh daemon (after boot_platform).
+        # This wires the permit/CRL/ASRL refresh cycles into the console process.
+        # Only starts if a credential file exists; safe to call multiple times.
+        try:
+            from license.session_refresh import boot_refresh as _lic_boot_refresh
+            _lic_boot_refresh()
+        except Exception:
+            pass  # best-effort — license daemon failure does not block console startup
+
         # ── Phase 1a: Voice config migration (best-effort — never blocks startup) ─
         # Auto-migrate voice configuration from legacy ~/.config/corvin-voice/
         # to tenant-scoped <corvin_home>/tenants/<tenant_id>/voice/ on first access.

@@ -302,7 +302,7 @@ class TestPIIScrubber:
 # ``core.vibe_engineering.notification_router``), hard-wired ``~/.corvin``
 # instead of honouring ``CORVIN_HOME``, and its "exactly-once via O_EXCL" claim
 # was false — the Discord daemon UNLINKS the outbox file once it has sent it
-# (``operator/bridges/discord/daemon.js``), so a later re-route of the same
+# (``corvin_operator/bridges/discord/daemon.js``), so a later re-route of the same
 # completion collides with nothing and delivers twice. The tests asserted the
 # guarantee the module could not provide.
 

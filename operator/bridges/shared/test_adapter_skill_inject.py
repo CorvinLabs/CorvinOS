@@ -7,7 +7,7 @@ to capture the constructed claude args and assert against the prompt
 text. Each case sets up its own CORVIN_HOME / CORVIN_PLUGIN_SLOT_DIR
 so the real workspace is never touched.
 
-Run: python3 operator/bridges/shared/test_adapter_skill_inject.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_skill_inject.py
 """
 from __future__ import annotations
 
@@ -23,14 +23,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 ADAPTER = ROOT / "adapter.py"
-REPO = ROOT.parent.parent.parent  # operator/bridges/shared/ -> repo (ADR-0035)
+REPO = ROOT.parent.parent.parent  # corvin_operator/bridges/shared/ -> repo (ADR-0035)
 SKILL_FORGE_PKG = REPO / "operator" / "skill-forge"
 FORGE_PKG = REPO / "operator" / "forge"
 
 TEST_CHANNEL = "skillinject"
 # Isolate the channel-settings dir under a private tmp bridges root (passed to
 # the adapter via ADAPTER_BRIDGES_DIR) instead of writing into the REPO tree at
-# operator/bridges/skillinject/ — that leaked a settings.json artifact into the
+# corvin_operator/bridges/skillinject/ — that leaked a settings.json artifact into the
 # working tree whenever a run was interrupted before teardown, the same
 # test-vs-real-config contamination class fixed for the other bridge tests.
 _BRIDGES_DIR = Path(tempfile.mkdtemp(prefix="skillinject-bridges-"))

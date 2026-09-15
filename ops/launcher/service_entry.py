@@ -104,7 +104,7 @@ def _webui_env_vars() -> dict:
             sep = ";" if sys.platform == "win32" else ":"
             dirs = [
                 "core/console", "core/gateway", "core/license",
-                "core/compliance", "operator/forge", "operator/skill-forge",
+                "core/compliance", "corvin_operator/forge", "corvin_operator/skill-forge",
                 "core/plugins",
             ]
             paths = [str(_REPO_ROOT / d) for d in dirs if (_REPO_ROOT / d).exists()]

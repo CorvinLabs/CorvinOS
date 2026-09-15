@@ -6,7 +6,7 @@ document from existing Corvin sources:
   - compliance/eu-ai-act.yaml + compliance/gdpr.yaml  (rule severity table)
   - docs/decisions/                                    (ADR layer mapping)
   - docs/overview.md                                   (system description)
-  - operator/bridges/run-all-tests.sh                  (test pointer)
+  - corvin_operator/bridges/run-all-tests.sh                  (test pointer)
 
 The generator does NOT call any LLM.  Sections where operator input
 is required are marked [OPERATOR: FILL IN].
@@ -558,7 +558,7 @@ Corvin does define structural correctness targets:
 | Incident tracker | test_incident_tracker.py | {now} |
 | Operator declaration gate | test_operator_declaration.py | {now} |
 
-Full test suite: `bash operator/bridges/run-all-tests.sh`
+Full test suite: `bash corvin_operator/bridges/run-all-tests.sh`
 
 ## 8. Testing Procedures and Results
 
@@ -572,7 +572,7 @@ Corvin uses a five-tier test pyramid:
 
 **Architecture Decision Records:** {adr_count} ADRs documenting every major design decision.
 
-[OPERATOR: FILL IN — attach the output of `bash operator/bridges/run-all-tests.sh`
+[OPERATOR: FILL IN — attach the output of `bash corvin_operator/bridges/run-all-tests.sh`
 and `bridge.sh doctor --json` from your production deployment.]
 
 ## 9. Standards Applied
@@ -617,7 +617,7 @@ the relevant provisions of Regulation (EU) 2024/1689 (EU AI Act).
 | Compliance manifest check | On every `bridge.sh doctor` | `corvin-compliance-check` |
 | Incident scan (consent/disclosure) | Daily | `corvin-incident scan` (systemd timer recommended) |
 | Open incident review | Weekly | `corvin-incident list --status open` |
-| Test suite | On every commit | `bash operator/bridges/run-all-tests.sh` |
+| Test suite | On every commit | `bash corvin_operator/bridges/run-all-tests.sh` |
 
 Serious incidents are tracked via L39 Incident Tracker.  Art. 73 15-day notification
 clock starts on `severity: serious` incidents.

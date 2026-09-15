@@ -130,7 +130,7 @@ VALID_KINDS: frozenset[str] = frozenset({
     "digest",       # a scheduled/coalesced summary
     "follow_up",    # a proactive follow-up nudge
     "heartbeat",    # a liveness "still working" ping
-    "system",       # an operator/system notice
+    "system",       # an corvin_operator/system notice
 })
 
 # The ship-dark flag id (registered in feature_flags.REGISTRY, default OFF).

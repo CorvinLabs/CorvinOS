@@ -21,7 +21,7 @@ proves BOTH flag states:
 The CEL brief build/render is mocked (the pipeline has its own hermetic E2E); this
 test's job is the BRIDGE relocation wiring, not the pipeline internals.
 
-Run: python3 operator/bridges/shared/test_adapter_cache_stable_cel.py
+Run: python3 corvin_operator/bridges/shared/test_adapter_cache_stable_cel.py
 """
 from __future__ import annotations
 

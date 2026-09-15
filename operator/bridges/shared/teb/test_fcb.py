@@ -17,7 +17,7 @@ Coverage:
   14. SkillCompiler.should_inject_via_system_prompt True for all engines.
 
 Run:
-    python3 operator/bridges/shared/teb/test_fcb.py
+    python3 corvin_operator/bridges/shared/teb/test_fcb.py
 """
 from __future__ import annotations
 

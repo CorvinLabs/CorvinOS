@@ -105,7 +105,7 @@ _IBC_FILE = "instance_cert.jwt"
 # M3). Earlier drafts of this module pointed at "api.corvin-labs.com", a
 # domain that was never actually provisioned — every IBC call silently failed
 # in production. Fixed to the real, already-live domain used everywhere else
-# in operator/license/ (session_refresh.py, validator.py).
+# in corvin_operator/license/ (session_refresh.py, validator.py).
 _FEATURES_SERVER_PROD = "https://corvin-features-production.up.railway.app"
 
 # ADR-0144 Fix B1 pattern (see session_refresh.py): snapshot at import time so
@@ -126,8 +126,8 @@ def _features_server() -> str:
 # session-signing keypair (kid "ibc-vN") instead of a separate RS256 trust
 # anchor — see ADR-0145 "Relationship to ADR-0153" / deviation note. This is
 # the SAME DER-b64 public key as SESSION_SERVER_KEY_RING["sess-v1"] in
-# operator/license/validator.py; kept as a local literal (public key, not a
-# secret) so this module has no import dependency on operator/license/.
+# corvin_operator/license/validator.py; kept as a local literal (public key, not a
+# secret) so this module has no import dependency on corvin_operator/license/.
 # Rotation checklist: whenever validator.py's SESSION_SERVER_KEY_RING gains a
 # new kid, add the same entry here too (see validator.py's rotation comment).
 _IBC_TRUST_KEY_RING: dict[str, str] = {
@@ -615,7 +615,7 @@ def _authenticated_features_request(path: str, body: dict) -> dict:
 
     Reuses the SAME activation credentials (~/.config/corvin-voice/features.json,
     written by 'corvin-license activate') and helper functions as
-    operator/license/session_refresh.py, rather than re-implementing the HMAC
+    corvin_operator/license/session_refresh.py, rather than re-implementing the HMAC
     scheme a second time. Raises IBCError on any failure.
     """
     try:
@@ -627,7 +627,7 @@ def _authenticated_features_request(path: str, body: dict) -> dict:
                 lic_dir = candidate
                 break
         if lic_dir is None:
-            raise ImportError("operator/license directory not found")
+            raise ImportError("corvin_operator/license directory not found")
         if str(lic_dir) not in sys.path:
             sys.path.insert(0, str(lic_dir))
         import session_refresh as _sr  # type: ignore[import-not-found]
@@ -700,7 +700,7 @@ def bind_instance() -> dict:
     """Bind this instance to the caller's activated Corvin Labs license.
 
     Requires the installation to already be activated ('corvin-license
-    activate <key>' — see operator/license/session_refresh.py). Authenticates
+    activate <key>' — see corvin_operator/license/session_refresh.py). Authenticates
     to Corvin-Features with the same license token + HMAC api_key as every
     other authenticated endpoint; no separate SesT concept.
 

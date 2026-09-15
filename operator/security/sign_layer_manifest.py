@@ -2,19 +2,19 @@
 """sign_layer_manifest.py — ADR-0141 Tier 1 offline manifest signing tool.
 
 Corvin Labs runs this at release time with the A2A network *private* key (the
-counterpart of ``operator/license/a2a_network_pubkey.pem``, which is never in
+counterpart of ``corvin_operator/license/a2a_network_pubkey.pem``, which is never in
 the repo). It hashes the current mandatory security-layer files, assembles the
-manifest body, RS256-signs it, and writes ``operator/security/layer-manifest.json``.
+manifest body, RS256-signs it, and writes ``corvin_operator/security/layer-manifest.json``.
 
 Usage:
-    python3 operator/security/sign_layer_manifest.py \
+    python3 corvin_operator/security/sign_layer_manifest.py \
         --key /secure/offline/a2a_network_privkey.pem \
         [--mandatory-after 1790000000] \
-        [--out operator/security/layer-manifest.json] \
+        [--out corvin_operator/security/layer-manifest.json] \
         [--issued-at 1781782035]      # defaults to current wall clock
 
 Verify a freshly-written (or committed) manifest against the public key:
-    python3 operator/security/sign_layer_manifest.py --verify
+    python3 corvin_operator/security/sign_layer_manifest.py --verify
 
 This tool is the ONLY supported way to produce a valid manifest. Hand-editing
 ``layer-manifest.json`` invalidates the signature and the boot check rejects it
@@ -28,7 +28,7 @@ import sys
 import time
 from pathlib import Path
 
-# operator/ shadows the stdlib 'operator' module, so add the shared dir to path
+# corvin_operator/ shadows the stdlib 'operator' module, so add the shared dir to path
 # and import layer_integrity directly (mirrors the ops/launcher/*_entry shims).
 _SHARED = Path(__file__).resolve().parents[1] / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
@@ -82,7 +82,7 @@ def main(argv: "list[str] | None" = None) -> int:
     ap.add_argument("--verify", action="store_true",
                     help="verify the on-disk manifest instead of signing")
     ap.add_argument("--key", help="path to the RS256 private key PEM")
-    ap.add_argument("--out", help="output manifest path (default: operator/security/layer-manifest.json)")
+    ap.add_argument("--out", help="output manifest path (default: corvin_operator/security/layer-manifest.json)")
     ap.add_argument("--mandatory-after", type=int, default=None,
                     help="unix ts after which Protocol v7 attestation is mandatory")
     ap.add_argument("--issued-at", type=int, default=None,

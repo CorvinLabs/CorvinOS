@@ -10,7 +10,7 @@ Implements the dual-write mechanism described in ADR-0532 Phase 2 synthesis:
 This module bridges between delegation_policy.py (entry point) and the monitoring
 infrastructure (correctness tracker + rollback detector).
 
-Call site: operator/bridges/shared/delegation_policy.py::resolve_worker_engine()
+Call site: corvin_operator/bridges/shared/delegation_policy.py::resolve_worker_engine()
 Integration: Phase 2a exit from shadow mode
 """
 from __future__ import annotations

@@ -17,7 +17,7 @@ the bridge ``adapter``) actually gate this render call by the
 ``cel_brief_includes_content`` feature flag, so the parameter is reachable, not
 dead.
 
-Run: python3 -m pytest operator/context_engineering/tests/test_drift_memory_injection_e2e.py
+Run: python3 -m pytest corvin_operator/context_engineering/tests/test_drift_memory_injection_e2e.py
 """
 from __future__ import annotations
 

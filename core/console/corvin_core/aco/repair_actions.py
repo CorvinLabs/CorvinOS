@@ -634,8 +634,8 @@ class HermesHealthRepair(RepairAction):
         walked two levels too high, so the import always failed and this L5 repair
         was a permanent no-op. Anchor on ``Path(__file__)`` instead, exactly like
         ``patch_generator.default_llm``:
-          * source tree  → ``<repo>/operator/bridges/shared``   (parents[4])
-          * wheel install→ ``<corvin_console>/_vendor/operator/bridges/shared`` (parents[1])
+          * source tree  → ``<repo>/corvin_operator/bridges/shared``   (parents[4])
+          * wheel install→ ``<corvin_console>/_vendor/corvin_operator/bridges/shared`` (parents[1])
         """
         here = Path(__file__).resolve()
         return [

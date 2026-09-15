@@ -334,7 +334,7 @@ class TestInstanceRecord:
 class TestA2ATaskEnvelopeDispatch:
     """Test A2ATaskEnvelope.dispatch() with mocked sender (Tier 2).
 
-    Note: Full dispatch tests require operator/bridges/shared on path.
+    Note: Full dispatch tests require corvin_operator/bridges/shared on path.
     These tests verify the dispatch interface and error handling.
     Integration tests (Tier 3) verify end-to-end with real RemoteTriggerSender.
     """

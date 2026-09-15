@@ -24,7 +24,7 @@ _log = logging.getLogger("corvin.summary")
 # ── Default implementation ────────────────────────────────────────────────────
 
 class ClaudeCliSummaryProvider:
-    """Default: delegate to operator/voice/scripts/summarize.py via subprocess.
+    """Default: delegate to corvin_operator/voice/scripts/summarize.py via subprocess.
 
     Mirrors the existing call site in the adapter — same CLI contract,
     same naive-truncation fallback when the script is unavailable.
@@ -41,7 +41,7 @@ class ClaudeCliSummaryProvider:
             # provider permanently fall back to naive-truncation with no
             # error signal.
             Path(__file__).resolve().parents[4]
-            / "operator/voice/scripts/summarize.py",
+            / "corvin_operator/voice/scripts/summarize.py",
         ]
         for p in candidates:
             if p.exists():

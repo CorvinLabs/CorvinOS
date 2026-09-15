@@ -27,7 +27,7 @@ def _shared_path() -> None:
     here = Path(__file__).resolve().parent
     if str(here) not in sys.path:
         sys.path.insert(0, str(here))
-    op = here.parents[1]  # operator/
+    op = here.parents[1]  # corvin_operator/
     if str(op) not in sys.path:
         sys.path.insert(0, str(op))
 

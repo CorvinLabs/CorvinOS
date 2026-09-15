@@ -1,0 +1,38 @@
+apiVersion: corvin/v1
+kind: EngineTrust
+metadata:
+  engine_id: hermes
+  trust_tier: low
+  evaluated_at: "2026-05-29T00:00:00Z"
+  evaluated_against: "NousResearch Hermes-2/Hermes-3 via Ollama local (qwen3:1.7b test)"
+  valid_until: "2026-11-29T00:00:00Z"
+spec:
+  binary_sha256: null
+  jailbreak_resistance: 0.60
+  system_prompt_respect: 0.72
+  tool_call_fidelity: 0.75
+  tested_refusal_classes:
+    - harmful_content
+  notes: |
+    HermesEngine ist ein HTTP-basierter Wrapper um Ollama-lokale
+    Inferenz (NousResearch Hermes-2/3, oder beliebiges Ollama-kompatibles
+    Modell). Kein Subprocess, kein CLI — direkter HTTP-Call auf localhost.
+
+    Trust-Tier "low": Hermes-Modelle (insb. 7B/8B Varianten) haben
+    deutlich schwächere Safety-Trainings als Claude. Operators, die
+    Hermes für CONFIDENTIAL-Tasks einsetzen, müssen sich bewusst sein,
+    dass die Refusal-Garantien erheblich niedriger sind als bei Claude.
+
+    Vorteile für Compliance:
+      - locality: local, network_egress: none → L34 CONFIDENTIAL-capable
+      - Kein Cloud-API-Call, kein Token-Usage, kein Datentransfer
+
+    Operator kann Override-Datei anlegen unter:
+    <corvin_home>/global/engine_trust/hermes.yaml
+    mit höherem Tier, wenn z.B. ein feingetuntes Hermes-Modell mit
+    starkerem Safety-Training eingesetzt wird.
+
+    binary_sha256: null — Ollama lädt das Modell; das Binary ist
+    `ollama` selbst, nicht eine versionierte Engine-Binary.
+    Eine SHA256-Verifikation der Ollama-Binary kann via lokalem
+    Override eingetragen werden.

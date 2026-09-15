@@ -70,7 +70,7 @@ Design notes
   written into the roles store. The ``classify()`` helper re-reads the
   channel's ``settings.json`` per call (TOCTOU consistency with the
   daemon's ``auth.js``).
-* Path-gate (``operator/voice/hooks/path_gate.py``) is intended to protect
+* Path-gate (``corvin_operator/voice/hooks/path_gate.py``) is intended to protect
   the roles storage in a follow-up pass; until then the contract is
   "operator-only via slash-commands or this CLI".
 """

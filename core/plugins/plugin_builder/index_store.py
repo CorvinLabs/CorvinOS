@@ -48,7 +48,7 @@ class ScaffoldRecord:
 
 
 def _index_path(tenant_id: str) -> Path:
-    # `forge` lives under operator/ and only reaches sys.path through the host's
+    # `forge` lives under corvin_operator/ and only reaches sys.path through the host's
     # bootstrap (corvin_console._operator_bootstrap in a wheel, a path insert in
     # a checkout). Importing it at MODULE level made `import plugin_builder.turn`
     # — the shared, transport-agnostic entry point both the Console and the

@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 HOOK_DIR = Path(__file__).resolve().parent
-# operator/voice/hooks → operator/voice → operator → operator/bridges/shared
+# corvin_operator/voice/hooks → corvin_operator/voice → operator → corvin_operator/bridges/shared
 SHARED_DIR = HOOK_DIR.parent.parent / "bridges" / "shared"
 
 

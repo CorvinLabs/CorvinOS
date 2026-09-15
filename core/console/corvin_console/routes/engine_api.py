@@ -15,7 +15,7 @@ Real data (2026-09-10), replacing the Phase-1 K=1 mock:
   - Stats (run_count / confidence / last_updated): aggregated from the
     tenant's real hash-chained audit chain, filtered to
     ``skill.model_selector.classified`` events (emitted by the SHADOW
-    classification wired into operator/bridges/shared/adapter.py's two real
+    classification wired into corvin_operator/bridges/shared/adapter.py's two real
     turn call sites — see model_selector_shadow.py for why). Honest empty
     state (0 samples) is expected and correct until real turns accrue.
   - "corvinOS" task type has no classifier equivalent (task classification
@@ -447,7 +447,7 @@ async def get_engine_config(
     core.learning.model_selection_optimizer.ConfidenceOptimizer (ADR-0644,
     Bayesian + EMA) for the tier's CURRENTLY selected model — real outcome
     feedback closes this loop end to end (2026-09-10):
-    operator/bridges/shared/model_selector_shadow.py classifies every real
+    corvin_operator/bridges/shared/model_selector_shadow.py classifies every real
     turn (SHADOW — never alters routing) and reports its real success/failure
     back into this same optimizer. 0 samples is the honest, expected state
     until real turns accrue; ``is_converged`` only turns true once the

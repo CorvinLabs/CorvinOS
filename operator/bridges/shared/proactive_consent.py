@@ -132,7 +132,7 @@ def _audit_path(tenant_id: str) -> Path:
 def _default_outbox_dir() -> Path:
     """The shared outbox every messenger daemon polls.
 
-    Matches ``operator/bridges/shared/outbox`` (bg_monitor.py:103).
+    Matches ``corvin_operator/bridges/shared/outbox`` (bg_monitor.py:103).
     """
     return Path(__file__).resolve().parent / "outbox"
 

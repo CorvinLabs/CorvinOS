@@ -52,7 +52,7 @@ class TicketAgentTests(unittest.TestCase):
         self.doc = load_workflow(WORKFLOW_PATH)
         validate(self.doc)
         # Redirect the bridge outbox to a tmpdir. Pointing it at the live
-        # `operator/bridges/shared/outbox/` handed every run of this test a
+        # `corvin_operator/bridges/shared/outbox/` handed every run of this test a
         # real send job to the running Discord daemon, which polls that
         # directory every 500 ms and grabbed the envelope well before tearDown
         # could unlink it (incident 2026-07-26: 724 such envelopes, all with

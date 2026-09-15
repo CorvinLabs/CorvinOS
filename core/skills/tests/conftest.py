@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-# The core hash-chained audit writer lives at operator/bridges/shared/audit.py
+# The core hash-chained audit writer lives at corvin_operator/bridges/shared/audit.py
 # and is imported by BARE module name (``operator`` shadows the stdlib module),
 # so the directory must be on sys.path. Without it these tests fail standalone
 # with "core audit writer unavailable" and pass only when another suite in the

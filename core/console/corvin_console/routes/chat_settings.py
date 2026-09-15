@@ -160,7 +160,7 @@ class ChatSettingsPatch(BaseModel):
 
 def _channel_settings_path(channel: str) -> Path:
     """Resolve the per-channel settings.json. Single source of truth —
-    the legacy in-repo location under ``operator/bridges/<channel>/``.
+    the legacy in-repo location under ``corvin_operator/bridges/<channel>/``.
     ADR-0008's canonical XDG path lives under ``<corvin_home>/bridges``
     but is wired in a separate phase; for now the in-repo path is what
     the daemons read."""

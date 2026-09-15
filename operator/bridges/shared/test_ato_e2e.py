@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _here = Path(__file__).resolve().parent
-_repo = _here.parents[2]  # operator/bridges/shared → repo root
+_repo = _here.parents[2]  # corvin_operator/bridges/shared → repo root
 
 # Path to the Forge tool script under the default tenant
 _INTAKE_TOOL = (
@@ -1200,7 +1200,7 @@ class TestATORealLLMSmokeTest(unittest.TestCase):
     guidance in the system prompt influences the output.
 
     Usage:
-        RUN_LLM_E2E=1 python -m pytest operator/bridges/shared/test_ato_e2e.py \
+        RUN_LLM_E2E=1 python -m pytest corvin_operator/bridges/shared/test_ato_e2e.py \
             -k "RealLLM" -v
     """
 

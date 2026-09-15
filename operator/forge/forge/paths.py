@@ -255,7 +255,7 @@ def tenant_cowork_dir(tenant_id: str | None = None) -> Path:
 # this resolver is a CHARSET rule (_BRIDGE_CHANNEL_RE below), not an enumeration
 # — a frozenset used to sit at this spot, was never read by anything, and had
 # gone stale (no "signal", no "teams"), so a reader took it for the canonical
-# list. The canonical list is operator/bridges/shared/channels.py.
+# list. The canonical list is corvin_operator/bridges/shared/channels.py.
 _BRIDGE_KINDS = frozenset({
     "inbox", "outbox", "processed", "attachments", "auth", "log",
     "settings", "root",
@@ -355,7 +355,7 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     repo = _repo_root()
     if repo is None:
         return None
-    # Try new operator/bridges layout first, fall back to legacy plugins/ location
+    # Try new corvin_operator/bridges layout first, fall back to legacy plugins/ location
     channel_dir = repo / "operator" / "bridges" / channel
     if not channel_dir.exists():
         channel_dir = repo / "operator" / "bridges" / channel
@@ -408,7 +408,7 @@ def tenant_audit_chain(tenant_id: str | None = None) -> Path:
 
     Every writer of a hash-chained audit record for *tenant_id* must resolve
     here. Mirrored byte-identically by ``core/paths/tenant.py::tenant_audit_chain``
-    and ``operator/bridges/shared/paths.py::tenant_audit_chain``; the guard test
+    and ``corvin_operator/bridges/shared/paths.py::tenant_audit_chain``; the guard test
     ``tests/security/test_audit_chain_ssot.py`` fails if the three diverge.
     """
     return tenant_global_dir(tenant_id) / "forge" / AUDIT_CHAIN_NAME

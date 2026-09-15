@@ -132,7 +132,7 @@ async def create_panel(
     body: PanelCreate,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict:
-    """Install a panel directly (operator/API path). The chat worker uses the
+    """Install a panel directly (corvin_operator/API path). The chat worker uses the
     post-turn workdir scan (chat_runtime) instead, but this endpoint is the SSOT
     surface and what the E2E test drives."""
     _validate_id(body.id)

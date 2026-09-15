@@ -27,7 +27,7 @@ Plus orthogonal cases that have to hold for every pair:
     + dialectic.resolve_mode unaffected (only top-level layer)
   - PRESETS: no preset turns a child on while leaving its parent off
 
-Run: python3 operator/bridges/shared/test_ldd_dependencies.py
+Run: python3 corvin_operator/bridges/shared/test_ldd_dependencies.py
 """
 from __future__ import annotations
 
@@ -246,7 +246,7 @@ def case_effective_state_non_cascade_layers():
 
 def _run_cli(*args):
     return subprocess.run(
-        [sys.executable, str(REPO / "operator/bridges/shared/ldd.py"),
+        [sys.executable, str(REPO / "corvin_operator/bridges/shared/ldd.py"),
          *args],
         capture_output=True, text=True, env={**os.environ},
     )

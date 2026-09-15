@@ -85,7 +85,7 @@ DEPRECATED_APIS = {
 SCAN_PATTERNS = {
     "core_code": "core/**/*.py",
     "plugins": "/home/shumway/projects/Corvin-Marketplace/plugins/**/*.py",
-    "bridges": "operator/bridges/**/*.py",
+    "bridges": "corvin_operator/bridges/**/*.py",
     "tests": "tests/**/*.py",
 }
 
@@ -263,7 +263,7 @@ class DeprecatedAPIAuditor:
             return "LOW"
 
         # Bridge code = MEDIUM risk (active, but has migration path)
-        if "operator/bridges" in str(filepath):
+        if "corvin_operator/bridges" in str(filepath):
             return "MEDIUM"
 
         # Default to API's declared risk level

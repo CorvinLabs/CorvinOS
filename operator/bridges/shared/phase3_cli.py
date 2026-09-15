@@ -139,9 +139,9 @@ def _svc(argv: list[str]) -> int:
     if sub in daemon_only:
         return _svc_daemon_call(sub, rest)
 
-    # Discover services across operator/ for the read-only commands
-    # bridges/shared → bridges → operator/. Service manifests live in
-    # operator/{forge,voice,skill-forge,bridges/*}/*.service.yaml.
+    # Discover services across corvin_operator/ for the read-only commands
+    # bridges/shared → bridges → corvin_operator/. Service manifests live in
+    # corvin_operator/{forge,voice,skill-forge,bridges/*}/*.service.yaml.
     plugins_dir = HERE.parent.parent
     try:
         services = init.discover_services([plugins_dir])

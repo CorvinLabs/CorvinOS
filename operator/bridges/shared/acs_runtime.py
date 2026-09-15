@@ -61,7 +61,7 @@ if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 
 # Vibe Engineering (ADR-0275) — Context Engineering Layer, loaded by file path
-# (operator/ is not on the ACS PYTHONPATH; a sys.path insert would re-open the
+# (corvin_operator/ is not on the ACS PYTHONPATH; a sys.path insert would re-open the
 # stdlib `operator` shadow trap). Injected into the MANAGER prompt only — never
 # per worker: the manager holds the whole-task view, the workers keep their
 # deliberate context isolation (ADR-0217). Flag-gated + fail-safe.
@@ -1321,7 +1321,7 @@ def _assert_engine_licensed(engine_id: str) -> None:
         return
     _le: "type | None" = None
     try:
-        _op = str(Path(__file__).resolve().parents[2])  # operator/
+        _op = str(Path(__file__).resolve().parents[2])  # corvin_operator/
         if _op not in sys.path:
             sys.path.insert(0, _op)
         from license.validator import assert_limit as _al  # type: ignore

@@ -1,0 +1,11 @@
+{
+  "_NOTE": "Signal bridge via signal-cli REST API (self-hosted). Whitelist: E.164 phone numbers (+491234567890). Requires signal-cli-rest-api running locally: https://github.com/bbernhard/signal-cli-rest-api",
+  "_NOTE_setup": "1) Install signal-cli-rest-api (Docker or native). 2) Register your number: POST /v1/register/<number>. 3) Confirm with SMS code: POST /v1/register/<number>/verify/<code>. 4) Set signal_number here.",
+  "_NOTE_read_only": "OPTIONAL — phone numbers in read_only may follow the conversation but CANNOT trigger the bot. Every drop is audited as bridge.read_only_drop.",
+  "signal_number":  "+49YOUR_NUMBER",
+  "signal_api_url": "http://localhost:8080",
+  "whitelist":      ["+49TRUSTED_NUMBER"],
+  "read_only":      [],
+  "rate_limit_per_hour": 60,
+  "pin":            null
+}

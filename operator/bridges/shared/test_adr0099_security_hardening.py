@@ -1381,7 +1381,7 @@ class TestA2AConfigFileLock(unittest.TestCase):
     ``activate_connection``) rewrite the same origin/endpoint JSON files from
     different processes; a threading.Lock cannot serialise them. All RMW
     writers must take ``a2a_friendship.config_file_lock`` (flock, with a
-    Windows msvcrt fallback — pattern from operator/license/compute_quota.py)
+    Windows msvcrt fallback — pattern from corvin_operator/license/compute_quota.py)
     so a timed peer reconnect notification cannot silently revert a fresh
     operator edit (e.g. ``enabled=false``).
 

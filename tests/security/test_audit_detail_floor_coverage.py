@@ -9,7 +9,7 @@ list of what was thrown away. The floor was doing exactly what it was told; no
 test asked whether what it kept was still an audit record.
 
 This module closes that. It AST-scans every ``write_event`` / ``audit_event`` /
-``_emit`` call site in ``core/`` and ``operator/`` that has BOTH a literal event
+``_emit`` call site in ``core/`` and ``corvin_operator/`` that has BOTH a literal event
 type and a literal ``details`` dict, runs those literal keys through the REAL
 :func:`forge.security_events.filter_audit_details`, and fails when a site loses
 its whole body (``test_no_emitter_lands_empty``) or loses a key that carries the

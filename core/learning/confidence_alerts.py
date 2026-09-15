@@ -50,7 +50,7 @@ class AlertThresholdManager:
         self.task_type_thresholds: dict[str, float] = {}  # Per-task-type overrides
 
     def get_threshold(self, operator_id: str, task_type: Optional[str] = None) -> float:
-        """Get effective threshold for operator/task combination."""
+        """Get effective threshold for corvin_operator/task combination."""
         # Priority: task-type override > operator override > default
         if task_type and task_type in self.task_type_thresholds:
             return self.task_type_thresholds[task_type]

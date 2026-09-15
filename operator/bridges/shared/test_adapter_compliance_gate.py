@@ -2,7 +2,7 @@
 
 Run with::
 
-    python3 operator/bridges/shared/test_adapter_compliance_gate.py
+    python3 corvin_operator/bridges/shared/test_adapter_compliance_gate.py
 """
 from __future__ import annotations
 

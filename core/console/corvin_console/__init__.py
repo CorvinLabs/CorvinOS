@@ -13,7 +13,7 @@ design rationale.
 from __future__ import annotations
 
 
-# The operator-dependency bootstrap (wincompat shim → operator/ subtrees on
+# The operator-dependency bootstrap (wincompat shim → corvin_operator/ subtrees on
 # sys.path → source-tree injection) moved to corvin_core (ADR-0352 P2.3) — it is an
 # OS-kernel concern, not a Console one, and headless mode needs it without the
 # Console. Importing corvin_core runs it, in the same critical order, and MUST be

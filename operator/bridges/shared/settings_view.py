@@ -226,7 +226,7 @@ def _chat_profile(channel: str, chat_key: str) -> dict[str, Any]:
 def _persona_files() -> list[Path]:
     """Bundle + user persona dirs that ship with cowork."""
     candidates: list[Path] = []
-    # Repo-relative resolution: settings_view.py → operator/bridges/shared
+    # Repo-relative resolution: settings_view.py → corvin_operator/bridges/shared
     # → repo root is three parents up.
     repo_root = HERE.parent.parent.parent
     bundle = repo_root / "operator" / "cowork" / "personas"

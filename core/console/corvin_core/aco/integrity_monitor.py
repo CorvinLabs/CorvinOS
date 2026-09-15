@@ -125,7 +125,7 @@ def _save_checksum_state(tenant_id: str, state: dict) -> None:
 
 # ── Audit-chain verification: memoization (performance, NOT a weakening) ─────
 # The audit chain is UNIFIED / scope-independent (see
-# operator/bridges/shared/audit.py::_forge_workspace_root): EVERY tenant's scan
+# corvin_operator/bridges/shared/audit.py::_forge_workspace_root): EVERY tenant's scan
 # verifies the very same file. Without memoization verify_audit() ran once per
 # tenant AND once per call site — on this machine 36 full walks over a 315 MB
 # chain per heal cycle (~230 s of blocking work), breaking this module's own
@@ -183,7 +183,7 @@ def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
     try:
         # ADR-0215 F5: the dotted `from operator.bridges.shared...` primary
         # attempt this used to have can never resolve (stdlib `operator`
-        # always shadows the repo's operator/ directory) — dead code,
+        # always shadows the repo's corvin_operator/ directory) — dead code,
         # removed. parents[4] is the repo root (core/console/corvin_console/
         # aco/integrity_monitor.py -> aco -> corvin_console -> console ->
         # core -> repo root).
@@ -554,15 +554,15 @@ def check_license_file_presence() -> list[IntegrityFinding]:
 # Pfade sind relativ zum Repo-Root (werden beim ersten Zyklus berechnet).
 _COMPLIANCE_FILES = [
     # House-Rules L44 — darf nie deaktiviert werden
-    ("operator/bridges/shared/house_rules.py", "house_rules"),
+    ("corvin_operator/bridges/shared/house_rules.py", "house_rules"),
     # Consent Gate L16
-    ("operator/bridges/shared/consent.py", "consent_gate"),
+    ("corvin_operator/bridges/shared/consent.py", "consent_gate"),
     # Disclosure (EU AI Act Art. 50)
-    ("operator/bridges/shared/disclosure.py", "disclosure_gate"),
+    ("corvin_operator/bridges/shared/disclosure.py", "disclosure_gate"),
     # Audit-Chain (L16)
-    ("operator/bridges/shared/audit.py", "bridge_audit"),
+    ("corvin_operator/bridges/shared/audit.py", "bridge_audit"),
     # Path-Gate (L10)
-    ("operator/bridges/shared/path_gate.py", "path_gate"),
+    ("corvin_operator/bridges/shared/path_gate.py", "path_gate"),
 ]
 
 

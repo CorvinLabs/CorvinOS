@@ -587,10 +587,10 @@ def spawn_a2a_worker(
     try:
         _lic_root = str(Path(__file__).resolve().parents[2])
         if _lic_root not in sys.path:
-            # APPEND, never insert(0): ``operator/`` at the FRONT of sys.path
-            # made ``import forge`` resolve to the ``operator/forge/`` DIRECTORY
+            # APPEND, never insert(0): ``corvin_operator/`` at the FRONT of sys.path
+            # made ``import forge`` resolve to the ``corvin_operator/forge/`` DIRECTORY
             # (an implicit namespace package whose ``security_events`` is the
-            # CLI shim) instead of the real ``operator/forge/forge`` package.
+            # CLI shim) instead of the real ``corvin_operator/forge/forge`` package.
             # audit.py then died at import (``forge.security_events`` has no
             # ``AuditTenantMismatch``) and EVERY A2A spawn crashed after the
             # quota gate (adversarial hardening 2026-09-07). The B1 shadow
@@ -600,7 +600,7 @@ def spawn_a2a_worker(
         from license.limits import LicenseLimitError as _CQError  # type: ignore[assignment]
         # ADR-0144 A2A-CQ-NO-B1-02: the standalone a2a_http_server entrypoint never
         # runs the adapter's boot B1 PYTHONPATH-shadow gate, so verify HERE that the
-        # license modules were loaded from the expected operator/license/ dir. A
+        # license modules were loaded from the expected corvin_operator/license/ dir. A
         # shadow module (attacker `license` earlier on sys.path) would otherwise
         # silently no-op the quota gate. Fail-CLOSED: reject the spawn rather than
         # fall through to the fail-open path. Done via a direct return (not raise) so

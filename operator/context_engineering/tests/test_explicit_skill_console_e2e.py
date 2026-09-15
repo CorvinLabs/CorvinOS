@@ -16,7 +16,7 @@ output) — NOT by calling the stage directly. The only thing bypassed is the LL
 ``subprocess`` — the boundary under test here is the pipeline → skills_to_bind → render
 chain, not the synthesis call.
 
-Run:  python3 operator/context_engineering/tests/test_explicit_skill_console_e2e.py
+Run:  python3 corvin_operator/context_engineering/tests/test_explicit_skill_console_e2e.py
 """
 from __future__ import annotations
 

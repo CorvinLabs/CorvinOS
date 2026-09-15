@@ -21,7 +21,7 @@ policy is later extended with PII-zone routing:
   * Adapter integration: when policy_used, _try_awp_dispatch emits
     engine.policy_resolved audit event with engine_id + compliance_zone.
 
-Run: python3 operator/bridges/shared/test_engine_policy_dispatch.py
+Run: python3 corvin_operator/bridges/shared/test_engine_policy_dispatch.py
 """
 from __future__ import annotations
 

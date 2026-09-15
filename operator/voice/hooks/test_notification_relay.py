@@ -10,7 +10,7 @@ Prüft alle Pfade ohne Claude Code zu starten:
   6. Event nicht in events-Filter → kein Forward
 
 Run:
-    python3 operator/voice/hooks/test_notification_relay.py
+    python3 corvin_operator/voice/hooks/test_notification_relay.py
 """
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ from pathlib import Path
 
 ROOT     = Path(__file__).resolve().parent
 RELAY    = ROOT / "notification_relay.py"
-# The REAL outbox the messenger daemons poll (operator/bridges/shared/outbox).
+# The REAL outbox the messenger daemons poll (corvin_operator/bridges/shared/outbox).
 # This is the regression anchor for the orphan-path bug: the relay MUST target
-# this, not operator/voice/bridges/shared/outbox.
+# this, not corvin_operator/voice/bridges/shared/outbox.
 REAL_OUTBOX = ROOT.parent.parent / "bridges" / "shared" / "outbox"
 # Each run points the relay at a temp dir via ADAPTER_OUTBOX so the test asserts
 # against a controlled directory without polluting the repo tree — and, crucially,
@@ -75,7 +75,7 @@ def main() -> int:
 
         # --- 0. REGRESSION: default outbox path = the daemon-polled dir ---
         # Guards the orphan-path bug: with no override, the relay must resolve
-        # to operator/bridges/shared/outbox, NOT operator/voice/bridges/...
+        # to corvin_operator/bridges/shared/outbox, NOT corvin_operator/voice/bridges/...
         probe = subprocess.run(
             ["python3", "-c",
              "import os,importlib.util as u;"
