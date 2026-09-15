@@ -61,6 +61,32 @@ class AnomaliesResponse(BaseModel):
     count: int
 
 
+class RoutingPattern(BaseModel):
+    """One engine's share of the router's decisions."""
+    engine: str
+    count: int
+    percentage: float
+
+
+class SkillPattern(BaseModel):
+    """One skill's execution volume + success rate."""
+    skill: str
+    count: int
+    percentage: float
+    success_rate: Optional[float] = None
+
+
+class PatternsResponse(BaseModel):
+    """Real usage patterns derived from the learning EventStore."""
+    window: str
+    generated_at: str
+    available: bool
+    routing: List[RoutingPattern]
+    skills: List[SkillPattern]
+    total_routing_decisions: int
+    total_skill_executions: int
+
+
 # ===== Anomaly Detection =====
 
 class AnomalyDetector:
@@ -234,4 +260,33 @@ async def detect_anomalies(
         anomalies=anomalies,
         window_seconds=window,
         count=len(anomalies),
+    )
+
+
+@router.get(
+    "/patterns",
+    response_model=PatternsResponse,
+    summary="Usage Patterns",
+)
+async def get_patterns(
+    window: Literal["today", "7d", "30d", "90d"] = "7d",
+    rec=Depends(require_session),
+) -> PatternsResponse:
+    """
+    Real routing + skill usage patterns for the window.
+
+    Routing = the delegation router's engine choices; skills = execution volume
+    per skill_id. Both derived on demand from the ADR-0314 learning EventStore.
+    """
+    from . import maturity_live
+
+    raw = maturity_live.build_patterns(tenant_id=rec.tenant_id, window=window)
+    return PatternsResponse(
+        window=str(raw.get("window", window)),
+        generated_at=str(raw.get("generated_at", "")),
+        available=bool(raw.get("available", False)),
+        routing=[RoutingPattern(**r) for r in raw.get("routing", [])],
+        skills=[SkillPattern(**s) for s in raw.get("skills", [])],
+        total_routing_decisions=int(raw.get("total_routing_decisions", 0)),
+        total_skill_executions=int(raw.get("total_skill_executions", 0)),
     )

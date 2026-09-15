@@ -1,154 +1,176 @@
 /**
- * Patterns Tab — Top Routing Decisions, Top Skills, Context Distribution
- * Phase 4a Operator View
+ * Patterns Tab — REAL usage patterns (routing engine choices + skill volume).
+ *
+ * All data comes from `/v1/console/vibe/maturity/patterns`, which derives it on
+ * demand from the ADR-0314 learning EventStore (SKILL_EXECUTED events):
+ *   • Top Routing Decisions = the delegation router's engine choices
+ *     (shadow-mode `output.engine` on os.delegation_router executions).
+ *   • Top Skills Used = execution volume per skill_id, with success rate.
+ * There is NO context-size distribution and NO fabricated trend — nothing
+ * measures those cross-platform, so they are omitted rather than mocked. When
+ * the window has no executions, an honest empty state renders.
  */
 
-import React, { useMemo } from 'react';
-import { BarChart3, Zap, FolderOpen } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { BarChart3, Zap, Database } from 'lucide-react';
+import type { TimeWindow } from '../../hooks/useLiveMaturityData';
 
-interface PatternsTabProps {
-  loopScores: any;
+interface RoutingPattern {
+  engine: string;
+  count: number;
+  percentage: number;
 }
 
-// Mock data for phase 4a — will connect to real telemetry in Phase 4b
-const MOCK_ROUTING_PATTERNS = [
-  { engine: 'Claude Opus', count: 245, percentage: 58, trend: '+12%' },
-  { engine: 'Claude Sonnet', count: 142, percentage: 34, trend: '+5%' },
-  { engine: 'Claude Haiku', count: 38, percentage: 9, trend: '−3%' },
-];
+interface SkillPattern {
+  skill: string;
+  count: number;
+  percentage: number;
+  success_rate: number | null;
+}
 
-const MOCK_SKILL_PATTERNS = [
-  { skill: 'os.delegation_router', count: 318, percentage: 42, category: 'routing' },
-  { skill: 'loop-driven-engineering', count: 156, percentage: 21, category: 'ldd' },
-  { skill: 'context_adapter_l10', count: 124, percentage: 16, category: 'context' },
-  { skill: 'e2e_wiring_proof', count: 89, percentage: 12, category: 'testing' },
-  { skill: 'root-cause-by-layer', count: 45, percentage: 6, category: 'debugging' },
-];
+interface PatternsResponse {
+  window: string;
+  generated_at: string;
+  available: boolean;
+  routing: RoutingPattern[];
+  skills: SkillPattern[];
+  total_routing_decisions: number;
+  total_skill_executions: number;
+}
 
-const MOCK_CONTEXT_BUCKETS = [
-  { bucket: 'lightweight (<2KB)', count: 412, percentage: 55 },
-  { bucket: 'normal (2–5KB)', count: 268, percentage: 36 },
-  { bucket: 'large (5–10KB)', count: 62, percentage: 8 },
-  { bucket: 'heavy (>10KB)', count: 8, percentage: 1 },
-];
+interface PatternsTabProps {
+  loopScores?: unknown; // kept for call-site compatibility; patterns are fetched live
+  window?: TimeWindow;
+}
 
-export function PatternsTab({ loopScores }: PatternsTabProps) {
+export function PatternsTab({ window: windowPref = '7d' }: PatternsTabProps) {
+  const [data, setData] = useState<PatternsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`/v1/console/vibe/maturity/patterns?window=${windowPref}`, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!res.ok) throw new Error(`API returned ${res.status}`);
+        const json: PatternsResponse = await res.json();
+        if (!cancelled) {
+          setData(json);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Unknown error');
+          setData(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    const interval = setInterval(load, 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [windowPref]);
+
+  const hasRouting = (data?.routing?.length ?? 0) > 0;
+  const hasSkills = (data?.skills?.length ?? 0) > 0;
+
+  if (loading && !data) {
+    return (
+      <div className="text-center py-12 text-sm text-muted-foreground">Loading usage patterns…</div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="border border-destructive/40 bg-destructive/10 rounded p-4 text-sm text-destructive">
+        {error}
+      </div>
+    );
+  }
+
+  if (!hasRouting && !hasSkills) {
+    return (
+      <div className="border border-border bg-card rounded-lg p-8 text-center">
+        <Database size={28} className="mx-auto mb-3 text-muted-foreground" />
+        <div className="text-sm font-medium text-foreground mb-1">No usage patterns yet</div>
+        <div className="text-xs text-muted-foreground max-w-md mx-auto">
+          Routing decisions and skill executions are read from the learning EventStore. Once the
+          system routes tasks and runs skills in this window, the patterns populate automatically.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Top Routing Decisions */}
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h3 className="text-sm font-semibold mb-4 text-foreground flex items-center gap-2">
-          <Zap size={18} className="text-accent" />
-          Top Routing Decisions (7d)
-        </h3>
-        <div className="space-y-4">
-          {MOCK_ROUTING_PATTERNS.map((pattern, i) => (
-            <div key={i}>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <span className="text-sm font-medium text-foreground">{pattern.engine}</span>
-                  <span className="text-xs text-muted-foreground ml-2">({pattern.count} calls)</span>
+      {hasRouting && (
+        <div className="bg-card border border-border rounded-lg p-6">
+          <h3 className="text-sm font-semibold mb-1 text-foreground flex items-center gap-2">
+            <Zap size={18} className="text-accent" />
+            Top Routing Decisions ({data!.window})
+          </h3>
+          <div className="text-xs text-muted-foreground mb-4">
+            {data!.total_routing_decisions} router decisions (delegation router, shadow mode)
+          </div>
+          <div className="space-y-4">
+            {data!.routing.map((pattern) => (
+              <div key={pattern.engine}>
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <span className="text-sm font-medium text-foreground">{pattern.engine}</span>
+                    <span className="text-xs text-muted-foreground ml-2">({pattern.count} decisions)</span>
+                  </div>
+                  <span className="text-xs font-semibold text-accent">{pattern.percentage}%</span>
                 </div>
-                <span className={`text-xs font-semibold ${pattern.trend.startsWith('+') ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                  {pattern.trend}
-                </span>
-              </div>
-              <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
-                <div
-                  className="bg-accent h-2 rounded-full"
-                  style={{ width: `${pattern.percentage}%` }}
-                ></div>
-              </div>
-              <div className="text-xs text-muted-foreground mt-1">{pattern.percentage}% of all routing decisions</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Top Skills Called */}
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h3 className="text-sm font-semibold mb-4 text-foreground flex items-center gap-2">
-          <BarChart3 size={18} className="text-accent" />
-          Top Skills Used (7d)
-        </h3>
-        <div className="space-y-3">
-          {MOCK_SKILL_PATTERNS.map((skill, i) => (
-            <div key={i} className="flex items-center justify-between p-3 bg-muted rounded border border-border">
-              <div className="flex-1">
-                <div className="text-sm font-medium text-foreground">{skill.skill}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  {skill.count} invocations • {skill.category}
+                <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                  <div className="bg-accent h-2 rounded-full" style={{ width: `${pattern.percentage}%` }}></div>
                 </div>
               </div>
-              <div className="text-right">
-                <div className="text-sm font-semibold text-accent">{skill.percentage}%</div>
-                <div className="w-16 h-1.5 bg-card rounded mt-1 overflow-hidden">
-                  <div
-                    className="bg-accent h-1.5 rounded"
-                    style={{ width: `${skill.percentage}%` }}
-                  ></div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Context Distribution */}
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h3 className="text-sm font-semibold mb-4 text-foreground flex items-center gap-2">
-          <FolderOpen size={18} className="text-accent" />
-          Context Size Distribution (7d)
-        </h3>
-        <div className="space-y-4">
-          {MOCK_CONTEXT_BUCKETS.map((bucket, i) => (
-            <div key={i}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-foreground">{bucket.bucket}</span>
-                <span className="text-xs font-semibold text-muted-foreground">{bucket.count} ({bucket.percentage}%)</span>
-              </div>
-              <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
-                <div
-                  className={`h-2 rounded-full ${
-                    bucket.percentage > 50
-                      ? 'bg-emerald-500'
-                      : bucket.percentage > 30
-                        ? 'bg-accent'
-                        : bucket.percentage > 10
-                          ? 'bg-amber-500'
-                          : 'bg-destructive'
-                  }`}
-                  style={{ width: `${bucket.percentage}%` }}
-                ></div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 p-3 bg-muted rounded border border-border">
-          <div className="text-xs text-muted-foreground">
-            💡 <strong>Insight:</strong> Most requests use lightweight context (&lt;2KB). Heavy contexts (&gt;10KB) are rare — consider trimming if they appear.
+            ))}
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Pattern Insights */}
-      <div className="bg-card border border-border rounded-lg p-6">
-        <h3 className="text-sm font-semibold mb-4 text-foreground">📌 Pattern Insights</h3>
-        <ul className="space-y-3 text-sm text-foreground">
-          <li className="flex gap-3">
-            <span className="text-emerald-600 dark:text-emerald-400 flex-shrink-0">✓</span>
-            <span>Opus dominance (58%) is expected for complex reasoning tasks — monitor if percentage drops below 50%</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-emerald-600 dark:text-emerald-400 flex-shrink-0">✓</span>
-            <span>Skill diversification is healthy — top 5 skills cover only 97% of calls (no single point of failure)</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-accent flex-shrink-0">→</span>
-            <span>Context sizes are well-distributed — lightweight (&lt;2KB) usage suggests good context efficiency</span>
-          </li>
-        </ul>
-      </div>
+      {/* Top Skills Used */}
+      {hasSkills && (
+        <div className="bg-card border border-border rounded-lg p-6">
+          <h3 className="text-sm font-semibold mb-1 text-foreground flex items-center gap-2">
+            <BarChart3 size={18} className="text-accent" />
+            Top Skills Used ({data!.window})
+          </h3>
+          <div className="text-xs text-muted-foreground mb-4">
+            {data!.total_skill_executions} skill executions
+          </div>
+          <div className="space-y-3">
+            {data!.skills.map((skill) => (
+              <div key={skill.skill} className="flex items-center justify-between p-3 bg-muted rounded border border-border">
+                <div className="flex-1">
+                  <div className="text-sm font-medium text-foreground">{skill.skill}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {skill.count} invocations
+                    {skill.success_rate != null && ` • ${(skill.success_rate * 100).toFixed(0)}% success`}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-accent">{skill.percentage}%</div>
+                  <div className="w-16 h-1.5 bg-card rounded mt-1 overflow-hidden">
+                    <div className="bg-accent h-1.5 rounded" style={{ width: `${skill.percentage}%` }}></div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
