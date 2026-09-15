@@ -3,18 +3,21 @@
 Given a provider spec (from ``engine_models``), fetch the model IDs the provider
 actually offers right now:
   * ``anthropic``  → GET {base_url}/v1/models              (paginated, cached)
+  * ``bedrock``    → GET /foundation-models + /inference-profiles (SigV4-signed)
   * ``ollama``     → GET {base_url}/api/tags               (local + cloud)
   * ``openrouter`` → GET {base_url}/models                 (public catalogue)
   * ``openai``     → GET {base_url}/models                 (requires an API key)
   * ``static``     → no live list (use the curated registry entries)
 
-The ``anthropic`` source differs from the other two in both directions: it walks
-``has_more``/``last_id`` pages, and it WRITES what it finds to ``model_catalog``
-so ``engine_models.load_registry()`` can merge it into the curated picker. That
-merge is the whole point — a fetch whose result nobody stores changes nothing
-the operator can see. It is also the one source with a benign no-credential
-case: a Claude Code subscription login exposes no API key, so a keyless call
-returns an explanation and does not egress.
+Two sources WRITE what they find to ``model_catalog`` so
+``engine_models.load_registry()`` can merge it into the curated picker —
+``anthropic`` and ``bedrock``. That merge is the whole point: a fetch whose
+result nobody stores changes nothing the operator can see. ``anthropic`` is
+additionally the only PAGINATED source (``has_more``/``last_id``) and the only
+one with a benign no-credential case — a Claude Code subscription login exposes
+no API key, so a keyless call returns an explanation and does not egress.
+``bedrock`` is the only source that needs no ``credential_env`` at all: it
+authenticates through the AWS credential chain, not the L16 key vault.
 
 Credentials: the provider's ``credential_env`` names an env var; its value
 (the API key) is resolved via provider_keys.resolve_by_env_var at request
@@ -38,6 +41,7 @@ from typing import Any
 _SHARED_DIR = Path(__file__).resolve().parent
 if str(_SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(_SHARED_DIR))
+import aws_sigv4 as _aws_sigv4  # type: ignore  # noqa: E402
 import model_catalog as _model_catalog  # type: ignore  # noqa: E402
 import provider_keys as _provider_keys  # type: ignore  # noqa: E402
 
@@ -120,6 +124,140 @@ def _fetch_anthropic(result: dict, *, base: str, key: str, timeout: float) -> di
     return result
 
 
+def _bedrock_host(region: str) -> str:
+    return f"bedrock.{region}.amazonaws.com"
+
+
+def _bedrock_get(
+    *, credentials: Any, region: str, path: str, query: dict[str, str], timeout: float
+) -> Any:
+    host = _bedrock_host(region)
+    headers = _aws_sigv4.signed_get_headers(
+        credentials=credentials, host=host, region=region,
+        service="bedrock", canonical_uri=path, query=query,
+    )
+    url = f"https://{host}{path}"
+    canonical = _aws_sigv4.canonical_query(query)
+    if canonical:
+        url = f"{url}?{canonical}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed AWS endpoint
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def _fetch_bedrock(result: dict, *, timeout: float) -> dict:
+    """List what THIS AWS account can actually invoke, via two Bedrock calls.
+
+    Both are needed and neither is redundant:
+
+    * ``ListFoundationModels`` returns base ids (``anthropic.claude-sonnet-5-v1:0``).
+    * ``ListInferenceProfiles`` returns the cross-region ids (``us.anthropic.
+      claude-sonnet-5``) — and those are what Claude Code actually passes as
+      ``ANTHROPIC_MODEL`` on a Bedrock install, so a picker built from foundation
+      models alone offers ids the operator cannot select.
+
+    A profile listing that fails does not sink the foundation-model list (and vice
+    versa): partial truth beats an empty picker, and ``result["error"]`` names
+    what was missed. Never raises.
+    """
+    region = _aws_sigv4.resolve_region()
+    if not region:
+        result["error"] = (
+            "no AWS region configured (AWS_REGION / AWS_DEFAULT_REGION or the "
+            "profile's `region`) — cannot address a Bedrock endpoint"
+        )
+        return result
+
+    credentials, reason = _aws_sigv4.resolve_credentials()
+    if credentials is None:
+        result["error"] = reason or "no AWS credentials configured on this host"
+        return result
+
+    models: list[dict] = []
+    partial_errors: list[str] = []
+    # A session token cached in ~/.aws/credentials outlives its validity: the file
+    # still parses, so the chain hands it over and only AWS knows it is dead. On
+    # that specific rejection, re-run credential_process ONCE and retry.
+    refreshed = False
+
+    def _call(path: str, query: dict[str, str]) -> Any:
+        nonlocal credentials, refreshed
+        try:
+            return _bedrock_get(credentials=credentials, region=region, path=path,
+                                query=query, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (401, 403) or refreshed or not _aws_sigv4.has_credential_process():
+                raise
+            refreshed = True
+            fresh, refresh_reason = _aws_sigv4.resolve_credentials(force_refresh=True)
+            if fresh is None:
+                raise RuntimeError(refresh_reason or "credential refresh produced nothing") from exc
+            credentials = fresh
+            return _bedrock_get(credentials=credentials, region=region, path=path,
+                                query=query, timeout=timeout)
+
+    try:
+        data = _call("/foundation-models", {"byOutputModality": "TEXT"}) or {}
+        for summary in data.get("modelSummaries") or []:
+            if not isinstance(summary, dict) or not summary.get("modelId"):
+                continue
+            model_id = summary["modelId"]
+            vendor = summary.get("providerName") or ""
+            name = summary.get("modelName") or model_id
+            models.append({
+                "id": model_id,
+                "label": f"{vendor} {name}".strip() if vendor else name,
+                "bedrock_kind": "foundation_model",
+            })
+    except Exception as exc:  # noqa: BLE001
+        partial_errors.append(f"ListFoundationModels: {_brief(exc)}")
+
+    try:
+        next_token = ""
+        for _ in range(_MAX_MODEL_PAGES):
+            query = {"maxResults": "100"}
+            if next_token:
+                query["nextToken"] = next_token
+            data = _call("/inference-profiles", query) or {}
+            for summary in data.get("inferenceProfileSummaries") or []:
+                if not isinstance(summary, dict) or not summary.get("inferenceProfileId"):
+                    continue
+                models.append({
+                    "id": summary["inferenceProfileId"],
+                    "label": summary.get("inferenceProfileName")
+                             or summary["inferenceProfileId"],
+                    "bedrock_kind": "inference_profile",
+                })
+            next_token = data.get("nextToken") or ""
+            if not next_token:
+                break
+    except Exception as exc:  # noqa: BLE001
+        partial_errors.append(f"ListInferenceProfiles: {_brief(exc)}")
+
+    if not models:
+        result["error"] = "; ".join(partial_errors) or "Bedrock returned no models"
+        return result
+
+    seen: set[str] = set()
+    unique = [m for m in models if not (m["id"] in seen or seen.add(m["id"]))]
+    result.update(reachable=True, models=unique, count=len(unique))
+    result["region"] = region
+    result["credential_source"] = credentials.source
+    if partial_errors:
+        result["error"] = "; ".join(partial_errors)
+    try:
+        result["cached"] = bool(_model_catalog.store_models("bedrock", unique))
+    except Exception:  # noqa: BLE001 — a cache write must not cost the response
+        result["cached"] = False
+    return result
+
+
+def _brief(exc: BaseException) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    return f"{type(exc).__name__}: {str(exc)[:120]}"
+
+
 def fetch_models(
     provider: str,
     *,
@@ -147,16 +285,25 @@ def fetch_models(
         # no API key at all. Explain it and do not egress — a keyless request
         # would come back 401 and read like a broken credential rather than an
         # absent one.
+        # The wording matters: this response carries models=[]. Saying "showing
+        # the curated model list" claimed a list THIS response does not contain
+        # (merging the curated list is the caller's job, and neither live caller
+        # does it) — which reads as a bug in the picker rather than an absent key.
         result["error"] = (
-            f"no {credential_env or 'ANTHROPIC_API_KEY'} configured — showing the "
-            f"curated model list. Add an API key under Settings → API Keys to see "
-            f"Anthropic's live model list."
+            f"no {credential_env or 'ANTHROPIC_API_KEY'} configured, so no live "
+            f"model list could be fetched. Add an API key under Settings → API "
+            f"Keys to see Anthropic's live models."
         )
         return result
 
     try:
         if model_source == "anthropic":
             return _fetch_anthropic(result, base=base, key=key, timeout=timeout)
+        if model_source == "bedrock":
+            # No credential_env: Bedrock authenticates with the AWS credential
+            # chain (env / profile / credential_process), not an API key in the
+            # L16 vault, so there is nothing for provider_keys to resolve.
+            return _fetch_bedrock(result, timeout=timeout)
         if model_source == "ollama":
             data = _get_json(f"{base}/api/tags", bearer=key, timeout=timeout)
             items = (data or {}).get("models") or []

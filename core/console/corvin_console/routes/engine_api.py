@@ -51,9 +51,12 @@ if str(_SHARED) not in sys.path:
 router = APIRouter()
 
 TASK_TYPES = ("corvinOS", "SIMPLE", "MEDIUM", "COMPLEX")
-_VALID_ANTHROPIC_MODELS = (
-    "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-fable-5",
-)
+
+#: Which provider ids can serve a "native Claude" model on this host. Both are
+#: real, live sources; which one applies depends on how Claude Code is logged in
+#: (an API key vs. CLAUDE_CODE_USE_BEDROCK=1), so both are always offered and
+#: each reports its own reachability.
+_CLAUDE_PROVIDERS = ("anthropic", "bedrock")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -85,7 +88,11 @@ class EngineConfigRequest(BaseModel):
 class ExternalProviderTestRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
-    provider: str = Field(..., pattern="^(ollama_local|ollama_cloud|openrouter|openai|anthropic)$")
+    # A shape constraint, not an allowlist: the set of real providers lives in the
+    # ADR-0181 registry and is checked against it in the handler. An enum here
+    # froze the list at four ids, so a provider added to the registry (bedrock)
+    # was rejected with a 422 before the handler could ever see it.
+    provider: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
 
 
 class ExternalProviderTestResponse(BaseModel):
@@ -175,9 +182,214 @@ def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | N
     return stats, total, last_iso
 
 
+def _is_claude_model_id(model_id: str) -> bool:
+    """Does this id name a Claude model, in ANY of the forms a host addresses one?
+
+    Bedrock hands back three shapes for the same family — ``anthropic.claude-…``
+    (foundation model), ``us.anthropic.claude-…`` / ``global.anthropic.claude-…``
+    (inference profiles) — and the Anthropic API hands back a bare ``claude-…``.
+    Matching the vendor token rather than a prefix list covers all of them, and a
+    new region prefix does not silently drop the model from the picker.
+    """
+    lowered = model_id.lower()
+    return "claude" in lowered or "anthropic" in lowered
+
+
+def _claude_catalog_offline() -> set[str]:
+    """Ids a saved choice may name, resolved WITHOUT touching the network.
+
+    A PUT must not be gated on provider reachability — a validator that calls out
+    would reject every save the moment the network hiccups. Both sources here are
+    on-disk and real: the ADR-0119 registry (shipped configuration) and
+    ``model_catalog`` (what a provider ANSWERED on its last successful fetch).
+    """
+    ids: set[str] = set()
+    try:
+        from engine_models import load_registry  # type: ignore[import]  # noqa: PLC0415
+        for spec in load_registry(force_reload=False).values():
+            for role_attr in ("os_models", "worker_models"):
+                for entry in getattr(spec, role_attr, None) or []:
+                    entry_id = getattr(entry, "id", "")
+                    if entry_id and _is_claude_model_id(entry_id):
+                        ids.add(entry_id)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import model_catalog  # type: ignore[import]  # noqa: PLC0415
+        for provider_id in _CLAUDE_PROVIDERS:
+            for entry in model_catalog.catalog_models(provider_id) or []:
+                entry_id = entry.get("id") if isinstance(entry, dict) else None
+                if entry_id and _is_claude_model_id(entry_id):
+                    ids.add(entry_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return ids
+
+
 # ─────────────────────────────────────────────────────────────────
 # API Routes
 # ─────────────────────────────────────────────────────────────────
+
+
+@router.get("/v1/engine/claude-models")
+async def get_claude_models(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Every Claude model this host can actually select, from ALL live sources.
+
+    Three sources are queried and UNIONED, because no single one is complete:
+
+    * ``registry`` — the ADR-0119 curated list. Offline, always available, and a
+      release-time snapshot, so it is the floor and never the whole answer.
+    * ``anthropic_live`` — ``GET /v1/models``. Authoritative on an API-key login;
+      returns nothing on a subscription or Bedrock login, which exposes no key.
+    * ``bedrock_live`` — ``ListFoundationModels`` + ``ListInferenceProfiles``,
+      SigV4-signed. Authoritative on a ``CLAUDE_CODE_USE_BEDROCK=1`` host, and the
+      only source that knows the ``us.anthropic.claude-…`` inference-profile ids
+      Claude Code actually passes as ``ANTHROPIC_MODEL`` there.
+
+    Each entry names the sources it came from, and each source reports its own
+    reachability and error, so an incomplete list is visible AS incomplete rather
+    than looking like the full truth.
+    """
+    tenant_id = _tenant_id(rec)
+    entries: dict[str, dict[str, Any]] = {}
+    sources: list[dict[str, Any]] = []
+
+    def _add(model_id: str, label: str, source: str, provider: str) -> None:
+        entry = entries.setdefault(
+            model_id,
+            {"id": model_id, "label": label or model_id, "sources": [], "providers": []},
+        )
+        if source not in entry["sources"]:
+            entry["sources"].append(source)
+        if provider and provider not in entry["providers"]:
+            entry["providers"].append(provider)
+        # A live provider's own display_name beats the registry's hand-written
+        # label — it is what the vendor calls the model today.
+        if source != "registry" and label:
+            entry["label"] = label
+
+    registry_count = 0
+    registry_error: str | None = None
+    default_model_id = ""
+    try:
+        from engine_models import load_registry  # type: ignore[import]  # noqa: PLC0415
+        registry = load_registry(force_reload=True)
+        for spec in registry.values():
+            live = getattr(spec, "live_models", None)
+            provider = getattr(live, "provider", "") if live is not None else ""
+            for role_attr in ("os_models", "worker_models"):
+                for entry in getattr(spec, role_attr, None) or []:
+                    entry_id = getattr(entry, "id", "")
+                    if entry_id and _is_claude_model_id(entry_id):
+                        _add(entry_id, getattr(entry, "label", ""), "registry", provider)
+                        registry_count += 1
+        # The registry's own marked default for Claude Code's worker role. The UI
+        # needs SOME id to fall back to when the operator detaches an external
+        # provider, and taking it from the registry keeps that fallback a real
+        # configured value instead of a constant in the page.
+        claude_code = registry.get("claude_code")
+        for entry in getattr(claude_code, "worker_models", None) or []:
+            if getattr(entry, "default", False) and getattr(entry, "id", ""):
+                default_model_id = entry.id
+                break
+    except Exception as exc:  # noqa: BLE001
+        registry_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+    sources.append({
+        "id": "registry", "label": "Curated registry (ADR-0119)",
+        "reachable": registry_error is None, "count": registry_count,
+        "error": registry_error, "live": False,
+    })
+
+    for provider_id in _CLAUDE_PROVIDERS:
+        fetched = _fetch_provider_models(provider_id, tenant_id)
+        matched = 0
+        for model in fetched.get("models") or []:
+            model_id = model.get("id") if isinstance(model, dict) else None
+            if model_id and _is_claude_model_id(model_id):
+                _add(model_id, model.get("label") or "", f"{provider_id}_live", provider_id)
+                matched += 1
+        sources.append({
+            "id": f"{provider_id}_live",
+            "label": fetched.get("provider_label") or provider_id,
+            "reachable": bool(fetched.get("reachable")),
+            # Claude models found, not every model the provider offers — Bedrock
+            # returns ~160 across every vendor and only a slice is Claude.
+            "count": matched,
+            "error": fetched.get("error"),
+            "live": True,
+            "detail": fetched.get("detail"),
+        })
+
+    models = sorted(entries.values(), key=lambda m: m["id"])
+    return {
+        "tenant_id": tenant_id,
+        "models": models,
+        "count": len(models),
+        "sources": sources,
+        "default_model_id": default_model_id or None,
+    }
+
+
+def _fetch_provider_models(provider_id: str, tenant_id: str) -> dict[str, Any]:
+    """Live-fetch one provider's models, honouring the L35 egress gate.
+
+    Mirrors ``routes/engine.py::get_provider_models`` rather than calling it: that
+    one is a FastAPI endpoint with a session dependency, so reusing it from here
+    would mean constructing a request. Never raises.
+    """
+    try:
+        from engine_models import load_providers  # type: ignore[import]  # noqa: PLC0415
+        from engine_providers import fetch_models  # type: ignore[import]  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        return {"reachable": False, "models": [], "error": f"module error: {exc}"}
+
+    spec = load_providers(force_reload=True).get(provider_id)
+    if spec is None:
+        return {"reachable": False, "models": [], "error": f"unknown provider '{provider_id}'"}
+
+    if spec.kind == "cloud" and spec.base_url:
+        try:
+            from .engine import _egress_denied  # noqa: PLC0415
+            denied = _egress_denied(spec.base_url, tenant_id)
+        except Exception:  # noqa: BLE001
+            denied = None
+        if denied:
+            return {"reachable": False, "models": [], "error": denied,
+                    "provider_label": spec.label}
+
+    result = fetch_models(
+        provider_id, base_url=spec.base_url,
+        model_source=spec.model_source, credential_env=spec.credential_env,
+    )
+    result["provider_label"] = spec.label
+    # Bedrock resolves its endpoint + credential at fetch time; naming both lets
+    # the operator see WHICH account/region the list came from.
+    region = result.get("region")
+    credential_source = result.get("credential_source")
+    if region or credential_source:
+        result["detail"] = " · ".join(
+            part for part in (region, credential_source) if part
+        )
+    return result
+
+
+@router.get("/v1/engine/model-usage")
+async def get_model_usage(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Per-model and per-provider usage share, counted from the audit chain.
+
+    See ``model_usage`` for why the chain is the source and not a counter table.
+    Read-only; emits no audit event of its own.
+    """
+    tenant_id = _tenant_id(rec)
+    try:
+        from ..model_usage import model_usage  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"model_usage unavailable: {exc}") from exc
+    return model_usage(tenant_id)
 
 
 @router.get("/v1/engine/config")
@@ -279,11 +491,17 @@ async def update_engine_config(
         if task_type not in TASK_TYPES:
             raise HTTPException(status_code=400, detail=f"Invalid task_type: {task_type}")
         if model_cfg.provider is None:
-            if model_cfg.selected_model not in _VALID_ANTHROPIC_MODELS:
+            known_claude = _claude_catalog_offline()
+            # An empty catalogue means the registry could not be read AND no live
+            # fetch has ever cached anything — refusing every save on that basis
+            # would lock the operator out over an unreadable YAML, so accept and
+            # let the model-source panel surface the broken catalogue instead.
+            if known_claude and model_cfg.selected_model not in known_claude:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Unknown Anthropic model {model_cfg.selected_model!r} for {task_type}. "
-                          f"Choose from: {list(_VALID_ANTHROPIC_MODELS)}",
+                    detail=f"Unknown Claude model {model_cfg.selected_model!r} for {task_type}. "
+                          f"Not offered by the curated registry or by any provider's "
+                          f"last live model list.",
                 )
         elif known_providers and model_cfg.provider not in known_providers:
             raise HTTPException(

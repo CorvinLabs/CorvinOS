@@ -16,17 +16,28 @@ import engine_providers as EP  # type: ignore
 
 def test_providers_registry_loaded():
     prov = EM.providers_as_dict(force_reload=True)
-    assert set(prov) == {"anthropic", "openai", "ollama_local", "ollama_cloud", "openrouter"}
+    assert set(prov) == {"anthropic", "bedrock", "openai",
+                         "ollama_local", "ollama_cloud", "openrouter"}
     assert prov["openrouter"]["kind"] == "cloud"
     assert prov["ollama_local"]["kind"] == "local"
     # credential_env is a NAME, never a secret value
     assert prov["openrouter"]["credential_env"] == "OPENROUTER_API_KEY"
+    # bedrock is the one provider with NO credential_env: it authenticates through
+    # the AWS credential chain, so there is nothing for provider_keys to resolve.
+    # A non-empty value here would send the console looking in the L16 key vault
+    # for a key that never exists and reporting the provider as unconfigured.
+    assert prov["bedrock"]["credential_env"] == ""
+    assert prov["bedrock"]["model_source"] == "bedrock"
 
 
 def test_supported_providers_per_engine():
     reg = EM.registry_as_dict(force_reload=True)
     cc = {p["provider"]: p for p in reg["claude_code"]["supported_providers"]}
     assert cc["anthropic"]["native"] is True
+    # Bedrock is native, not proxied: Claude Code speaks to it directly under
+    # CLAUDE_CODE_USE_BEDROCK, so routing it through anthropic_openai_bridge
+    # would translate a dialect it already understands.
+    assert cc["bedrock"]["native"] is True
     assert cc["ollama_local"]["native"] is False   # via built-in translating proxy
     assert cc["ollama_cloud"]["native"] is False   # via built-in translating proxy
     assert cc["openrouter"]["native"] is False      # via built-in translating proxy
@@ -117,7 +128,10 @@ def test_bad_reload_does_not_wipe_good_cache(tmp_path):
     importlib.reload(EM)
     EM.load_registry(force_reload=True)
     good = len(EM.load_providers())
-    assert good == 5
+    # Not a pinned count: what this test is about is that `good` SURVIVES the bad
+    # reload below. Pinning it meant every legitimately added provider failed here
+    # with an arithmetic mismatch that says nothing about cache preservation.
+    assert good > 0
     orig = EM._REGISTRY_FILE
     try:
         EM._REGISTRY_FILE = tmp_path / "missing.yaml"

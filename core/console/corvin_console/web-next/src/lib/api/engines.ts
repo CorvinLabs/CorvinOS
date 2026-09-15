@@ -517,3 +517,105 @@ export async function resetModelSelectionLearning(
 ): Promise<{ status: string; message: string; reset_at: string }> {
   return api("/v1/engine/analytics/reset", { method: "POST", csrf });
 }
+
+// ── Claude model catalogue — union of every live source ────────────────────
+// registry (ADR-0119 curated, offline) + anthropic_live (GET /v1/models) +
+// bedrock_live (ListFoundationModels + ListInferenceProfiles, SigV4). No
+// hardcoded model list in this file: on a Bedrock host the selectable ids are
+// `us.anthropic.claude-*` inference profiles that no shipped list can predict.
+
+export interface ClaudeModelEntry {
+  id: string;
+  label: string;
+  /** which sources offered this id: "registry" | "anthropic_live" | "bedrock_live" */
+  sources: string[];
+  providers: string[];
+}
+
+export interface ClaudeModelSource {
+  id: string;
+  label: string;
+  reachable: boolean;
+  /** Claude models found by THIS source (not the provider's whole catalogue) */
+  count: number;
+  error: string | null;
+  live: boolean;
+  /** e.g. Bedrock's resolved region + credential source */
+  detail?: string | null;
+}
+
+export interface ClaudeModelsResponse {
+  tenant_id: string;
+  models: ClaudeModelEntry[];
+  count: number;
+  sources: ClaudeModelSource[];
+  /** The ADR-0119 registry's `default: true` worker model, or null when the
+   *  registry declares none. Used as the reset target when an external provider
+   *  is removed — never a positional index into a frontend array. */
+  default_model_id: string | null;
+}
+
+export async function getClaudeModels(signal?: AbortSignal): Promise<ClaudeModelsResponse> {
+  return api<ClaudeModelsResponse>("/v1/engine/claude-models", { signal });
+}
+
+// ── Real model usage shares, counted from the tenant audit chain ───────────
+
+export interface ModelUsageRow {
+  model_id: string;
+  provider: string;
+  provider_label: string;
+  /** how the provider was determined: live_catalog | registry | id_prefix | unresolved */
+  provider_source: string;
+  turns: number;
+  share_pct: number;
+  ok: number;
+  failed: number;
+  unfinished: number;
+  success_pct: number;
+  avg_duration_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  token_share_pct: number;
+  roles: Record<string, number>;
+  engines: string[];
+  first_seen: number | null;
+  last_seen: number | null;
+}
+
+export interface ProviderUsageRow {
+  provider: string;
+  provider_label: string;
+  turns: number;
+  total_tokens: number;
+  models: number;
+  share_pct: number;
+  token_share_pct: number;
+}
+
+export interface ModelUsageResponse {
+  tenant_id: string;
+  chain_path_resolved: boolean;
+  /** false = the chain file does not exist yet (fresh install), not an error */
+  chain_readable: boolean;
+  models: ModelUsageRow[];
+  providers: ProviderUsageRow[];
+  totals: {
+    turns: number;
+    ok: number;
+    failed: number;
+    unfinished: number;
+    total_tokens: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+  };
+}
+
+export async function getModelUsage(signal?: AbortSignal): Promise<ModelUsageResponse> {
+  return api<ModelUsageResponse>("/v1/engine/model-usage", { signal });
+}
