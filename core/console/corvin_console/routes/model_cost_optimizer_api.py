@@ -119,6 +119,13 @@ class DashboardStatusResponse(BaseModel):
     acs_total_turns: int = 0
     acs_savings_percent: float = 0.0
     acs_worker_model_pin: Optional[str] = None
+    # ADR-0761 — per-model dollars for both sources:
+    # {model_id: {actual_usd, baseline_usd, turns}}. The mix fields above say
+    # which models ran; these say what each one cost against the same-token Opus
+    # reference, which is what lets the panel show WHERE the saving came from
+    # instead of only that there was one.
+    cost_model_cost: Dict[str, Dict[str, float]] = {}
+    acs_model_cost: Dict[str, Dict[str, float]] = {}
     # ── OS + worker together. Neither number alone is "what this install
     # saved": the OS series is the cheap orchestration layer and the worker
     # series is the substantive work. Derived from the two REAL totals, never
@@ -406,6 +413,8 @@ async def get_learning_status(
             "acs_total_turns": acs_total_turns,
             "acs_savings_percent": acs_savings_pct,
             "acs_worker_model_pin": worker_model_pin,
+            "cost_model_cost": cost_result.model_cost if cost_data_available else {},
+            "acs_model_cost": cost_result.acs_model_cost if acs_data_available else {},
             "combined_actual_usd": combined_actual,
             "combined_baseline_usd": combined_baseline,
             "combined_savings_percent": combined_savings_pct,

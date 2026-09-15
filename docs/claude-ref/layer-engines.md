@@ -3035,3 +3035,88 @@ Recomputed independently from the chain: identical to four decimals.
   it is a view, and an operator who believes otherwise has been misled by us.
 - **Don't confuse the epoch with retention or GDPR Art. 17 erasure.** It changes
   what a dashboard counts; those change what exists.
+
+---
+
+## Cost-visualisation encodings (ADR-0761, 2026-09-15)
+
+The Cost Efficiency card had ONE chart: four overlapping areas (OS actual, OS
+baseline, worker actual, worker baseline) on **one shared axis**. Measured live:
+OS $0.02 against worker $1.99 — the OS areas held under 2 % of the y-range and
+were invisible, which reads as "the OS layer is free" when the fact is "the OS
+layer is small".
+
+### Rules the charts follow
+
+**Two sources are never one plot — and the facets share ONE scale.** The second
+half is the less obvious one: two charts side by side, same unit, same visual
+bar length, silently different axes is *worse* than the shared-axis chart it
+replaced, because it reads as comparable while not being comparable. One domain
+means a facet that is genuinely small looks small.
+
+**Never a dual axis.** Two y-scales on one plot make the alignment arbitrary and
+invent a relationship the data does not contain.
+
+**The form degrades with the data.** Below two days the daily view draws bars,
+not areas: a single point has nothing to connect, and calling one day a trend is
+a lie of form. The heading changes with it.
+
+**The bar length IS the saving** (per model, a floating bar from real →
+hypothetical). `minPointSize={2}` is load-bearing: recharts renders neither a
+zero-length mark NOR its label, so the Opus row — the reference, zero saving —
+vanished silently from the chart.
+
+**The saving label has THREE outcomes, not two.** The pricing table carries
+families priced ABOVE the Opus reference (Fable, Mythos), so the saving can be
+negative, and a two-branch formatter falls through to `'Referenz'` for exactly
+those — labelling the most expensive turn on the install as the neutral
+baseline. `−80 %` / `Referenz` / `+23 % teurer`.
+
+**Backend supplies per-model DOLLARS**, not only counts: `model_cost` /
+`acs_model_cost` = `{model_id: {actual_usd, baseline_usd, turns}}`. The mix
+fields say which models ran; these say where a saving came from.
+
+### The `--viz-*` palette is validated, not eyeballed
+
+Kept separate from `--accent` and the other semantic tokens on purpose: those
+are brand colours that may be restyled, these encode DATA. Every set was run
+through the dataviz validator against this theme's **real** chart surfaces
+(`#ffffff` light / `#0e1320` dark), not the tool's defaults:
+
+| Role | Light | Dark | Result |
+|---|---|---|---|
+| OS vs worker (categorical) | `#2a78d6` / `#eb6834` | `#3987e5` / `#d95926` | PASS, CVD ΔE 24.7 / 26.8 |
+| Model tier (ordinal, 3 steps) | `#86b6ef` `#2a78d6` `#104281` | `#9ec5f4` `#3987e5` `#184f95` | PASS, monotone, light-end 2.11:1 / 2.29:1 |
+
+Model tiers are ORDERED (Haiku < Sonnet < Opus in price), so an ordinal ramp is
+correct and darker-means-more-expensive carries meaning. **The tier keys on the
+family NAME, never on the measured cost** — colouring a bar darker-because-bigger
+double-encodes bar length as hue and burns the only free channel on information
+the bar already shows. It matches on the family substring so a Bedrock/Vertex
+routing prefix (`eu.anthropic.claude-sonnet-5`) lands in the same tier.
+
+Dark values are a **selected** set stepped for the dark surface, never an
+automatic flip of the light ones.
+
+### Verify by looking, not only by validating
+
+The validator checks colour, not layout. Screenshot the panel and inspect it.
+**The console is `data-theme` driven, not `prefers-color-scheme`** — a Playwright
+run that sets `color_scheme` renders the dark theme twice and leaves the light
+palette unverified. Set `data-theme` on `documentElement`.
+
+### What you, as Claude Code, must NOT do (ADR-0761)
+
+- **Don't put two sources of different magnitude on one axis**, and don't give
+  side-by-side facets independent scales.
+- **Don't add a second y-axis** to make two scales fit one plot.
+- **Don't draw an area or line for a single day.**
+- **Don't ship a categorical or ordinal palette without running the validator**
+  against the surface the chart actually renders on.
+- **Don't colour nominal categories by their value** — that is the value-ramp
+  anti-pattern. Ordered tiers get the ordinal ramp, keyed on the tier.
+- **Don't let a zero-length mark carry a label** without `minPointSize`.
+- **Don't write a two-branch saving label** — negative savings exist.
+- **Don't put the encoding logic in the component.** It goes in
+  `panels/cost-viz.ts` so it can be tested; a wrong mapping is invisible in a
+  screenshot until a tenant hits the case.
