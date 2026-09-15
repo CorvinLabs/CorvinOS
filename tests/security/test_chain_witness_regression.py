@@ -40,7 +40,7 @@ _REPO = Path(__file__).resolve().parents[2]
 
 _SEED = r'''
 import os, sys
-sys.path.insert(0, os.path.join(os.environ["REPO"], "operator", "forge"))
+sys.path.insert(0, os.path.join(os.environ["REPO"], "corvin_operator", "forge"))
 from pathlib import Path
 from forge import security_events as se
 p = Path(os.environ["VOICE_AUDIT_PATH"])
@@ -55,7 +55,7 @@ print("SEEDED")
 #: failure mode this whole file exists to exclude.
 _VERIFY = r'''
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["REPO"], "operator", "forge"))
+sys.path.insert(0, os.path.join(os.environ["REPO"], "corvin_operator", "forge"))
 from pathlib import Path
 from forge import security_events as se
 p = Path(os.environ["VOICE_AUDIT_PATH"])
@@ -73,7 +73,7 @@ print("RESULT " + json.dumps({
 
 _WITNESS = r'''
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["REPO"], "operator", "forge"))
+sys.path.insert(0, os.path.join(os.environ["REPO"], "corvin_operator", "forge"))
 from pathlib import Path
 from forge import security_events as se
 p = Path(os.environ["VOICE_AUDIT_PATH"])
@@ -313,7 +313,7 @@ class TestWitnessIsNeverTrustedOnItsOwn:
 
         forge_witness = r'''
 import json, os, sys
-sys.path.insert(0, os.path.join(os.environ["REPO"], "operator", "forge"))
+sys.path.insert(0, os.path.join(os.environ["REPO"], "corvin_operator", "forge"))
 from pathlib import Path
 from forge import security_events as se
 p = Path(os.environ["VOICE_AUDIT_PATH"])

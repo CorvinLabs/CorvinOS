@@ -21,8 +21,8 @@ from unittest.mock import MagicMock, patch
 _THIS = Path(__file__).resolve()
 _REPO = _THIS.parents[3]
 sys.path.insert(0, str(_REPO / "core" / "console"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 import corvin_console.routes.chain_dual_track as dt  # noqa: E402
 

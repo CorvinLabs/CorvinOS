@@ -18,7 +18,7 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "console"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from corvin_console import feature_flags as ff  # noqa: E402
 

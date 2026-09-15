@@ -19,8 +19,8 @@ from typing import Any, Iterator
 # Make the in-tree packages importable
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 sys.path.insert(0, str(_REPO / "core" / "monitoring"))
 
 from fastapi.testclient import TestClient  # noqa: E402

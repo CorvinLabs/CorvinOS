@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator"))
+sys.path.insert(0, str(_REPO / "corvin_operator"))
 
 from context_engineering.pipeline import render_brief_to_text  # noqa: E402
 from context_engineering.rich_task_brief import (  # noqa: E402
@@ -132,7 +132,7 @@ def test_live_surfaces_gate_render_by_the_flag():
     assert 'is_enabled("cel_brief_includes_content"' in chat
     assert "include_content=" in chat, "chat_runtime must pass the flag into the render"
 
-    adapter = (_REPO / "operator" / "bridges" / "shared" / "adapter.py").read_text(
+    adapter = (_REPO / "corvin_operator" / "bridges" / "shared" / "adapter.py").read_text(
         encoding="utf-8")
     assert 'is_enabled("cel_brief_includes_content"' in adapter
     assert "include_content=" in adapter, "adapter must pass the flag into the render"

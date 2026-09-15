@@ -20,7 +20,7 @@ from unittest.mock import patch
 # Add paths for gateway and forge
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 from corvin_gateway import app as gateway_app  # noqa: E402

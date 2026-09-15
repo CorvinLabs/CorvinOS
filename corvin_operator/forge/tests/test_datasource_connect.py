@@ -25,7 +25,7 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 sys.path.insert(0, str(REPO / "core" / "compute"))
 
 from forge import mcp_server as srv  # noqa: E402
@@ -51,7 +51,7 @@ class TestLicenseGateRealImport(unittest.TestCase):
             "print('OK')\n"
         )
         env = dict(os.environ)
-        env["PYTHONPATH"] = str(REPO / "operator" / "forge")
+        env["PYTHONPATH"] = str(REPO / "corvin_operator" / "forge")
         result = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True, text=True, cwd=str(REPO), env=env, timeout=30,

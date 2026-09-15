@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
 
 def _corvin_home() -> Path:
@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     # adapter boot.  Without this, paid-tier installs get a free-tier anchor HMAC
     # on rotation and a false hmac_invalid CRITICAL at the next boot.
     # Best-effort — free-tier or missing validator falls back to instance seed.
-    _lic_dir = REPO_ROOT / "operator" / "license"
+    _lic_dir = REPO_ROOT / "corvin_operator" / "license"
     if str(_lic_dir) not in sys.path:
         sys.path.insert(0, str(_lic_dir))
     try:

@@ -17,7 +17,7 @@ from typing import Any
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "operator" / "forge"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
 
 from corvin_compute.fabric_config import FabricConfig  # noqa: E402
 

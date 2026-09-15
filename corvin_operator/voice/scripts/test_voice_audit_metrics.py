@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-_SCRIPT = _REPO / "operator" / "voice" / "scripts" / "voice_audit.py"
+_SCRIPT = _REPO / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
 
 
 @contextmanager
@@ -40,7 +40,7 @@ def sandbox(tenants=("_default", "acme")):
 
 def _write_event(home: Path, tenant: str, event_type: str, **kw) -> None:
     # Use forge.security_events directly for deterministic chain writes.
-    sys.path.insert(0, str(_REPO / "operator" / "forge"))
+    sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
     from forge import security_events as _se
     chain = home / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
     _se.write_event(

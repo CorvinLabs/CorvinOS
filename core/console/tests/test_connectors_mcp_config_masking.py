@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 _THIS = Path(__file__).resolve()
 _REPO = _THIS.parents[3]
 sys.path.insert(0, str(_REPO / "core" / "console"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 import corvin_console.routes.connectors as connectors  # noqa: E402
 

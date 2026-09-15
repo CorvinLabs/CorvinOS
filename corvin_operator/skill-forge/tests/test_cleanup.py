@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-SCRIPT = REPO / "operator" / "skill-forge" / "scripts" / "skill_cleanup.py"
+SCRIPT = REPO / "corvin_operator" / "skill-forge" / "scripts" / "skill_cleanup.py"
 
 PASS = 0
 FAIL = 0
@@ -42,7 +42,7 @@ def _set_old_mtime_recursive(path: Path, age_seconds: float):
 
 
 # Pre-import path so the script's own sys.path.insert doesn't surprise us
-sys.path.insert(0, str(REPO / "operator" / "skill-forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "skill-forge"))
 from skill_forge.registry import SkillRegistry  # noqa: E402
 
 # Sandbox the plugin-slot mirror so this test never touches the real

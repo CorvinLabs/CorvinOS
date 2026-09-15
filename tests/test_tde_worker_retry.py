@@ -15,8 +15,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
-sys.path.insert(0, str(_REPO / "operator"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "orchestration"))
+sys.path.insert(0, str(_REPO / "corvin_operator"))
 
 from tde import worker_ipc as w  # noqa: E402
 

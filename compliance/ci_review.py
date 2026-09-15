@@ -27,7 +27,7 @@ from pathlib import Path
 # Ensure shared module is importable
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 from compliance_manifest import run_compliance_check, resolve_manifest_dir  # noqa: E402
 

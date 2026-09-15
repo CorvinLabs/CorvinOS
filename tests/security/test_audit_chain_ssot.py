@@ -53,9 +53,9 @@ def _run(code: str, home: Path, *, extra_env: dict[str, str] | None = None) -> d
         from pathlib import Path
         R = Path({str(REPO)!r})
         sys.path.insert(0, str(R))
-        sys.path.insert(0, str(R / "operator" / "forge"))
-        sys.path.insert(0, str(R / "operator" / "skill-forge"))
-        sys.path.append(str(R / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(R / "corvin_operator" / "forge"))
+        sys.path.insert(0, str(R / "corvin_operator" / "skill-forge"))
+        sys.path.append(str(R / "corvin_operator" / "bridges" / "shared"))
         OUT = {{}}
     """)
     proc = subprocess.run(
@@ -86,7 +86,7 @@ def test_three_paths_modules_agree_on_the_chain(home: Path):
         from forge.paths import tenant_audit_chain as forge_chain
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "_bp", R / "operator" / "bridges" / "shared" / "paths.py")
+            "_bp", R / "corvin_operator" / "bridges" / "shared" / "paths.py")
         bp = importlib.util.module_from_spec(spec); spec.loader.exec_module(bp)
         OUT["core"] = str(core_chain("_default"))
         OUT["forge"] = str(forge_chain("_default"))
@@ -143,12 +143,12 @@ def test_source_checkout_branch_with_corvin_home_unset(home: Path):
         import sys, json
         from pathlib import Path
         R = Path({str(REPO)!r})
-        sys.path.insert(0, str(R)); sys.path.insert(0, str(R / "operator" / "forge"))
+        sys.path.insert(0, str(R)); sys.path.insert(0, str(R / "corvin_operator" / "forge"))
         from core.paths import tenant_audit_chain as c
         from forge.paths import tenant_audit_chain as f
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "_bp", R / "operator" / "bridges" / "shared" / "paths.py")
+            "_bp", R / "corvin_operator" / "bridges" / "shared" / "paths.py")
         bp = importlib.util.module_from_spec(spec); spec.loader.exec_module(bp)
         print("@@" + json.dumps({{"core": str(c("_default")), "forge": str(f("_default")),
                                  "bridges": str(bp.tenant_audit_chain("_default"))}}))

@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Make the in-tree forge package importable when running this file directly.
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from forge import tenants  # noqa: E402
 from forge.tenants import (  # noqa: E402

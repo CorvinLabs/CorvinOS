@@ -18,8 +18,8 @@ if str(_PARENT_DIR) not in sys.path:
 
 # Add corvin_operator/forge to path
 _REPO = Path(__file__).resolve().parents[3]
-if str(_REPO / "operator" / "forge") not in sys.path:
-    sys.path.insert(0, str(_REPO / "operator" / "forge"))
+if str(_REPO / "corvin_operator" / "forge") not in sys.path:
+    sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 # Now we can import the daemon module
 from collector_daemon import (

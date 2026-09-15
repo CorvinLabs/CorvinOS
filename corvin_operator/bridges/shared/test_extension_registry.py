@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 import extension_api as ext_api  # noqa: E402
 import extension_registry as reg  # noqa: E402

@@ -27,7 +27,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
 # The voice audit module — this is the public surface the bridge code uses.
 import audit as _voice_audit  # noqa: E402
@@ -97,7 +97,7 @@ def test_bridge_events_chain_verifies_clean():
             t("verify_audit() ok", ok and not problems)
 
             # Verify via the CLI
-            cli_path = REPO_ROOT / "operator" / "voice" / "scripts" / "voice_audit.py"
+            cli_path = REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
             proc = subprocess.run(
                 [sys.executable, str(cli_path), "--path",
                  str(audit_path), "verify"],
@@ -144,7 +144,7 @@ def test_tampered_audit_fails_verify():
             lines[1] = json.dumps(rec)
             audit_path.write_text("\n".join(lines) + "\n")
 
-            cli = REPO_ROOT / "operator" / "voice" / "scripts" / "voice_audit.py"
+            cli = REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
             proc = subprocess.run(
                 [sys.executable, str(cli), "--path",
                  str(audit_path), "verify"],
@@ -220,13 +220,13 @@ def _load_audit_copy(tmp_root: Path, *, forge_present_but_broken: bool, name: st
     import importlib.util
 
     audit_src = (Path(__file__).resolve().parent / "audit.py").read_text()
-    shared_dir = tmp_root / "operator" / "bridges" / "shared"
+    shared_dir = tmp_root / "corvin_operator" / "bridges" / "shared"
     shared_dir.mkdir(parents=True, exist_ok=True)
     audit_copy = shared_dir / "audit.py"
     audit_copy.write_text(audit_src)
 
     if forge_present_but_broken:
-        forge_pkg = tmp_root / "operator" / "forge" / "forge"
+        forge_pkg = tmp_root / "corvin_operator" / "forge" / "forge"
         forge_pkg.mkdir(parents=True, exist_ok=True)
         (forge_pkg / "__init__.py").write_text("")
         (forge_pkg / "security_events.py").write_text(

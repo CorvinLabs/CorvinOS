@@ -21,7 +21,7 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 sys.path.insert(0, str(REPO / "core" / "compute"))
 
 from forge import mcp_server as srv  # noqa: E402

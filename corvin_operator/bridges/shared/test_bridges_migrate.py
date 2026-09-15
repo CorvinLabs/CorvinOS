@@ -12,7 +12,7 @@ THIS = Path(__file__).resolve()
 sys.path.insert(0, str(THIS.parent))
 # Make forge importable for the audit chain check.
 _repo = THIS.parents[3]
-sys.path.insert(0, str(_repo / "operator" / "forge"))
+sys.path.insert(0, str(_repo / "corvin_operator" / "forge"))
 
 import bridges_migrate  # noqa: E402
 
@@ -29,7 +29,7 @@ def _clean_env():
 def _fake_repo(tmp: Path, channels=("discord", "email")) -> Path:
     """Build a fake repo tree with some private bridge state."""
     repo = tmp / "repo"
-    bridges = repo / "operator" / "bridges"
+    bridges = repo / "corvin_operator" / "bridges"
     bridges.mkdir(parents=True)
     for ch in channels:
         ch_dir = bridges / ch
@@ -67,14 +67,14 @@ def case_opt_out_env() -> None:
         )
         assert result["status"] == "skipped-opt-out", result
         # No move happened
-        assert (repo / "operator" / "bridges" / "discord" / "inbox").exists()
+        assert (repo / "corvin_operator" / "bridges" / "discord" / "inbox").exists()
 
 
 def case_no_legacy_content() -> None:
     with tempfile.TemporaryDirectory() as tmp_s:
         tmp = Path(tmp_s)
         repo = tmp / "repo"
-        (repo / "operator" / "bridges").mkdir(parents=True)
+        (repo / "corvin_operator" / "bridges").mkdir(parents=True)
         home = tmp / "corvin"
         _clean_env()
         result = bridges_migrate.migrate_bridges_state_if_needed(
@@ -95,7 +95,7 @@ def case_dry_run() -> None:
         )
         assert result["status"] == "dry-run", result
         # Sources untouched
-        assert (repo / "operator" / "bridges" / "discord" / "inbox" / "msg-1.json").exists()
+        assert (repo / "corvin_operator" / "bridges" / "discord" / "inbox" / "msg-1.json").exists()
         # Target not created
         assert not (home / "bridges").exists()
         # Plan covers every present source
@@ -130,8 +130,8 @@ def case_full_migration_same_fs() -> None:
         # voice.log under log/
         assert (home / "bridges" / "discord" / "log" / "voice.log").exists()
         # Source dirs gone (rename)
-        assert not (repo / "operator" / "bridges" / "discord" / "inbox").exists()
-        assert not (repo / "operator" / "bridges" / "email" / "settings.json").exists()
+        assert not (repo / "corvin_operator" / "bridges" / "discord" / "inbox").exists()
+        assert not (repo / "corvin_operator" / "bridges" / "email" / "settings.json").exists()
         # Marker present
         assert (home / "bridges" / ".bridges-migrated").exists()
 
@@ -148,7 +148,7 @@ def case_idempotent_second_run() -> None:
         assert first["status"] == "migrated"
         # Add fresh "leftover" content to source — second run must NOT
         # touch it, because the marker file short-circuits.
-        ch_inbox = repo / "operator" / "bridges" / "discord" / "inbox"
+        ch_inbox = repo / "corvin_operator" / "bridges" / "discord" / "inbox"
         ch_inbox.mkdir(parents=True, exist_ok=True)
         (ch_inbox / "msg-2.json").write_text(json.dumps({"text": "leftover"}))
         second = bridges_migrate.migrate_bridges_state_if_needed(
@@ -170,7 +170,7 @@ def case_force_runs_again() -> None:
             repo_root=repo, corvin_home=home,
         )
         # Set up additional source
-        ch_inbox = repo / "operator" / "bridges" / "discord" / "inbox"
+        ch_inbox = repo / "corvin_operator" / "bridges" / "discord" / "inbox"
         ch_inbox.mkdir(parents=True, exist_ok=True)
         (ch_inbox / "msg-2.json").write_text(json.dumps({"text": "second"}))
         forced = bridges_migrate.migrate_bridges_state_if_needed(
@@ -226,7 +226,7 @@ def case_legacy_shared_queues() -> None:
     with tempfile.TemporaryDirectory() as tmp_s:
         tmp = Path(tmp_s)
         repo = tmp / "repo"
-        bridges = repo / "operator" / "bridges"
+        bridges = repo / "corvin_operator" / "bridges"
         shared_legacy = bridges / "shared"
         for kind in ("inbox", "outbox", "processed"):
             (shared_legacy / kind).mkdir(parents=True)

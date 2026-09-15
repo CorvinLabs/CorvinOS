@@ -27,9 +27,9 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "cowork" / "lib"))
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "cowork" / "lib"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 # Sandbox CORVIN_HOME so writes of ldd.json don't poison the real
 # workspace.
@@ -226,7 +226,7 @@ def case_cascade_with_master_off():
 
 def case_schema_smoke():
     print("\n[8] Bundle persona JSONs have valid LDD fields")
-    bundle = REPO / "operator" / "cowork" / "personas"
+    bundle = REPO / "corvin_operator" / "cowork" / "personas"
     valid_presets = set(ldd.PRESETS.keys())
     for path in sorted(bundle.glob("*.json")):
         name = path.stem

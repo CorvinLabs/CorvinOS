@@ -23,10 +23,10 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[3]
-SLOT_REAL = REPO / "operator" / "skill-forge" / "skills" / "dyn"
+SLOT_REAL = REPO / "corvin_operator" / "skill-forge" / "skills" / "dyn"
 
-sys.path.insert(0, str(REPO / "operator" / "skill-forge"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "skill-forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 
 def _maybe_skip() -> bool:

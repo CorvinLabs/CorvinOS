@@ -29,8 +29,8 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-sys.path.insert(0, str(REPO / "operator" / "forge"))
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
 
 from forge import artifacts as art  # noqa: E402
 from forge.mcp_server import MCPServer  # noqa: E402
@@ -284,7 +284,7 @@ class PostToolUseHookE2ETests(unittest.TestCase):
                 "tool_input": {"file_path": str(outside)},
                 "tool_response": {"ok": True},
             })
-            hook = REPO / "operator" / "voice" / "hooks" / "artifact_register.py"
+            hook = REPO / "corvin_operator" / "voice" / "hooks" / "artifact_register.py"
             env = os.environ.copy()
             # Force description generator to no-op — keeps the test
             # offline.  The hook reads this env in `_generate_description`

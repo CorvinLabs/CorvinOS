@@ -22,8 +22,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-SCRIPT = REPO / "operator" / "voice" / "scripts" / "voice_audit.py"
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+SCRIPT = REPO / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 from forge.security_events import write_event  # noqa: E402
 
@@ -178,7 +178,7 @@ def case_chain_break_relay_disabled():
 
 def case_systemd_units_exist():
     print("\n[case] systemd unit templates ship with the plugin")
-    sd = REPO / "operator" / "voice" / "scripts" / "systemd"
+    sd = REPO / "corvin_operator" / "voice" / "scripts" / "systemd"
     svc = sd / "corvin-audit-verify.service"
     timer = sd / "corvin-audit-verify.timer"
     t("audit-verify.service exists", svc.exists(), detail=str(svc))
@@ -195,7 +195,7 @@ def case_systemd_units_exist():
         t("timer fires daily 04:30",
           "OnCalendar=*-*-* 04:30:00" in body,
           detail=body[:200])
-    bsh = (REPO / "operator" / "bridges" / "bridge.sh").read_text()
+    bsh = (REPO / "corvin_operator" / "bridges" / "bridge.sh").read_text()
     t("bridge.sh registers the audit-verify timer in ALL_UNITS",
       "UNIT_CORVIN_AUDIT_VERIFY_TIMER" in bsh)
     t("bridge.sh enables the timer in cmd_up()",

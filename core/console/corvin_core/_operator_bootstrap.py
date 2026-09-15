@@ -6,7 +6,7 @@ Background
 ``corvin_operator/`` via repo-relative ``sys.path`` injection, e.g.::
 
     _REPO = Path(__file__).resolve().parents[2]
-    sys.path.insert(0, str(_REPO / "operator" / "forge"))
+    sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
     from forge import paths
 
 This works in a *source-tree* checkout (the ``corvin_operator/`` directory is a
@@ -110,7 +110,7 @@ def vendor_operator_root() -> Path | None:
     Wheel mode → ``<corvin_console>/_vendor/operator`` (exists).
     Source-tree mode → ``None`` (the directory is not shipped).
     """
-    root = Path(__file__).resolve().parent / _VENDOR_DIRNAME / "operator"
+    root = Path(__file__).resolve().parent / _VENDOR_DIRNAME / "corvin_operator"
     return root if root.is_dir() else None
 
 

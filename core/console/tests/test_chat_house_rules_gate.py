@@ -41,8 +41,8 @@ sys.path.insert(0, str(_REPO / "core" / "console"))
 # house_rules / egress_gate / security_capabilities live under bridges/shared;
 # chat_runtime adds this to sys.path at import, but make it explicit for a
 # direct `python3` run of this file too.
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 
 def _drain(agen):

@@ -42,9 +42,9 @@ pytestmark = pytest.mark.skipif(not E2E, reason="set CORVINFLOW_E2E=1 to run")
 # ── Repo root ────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[3]  # operator/bridges/shared/tests/ → repo root
-_LIC = _REPO / "operator" / "license"
-sys.path.insert(0, str(_REPO / "operator"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+_LIC = _REPO / "corvin_operator" / "license"
+sys.path.insert(0, str(_REPO / "corvin_operator"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 from license import validator as _v
 from license import limits as _l

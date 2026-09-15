@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
 import audit  # noqa: E402  bridges/shared/audit.py
 
@@ -163,7 +163,7 @@ def _nbac_cross_genesis_check(
     - Both chains share the same network_id.
     """
     try:
-        sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
         from nbac import (  # noqa: PLC0415
             get_genesis_block as _get_gb,
             verify_genesis_block as _verify_gb,
@@ -693,7 +693,7 @@ def _verify_sealed_segments(
     """
     try:
         import sys as _sys
-        _sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+        _sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
         from audit_sealer import (  # type: ignore
             last_hash_of_segment,
             list_sealed_segments,
@@ -749,7 +749,7 @@ def _verify_sealed_segments(
             # because audit.verify_audit doesn't surface initial_prev yet.
             try:
                 import sys as _sys
-                _sys.path.insert(0, str(REPO_ROOT / "operator" / "forge"))
+                _sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
                 from forge.security_events import verify_chain  # type: ignore
                 ok, segment_problems = verify_chain(
                     plaintext, initial_prev=prev_tail,
@@ -790,7 +790,7 @@ def cmd_unseal(args) -> int:
     of what happens to the plaintext."""
     try:
         import sys as _sys
-        _sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+        _sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
         from audit_sealer import (  # type: ignore
             unseal_to_temp,
             make_forge_audit_writer,
@@ -888,7 +888,7 @@ def _notify_chain_break(path: Path, problems: list,
 
     outbox_dir = (Path(args.outbox_dir).expanduser()
                   if getattr(args, "outbox_dir", None)
-                  else REPO_ROOT / "operator" / "bridges"
+                  else REPO_ROOT / "corvin_operator" / "bridges"
                        / "shared" / "outbox")
     outbox_dir.mkdir(parents=True, exist_ok=True)
 
@@ -992,7 +992,7 @@ def cmd_metrics(args) -> int:
     # core/gateway, which is NOT on PYTHONPATH by default.
     repo = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(repo / "core" / "gateway"))
-    sys.path.insert(0, str(repo / "operator" / "forge"))
+    sys.path.insert(0, str(repo / "corvin_operator" / "forge"))
     try:
         from corvin_gateway import audit_metrics as _am
     except ImportError as exc:

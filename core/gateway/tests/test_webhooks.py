@@ -49,8 +49,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 sys.path.insert(0, str(_REPO / "core" / "console"))
 
 from fastapi.testclient import TestClient  # noqa: E402

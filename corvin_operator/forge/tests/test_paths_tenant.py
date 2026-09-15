@@ -43,13 +43,13 @@ def _import_paths(plugin: str):
     sys.modules.pop("cowork.lib.paths", None)
 
     if plugin == "forge":
-        sys.path.insert(0, str(REPO / "operator" / "forge"))
+        sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
         return importlib.import_module("forge.paths")
     if plugin == "cowork":
-        sys.path.insert(0, str(REPO / "operator" / "cowork"))
+        sys.path.insert(0, str(REPO / "corvin_operator" / "cowork"))
         return importlib.import_module("lib.paths")
     if plugin == "voice":
-        sys.path.insert(0, str(REPO / "operator" / "bridges"))
+        sys.path.insert(0, str(REPO / "corvin_operator" / "bridges"))
         return importlib.import_module("shared.paths")
     raise ValueError(f"unknown plugin {plugin!r}")
 
@@ -184,7 +184,7 @@ class TenantIDValidationContractTests(unittest.TestCase):
     """Verify the inline validation in paths.py mirrors forge.tenants."""
 
     def setUp(self):
-        sys.path.insert(0, str(REPO / "operator" / "forge"))
+        sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
         from forge import tenants as forge_tenants
         from forge import paths as forge_paths
         self.forge_tenants = forge_tenants

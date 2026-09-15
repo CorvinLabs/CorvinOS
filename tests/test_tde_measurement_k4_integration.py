@@ -12,7 +12,7 @@ import asyncio
 import time
 
 _REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "orchestration"))
 
 
 @pytest.fixture(autouse=True)

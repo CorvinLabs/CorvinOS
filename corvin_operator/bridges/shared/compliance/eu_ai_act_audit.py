@@ -92,7 +92,7 @@ class ComplianceAuditor:
             # For CC (native): check path_gate.py exists
             if engine_id == "claude_code":
                 import os
-                path_gate_file = str(_REPO_ROOT / "operator" / "voice" / "hooks" / "path_gate.py")
+                path_gate_file = str(_REPO_ROOT / "corvin_operator" / "voice" / "hooks" / "path_gate.py")
                 if not os.path.exists(path_gate_file):
                     return ComplianceCheck(
                         layer=ComplianceLayer.L10_PATH_GATE,
@@ -108,7 +108,7 @@ class ComplianceAuditor:
                 # running the self-test. Fixed via repo-relative sys.path
                 # insert + bare leaf-module import.
                 try:
-                    _hooks_dir = Path(__file__).resolve().parents[4] / "operator" / "voice" / "hooks"
+                    _hooks_dir = Path(__file__).resolve().parents[4] / "corvin_operator" / "voice" / "hooks"
                     if _hooks_dir.is_dir() and str(_hooks_dir) not in sys.path:
                         sys.path.insert(0, str(_hooks_dir))
                     # ADR-0215 secondary bug, exposed by the import fix above:
@@ -135,7 +135,7 @@ class ComplianceAuditor:
 
             # For other engines: TEB implements path-gate
             else:
-                teb_path = str(_REPO_ROOT / "operator" / "bridges" / "shared" / "teb")
+                teb_path = str(_REPO_ROOT / "corvin_operator" / "bridges" / "shared" / "teb")
                 import os
                 if not os.path.exists(teb_path):
                     return ComplianceCheck(
@@ -268,7 +268,7 @@ class ComplianceAuditor:
 
             # This is primarily runtime behavior, but we can check for config
             import os
-            if not os.path.exists(str(_REPO_ROOT / "operator" / "bridges")):
+            if not os.path.exists(str(_REPO_ROOT / "corvin_operator" / "bridges")):
                 return ComplianceCheck(
                     layer=ComplianceLayer.L19_DISCLOSURE,
                     engine_id=engine_id,
@@ -310,7 +310,7 @@ class ComplianceAuditor:
         """
         try:
             import os
-            stt_file = str(_REPO_ROOT / "operator" / "voice" / "scripts" / "stt")
+            stt_file = str(_REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "stt")
             if not os.path.exists(stt_file):
                 return ComplianceCheck(
                     layer=ComplianceLayer.L23_VOICE,
@@ -429,7 +429,7 @@ class ComplianceAuditor:
 
             # Check EU_PRODUCTION presets
             import os
-            eu_preset_file = str(_REPO_ROOT / "operator" / "bundle" / "config-templates" / "tenant.corvin.eu-production-ollama.yaml")
+            eu_preset_file = str(_REPO_ROOT / "corvin_operator" / "bundle" / "config-templates" / "tenant.corvin.eu-production-ollama.yaml")
             if not os.path.exists(eu_preset_file):
                 return ComplianceCheck(
                     layer=ComplianceLayer.L35_EGRESS,
@@ -523,7 +523,7 @@ class ComplianceAuditor:
         """
         try:
             import os
-            sealer_file = str(_REPO_ROOT / "operator" / "bridges" / "shared" / "audit_sealer.py")
+            sealer_file = str(_REPO_ROOT / "corvin_operator" / "bridges" / "shared" / "audit_sealer.py")
             if not os.path.exists(sealer_file):
                 return ComplianceCheck(
                     layer=ComplianceLayer.L37_ENCRYPTION,
@@ -568,7 +568,7 @@ class ComplianceAuditor:
         """
         try:
             import os
-            a2a_file = str(_REPO_ROOT / "operator" / "bridges" / "shared" / "a2a_worker.py")
+            a2a_file = str(_REPO_ROOT / "corvin_operator" / "bridges" / "shared" / "a2a_worker.py")
             if not os.path.exists(a2a_file):
                 return ComplianceCheck(
                     layer=ComplianceLayer.L38_A2A,
@@ -671,7 +671,7 @@ class ComplianceAuditor:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(_REPO_ROOT / "operator" / "bridges" / "shared"))
+    sys.path.insert(0, str(_REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
     auditor = ComplianceAuditor()
     engines = ["claude_code", "codex", "copilot", "hermes"]

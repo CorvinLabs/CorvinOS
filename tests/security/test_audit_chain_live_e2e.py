@@ -45,8 +45,8 @@ def test_a_real_claude_turn_lands_its_engine_span_in_the_tenant_chain(tmp_path):
 import json, subprocess, sys, time
 from pathlib import Path
 R = Path({str(REPO)!r})
-sys.path.insert(0, str(R / "operator" / "forge"))
-sys.path.append(str(R / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(R / "corvin_operator" / "forge"))
+sys.path.append(str(R / "corvin_operator" / "bridges" / "shared"))
 import audit as ba
 from engine_span import new_span_id, emit_start, emit_end
 
@@ -99,7 +99,7 @@ print("@@" + json.dumps({{
     assert len(span_recs) == 2, span_recs
     assert span_recs[1]["details"]["status"] == "ok", span_recs[1]
 
-    sys.path.insert(0, str(REPO / "operator" / "forge"))
+    sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
     from forge.security_events import verify_chain
     os.environ["CORVIN_AUDIT_ANCHOR_KEY"] = str(home / "anchor.key")
     ok, problems = verify_chain(canonical)

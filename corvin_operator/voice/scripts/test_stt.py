@@ -43,9 +43,9 @@ from pathlib import Path
 from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[3]
-_SCRIPTS = _REPO / "operator" / "voice" / "scripts"
+_SCRIPTS = _REPO / "corvin_operator" / "voice" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from stt import (  # noqa: E402
     STTError,
@@ -799,7 +799,7 @@ class NoPIIContractTests(unittest.TestCase):
         # what gets written.
         import importlib.util
         adapter_path = (
-            _REPO / "operator" / "bridges" / "shared" / "adapter.py"
+            _REPO / "corvin_operator" / "bridges" / "shared" / "adapter.py"
         )
         # We don't import the full adapter (heavy boot); we instead
         # validate the contract structurally via the _emit_* helpers.

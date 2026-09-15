@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
 
 def _corvin_home() -> Path:

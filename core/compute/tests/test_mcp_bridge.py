@@ -20,7 +20,7 @@ REPO_ROOT = PLUGIN_ROOT.parents[1]
 
 # corvin_compute first, forge second — both append themselves to sys.path
 sys.path.insert(0, str(PLUGIN_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "operator" / "forge"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
 
 # Local plugin imports
 from corvin_compute.client import WorkerClient, is_socket_reachable  # noqa: E402

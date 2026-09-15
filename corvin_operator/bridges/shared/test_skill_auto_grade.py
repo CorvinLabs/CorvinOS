@@ -25,9 +25,9 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(REPO / "operator" / "skill-forge"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "skill-forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 
 # Sandbox CORVIN_HOME + plugin slot BEFORE importing skill_inject so the

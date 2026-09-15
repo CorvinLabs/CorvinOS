@@ -11,8 +11,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "operator" / "voice" / "scripts"))
-sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "voice" / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
 import corvin_erasure  # noqa: E402
 

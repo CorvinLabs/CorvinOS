@@ -33,10 +33,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent / "lib"))
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
 sys.path.insert(0, str(REPO / "core" / "orchestration"))
 sys.path.insert(0, str(REPO / "core" / "workflows"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 sys.path.insert(0, str(HERE))
 import _fixture_personas as fx  # noqa: E402
 

@@ -33,7 +33,7 @@ try:  # pragma: no cover - import shape
     import os as _pg_os, sys as _pg_sys
     _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
     while _pg_d != _pg_os.path.dirname(_pg_d):
-        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        _pg_c = _pg_os.path.join(_pg_d, "corvin_operator", "bridges", "shared")
         if _pg_os.path.isdir(_pg_c):
             if _pg_c not in _pg_sys.path:
                 _pg_sys.path.insert(0, _pg_c)
@@ -52,8 +52,8 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "core" / "console"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
 
 os.environ["CORVIN_HOME"] = str(REPO / ".corvin")
 os.environ["CORVIN_TENANT_ID"] = "_default"

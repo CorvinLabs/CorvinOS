@@ -43,7 +43,7 @@ import yaml
 # ---------------------------------------------------------------------------
 
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from forge import paths as _forge_paths          # noqa: E402
 from forge import security_events as _sec        # noqa: E402
@@ -549,7 +549,7 @@ def _quality_gate_node(
         "x_quality_gate": {
             "metric": "best_loss",
             "from_node": stage_id,
-            "operator": "lte",
+            "corvin_operator": "lte",
             "threshold": threshold,
             "on_pass": "continue",
         "depends_on": depends_on,
@@ -557,7 +557,7 @@ def _quality_gate_node(
             {
                 "metric": "best_loss",
                 "from_node": stage_id,
-                "operator": "lte",
+                "corvin_operator": "lte",
                 "threshold": threshold,
             }
         ],

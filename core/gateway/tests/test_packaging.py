@@ -29,7 +29,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from corvin_gateway import cli, packaging  # noqa: E402
 from corvin_gateway.packaging import (  # noqa: E402

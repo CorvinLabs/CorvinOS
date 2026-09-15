@@ -33,8 +33,8 @@ def _clear_env() -> None:
 
 
 def _fresh_sweep():
-    sys.path.insert(0, str(REPO / "operator" / "voice" / "scripts"))
-    sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
+    sys.path.insert(0, str(REPO / "corvin_operator" / "voice" / "scripts"))
+    sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
     for mod in ("session_timeout_sweep",):
         sys.modules.pop(mod, None)
     try:

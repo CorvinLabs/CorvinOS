@@ -21,7 +21,7 @@ import yaml
 repo_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(repo_root))
 # Also add operator directly
-sys.path.insert(0, str(repo_root / "operator"))
+sys.path.insert(0, str(repo_root / "corvin_operator"))
 
 
 # ── Mock Form Inputs ────────────────────────────────────────
@@ -168,7 +168,7 @@ def test_form_validation():
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "rag_manifest_generator",
-        Path(__file__).parent.parent.parent.parent / "operator" / "bridges" / "shared" / "rag_manifest_generator.py"
+        Path(__file__).parent.parent.parent.parent / "corvin_operator" / "bridges" / "shared" / "rag_manifest_generator.py"
     )
     rag_gen_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rag_gen_module)

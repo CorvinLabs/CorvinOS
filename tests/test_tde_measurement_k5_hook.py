@@ -18,7 +18,7 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "core" / "console"))
-sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "orchestration"))
 
 from corvin_console import chat_runtime as cr  # noqa: E402
 

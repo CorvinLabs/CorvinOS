@@ -41,8 +41,8 @@ from pathlib import Path
 
 # ── paths ──────────────────────────────────────────────────────────────────
 _REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 from forge import paths as _fp  # type: ignore[import-untyped]
 
