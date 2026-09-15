@@ -42,6 +42,21 @@ providers:
     model_source: "anthropic"
     credential_env: "ANTHROPIC_API_KEY"
     kind: "cloud"
+  bedrock:
+    label: "Amazon Bedrock (Claude)"
+    # The host is region-dependent, so the real endpoint is derived at fetch time
+    # from the resolved AWS region (aws_sigv4.resolve_region). This value is the
+    # L35 allowlist subject and a display string — never the URL that gets called.
+    base_url: "https://bedrock.amazonaws.com"
+    # LIVE. On a `CLAUDE_CODE_USE_BEDROCK=1` install the invocable model set is
+    # whatever THIS AWS account is granted, which no shipped YAML can know.
+    # ListInferenceProfiles is the load-bearing half: its ids (`us.anthropic.
+    # claude-sonnet-5`) are what Claude Code passes as ANTHROPIC_MODEL.
+    model_source: "bedrock"
+    # Intentionally empty: Bedrock uses the AWS credential chain (env / profile /
+    # credential_process), not an API key held in the L16 vault.
+    credential_env: ""
+    kind: "cloud"
   openai:
     label: "OpenAI"
     base_url: "https://api.openai.com/v1"
@@ -88,6 +103,9 @@ engines:
       - provider: "anthropic"
         native: true
         note: ""
+      - provider: "bedrock"
+        native: true
+        note: "active when CLAUDE_CODE_USE_BEDROCK=1; models are the AWS account's inference profiles"
       - provider: "ollama_local"
         native: false
         note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"

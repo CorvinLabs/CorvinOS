@@ -125,12 +125,17 @@ model — one orchestration harness, swappable model providers:
 `MODEL_PROVIDERS` array whose Ollama entry used the id `ollama` while the
 registry calls it `ollama_local`, so every model fetch for it answered
 `unknown provider 'ollama'`. Do not re-introduce a static mirror of the registry.
+The same rule now binds `/app/engine-config`, where a static mirror had in fact
+been re-introduced — see [the Engine Configuration real-data pass](#engine-configuration-panel-every-list-and-every-percentage-is-real-2026-09-15)
+below, which removes it and adds the model list to what must be fetched rather
+than shipped.
 
 **The harness cannot drive every provider — gate on the registry.** `PUT
 /settings/engine` validates the (engine, provider) pair against
 `GET /settings/engine/registry`'s `supported_providers` and answers
 `400 {"detail":"engine 'claude_code' does not support provider 'openai'"}` for a
-pair that does not exist. Claude Code supports `anthropic` (native) plus
+pair that does not exist. Claude Code supports `anthropic` and `bedrock` (both
+native — the 2026-09-15 real-data pass registered the second) plus
 `ollama_local`, `ollama_cloud` and `openrouter` **via the built-in
 `anthropic_openai_bridge` translating proxy** — and NOT `openai`. So the assign
 button is disabled for any provider absent from that list, and the routing chain
@@ -2415,3 +2420,221 @@ Tests: `operator/bridges/shared/test_acs_runtime.py` —
 `test_budget_from_spec_clamps_max_wall_time_ceiling`,
 `test_budget_from_spec_max_wall_time_zero_or_negative_falls_back_to_default`,
 `test_budget_from_spec_max_wall_time_within_ceiling_passes_through`.
+
+---
+
+## Engine Configuration panel: every list and every percentage is real (2026-09-15)
+
+*ADR pending: this pass is structural (two new endpoints, a new ADR-0181 provider,
+a new `model_source`) and needs a record in the Corvin-ADR repo, which is not
+present on the Windows maintainer host this was built on. The number must be
+derived as max+1 THERE — do not guess one from this repo's references, and do not
+reuse 0650/0651, both of which are already taken twice over.*
+
+`/app/engine-config` (`web-next/src/pages/engine-config.tsx`, ADR-0641) showed
+real persistence and real ADR-0644 confidence scores from the start, but three
+things in it were not real: a four-entry `CLAUDE_MODELS` array, a four-entry
+`EXTERNAL_PROVIDERS` array duplicating the registry the same file already
+fetched, and a `_VALID_ANTHROPIC_MODELS` tuple in the backend that validated
+saves against that same frozen list. Model-usage shares did not exist at all,
+although the data to compute them had been in the audit chain the whole time.
+All four are gone.
+
+### The Claude model list is a UNION of three real sources
+
+`GET /v1/console/v1/engine/claude-models` — note the doubled prefix: the client
+`BASE` is `/v1/console` and the router path is `/v1/engine/...`, so a request to
+`/v1/engine/claude-models` is a 404 and has read as "stale process" before.
+
+| Source id | Live? | What it asks | Fails how |
+|---|---|---|---|
+| `registry` | no | the curated ADR-0119 `engine_model_registry.yaml` — `os_models` + `worker_models` of every engine whose provider serves Claude | only if the YAML is unreadable |
+| `anthropic_live` | yes | `GET {base_url}/v1/models`, paginated | a keyless Claude Code subscription login has no API key — reported as an ABSENT key, and no egress is attempted |
+| `bedrock_live` | yes | `bedrock:ListFoundationModels` + `bedrock:ListInferenceProfiles`, SigV4-signed | any AWS failure; `detail` carries `region · credential_source` |
+
+Each source reports its OWN `reachable` / `count` / `error` / `live` / `detail`,
+and the panel renders one line per source. That is not decoration: a list of 4
+ids and a list of 47 look identical inside a `<select>`, and only that line
+distinguishes "Bedrock answered with this account's inference profiles" from
+"Bedrock was unreachable, so you are looking at the shipped snapshot".
+
+`default_model_id` is the registry's `default: true` worker model. It is the
+reset target for the panel's "remove external provider" button, which previously
+wrote `CLAUDE_MODELS[1].value` — a positional index into a frontend array.
+
+**Why a shipped list cannot be correct here.** On a Bedrock-authenticated install
+(`CLAUDE_CODE_USE_BEDROCK=1`) the ids Claude Code can actually address are this
+AWS account's inference profiles — `us.anthropic.claude-opus-5`,
+`global.anthropic.claude-sonnet-5` — which is exactly the set Claude Code's own
+`/model` menu offers and which no release-time constant can predict. Measured on
+the maintainer host: 12 ids from the registry, 40 Claude ids from Bedrock, 47 in
+the union, `default_model_id: claude-opus-5`.
+
+### `bedrock` is a first-class ADR-0181 provider, signed without boto3
+
+`engine_model_registry.yaml` gained a `bedrock` provider with
+`model_source: "bedrock"` and an **empty `credential_env`** — Bedrock
+authenticates with the AWS credential chain, not with an API key in the L16
+vault, so there is nothing for `provider_keys` to resolve. `claude_code`'s
+`supported_providers` gained `bedrock` as `native: true`.
+
+`operator/bridges/shared/aws_sigv4.py` is a stdlib-only signer (hmac / hashlib /
+urllib). CorvinOS has no boto3 and no aws-CLI dependency, and taking one on for
+two GETs is a heavy price. Scope is deliberately narrow: signed GET only, no
+retries, no paginator, no service model.
+
+Credential chain — a documented SUBSET of boto3's, in boto3's order: env →
+shared-credentials-file profile → the config profile's `credential_process`.
+`sso_*` and `role_arn` profiles are reported as an unsupported-profile REASON,
+never as a bare failure. On a 401/403 with a `credential_process` configured, the
+Bedrock fetch retries ONCE with `force_refresh=True` — the recovery path for a
+cached-but-expired session token in `~/.aws/credentials`, where steps 1–2 look
+populated and signing then fails with `ExpiredToken`.
+
+- `configparser.ConfigParser(interpolation=None)` is **load-bearing on Windows**:
+  a `credential_process` line holding `%USERPROFILE%\...` makes the default
+  `BasicInterpolation` raise `InterpolationSyntaxError`, which would present as
+  "no AWS config on this host" on exactly the hosts that have one.
+- `~/.aws/config` names the default profile `[default]` but every other one
+  `[profile NAME]`. Looking up the bare name silently yields an empty section.
+- The helper's **stdout is parsed as JSON and NEVER logged** — it carries the
+  secret. Only the credential SOURCE label (`env` / `shared_credentials_file` /
+  `credential_process`) is ever surfaced in a return value or reason string.
+
+### Model usage % is counted from the audit chain, not from a counter
+
+`GET /v1/console/v1/engine/model-usage` →
+`core/console/corvin_console/model_usage.py`. There is no counter table behind it
+and deliberately isn't one: the hash-chained trail already records every turn, so
+a second store would be a second truth that can disagree with the one that is
+legally load-bearing (ADR-0232/0233, GDPR Art. 30/32). The chain is resolved ONLY
+through `tenant_audit_chain()` (ADR-0650) and read-only; the read never raises —
+an absent chain is the honest zero state of a fresh install, reported as
+`chain_readable: false` rather than as an error.
+
+Events consumed, all already emitted by the live turn path:
+`engine.span.start` / `engine.span.end` (role, engine_id, model_id, status,
+duration_ms) and `os_turn.completed` (the only source of token counts).
+
+**The counting unit is the SPAN, keyed by `span_id`.** An OS turn and the worker
+turn it delegates to share a `turn_id`, so keying on that would silently merge
+two different models' work into one row. Token counts from `os_turn.completed`
+are attached to the os-role span carrying the same `turn_id`, and that turn's
+standalone entry is then dropped so nothing is counted twice. A span-less
+`os_turn` (a crash between the two writes) is still counted under
+`turn:<turn_id>` — a real turn is never dropped because its span is missing.
+
+Provider attribution is RESOLVED, never guessed, and every row carries a
+`provider_source` naming which real lookup produced it:
+
+| `provider_source` | Meaning | Strength |
+|---|---|---|
+| `live_catalog` | this provider ANSWERED with this id when last asked (`model_catalog`, written only by a successful live fetch) | strongest |
+| `tenant_config` | the operator assigned this model to this provider on this very page (ADR-0641 selection) | operator-authored |
+| `id_prefix` | parsed out of a `<provider>/<model>` id | parsing |
+| `registry` | the shipped ADR-0119 curated list | snapshot |
+| `engine_config` | the engine that ran the span currently has this exact model configured, and its ADR-0181 provider assignment is unambiguous | inference from today's config onto a past span |
+| `unresolved` | nothing claims this id; `provider` stays `"unknown"` | none |
+
+An id nothing matches stays `unknown` rather than being pattern-matched into a
+plausible-looking provider, and the panel says so in words. `ollama/llama3`
+resolves to nothing ON PURPOSE: `ollama_local` and `ollama_cloud` both carry that
+family name, so the prefix is genuinely ambiguous and picking one would be a
+coin flip presented as a measurement. `_engine_config_provider` refuses the same
+way when two of a row's engines disagree.
+
+**The `id_prefix` branch was dead when written.** It compared the prefix against
+providers that already had a model in the index — but nothing had ever fetched an
+OpenAI or Ollama catalogue, so no OpenAI model was in the index, so
+`openai/gpt-5` fell through to `unknown`, for exactly the providers the branch
+existed to serve. It now compares against the REGISTERED provider ids.
+
+Real numbers observed on the maintainer host: 5 spans, one model
+(`claude-sonnet-5`, 100%, `registry`), 1,143,763 tokens across
+input/output/cache-read/cache-write. A synthetic-chain probe under a temp
+`CORVIN_HOME` (the real chain untouched) confirmed the multi-provider path:
+`qwen3:8b` → `ollama_local` (`tenant_config`) 50%, `openai/gpt-5` → `openai`
+(`id_prefix`) 33.3%, and a delegated worker span counted separately from its
+parent OS turn.
+
+The read is **offline by design** — it never triggers a network fetch, because it
+runs on every page load. Ollama/OpenAI attribution therefore improves organically
+as the operator opens the provider modal (which caches a catalogue), and until
+then the row honestly reads `unresolved`.
+
+### Backend validation is no longer a frozen list
+
+`engine_api.py` validates a save against `_claude_catalog_offline()` — the
+registry ∪ `model_catalog` for both `_CLAUDE_PROVIDERS` (`anthropic`, `bedrock`),
+with no network call on the write path. An EMPTY catalogue ACCEPTS the save: an
+unreadable YAML plus a never-fetched catalogue must not lock the operator out of
+their own configuration.
+
+`ExternalProviderTestRequest.provider` is a shape constraint (`^[a-z0-9_]+$`),
+not an enum. The enum froze the set at four ids, so the newly registered
+`bedrock` was rejected with a 422 **before** the handler could check it against
+the live registry.
+
+### One hardcoded list survives, deliberately named here
+
+`routes/engine.py:88`'s `_CLAUDE_MODELS` (three ids, "kept in sync by hand until a
+follow-up wires this route to that source directly") is still static, and this
+pass did NOT touch it. The reason is not that it is acceptable: `GET
+/settings/engine/catalog` is its only reader, `getEngineCatalog()` is its only
+client binding, and **nothing in `web-next/src` calls that binding** — verified by
+grep, zero hits outside `lib/api/engines.ts`. So it is dead surface, not a list an
+operator is shown, and removing a session-authenticated public endpoint is its own
+structural change with its own ADR. Do not cite it as precedent for a static list
+in a live picker, and do not "sync it by hand" again — wire it to
+`engine_models.registry_as_dict()` when something finally needs it.
+
+### Corrected message
+
+`engine_providers.fetch_models` used to answer a keyless Anthropic fetch with
+"no ANTHROPIC_API_KEY configured — showing the curated model list" while
+returning `models: []`. Merging the curated list is the CALLER's job and neither
+live caller does it, so the sentence promised a list the response did not
+contain — which reads as a broken picker rather than an absent key. It now says
+no live list could be fetched, and where to add the key.
+
+### What you, as Claude Code, must NOT do (Engine Configuration real-data pass)
+
+- **Don't put a model list or a provider list in `engine-config.tsx`.** Both are
+  fetched. A constant is wrong on any Bedrock host, and the provider array
+  duplicated a registry the same file was already loading. The "external"
+  provider set is DERIVED — the registry minus the native-Claude source ids — so
+  a provider added to the registry appears without a frontend release.
+- **Don't drop the currently-configured model from the picker's options** when no
+  source lists it (retired upstream, or a fetch still in flight). The `<select>`
+  would silently display, and on the next Save persist, a DIFFERENT model than
+  the tenant is configured with.
+- **Don't collapse the per-source status into one "sources unavailable" line.**
+  Which source failed, and why, is the whole point of the union.
+- **Don't invent a second usage counter.** Count the chain.
+- **Don't key usage on `turn_id`.** It merges an OS turn with the worker turn it
+  delegated to, under one model.
+- **Don't pattern-match an unattributable model id into a provider,** and don't
+  hide `provider_source` in the UI — a snapshot inference must not read like a
+  measurement.
+- **Don't compose the audit-chain path by hand** in `model_usage.py`; it goes
+  through `tenant_audit_chain()` and nothing else (ADR-0650).
+- **Don't log or return `credential_process` stdout,** and don't widen
+  `aws_sigv4.py` into a general AWS client — that is boto3's job.
+- **Don't make the model-usage read fetch anything over the network.**
+- **Don't assert the mock list is gone by scanning only the SPA shell's assets.**
+  The panel is a lazily-imported chunk whose filename appears only INSIDE an
+  eager bundle, never in `index.html`, so a one-level scan passes vacuously —
+  it did, against the shell's 8 assets, while the panel lived in a 9th. Crawl
+  transitively (82 chunks on this host) and assert a positive panel marker FIRST.
+
+Tests: `tests/e2e/test_engine_config_real_data_e2e.py` — real HTTP against the
+running console (session from the loopback GET `/auth/local-login`), covering
+`test_endpoint_requires_a_session` (401, not 404 and not 200, on both endpoints),
+`test_claude_models_unions_declared_sources`,
+`test_claude_models_reports_at_least_one_reachable_source`,
+`test_model_usage_shares_are_internally_consistent` (share sets sum to 100%,
+`unresolved ⟺ provider == "unknown"`, per-provider rollup reconciles with its
+model rows), and `test_served_bundle_carries_no_hardcoded_model_list` (transitive
+crawl of the served chunks, positive control before the negative assertion).
+Assertions are internal-consistency checks against whatever this host has, never
+pinned counts — "47 models" would fail on any other AWS account.

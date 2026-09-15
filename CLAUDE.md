@@ -621,7 +621,20 @@ presents like a stale bundle. It happened on 2026-09-03 (`<ManifestPanelRoutes /
 in. `tests/unit/app-routes-static.test.tsx` renders the real `<App />` and fails on the
 next one.
 
+**A "the old code is gone" assertion needs a POSITIVE control first.** A test that
+greps the served assets for a removed string passes both when the string is gone and when
+the check never looked at the file it lived in — and a route's chunk is lazily imported, so
+its filename appears only INSIDE an eager bundle, never in `index.html`. Scanning the
+shell's 8 assets therefore proves nothing about the panel in the 9th; it read as green for
+a check that had zero reach (2026-09-15,
+`tests/e2e/test_engine_config_real_data_e2e.py`). Crawl the chunk graph transitively, then
+assert a string only the NEW code contains — and assert it BEFORE the absence check, so a
+crawl that stops short fails loudly instead of passing vacuously. Same shape applies to any
+"X no longer exists" claim: prove you reached X's home first.
+
 **Must NOT do:** declare a frontend change "done"/"live" on a correct source diff alone ·
+assert a string's absence from the bundle without a positive control proving the crawl
+reached the chunk that string lived in ·
 run `npm run build` without clearing `dist/` + `node_modules/.vite/` first · skip the
 `grep` + `curl` proof that the served hashes are the new ones · report the change without
 telling the operator to hard-refresh WHEN `console_auto_reload` is off · cache the SPA

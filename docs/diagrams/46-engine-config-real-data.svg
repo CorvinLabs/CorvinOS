@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
+  <title>Engine Configuration panel — where the model list and the usage percentages actually come from</title>
+  <style>
+    .box  { fill:#f6f8fa; stroke:#57606a; rx:8; }
+    .gate { fill:#fff8c5; stroke:#9a6700; rx:8; }
+    .ok   { fill:#dafbe1; stroke:#1a7f37; rx:8; }
+    .fall { fill:#ffebe9; stroke:#cf222e; rx:8; }
+    .cold { fill:#eaeef2; stroke:#57606a; rx:8; }
+    .lbl  { fill:#24292f; }
+    .sub  { fill:#57606a; font-size:11px; }
+    .arr  { stroke:#57606a; stroke-width:1.5; fill:none; marker-end:url(#a); }
+    .arrd { stroke:#cf222e; stroke-width:1.5; fill:none; stroke-dasharray:4 3; marker-end:url(#b); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#57606a"/>
+    </marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#cf222e"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="28" font-size="16" font-weight="bold" class="lbl">Engine Configuration — no hardcoded model list, no hardcoded provider list, no invented percentage</text>
+  <text x="20" y="46" class="sub">Left: the picker is a UNION of three real sources, each reporting its own reachability. Right: the shares are counted from the hash-chained audit trail, offline.</text>
+
+  <!-- ───────── Left: GET /v1/engine/claude-models ───────── -->
+  <rect x="20" y="70" width="440" height="52" class="box"/>
+  <text x="35" y="92" class="lbl" font-weight="bold">GET /v1/console/v1/engine/claude-models</text>
+  <text x="35" y="110" class="sub">doubled prefix is real (client BASE + router path) · one fetch, deduped across all four cards</text>
+
+  <path class="arr" d="M240 122 V146"/>
+
+  <rect x="20" y="146" width="440" height="48" class="cold"/>
+  <text x="35" y="168" class="lbl" font-weight="bold">registry — curated engine_model_registry.yaml (the offline floor)</text>
+  <text x="35" y="185" class="sub">os_models + worker_models of every Claude-serving engine · 12 ids on this host</text>
+
+  <path class="arr" d="M240 194 V204"/>
+
+  <rect x="20" y="204" width="440" height="52" class="box"/>
+  <text x="35" y="226" class="lbl" font-weight="bold">anthropic_live — GET {base_url}/v1/models, paginated</text>
+  <text x="35" y="244" class="sub">keyless Claude Code subscription login → reported as an ABSENT key · no egress attempted</text>
+
+  <path class="arr" d="M240 256 V266"/>
+
+  <rect x="20" y="266" width="440" height="66" class="ok"/>
+  <text x="35" y="288" class="lbl" font-weight="bold">bedrock_live — ListFoundationModels + ListInferenceProfiles</text>
+  <text x="35" y="306" class="sub">SigV4 signed by aws_sigv4.py (stdlib only, signed GET only — not an AWS client)</text>
+  <text x="35" y="323" class="sub">40 Claude ids on this host · us.anthropic.claude-* IS what /model offers here</text>
+
+  <path class="arr" d="M240 332 V358"/>
+
+  <rect x="20" y="358" width="440" height="76" class="ok"/>
+  <text x="35" y="380" class="lbl" font-weight="bold">union by id · every source keeps its own reachable / count / error / detail</text>
+  <text x="35" y="398" class="sub">47 ids here · default_model_id = the registry's `default: true`, never an array index</text>
+  <text x="35" y="415" class="sub">the CONFIGURED id is always offerable — dropping it would silently re-save another model</text>
+
+  <path class="arr" d="M240 434 V460"/>
+
+  <rect x="20" y="460" width="440" height="62" class="cold"/>
+  <text x="35" y="482" class="lbl" font-weight="bold">Console → Engine Configuration → Default Model</text>
+  <text x="35" y="500" class="sub">one &lt;select&gt; + one line PER SOURCE (✓ reachable · ⚠ unreachable, with its reason)</text>
+  <text x="35" y="516" class="sub">4 ids and 47 ids look identical in a dropdown — that line is the only difference visible</text>
+
+  <!-- ───────── Right: GET /v1/engine/model-usage ───────── -->
+  <rect x="500" y="70" width="440" height="52" class="box"/>
+  <text x="515" y="92" class="lbl" font-weight="bold">GET /v1/console/v1/engine/model-usage</text>
+  <text x="515" y="110" class="sub">read-only and OFFLINE — it runs on every page load, so it never fetches anything</text>
+
+  <path class="arr" d="M720 122 V146"/>
+
+  <rect x="500" y="146" width="440" height="52" class="gate"/>
+  <text x="515" y="168" class="lbl" font-weight="bold">tenant_audit_chain() — the only sanctioned resolver (ADR-0650)</text>
+  <text x="515" y="186" class="sub">no chain file yet → chain_readable:false, the honest zero state of a fresh install</text>
+
+  <path class="arr" d="M720 198 V224"/>
+
+  <rect x="500" y="224" width="440" height="76" class="box"/>
+  <text x="515" y="246" class="lbl" font-weight="bold">count SPANS, keyed by span_id</text>
+  <text x="515" y="264" class="sub">engine.span.start / engine.span.end · os_turn.completed is the only token source</text>
+  <text x="515" y="281" class="sub">turn_id would MERGE an OS turn with the worker turn it delegated to, under one model</text>
+
+  <path class="arr" d="M720 300 V326"/>
+
+  <rect x="500" y="326" width="440" height="94" class="ok"/>
+  <text x="515" y="348" class="lbl" font-weight="bold">resolve the provider — strongest real source wins</text>
+  <text x="515" y="366" class="sub">live_catalog (it answered) &gt; tenant_config (you assigned it) &gt; registry (shipped)</text>
+  <text x="515" y="383" class="sub">then id_prefix (parsed from &lt;provider&gt;/&lt;model&gt;) · then engine_config (inferred)</text>
+  <text x="515" y="400" class="sub">nothing claims it → provider "unknown", provider_source "unresolved" — never guessed</text>
+
+  <path class="arr" d="M720 420 V460"/>
+
+  <rect x="500" y="460" width="440" height="62" class="cold"/>
+  <text x="515" y="482" class="lbl" font-weight="bold">Model Usage panel — by provider, then by model</text>
+  <text x="515" y="500" class="sub">bar width IS the percentage of ALL turns, never normalised to the top row</text>
+  <text x="515" y="516" class="sub">every row carries its provider_source badge: an inference must not read like a measurement</text>
+
+  <!-- ───────── Refusals ───────── -->
+  <rect x="20" y="540" width="920" height="46" class="fall"/>
+  <text x="35" y="562" class="lbl" font-weight="bold">Refused by design:</text>
+  <text x="140" y="562" class="sub">no second usage counter (it would be a second truth against a legally load-bearing one, ADR-0232/0233) · no model or provider array in engine-config.tsx</text>
+  <text x="140" y="578" class="sub">(a constant is wrong on any Bedrock host) · ollama/llama3 stays unresolved — ollama_local vs ollama_cloud is a coin flip, and a coin flip is not data</text>
+  <path class="arrd" d="M240 522 V540"/>
+  <path class="arrd" d="M720 522 V540"/>
+</svg>

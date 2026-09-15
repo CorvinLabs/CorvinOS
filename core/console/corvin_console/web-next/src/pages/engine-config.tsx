@@ -17,9 +17,27 @@
  *     (model_selector_shadow.py). Shadow = advisory only: it never decides
  *     which model actually serves a turn, it only observes + records.
  *     0 samples is the honest, expected state until real turns accrue.
- *   - External Providers — the same live ADR-0181 registry the Engine
- *     Configuration provider/model picker uses (getEngineProviders,
- *     getProviderModels — real GET /v1/models etc. per provider).
+ *   - External Providers — the live ADR-0181 registry itself, both the
+ *     provider list and each provider's models (getEngineProviders,
+ *     getProviderModels — real GET /v1/models etc. per provider). The
+ *     "external" set is the registry minus the native-Claude sources, so a
+ *     provider added to the registry shows up without a frontend change.
+ *   - Default Model — GET /v1/engine/claude-models, the UNION of three real
+ *     sources, each reporting its own reachability: the curated ADR-0119
+ *     registry, Anthropic's live GET /v1/models, and Bedrock's
+ *     ListFoundationModels + ListInferenceProfiles (SigV4-signed). On a
+ *     Bedrock install the selectable ids are this AWS account's
+ *     `us.anthropic.claude-*` inference profiles — which is exactly the set
+ *     Claude Code's own /model menu offers, and which no shipped constant
+ *     can predict. There is deliberately NO model list in this file.
+ *   - Model Usage — GET /v1/engine/model-usage, per-model and per-provider
+ *     shares counted from the tenant's hash-chained audit chain
+ *     (engine.span.start/end + os_turn.completed). Counting unit is the span,
+ *     so a delegated worker turn is attributed to the model that ran it
+ *     rather than merged into its parent OS turn. Each row carries
+ *     provider_source, so a catalogue hit is distinguishable from a registry
+ *     inference and an unattributable id stays "unknown" instead of being
+ *     pattern-matched into something plausible.
  *   - "View Analytics" / "Reset Learning" — real core.learning.
  *     model_selection_optimizer.ConfidenceOptimizer (ADR-0644, Bayesian).
  *     Currently always 0 samples too: nothing feeds it outcome/quality
@@ -70,25 +88,105 @@ import {
   resetModelSelectionLearning,
   getEngineProviders,
   getProviderModels,
+  getClaudeModels,
+  getModelUsage,
   detectEngines,
   type TaskType,
   type TaskModelConfig,
+  type ClaudeModelsResponse,
+  type ProviderSpec,
 } from '@/lib/api/engines';
 
-const TASK_TYPES: TaskType[] = ['corvinOS', 'SIMPLE', 'MEDIUM', 'COMPLEX'];
-const CLAUDE_MODELS = [
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (Fast, Low Cost)' },
-  { value: 'claude-sonnet-5', label: 'Claude Sonnet 5 (Balanced)' },
-  { value: 'claude-opus-5', label: 'Claude Opus 5 (Powerful)' },
-  { value: 'claude-fable-5', label: 'Claude Fable 5 (Creative)' },
-];
-type ExternalProviderId = 'ollama_local' | 'ollama_cloud' | 'openrouter' | 'openai';
-const EXTERNAL_PROVIDERS: { id: ExternalProviderId; label: string }[] = [
-  { id: 'ollama_local', label: 'Ollama (local)' },
-  { id: 'ollama_cloud', label: 'Ollama Cloud' },
-  { id: 'openrouter', label: 'OpenRouter' },
-  { id: 'openai', label: 'OpenAI' },
-];
+// No model list and no provider list live in this file. Both are fetched:
+// models from /v1/engine/claude-models (curated registry ∪ Anthropic /v1/models ∪
+// Bedrock ListFoundationModels+ListInferenceProfiles), providers from the
+// ADR-0181 registry. A constant here would be wrong on any Bedrock host, where
+// the selectable ids are `us.anthropic.claude-*` inference profiles.
+
+function useClaudeModels() {
+  return useQuery({
+    queryKey: ['claude-models'],
+    queryFn: ({ signal }) => getClaudeModels(signal),
+    staleTime: 5 * 60_000,
+  });
+}
+
+function useProviders() {
+  return useQuery({
+    queryKey: ['engine-providers'],
+    queryFn: ({ signal }) => getEngineProviders(signal),
+    staleTime: 60_000,
+  });
+}
+
+/** Provider ids that serve "native Claude" — derived from the live source list,
+ *  so a source added on the backend does not have to be repeated here. */
+function claudeNativeProviders(catalog: ClaudeModelsResponse | undefined): Set<string> {
+  return new Set(
+    (catalog?.sources ?? [])
+      .filter((s) => s.live)
+      .map((s) => s.id.replace(/_live$/, '')),
+  );
+}
+
+function providerLabelOf(
+  providerId: string | null,
+  providers: Record<string, ProviderSpec> | undefined,
+): string | null {
+  if (!providerId) return null;
+  return providers?.[providerId]?.label ?? providerId;
+}
+
+/**
+ * Provenance for the model list, per source. Not decoration: a list of 4 ids and
+ * a list of 158 look identical in a <select>, and only this line distinguishes
+ * "Bedrock answered with the account's inference profiles" from "Bedrock was
+ * unreachable, so you are seeing the shipped registry snapshot".
+ */
+function ClaudeSourceLine({
+  catalog,
+  error,
+}: {
+  catalog: ClaudeModelsResponse | undefined;
+  error?: unknown;
+}) {
+  if (error) {
+    return (
+      <p className="text-xs text-destructive mt-1.5 flex items-start gap-1">
+        <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+        Model sources could not be queried: {String((error as Error)?.message ?? error)}
+      </p>
+    );
+  }
+  if (!catalog) return null;
+  return (
+    <div className="mt-1.5 space-y-0.5">
+      <p className="text-xs text-muted-foreground">
+        {catalog.count} model{catalog.count === 1 ? '' : 's'} from {catalog.sources.length} source
+        {catalog.sources.length === 1 ? '' : 's'}:
+      </p>
+      {catalog.sources.map((s) => (
+        <p
+          key={s.id}
+          className={cn(
+            'text-xs flex items-start gap-1',
+            s.reachable ? 'text-muted-foreground' : 'text-amber-700 dark:text-amber-300',
+          )}
+        >
+          {s.reachable
+            ? <Check className="w-3 h-3 mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            : <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />}
+          <span>
+            <span className="font-medium">{s.label}</span>
+            {s.live ? ' (live)' : ' (shipped)'} — {s.reachable ? `${s.count} Claude model${s.count === 1 ? '' : 's'}` : 'unreachable'}
+            {s.detail ? ` · ${s.detail}` : ''}
+            {s.error ? ` · ${s.error}` : ''}
+          </span>
+        </p>
+      ))}
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Task Type Card
@@ -104,6 +202,10 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
   const [model, setModel] = useState(config.selected_model);
   const [showProviderModal, setShowProviderModal] = useState(false);
 
+  // Shared queryKeys — TanStack dedupes, so all four cards drive ONE fetch each.
+  const claudeQ = useClaudeModels();
+  const providersQ = useProviders();
+
   React.useEffect(() => setModel(config.selected_model), [config.selected_model]);
 
   const isCorvinOS = config.task_type === 'corvinOS';
@@ -117,9 +219,19 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
         : 'Complex, reasoning-heavy tasks (>3000 tokens, deep analysis)';
 
   const dirty = model !== config.selected_model;
-  const providerLabel = config.provider
-    ? EXTERNAL_PROVIDERS.find((p) => p.id === config.provider)?.label ?? config.provider
-    : null;
+  const providerLabel = providerLabelOf(config.provider, providersQ.data);
+
+  const catalogue = claudeQ.data?.models ?? [];
+  // The saved id is always offerable even when no source lists it (a model
+  // retired upstream, or a fetch that is still in flight). Dropping it would
+  // make the <select> silently display — and on the next Save, persist — a
+  // DIFFERENT model than the one the tenant is configured with.
+  const options = catalogue.some((m) => m.id === config.selected_model)
+    ? catalogue
+    : [{ id: config.selected_model, label: `${config.selected_model} (configured)`, sources: [], providers: [] },
+       ...catalogue];
+  // The registry's own default, never a positional guess into a shipped array.
+  const nativeDefault = claudeQ.data?.default_model_id ?? null;
 
   return (
     <Card>
@@ -157,8 +269,13 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
               </Button>
               <Button
                 type="button" size="sm" variant="ghost" className="h-6 px-2 text-destructive"
-                onClick={() => onSave({ selected_model: CLAUDE_MODELS[1].value, provider: null })}
-                title="Remove external provider — back to native Anthropic"
+                disabled={!nativeDefault}
+                onClick={() => nativeDefault && onSave({ selected_model: nativeDefault, provider: null })}
+                title={
+                  nativeDefault
+                    ? `Remove external provider — back to ${nativeDefault}`
+                    : 'Cannot reset: the engine registry declares no default Claude model'
+                }
               >
                 <X className="w-3 h-3" />
               </Button>
@@ -167,11 +284,18 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
         ) : (
           <div>
             <Label className="text-sm font-medium mb-2 block">Default Model</Label>
-            <Select value={model} onChange={(e) => setModel(e.target.value)}>
-              {CLAUDE_MODELS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </Select>
+            {claudeQ.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Querying every model source…
+              </div>
+            ) : (
+              <Select value={model} onChange={(e) => setModel(e.target.value)}>
+                {options.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </Select>
+            )}
+            <ClaudeSourceLine catalog={claudeQ.data} error={claudeQ.error} />
           </div>
         )}
 
@@ -229,7 +353,8 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              None configured — using native Anthropic.
+              None configured — using the Claude model selected above, through
+              whichever backend Claude Code is authenticated against.
             </p>
           </div>
         )}
@@ -281,21 +406,31 @@ const ExternalProviderModal: React.FC<ExternalProviderModalProps> = ({
 }) => {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? '';
-  const [provider, setProvider] = useState<ExternalProviderId>(
-    (currentProvider as ExternalProviderId) || 'ollama_local',
-  );
+  const [provider, setProvider] = useState<string>(currentProvider ?? '');
   const [modelId, setModelId] = useState(currentModel ?? '');
 
-  const providersQ = useQuery({
-    queryKey: ['engine-providers'],
-    queryFn: ({ signal }) => getEngineProviders(signal),
-    staleTime: 60_000,
-    enabled: open,
-  });
+  const providersQ = useProviders();
+  const claudeQ = useClaudeModels();
+
+  // "External" = every provider in the ADR-0181 registry that is NOT one of the
+  // native-Claude sources the Default-Model picker above already covers. Derived,
+  // so a provider added to the registry appears here without a frontend release.
+  const nativeIds = claudeNativeProviders(claudeQ.data);
+  const external = Object.entries(providersQ.data ?? {})
+    .filter(([id]) => !nativeIds.has(id))
+    .map(([id, s]) => ({ id, label: s.label || id }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  // Nothing is preselected until the real list arrives — a hardcoded fallback id
+  // would fetch models for a provider that may not exist on this install.
+  React.useEffect(() => {
+    if (!provider && external.length > 0) setProvider(currentProvider ?? external[0].id);
+  }, [provider, currentProvider, external]);
+
   const modelsQ = useQuery({
     queryKey: ['provider-models', provider],
     queryFn: () => getProviderModels(provider),
-    enabled: open,
+    enabled: open && !!provider,
     staleTime: 15_000,
   });
   const testMut = useMutation({
@@ -315,17 +450,30 @@ const ExternalProviderModal: React.FC<ExternalProviderModalProps> = ({
         <div className="space-y-4">
           <div>
             <Label className="text-sm font-medium mb-2 block">Provider</Label>
-            <Select
-              value={provider}
-              onChange={(e) => { setProvider(e.target.value as ExternalProviderId); setModelId(''); }}
-            >
-              {EXTERNAL_PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
-            </Select>
-            {spec?.credential_env && (
+            {providersQ.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading providers…
+              </div>
+            ) : external.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                The engine registry declares no external providers on this install.
+              </p>
+            ) : (
+              <Select
+                value={provider}
+                onChange={(e) => { setProvider(e.target.value); setModelId(''); }}
+              >
+                {external.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </Select>
+            )}
+            {spec && (
               <p className="text-xs text-muted-foreground mt-1">
-                Needs {spec.credential_env} — set it under Settings → API Keys.
+                {spec.kind === 'local' ? 'Runs locally' : 'Cloud provider'} · {spec.base_url}
+                {spec.credential_env
+                  ? ` · needs ${spec.credential_env} (Settings → API Keys)`
+                  : ''}
               </p>
             )}
           </div>
@@ -386,7 +534,7 @@ const ExternalProviderModal: React.FC<ExternalProviderModalProps> = ({
 
         <DialogFooter className="flex gap-2">
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="button" onClick={() => onSave(provider, modelId)} disabled={!modelId}>
+          <Button type="button" onClick={() => onSave(provider, modelId)} disabled={!modelId || !provider}>
             Save & Assign to task type
           </Button>
         </DialogFooter>
@@ -434,6 +582,194 @@ function ClaudeCodeAuthStatus() {
           {probe.authenticated ? `Authenticated via ${methodLabel}` : 'Not authenticated'}
         </span>
         {probe.detail && <span className="text-xs text-muted-foreground truncate">— {probe.detail}</span>}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Model Usage — real shares, counted from the tenant's audit chain
+// ─────────────────────────────────────────────────────────────────
+
+const PROVENANCE_NOTE: Record<string, string> = {
+  live_catalog: 'strongest — this provider answered with this id when last asked',
+  tenant_config: 'you assigned this model to this provider on this page',
+  registry: 'from the shipped ADR-0119 engine registry',
+  id_prefix: 'parsed from the model id itself (<provider>/<model>)',
+  engine_config: "inferred from the running engine's current provider assignment",
+  unresolved: 'no source claims this id — provider genuinely unknown',
+};
+
+function fmtInt(n: number): string {
+  return n.toLocaleString();
+}
+
+/** Horizontal share bar. Width is the percentage itself — nothing is normalised
+ *  to the largest row, so 100% means 100% of real turns, not "the top row". */
+function ShareBar({ pct, className }: { pct: number; className?: string }) {
+  return (
+    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+      <div
+        className={cn('h-full rounded-full bg-accent', className)}
+        style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+      />
+    </div>
+  );
+}
+
+function ModelUsagePanel() {
+  const usageQ = useQuery({
+    queryKey: ['model-usage'],
+    queryFn: ({ signal }) => getModelUsage(signal),
+    staleTime: 30_000,
+  });
+
+  const data = usageQ.data;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <CardTitle className="text-xl font-semibold">Model Usage</CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              Which model served which share of real work — counted from this
+              tenant's hash-chained audit chain (engine spans + OS turns), across
+              every provider. No separate counter, no estimate.
+            </p>
+          </div>
+          {data && data.totals.turns > 0 && (
+            <Badge variant="secondary" title="Engine spans counted from the audit chain">
+              {fmtInt(data.totals.turns)} turn{data.totals.turns === 1 ? '' : 's'} ·{' '}
+              {fmtInt(data.totals.total_tokens)} tokens
+            </Badge>
+          )}
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-6">
+        {usageQ.isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="w-4 h-4 animate-spin" /> Reading the audit chain…
+          </div>
+        ) : usageQ.error ? (
+          <p className="text-sm text-destructive flex items-start gap-1.5">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            Usage could not be read: {String((usageQ.error as Error)?.message ?? usageQ.error)}
+          </p>
+        ) : !data ? null : !data.chain_readable ? (
+          // Three different real states, told apart instead of collapsed into
+          // one "no data" box: an unresolvable path is a defect, an absent file
+          // is a fresh install, and an empty file is simply no work yet.
+          <p className="text-sm text-muted-foreground flex items-start gap-1.5">
+            <Info className="w-4 h-4 mt-0.5 shrink-0" />
+            {data.chain_path_resolved
+              ? 'No audit chain on disk yet for this tenant — usage appears after the first real turn.'
+              : 'The tenant audit chain path could not be resolved, so usage cannot be counted.'}
+          </p>
+        ) : data.models.length === 0 ? (
+          <p className="text-sm text-muted-foreground flex items-start gap-1.5">
+            <Info className="w-4 h-4 mt-0.5 shrink-0" />
+            The audit chain holds no engine spans or OS turns yet — no model has
+            served real work on this install.
+          </p>
+        ) : (
+          <>
+            <div>
+              <Label className="text-sm font-medium mb-3 block">By provider</Label>
+              <div className="space-y-3">
+                {data.providers.map((p) => (
+                  <div key={p.provider}>
+                    <div className="flex items-baseline justify-between gap-2 text-sm">
+                      <span className="font-medium truncate">{p.provider_label}</span>
+                      <span className="tabular-nums shrink-0">
+                        {p.share_pct.toFixed(1)}%
+                        <span className="text-muted-foreground">
+                          {' '}· {fmtInt(p.turns)} turn{p.turns === 1 ? '' : 's'} ·{' '}
+                          {p.models} model{p.models === 1 ? '' : 's'} ·{' '}
+                          {p.token_share_pct.toFixed(1)}% of tokens
+                        </span>
+                      </span>
+                    </div>
+                    <ShareBar pct={p.share_pct} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-3 block">By model</Label>
+              <div className="space-y-4">
+                {data.models.map((m) => (
+                  <div key={m.model_id}>
+                    <div className="flex items-baseline justify-between gap-2 text-sm">
+                      <span className="font-medium truncate" title={m.model_id}>{m.model_id}</span>
+                      <span className="tabular-nums shrink-0">{m.share_pct.toFixed(1)}%</span>
+                    </div>
+                    <ShareBar pct={m.share_pct} />
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      <Badge
+                        variant="outline"
+                        className="font-normal"
+                        title={PROVENANCE_NOTE[m.provider_source] ?? m.provider_source}
+                      >
+                        {m.provider_label}
+                        <span className="ml-1 opacity-60">({m.provider_source})</span>
+                      </Badge>
+                      <span className="tabular-nums">
+                        {fmtInt(m.turns)} turn{m.turns === 1 ? '' : 's'}
+                      </span>
+                      {(m.ok > 0 || m.failed > 0) && (
+                        <span className="tabular-nums">
+                          {m.success_pct.toFixed(0)}% ok ({m.ok}/{m.ok + m.failed})
+                        </span>
+                      )}
+                      {m.unfinished > 0 && (
+                        <span className="tabular-nums" title="Started, no end event — still running or the process died">
+                          {m.unfinished} unfinished
+                        </span>
+                      )}
+                      {m.avg_duration_ms > 0 && (
+                        <span className="tabular-nums">
+                          ⌀ {(m.avg_duration_ms / 1000).toFixed(1)}s
+                        </span>
+                      )}
+                      <span
+                        className="tabular-nums"
+                        title={
+                          `in ${fmtInt(m.input_tokens)} · out ${fmtInt(m.output_tokens)} · ` +
+                          `cache read ${fmtInt(m.cache_read_tokens)} · cache write ${fmtInt(m.cache_write_tokens)}`
+                        }
+                      >
+                        {fmtInt(m.total_tokens)} tokens ({m.token_share_pct.toFixed(1)}%)
+                      </span>
+                      {Object.entries(m.roles).map(([role, n]) => (
+                        <Badge key={role} variant="secondary" className="font-normal">
+                          {role} ×{n}
+                        </Badge>
+                      ))}
+                      {m.engines.map((engine) => (
+                        <Badge key={engine} variant="outline" className="font-normal">
+                          {engine}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {data.models.some((m) => m.provider_source === 'unresolved') && (
+              <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                Rows marked <span className="font-mono">unresolved</span> ran a model
+                no provider catalogue or registry currently claims — the turns are
+                real, only the provider attribution is unknown. Fetching that
+                provider's live models once resolves them.
+              </p>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   );
@@ -602,6 +938,8 @@ export const EngineConfigPage: React.FC = () => {
       <ClaudeCodeAuthStatus />
 
       <LearningStatusBar csrf={csrf} />
+
+      <ModelUsagePanel />
 
       <div>
         <h2 className="text-xl font-semibold mb-4">CorvinOS Model Selection</h2>

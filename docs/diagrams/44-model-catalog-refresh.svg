@@ -43,16 +43,16 @@
   <path class="arr" d="M830 126 V158"/>
 
   <rect x="620" y="158" width="320" height="72" class="box"/>
-  <text x="635" y="180" class="lbl" font-weight="bold">engine_providers.fetch_models("anthropic")</text>
-  <text x="635" y="198" class="sub">GET api.anthropic.com/v1/models · x-api-key + anthropic-version</text>
-  <text x="635" y="215" class="sub">follows has_more / last_id · key via provider_keys (env → service.env)</text>
+  <text x="635" y="180" class="lbl" font-weight="bold">engine_providers.fetch_models(provider)</text>
+  <text x="635" y="198" class="sub">anthropic → GET /v1/models · x-api-key · follows has_more / last_id</text>
+  <text x="635" y="215" class="sub">bedrock → ListFoundationModels + ListInferenceProfiles · SigV4 (aws_sigv4.py)</text>
 
   <path class="arr" d="M780 230 V262"/>
   <text x="792" y="252" class="sub">on success only</text>
 
   <rect x="620" y="262" width="320" height="72" class="ok"/>
-  <text x="635" y="284" class="lbl" font-weight="bold">model_catalog.store_models()</text>
-  <text x="635" y="302" class="sub">~/.corvin/global/model_catalog.json · 0600 · atomic replace</text>
+  <text x="635" y="284" class="lbl" font-weight="bold">model_catalog.store_models(provider)</text>
+  <text x="635" y="302" class="sub">0600 · atomic replace · one key per provider (anthropic AND bedrock write here)</text>
   <text x="635" y="319" class="sub">rejects an EMPTY list — last-good is never wiped</text>
 
   <!-- Failure path -->
