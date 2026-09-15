@@ -1,0 +1,22 @@
+runner error for mpfn1lsd_c0d787 (discord:1502103856740302964):
+Traceback (most recent call last):
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 5546, in _runner
+    # otherwise they queue behind the very turn they want to talk to.
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 5153, in process_one
+    # Sekunden noch gar nichts tut. Bei progress_updates ist die Wartezeit
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        args=(sender, msg_id, channel, chat_id, hb_stop, hb_delay),
+        ^^^^^
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 3433, in call_claude_streaming
+    # group (claude + tool-use children).
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 2947, in _call_claude_streaming_via_engine
+    retry_model = _ms_retry.escalate_for_error(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shumway/anaconda3/lib/python3.13/pathlib/_local.py", line 714, in touch
+    fd = os.open(self, flags, mode)
+FileNotFoundError: [Errno 2] No such file or directory: '/home/shumway/projects/CorvinOS/.corvin/voice/sessions/discord/1502103856740302964/.session_started'

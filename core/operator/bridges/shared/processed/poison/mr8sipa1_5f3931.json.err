@@ -1,0 +1,14 @@
+runner error for mr8sipa1_5f3931 (discord:1502103856740302964):
+Traceback (most recent call last):
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 9122, in _runner
+    process_one(inbox_file, settings)
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 8556, in process_one
+    answer = call_claude_streaming(
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 6510, in call_claude_streaming
+    return _call_claude_streaming_via_engine(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 4878, in _call_claude_streaming_via_engine
+    stderr = (proc.stderr.read() if proc.stderr else "") or ""
+              ^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.

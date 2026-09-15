@@ -1,0 +1,16 @@
+{
+  "channel": "discord",
+  "chat_id": "owner-chat",
+  "text": "Confirm?",
+  "ts": 1783957654361,
+  "_final": true,
+  "_workflow_ask_human": true,
+  "node_id": "confirm",
+  "provenance": {
+    "ai_generated": true,
+    "generator_id": "corvin_os",
+    "persona": "",
+    "session_id": "discord:owner-chat",
+    "timestamp_utc": "2026-07-13T15:47:34.361192+00:00"
+  }
+}

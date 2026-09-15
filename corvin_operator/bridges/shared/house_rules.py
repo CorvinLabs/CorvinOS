@@ -275,7 +275,15 @@ _REASON_NO_MATCH = "no_rule_matched"
 
 # ── repo policy file location + integrity ────────────────────────────────────
 
-REPO_POLICY_RELPATH = "operator/policy/house_rules.yaml"
+# Repo-relative location of the committed policy, kept for diagnostics/tests.
+# The live lookup below does NOT use this string: it derives the operator
+# directory from __file__, because that directory was renamed once already
+# (operator/ -> corvin_operator/, to stop it shadowing the stdlib `operator`
+# module) and a hard-coded name made verify_policy_integrity() report
+# "house_rules.yaml missing" on 2026-09-15. The L44 gate is fail-closed, so
+# that denied every bridge turn with reason_code=integrity_failed while the
+# file itself was present and its hash matched the anchor exactly.
+REPO_POLICY_RELPATH = "corvin_operator/policy/house_rules.yaml"
 
 # ADR-0143 M2 integrity anchor. The expected sha256 of the committed
 # house_rules.yaml. The gate refuses to run (fail-closed deny) when the file on
@@ -299,8 +307,13 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _operator_root() -> Path:
+    """The operator package directory this module lives in (see REPO_POLICY_RELPATH)."""
+    return Path(__file__).resolve().parents[2]
+
+
 def repo_policy_path() -> Path:
-    return _repo_root() / REPO_POLICY_RELPATH
+    return _operator_root() / "policy" / "house_rules.yaml"
 
 
 def sha256_of(path: Path) -> str:

@@ -1,0 +1,7 @@
+{
+  "reason": "permanent send error",
+  "error": "chat_id \"owner-chat\" is not a snowflake",
+  "attempts": 1,
+  "channel": "discord",
+  "dead_lettered_at": "2026-09-07T08:53:17.662Z"
+}
