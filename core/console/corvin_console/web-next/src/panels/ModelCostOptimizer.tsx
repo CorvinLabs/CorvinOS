@@ -63,6 +63,10 @@ interface DashboardStatus {
   acs_cost_actual_usd: number;
   acs_cost_baseline_usd: number;
   acs_model_mix: Record<string, number>;
+  // False = no acs.engine_completed event with usable token data exists. The
+  // per-day acs_*_usd values are then all 0.0, which must NOT be drawn — a
+  // flat zero line reads as "delegated workers are free".
+  acs_data_available: boolean;
   accuracy_percent: number;
   last_updated: string;
 }
@@ -320,6 +324,16 @@ export const ModelCostOptimizer: React.FC = () => {
                     `${Math.round((n / modelMixTotal) * 100)}% ${modelMixLabel(id)}`
                   )).join(' · ')}
                 </div>
+                {/* Scope of the headline number. These $ come from
+                    os_turn.completed ONLY — the OS-manager layer. Without a
+                    worker series the percentage is not the system's overall
+                    saving, and saying so here (not only on the chart below)
+                    is what keeps the big green number from overstating. */}
+                {!status.acs_data_available && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Nur OS-Manager-Turns — keine Worker-Daten erfasst
+                  </div>
+                )}
                 {isSingleModel && (
                   <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
                     <AlertCircle size={12} className="mt-0.5 shrink-0" />
@@ -383,38 +397,9 @@ export const ModelCostOptimizer: React.FC = () => {
         </Card>
       </div>
 
-      {/* Threshold Convergence Chart */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Learned Thresholds vs Base</CardTitle>
-          <CardDescription>
-            Per-task-type routing threshold, learned value against the 0.5 base default
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {hasThresholds ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={convergenceData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                <YAxis domain={[0, 1]} tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value) => (typeof value === 'number' ? value.toFixed(3) : value)} />
-                <Legend />
-                <Bar dataKey="base" fill="hsl(var(--muted-foreground))" name="Base (0.5)" />
-                <Bar dataKey="learned" fill="hsl(var(--accent))" name="Learned" />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="py-16 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
-              No learned thresholds yet — the model-selection routing path hasn't
-              recorded any decisions for this tenant, so there is nothing to
-              compare against the base threshold.
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Cost Efficiency */}
+      {/* Cost Efficiency — deliberately ABOVE the threshold chart: real money
+          spent is the headline, the learned routing threshold is the mechanism
+          that produced it. */}
       <Card className="mb-6">
         <CardHeader>
           <CardTitle>Cost Efficiency Trend</CardTitle>
@@ -450,22 +435,30 @@ export const ModelCostOptimizer: React.FC = () => {
                   stroke="hsl(var(--accent))"
                   fillOpacity={0.25}
                 />
-                <Area
-                  type="monotone"
-                  dataKey="acs_baseline_usd"
-                  name="ACS-Worker Baseline (Opus)"
-                  fill="hsl(217 91% 60%)"
-                  stroke="hsl(217 91% 60%)"
-                  fillOpacity={0.1}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="acs_actual_usd"
-                  name="ACS-Worker (real)"
-                  fill="hsl(217 91% 45%)"
-                  stroke="hsl(217 91% 45%)"
-                  fillOpacity={0.3}
-                />
+                {/* Only drawn when worker spend was actually measured. With no
+                    acs.engine_completed event every acs_*_usd is 0.0, and a
+                    flat zero line claims delegated workers are free — the most
+                    expensive turns in the system reading as costless. */}
+                {status.acs_data_available && (
+                  <Area
+                    type="monotone"
+                    dataKey="acs_baseline_usd"
+                    name="ACS-Worker Baseline (Opus)"
+                    fill="hsl(217 91% 60%)"
+                    stroke="hsl(217 91% 60%)"
+                    fillOpacity={0.1}
+                  />
+                )}
+                {status.acs_data_available && (
+                  <Area
+                    type="monotone"
+                    dataKey="acs_actual_usd"
+                    name="ACS-Worker (real)"
+                    fill="hsl(217 91% 45%)"
+                    stroke="hsl(217 91% 45%)"
+                    fillOpacity={0.3}
+                  />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           ) : (
@@ -473,6 +466,20 @@ export const ModelCostOptimizer: React.FC = () => {
               No cost data yet — token usage is only recorded on turns
               completed after this feature shipped (ADR-0696). Once new
               turns complete, real daily cost will appear here.
+            </div>
+          )}
+          {!status.acs_data_available && (
+            <div className="mt-3 flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 border border-amber-600/30 dark:border-amber-400/30 rounded-lg px-3 py-2">
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <span>
+                <strong>Keine ACS-Worker-Daten erfasst.</strong> Der Trend oben
+                zeigt ausschließlich die OS-Manager-Turns — die leichte
+                Orchestrierungs-Schicht. Delegierte Worker-Runs (voller
+                Tool-Zugriff, typisch der weitaus größere Teil der Ausgaben)
+                werden aus <code>acs.engine_completed</code>-Events gelesen; für
+                diesen Tenant existiert bisher keines. Die dargestellte Ersparnis
+                ist damit <em>nicht</em> die Gesamt-Ersparnis des Systems.
+              </span>
             </div>
           )}
           {status.cost_data_available && lowCoverageDays.length > 0 && (
@@ -483,6 +490,37 @@ export const ModelCostOptimizer: React.FC = () => {
                 {lowCoverageDays.map((p) => `${p.date} (${p.counted_turns}/${p.total_turns})`).join(', ')}
                 {' '}— die Kosten dort spiegeln keinen echten Trend, sondern eine Lücke in der Token-Erfassung.
               </span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Threshold Convergence Chart */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Learned Thresholds vs Base</CardTitle>
+          <CardDescription>
+            Per-task-type routing threshold, learned value against the 0.5 base default
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {hasThresholds ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={convergenceData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <YAxis domain={[0, 1]} tick={{ fontSize: 12 }} />
+                <Tooltip formatter={(value) => (typeof value === 'number' ? value.toFixed(3) : value)} />
+                <Legend />
+                <Bar dataKey="base" fill="hsl(var(--muted-foreground))" name="Base (0.5)" />
+                <Bar dataKey="learned" fill="hsl(var(--accent))" name="Learned" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="py-16 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
+              No learned thresholds yet — the model-selection routing path hasn't
+              recorded any decisions for this tenant, so there is nothing to
+              compare against the base threshold.
             </div>
           )}
         </CardContent>
