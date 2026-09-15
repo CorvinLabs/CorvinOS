@@ -199,6 +199,31 @@ def _refresh_once_impl(tenant_id: str) -> None:
                         "reachable": True,
                     },
                 )
+        elif result.get("credential_absent"):
+            # NOT a failure. A Claude subscription / Bedrock / Vertex login
+            # exposes no ANTHROPIC_API_KEY at all, so this branch is the STEADY
+            # STATE of most installs — and the refresh timer runs every
+            # _REFRESH_INTERVAL forever. Auditing it as a failure wrote one
+            # `model_catalog_refresh_failed` record per cycle into the
+            # hash-chained trail: 4 671 of them on this install by 2026-09-15,
+            # against 490 real engine spans. That is not a cosmetic log
+            # nuisance — it buries the events a compliance export is FOR, and
+            # it trains the reader to ignore the event name that would matter
+            # on a host that really does have a key and really is failing.
+            # Logged at debug, audited once per process, never per cycle.
+            global _CREDENTIAL_ABSENT_AUDITED  # noqa: PLW0603
+            _log.debug(f"[models] Anthropic catalogue not fetched: {result.get('error')}")
+            if not _CREDENTIAL_ABSENT_AUDITED:
+                _CREDENTIAL_ABSENT_AUDITED = True
+                console_audit.system_event(
+                    tenant_id=tenant_id,
+                    event="model_catalog_refresh_skipped",
+                    details={
+                        "provider": "anthropic",
+                        "reason": "credential_absent",
+                        "reachable": False,
+                    },
+                )
         else:
             _log.warning(
                 f"[models] Anthropic fetch failed: {result.get('error')}"
@@ -222,6 +247,10 @@ def _refresh_once_impl(tenant_id: str) -> None:
         )
         _REFRESH_THREAD.daemon = True
         _REFRESH_THREAD.start()
+
+
+#: One `model_catalog_refresh_skipped` per process, not per refresh cycle.
+_CREDENTIAL_ABSENT_AUDITED = False
 
 
 def _schedule_background_refresh(tenant_id: str = "_default") -> None:

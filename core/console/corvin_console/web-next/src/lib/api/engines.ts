@@ -15,25 +15,32 @@ export interface EngineModelConfig {
   provider?: string | null;
 }
 
+/** GET /settings/engine.
+ *
+ *  Kept in step with `routes/engine.py::EngineSettingResponse` — that model is
+ *  the contract, and this interface had drifted past it. Six fields declared
+ *  here as REQUIRED (`hermes_model`, `ollama_reachable`, `default_worker_engine`,
+ *  `default_worker_model`, `delegation_enabled`, plus `valid_worker_engines`)
+ *  are not returned by the route at all: a caller reading any of them got
+ *  `undefined` while the compiler promised a value. They are marked optional
+ *  below rather than deleted, because an older gateway on the other end of the
+ *  same console build may still send them. */
 export interface OsEngineSetting {
   // Engine-agnostic: any engine_id string from the catalog, or null for system default.
   default_engine: string | null;
-  // Hermes model alias (legacy field — general model hint is handled via default_worker_model).
-  hermes_model: "hermes-fast" | "hermes-balanced" | "hermes-capable" | "hermes-large" | null;
   valid_engines: string[];
-  ollama_reachable: boolean;
-  // Worker engine (delegation target)
-  default_worker_engine: string | null;
-  default_worker_model: string | null;
-  /** Absent since routes/engine.py was rewritten for Claude Code only (243690e8);
-   *  kept optional so older payloads still type-check. */
-  valid_worker_engines?: string[];
   // Per-engine model overrides (ADR-0119)
   engine_models: Record<string, EngineModelConfig>;
-  // Delegation flag — true when web_chat.delegation_enabled is set
-  delegation_enabled: boolean;
   // ADR-0181 — L34/L35 advisories raised when saving cloud-model assignments
   compliance_warnings?: string[];
+
+  /** ── Not sent by the current backend. Optional, never assume present. ── */
+  hermes_model?: "hermes-fast" | "hermes-balanced" | "hermes-capable" | "hermes-large" | null;
+  ollama_reachable?: boolean;
+  default_worker_engine?: string | null;
+  default_worker_model?: string | null;
+  valid_worker_engines?: string[];
+  delegation_enabled?: boolean;
 }
 
 export interface OsEngineHealth {
@@ -46,12 +53,18 @@ export async function getOsEngineSetting(signal?: AbortSignal): Promise<OsEngine
   return api<OsEngineSetting>("/settings/engine", { signal });
 }
 
+/** PUT /settings/engine.
+ *
+ *  The body shape is `routes/engine.py::EngineSettingUpdate`, which is
+ *  `extra="forbid"`: it accepts EXACTLY `default_engine` and `engine_models`.
+ *  This signature previously required `hermes_model` and offered
+ *  `default_worker_engine` / `default_worker_model`, none of which that model
+ *  accepts — so any call built to satisfy the TypeScript signature was
+ *  guaranteed to come back 422 `extra_forbidden`. Verified against the live
+ *  route 2026-09-15. Widen the Pydantic model first if these need to return. */
 export async function setOsEngineSetting(
   body: {
     default_engine: string | null;
-    hermes_model: string | null;
-    default_worker_engine?: string | null;
-    default_worker_model?: string | null;
     engine_models?: Record<string, EngineModelConfig> | null;
   },
   csrf: string,
@@ -118,6 +131,12 @@ export interface EngineProbeResult {
   version: string | null;
   /** non-empty only for hermes — list of pulled Ollama model names */
   models: string[];
+  /** ADR-0759 — which plan backs an authenticated engine: "pro" | "max" |
+   *  "team" | "enterprise" for an OAuth subscription, or the platform id
+   *  ("bedrock" | "vertex" | "foundry"). "" when the host cannot say. */
+  plan?: string;
+  /** Vendor's own rate-limit tier label. Display only — never parsed. */
+  rate_limit_tier?: string;
   detail: string | null;
 }
 
@@ -612,6 +631,31 @@ export interface ProviderUsageRow {
   token_share_pct: number;
 }
 
+/** ADR-0759 — one row per engine ROLE (os | worker | manager). The OS turn and
+ *  the worker turn it delegates to run different engines on different models;
+ *  summed together they hide exactly the split an operator is looking for. */
+export interface RoleUsageRow {
+  role: string;
+  turns: number;
+  ok: number;
+  failed: number;
+  unfinished: number;
+  success_pct: number;
+  share_pct: number;
+  avg_duration_ms: number;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  token_share_pct: number;
+  models: string[];
+  engines: string[];
+  /** false = this role ran real turns but its emitter reported no token counts.
+   *  Distinct from "cost nothing" and must be rendered as such. */
+  tokens_reported: boolean;
+}
+
 export interface ModelUsageResponse {
   tenant_id: string;
   chain_path_resolved: boolean;
@@ -619,6 +663,7 @@ export interface ModelUsageResponse {
   chain_readable: boolean;
   models: ModelUsageRow[];
   providers: ProviderUsageRow[];
+  roles: RoleUsageRow[];
   totals: {
     turns: number;
     ok: number;

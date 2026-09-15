@@ -140,7 +140,7 @@ export const VibeDashboard: React.FC = () => {
             <div className="flex items-end justify-between">
               <span className="text-2xl font-bold text-gray-800">{dim.value.toFixed(1)}</span>
               <Badge
-                variant={dim.value >= 7 ? 'default' : dim.value >= 5 ? 'secondary' : 'destructive'}
+                variant={dim.value >= 7 ? 'default' : dim.value >= 5 ? 'secondary' : 'danger'}
               >
                 {dim.value >= 7 ? '↑ Strong' : dim.value >= 5 ? '→ Fair' : '↓ Needs work'}
               </Badge>

@@ -47,7 +47,7 @@ from types import ModuleType
 
 # corvin_operator/cli lives at <repo-root>/corvin_operator/cli. This file is at
 # <repo-root>/ops/launcher/corvin/skill_cmd.py → parents[3] is the repo root.
-_OPERATOR_CLI = Path(__file__).resolve().parents[3] / "operator" / "cli"
+_OPERATOR_CLI = Path(__file__).resolve().parents[3] / "corvin_operator" / "cli"
 
 
 def add_parser(parent_subparsers: argparse._SubParsersAction) -> None:

@@ -59,7 +59,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # Forge path so we can reuse tenant validation + path helpers.
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 
@@ -164,7 +164,32 @@ class EngineTrustConfig(BaseModel):
 
 
 class TenantSpec(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """The ``spec:`` block — a SHARED namespace, not this module's alone.
+
+    ``extra="allow"`` at THIS level, deliberately, while every security-bearing
+    sub-model above keeps ``extra="forbid"``.
+
+    ``tenant.corvin.yaml`` is co-owned. The console writes
+    ``spec.engine_models`` / ``spec.default_worker_engine`` (PUT
+    /settings/engine), ``spec.web_chat``, ``spec.features_whitelist``,
+    ``spec.learning``, ``spec.claude_code_local``, ``spec.context_engineering``;
+    ``acs_runtime`` reads ``spec.default_worker_model``; ``engine_models`` reads
+    ``spec.engine_models.<engine>.provider``. None of those belong to the
+    gateway, and none of them existed in this schema — so ``extra="forbid"``
+    did not guard anything, it simply made the gateway REFUSE the real file:
+    ``load()`` raised ``TenantConfigMalformed`` and the dispatcher failed every
+    run before spawning an engine. Measured on this install 2026-09-15: 12
+    validation errors, 100% of submitted runs terminal-``failed``, message
+    ``spec.engine_models Extra inputs are not permitted``. A worker engine that
+    cannot start is not a stricter worker engine.
+
+    What is NOT relaxed, and must not be: ``DataResidency``, ``Budget``,
+    ``ComputeConfig`` and ``EngineTrustConfig`` stay ``extra="forbid"``. Those
+    ARE this module's, they gate engine admission and residency, and a typo
+    inside one of them (``forbid_engine:`` for ``forbid_engines:``) must keep
+    failing loudly rather than silently disabling a restriction.
+    """
+    model_config = ConfigDict(extra="allow")
 
     data_residency: DataResidency      = Field(default_factory=DataResidency)
     budget:         Budget             = Field(default_factory=Budget)
@@ -181,12 +206,24 @@ class TenantMetadata(BaseModel):
 
 
 class TenantConfig(BaseModel):
-    """Top-level on-disk schema for ``tenant.corvin.yaml``."""
-    model_config = ConfigDict(extra="forbid")
+    """Top-level on-disk schema for ``tenant.corvin.yaml``.
 
-    apiVersion: Literal["corvin/v1"]
-    kind:       Literal["Tenant"]
-    metadata:   TenantMetadata
+    The AWP envelope (``apiVersion``/``kind``/``metadata``) is OPTIONAL on read
+    and always written by :meth:`save`. It was required, and the other writers
+    of this shared file — the console's ``PUT /settings/engine`` among them —
+    emit a bare ``spec:`` mapping with no envelope at all, so requiring it meant
+    the gateway rejected the file that the rest of the product had just written.
+
+    Optional is not unchecked: the fields keep their ``Literal`` types, so a
+    file that DECLARES ``apiVersion: other/v2`` or ``kind: Secret`` is still
+    refused. Only silence is accepted, and silence is what a co-writer produces.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    apiVersion: Literal["corvin/v1"] = "corvin/v1"
+    kind:       Literal["Tenant"] = "Tenant"
+    metadata:   TenantMetadata = Field(
+        default_factory=lambda: TenantMetadata(id="_default"))
     spec:       TenantSpec = Field(default_factory=TenantSpec)
 
     # ---- Constructors --------------------------------------------------

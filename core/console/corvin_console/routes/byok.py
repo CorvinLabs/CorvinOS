@@ -51,7 +51,7 @@ _MGMT_API_URL_ENV = "CORVIN_MANAGEMENT_API_URL"
 _BYOK_TIMEOUT = 15.0
 
 _REPO = Path(__file__).resolve().parents[4]
-_AGENT_PATH = _REPO / "operator" / "agent"
+_AGENT_PATH = _REPO / "corvin_operator" / "agent"
 if str(_AGENT_PATH) not in sys.path:
     sys.path.insert(0, str(str(_AGENT_PATH.parent)))
 

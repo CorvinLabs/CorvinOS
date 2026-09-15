@@ -513,6 +513,68 @@ bash corvin_operator/bridges/run-all-tests.sh
 
 ---
 
+## Worker-Engine Model Routing (ADR-0759, load-bearing)
+
+**`tenant.corvin.yaml` is CO-OWNED.** The console writes `spec.engine_models`,
+`spec.web_chat`, `spec.learning`, `spec.claude_code_local`,
+`spec.features_whitelist`, `spec.context_engineering`; `acs_runtime` and
+`engine_models` read their own keys. `corvin_gateway.tenant_config.TenantSpec` is
+therefore `extra="allow"` with an OPTIONAL AWP envelope. It used to be
+`extra="forbid"` with a required envelope, and the consequence was not strictness
+— it was **100% of gateway runs terminal-`failed` before an engine was spawned**.
+The relaxation is SCOPED: `data_residency`, `budget`, `compute` and
+`engine_trust` keep `extra="forbid"`, because those gate engine admission and a
+typo there must keep failing loudly.
+
+**Write that file at mode `0o600`, always.** The gateway reads it fail-closed on
+mode. `os.replace` carries the temp file's mode onto the target, so a writer at
+umask leaves it `0o664` and disables every run. `chmod` BEFORE `replace`.
+
+**Every `engine.span.*` carries a real `model_id`.** `model_usage` keys on it and
+an observation without one used to be dropped — so 100% of delegated worker turns
+were invisible in the console and priced at $0.00. The span closes on the model
+the engine REPORTS, not the one that was requested. `engine_span.END_FIELDS`
+carries the four-way token split (`input`/`output`/`cache_read`/`cache_write`);
+a single `tokens_used` total cannot be priced, because the four bill at four
+different rates.
+
+**A field not in `_EVENT_ALLOWLIST` is dropped silently.** `acs.engine_completed`
+emitted its token split for months into a floor that discarded it, so ACS worker
+cost read as $0.00 while the emitter looked correct. Add the field to the
+allowlist in the same commit as the emitter.
+
+**Bedrock / Vertex / Foundry are `auth_mode: platform` — NOT base-url redirects.**
+Claude Code reaches them natively (`CLAUDE_CODE_USE_BEDROCK=1` + SigV4). Setting
+`ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` for one makes it speak plain Anthropic
+to a signed endpoint and every turn 403s. They carry no `credential_env` (the
+credential is a CHAIN: AWS profile / IMDS / IRSA / ADC / Azure token), their
+endpoint is region-derived, and the L35 gate must use `ProviderSpec.egress_url` —
+gating on `base_url` (empty for them) skipped the check entirely.
+`corvin_operator/bridges/shared/aws_sigv4.py` is the stdlib-only signer; it was
+deleted once by a rename sweep while its docs stayed, and
+`test_the_signer_module_is_present_at_all` now fails if that recurs.
+
+**Engine detection: the platform flag outranks a stale OAuth file.** Nothing
+removes `~/.claude/.credentials.json` when an operator switches to Bedrock, and
+Claude Code itself gives the flag precedence. `EngineProbeResult.plan` reports
+which subscription (`pro`/`max`/`team`/`enterprise`) — labels only, never a token.
+
+**`_strip_worker_secrets` disarms a platform host unless `_restore_platform_credentials`
+runs after it.** The strip matches `SECRET`/`ACCESS_KEY`/`_TOKEN$` by name — which
+is exactly the only credential a Bedrock/Vertex worker has. Restore is scoped to
+the ACTIVE platform and to registry-declared names; never widen `_SECRET_NAME_RE`.
+
+**Must NOT do:** re-tighten `TenantSpec` · write the tenant YAML at umask · emit a
+span without `model_id` · pass `model=` to an engine without probing the keyword ·
+add an audit field without an allowlist entry · compose an audit-chain path by
+hand · give a platform provider a `credential_env` · audit a credential-absent
+catalogue refresh as a failure (4 671 such records buried the real events).
+
+→ Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Worker-engine model routing
+→ ADR: See Corvin-ADR for ADR-0759
+
+---
+
 ## Console Frontend — Prove the NEW Build Is What Loads (load-bearing)
 
 Any change under `core/console/corvin_console/web-next/` is **not done when the source is

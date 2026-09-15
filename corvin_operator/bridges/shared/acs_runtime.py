@@ -481,11 +481,36 @@ def _run_dir(tenant_id: str, bridge: str, chat: str, run_id: str) -> Path:
     return session_dir / "acs" / "runs" / run_id
 
 
+_FORGE_PATH = str(Path(__file__).resolve().parents[2] / "forge")
+
+
 def _audit_path(tenant_id: str) -> Path:
-    return _corvin_home() / "tenants" / tenant_id / "global" / "audit.jsonl"
+    """The ONE hash-chained audit file for this tenant (ADR-0007 / ADR-0650).
 
+    Resolved through the shared ``tenant_audit_chain()`` helper, never composed
+    by hand. This function DID compose it by hand — ``<home>/tenants/<tid>/
+    global/audit.jsonl`` — one directory above the canonical
+    ``…/global/forge/audit.jsonl``, so every ACS manager/worker record (span
+    start/end, WDAT worker traces, delegation decisions) landed in a second,
+    parallel chain. Nothing reads that file: the ADR-0232 boot tripwire, the
+    console's model-usage roll-up and every compliance report verify the
+    canonical one, so a delegated turn was auditable in principle and invisible
+    in practice. Measured on this install 2026-09-15: 2.0 MB of ACS records off
+    the trail while the canonical chain held 44 MB of OS records.
 
-_FORGE_PATH = str(Path(__file__).resolve().parents[3] / "operator" / "forge")
+    The historical file is NOT merged, rewritten or deleted (CLAUDE.md is
+    explicit); it stays as an append-only historical chain and the boot seam
+    links it. Only new writes move.
+    """
+    try:
+        sys.path.insert(0, _FORGE_PATH) if _FORGE_PATH not in sys.path else None
+        from forge.paths import tenant_audit_chain  # type: ignore[import]  # noqa: PLC0415
+        return tenant_audit_chain(tenant_id)
+    except Exception:  # noqa: BLE001
+        # Fail to the CANONICAL layout, not to the legacy one: a resolver that
+        # cannot be imported must not silently reopen the split this docstring
+        # describes.
+        return _corvin_home() / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
 
 
 def _resolve_worker_model(explicit: str | None, tenant_id: str) -> str:
@@ -1393,6 +1418,49 @@ def _strip_worker_secrets(env: dict) -> None:
             env.pop(_k, None)
 
 
+def _restore_platform_credentials(env: dict, source_env: "dict | None" = None) -> None:
+    """Put back the Bedrock/Vertex/Foundry credential chain the strip removed.
+
+    ``_strip_worker_secrets`` matches on the NAME shape (``SECRET``,
+    ``ACCESS_KEY``, ``_TOKEN$``, ``_CREDENTIAL``). That is the correct default
+    for an operator-exported secret, and it is FATAL on a platform-authenticated
+    host, because the names it matches — ``AWS_SECRET_ACCESS_KEY``,
+    ``AWS_ACCESS_KEY_ID``, ``AWS_SESSION_TOKEN``,
+    ``GOOGLE_APPLICATION_CREDENTIALS``, ``AZURE_CLIENT_SECRET`` — are the ONLY
+    way the engine can authenticate at all there. ``CLAUDE_CODE_USE_BEDROCK``
+    itself is not secret-shaped and survived, so the worker was spawned told to
+    use Bedrock and given nothing to sign with: every delegated turn failed on
+    credentials while the OS turn beside it worked.
+
+    This is deliberately NOT a weakening of that control:
+
+    * It runs only when the HOST is actually in platform mode (the enabling flag
+      is set). On a subscription or API-key install it is a no-op.
+    * It restores only names the registry declares for that platform, from the
+      parent's own environment — it never reads a vault, a file, or another
+      provider's variables.
+    * The OS turn already runs with exactly these variables. A worker that
+      cannot see them is strictly less capable than the process that spawned it
+      while being no less trusted; the isolation boundary that matters for a
+      tool-capable worker is the one around the OPERATOR's unrelated secrets
+      (OpenAI keys, GitHub tokens, DB passwords), and that stays closed.
+    """
+    src = source_env if source_env is not None else os.environ
+    try:
+        from engine_models import (  # type: ignore[import]  # noqa: PLC0415
+            active_platform_provider, platform_provider_env,
+        )
+    except Exception:  # noqa: BLE001 — registry unavailable ⇒ nothing to restore
+        return
+    try:
+        spec = active_platform_provider(src)
+        if spec is None:
+            return
+        env.update(platform_provider_env(spec, src))
+    except Exception:  # noqa: BLE001 — never break a spawn over provenance
+        return
+
+
 def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
     """ADR-0181 M3 (review finding #6) — mirror the OS-turn provider redirect for
     claude_code WORKER/manager spawns. Delegates to
@@ -1566,6 +1634,7 @@ def _call_manager_sync(
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
     _strip_worker_secrets(env)  # full secret/PII strip (round-2)
+    _restore_platform_credentials(env)  # ADR-0759 — Bedrock/Vertex/Foundry chain
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     # Windows fresh-install fix (adversarial-review finding, same bug class
     # already fixed in chat_runtime.py / agents/claude_code.py / codex_cli.py
@@ -1758,6 +1827,7 @@ def _call_worker_sync(
     # the old 2-var ANTHROPIC-only strip left OPENAI/provider/messaging/license
     # creds exfiltrable by a prompt-injected tool-capable subtask.
     _strip_worker_secrets(env)
+    _restore_platform_credentials(env)  # ADR-0759 — Bedrock/Vertex/Foundry chain
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     timeout = _effective_worker_timeout(budget)
     # max-turns fallback: _DEFAULT_WORKER_TURNS (unconfigured = ceiling, 2026-07-20).

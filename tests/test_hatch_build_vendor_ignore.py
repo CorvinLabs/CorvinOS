@@ -152,7 +152,7 @@ def test_all_twelve_ldd_skill_files_present_on_disk_for_the_vendored_source():
     every skill directory under skills/ldd/ actually has a SKILL.md to copy,
     so a future skill added to the directory but never written correctly
     fails here instead of shipping an empty dir."""
-    ldd_dir = _REPO / "operator" / "bundle" / "skills" / "ldd"
+    ldd_dir = _REPO / "corvin_operator" / "bundle" / "skills" / "ldd"
     skill_dirs = [p for p in ldd_dir.iterdir() if p.is_dir()]
     assert len(skill_dirs) >= 12, f"expected >= 12 LDD skills, found {len(skill_dirs)}"
     missing_skill_md = [p.name for p in skill_dirs if not (p / "SKILL.md").is_file()]

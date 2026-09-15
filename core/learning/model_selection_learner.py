@@ -209,17 +209,79 @@ def _read_acs_completions(chain_path: Path, max_bytes: int) -> list[dict[str, An
     return completions
 
 
-def _acs_chain_path(tenant_id: str) -> Path:
-    """The chain ``acs_runtime.py`` actually writes to (see its ``_audit_path``).
+def _acs_chain_paths(tenant_id: str) -> list[Path]:
+    """Every chain file ACS worker completions can be found in, oldest first.
 
-    Deliberately NOT ``tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"``
-    (the canonical chain) — ACS writes one directory up. Mirrored here rather
-    than imported so this module doesn't need acs_runtime's full dependency
-    surface just to read a path.
+    TWO, not one, and both are needed for a complete answer:
+
+    * ``<global>/audit.jsonl`` — where ``acs_runtime._audit_path()`` wrote
+      until 2026-09-15. A hand-composed path one directory above the canonical
+      chain (the ADR-0650 split). Append-only history; CLAUDE.md forbids
+      merging, rewriting or deleting it, so it is READ, never touched.
+    * ``<global>/forge/audit.jsonl`` — the canonical chain
+      (``tenant_audit_chain()``), where ACS writes from 2026-09-15 on.
+
+    Reading only the first would lose every new record the moment the writer
+    was corrected; reading only the second would lose all history. Records are
+    de-duplicated by the caller on (ts, model, tokens), so a record that
+    somehow exists in both is counted once.
     """
     from core.console.corvin_console import _bootstrap
 
-    return _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "audit.jsonl"
+    global_dir = _bootstrap.forge_paths.tenant_global_dir(tenant_id)
+    return [global_dir / "audit.jsonl", global_dir / "forge" / "audit.jsonl"]
+
+
+def _read_worker_spans(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]:
+    """Delegated WORKER spend from ``engine.span.end`` (role=worker).
+
+    The third delegation path, alongside ACS: a gateway ``POST
+    /v1/tenants/{tid}/runs`` spawns a worker engine and closes the run with an
+    engine span. Until ADR-0759 that span carried neither a ``model_id`` nor
+    token counts, so this spend could not be priced at all and the dashboard
+    reported the OS turns as if they were the whole bill. Spans that still lack
+    either (anything recorded before that change) are skipped here rather than
+    estimated — same honesty rule as everywhere else in this module.
+    """
+    if not chain_path.exists():
+        return []
+    try:
+        size = chain_path.stat().st_size
+        with chain_path.open("rb") as fh:
+            fh.seek(max(0, size - max_bytes))
+            buf = fh.read()
+    except OSError:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for line in buf.decode("utf-8", errors="replace").splitlines():
+        if '"engine.span.end"' not in line:
+            continue
+        try:
+            record = json.loads(line)
+        except Exception:  # noqa: BLE001
+            continue
+        details = record.get("details")
+        if not isinstance(details, dict) or details.get("role") != "worker":
+            continue
+        model = str(details.get("model_id") or "")
+        if not model:
+            continue
+        in_tok = int(details.get("input_tokens") or 0)
+        out_tok = int(details.get("output_tokens") or 0)
+        cw_tok = int(details.get("cache_write_tokens") or 0)
+        cr_tok = int(details.get("cache_read_tokens") or 0)
+        if not (in_tok or out_tok or cw_tok or cr_tok):
+            continue
+        out.append({
+            "completed_ts": record.get("ts"),
+            "model": model,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "cache_creation_input_tokens": cw_tok,
+            "cache_read_input_tokens": cr_tok,
+        })
+    return out
 
 
 # ── ADR-0696: real cost-efficiency trend ────────────────────────────────
@@ -469,7 +531,24 @@ def compute_cost_efficiency(
     # ACS-delegated worker spend — separate chain, separate series (see
     # CostEfficiencyResult.acs_daily docstring above for why it's never
     # blended into `daily`).
-    acs_completions = _read_acs_completions(_acs_chain_path(tenant_id), _MAX_SCAN_BYTES)
+    acs_completions: list[dict[str, Any]] = []
+    _seen_delegated: set[tuple] = set()
+    _chain_paths = _acs_chain_paths(tenant_id)
+    for _chain in _chain_paths:
+        acs_completions.extend(_read_acs_completions(_chain, _MAX_SCAN_BYTES))
+    # Gateway worker runs (ADR-0759). Only on the canonical chain — the
+    # dispatcher has always written there.
+    acs_completions.extend(_read_worker_spans(_chain_paths[-1], _MAX_SCAN_BYTES))
+    _deduped: list[dict[str, Any]] = []
+    for _c in acs_completions:
+        _key = (_c.get("completed_ts"), _c.get("model"),
+                _c.get("input_tokens"), _c.get("output_tokens"),
+                _c.get("cache_creation_input_tokens"), _c.get("cache_read_input_tokens"))
+        if _key in _seen_delegated:
+            continue
+        _seen_delegated.add(_key)
+        _deduped.append(_c)
+    acs_completions = _deduped
     acs_by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
     acs_by_day_total: dict[str, int] = defaultdict(int)
     acs_by_day_counted: dict[str, int] = defaultdict(int)
