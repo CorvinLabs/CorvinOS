@@ -133,6 +133,28 @@ function useProviders() {
 /** Real per-model usage from the tenant's audit chain. One shared queryKey for
  *  the Model Usage panel AND the five task cards: same fetch, same chain read,
  *  and structurally the same numbers in both places. */
+/** How this host authenticates Claude Code, as a display label.
+ *
+ *  Read from the SAME engine probe the auth card shows, so the source line and
+ *  the auth card can never disagree about the host's login method. "" while the
+ *  probe is still in flight — the caller falls back to a neutral phrasing rather
+ *  than asserting a login mode it has not confirmed. */
+function useAuthLabel(): string {
+  const probe = useQuery({
+    queryKey: ['engine-detect'],
+    queryFn: ({ signal }) => detectEngines(signal),
+    staleTime: 3 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const cc = probe.data?.results?.find((r) => r.engine_id === 'claude_code');
+  if (!cc?.authenticated) return '';
+  if (cc.credential_source === 'subscription') {
+    return cc.plan ? `Claude ${cc.plan[0].toUpperCase()}${cc.plan.slice(1)} subscription`
+                   : 'Claude subscription';
+  }
+  return AUTH_METHOD_LABEL[cc.credential_source ?? ''] ?? '';
+}
+
 function useUsage() {
   return useQuery({
     queryKey: ['model-usage'],
@@ -177,22 +199,37 @@ function providerLabelOf(
  * attribute. Collapsing the sources into one "sources unavailable" summary is
  * still refused: a union is only readable if you can tell which half is missing.
  *
- * One source is dropped from the line entirely, and only under one condition: a
- * `credential_absent` one, while another live source is answering. On this host
- * Claude Code logs in through Bedrock, so `ANTHROPIC_API_KEY` is not a setting
- * that is missing — it is a setting that does not apply, and naming it invited a
- * fix for a non-problem (operator, 2026-09-15: "dieser key ist sinnlos"). The
- * source stays in the response, stays queried, and stays in the hover text as
- * "not used on this host"; it reappears inline the moment NO live source answers,
- * because then the picker really is down to the shipped snapshot and an API key
- * really is a remedy.
+ * A source that genuinely FAILED is always named inline, with its reason. What
+ * is not named inline is a `credential_absent` source, because that is not a
+ * failure and on most hosts it is not even a gap.
+ *
+ * The earlier rule hid such a source only "while another live source is
+ * answering", on the reasoning that once nothing live answers, an API key is a
+ * real remedy. That reasoning does not hold on a SUBSCRIPTION host, which is the
+ * common case: Claude Code authenticates through an OAuth subscription, exposes
+ * no provider key, and all four live catalogues therefore report
+ * `credential_absent` at once. The panel then printed four lines that each named
+ * a missing credential, which reads as four broken integrations and prescribes a
+ * fix (add a key) for something that is not broken and that the operator is not
+ * supposed to do — they already pay for the subscription.
+ *
+ * So credential-absent sources collapse into ONE sentence that states how this
+ * host actually authenticates, taken from the engine probe rather than guessed.
+ * That is deliberately NOT the forbidden "sources unavailable" summary: it names
+ * the real reason and is true. Every source stays in the response, stays
+ * queried, and stays individually listed in the hover text — and any source with
+ * a real error is still listed inline, because that one IS actionable.
  */
 function ClaudeSourceLine({
   catalog,
   error,
+  authLabel,
 }: {
   catalog: ClaudeModelsResponse | undefined;
   error?: unknown;
+  /** How this host authenticates, from the engine probe — e.g. "Claude Max
+   *  subscription". Empty when the probe has not answered yet. */
+  authLabel?: string;
 }) {
   if (error) {
     return (
@@ -204,18 +241,18 @@ function ClaudeSourceLine({
   }
   if (!catalog) return null;
 
-  // Does the host have a live answer at all? If not, even an inapplicable source
-  // is worth naming — "add an API key" is only useful advice when the shipped
-  // snapshot is all that is left.
-  const liveAnswered = catalog.sources.some((s) => s.live && s.reachable);
-  const shown = catalog.sources.filter((s) => !(s.credential_absent && liveAnswered));
+  // Inline: sources that answered, and sources that genuinely failed. A
+  // credential-absent source is neither — it is a catalogue this host was never
+  // set up to query.
+  const shown = catalog.sources.filter((s) => !s.credential_absent);
+  const absent = catalog.sources.filter((s) => s.credential_absent);
 
   const tooltip = catalog.sources
     .map((s) => {
       const state = s.reachable
         ? `${s.count} Claude model${s.count === 1 ? '' : 's'}`
-        : s.credential_absent && liveAnswered
-          ? 'not used on this host'
+        : s.credential_absent
+          ? 'not configured on this host'
           : 'unreachable';
       const extra = [s.detail, s.error].filter(Boolean).join(' · ');
       return `${s.label} (${s.live ? 'live' : 'shipped'}) — ${state}${extra ? ` · ${extra}` : ''}`;
@@ -245,6 +282,13 @@ function ClaudeSourceLine({
             : `— ${s.hint || s.error || 'unreachable'}`}
         </span>
       ))}
+      {absent.length > 0 && (
+        <span className="before:content-['·'] before:mr-0.5 before:opacity-50">
+          {authLabel
+            ? `${authLabel} — provider API keys don't apply`
+            : `${absent.length} provider catalogue${absent.length === 1 ? '' : 's'} not configured here`}
+        </span>
+      )}
     </p>
   );
 }
@@ -325,6 +369,8 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassified, on
   // a second one — and the same numbers the Model Usage panel shows, so a tier
   // can never disagree with the panel above it.
   const usageQ = useUsage();
+  // Same queryKey as the auth card above — one probe, one answer.
+  const authLabel = useAuthLabel();
 
   React.useEffect(() => setModel(config.selected_model), [config.selected_model]);
 
@@ -415,7 +461,11 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassified, on
                 ))}
               </Select>
             )}
-            <ClaudeSourceLine catalog={claudeQ.data} error={claudeQ.error} />
+            <ClaudeSourceLine
+              catalog={claudeQ.data}
+              error={claudeQ.error}
+              authLabel={authLabel}
+            />
           </div>
         )}
 
@@ -461,7 +511,7 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassified, on
               <p>
                 No learned confidence yet:{' '}
                 <span className="tabular-nums">
-                  {config.classified_count} of {totalClassified}
+                  {fmtInt(config.classified_count)} of {fmtInt(totalClassified)}
                 </span>{' '}
                 classified turn{totalClassified === 1 ? '' : 's'} landed in{' '}
                 {taskLabel}
@@ -475,13 +525,29 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassified, on
                 loading={usageQ.isLoading}
                 modelId={config.selected_model}
               />
+              <p className="text-xs opacity-80">
+                Both counts come from the same audit chain over the same counting
+                window, but they are not the same denominator: classified turns
+                are OS turns the shadow classifier bucketed, while the share
+                below is measured against every engine span, OS and worker.
+              </p>
             </div>
           </div>
         ) : (
           <div className="p-3 border border-emerald-500/30 bg-emerald-500/10 rounded-md">
             <p className="text-sm text-emerald-700 dark:text-emerald-300 font-medium">
-              ✓ Learned confidence: {(config.confidence_score * 100).toFixed(0)}% ({config.run_count} real outcome{config.run_count === 1 ? '' : 's'})
+              ✓ Learned confidence: {(config.confidence_score * 100).toFixed(0)}%
               {config.is_converged && ' — converged'}
+            </p>
+            {/* The optimizer's sample count is LIFETIME and deliberately not
+                narrowed by the counting window: a confidence score is
+                accumulated evidence, and windowing it would discard the very
+                history that makes it a score rather than a guess. Labelled as
+                such so it is not read as a windowed figure like everything
+                else on this card. */}
+            <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80 mt-1 tabular-nums">
+              {fmtInt(config.run_count)} outcome sample{config.run_count === 1 ? '' : 's'} for
+              this (tier, model) pair — lifetime, not limited to the counting window
             </p>
           </div>
         )}
@@ -772,8 +838,14 @@ const PROVENANCE_NOTE: Record<string, string> = {
   unresolved: 'no source claims this id — provider genuinely unknown',
 };
 
+/** Thousands-separated integer, pinned to en-US.
+ *
+ *  Bare `toLocaleString()` follows the BROWSER locale: on a German machine
+ *  159562 renders as "159.562", which an English reader parses as a decimal —
+ *  the same glyphs carrying a 1000x different value. The console ships English,
+ *  so its numbers are formatted English regardless of the host. */
 function fmtInt(n: number): string {
-  return n.toLocaleString();
+  return n.toLocaleString('en-US');
 }
 
 /** ADR-0171 role ids, spelled out. "worker" is the delegated engine run — the
@@ -820,7 +892,7 @@ function ModelUsagePanel() {
               <p className="text-xs text-muted-foreground mt-1 flex items-start gap-1.5">
                 <Clock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                 Counting since{' '}
-                {new Date(data.window.since_iso as string).toLocaleString()} — older
+                {new Date(data.window.since_iso as string).toLocaleString('en-US')} — older
                 turns are still in the audit trail but are not counted here.
                 Reset or clear the window in Model Cost Optimizer.
               </p>
@@ -1074,8 +1146,16 @@ function LearningStatusBar({ csrf }: { csrf: string }) {
                 Learning: <span className={statusColor}>{statusLabel}</span>
               </p>
               <p className="text-sm text-muted-foreground">
-                {lastUpdate ? `Last update: ${new Date(lastUpdate).toLocaleString()} • ` : ''}
-                {samples} classified · {learnedSamples} outcome sample{learnedSamples === 1 ? '' : 's'} learned
+                {lastUpdate ? `Last update: ${new Date(lastUpdate).toLocaleString('en-US')} • ` : ''}
+                {/* Two different periods sat side by side here with nothing to
+                    tell them apart: classified turns are narrowed by the
+                    counting window, the optimizer's outcome samples are
+                    lifetime. "6 classified · 241 outcome samples" invited the
+                    reading that 235 turns were classified but not learned. */}
+                <span className="tabular-nums">{fmtInt(samples)}</span> classified in this window
+                {' · '}
+                <span className="tabular-nums">{fmtInt(learnedSamples)}</span> outcome
+                sample{learnedSamples === 1 ? '' : 's'} learned (lifetime)
               </p>
             </div>
           </div>

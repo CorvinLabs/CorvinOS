@@ -3203,3 +3203,68 @@ non-zero before believing a zero-findings result.
 - **Don't return sample/mock data from a 404 branch** — empty, plus a statement
   that the feature is unavailable.
 - **Don't trust a zero-findings sweep without a positive control.**
+
+---
+
+## The two pages must agree (ADR-0764, 2026-09-16)
+
+`/console/app/engine-config` and `/console/app/model-cost-optimizer` show the
+same traffic from two angles. Any disagreement is read as one of them being
+wrong — correctly, because one of them is. They drifted twice, and both splits
+were invisible from either page alone.
+
+**Different windows.** `_real_stats` (classified turns) read the whole chain
+while `model_usage` honoured the ADR-0760 window, so the card printed "0 of 288
+classified turns" directly above "18.2% of all turns" — an all-time total
+stacked on a windowed one. `_real_stats` now filters on the same epoch.
+
+**`run_count` is LIFETIME and stays that way.** The optimizer's sample count is
+accumulated evidence; windowing it would discard the history that makes it a
+score rather than a guess. It is labelled "lifetime, not limited to the counting
+window" wherever it appears. This also retires an old invariant:
+`run_count <= classified_count` held while both covered the same period and does
+not any more — the accounting check that survives is parts-equal-whole within
+one window.
+
+**Different denominators, same wording.** "classified turns" counts OS turns the
+shadow classifier bucketed; "% of all turns" is measured against every engine
+span, OS and worker. Both are correct, they are not comparable, and the card
+says so.
+
+**Numbers are formatted `en-US`, pinned.** Bare `toLocaleString()` follows the
+BROWSER: on a German host 159562 renders as "159.562", which an English reader
+parses as a decimal — the same glyphs carrying a 1000x different value.
+
+**Counts are DISTINCT ids, not entries scanned.** The curated registry lists the
+same model under both `os_models` and `worker_models`, so a registry offering 7
+Claude ids reported "12" beside the "7 models" union total it was meant to
+explain.
+
+### Credential-absent sources collapse; failures never do
+
+The earlier rule hid a `credential_absent` source only "while another live source
+is answering", reasoning that once nothing live answers, an API key is a real
+remedy. **That reasoning fails on a subscription host** — the common case: Claude
+Code authenticates through OAuth, exposes no provider key, and all four live
+catalogues report `credential_absent` at once. The panel then printed four lines
+each naming a missing credential, reading as four broken integrations and
+prescribing a fix the operator is not supposed to make.
+
+Credential-absent sources now collapse into ONE sentence stating how the host
+actually authenticates, taken from the engine probe (`useAuthLabel`, the same
+probe the auth card reads) — e.g. "Claude Max subscription — provider API keys
+don't apply". That is **not** the forbidden "sources unavailable" summary: it
+names the real reason and is true. A source with a real error is still listed
+inline with its reason, and every source stays individually in the hover text.
+
+### What you, as Claude Code, must NOT do (ADR-0764)
+
+- **Don't let the two pages count over different windows.** One epoch, every
+  reader — including `_real_stats`.
+- **Don't window `run_count`**, and don't show it unlabelled beside windowed
+  figures.
+- **Don't put two different denominators side by side without naming them.**
+- **Don't call `toLocaleString()` without a locale** in shipped UI.
+- **Don't report "entries scanned" as a model count.**
+- **Don't list a credential-absent source as a failure on a host that has no key
+  to add** — and don't hide a source that genuinely failed.

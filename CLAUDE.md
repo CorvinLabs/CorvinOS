@@ -679,7 +679,7 @@ resolves `src/` relative to `web-next/`; run from the repo root it sees zero
 files and reports success. Confirm the file count first.
 
 → Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § The console as a production surface
-→ ADR: See Corvin-ADR for ADR-0763
+→ ADR: See Corvin-ADR for ADR-0763, ADR-0764 (cross-page consistency: one window, named denominators, pinned en-US formatting)
 
 ---
 

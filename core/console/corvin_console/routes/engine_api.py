@@ -149,7 +149,20 @@ def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | N
     Returns (stats_by_task_type, total_samples, last_ts_iso). An unreadable
     or absent chain is a normal, expected state (no turns yet) — returns all
     zeros, never raises.
+
+    Narrowed by the SAME counting window as every other number on these two
+    pages. It read the whole chain before, so the Engine Configuration card
+    said "0 of 288 classified turns" (all time) directly above a usage line
+    reading "18.2% of all turns" (windowed) — two totals, one card, different
+    periods. That is exactly the split the window exists to prevent, and it is
+    invisible until someone divides one number by the other.
     """
+    try:
+        from .. import usage_epoch  # noqa: PLC0415
+
+        since_ts = usage_epoch.epoch_ts(tenant_id)
+    except Exception:  # noqa: BLE001
+        since_ts = 0.0
     from core.models.model_selection_config import COMPLEXITY_BY_TASK_TYPE  # noqa: PLC0415
     complexity_to_task = {v: k for k, v in COMPLEXITY_BY_TASK_TYPE.items()}
     sums: dict[str, float] = {t: 0.0 for t in TASK_TYPES}
@@ -174,6 +187,9 @@ def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | N
                     except Exception:  # noqa: BLE001
                         continue
                     if rec.get("event_type") != "skill.model_selector.classified":
+                        continue
+                    rec_ts = rec.get("ts")
+                    if since_ts and isinstance(rec_ts, (int, float)) and rec_ts < since_ts:
                         continue
                     details = rec.get("details") or {}
                     task_type = complexity_to_task.get(details.get("complexity"))
@@ -319,7 +335,12 @@ async def get_claude_models(
         if source != "registry" and label:
             entry["label"] = label
 
-    registry_count = 0
+    # DISTINCT model ids, not entries scanned. This counted every occurrence,
+    # and the registry lists the same model under both `os_models` and
+    # `worker_models` — so a registry offering 7 Claude ids reported "12",
+    # sitting directly beside a "7 models" union total it was supposed to
+    # explain. Every other source here already reports distinct ids.
+    registry_ids: set[str] = set()
     registry_error: str | None = None
     default_model_id = ""
     try:
@@ -333,7 +354,7 @@ async def get_claude_models(
                     entry_id = getattr(entry, "id", "")
                     if entry_id and _is_claude_model_id(entry_id):
                         _add(entry_id, getattr(entry, "label", ""), "registry", provider)
-                        registry_count += 1
+                        registry_ids.add(entry_id)
         # The registry's own marked default for Claude Code's worker role. The UI
         # needs SOME id to fall back to when the operator detaches an external
         # provider, and taking it from the registry keeps that fallback a real
@@ -350,7 +371,7 @@ async def get_claude_models(
         # A one-word label for the compact source line, where the ADR reference
         # costs more width than it earns. The full label stays above it.
         "short_label": "Curated registry",
-        "reachable": registry_error is None, "count": registry_count,
+        "reachable": registry_error is None, "count": len(registry_ids),
         "error": registry_error, "hint": _short_reason(registry_error), "live": False,
         # The registry is on disk; it can never be waiting for a credential.
         "credential_absent": False,
