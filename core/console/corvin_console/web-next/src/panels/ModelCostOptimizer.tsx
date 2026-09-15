@@ -628,7 +628,7 @@ export const ModelCostOptimizer: React.FC = () => {
           Learned thresholds &amp; cost optimization for automatic model routing
         </p>
         <p className="text-xs text-muted-foreground mt-2">
-          Last updated: {new Date(status.last_updated).toLocaleTimeString()}
+          Last updated: {new Date(status.last_updated).toLocaleTimeString('en-US')}
         </p>
       </div>
 
@@ -643,7 +643,7 @@ export const ModelCostOptimizer: React.FC = () => {
               <span>
                 Counting since{' '}
                 <span className="font-medium">
-                  {new Date(win.since_iso as string).toLocaleString()}
+                  {new Date(win.since_iso as string).toLocaleString('en-US')}
                 </span>
                 <span className="text-muted-foreground">
                   {' '}— OS and worker both start from zero at that point

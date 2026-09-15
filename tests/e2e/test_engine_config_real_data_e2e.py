@@ -9,8 +9,9 @@ provider list may ship in the panel's bundle.
 It also covers the fields the same pass added so the panel can be terse without
 becoming vague: each model source's ``short_label``/``hint`` (one line, full
 error on hover), its ``credential_absent`` flag (a source this host has no key
-for is unused, not broken, and is dropped from that line while another live
-source answers) and each tier's ``classified_count`` (why a tier with no learned
+for is unused, not broken; such sources collapse into one line naming how the
+host actually authenticates, while a source that genuinely FAILED is still
+listed individually) and each tier's ``classified_count`` (why a tier with no learned
 outcomes is empty). All are display summaries of data that already existed, so
 what is asserted about them is that they cannot DISAGREE with the long form.
 
@@ -246,6 +247,19 @@ def test_engine_config_tiers_account_for_every_classified_turn(opener) -> None:
     classified turns landed in MEDIUM"). If the parts do not add up to the whole,
     that sentence states a false ratio about real audit-chain data — worse than
     the bare placeholder it replaced, because it looks measured.
+
+    This assertion used to also require ``run_count <= classified_count``, on
+    the reasoning that a tier cannot learn from more turns than were classified
+    into it. That held while both numbers covered the same period, and stopped
+    holding when ``classified_count`` was narrowed to the counting window:
+    ``run_count`` is the optimizer's LIFETIME sample count for the (tier, model)
+    pair and is deliberately not windowed, because a confidence score is
+    accumulated evidence and windowing it discards the history that makes it a
+    score rather than a guess. So the two legitimately cross over, and the
+    invariant that survives is the accounting one below — parts equal whole,
+    within one window. The remaining risk (a reader taking the lifetime figure
+    for a windowed one) is a labelling problem, pinned in
+    test_console_cross_page_consistency_e2e.py::TestLabelledDenominators.
     """
     data = _get_json(opener, "/v1/engine/config")
     tiers = data["models"]
@@ -256,12 +270,8 @@ def test_engine_config_tiers_account_for_every_classified_turn(opener) -> None:
         count = tier["classified_count"]
         assert isinstance(count, int) and count >= 0, f"{name}: bad classified_count {count!r}"
         per_tier += count
-        # run_count is outcome samples for (tier, currently-selected model); a
-        # tier cannot have learned from more turns than were ever classified into
-        # it, and an inversion means the two are being read from different keys.
-        assert tier["run_count"] <= count, (
-            f"{name} learned from {tier['run_count']} outcomes but only "
-            f"{count} turns were ever classified into it"
+        assert isinstance(tier["run_count"], int) and tier["run_count"] >= 0, (
+            f"{name}: bad run_count {tier['run_count']!r}"
         )
 
     assert per_tier == data["total_samples"], (
