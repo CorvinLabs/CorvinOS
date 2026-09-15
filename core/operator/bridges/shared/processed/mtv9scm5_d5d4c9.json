@@ -1,8 +1,0 @@
-{
-  "id": "mtv9scm5_d5d4c9",
-  "channel": "discord",
-  "from": "1299270034849533983",
-  "chat_id": "1502103856740302964",
-  "ts": 1789029188572,
-  "text": "mach alles autonom bis production ready: Next Phases\nPhase 2b: LLM Fallback (uncertain blocks → ask Claude classifier)\nPhase 2c: CEL Pipeline Wiring (integrate with L10 context engineering)\nPhase 3: Learning Loop (ADR-0314: feedback → optimize scores)"
-}

@@ -1,8 +1,0 @@
-{
-  "id": "mtx767d5_0360ee",
-  "channel": "discord",
-  "from": "1299270034849533983",
-  "chat_id": "1501315335750684803",
-  "ts": 1789145728457,
-  "text": "❯ lege diese seiten zusammen und nenne diese Marketplace und füge diese seite unter Leaning in einer eigenen Section ein: http://127.0.0.1:8765/console/app/packages, http://127.0.0.1:8765/console/app/plugin-center, es sollen auch alle extensions aus dem repo Corvin-Marketplace aufgeführt werden. alos auch ├── extensions/                  ← Other extensions\n  │   ├── skills/\n  │   ├── tools/\n  │   ├── connectors/\n  │   └── layers/. es soll ein richtiger übersichtlicher Marketplace sein. alles muss voll funktionstüchtig sein. das heißt skills sollen zu skills, plugins zu plugins usw integriert werden. und alles im tenend. finde dafür einen gute struktur im tenent. erzeuge ein konzept."
-}

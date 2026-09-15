@@ -1,7 +1,0 @@
-{
-  "reason": "20 attempts exhausted",
-  "error": "Unknown Channel",
-  "attempts": 20,
-  "channel": "discord",
-  "dead_lettered_at": "2026-07-25T18:26:36.644Z"
-}

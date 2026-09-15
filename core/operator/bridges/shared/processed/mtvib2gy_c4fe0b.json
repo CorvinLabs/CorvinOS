@@ -1,8 +1,0 @@
-{
-  "id": "mtvib2gy_c4fe0b",
-  "channel": "discord",
-  "from": "1299270034849533983",
-  "chat_id": "1540066113155637350",
-  "ts": 1789043498818,
-  "text": "charts-B4L96jrC.js:1 Uncaught ReferenceError: assistantOpen is not defined\n    at ic (index-DpoOOI3R.js:33:207542)\n    at wo (charts-B4L96jrC.js:1:64031)\n    at Eu (charts-B4L96jrC.js:1:122915)\n    at _c (charts-B4L96jrC.js:1:112159)\n    at wc (charts-B4L96jrC.js:1:112087)\n    at bc (charts-B4L96jrC.js:1:111948)\n    at uc (charts-B4L96jrC.js:1:108783)\n    at lc (charts-B4L96jrC.js:1:107339)\n    at x (charts-B4L96jrC.js:1:1721)\n    at MessagePort.j (charts-B4L96jrC.js:1:2253)"
-}
