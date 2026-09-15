@@ -539,6 +539,10 @@ class WebChatSession:
     # (_session_from_meta rebuilds every field explicitly): the resolver runs
     # once per turn and must never carry a stale decision across turns.
     language_context: dict[str, Any] | None = field(default=None, repr=False)
+    # ADR-0649 Phase 1 — task_id for bridge resume (optional, transient).
+    # Set by web API when context is task-scoped; used by _infinite_session_context_block()
+    # to load prior session state via SessionBridger.resume_from_bridge().
+    task_id: str | None = field(default=None, repr=False)
 
     @property
     def chat_key(self) -> str:
@@ -1735,28 +1739,77 @@ def _infinite_session_context_block(sess: WebChatSession) -> str:
 
     Fail-safe: if bridge loading fails, return empty string and continue normally.
     No user notice needed — session transitions are transparent."""
-    if not sess or not sess.chat_key:
+    if not sess or not sess.task_id:
         return ""
 
     try:
         from core.infinite_session.session_bridger import SessionBridger
         from core.infinite_session.event_store import EventStore
         from core.infinite_session.crypto_binding import CryptoBinding
+        from core.paths import audit_backend
 
-        # Try to load and resume from a prior session bridge
+        # Try to load and resume from a prior session bridge.
+        # Bridges are task-scoped: use sess.task_id to find the most recent one.
         event_store = EventStore(tenant_id=sess.tenant_id)
         crypto_binding = CryptoBinding(event_store.root_dir.parent)
         bridger = SessionBridger(event_store, crypto_binding)
 
-        # Look for the most recent bridge for this session
-        # (bridges are task-scoped, not session-scoped, but we can try to find one)
-        # For now: return empty if no bridge found (fail-safe, not fail-closed)
+        # Find the most recent bridge for this task (if any).
+        # Bridges are stored at <tenant_root>/bridges/<task_id>/*.json
+        bridge_dir = event_store.root_dir.parent / "bridges" / sess.task_id
+        if not bridge_dir.exists():
+            return ""  # No bridges for this task yet
 
-        # TODO: Wire bridge loading once task-id is available in WebChatSession
-        return ""
-    except Exception:  # noqa: BLE001
+        # Load the most recent bridge (by modification time)
+        bridge_files = sorted(bridge_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not bridge_files:
+            return ""
+
+        bridge_id = bridge_files[0].stem  # filename without .json extension
+        recovered, reason = bridger.resume_from_bridge(
+            tenant_id=sess.tenant_id,
+            task_id=sess.task_id,
+            bridge_id=bridge_id,
+            audit_callback=_make_audit_callback(),
+        )
+
+        if not recovered:
+            # Bridge loading failed (signature mismatch, snapshot unavailable, etc.)
+            return ""
+
+        # Successfully recovered context from bridge.
+        state_dict = recovered.get("state_dict", {})
+        if not state_dict:
+            return ""
+
+        # Format the recovered context for injection into the system prompt.
+        recovered_text = "## RECOVERED CONTEXT (from prior session):\n\n"
+        for key, value in sorted(state_dict.items()):
+            if isinstance(value, (str, int, float, bool)):
+                recovered_text += f"- **{key}**: {value}\n"
+            elif isinstance(value, (list, dict)):
+                recovered_text += f"- **{key}**: {json.dumps(value, ensure_ascii=False)[:200]}...\n"
+            else:
+                recovered_text += f"- **{key}**: {str(value)[:200]}\n"
+
+        return f"\n\n{recovered_text}"
+
+    except Exception as e:  # noqa: BLE001
         # Infinite sessions are a feature, not critical — fail gracefully
+        import logging
+        logging.exception(f"_infinite_session_context_block failed: {e}")
         return ""
+
+
+def _make_audit_callback():
+    """Create an audit callback for session bridge events."""
+    def audit_callback(event_type: str, **kwargs):
+        try:
+            from core.paths import audit_backend
+            audit_backend.write_event(event_type=event_type, **kwargs)
+        except Exception:  # noqa: BLE001
+            pass  # Non-critical
+    return audit_callback
 
 
 def _persona_mcp_config(tenant_id: str = "_default", workdir: "Path | None" = None,
