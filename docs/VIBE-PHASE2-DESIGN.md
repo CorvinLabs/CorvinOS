@@ -1,52 +1,74 @@
 # VIBE 9D Maturity Dashboard — Phase 2 Design Document
 
-**Status:** ✅ IMPLEMENTED (commit 89e13e32)  
-**Date:** 2026-09-10  
+**Status:** ✅ IMPLEMENTED (commit 89e13e32) · 🔄 REWORKED to on-demand (Phase 2.1, 2026-09-15)  
+**Date:** 2026-09-10 (original), 2026-09-15 (Phase 2.1 rework)  
 **Author:** Claude Haiku 4.5  
 **Related ADRs:** ADR-0593 (Vibe Engineering), ADR-0314 (Learning Infrastructure), ADR-0680 (Observability)
 
+> **Phase 2.1 rework (2026-09-15) — read this first.** The original Phase 2 relied
+> on `core/learning/live_experiment_collector.py`, a POSIX-only daemon
+> (`import resource`, `os.getloadavg()`) that **cannot run on Windows**, was never
+> started by the console, and left `experiments/live_measurements/` empty. The
+> dashboard therefore showed a frozen block of hardcoded sample scores. Phase 2.1
+> **removes the dependency on the collector** and computes each measurement
+> **on demand** from real, cross-platform sources — the ADR-0314 learning
+> `EventStore` + the tenant audit chain — in a new module
+> `core/console/corvin_console/routes/maturity_live.py`. Loop scores, the meta
+> loop, the trend/projection, recommendations and anomalies are now **server-
+> authoritative and REAL**; the frontend no longer transforms loss metrics and no
+> longer falls back to sample data (empty → explicit empty state). Sections below
+> marked *(Phase 2.1)* reflect the current design; the collector-based prose is
+> retained only as historical context.
+
 ## 1. Executive Summary
 
-Phase 2 connects the VIBE 9D Maturity Dashboard visual (Phase 1) to real telemetry data from the learning and observability systems. Instead of rendering hardcoded test data, the dashboard now:
+Phase 2 connects the VIBE 9D Maturity Dashboard visual (Phase 1) to real telemetry data from the learning and observability systems. Instead of rendering hardcoded test data, the dashboard now *(Phase 2.1)*:
 
-1. **Fetches live measurements** from the backend API (`/v1/console/vibe/maturity/measurements`)
-2. **Transforms loss metrics** into 9D loop scores (0-10 scale)
-3. **Updates in real-time** (5-minute refresh interval)
-4. **Handles errors gracefully** (fallback to test data on API failure)
+1. **Fetches one on-demand measurement** from the backend API (`/v1/console/vibe/maturity/measurements`), computed fresh per request.
+2. **Reads server-authoritative loop scores** (`loop_scores`) and `meta` — no client-side loss→score transform.
+3. **Updates in real-time** (60-second refresh interval).
+4. **Shows an explicit empty state** when no data exists (NO synthetic/sample fallback).
 
-This enables operators to monitor system health across 13 dimensions (6 Tier 1 core loops, 6 Tier 2 infrastructure loops, 1 meta loop) with live feedback from the unified learning infrastructure.
+This enables operators to monitor system health across 13 dimensions (6 Tier 1 core loops, 6 Tier 2 infrastructure loops, 1 meta loop) with live feedback from the unified learning infrastructure. A loop with no signal in the window is reported `active: false` and scores at its floor — it is never faked.
 
 ## 2. Architecture Overview
 
-### 2.1 Data Flow
+### 2.1 Data Flow *(Phase 2.1 — on-demand)*
 
 ```
-Live System → Event Store (ADR-0314) → Live Collector → JSONL Files
-                                           ↓
-                                      (~/.corvin/tenants/_default/
-                                       experiments/live_measurements/)
-                                           ↓
-                    Backend API (api_vibe_maturity.py)
-                           ↓
-                    /v1/console/vibe/maturity/measurements
-                           ↓
-              useLiveMaturityData Hook (React)
-                           ↓
-                    Transform: Loss → Scores
-                           ↓
+                    ADR-0314 learning EventStore ──┐
+                    (OUTCOME/SKILL_EXECUTED/…)      │
+                                                    ├─► maturity_live.build_measurement()
+                    tenant audit chain ─────────────┘   (per-request, cross-platform,
+                    (tenant_audit_chain(); event         maps 12+1 loops → {active,
+                     counts, integrity, house-rules)      contribution, drift})
+                                                    ↓
+                    Backend API (api_vibe_maturity.py / _phase3.py)
+                                                    ↓
+              /v1/console/vibe/maturity/{measurements,historical,anomalies}
+                                                    ↓
+              useLiveMaturityData Hook (React, 60s refresh, no fallback)
+                                                    ↓
+              reads loop_scores + meta (server-authoritative)
+                                                    ↓
                     MaturityDashboard Component
-                           ↓
+                                                    ↓
                     HexagonRadar + Score Cards + Tabs
 ```
 
-### 2.2 Components
+The obsolete path (`Live Collector → JSONL Files → experiments/live_measurements/`)
+is no longer used; see the Phase 2.1 note at the top.
+
+### 2.2 Components *(Phase 2.1)*
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| **Backend Endpoint** | `core/console/corvin_console/routes/api_vibe_maturity.py` | Reads JSONL files, filters by window/tenant, returns measurements |
-| **Frontend Hook** | `core/console/corvin_console/web-next/src/pages/vibe-engineering/hooks/useLiveMaturityData.ts` | Fetches from API, transforms data, manages refresh interval |
-| **Dashboard Component** | `core/console/corvin_console/web-next/src/pages/vibe-engineering/components/MaturityDashboard.tsx` | Renders live data with loading/error states |
-| **Data Source** | `core/learning/live_experiment_collector.py` | Daemon that writes measurements every 60s |
+| **Measurement builder** | `core/console/corvin_console/routes/maturity_live.py` | Computes one measurement on demand from the EventStore + audit chain; documents the loop→signal scoring model (`_LOOP_DOC`) |
+| **Backend Endpoint** | `core/console/corvin_console/routes/api_vibe_maturity.py` | `/measurements` — returns the current on-demand snapshot for the session's tenant |
+| **Phase-3 Endpoints** | `core/console/corvin_console/routes/api_vibe_maturity_phase3.py` | `/historical` (bucketed real time-series) + `/anomalies` (real drift/regression) |
+| **Frontend Hook** | `.../pages/vibe-engineering/hooks/useLiveMaturityData.ts` | Fetches the snapshot; exposes `loopScores` + `meta`; returns `null` (no fallback) when empty |
+| **Dashboard Component** | `.../pages/vibe-engineering/components/MaturityDashboard.tsx` | Renders real data; Trend/Meta/Recommendations cards bound to `meta`; explicit empty state |
+| **Data Source (obsolete)** | `core/learning/live_experiment_collector.py` | POSIX-only daemon; NOT used on any platform by the dashboard as of Phase 2.1 |
 
 ## 3. Data Schema
 
@@ -96,13 +118,20 @@ Live System → Event Store (ADR-0314) → Live Collector → JSONL Files
 
 **Field Breakdown:**
 
-- **timestamp, unix_time:** When measurement was collected
-- **tenant_id:** Tenant scoping (fail-closed: measurements without valid tenant are discarded)
-- **schema:** Version identifier (`corvin.live_measurement/1`); readers MUST filter on this to exclude fabricated/synthetic data
-- **learning:** Metrics from ADR-0314 EventStore (loss metrics for routing, confidence, feedback; accuracy and convergence rate)
-- **system:** OS-level metrics (rusage, audit chain length)
-- **user_actions:** Event counts over last 1 hour (from EventStore queries)
-- **component_health:** Per-learning-component active/contribution/drift tracking
+- **timestamp, unix_time:** When the measurement was computed (per request).
+- **tenant_id:** Tenant scoping — taken from the authenticated session (`rec.tenant_id`), never an env var.
+- **schema:** Version identifier. *(Phase 2.1: bumped to `corvin.live_measurement/2`.)* Readers MUST filter on this.
+- **learning:** Derived from the ADR-0314 EventStore (recent-OUTCOME success rate → accuracy/loss; convergence rate).
+- **system:** `audit_chain_length` is real; `latency_p99_ms`/`throughput`/`memory_usage_mb`/`cpu_usage_percent` are `null` *(Phase 2.1: not measured cross-platform — `psutil` is not a dependency; the system LOOP is instead scored from real boot/integrity signals, not host metrics)*.
+- **user_actions:** Event counts over the window (from EventStore + audit-chain queries).
+- **component_health:** Per-loop `{active, contribution, drift}` for the **12 loops + `meta_convergence`** the dashboard renders (`confidence, routing, context, workflow, data_flow, security, memory, skills, plugins, audit, compliance, system, meta_convergence`) — NOT the raw learning-component keys shown in the illustrative record above. Each loop's real signal source is documented in `maturity_live._LOOP_DOC`.
+
+**Phase 2.1 additional fields** (computed server-side, consumed directly by the frontend):
+
+- **`loop_scores`:** `{loop → 0..10}` = `contribution * (1 - drift) * 10` per loop. Authoritative; the client does not recompute.
+- **`meta`:** `convergence_rate`, `threshold_updates`, `prediction_accuracy`, `optimizer_active`, `drift` (mean over active loops), `trend {direction, value, insufficient_history}`, `projection_30d`, and `recommendations[]` (weakest active loops, named). Drives the Trend / Meta Loop / Recommendations cards.
+- **`signals`:** Raw counts every score is derived from (audit event tallies, learning counts) — echoed back so an operator can audit the arithmetic.
+- **`provenance`:** `{generator, measured: true, mode: "on_demand"}`.
 
 ### 3.2 API Response
 
