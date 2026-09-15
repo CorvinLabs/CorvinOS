@@ -137,8 +137,15 @@ def _as_float(value: Any) -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
-def _collect(path: Path) -> dict[str, _Observation]:
-    """Fold the chain into one observation per span (or span-less OS turn)."""
+def _collect(path: Path, since_ts: float = 0.0) -> dict[str, _Observation]:
+    """Fold the chain into one observation per span (or span-less OS turn).
+
+    ``since_ts`` is the ADR-0760 counting epoch: events older than it are not
+    read. Applied HERE rather than after folding, because a span whose start is
+    before the epoch and whose end is after it would otherwise be folded into a
+    half-observation — counted as a turn, with no status and no tokens, which
+    reads as "unfinished" and is not true. Whole spans or nothing.
+    """
     spans: dict[str, _Observation] = {}
     os_turns: dict[str, _Observation] = {}
     #: turn_id → span_id of its os-role span, so token counts from
@@ -151,6 +158,8 @@ def _collect(path: Path) -> dict[str, _Observation]:
         if not isinstance(details, dict):
             continue
         ts = _as_float(record.get("ts"))
+        if since_ts and ts and ts < since_ts:
+            continue
 
         if event_type in (_SPAN_START, _SPAN_END):
             span_id = str(details.get("span_id") or "")
@@ -388,10 +397,24 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
     yet" or "the chain could not be read".
     """
     path = _chain_path(tenant_id)
+    try:
+        from . import usage_epoch  # noqa: PLC0415
+
+        since_ts = usage_epoch.epoch_ts(tenant_id)
+        window = usage_epoch.window_note(tenant_id)
+    except Exception:  # noqa: BLE001 — no epoch module ⇒ all-time, never an error
+        since_ts, window = 0.0, {"active": False, "epoch_ts": None,
+                                 "since_iso": None, "reason": ""}
+
     result: dict[str, Any] = {
         "tenant_id": tenant_id,
         "chain_path_resolved": path is not None,
         "chain_readable": bool(path is not None and path.exists()),
+        # ADR-0760 — the window these numbers were counted over. Shipped in the
+        # SAME payload as the numbers so a caller cannot render one without the
+        # other; an unlabelled count that silently means "since Tuesday" is the
+        # failure this field exists to prevent.
+        "window": window,
         "models": [],
         "providers": [],
         "roles": [],
@@ -404,7 +427,7 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
     if path is None or not path.exists():
         return result
 
-    observations = _collect(path)
+    observations = _collect(path, since_ts)
     rows: dict[str, _ModelRow] = {}
     for obs in observations.values():
         row = rows.setdefault(obs.model_id, _ModelRow(model_id=obs.model_id))

@@ -2951,3 +2951,87 @@ original event every cycle.
 - **Don't widen `_SECRET_NAME_RE` to get AWS credentials into a worker.** Use
   `_restore_platform_credentials`, which is scoped to the active platform.
 - **Don't audit a credential-absent catalogue refresh as a failure.**
+
+---
+
+## Counting epoch for the usage + cost panels (ADR-0760, 2026-09-15)
+
+After ADR-0759 made worker turns visible, the two series were incomparable: ~500
+OS turns of history against 3 worker turns from the day the emitter was fixed.
+The operator asked for both to start level.
+
+**The chain is NOT trimmed to achieve that, and cannot be.** It is append-only
+and hash-linked; the ADR-0232 boot tripwire verifies it before anything else
+runs, so removing a record does not reset a counter — it breaks the chain and
+fails the next boot. It is also the GDPR Art. 30/32 record.
+
+Instead ONE timestamp per tenant (`<tenant>/global/usage_epoch.json`, mode
+`0o600`) says from when the console counts.
+
+| Reader | Shows | Narrowed by |
+|---|---|---|
+| `model_usage()` | turns, token shares, per-role roll-up | `_collect(path, since_ts)` |
+| `compute_cost_efficiency()` | dollars, savings, daily series | the same `epoch_ts()` |
+
+**One epoch, both readers — never one window per panel.** Two totals side by
+side that silently disagree about which turns they counted is worse than no
+reset at all.
+
+**The filter runs per EVENT, before spans are folded.** A span that starts before
+the epoch and ends after it is excluded WHOLE. Folding only its end yields an
+observation with no start, no status and no duration, which the roll-up reports
+as `unfinished` — a crash that never happened.
+
+**The window ships in the same payload as the numbers** (`window`: `active`,
+`epoch_ts`, `since_iso`, `reason`) so a caller cannot render a narrowed total
+without the period it covers. The cost panel renders it ABOVE the KPI cards: a
+total read first and qualified later has already been misread.
+
+`POST /v1/console/learning/model-cost-optimizer/usage-epoch` sets it (or clears
+it with `{"clear": true}`), audits `learning.usage_window_reset` /
+`learning.usage_window_cleared` with the session FINGERPRINT (never a uid), and
+returns a `note` saying in words that nothing was modified or removed. Clearing
+genuinely restores the full history — that reversibility is what makes the
+button safe to expose.
+
+### The worker half of the cost panel got the OS half's shape
+
+The delegated series was two dollar totals and nothing else, so the panel drew a
+worker line it could not explain. Added `acs_counted_turns`, `acs_total_turns`,
+`acs_savings_percent`, `acs_worker_model_pin`, and a rendered `acs_model_mix`.
+
+**`combined_savings_percent` is derived from the two real dollar totals, NEVER
+from averaging the two percentages.** Averaging weights a 4-turn worker series
+like a 500-turn OS one and describes traffic that never ran. On the live shape
+(OS 80.0 % over 500 turns, worker 20.0 % over 4) the two answers are 70.0 % and
+50.0 %; the E2E asserts both, so drift to the wrong one fails loudly.
+`combined_data_available` stays false unless BOTH sides have data in the window —
+a total computed from one half is not a total.
+
+Measured right after the reset, six real `claude -p` worker runs across three
+models (2 × Haiku, 2 × Sonnet, 2 × Opus):
+
+| | turns | actual | Opus baseline | saved |
+|---|---|---|---|---|
+| OS | 1 | $0.0210 | $0.1048 | 79.96 % |
+| Worker | 6 | $1.1296 | $1.9895 | 43.22 % |
+| Combined | 7 | $1.1506 | $2.0943 | 45.06 % |
+
+Recomputed independently from the chain: identical to four decimals.
+
+### What you, as Claude Code, must NOT do (ADR-0760)
+
+- **Don't trim, rewrite or delete the audit chain to reset a counter.** Move the
+  epoch. The chain is load-bearing for boot, not only for compliance.
+- **Don't give a panel its own window.** Both readers call `usage_epoch.epoch_ts()`.
+- **Don't filter after folding spans** — a straddling span becomes a phantom
+  `unfinished` turn.
+- **Don't return a narrowed total without its `window`.** The label is part of
+  the number.
+- **Don't average two savings percentages into a combined one.** Sum the real
+  dollars and divide once.
+- **Don't show a combined figure when only one side has data.**
+- **Don't describe the reset as clearing data** anywhere in the UI or the API —
+  it is a view, and an operator who believes otherwise has been misled by us.
+- **Don't confuse the epoch with retention or GDPR Art. 17 erasure.** It changes
+  what a dashboard counts; those change what exists.

@@ -67,6 +67,7 @@ import {
   BarChart3,
   Check,
   Database,
+  Clock,
   Info,
   Loader2,
   Plus,
@@ -812,6 +813,18 @@ function ModelUsagePanel() {
               tenant's hash-chained audit chain (engine spans + OS turns), across
               every provider. No separate counter, no estimate.
             </p>
+            {/* ADR-0760 — the SAME window the Model Cost Optimizer applies, from
+                the same stored epoch. Two panels quoting turn counts over
+                different periods is the specific confusion this label prevents. */}
+            {data?.window?.active && (
+              <p className="text-xs text-muted-foreground mt-1 flex items-start gap-1.5">
+                <Clock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                Zählfenster seit{' '}
+                {new Date(data.window.since_iso as string).toLocaleString()} — ältere
+                Turns sind weiterhin in der Audit-Chain, werden hier aber nicht
+                gezählt. Zurücksetzen/aufheben im Model Cost Optimizer.
+              </p>
+            )}
           </div>
           {data && data.totals.turns > 0 && (
             <Badge variant="secondary" title="Engine spans counted from the audit chain">

@@ -109,6 +109,37 @@ class DashboardStatusResponse(BaseModel):
     # check exists in the model-selection path; a single-model cost_model_mix
     # is explained by THIS, when set, not by license tier.
     cost_os_model_pin: Optional[str] = None
+    # ── Delegated WORKER turns, same shape as the OS fields above (ADR-0760).
+    # They existed only as two dollar totals, so the panel could draw a worker
+    # line but could not say which models produced it, how many turns it rests
+    # on, or what it saved — while the OS block beside it said all three. Same
+    # question, same answer shape, for the half an operator is usually paying
+    # for.
+    acs_counted_turns: int = 0
+    acs_total_turns: int = 0
+    acs_savings_percent: float = 0.0
+    acs_worker_model_pin: Optional[str] = None
+    # ── OS + worker together. Neither number alone is "what this install
+    # saved": the OS series is the cheap orchestration layer and the worker
+    # series is the substantive work. Derived from the two REAL totals, never
+    # from averaging two percentages (which would weight a 3-turn worker series
+    # like a 500-turn OS one).
+    combined_actual_usd: float = 0.0
+    combined_baseline_usd: float = 0.0
+    combined_savings_percent: float = 0.0
+    combined_data_available: bool = False
+    # ── ADR-0760 counting window. Present in the SAME payload as every number
+    # it narrows, so a caller cannot render a total without the period it
+    # covers. {"active": false} = all-time.
+    window: Dict[str, Any] = {}
+
+
+class UsageEpochRequest(BaseModel):
+    """Reset (or clear) the counting window."""
+    reason: str = "Operator counter reset"
+    #: true = drop the epoch and return to the full all-time view. History was
+    #: never deleted, so this genuinely restores it.
+    clear: bool = False
 
 
 class OverrideRequest(BaseModel):
@@ -292,6 +323,56 @@ async def get_learning_status(
 
         cost_model_mix = cost_result.model_mix if cost_data_available else {}
 
+        acs_counted_turns = (
+            sum(p.counted_turns for p in cost_result.acs_daily) if acs_data_available else 0
+        )
+        acs_total_turns = (
+            sum(p.total_turns for p in cost_result.acs_daily) if acs_data_available else 0
+        )
+        # Same definition as the OS figure: 1 - actual/baseline against the
+        # Opus reference, on the SAME real token counts. Clamped like the OS one
+        # because a model priced ABOVE the reference yields a negative saving,
+        # which is the honest reading but not what this field means.
+        acs_savings_pct = (
+            round(max(0.0, min(100.0, (1 - acs_total_actual / acs_total_baseline) * 100)), 2)
+            if acs_total_baseline > 0 else 0.0
+        )
+
+        combined_actual = round(cost_current + acs_total_actual, 4)
+        combined_baseline = round(cost_baseline + acs_total_baseline, 4)
+        combined_savings_pct = (
+            round(max(0.0, min(100.0, (1 - combined_actual / combined_baseline) * 100)), 2)
+            if combined_baseline > 0 else 0.0
+        )
+
+        # The worker-model pin, read from the same key the console writes and
+        # the gateway spawns with (ADR-0759). A single-key acs_model_mix is
+        # explained by THIS when set, exactly as cost_os_model_pin explains a
+        # single-key cost_model_mix — without it the UI would have to guess
+        # whether one model means "pinned" or "nothing else was ever tried".
+        worker_model_pin = None
+        try:
+            import sys as _sys  # noqa: PLC0415
+            from pathlib import Path as _Path  # noqa: PLC0415
+
+            _shared = str(_Path(__file__).resolve().parents[4]
+                          / "corvin_operator" / "bridges" / "shared")
+            if _shared not in _sys.path:
+                _sys.path.insert(0, _shared)
+            from engine_models import get_tenant_engine_model  # type: ignore  # noqa: PLC0415
+
+            worker_model_pin = get_tenant_engine_model(
+                rec.tenant_id, "claude_code", "worker_model")
+        except Exception:  # noqa: BLE001 — a pin we cannot read is reported as absent
+            worker_model_pin = None
+
+        try:
+            from .. import usage_epoch  # noqa: PLC0415
+
+            window = usage_epoch.window_note(rec.tenant_id)
+        except Exception:  # noqa: BLE001
+            window = {"active": False, "epoch_ts": None, "since_iso": None, "reason": ""}
+
         return {
             "converged_count": converged,
             "total_count": total,
@@ -321,6 +402,15 @@ async def get_learning_status(
             "acs_cost_baseline_usd": acs_total_baseline,
             "acs_model_mix": acs_model_mix,
             "acs_data_available": acs_data_available,
+            "acs_counted_turns": acs_counted_turns,
+            "acs_total_turns": acs_total_turns,
+            "acs_savings_percent": acs_savings_pct,
+            "acs_worker_model_pin": worker_model_pin,
+            "combined_actual_usd": combined_actual,
+            "combined_baseline_usd": combined_baseline,
+            "combined_savings_percent": combined_savings_pct,
+            "combined_data_available": bool(cost_data_available and acs_data_available),
+            "window": window,
             "accuracy_percent": accuracy,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
@@ -444,6 +534,70 @@ async def reset_learning(
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to reset learning: {e}",
+        )
+
+
+@router.post("/usage-epoch")
+async def reset_usage_window(
+    req: UsageEpochRequest,
+    rec: session_auth.SessionRecord = Depends(require_session),
+    csrf: Annotated[str, Depends(require_csrf)] = "",
+) -> Dict[str, Any]:
+    """Start counting turns and dollars from NOW — or clear the window (ADR-0760).
+
+    This is the ONLY supported "reset the counters" action, and it deliberately
+    touches no data. The audit chain is append-only, hash-linked, verified by
+    the ADR-0232 boot tripwire and is the GDPR Art. 30/32 record; trimming it to
+    make two series start level would not reset a counter, it would break the
+    chain and fail the next boot. So the chain is untouched and one timestamp
+    moves instead. ``clear: true`` removes it and every historical turn is back
+    — which is exactly the property that makes this safe to expose.
+
+    Applies to BOTH the turn-share view (``/v1/engine/model-usage``) and the
+    dollar view (this panel), because both read the same epoch.
+    """
+    try:
+        from .. import usage_epoch  # noqa: PLC0415
+
+        if req.clear:
+            usage_epoch.clear_epoch(rec.tenant_id)
+            record: Dict[str, Any] = {}
+            action = "learning.usage_window_cleared"
+        else:
+            record = usage_epoch.set_epoch(
+                rec.tenant_id,
+                reason=req.reason,
+                # A session FINGERPRINT, never a uid or an address (GDPR Art. 5).
+                actor=rec.sid_fingerprint,
+            )
+            action = "learning.usage_window_reset"
+
+        try:
+            console_audit.action_performed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action=action,
+                target_kind="usage_epoch",
+                target_id=str(record.get("epoch_ts") or "cleared"),
+            )
+        except Exception:  # noqa: BLE001 — the reset itself already committed
+            logger.warning("usage-epoch reset could not be audited", exc_info=True)
+
+        return {
+            "status": "ok",
+            "window": usage_epoch.window_note(rec.tenant_id),
+            # Said plainly in the response, because the one thing an operator
+            # must not believe about this button is that it deleted anything.
+            "note": (
+                "Counting window only — no audit record was modified or removed. "
+                "Clear the window to see the full history again."
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Failed to set usage epoch: {exc}")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to set usage window: {exc}",
         )
 
 
