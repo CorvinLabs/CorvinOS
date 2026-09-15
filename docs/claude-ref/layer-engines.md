@@ -2597,6 +2597,82 @@ live caller does it, so the sentence promised a list the response did not
 contain — which reads as a broken picker rather than an absent key. It now says
 no live list could be fetched, and where to add the key.
 
+**Fixing the string is half the fix; the process holds the old one.** The console
+is an editable uv-tool install, so a corrected message in `engine_providers.py`
+reaches the endpoint only after a RESTART. For half a day the panel served the
+old self-contradictory sentence while `grep` found it nowhere in the tree except
+in this file quoting it — and the natural reading of that ("the fix didn't
+apply") is wrong. When a message you just corrected still appears over the wire,
+check the process age before re-editing anything: the frontend is picked up live
+per request, backend Python is not.
+
+### One line per model source, not one line per source line
+
+The panel used to print the count plus a full line for each of the three sources,
+error sentence included. The operator asked for that block to go (2026-09-15) —
+and it earned it: the longest line was the keyless-Anthropic case, which on a
+Bedrock host is the NORMAL state, so three stacked sentences headed by a warning
+triangle presented a healthy 47-model union as a malfunction.
+
+What shipped is a compaction, not a removal:
+
+| Shown | Where |
+|---|---|
+| total count, and per source: short label + id count, or short label + short reason | the one line under the `<select>` |
+| full label, live/shipped, exact count, region + credential source, untruncated error | the line's `title` — hover |
+
+Two fields exist for this and for nothing else: `short_label` (`"Anthropic
+(Claude)"` → `"Anthropic"`; in a list where every source is a Claude source the
+qualifier is noise) and `hint` — `error` cut at its first clause by
+`_short_reason()`, which keeps the cause (`"no ANTHROPIC_API_KEY configured"`) and
+drops the remedy (`"Add an API key under Settings → API Keys …"`), the half that
+does not fit and the half nobody needs until they act on it.
+
+`hint` must stay a PREFIX of `error`. A hint that says something `error` does not
+is a second copy of the message — and a second copy of THIS message going stale
+is what got the block asked for removal in the first place.
+`test_claude_model_sources_carry_a_compact_label_and_hint` asserts the prefix
+relation rather than any wording.
+
+### An empty confidence tier states its own denominator
+
+Three of four tiers showed "No real outcomes learned for this model yet", and the
+operator read that as missing values, not as an empty set. The placeholder was
+true — on this host all 5 classified turns landed in SIMPLE, so MEDIUM and
+COMPLEX genuinely have `run_count: 0` and their `confidence_score: 0.5` is
+ADR-0644's neutral prior, never a measurement — but a true sentence that reads as
+a defect is still a defect in the panel.
+
+Two REAL numbers replaced it, neither of them new data:
+
+* **`classified_count` per tier** — already computed by `_real_stats()` and
+  discarded by the handler (`_, total, last = ...`). Restored, it turns "nothing
+  yet" into "0 of 5 classified turns landed in MEDIUM": an empty set with a
+  visible reason. It is NOT `run_count`: that one is outcome samples for (tier,
+  *currently selected* model) and resets when the tier is re-pointed, which is
+  also why `run_count ≤ classified_count` is the invariant worth pinning.
+* **the audit-chain row for the model the tier points at** — read through the
+  SAME `['model-usage']` queryKey the Model Usage panel uses, so it is one chain
+  read and a tier can never disagree with the panel above it.
+
+The chain row carries the qualifier **"this model across all task types"**, and
+that qualifier is load-bearing. MEDIUM points at `claude-sonnet-5`, which has 5
+real chained turns — every one of them classified SIMPLE. Printing "5 turns"
+under MEDIUM unqualified would attribute another tier's work to it, which is the
+invented number this whole pass exists to refuse.
+
+**Open, not fixed: the optimizer credits the tier's CONFIGURED model, not the one
+that ran.** `optimizer.get_stats(task_type, model_id, tenant_id)` is keyed by
+(tier, model), so SIMPLE reports 5 learned outcomes for
+`claude-haiku-4-5-20251001` while the chain shows those same 5 turns running
+`claude-sonnet-5` — and `corvinOS`, pointing at the same haiku id, reports 0.
+Both panels are internally correct and they disagree with each other. That is an
+attribution bug in the ADR-0644 report path (`model_selector_shadow.py::
+report_turn_outcome`), not in this panel; making the chain row visible per tier
+makes it easier to notice, which is the argument for leaving it visible. Fixing
+it needs its own pass and its own E2E proof — deliberately deferred (operator
+decision, 2026-09-15).
+
 ### What you, as Claude Code, must NOT do (Engine Configuration real-data pass)
 
 - **Don't put a model list or a provider list in `engine-config.tsx`.** Both are
@@ -2609,7 +2685,18 @@ no live list could be fetched, and where to add the key.
   would silently display, and on the next Save persist, a DIFFERENT model than
   the tenant is configured with.
 - **Don't collapse the per-source status into one "sources unavailable" line.**
-  Which source failed, and why, is the whole point of the union.
+  Which source failed, and why, is the whole point of the union. Compacting it to
+  one line that still NAMES every source and its count/reason is fine and is what
+  ships; summarising three sources into a single verdict is not.
+- **Don't let `hint` diverge from `error`.** It is `error`'s first clause, nothing
+  else. A short message that can say something the long one cannot is a second
+  truth, and the one it replaced went stale exactly that way.
+- **Don't present a tier's chain row as that tier's own turns.** The row is keyed
+  by model id, so it counts every turn on that model across all task types; the
+  qualifier stays in the label.
+- **Don't fill an empty tier with the neutral prior.** `confidence_score: 0.5` at
+  `run_count: 0` is ADR-0644's prior, not a measurement — the badge stays hidden
+  and the card says what IS known instead.
 - **Don't invent a second usage counter.** Count the chain.
 - **Don't key usage on `turn_id`.** It merges an OS turn with the worker turn it
   delegated to, under one model.
@@ -2632,6 +2719,11 @@ running console (session from the loopback GET `/auth/local-login`), covering
 `test_endpoint_requires_a_session` (401, not 404 and not 200, on both endpoints),
 `test_claude_models_unions_declared_sources`,
 `test_claude_models_reports_at_least_one_reachable_source`,
+`test_claude_model_sources_carry_a_compact_label_and_hint` (`short_label` no
+longer than `label`, `hint` a prefix of `error` and ≤48 chars, no hint without an
+error), `test_engine_config_tiers_account_for_every_classified_turn`
+(per-tier `classified_count` sums to `total_samples`, and
+`run_count ≤ classified_count` — the card's "0 of 5" must be a true ratio),
 `test_model_usage_shares_are_internally_consistent` (share sets sum to 100%,
 `unresolved ⟺ provider == "unknown"`, per-provider rollup reconciles with its
 model rows), and `test_served_bundle_carries_no_hardcoded_model_list` (transitive

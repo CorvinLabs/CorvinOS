@@ -29,7 +29,16 @@
  *     Bedrock install the selectable ids are this AWS account's
  *     `us.anthropic.claude-*` inference profiles — which is exactly the set
  *     Claude Code's own /model menu offers, and which no shipped constant
- *     can predict. There is deliberately NO model list in this file.
+ *     can predict. There is deliberately NO model list in this file. Each
+ *     source's state is summarised on ONE line (count when it answered, short
+ *     reason when it did not) with the untruncated text on hover — visible
+ *     enough to tell a live list from a shipped snapshot, quiet enough not to
+ *     read as breakage when a keyless Anthropic source is the normal state.
+ *   - A tier with no learned outcomes yet shows two REAL numbers instead of a
+ *     bare placeholder: its own share of all classified turns (why it is empty)
+ *     and what the audit chain measured for the model it points at, explicitly
+ *     labelled as that model's usage across all task types rather than as this
+ *     tier's own.
  *   - Model Usage — GET /v1/engine/model-usage, per-model and per-provider
  *     shares counted from the tenant's hash-chained audit chain
  *     (engine.span.start/end + os_turn.completed). Counting unit is the span,
@@ -94,6 +103,7 @@ import {
   type TaskType,
   type TaskModelConfig,
   type ClaudeModelsResponse,
+  type ModelUsageResponse,
   type ProviderSpec,
 } from '@/lib/api/engines';
 
@@ -119,6 +129,17 @@ function useProviders() {
   });
 }
 
+/** Real per-model usage from the tenant's audit chain. One shared queryKey for
+ *  the Model Usage panel AND the five task cards: same fetch, same chain read,
+ *  and structurally the same numbers in both places. */
+function useUsage() {
+  return useQuery({
+    queryKey: ['model-usage'],
+    queryFn: ({ signal }) => getModelUsage(signal),
+    staleTime: 30_000,
+  });
+}
+
 /** Provider ids that serve "native Claude" — derived from the live source list,
  *  so a source added on the backend does not have to be repeated here. */
 function claudeNativeProviders(catalog: ClaudeModelsResponse | undefined): Set<string> {
@@ -138,10 +159,22 @@ function providerLabelOf(
 }
 
 /**
- * Provenance for the model list, per source. Not decoration: a list of 4 ids and
- * a list of 158 look identical in a <select>, and only this line distinguishes
- * "Bedrock answered with the account's inference profiles" from "Bedrock was
- * unreachable, so you are seeing the shipped registry snapshot".
+ * Provenance for the model list — ONE line, full detail on hover.
+ *
+ * Not decoration: a list of 4 ids and a list of 47 look identical in a <select>,
+ * and only this distinguishes "Bedrock answered with this account's inference
+ * profiles" from "Bedrock was unreachable, so you are seeing the shipped registry
+ * snapshot". What it must NOT do is read like a malfunction. It used to print a
+ * full line per source including the whole error sentence, and the longest of
+ * those is the keyless-Anthropic case — which on a Bedrock host is the normal
+ * state, not a fault. Four stacked lines of that under a dropdown got it read as
+ * breakage and asked to be removed (operator, 2026-09-15).
+ *
+ * So: which sources answered and with how many ids stays VISIBLE, the reasons
+ * shrink to `hint` (backend-computed first clause), and the untruncated text —
+ * every source, its count, its detail, its full error — moves into the title
+ * attribute. Collapsing the sources into one "sources unavailable" summary is
+ * still refused: a union is only readable if you can tell which half is missing.
  */
 function ClaudeSourceLine({
   catalog,
@@ -159,32 +192,93 @@ function ClaudeSourceLine({
     );
   }
   if (!catalog) return null;
+
+  const tooltip = catalog.sources
+    .map((s) => {
+      const state = s.reachable
+        ? `${s.count} Claude model${s.count === 1 ? '' : 's'}`
+        : 'unreachable';
+      const extra = [s.detail, s.error].filter(Boolean).join(' · ');
+      return `${s.label} (${s.live ? 'live' : 'shipped'}) — ${state}${extra ? ` · ${extra}` : ''}`;
+    })
+    .join('\n');
+
   return (
-    <div className="mt-1.5 space-y-0.5">
-      <p className="text-xs text-muted-foreground">
-        {catalog.count} model{catalog.count === 1 ? '' : 's'} from {catalog.sources.length} source
-        {catalog.sources.length === 1 ? '' : 's'}:
-      </p>
+    <p
+      className="mt-1.5 text-xs text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-0.5"
+      title={tooltip}
+    >
+      <Info className="w-3 h-3 shrink-0 opacity-60" />
+      <span className="font-medium">
+        {catalog.count} model{catalog.count === 1 ? '' : 's'}
+      </span>
       {catalog.sources.map((s) => (
-        <p
+        <span
           key={s.id}
           className={cn(
-            'text-xs flex items-start gap-1',
-            s.reachable ? 'text-muted-foreground' : 'text-amber-700 dark:text-amber-300',
+            'flex items-center gap-1 before:content-["·"] before:mr-0.5 before:opacity-50',
+            !s.reachable && 'text-amber-700 dark:text-amber-300',
           )}
         >
+          {s.short_label || s.label}{' '}
           {s.reachable
-            ? <Check className="w-3 h-3 mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            : <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />}
-          <span>
-            <span className="font-medium">{s.label}</span>
-            {s.live ? ' (live)' : ' (shipped)'} — {s.reachable ? `${s.count} Claude model${s.count === 1 ? '' : 's'}` : 'unreachable'}
-            {s.detail ? ` · ${s.detail}` : ''}
-            {s.error ? ` · ${s.error}` : ''}
-          </span>
-        </p>
+            ? `${s.count}${s.live ? ' live' : ''}${s.detail ? ` (${s.detail})` : ''}`
+            : `— ${s.hint || s.error || 'unreachable'}`}
+        </span>
       ))}
-    </div>
+    </p>
+  );
+}
+
+/**
+ * What the audit chain already knows about ONE model id — shown in a tier whose
+ * optimizer has no samples yet, so the card carries a measured number instead of
+ * only a placeholder.
+ *
+ * Labelled "across all task types" on purpose, and that qualifier is the whole
+ * point: these turns are real and hash-chained, but they are not necessarily
+ * THIS tier's turns. On this install every classified turn so far landed in
+ * SIMPLE while MEDIUM points at a model those turns happened to run — printing
+ * "5 turns" under MEDIUM without the qualifier would attribute another tier's
+ * work to it, which is precisely the invented number this page exists to avoid.
+ */
+function ChainFactsLine({
+  usage,
+  loading,
+  modelId,
+}: {
+  usage: ModelUsageResponse | undefined;
+  loading: boolean;
+  modelId: string;
+}) {
+  if (loading) return <p className="opacity-75">Reading the audit chain…</p>;
+  if (!usage) return null;
+  if (!usage.chain_readable) {
+    return (
+      <p className="opacity-75">
+        {usage.chain_path_resolved
+          ? 'No audit chain on disk yet, so there is no measured usage either.'
+          : 'The tenant audit chain path could not be resolved — usage cannot be counted.'}
+      </p>
+    );
+  }
+  const row = usage.models.find((m) => m.model_id === modelId);
+  if (!row) {
+    return (
+      <p className="opacity-75">
+        Audit chain: no real turn has run <span className="font-mono">{modelId}</span> yet.
+      </p>
+    );
+  }
+  return (
+    <p className="opacity-90">
+      Audit chain, this model across all task types:{' '}
+      <span className="tabular-nums">
+        {fmtInt(row.turns)} turn{row.turns === 1 ? '' : 's'}
+        {row.ok + row.failed > 0 ? ` · ${row.success_pct.toFixed(0)}% ok` : ''}
+        {' · '}{fmtInt(row.total_tokens)} tokens · {row.share_pct.toFixed(1)}% of all turns
+      </span>
+    </p>
   );
 }
 
@@ -194,17 +288,24 @@ function ClaudeSourceLine({
 
 interface TaskTypeCardProps {
   config: TaskModelConfig;
+  /** Total real turns the shadow classifier has seen, across every tier. The
+   *  denominator that makes this tier's own count mean something. */
+  totalClassified: number;
   onSave: (patch: { selected_model: string; provider: string | null }) => void;
   saving: boolean;
 }
 
-const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) => {
+const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassified, onSave, saving }) => {
   const [model, setModel] = useState(config.selected_model);
   const [showProviderModal, setShowProviderModal] = useState(false);
 
   // Shared queryKeys — TanStack dedupes, so all four cards drive ONE fetch each.
   const claudeQ = useClaudeModels();
   const providersQ = useProviders();
+  // Same queryKey as ModelUsagePanel, so this is the SAME single chain read, not
+  // a second one — and the same numbers the Model Usage panel shows, so a tier
+  // can never disagree with the panel above it.
+  const usageQ = useUsage();
 
   React.useEffect(() => setModel(config.selected_model), [config.selected_model]);
 
@@ -329,10 +430,32 @@ const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, onSave, saving }) =
             </div>
           </div>
         ) : config.run_count === 0 ? (
+          // An empty tier is a real state, not a gap — but "nothing learned yet"
+          // alone reads as missing data, especially when three of four tiers show
+          // it (operator, 2026-09-15: "die werte bei medium und complex fehlen").
+          // Two real numbers replace the bare placeholder, and neither is
+          // invented: WHY the tier is empty (its own classified share of all real
+          // turns) and what the chain DOES know about the model it points at.
           <div className="p-3 border border-amber-500/30 bg-amber-500/10 rounded-md flex gap-2">
             <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-amber-700 dark:text-amber-300">
-              No real outcomes learned for this model yet. Confidence updates live as real turns complete.
+            <div className="text-sm text-amber-700 dark:text-amber-300 space-y-1">
+              <p>
+                No learned confidence yet:{' '}
+                <span className="tabular-nums">
+                  {config.classified_count} of {totalClassified}
+                </span>{' '}
+                classified turn{totalClassified === 1 ? '' : 's'} landed in{' '}
+                {taskLabel}
+                {config.classified_count > 0 && totalClassified > 0
+                  ? ', and none of them has reported an outcome for this model'
+                  : ''}
+                .
+              </p>
+              <ChainFactsLine
+                usage={usageQ.data}
+                loading={usageQ.isLoading}
+                modelId={config.selected_model}
+              />
             </div>
           </div>
         ) : (
@@ -618,12 +741,7 @@ function ShareBar({ pct, className }: { pct: number; className?: string }) {
 }
 
 function ModelUsagePanel() {
-  const usageQ = useQuery({
-    queryKey: ['model-usage'],
-    queryFn: ({ signal }) => getModelUsage(signal),
-    staleTime: 30_000,
-  });
-
+  const usageQ = useUsage();
   const data = usageQ.data;
 
   return (
@@ -945,6 +1063,7 @@ export const EngineConfigPage: React.FC = () => {
         <h2 className="text-xl font-semibold mb-4">CorvinOS Model Selection</h2>
         <TaskTypeCard
           config={config.models.corvinOS}
+          totalClassified={config.total_samples}
           saving={saveMut.isPending}
           onSave={(patch) => saveMut.mutate({ taskType: 'corvinOS', ...patch })}
         />
@@ -957,6 +1076,7 @@ export const EngineConfigPage: React.FC = () => {
             <TaskTypeCard
               key={taskType}
               config={config.models[taskType]}
+              totalClassified={config.total_samples}
               saving={saveMut.isPending}
               onSave={(patch) => saveMut.mutate({ taskType, ...patch })}
             />

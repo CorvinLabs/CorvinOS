@@ -431,6 +431,12 @@ export interface TaskModelConfig {
   // True only once the real variance criterion is met (n>=5, then <0.05
   // variance over the last 50 samples) — never claimed early.
   is_converged: boolean;
+  // Real turns the shadow classifier assigned to THIS tier, counted from the
+  // audit chain. Not the same as run_count: that one is outcome samples for
+  // (tier, currently-selected model) and resets when the tier is re-pointed at
+  // another model. This is what lets an empty tier say WHY it is empty —
+  // "0 of 5 classified turns were MEDIUM" rather than a bare "nothing yet".
+  classified_count: number;
 }
 
 export interface EngineConfigResponse {
@@ -535,10 +541,15 @@ export interface ClaudeModelEntry {
 export interface ClaudeModelSource {
   id: string;
   label: string;
+  /** `label` without its trailing qualifier, for the compact one-line summary */
+  short_label?: string | null;
   reachable: boolean;
   /** Claude models found by THIS source (not the provider's whole catalogue) */
   count: number;
   error: string | null;
+  /** `error` cut to its first clause — the compact line's share of it. Never a
+   *  replacement for `error`, which the panel keeps on hover. */
+  hint?: string | null;
   live: boolean;
   /** e.g. Bedrock's resolved region + credential source */
   detail?: string | null;

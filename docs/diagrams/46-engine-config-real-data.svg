@@ -58,8 +58,8 @@
 
   <rect x="20" y="460" width="440" height="62" class="cold"/>
   <text x="35" y="482" class="lbl" font-weight="bold">Console → Engine Configuration → Default Model</text>
-  <text x="35" y="500" class="sub">one &lt;select&gt; + one line PER SOURCE (✓ reachable · ⚠ unreachable, with its reason)</text>
-  <text x="35" y="516" class="sub">4 ids and 47 ids look identical in a dropdown — that line is the only difference visible</text>
+  <text x="35" y="500" class="sub">one &lt;select&gt; + ONE line: total, then per source its short_label + count or hint</text>
+  <text x="35" y="516" class="sub">full label, exact count, region + untruncated error on hover — never one "sources down"</text>
 
   <!-- ───────── Right: GET /v1/engine/model-usage ───────── -->
   <rect x="500" y="70" width="440" height="52" class="box"/>
@@ -90,15 +90,15 @@
   <path class="arr" d="M720 420 V460"/>
 
   <rect x="500" y="460" width="440" height="62" class="cold"/>
-  <text x="515" y="482" class="lbl" font-weight="bold">Model Usage panel — by provider, then by model</text>
-  <text x="515" y="500" class="sub">bar width IS the percentage of ALL turns, never normalised to the top row</text>
-  <text x="515" y="516" class="sub">every row carries its provider_source badge: an inference must not read like a measurement</text>
+  <text x="515" y="482" class="lbl" font-weight="bold">Model Usage panel — AND every task-type card's empty state</text>
+  <text x="515" y="500" class="sub">bar width IS the percentage of ALL turns · provider_source badge on every row</text>
+  <text x="515" y="516" class="sub">same queryKey, so a tier with 0 learned outcomes cites the same chain, not a second read</text>
 
   <!-- ───────── Refusals ───────── -->
   <rect x="20" y="540" width="920" height="46" class="fall"/>
   <text x="35" y="562" class="lbl" font-weight="bold">Refused by design:</text>
   <text x="140" y="562" class="sub">no second usage counter (it would be a second truth against a legally load-bearing one, ADR-0232/0233) · no model or provider array in engine-config.tsx</text>
-  <text x="140" y="578" class="sub">(a constant is wrong on any Bedrock host) · ollama/llama3 stays unresolved — ollama_local vs ollama_cloud is a coin flip, and a coin flip is not data</text>
+  <text x="140" y="578" class="sub">(a constant is wrong on any Bedrock host) · ollama/llama3 stays unresolved — a coin flip is not data · an empty tier shows its own count, never the 0.5 prior</text>
   <path class="arrd" d="M240 522 V540"/>
   <path class="arrd" d="M720 522 V540"/>
 </svg>
