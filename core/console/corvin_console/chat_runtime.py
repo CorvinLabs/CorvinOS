@@ -4836,6 +4836,12 @@ async def stream_turn(
                 payload_chars=payload,
                 engine_id=_os_engine,
                 tenant_id=sess.tenant_id,
+                # Tier 2.9: the real complexity classifier decides. Passing the
+                # prompt is what makes it a routing input instead of a shadow
+                # record — without it every turn fell through to Tier 3, which
+                # returns Sonnet unconditionally, so the Model Cost Optimizer
+                # only ever saw a single-model mix.
+                task_input=prompt,
             )
             # ADR-0251 — the `engine.model_selection` call site, shared with the
             # bridge adapter so both surfaces apply one plugin contract. A hook
