@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
+  Activity,
   AudioLines,
   BookOpen,
   Boxes,
@@ -51,6 +52,7 @@ import {
   type ConsoleManifest,
 } from "@/adapters/capabilities";
 import { useAiPanels } from "@/adapters/ai-panels";
+import { PANELS, generateNavGroupsFromRegistry } from "@/panels/registry";
 
 // ── Engine chip — shows the active tenant-default engine in the header ───
 
@@ -120,6 +122,37 @@ interface NavGroup {
   items: NavItem[];
 }
 
+// Icon mapping for dynamic nav generation (ADR-0353 P1)
+// Matches icon names from ConsolePanel.nav.icon to lucide-react components
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  Brain: TrendingUp,      // vibe-engineering, model-selection
+  CheckCircle,            // quality gates
+  Settings,               // engine-config, settings
+  Network,                // bridges
+  AudioLines,             // voice
+  Hammer,                 // forge
+  BookOpen,               // skills, memory
+  Package,                // packages
+  Boxes,                  // ldd
+  ShieldCheck,            // compliance
+  FolderOpen,             // files
+  Globe2,                 // agent-hub, rag-hub
+  Plug,                   // connectors, custom-provider
+  KeyRound,               // api-keys
+  Lock,                   // license, licensing-audit
+  Database,               // rag, datahub-unified
+  Server,                 // data-sources
+  Gauge,                  // otel-telemetry, compute
+  Sparkles,               // skill-forge-generator
+  Workflow,               // workflows
+  TrendingUp: TrendingUp, // model-cost-optimizer
+  Blocks,                 // plugin-center (marketplace)
+  Activity,               // sync-monitor
+};
+
+// Legacy hardcoded NAV_GROUPS for now (fallback while panels are being migrated)
+// TODO (2026-09-15): fully replace with generateNavGroupsFromRegistry(PANELS)
+// once all panel nav metadata is complete
 const NAV_GROUPS: NavGroup[] = [
   {
     id: "primary",
