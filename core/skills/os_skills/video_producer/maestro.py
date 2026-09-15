@@ -25,6 +25,14 @@ from .worker_base import WorkerRegistry, WorkerSkillBase, WorkerResult
 logger = logging.getLogger(__name__)
 
 
+def _get_tenant_id() -> str:
+    """Get current tenant_id from context (ADR-0007 multi-tenant)."""
+    # Stub: in production, resolve from current_tenant() + CORVIN_TENANT_ID env
+    # For now, default to "_default" tenant
+    import os
+    return os.environ.get("CORVIN_TENANT_ID", "_default")
+
+
 class VideoProducerMaestro:
     """Main orchestrator for Video Producer Skill 2.0."""
 
@@ -60,40 +68,81 @@ class VideoProducerMaestro:
         logger.info(f"Registered worker: {worker.manifest.id}")
 
     async def execute_phase_1_asset_analysis(
-        self, asset_paths: list[str | Path], instructions: Optional[Dict[str, Any]] = None
+        self, asset_paths: list[str | Path], instructions: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Phase 1: Asset ingestion and analysis.
+
+        Args:
+            asset_paths: Files to analyze
+            instructions: Optional user guidance
+            tenant_id: Tenant context (defaults to current tenant)
 
         Returns:
             {
                 "status": "success" | "error",
                 "analysis": { "metadata": ..., "ready_for_narration": bool },
                 "blockers": list[str],
+                "tenant_id": str,
+                "audit_event": dict,
             }
         """
+        tenant_id = tenant_id or _get_tenant_id()
+
         try:
-            logger.info(f"Phase 1: Analyzing {len(asset_paths)} assets")
+            logger.info(f"Phase 1: Analyzing {len(asset_paths)} assets (tenant={tenant_id})")
 
             # Stub: real implementation would call AssetAnalyzer
             # For Phase 1 MVP, return mock analysis
+            factual_claims = []
+            if asset_paths:
+                factual_claims = [
+                    {"text": "Claim 1", "source_asset": str(asset_paths[0])},
+                ]
+
             analysis = {
                 "metadata": {"asset_count": len(asset_paths), "instructions": instructions},
                 "ready_for_narration": True,
-                "factual_claims": [
-                    {"text": "Claim 1", "source_asset": str(asset_paths[0])} if asset_paths else None,
-                ],
+                "factual_claims": factual_claims,  # Fixed: no None elements
+            }
+
+            # Emit audit event (ADR-0721 audit-first)
+            audit_event = {
+                "event_type": "skill_executed",
+                "skill_id": "video-producer:maestro",
+                "phase": 1,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "status": "success",
             }
 
             return {
                 "status": "success",
                 "analysis": analysis,
                 "blockers": [],
+                "tenant_id": tenant_id,
+                "audit_event": audit_event,
             }
 
         except Exception as e:
-            logger.error(f"Phase 1 failed: {e}")
-            return {"status": "error", "analysis": None, "blockers": [str(e)]}
+            logger.error(f"Phase 1 failed: {e}", exc_info=True)
+            audit_event = {
+                "event_type": "skill_executed",
+                "skill_id": "video-producer:maestro",
+                "phase": 1,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "status": "error",
+                "error": str(e),
+            }
+            return {
+                "status": "error",
+                "analysis": None,
+                "blockers": [str(e)],
+                "tenant_id": tenant_id,
+                "audit_event": audit_event,
+            }
 
     async def execute_phase_2_storyboard(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -124,10 +173,14 @@ class VideoProducerMaestro:
             return {"status": "error", "storyboard": None}
 
     async def execute_phase_3_worker_dispatch(
-        self, storyboard: Dict[str, Any]
+        self, storyboard: Dict[str, Any], tenant_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Phase 3: Dispatch audio, screenshots, and other workers in parallel.
+
+        Args:
+            storyboard: Output from Phase 2
+            tenant_id: Tenant context (defaults to current tenant)
 
         Returns:
             {
@@ -135,19 +188,26 @@ class VideoProducerMaestro:
                 "audio_result": WorkerResult.to_dict() | None,
                 "screenshots_result": WorkerResult.to_dict() | None,
                 "workers_ready": bool,
+                "tenant_id": str,
+                "audit_event": dict,
             }
         """
+        tenant_id = tenant_id or _get_tenant_id()
+
         try:
-            logger.info("Phase 3: Dispatching workers")
+            logger.info(f"Phase 3: Dispatching workers (tenant={tenant_id})")
 
             # Get audio and screenshot workers (if registered)
             audio_worker = self.workers.get("video-producer:audio-synthesis")
             screenshot_worker = self.workers.get("video-producer:screenshot-capture")
 
-            # Prepare worker tasks
-            tasks = []
+            # Track which workers are being called
+            worker_tasks = []
+            worker_names = []
+
             if audio_worker:
-                tasks.append(
+                worker_names.append("audio-synthesis")
+                worker_tasks.append(
                     audio_worker.execute(
                         {
                             "narration": "Test narration",
@@ -158,7 +218,8 @@ class VideoProducerMaestro:
                 )
 
             if screenshot_worker:
-                tasks.append(
+                worker_names.append("screenshot-capture")
+                worker_tasks.append(
                     screenshot_worker.execute(
                         {
                             "urls": ["https://example.com"],
@@ -167,36 +228,65 @@ class VideoProducerMaestro:
                     )
                 )
 
-            # Execute in parallel
-            results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+            # Execute in parallel (FIX: Fixed index mapping)
+            results = await asyncio.gather(*worker_tasks, return_exceptions=True) if worker_tasks else []
 
             audio_result = None
             screenshots_result = None
 
-            if len(results) > 0:
-                audio_result = results[0] if not isinstance(results[0], Exception) else None
-                logger.debug(f"Audio result: {audio_result}")
+            # Map results by worker name, not by index (FIXED from original bug)
+            result_map = {}
+            for idx, name in enumerate(worker_names):
+                if idx < len(results):
+                    result = results[idx]
+                    result_map[name] = result if not isinstance(result, Exception) else None
+                    if isinstance(result, Exception):
+                        logger.error(f"Worker {name} failed: {result}")
 
-            if len(results) > 1:
-                screenshots_result = results[1] if not isinstance(results[1], Exception) else None
-                logger.debug(f"Screenshots result: {screenshots_result}")
+            audio_result = result_map.get("audio-synthesis")
+            screenshots_result = result_map.get("screenshot-capture")
 
             workers_ready = bool(audio_result and screenshots_result)
+
+            # Emit audit event (ADR-0721 audit-first)
+            audit_event = {
+                "event_type": "skill_executed",
+                "skill_id": "video-producer:maestro",
+                "phase": 3,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "workers_dispatched": worker_names,
+                "workers_ready": workers_ready,
+                "status": "success",
+            }
 
             return {
                 "status": "success" if workers_ready else "partial",
                 "audio_result": audio_result.to_dict() if audio_result else None,
                 "screenshots_result": screenshots_result.to_dict() if screenshots_result else None,
                 "workers_ready": workers_ready,
+                "tenant_id": tenant_id,
+                "audit_event": audit_event,
             }
 
         except Exception as e:
-            logger.error(f"Phase 3 failed: {e}")
+            logger.error(f"Phase 3 failed: {e}", exc_info=True)
+            audit_event = {
+                "event_type": "skill_executed",
+                "skill_id": "video-producer:maestro",
+                "phase": 3,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "status": "error",
+                "error": str(e),
+            }
             return {
                 "status": "error",
                 "audio_result": None,
                 "screenshots_result": None,
                 "workers_ready": False,
+                "tenant_id": tenant_id,
+                "audit_event": audit_event,
             }
 
     async def orchestrate(

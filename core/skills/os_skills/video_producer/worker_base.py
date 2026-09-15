@@ -39,7 +39,7 @@ class WorkerResult:
     output: Dict[str, Any]
     error: Optional[str] = None
     latency_ms: float = 0.0
-    timestamp: str = None
+    timestamp: Optional[str] = None
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -111,6 +111,10 @@ class WorkerRegistry:
 
     def register(self, worker: WorkerSkillBase):
         """Register a worker (called at startup by Maestro)."""
+        # Type validation (FIX for HIGH finding #5)
+        if not isinstance(worker, WorkerSkillBase):
+            raise TypeError(f"Worker must be instance of WorkerSkillBase, got {type(worker).__name__}")
+
         worker_id = worker.manifest.id
         if worker_id in self.workers:
             logger.warning(f"Worker {worker_id} already registered, overwriting")
