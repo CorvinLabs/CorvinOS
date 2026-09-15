@@ -1,11 +1,18 @@
 /**
- * Summary Tab — 7d Confidence Trend, Convergence Status, Top Anomalies
- * Phase 4a Operator View
+ * Summary Tab — Operator overview built entirely from REAL data.
+ *
+ * Overall confidence + convergence come from the live loop scores; the trend
+ * card is the server-computed `meta.trend` / `meta.projection_30d` (real, from
+ * the meta-convergence history buckets, with an explicit "not enough history"
+ * state); the anomalies list is the real `/anomalies` feed. Nothing here is a
+ * fixed placeholder — when a signal is absent it renders as absent.
  */
 
-import React, { useMemo } from 'react';
-import { TrendingUp, AlertTriangle, CheckCircle } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { MaturityMeta } from '../../hooks/useLiveMaturityData';
+import type { Anomaly } from './AnomalyAlerts';
 
 interface SummaryTabProps {
   loopScores: {
@@ -23,10 +30,39 @@ interface SummaryTabProps {
     system: number;
     meta_convergence: number;
   };
+  meta?: MaturityMeta | null;
   lastUpdated?: string;
 }
 
-export function SummaryTab({ loopScores, lastUpdated }: SummaryTabProps) {
+export function SummaryTab({ loopScores, meta, lastUpdated }: SummaryTabProps) {
+  const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
+  const [anomaliesLoaded, setAnomaliesLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/v1/console/vibe/maturity/anomalies?window=300', {
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+        const json = await res.json();
+        if (!cancelled) setAnomalies(json.anomalies || []);
+      } catch (e) {
+        console.warn('[SummaryTab] anomalies fetch failed:', e);
+        if (!cancelled) setAnomalies([]);
+      } finally {
+        if (!cancelled) setAnomaliesLoaded(true);
+      }
+    };
+    load();
+    const interval = setInterval(load, 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   const overallConfidence = useMemo(() => {
     const tier1 = [
       loopScores.confidence,
@@ -52,6 +88,15 @@ export function SummaryTab({ loopScores, lastUpdated }: SummaryTabProps) {
 
   const status = getStatus(overallConfidence);
 
+  const trend = meta?.trend;
+  const TrendIcon = trend?.direction === 'up' ? TrendingUp : trend?.direction === 'down' ? TrendingDown : Minus;
+  const trendColor =
+    trend?.direction === 'up'
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : trend?.direction === 'down'
+        ? 'text-destructive'
+        : 'text-muted-foreground';
+
   return (
     <div className="space-y-6">
       {/* Overall Confidence */}
@@ -76,23 +121,42 @@ export function SummaryTab({ loopScores, lastUpdated }: SummaryTabProps) {
         </div>
       </div>
 
-      {/* 7d Trend */}
+      {/* Trend + Convergence */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-card border border-border rounded-lg p-6">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-4">7-Day Trend</h4>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-4">Meta-Convergence Trend</h4>
           <div className="space-y-4">
             <div>
               <div className="flex items-baseline gap-2 mb-2">
-                <span className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">+0.3</span>
-                <span className="text-xs text-muted-foreground">improvement (avg/day)</span>
+                {trend?.insufficient_history || !trend ? (
+                  <span className="text-lg font-semibold text-muted-foreground">Not enough history</span>
+                ) : (
+                  <>
+                    <span className={cn('text-3xl font-bold', trendColor)}>
+                      {trend.value > 0 ? '+' : ''}
+                      {trend.value.toFixed(2)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">meta score change (window)</span>
+                  </>
+                )}
               </div>
-              <div className="h-2 bg-muted rounded overflow-hidden">
-                <div className="h-2 bg-emerald-500 rounded" style={{ width: '60%' }}></div>
-              </div>
+              {meta?.projection_30d != null && (
+                <div className="text-xs text-muted-foreground">
+                  Projected (30d): <span className="font-semibold text-accent">{meta.projection_30d.toFixed(1)}/10</span>
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
-              <TrendingUp size={14} />
-              <span>Healthy upward trajectory</span>
+            <div className={cn('flex items-center gap-2 text-xs', trendColor)}>
+              <TrendIcon size={14} />
+              <span>
+                {trend?.insufficient_history || !trend
+                  ? 'Collecting data'
+                  : trend.direction === 'up'
+                    ? 'Improving trajectory'
+                    : trend.direction === 'down'
+                      ? 'Declining trajectory'
+                      : 'Stable trajectory'}
+              </span>
             </div>
           </div>
         </div>
@@ -114,39 +178,81 @@ export function SummaryTab({ loopScores, lastUpdated }: SummaryTabProps) {
         </div>
       </div>
 
-      {/* Top Anomalies (Last 24h) */}
+      {/* Top Anomalies — real, from /anomalies */}
       <div className="bg-card border border-border rounded-lg p-6">
-        <h4 className="text-sm font-semibold text-foreground mb-4">⚠️ Top Anomalies (Last 24h)</h4>
-        <div className="space-y-3">
-          <div className="flex items-start gap-3 p-3 bg-muted/40 rounded border border-amber-500/30">
-            <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="text-sm font-medium text-amber-600 dark:text-amber-400">Workflow Loop drift spike</div>
-              <div className="text-xs text-muted-foreground mt-1">Δ = 0.08 (threshold: 0.01) — Skills config may need rebalancing</div>
-              <div className="text-xs text-muted-foreground mt-1">2 hours ago</div>
-            </div>
-          </div>
-
+        <h4 className="text-sm font-semibold text-foreground mb-4">⚠️ Anomalies (current window)</h4>
+        {anomaliesLoaded && anomalies.length === 0 ? (
           <div className="flex items-start gap-3 p-3 bg-muted/40 rounded border border-accent/30">
             <CheckCircle size={16} className="text-accent flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <div className="text-sm font-medium text-accent">Confidence loop healthy</div>
-              <div className="text-xs text-muted-foreground mt-1">No score drops detected — routing decisions stable</div>
-              <div className="text-xs text-muted-foreground mt-1">Continuous</div>
+              <div className="text-sm font-medium text-accent">No anomalies detected</div>
+              <div className="text-xs text-muted-foreground mt-1">
+                No drift spikes or convergence drops crossed threshold in the window.
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-3">
+            {anomalies.map((a) => (
+              <div
+                key={a.id}
+                className={cn(
+                  'flex items-start gap-3 p-3 rounded border bg-muted/40',
+                  a.severity === 'critical' ? 'border-destructive/30' : 'border-amber-500/30',
+                )}
+              >
+                <AlertTriangle
+                  size={16}
+                  className={cn(
+                    'flex-shrink-0 mt-0.5',
+                    a.severity === 'critical' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400',
+                  )}
+                />
+                <div className="flex-1">
+                  <div
+                    className={cn(
+                      'text-sm font-medium',
+                      a.severity === 'critical' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400',
+                    )}
+                  >
+                    {a.loop.replace('_', ' ')} — {a.type.replace('-', ' ')}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">{a.message}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {new Date(a.timestamp).toLocaleTimeString()} • Δ{a.value.toFixed(3)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Operator Note */}
-      <div className="border border-emerald-500/30 bg-emerald-500/10 rounded-lg p-4">
-        <div className="flex gap-3">
-          <CheckCircle size={18} className="text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
-          <div className="text-sm text-emerald-700 dark:text-emerald-400">
-            <strong>Status:</strong> Learning loops are healthy. No immediate action required. Monitor drift spikes on Workflow loop.
-          </div>
+      {/* Recommendations — real, server-derived (mirrors the radar tab) */}
+      {meta?.recommendations && meta.recommendations.length > 0 && (
+        <div className="border border-border bg-card rounded-lg p-4">
+          <div className="text-xs font-semibold text-muted-foreground uppercase mb-3">Recommendations</div>
+          <ul className="space-y-2 text-sm text-muted-foreground">
+            {meta.recommendations.map((r, i) => (
+              <li key={i} className="flex gap-2">
+                <span
+                  className={cn(
+                    'flex-shrink-0',
+                    r.severity === 'critical'
+                      ? 'text-destructive'
+                      : r.severity === 'warning'
+                        ? 'text-amber-500'
+                        : 'text-emerald-500',
+                  )}
+                >
+                  {i + 1}.
+                </span>
+                <span>{r.text}</span>
+              </li>
+            ))}
+          </ul>
         </div>
-      </div>
+      )}
 
       {lastUpdated && (
         <div className="text-xs text-muted-foreground text-center">

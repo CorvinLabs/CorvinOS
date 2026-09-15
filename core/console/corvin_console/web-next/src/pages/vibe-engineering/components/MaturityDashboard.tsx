@@ -25,7 +25,7 @@ import { useLiveMaturityData, type TimeWindow, type MaturityMeta } from '../hook
 
 type DashboardTab = 'radar' | 'summary' | 'patterns';
 
-const MARKER = 'vibe-maturity-live-v2'; // deploy proof marker — real on-demand data
+const MARKER = 'vibe-maturity-live-v3'; // deploy proof — real data across all tabs (summary+patterns)
 
 export function MaturityDashboard() {
   const [windowPref, setWindow] = useState<TimeWindow>('7d');
@@ -180,12 +180,12 @@ export function MaturityDashboard() {
 
       {/* Summary Tab */}
       {activeTab === 'summary' && loopScores && (
-        <SummaryTab loopScores={loopScores} lastUpdated={lastUpdated?.toISOString()} />
+        <SummaryTab loopScores={loopScores} meta={meta} lastUpdated={lastUpdated?.toISOString()} />
       )}
 
       {/* Patterns Tab */}
       {activeTab === 'patterns' && loopScores && (
-        <PatternsTab loopScores={loopScores} />
+        <PatternsTab loopScores={loopScores} window={windowPref} />
       )}
 
       {/* Hover Details Modal */}

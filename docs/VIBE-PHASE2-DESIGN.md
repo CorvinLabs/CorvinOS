@@ -29,6 +29,16 @@ Phase 2 connects the VIBE 9D Maturity Dashboard visual (Phase 1) to real telemet
 3. **Updates in real-time** (60-second refresh interval).
 4. **Shows an explicit empty state** when no data exists (NO synthetic/sample fallback).
 
+*(Phase 2.1b)* All three tabs are now real. The **Summary** tab renders the
+server-computed `meta.trend`/`projection_30d`, the real `/anomalies` feed and the
+server recommendations (no hardcoded `+0.3` trend or fixed anomaly). The
+**Patterns** tab is driven by a new `/patterns` endpoint that derives routing
+engine choices (delegation-router shadow-mode `output.engine`) and per-skill
+execution volume from the learning EventStore. The former mock arrays
+(`MOCK_ROUTING_PATTERNS`/`MOCK_SKILL_PATTERNS`/`MOCK_CONTEXT_BUCKETS`) are removed;
+the context-size distribution is dropped entirely because no cross-platform source
+measures it (omitted, never faked).
+
 This enables operators to monitor system health across 13 dimensions (6 Tier 1 core loops, 6 Tier 2 infrastructure loops, 1 meta loop) with live feedback from the unified learning infrastructure. A loop with no signal in the window is reported `active: false` and scores at its floor — it is never faked.
 
 ## 2. Architecture Overview
@@ -45,7 +55,7 @@ This enables operators to monitor system health across 13 dimensions (6 Tier 1 c
                                                     ↓
                     Backend API (api_vibe_maturity.py / _phase3.py)
                                                     ↓
-              /v1/console/vibe/maturity/{measurements,historical,anomalies}
+        /v1/console/vibe/maturity/{measurements,historical,anomalies,patterns}
                                                     ↓
               useLiveMaturityData Hook (React, 60s refresh, no fallback)
                                                     ↓
@@ -65,9 +75,11 @@ is no longer used; see the Phase 2.1 note at the top.
 |-----------|------|---------|
 | **Measurement builder** | `core/console/corvin_console/routes/maturity_live.py` | Computes one measurement on demand from the EventStore + audit chain; documents the loop→signal scoring model (`_LOOP_DOC`) |
 | **Backend Endpoint** | `core/console/corvin_console/routes/api_vibe_maturity.py` | `/measurements` — returns the current on-demand snapshot for the session's tenant |
-| **Phase-3 Endpoints** | `core/console/corvin_console/routes/api_vibe_maturity_phase3.py` | `/historical` (bucketed real time-series) + `/anomalies` (real drift/regression) |
+| **Phase-3 Endpoints** | `core/console/corvin_console/routes/api_vibe_maturity_phase3.py` | `/historical` (bucketed real time-series) + `/anomalies` (real drift/regression) + `/patterns` (real routing/skill usage from the EventStore) |
 | **Frontend Hook** | `.../pages/vibe-engineering/hooks/useLiveMaturityData.ts` | Fetches the snapshot; exposes `loopScores` + `meta`; returns `null` (no fallback) when empty |
 | **Dashboard Component** | `.../pages/vibe-engineering/components/MaturityDashboard.tsx` | Renders real data; Trend/Meta/Recommendations cards bound to `meta`; explicit empty state |
+| **Summary Tab** | `.../components/maturity/SummaryTab.tsx` | Overall confidence + convergence from loop scores; real `meta.trend`/projection; live `/anomalies` list; server recommendations |
+| **Patterns Tab** | `.../components/maturity/PatternsTab.tsx` | Fetches `/patterns`; renders real routing-engine + skill-usage bars; empty state when quiet (no mock arrays, no context-size distribution) |
 | **Data Source (obsolete)** | `core/learning/live_experiment_collector.py` | POSIX-only daemon; NOT used on any platform by the dashboard as of Phase 2.1 |
 
 ## 3. Data Schema

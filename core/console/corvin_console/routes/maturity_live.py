@@ -474,6 +474,79 @@ def build_history(tenant_id: str, loop: str, window: str = "today") -> List[Dict
     return points
 
 
+def build_patterns(tenant_id: str, window: str = "7d") -> Dict[str, Any]:
+    """Real routing/skill usage patterns from the ADR-0314 EventStore.
+
+    Two honest dimensions, both derived from real SKILL_EXECUTED events:
+      * ``routing`` — the delegation-router's engine choices, read from the
+        shadow-mode ``signal.output.engine`` on ``os.delegation_router``
+        executions (what the router DECIDED, ADR-0613 shadow path), and
+      * ``skills``  — execution volume per ``skill_id`` with its success rate.
+
+    No context-size distribution is emitted: nothing measures per-request
+    context size cross-platform, so inventing buckets would be a fabrication.
+    Empty lists are the correct answer for a quiet install — never a placeholder.
+    """
+    days = WINDOW_DAYS.get(window, 7)
+    since_date = (_now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    routing: Dict[str, int] = {}
+    skills: Dict[str, Dict[str, int]] = {}
+    available = False
+    try:
+        from core.learning.event_store import EventStore  # noqa: PLC0415
+        from core.learning.learning_events import EventType  # noqa: PLC0415
+        from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+        store = EventStore(tenant_home(tenant_id), tenant_id=tenant_id)
+        execs = store.query_events(
+            tenant_id, event_type=EventType.SKILL_EXECUTED,
+            since=since_date, limit=2000, newest_first=True,
+        )
+        for e in execs:
+            sid = e.skill_id or "unknown"
+            rec = skills.setdefault(sid, {"count": 0, "success": 0})
+            rec["count"] += 1
+            sig = e.signal or {}
+            if sig.get("status") == "success":
+                rec["success"] += 1
+            out = sig.get("output")
+            eng = out.get("engine") if isinstance(out, dict) else None
+            if eng:
+                routing[str(eng)] = routing.get(str(eng), 0) + 1
+        available = True
+    except Exception as exc:  # noqa: BLE001 — record the gap, never invent a value
+        log.warning("maturity: patterns read failed: %r", exc)
+
+    total_routing = sum(routing.values())
+    total_skills = sum(v["count"] for v in skills.values())
+    routing_list = [
+        {
+            "engine": eng,
+            "count": cnt,
+            "percentage": round(100.0 * cnt / total_routing, 1) if total_routing else 0.0,
+        }
+        for eng, cnt in sorted(routing.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+    skills_list = [
+        {
+            "skill": sid,
+            "count": rec["count"],
+            "percentage": round(100.0 * rec["count"] / total_skills, 1) if total_skills else 0.0,
+            "success_rate": (round(rec["success"] / rec["count"], 4) if rec["count"] else None),
+        }
+        for sid, rec in sorted(skills.items(), key=lambda kv: kv[1]["count"], reverse=True)
+    ]
+    return {
+        "window": window,
+        "generated_at": _now().isoformat(),
+        "available": available,
+        "routing": routing_list,
+        "skills": skills_list,
+        "total_routing_decisions": total_routing,
+        "total_skill_executions": total_skills,
+    }
+
+
 def build_anomalies(tenant_id: str, window: str = "7d") -> List[Dict[str, Any]]:
     """Real anomalies from the current snapshot + recent trend — no fabrication.
 
