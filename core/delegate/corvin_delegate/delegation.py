@@ -1193,6 +1193,13 @@ def _write_wdat_run_for_delegation(
     model_id = model or engine
     tokens_in  = int(usage.get("input_tokens",  usage.get("tokens_in",  0)) or 0)
     tokens_out = int(usage.get("output_tokens", usage.get("tokens_out", 0)) or 0)
+    # Cache tokens dominate real spend on a cache-heavy delegation (a cache read
+    # is billed at 0.1x input, a cache write at 1.25x — so a run with 20k cache
+    # tokens and 300 input tokens is almost entirely cache cost). `usage` is the
+    # raw engine `usage` object (agents/claude_code.py:1129), which carries both
+    # fields; they were simply not forwarded below.
+    cache_write = int(usage.get("cache_creation_input_tokens", 0) or 0)
+    cache_read  = int(usage.get("cache_read_input_tokens", 0) or 0)
     tokens_used = tokens_in + tokens_out
 
     # 1. Run directory + manifest.json
@@ -1258,6 +1265,17 @@ def _write_wdat_run_for_delegation(
             "model_id":    model_id,
             "duration_ms": duration_ms,
             "tokens_used": tokens_used,
+            # The four-way split, same shape acs_runtime.py's real worker path
+            # emits. Without these the Model Cost Optimizer's worker series
+            # reads this record's tokens as all-zero and excludes the run from
+            # cost entirely (model_selection_learner.py::_read_acs_completions
+            # reads only the split keys, never `tokens_used`) — so every
+            # delegate_* delegation contributed $0.00 to the panel while still
+            # counting toward its turn total.
+            "input_tokens":                tokens_in,
+            "output_tokens":               tokens_out,
+            "cache_creation_input_tokens": cache_write,
+            "cache_read_input_tokens":     cache_read,
         })
         _sec.write_event(audit_path, "acs.worker_traced", details={
             "run_id":     run_id,

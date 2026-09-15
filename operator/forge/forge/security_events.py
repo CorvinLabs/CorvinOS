@@ -2213,6 +2213,25 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "acs.engine_completed": frozenset({
         "run_id", "worker_id", "engine_id", "model_id", "locality",
         "duration_ms", "tokens_used", "exit_code",
+        # The four-way token split. Both emitters have always PASSED these
+        # (acs_runtime.py's real worker path, with the comment "needed for
+        # per-model $ pricing", and corvin_delegate's WDAT synthesiser) and this
+        # per-event allowlist silently dropped all four into `_dropped_fields`,
+        # because a per-event set overrides the global safe-key list that
+        # already permits them (which is why the sibling `os_turn.completed` —
+        # which has NO per-event entry — kept them and worked).
+        #
+        # Consequence while they were dropped: the Model Cost Optimizer's
+        # delegated-worker cost series could never be non-zero, for any tenant,
+        # ever. `_read_acs_completions` reads only the split keys, never
+        # `tokens_used`, so every worker run priced as $0.00 and
+        # `acs_data_available` was structurally False — not "no data yet".
+        #
+        # Safe by the same reasoning the global list uses: these are integer
+        # counts, not content. "token" is deliberately not a substring match
+        # (see the design notes on _AUDIT_FORBIDDEN_EXACT above).
+        "input_tokens", "output_tokens",
+        "cache_creation_input_tokens", "cache_read_input_tokens",
     }),
     "acs.engine_error": frozenset({
         "run_id", "worker_id", "engine_id", "model_id", "duration_ms",

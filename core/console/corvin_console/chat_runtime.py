@@ -5185,6 +5185,17 @@ async def stream_turn(
     _os_tools_called = 0
     _os_tool_seq = 0          # sequence counter for os_turn.tool_called events
     _os_completed_emitted = False
+    # Raw Claude Code CLI `usage` object for this turn, read by
+    # `_os_emit_completed` below. It MUST be bound here, before that closure is
+    # defined: it is a free variable there, and it used to be first assigned
+    # only in the native-claude streaming section far below. Every exit path
+    # that emits earlier — the ACS delegation branch, the Hermes branch, the
+    # TDE hand-off, and every early error return — therefore hit
+    # `NameError: free variable 'last_usage' referenced before assignment`
+    # AFTER `_os_completed_emitted` was already set True, so those turns wrote
+    # no `os_turn.completed` at all and the Model Cost Optimizer never saw
+    # them. Binding it up here costs nothing and makes the closure total.
+    last_usage: dict[str, Any] | None = None
     # Requested model; overwritten with the subprocess-confirmed model from
     # the stream-json init event once it arrives.
     _os_model_used = _os_model or ""
@@ -6586,7 +6597,9 @@ async def stream_turn(
     # frontend's MessagePart union expects — so the turns.jsonl can be
     # replayed verbatim on re-open.
     assistant_parts: list[dict[str, Any]] = []
-    last_usage: dict[str, Any] | None = None
+    # `last_usage` is initialised at the top of this function (see the comment
+    # there) — it must NOT be re-bound here, or the early-emit paths above go
+    # back to raising NameError.
     result_text: str = ""
     # Set at the result event; must exist even if the turn produces none (error,
     # kill, no output), because the final-result emit below reads it.
