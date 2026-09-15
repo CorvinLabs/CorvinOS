@@ -1,0 +1,13 @@
+runner error for mu2wq14p_32d944 (discord:1486034324108083345):
+Traceback (most recent call last):
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 12364, in _runner
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 10574, in process_one
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/adapter.py", line 478, in _audit_event
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/audit.py", line 383, in audit_event
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/audit.py", line 202, in audit_path
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/audit.py", line 189, in _forge_workspace_root
+  File "/home/shumway/projects/CorvinOS/operator/bridges/shared/audit.py", line 107, in _load_tenant_audit_chain
+  File "<frozen importlib._bootstrap_external>", line 936, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1073, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1130, in get_data
+FileNotFoundError: [Errno 2] No such file or directory: '/home/shumway/projects/CorvinOS/operator/bridges/shared/paths.py'
