@@ -63,6 +63,15 @@ dependencies = [
     "reportlab >= 4.0",
     "edge-tts >= 6.1.8",
     "piper-tts >= 1.4.1",
+    # Anchor outbound TLS (edge-tts/OpenAI) to the OS trust store. On a
+    # corporate machine an HTTPS-inspecting proxy re-signs traffic with an
+    # internal root CA that is in the OS store but NOT in certifi's bundle, so
+    # edge-tts fails its handshake to speech.platform.bing.com with
+    # CERTIFICATE_VERIFY_FAILED and no voice summary is ever spoken (2026-09-15
+    # ALLIANZDE finding). say.py::_use_os_trust_store injects this; it is a
+    # guarded no-op when absent, so declare it to guarantee the fix on fresh
+    # installs. Cross-platform (Windows/macOS/Linux OpenSSL).
+    "truststore >= 0.9",
     # Bundled static ffmpeg binary (pure-Python wheel, prebuilt for
     # Windows/Linux/macOS) — edge-tts/Piper need ffmpeg to convert their
     # MP3/WAV output to OGG-Opus, but the installer explicitly skips

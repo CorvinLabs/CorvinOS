@@ -44,6 +44,41 @@ import sys
 import time
 from pathlib import Path
 
+
+def _use_os_trust_store() -> None:
+    """Make the network TTS providers (OpenAI, edge-tts) verify TLS against the
+    OPERATING-SYSTEM trust store instead of certifi's bundled CA list.
+
+    On a corporate/managed machine an outbound-TLS-inspecting proxy re-signs
+    every HTTPS connection with an internal root CA that lives in the OS trust
+    store but is ABSENT from certifi's `cacert.pem`. edge-tts (aiohttp) and the
+    OpenAI client then fail their handshake to `speech.platform.bing.com` /
+    `api.openai.com` with `CERTIFICATE_VERIFY_FAILED: unable to get local issuer
+    certificate` — swallowed content-free by `_try_edge` as
+    `edge-tts failed: ClientConnectorCertificateError`, so the console just
+    returns a silent 204 and no voice summary is ever spoken (2026-09-15 live
+    finding on ALLIANZDE). `truststore` reads the OS store (which HAS the
+    corporate root), so verification still happens — it is NOT disabled — it is
+    merely anchored where the corporate CA actually is. Piper is local and
+    unaffected.
+
+    Guarded: a missing `truststore` (older/vendored env) or any injection error
+    leaves the default certifi behaviour exactly as before — this only ever ADDS
+    a working trust path, never removes verification.
+    """
+    try:
+        import truststore  # type: ignore[import-not-found]
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001 — never let trust-store setup break TTS boot
+        pass
+
+
+# Anchor TLS trust to the OS store before any provider opens a socket (edge-tts
+# creates its aiohttp SSL context lazily at synth time, so injecting at import
+# is early enough). See _use_os_trust_store for why this is load-bearing behind
+# a TLS-inspecting corporate proxy.
+_use_os_trust_store()
+
 # V2-RESIDUAL (2026-07-20): anchor the total-deadline clock at MODULE IMPORT,
 # not in main(). On a slow (e.g. cold Windows) interpreter start, the seconds
 # spent booting + importing say.py's own deps count against the console's outer
