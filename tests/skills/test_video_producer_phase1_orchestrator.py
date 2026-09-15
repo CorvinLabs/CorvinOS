@@ -149,9 +149,14 @@ def test_maestro_phases_1_3():
         assert result["storyboard"] is not None
         assert "workers_ready" in result
 
+        # Verify tenant context (ADR-0007)
+        if "phase3" in str(result):
+            assert "tenant_id" in result or result["status"] == "partial"
+
         print("✓ Phases 1-3 orchestration passed")
         print(f"  - Status: {result['status']}")
         print(f"  - Workers ready: {result['workers_ready']}")
+        print(f"  - Tenant context present: {result.get('tenant_id', 'N/A')}")
 
 
 def test_phase_skip():
