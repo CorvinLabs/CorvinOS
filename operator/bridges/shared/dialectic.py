@@ -416,19 +416,54 @@ def _json_safe(v: Any) -> str:
 _CLI_TIMEOUT_SECONDS = 15.0
 
 
+def _claude_settings_env() -> dict:
+    """The ``env`` block of Claude Code's own settings.json (honouring
+    ``CLAUDE_CONFIG_DIR``). The Bedrock/Vertex/Foundry setup wizards write the
+    ``CLAUDE_CODE_USE_*`` flags HERE, not into the shell environment — so a
+    probe that only reads ``os.environ`` misses every wizard-configured install.
+    Mirrors summarize.py::_claude_settings_env() / chat_runtime.py.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    try:
+        import json as _json
+        config_dir = _os.environ.get("CLAUDE_CONFIG_DIR")
+        base = _Path(_os.path.expanduser(config_dir)) if config_dir else _Path.home() / ".claude"
+        path = base / "settings.json"
+        if not path.is_file():
+            return {}
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        env = data.get("env")
+        return env if isinstance(env, dict) else {}
+    except Exception:  # noqa: BLE001 — a corrupt settings file must not break detection
+        return {}
+
+
 def _claude_authenticated() -> bool:
     """Cheap, subprocess-free Claude Code auth probe — the ungated sibling of
     the 41c174e summarize.py gate. Without it, a fresh install with `claude` on
     PATH but not yet logged in burns the full judge timeout (15–20 s) on EVERY
     research/forge voice summary before falling back. Mirrors
-    summarize.py::_claude_authenticated (ANTHROPIC_API_KEY or an OAuth session
-    in ~/.claude/.credentials.json). Fail-OPEN on read error so a transient
-    glitch never disables a genuinely-logged-in user's judge.
+    summarize.py::_claude_authenticated / chat_runtime.py::_claude_authenticated:
+    authenticated iff ANY of ANTHROPIC_API_KEY; a 3rd-party platform (Amazon
+    Bedrock / Google Vertex / Microsoft Foundry); or an OAuth session in
+    ~/.claude/.credentials.json. Fail-OPEN on read error so a transient glitch
+    never disables a genuinely-logged-in user's judge.
     """
     import os as _os
     from pathlib import Path as _Path
     if _os.environ.get("ANTHROPIC_API_KEY"):
         return True
+    # 3rd-party platform (Bedrock/Vertex/Foundry): auth is via the platform's
+    # OWN credentials (AWS/GCP/Azure) — there is NO ANTHROPIC_API_KEY and NO
+    # ~/.claude/.credentials.json. Checking only those two false-negatived every
+    # such install, so the dialectic judge fell back to thesis-only on a machine
+    # where `claude` was in fact fully authenticated via Bedrock. The wizards
+    # write CLAUDE_CODE_USE_* into settings.json's `env` block, so check both.
+    _settings_env = _claude_settings_env()
+    for _flag in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        if (_os.environ.get(_flag) or _settings_env.get(_flag)) in ("1", "true", "True"):
+            return True
     try:
         creds_path = _Path.home() / ".claude" / ".credentials.json"
         if not creds_path.exists():
