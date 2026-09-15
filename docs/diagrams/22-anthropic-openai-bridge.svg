@@ -4,7 +4,7 @@
   <desc>Placeholder diagram (docs/claude-ref/testing-and-docs.md "Creating New Diagrams" convention).
   Claude Code only speaks the Anthropic Messages API. When a tenant assigns OpenRouter or Ollama to
   the claude_code engine, adapter.py::_build_spawn_env starts a local ThreadingHTTPServer
-  (operator/bridges/shared/anthropic_openai_bridge.py, ensure_proxy()) on 127.0.0.1 that translates
+  (corvin_operator/bridges/shared/anthropic_openai_bridge.py, ensure_proxy()) on 127.0.0.1 that translates
   POST /v1/messages (Anthropic, incl. SSE streaming) to POST /chat/completions (OpenAI-compatible)
   and back, then points ANTHROPIC_BASE_URL at it. See docs/claude-ref/layer-engines.md
   "ADR-0181 M3" section for the full write-up; refine this diagram with a real flow illustration

@@ -15,14 +15,14 @@ def _run_claude(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     with a list raises WinError 2 for .cmd files without shell=True.
     Uses proper cmd.exe quoting to prevent injection vulnerabilities.
     """
-    # operator/ has no __init__.py (it deliberately shadows the stdlib
+    # corvin_operator/ has no __init__.py (it deliberately shadows the stdlib
     # `operator` module — see nerve_builtins.py / bridge_manager.py's own
     # comment on this exact class of bug), so the dotted
     # `from operator.bridges.shared.agents._win_shim import ...` form used
     # here previously can NEVER resolve; it broke every fresh Windows
     # install at step_16_register_plugins with "No module named
     # 'operator.bridges'; 'operator' is not a package" (2026-09-14 live
-    # report). Put operator/bridges/shared on sys.path and import bare,
+    # report). Put corvin_operator/bridges/shared on sys.path and import bare,
     # matching every other _win_shim call site in this codebase.
     _shared_dir = str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared")
     if _shared_dir not in sys.path:

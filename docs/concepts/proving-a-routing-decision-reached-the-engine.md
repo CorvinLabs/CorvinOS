@@ -62,7 +62,7 @@ Three supporting moves make the result trustworthy:
 
 ## Worked evidence
 
-Tier 2.9 (2026-09-15, `operator/bridges/shared/model_selector.py` +
+Tier 2.9 (2026-09-15, `corvin_operator/bridges/shared/model_selector.py` +
 `core/console/corvin_console/chat_runtime.py`,
 `tests/e2e/test_os_model_tier29_classifier_e2e.py`): 8 assertions green wired, 5
 red unwired, and on the live install the first non-Sonnet OS turn in the audit

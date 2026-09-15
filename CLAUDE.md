@@ -320,7 +320,7 @@ won the race.
 **ONE audit chain per tenant: `<corvin_home>/tenants/<tid>/global/forge/audit.jsonl`.**
 Every writer of a hash-chained record resolves it through
 `forge.paths.tenant_audit_chain()` / `core.paths.tenant_audit_chain()` /
-`operator/bridges/shared/paths.py::tenant_audit_chain()` — three byte-identical
+`corvin_operator/bridges/shared/paths.py::tenant_audit_chain()` — three byte-identical
 mirrors, pinned together by `tests/security/test_audit_chain_ssot.py`. That file
 is what the ADR-0232 boot tripwire verifies, what `audit_query` reads and what
 every compliance report is generated from, so a record written anywhere else is
@@ -497,7 +497,7 @@ marketplace.
 
 **Before committing** changes to `adapter.py`, `daemon.js`, or `shared/js/`:
 ```bash
-bash operator/bridges/run-all-tests.sh
+bash corvin_operator/bridges/run-all-tests.sh
 ```
 
 **Every feature change** — code, config, behavior, API, protocol, CLI, error message —
@@ -734,7 +734,7 @@ amendments are prepended under "Status," never rewriting prior text.
 create a near-duplicate concept instead of amending the existing one · edit or delete anything
 under an existing concept's `## Operator Notes` heading · mint a SkillForge skill above a
 persona's namespace-gate prefix (skills created under the `assistant` persona must be named
-`assistant.<name>` — see `operator/skill-forge/README.md`'s namespace-gate section) · declare
+`assistant.<name>` — see `corvin_operator/skill-forge/README.md`'s namespace-gate section) · declare
 "done" on a task that clearly meets a Concept Gate trigger without running this gate · leave a
 skip implicit.
 

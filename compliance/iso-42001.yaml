@@ -42,7 +42,7 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0007
-        file: "operator/bridges/shared/compliance_zone_classifier.py"
+        file: "corvin_operator/bridges/shared/compliance_zone_classifier.py"
         test: "core/gateway/tests/test_zone_policy.py"
     invariants:
       - "tenant.corvin.yaml::data_residency.zone is the canonical context boundary"
@@ -67,14 +67,14 @@ rules:
     severity: critical
     implemented_by:
       - layer: L18
-        file: "operator/bridges/shared/roles.py"
-        test: "operator/bridges/shared/test_roles.py"
+        file: "corvin_operator/bridges/shared/roles.py"
+        test: "corvin_operator/bridges/shared/test_roles.py"
       - layer: L16
-        file: "operator/bridges/shared/consent.py"
-        test: "operator/bridges/shared/test_consent_gate.py"
+        file: "corvin_operator/bridges/shared/consent.py"
+        test: "corvin_operator/bridges/shared/test_consent_gate.py"
       - layer: L19
-        file: "operator/bridges/shared/disclosure.py"
-        test: "operator/bridges/shared/test_disclosure.py"
+        file: "corvin_operator/bridges/shared/disclosure.py"
+        test: "corvin_operator/bridges/shared/test_disclosure.py"
     invariants:
       - "role hierarchy enforced: owner > admin > member > observer"
       - "admin cannot self-promote beyond own role (kerze rule)"
@@ -101,8 +101,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0057
-        file: "operator/bridges/shared/operator_declaration.py"
-        test: "operator/bridges/shared/test_operator_declaration.py"
+        file: "corvin_operator/bridges/shared/operator_declaration.py"
+        test: "corvin_operator/bridges/shared/test_operator_declaration.py"
     invariants:
       - "eu_production and eu_production_ollama profiles require operator_declaration in tenant.corvin.yaml"
       - "dpia_completed must be true for eu_production boot to proceed"
@@ -128,8 +128,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0057
-        file: "operator/bridges/shared/operator_declaration.py"
-        test: "operator/bridges/shared/test_operator_declaration.py"
+        file: "corvin_operator/bridges/shared/operator_declaration.py"
+        test: "corvin_operator/bridges/shared/test_operator_declaration.py"
     invariants:
       - "declaration_verified emits to the L16 audit chain before first user session"
       - "boot fails with CRITICAL severity if declaration is absent on eu_production"
@@ -183,8 +183,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L34
-        file: "operator/bridges/shared/data_classification.py"
-        test: "operator/bridges/shared/test_data_classification.py"
+        file: "corvin_operator/bridges/shared/data_classification.py"
+        test: "corvin_operator/bridges/shared/test_data_classification.py"
     invariants:
       - "DataClassification enum has four levels: PUBLIC < INTERNAL < CONFIDENTIAL < SECRET"
       - "matrix entry is checked at every engine-spawn callsite before spawn"
@@ -210,8 +210,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0056
-        file: "operator/bridges/shared/compliance_manifest.py"
-        test: "operator/bridges/shared/test_eu_compliance.py"
+        file: "corvin_operator/bridges/shared/compliance_manifest.py"
+        test: "corvin_operator/bridges/shared/test_eu_compliance.py"
     invariants:
       - "corvin-compliance-check reports rules_passed/rules_failed counts"
       - "severity: critical rule failure exits non-zero from corvin-compliance-check"
@@ -282,11 +282,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L19
-        file: "operator/bridges/shared/disclosure.py"
-        test: "operator/bridges/shared/test_disclosure.py"
+        file: "corvin_operator/bridges/shared/disclosure.py"
+        test: "corvin_operator/bridges/shared/test_disclosure.py"
       - layer: L16
-        file: "operator/bridges/shared/consent.py"
-        test: "operator/bridges/shared/test_consent_gate.py"
+        file: "corvin_operator/bridges/shared/consent.py"
+        test: "corvin_operator/bridges/shared/test_consent_gate.py"
     invariants:
       - "disclosure card fires exactly once per (channel, chat, uid)"
       - "disclosure cannot be disabled by operator config or env var"
@@ -312,8 +312,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L19
-        file: "operator/bridges/shared/disclosure.py"
-        test: "operator/bridges/shared/test_disclosure.py"
+        file: "corvin_operator/bridges/shared/disclosure.py"
+        test: "corvin_operator/bridges/shared/test_disclosure.py"
     invariants:
       - "/join, /pass, /leave commands trigger the disclosure path"
       - "disclosure card contains opt-out commands"
@@ -336,11 +336,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/audit.py"
-        test: "operator/bridges/shared/test_audit.py"
+        file: "corvin_operator/bridges/shared/audit.py"
+        test: "corvin_operator/bridges/shared/test_audit.py"
       - layer: L37
-        file: "operator/bridges/shared/audit_sealer.py"
-        test: "operator/bridges/shared/test_audit_sealer.py"
+        file: "corvin_operator/bridges/shared/audit_sealer.py"
+        test: "corvin_operator/bridges/shared/test_audit_sealer.py"
     invariants:
       - "audit chain is hash-linked — no entry can be deleted without breaking verification"
       - "voice-audit verify exits 0 on an intact chain"
@@ -370,14 +370,14 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0007
-        file: "operator/bridges/shared/engine_policy.py"
-        test: "operator/bridges/shared/test_engine_policy.py"
+        file: "corvin_operator/bridges/shared/engine_policy.py"
+        test: "corvin_operator/bridges/shared/test_engine_policy.py"
       - layer: L34
-        file: "operator/bridges/shared/data_classification.py"
-        test: "operator/bridges/shared/test_data_classification.py"
+        file: "corvin_operator/bridges/shared/data_classification.py"
+        test: "corvin_operator/bridges/shared/test_data_classification.py"
       - layer: L35
-        file: "operator/bridges/shared/egress_gate.py"
-        test: "operator/bridges/shared/test_egress_gate.py"
+        file: "corvin_operator/bridges/shared/egress_gate.py"
+        test: "corvin_operator/bridges/shared/test_egress_gate.py"
     invariants:
       - "engine_policy.check() runs at every WorkerEngine spawn callsite"
       - "data classification check runs before every engine spawn"
@@ -407,7 +407,7 @@ rules:
     implemented_by:
       - layer: ADR-0056
         file: "compliance/ci_review.py"
-        test: "operator/bridges/shared/test_eu_compliance.py"
+        test: "corvin_operator/bridges/shared/test_eu_compliance.py"
     invariants:
       - "severity: critical rule failure blocks CI merge gate"
       - "severity: warning rule failure logs but does not block"
@@ -434,20 +434,20 @@ rules:
     severity: critical
     implemented_by:
       - layer: L10
-        file: "operator/voice/hooks/path_gate.py"
-        test: "operator/bridges/shared/test_path_gate_ast.py"
+        file: "corvin_operator/voice/hooks/path_gate.py"
+        test: "corvin_operator/bridges/shared/test_path_gate_ast.py"
       - layer: L34
-        file: "operator/bridges/shared/data_classification.py"
-        test: "operator/bridges/shared/test_data_classification.py"
+        file: "corvin_operator/bridges/shared/data_classification.py"
+        test: "corvin_operator/bridges/shared/test_data_classification.py"
       - layer: L35
-        file: "operator/bridges/shared/egress_gate.py"
-        test: "operator/bridges/shared/test_egress_gate.py"
+        file: "corvin_operator/bridges/shared/egress_gate.py"
+        test: "corvin_operator/bridges/shared/test_egress_gate.py"
       - layer: L36
-        file: "operator/bridges/shared/erasure_orchestrator.py"
-        test: "operator/bridges/shared/test_erasure_orchestrator.py"
+        file: "corvin_operator/bridges/shared/erasure_orchestrator.py"
+        test: "corvin_operator/bridges/shared/test_erasure_orchestrator.py"
       - layer: L37
-        file: "operator/bridges/shared/audit_sealer.py"
-        test: "operator/bridges/shared/test_audit_sealer.py"
+        file: "corvin_operator/bridges/shared/audit_sealer.py"
+        test: "corvin_operator/bridges/shared/test_audit_sealer.py"
     invariants:
       - "path-gate fails closed on all eval/exec/$()/backtick patterns"
       - "path-gate boot self-test runs on every adapter start"
@@ -477,8 +477,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0057
-        file: "operator/bridges/shared/operator_declaration.py"
-        test: "operator/bridges/shared/test_operator_declaration.py"
+        file: "corvin_operator/bridges/shared/operator_declaration.py"
+        test: "corvin_operator/bridges/shared/test_operator_declaration.py"
     invariants:
       - "dpia_completed must be true for eu_production boot to proceed"
       - "dpia_date must be present and parseable"
@@ -503,11 +503,11 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/audit.py"
-        test: "operator/bridges/shared/test_audit.py"
+        file: "corvin_operator/bridges/shared/audit.py"
+        test: "corvin_operator/bridges/shared/test_audit.py"
       - layer: L39
-        file: "operator/bridges/shared/incident_tracker.py"
-        test: "operator/bridges/shared/test_incident_tracker.py"
+        file: "corvin_operator/bridges/shared/incident_tracker.py"
+        test: "corvin_operator/bridges/shared/test_incident_tracker.py"
     invariants:
       - "every CRITICAL audit event is a candidate for auto-incident via IncidentAutoDetector"
       - "incident records stored at <tenant>/global/incidents/<id>.json mode 0600"
@@ -532,8 +532,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: ADR-0056
-        file: "operator/bridges/shared/compliance_manifest.py"
-        test: "operator/bridges/shared/test_eu_compliance.py"
+        file: "corvin_operator/bridges/shared/compliance_manifest.py"
+        test: "corvin_operator/bridges/shared/test_eu_compliance.py"
     invariants:
       - "corvin-compliance-check --all-frameworks reports pass/fail for every rule"
       - "CI runs corvin-compliance-check on every PR touching manifest-mapped files"
@@ -557,8 +557,8 @@ rules:
     severity: warning
     implemented_by:
       - layer: ADR-0057
-        file: "operator/voice/scripts/corvin_annex_iv.py"
-        test: "operator/voice/scripts/test_corvin_annex_iv.py"
+        file: "corvin_operator/voice/scripts/corvin_annex_iv.py"
+        test: "corvin_operator/voice/scripts/test_corvin_annex_iv.py"
     invariants:
       - "corvin-annex-iv export-package includes compliance-check-report.json for all frameworks"
       - "export package is GPG-signed as a whole"
@@ -587,8 +587,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L39
-        file: "operator/bridges/shared/incident_tracker.py"
-        test: "operator/bridges/shared/test_incident_tracker.py"
+        file: "corvin_operator/bridges/shared/incident_tracker.py"
+        test: "corvin_operator/bridges/shared/test_incident_tracker.py"
     invariants:
       - "TRIGGER_EVENTS auto-open incident records via IncidentAutoDetector"
       - "incident records are stored at <tenant>/global/incidents/<id>.json mode 0600"

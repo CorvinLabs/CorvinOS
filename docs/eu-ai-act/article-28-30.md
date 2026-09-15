@@ -23,7 +23,7 @@ The declaration gate enforces that this distinction is acknowledged before going
 
 ## The Operator Declaration Gate
 
-**Module:** `operator/bridges/shared/operator_declaration.py`
+**Module:** `corvin_operator/bridges/shared/operator_declaration.py`
 
 ### How it works
 
@@ -77,7 +77,7 @@ only in `tenant.corvin.yaml`. They **never** enter the audit chain.
 }
 ```
 
-**Test coverage:** `operator/bridges/shared/test_operator_declaration.py` (9 tests)
+**Test coverage:** `corvin_operator/bridges/shared/test_operator_declaration.py` (9 tests)
 
 The tests `test_declared_by_not_in_audit_dict` and `test_permitted_use_not_in_audit_dict`
 specifically verify that PII never appears in the auditable output.

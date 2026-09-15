@@ -431,7 +431,7 @@ Stage merge readiness:
 | Unit test coverage | ✅ 980+ tests green (core/plugins/tests/) | Mechanisms work in isolation |
 | Call-site gate | ✅ test_extension_point_call_sites.py | Detects regression if a point loses its caller |
 | CI/CD integration | ✅ core/plugins/tests/ added to coverage.yml | Tests run on every push |
-| Bridge test suite | ✅ operator/bridges/run-all-tests.sh | 15+ min execution; must run before Stage 5 merge |
+| Bridge test suite | ✅ corvin_operator/bridges/run-all-tests.sh | 15+ min execution; must run before Stage 5 merge |
 | E2E spine | ◑ E1 done; E2/E3 queued | Full lifecycle proof (end-to-end, no mocks) |
 
 ### 7.3 Operator Documentation

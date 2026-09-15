@@ -71,7 +71,7 @@ Art. 9(7) requires that logging capabilities enable post-hoc verification of sys
 |---|---|
 | Per boot | Self-test + path-gate self-test |
 | Daily 03:30 | Audit-chain verify + session TTL sweep |
-| Per PR | 434-test CI suite (operator/bridges/run-all-tests.sh) |
+| Per PR | 434-test CI suite (corvin_operator/bridges/run-all-tests.sh) |
 | Quarterly | Compliance drift scan (manual, DSB-CHECKLIST.md) |
 
 ## 5. Conditional Reclassification

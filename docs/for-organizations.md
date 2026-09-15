@@ -128,7 +128,7 @@ contract is documented in **CLAUDE.md → Hot-reload convention for
 bridge settings**.
 
 **Add a new channel** by dropping a `daemon.js` into
-`operator/bridges/<channel>/` that conforms to the inbox/outbox
+`corvin_operator/bridges/<channel>/` that conforms to the inbox/outbox
 JSON envelope. The shared `js/` modules
 (`auth.js`, `auth_elevation.js`, `in_chat_commands.js`,
 `outbox.js`, `settings.js`) are reusable and ship the slash-command
@@ -140,7 +140,7 @@ dispatcher (`/help`, `/btw`, `/stop`, `/reset`, `/consent`,
 Personas declare which MCP servers they spawn:
 
 ```jsonc
-// operator/cowork/personas/research.json
+// corvin_operator/cowork/personas/research.json
 {
   "name": "research",
   "mcp_servers": {
@@ -242,14 +242,14 @@ default since v0.13) and the engine-selection table.
 
 | Extension | Where it lives | When you reach for it |
 |---|---|---|
-| **Custom persona** | `operator/cowork/personas/<name>.json` (bundle) or `<repo>/.corvin/cowork/personas/<name>.json` (user) | A team needs a different system prompt + tool surface for one channel. |
+| **Custom persona** | `corvin_operator/cowork/personas/<name>.json` (bundle) or `<repo>/.corvin/cowork/personas/<name>.json` (user) | A team needs a different system prompt + tool surface for one channel. |
 | **Custom MCP server** | Any directory; referenced from a persona's `mcp_servers` block. | Wiring an internal API or knowledge base. |
-| **Custom forge tool template** | Add to the namespace allow-list in `operator/forge/forge/policy.json` and let the persona forge. | A class of deterministic tools the agent should be encouraged to generate (`csv.*`, `pdf.*`, `crm.*`). |
-| **Custom skill** | Skill-Forge generates them at runtime, OR write a `SKILL.md` under `operator/bundle/skills/<name>/` (or a custom operator plugin) for static skills. | Codifying organisational knowledge. |
-| **Custom bridge / channel** | `operator/bridges/<channel>/daemon.js` + reuse `shared/js/` modules. | A messaging surface not yet shipped (MS Teams, Mattermost, Matrix, custom in-house). |
-| **Custom engine** | `operator/bridges/shared/agents/<engine>.py` implementing the `WorkerEngine` protocol. | Switching to an OSS LLM, a self-hosted Claude proxy, or a fine-tune. |
-| **Custom audit sink** | `operator/voice/scripts/voice_audit.py --notify-bridge` already pushes chain breaks; add another sink in the relay or wrap `forge.security_events.write_event`. | Forwarding events to SIEM (Splunk, Elastic, Datadog). |
-| **Custom hook** | `operator/voice/hooks/<name>.py` and registered in `hooks/hooks.json`. | Adding a new PreToolUse / PostToolUse / Notification gate. |
+| **Custom forge tool template** | Add to the namespace allow-list in `corvin_operator/forge/forge/policy.json` and let the persona forge. | A class of deterministic tools the agent should be encouraged to generate (`csv.*`, `pdf.*`, `crm.*`). |
+| **Custom skill** | Skill-Forge generates them at runtime, OR write a `SKILL.md` under `corvin_operator/bundle/skills/<name>/` (or a custom operator plugin) for static skills. | Codifying organisational knowledge. |
+| **Custom bridge / channel** | `corvin_operator/bridges/<channel>/daemon.js` + reuse `shared/js/` modules. | A messaging surface not yet shipped (MS Teams, Mattermost, Matrix, custom in-house). |
+| **Custom engine** | `corvin_operator/bridges/shared/agents/<engine>.py` implementing the `WorkerEngine` protocol. | Switching to an OSS LLM, a self-hosted Claude proxy, or a fine-tune. |
+| **Custom audit sink** | `corvin_operator/voice/scripts/voice_audit.py --notify-bridge` already pushes chain breaks; add another sink in the relay or wrap `forge.security_events.write_event`. | Forwarding events to SIEM (Splunk, Elastic, Datadog). |
+| **Custom hook** | `corvin_operator/voice/hooks/<name>.py` and registered in `hooks/hooks.json`. | Adding a new PreToolUse / PostToolUse / Notification gate. |
 | **Custom slash-command** | `bridges/shared/js/in_chat_commands.js` dispatcher + handler module. | Domain-specific command (`/release`, `/oncall`, `/ticket`). |
 
 The core invariant: **every extension is a plain file an operator can
@@ -484,7 +484,7 @@ verifies clean.
 6. **Wire one internal MCP server** to a real backend (CRM, ticketing,
    wiki).
 7. **Forge or write 2–3 organisation-specific skills** under
-   `operator/bundle/skills/` (static) or via Skill-Forge (runtime).
+   `corvin_operator/bundle/skills/` (static) or via Skill-Forge (runtime).
 8. **Enable consent gate + disclosure card** on group chats with
    non-whitelisted observers.
 9. **Set up audit alerting** (configure `relay.json` to push chain

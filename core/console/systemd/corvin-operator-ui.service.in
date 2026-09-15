@@ -13,7 +13,7 @@ Group=__SERVICE_GROUP__
 WorkingDirectory=__REPO_ROOT__
 EnvironmentFile=-/etc/corvin/operator-ui.env
 EnvironmentFile=-__REPO_ROOT__/.corvin/operator-ui.env
-Environment=PYTHONPATH=__REPO_ROOT__/core/console:__REPO_ROOT__/core/gateway:__REPO_ROOT__/core/license:__REPO_ROOT__/core/compliance:__REPO_ROOT__/operator/forge:__REPO_ROOT__/operator/skill-forge
+Environment=PYTHONPATH=__REPO_ROOT__/core/console:__REPO_ROOT__/core/gateway:__REPO_ROOT__/core/license:__REPO_ROOT__/core/compliance:__REPO_ROOT__/corvin_operator/forge:__REPO_ROOT__/corvin_operator/skill-forge
 Environment=CORVIN_CONSOLE_UI=auto
 
 # Production: NO --reload, NO --log-level=debug. Service-user has a

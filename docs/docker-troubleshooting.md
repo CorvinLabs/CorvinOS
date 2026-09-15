@@ -258,7 +258,7 @@ This is **critical** — indicates tampering or corruption.
 **Check manually:**
 ```bash
 sudo docker exec corvin \
-  /opt/corvin-repo/operator/voice/scripts/voice-audit.py verify
+  /opt/corvin-repo/corvin_operator/voice/scripts/voice-audit.py verify
 ```
 
 **Common causes:**

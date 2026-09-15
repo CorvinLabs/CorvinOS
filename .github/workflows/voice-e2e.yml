@@ -27,8 +27,8 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'operator/voice/**'
-      - 'operator/bridges/shared/adapter.py'
+      - 'corvin_operator/voice/**'
+      - 'corvin_operator/bridges/shared/adapter.py'
       - 'ops/launcher/voice_entry.py'
       - 'corvinOS/installer/steps/stt.py'
       - 'corvinOS/installer/steps/piper.py'
@@ -37,8 +37,8 @@ on:
   pull_request:
     branches: [main, develop]
     paths:
-      - 'operator/voice/**'
-      - 'operator/bridges/shared/adapter.py'
+      - 'corvin_operator/voice/**'
+      - 'corvin_operator/bridges/shared/adapter.py'
       - 'ops/launcher/voice_entry.py'
       - 'corvinOS/installer/steps/stt.py'
       - 'corvinOS/installer/steps/piper.py'

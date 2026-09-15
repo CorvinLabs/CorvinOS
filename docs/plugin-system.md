@@ -16,7 +16,7 @@ and which working directory is used.
 
 | Property | Value |
 |---|---|
-| **Bundle personas** | `operator/cowork/personas/<name>.json` |
+| **Bundle personas** | `corvin_operator/cowork/personas/<name>.json` |
 | **User override** | `~/.corvin/cowork/personas/<name>.json` |
 | **Hot-reload** | immediate, re-read per message |
 | **Bind per chat** | `/cowork-bind <name>` or `chat_profiles.persona` in `settings.json` |
@@ -137,7 +137,7 @@ via grading, where it applies to all chats in the repo.
 persona-boundary check, size limit.
 
 **Slot-mirror** — for `project`- and `user`-scoped skills a
-`operator/skill-forge/skills/dyn/<name>/SKILL.md` is written (gitignored),
+`corvin_operator/skill-forge/skills/dyn/<name>/SKILL.md` is written (gitignored),
 injected directly into the engine. Task/session skills have no slot-mirror
 (prevents cross-chat leak).
 
@@ -147,7 +147,7 @@ injected directly into the engine. Task/session skills have no slot-mirror
 
 ## 4. Bridge Configuration — hot-reload
 
-`operator/bridges/<channel>/settings.json` is re-read **per incoming message**.
+`corvin_operator/bridges/<channel>/settings.json` is re-read **per incoming message**.
 Changes take effect immediately — no process restart required.
 
 **What hot-reloads:**

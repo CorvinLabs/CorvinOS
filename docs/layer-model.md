@@ -38,7 +38,7 @@ Corvin never patches Claude Code. If a layer needs a new affordance, it goes thr
 
 ## Layer 1 — voice
 
-**Plugin:** `operator/voice/`
+**Plugin:** `corvin_operator/voice/`
 **Owns:** speech I/O at the desk and inside any bridged chat that supports voice notes.
 
 ### Responsibilities
@@ -63,7 +63,7 @@ Corvin never patches Claude Code. If a layer needs a new affordance, it goes thr
 
 ## Layer 2 — bridges
 
-**Plugins:** `operator/bridges/{whatsapp,telegram,discord,slack,email}/`
+**Plugins:** `corvin_operator/bridges/{whatsapp,telegram,discord,slack,email}/`
 **Owns:** ferrying messages between an external messenger and the agent.
 
 ### Responsibilities
@@ -92,13 +92,13 @@ Corvin never patches Claude Code. If a layer needs a new affordance, it goes thr
 
 ## Layer 3 — cowork (personas)
 
-**Plugin:** `operator/cowork/`
+**Plugin:** `corvin_operator/cowork/`
 **Owns:** per-chat *role* of the agent — which tools it sees, which system prompt it gets, which directories it may touch.
 
 ### Responsibilities
 
-- A **persona** is a JSON file under `operator/cowork/personas/<name>.json` (bundle) or `~/.corvin/cowork/personas/<name>.json` (user-specific override; `<repo>/.corvin/cowork/personas/` inside a repo). It declares: `tools` (allowlist / blocklist), `mcp_servers`, `add_dirs`, `append_system`, `permission_mode`, optional `routing_anchors` (for layer 4).
-- A **resolver** (`operator/cowork/lib/resolver.py`) merges the persona declared on a `chat_profile` with the chat's other settings into the final argument list passed to `claude`.
+- A **persona** is a JSON file under `corvin_operator/cowork/personas/<name>.json` (bundle) or `~/.corvin/cowork/personas/<name>.json` (user-specific override; `<repo>/.corvin/cowork/personas/` inside a repo). It declares: `tools` (allowlist / blocklist), `mcp_servers`, `add_dirs`, `append_system`, `permission_mode`, optional `routing_anchors` (for layer 4).
+- A **resolver** (`corvin_operator/cowork/lib/resolver.py`) merges the persona declared on a `chat_profile` with the chat's other settings into the final argument list passed to `claude`.
 - Bundled personas: `assistant`, `coder`, `browser`, `research`, `inbox`, `homeassistant`. Custom personas drop into the user override directory and are picked up via hot-reload.
 
 ### Contract with the layer below
@@ -116,7 +116,7 @@ Corvin never patches Claude Code. If a layer needs a new affordance, it goes thr
 
 ## Layer 4 — auto-routing
 
-**Module:** `operator/bridges/shared/router.py`
+**Module:** `corvin_operator/bridges/shared/router.py`
 **Owns:** picking *which persona* should handle the next message, when no persona is pinned for that chat.
 
 ### Responsibilities
@@ -141,7 +141,7 @@ Corvin never patches Claude Code. If a layer needs a new affordance, it goes thr
 
 ## Layer 5 — forge (runtime tool factory + policy + audit)
 
-**Plugin:** `operator/forge/`
+**Plugin:** `corvin_operator/forge/`
 **Owns:** registration, execution, and audit of tools that did not exist when the session started.
 
 This is the layer that makes Corvin more than a "phone-first frontend". A working agent that can *write a new tool, register it, run it, and audit-log everything it does* is qualitatively different from one that only chains pre-defined tools.
@@ -183,7 +183,7 @@ Truncation behaviour changed too — when a forged tool's stdout exceeds the 4 M
 
 ## Layer 7 — skill-forge (runtime skill creation)
 
-**Plugin:** `operator/skill-forge/`
+**Plugin:** `corvin_operator/skill-forge/`
 **Owns:** generation, grading, promotion and pruning of **skills** — markdown bodies that get prompt-injected into future bridge turns.
 
 Where forge generates *executable* artifacts (sandboxed tools), skill-forge generates *knowledge*: instruction-shaped markdown that the bridge adapter merges into the next claude subprocess' `--append-system-prompt`. The two plugins share the four-scope mechanic and the unified hash-chain audit log; the same `voice-audit verify` covers both.
@@ -205,7 +205,7 @@ Visibility lives on three parallel paths: canonical workspace, plugin-slot mirro
 
 ## Layer 8 — session-bound lifecycle (`/new` `/clear` `/reset` + 7-day timeout sweep)
 
-**Module:** `operator/voice/scripts/session_reset.py` + `session_timeout_sweep.py`
+**Module:** `corvin_operator/voice/scripts/session_reset.py` + `session_timeout_sweep.py`
 **Owns:** wiping the chat-bound footprint when the user starts over.
 
 A bridge chat owns four cleanup layers — session-scope skills, session-scope forge tools, the session forge workspace dir, and the voice conversation state. Layer 8 unifies them: a single user trigger (`/new` / `/clear` / `/reset`) writes one `session.reset` audit event into the unified hash chain, then rmtrees the four locations atomically. Daily timer sweeps anything older than 7 days the same way. Project- and user-scope are never touched.
@@ -214,7 +214,7 @@ A bridge chat owns four cleanup layers — session-scope skills, session-scope f
 
 ## Layer 9 — capability gate (every persona forges its own tools/skills)
 
-**Module:** `operator/cowork/lib/resolver.py` (`_inject_forge_capability` + `_inject_skill_forge_capability`)
+**Module:** `corvin_operator/cowork/lib/resolver.py` (`_inject_forge_capability` + `_inject_skill_forge_capability`)
 **Owns:** turning a persona's `forge_enabled` / `skill_forge_enabled` flag into the actual MCP wiring.
 
 Every persona that opts in via the corresponding flag receives the `mcp__forge__*` and/or `mcp__skill_forge__*` tools in its resolved `allowed_tools`, plus the matching MCP server in `mcp_servers`. The resolver also appends a runtime-built **capability brief** to the persona's `append_system` — telling it (a) which namespace prefix it owns, (b) whether its sandbox shares the host network, (c) where to discover existing artifacts before creating new ones. The brief is read fresh from `policy.json` each resolve, so it never lies about what the runtime actually permits.
@@ -225,10 +225,10 @@ Forge and skill-forge are no longer specialist personas with load-bearing safety
 
 ## Layer 10 — path-gate hook (structural write protection)
 
-**Module:** `operator/voice/hooks/path_gate.py` (PreToolUse hook)
+**Module:** `corvin_operator/voice/hooks/path_gate.py` (PreToolUse hook)
 **Owns:** blocking direct `Write` / `Edit` / `MultiEdit` / `NotebookEdit` / `Bash` / `WebFetch` operations that target the forge / skill-forge workspaces, regardless of which persona made the call.
 
-The hook fires before every matching tool call from any persona — `bypassPermissions` included. Protected paths: `<corvin_home>/**/forge/**`, `<corvin_home>/**/skill-forge/**`, the unified `audit.jsonl`, all `policy.json` files, and the engine-facing slot mirror under `operator/skill-forge/skills/dyn/**`. Bash is parsed for `>` / `>>` / `tee` / `mv` / `cp` / `sed -i` / `dd of=` / `python -c "open('…','w')"` / `rsync` etc.; `eval` / `exec` / command-substitution that mention a protected hint fail closed. Every block writes a `path_gate.denied` event into the hash chain.
+The hook fires before every matching tool call from any persona — `bypassPermissions` included. Protected paths: `<corvin_home>/**/forge/**`, `<corvin_home>/**/skill-forge/**`, the unified `audit.jsonl`, all `policy.json` files, and the engine-facing slot mirror under `corvin_operator/skill-forge/skills/dyn/**`. Bash is parsed for `>` / `>>` / `tee` / `mv` / `cp` / `sed -i` / `dd of=` / `python -c "open('…','w')"` / `rsync` etc.; `eval` / `exec` / command-substitution that mention a protected hint fail closed. Every block writes a `path_gate.denied` event into the hash chain.
 
 This is the layer that makes "every persona may forge" safe. The MCP server stays the only writable path into the generation workspaces — not because the persona promised to be careful, but because the hook makes any other path return exit 2.
 

@@ -9,10 +9,10 @@ This document is the entry point for five extension surfaces:
 
 | Surface | What it is | Where it lives | Hot-reload |
 |---|---|---|---|
-| **Personas** | AI identity, system prompt, tool set, engine choice | `operator/cowork/personas/<name>.json` | Yes — next message |
+| **Personas** | AI identity, system prompt, tool set, engine choice | `corvin_operator/cowork/personas/<name>.json` | Yes — next message |
 | **Forge Tools** | Sandboxed, bwrap-isolated, MCP-callable Python tools | Chat request or JSON in forge workspace | Yes — MCP hot-register |
 | **Skills** | Markdown instruction files injected into future turns | Chat request or `mcp__skill_forge__skill_create` | Yes — injected per turn |
-| **Bridge Adapters** | New messaging channels (Teams, Matrix, Signal, custom) | `operator/bridges/<channel>/` | Restart needed |
+| **Bridge Adapters** | New messaging channels (Teams, Matrix, Signal, custom) | `corvin_operator/bridges/<channel>/` | Restart needed |
 | **Workflow Packages** | Installable bundles of personas + tools + skills | `corvin-pkg install <package.corvin-pkg>` | N/A — one-time install |
 
 Every extension event — a new persona loaded, a forge tool created, a skill promoted,
@@ -56,7 +56,7 @@ service interruption.
 **Bundle personas** (committed to the repo, visible to all deployments):
 
 ```
-operator/cowork/personas/<name>.json
+corvin_operator/cowork/personas/<name>.json
 ```
 
 User override personas take priority over bundle personas with the same name.
@@ -89,7 +89,7 @@ User override personas take priority over bundle personas with the same name.
 | `skill_forge_enabled` | boolean | `false` | Whether SkillForge (runtime skill creation) is enabled. Must be explicitly opted in. |
 | `memory_recall_enabled` | boolean | `false` | Whether recall indexing and user model injection are active. |
 | `working_dir` | string | repo root | The `--add-dir` working directory passed to the underlying engine. |
-| `ldd_preset` | enum | `"off"` | LDD preset (`operator/bridges/shared/ldd.py::PRESETS`): `"off"` / `"quick"` / `"default"` / `"strict"`. Governs the 10 process-LDD skills only — `adr_gate`/`e2e-wiring-proof` are always-on regardless (ADR-0259), toggled via `quality_layers.py` instead. |
+| `ldd_preset` | enum | `"off"` | LDD preset (`corvin_operator/bridges/shared/ldd.py::PRESETS`): `"off"` / `"quick"` / `"default"` / `"strict"`. Governs the 10 process-LDD skills only — `adr_gate`/`e2e-wiring-proof` are always-on regardless (ADR-0259), toggled via `quality_layers.py` instead. |
 | `add_dirs` | array | `[]` | Additional `--add-dir` paths passed to the engine for this persona. |
 | `delegate_enabled` | boolean | `false` | Enables the orchestrator delegation tools (`delegate_claude_code`, `delegate_codex`, etc.). |
 | `delegate_inject_skills` | boolean | `false` | Whether active skills are visible to delegated workers. |
@@ -153,7 +153,7 @@ To remove the pin and return to auto-routing:
 ### Assigning a persona to a chat profile
 
 For permanent assignment without requiring users to type `/pin`, add a `persona`
-field to the chat profile in `operator/bridges/<channel>/settings.json`:
+field to the chat profile in `corvin_operator/bridges/<channel>/settings.json`:
 
 ```json
 {
@@ -394,7 +394,7 @@ A bridge daemon must:
 4. Have a `settings.json` with at least `whitelist` (array), a token field, and
    optionally `chat_profiles` and `rate_limit_per_hour`.
 5. Have an `install.sh` that runs `npm install`.
-6. Have an entry in `operator/bridges/bridge.sh` so `bridge.sh up/down/status/tail`
+6. Have an entry in `corvin_operator/bridges/bridge.sh` so `bridge.sh up/down/status/tail`
    work uniformly.
 
 ### Reference implementation
@@ -402,7 +402,7 @@ A bridge daemon must:
 The simplest complete bridge is the Telegram daemon:
 
 ```
-operator/bridges/telegram/daemon.js
+corvin_operator/bridges/telegram/daemon.js
 ```
 
 It is approximately 400 lines and covers: bot initialization, whitelist checking,
@@ -439,7 +439,7 @@ Outgoing reply envelope (adapter → daemon):
 ### Settings hot-reload in your daemon
 
 The daemon must read `settings.json` on every message — not once at boot — by
-calling `currentSettings()` from `operator/bridges/shared/js/settings.js`. This
+calling `currentSettings()` from `corvin_operator/bridges/shared/js/settings.js`. This
 gives you hot-reload for whitelist changes, pin changes, rate limit tuning, and
 chat profile updates while the daemon is running.
 
@@ -453,7 +453,7 @@ if (!settings.whitelist.includes(userId)) return;
 
 ### Registering in bridge.sh
 
-Add a block to `operator/bridges/bridge.sh` following the existing pattern for
+Add a block to `corvin_operator/bridges/bridge.sh` following the existing pattern for
 Telegram or Discord. The script handles start, stop, status, and log tail uniformly
 if you follow the naming conventions (`<channel>/daemon.js`, port on
 `BRIDGE_PORT_<CHANNEL>`).
@@ -546,7 +546,7 @@ the repo automatically and will not be overwritten by `git pull`.
 | Attach an MCP server | Add `mcp_servers` to a persona | Same persona JSON | No |
 | Runtime automation tool | Create a forge tool | Chat request or JSON in forge workspace | No |
 | Reusable reasoning pattern | Create a skill | Chat request or `mcp__skill_forge__skill_create` | No |
-| New messaging channel | Write a Node.js bridge daemon | `operator/bridges/<channel>/` | Yes (daemon start) |
+| New messaging channel | Write a Node.js bridge daemon | `corvin_operator/bridges/<channel>/` | Yes (daemon start) |
 | Shareable bundle | Build a `.corvin-pkg` | `corvin-pkg build` | No (one-time install) |
 
 ---

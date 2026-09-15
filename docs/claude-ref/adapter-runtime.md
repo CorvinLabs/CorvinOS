@@ -7,7 +7,7 @@ CLAUDE.md summarises; this file has the full contract.
 
 ## Hot-reload convention for bridge settings
 
-Settings changes under `operator/bridges/<channel>/settings.json` take
+Settings changes under `corvin_operator/bridges/<channel>/settings.json` take
 effect **immediately** — no restart. Adapter re-reads per inbox message;
 daemons re-read on mtime change.
 
@@ -265,7 +265,7 @@ heartbeat thread writes `_heartbeat: true` envelopes (`~L3921`) if nothing
 else has fired yet. Both carry the turn's `msg_id` so a daemon can
 correlate them with the eventual real-reply envelope.
 
-Every bridge daemon (`operator/bridges/<channel>/daemon.js`, or
+Every bridge daemon (`corvin_operator/bridges/<channel>/daemon.js`, or
 `handler.js` for Signal/Teams) applies the same two-part mechanism instead
 of relaying each envelope as a brand-new message:
 
@@ -290,7 +290,7 @@ of relaying each envelope as a brand-new message:
 
 Both pieces of bookkeeping (the sticky-ref map and the finalized-TTL map)
 are the same primitive across every daemon:
-`operator/bridges/shared/js/sticky_progress.js` (`makeStickyProgress()`).
+`corvin_operator/bridges/shared/js/sticky_progress.js` (`makeStickyProgress()`).
 Each daemon supplies its own platform I/O (edit/send/delete); the module
 itself does none. Unit tests: `shared/js/test_sticky_progress.js`. Per-daemon
 wiring is covered by `<channel>/test_sticky_progress_wiring.js` (structural,
@@ -380,7 +380,7 @@ All of it is structural — no flag, no env kill-switch.
 | **`processed/` retention** | `adapter.py::_sweep_processed` on the cleanup tick (`ADAPTER_CLEANUP_INTERVAL`, 300 s) | Regular files directly under `processed/` older than the window are deleted (GDPR Art. 5(1)(e) — the archive held 264 MB / 8 k envelopes of personal data with no purpose). Window: env `ADAPTER_PROCESSED_RETENTION_DAYS` → shared `settings.json` `processed_retention_days` → **30**. `0`/negative disables. `poison/` and sub-directories are never swept. Audit `bridge.processed_swept` `{removed, bytes, retention_days}` — counts only. |
 | **System-prompt temp files** | `adapter.py::_sweep_sysprompt_tmp` on the same tick | `call_claude()` unlinks its `.corvin-sysprompt-*.txt` in `finally`; a SIGKILL/OOM between `mkstemp` and that `finally` used to leave the file (memory, recall, vault hints) behind forever. Any such file older than 1 h under the sessions root is swept. |
 | **Voice-summary hand-off** | `build_voice_summary` → `summarize.py --stdin-json` | The user's question and the answer travel to `summarize.py` as a JSON envelope `{"text", "task"}` on **stdin**; `summarize.py` hands the prompt to `claude -p` on stdin and the system prompt via `--append-system-prompt-file` (0600 temp). Nothing user-authored is ever an argv value (`/proc/<pid>/cmdline` is world-readable; also removes the E2BIG ceiling). `--task <text>` no longer exists. |
-| **Mid-turn heartbeat markers** | `mid_turn_heartbeat.default_state_dir()` = `<corvin_home>/bridges/mid_turn_heartbeats/` | Previously written into the repo tree (`operator/bridges/shared/`, un-ignored, world-readable, raw chat id in the filename). Now 0700 dir / 0600 files, filename carries a sha256 fingerprint of the session key; the raw ids stay in the marker body only. |
+| **Mid-turn heartbeat markers** | `mid_turn_heartbeat.default_state_dir()` = `<corvin_home>/bridges/mid_turn_heartbeats/` | Previously written into the repo tree (`corvin_operator/bridges/shared/`, un-ignored, world-readable, raw chat id in the filename). Now 0700 dir / 0600 files, filename carries a sha256 fingerprint of the session key; the raw ids stay in the marker body only. |
 | **L34 gate on a nameless engine** | `adapter.py::_check_compliance_or_fail` | An engine without `name` cannot be matched against the locality matrix → **refused** (`[compliance] Spawn rejected … fail-closed`). It used to fail-open. |
 | **L44 low-confidence allow is audited** | `adapter.py::_check_house_rules_or_fail` | `house_rules.py` writes `house_rules.escalated` for a `clear_low_confidence` verdict and the adapter then allows the turn; the override is now recorded as `house_rules.allowed_after_lowconf` (WARNING; rule id, reason code, confidence, fingerprinted chat key) so the chain never claims "blocked" for a request that ran. |
 
@@ -411,7 +411,7 @@ worker pool driving the REAL CLI with `/cost` and with a scratch `.claude/comman
 | Finding | Mechanism | Where | Contract |
 |---|---|---|---|
 | **R3-C2** | **`@<path>` neutraliser** | `agents/claude_code.py::neutralise_at_references`, applied inside `guard_prompt_head` — so every present and future call site inherits it | The byte-0 sentinel guarded **byte 0 only**. The CLI ALSO expands `@<path>` into that file's **content** *anywhere* in the message, client-side, before the model runs. It is not a tool call, so no tool policy, permission mode, `--add-dir` or sandbox restricts it: proven with all tools disallowed, through both the `/task` worker's `stream-json` transport and the plain-stdin adapter transport, `num_turns 1`, `permission_denials []`. Reachable from **every** channel carrying user text — Discord / Telegram / WhatsApp / e-mail bodies, console `/task`, console chat, voice summary — so one message exfiltrated `~/.corvin/audit.jsonl`, `~/.config/corvin-voice/secrets.json`, `.env`, any readable file. **Measured trigger:** only a *token-start* `@` expands (start-of-string or whitespace before it); `x@canary.txt` and `(`/`<`/`"`/`,`/`:`/`=`/`[`/`/`/`-` before the `@` do not — which is why e-mail addresses were never a vector. **Fix:** insert one zero-width **U+2060 WORD JOINER immediately BEFORE** every `@` whose preceding character is not an e-mail local-part char `[A-Za-z0-9._%+-]`. Nothing is deleted or rewritten — dropping the joiners restores the input byte-for-byte — and the guard stays idempotent. **Placement matters:** U+200B *before* the `@` does NOT stop the expansion (a zero-width space reads as a token boundary, a word joiner does not); a joiner *inside* the token (`@`+joiner) does stop it but made the model call the message "obfuscated … prompt-injection attempt" and refuse an ordinary echo. **Trade-off:** the rule is deliberately wider than the measured trigger, so `@handle`, `<@1234>` Discord mentions and a pasted `@property` decorator each gain one invisible joiner in front of the `@`; e-mail addresses are untouched. Byte-0 `!` (client-side shell — `!cat secret.txt` ran with the Bash tool disallowed) and `#` (memory-add) are covered by the existing sentinel, verified inert behind it. |
-| **R3-C1** | **The missed spawn site** | `corvin_console/routes/assistant.py` | It imported neither the sentinel nor the neutraliser and passed the prompt as a **positional argv element** with no `--`; with the route's defaults (`context={}`, `history=[]`) that element *was* the operator's message, so `--version` was parsed as a CLI flag and `/pwn` expanded a project command from the spawn cwd. The prompt now goes through `guard_prompt_head` and travels on **stdin** (`subprocess.run(..., input=…)`), fail-closed on `ImportError` exactly like `task_worker_pool.py`. `operator/orchestration/tde/worker_ipc.py::_run_worker` was guarded in the same pass. |
+| **R3-C1** | **The missed spawn site** | `corvin_console/routes/assistant.py` | It imported neither the sentinel nor the neutraliser and passed the prompt as a **positional argv element** with no `--`; with the route's defaults (`context={}`, `history=[]`) that element *was* the operator's message, so `--version` was parsed as a CLI flag and `/pwn` expanded a project command from the spawn cwd. The prompt now goes through `guard_prompt_head` and travels on **stdin** (`subprocess.run(..., input=…)`), fail-closed on `ImportError` exactly like `task_worker_pool.py`. `corvin_operator/orchestration/tde/worker_ipc.py::_run_worker` was guarded in the same pass. |
 | **R3-C1b** | **Spawn-site ledger** | `core/console/tests/test_claude_spawn_site_ledger.py` | The root cause was a *discovery* gap: nothing enumerated the `claude -p` spawn sites. The test now walks `core/`, `operator/` and `scripts/` for modules that spawn the CLI with `-p` and holds them against a ledger — `_MUST_GUARD` (must reach `guard_prompt_head`) and `_PENDING` (same finding class, other surfaces, each with a reason). A **new** spawn site, or a removed ledger entry, fails the test. |
 
 Regression tests: `shared/test_adapter_prompt_head.py` (neutraliser contract + idempotence +
@@ -427,12 +427,12 @@ neutralisation against a future CLI change, not the doc.
 
 | Finding | Mechanism | Where | Contract |
 |---|---|---|---|
-| **R4-C1** | **26 unguarded spawn sites** | the 12 bridge helper models in `operator/bridges/shared/` (`router`, `acs_classify`, `acs_gate_chain`, `acs_runtime`, `house_rules`, `output_sentinel`, `user_style`, `user_model`, `memory_bridge`, `ulo_compliance`, `dialectic`, `compute_narrator`) plus `context_engineering/stages/llm_synthesis.py`, `compute/fabric/oracle/oracle.py`, `console/browser/agent.py`, `console/routes/workflows.py` (3 spawns), `delegate/{output_judge,prompt_safety}.py`, `workflows/engines_claude.py`, `tde/{analysis_runner,loss_judge,tde_engine}.py`, `skill_creator/llm_client.py`, `voice/hooks/artifact_register.py`, `voice/scripts/engine_canary.py`, `scripts/run_spotify_workflow_demo.py` | Round 3's ledger listed these as `_PENDING`; the first twelve are fed the message body of a public Discord / Telegram / WhatsApp / e-mail turn **verbatim**, so `@/etc/hostname` in one chat message was a file read on every one of them. Each site now guards the **WHOLE payload** it hands to the CLI — never a substring — because the template and the attacker-influenced text are interleaved by the time the payload exists, and the sentinel additionally keeps a `-`-leading payload from being parsed as a CLI flag at the ~14 sites that pass the prompt **positionally**. Reply contracts are untouched: the guard edits only the prompt, and every one of these parses its verdict out of **stdout**. |
-| **R4-C2** | **One fail-closed import surface** | `operator/bridges/shared/prompt_guard.py` | Copying a defensive `try: import … except: _guard = None` block into thirty modules is thirty chances to forget the `is None` branch and spawn unguarded. The shim imports `agents.claude_code.guard_prompt_head` once and **raises `PromptGuardUnavailable`** from its own `guard_prompt_head()` when that fails — there is no code path that returns the caller's text, so callers need no `None` check. Sites outside `operator/bridges/shared/` bootstrap the shim by walking up to the repo root; their fallback is a **raising stub**, never a pass-through. The three round-1..3 sites keep their inline `is None` refusal and are listed in the ledger's `_INLINE_NONE_CHECK`; `chat_runtime.py` / `summarize.py` import the helper directly with no fallback at all (`_DIRECT_HARD_IMPORT`). |
+| **R4-C1** | **26 unguarded spawn sites** | the 12 bridge helper models in `corvin_operator/bridges/shared/` (`router`, `acs_classify`, `acs_gate_chain`, `acs_runtime`, `house_rules`, `output_sentinel`, `user_style`, `user_model`, `memory_bridge`, `ulo_compliance`, `dialectic`, `compute_narrator`) plus `context_engineering/stages/llm_synthesis.py`, `compute/fabric/oracle/oracle.py`, `console/browser/agent.py`, `console/routes/workflows.py` (3 spawns), `delegate/{output_judge,prompt_safety}.py`, `workflows/engines_claude.py`, `tde/{analysis_runner,loss_judge,tde_engine}.py`, `skill_creator/llm_client.py`, `voice/hooks/artifact_register.py`, `voice/scripts/engine_canary.py`, `scripts/run_spotify_workflow_demo.py` | Round 3's ledger listed these as `_PENDING`; the first twelve are fed the message body of a public Discord / Telegram / WhatsApp / e-mail turn **verbatim**, so `@/etc/hostname` in one chat message was a file read on every one of them. Each site now guards the **WHOLE payload** it hands to the CLI — never a substring — because the template and the attacker-influenced text are interleaved by the time the payload exists, and the sentinel additionally keeps a `-`-leading payload from being parsed as a CLI flag at the ~14 sites that pass the prompt **positionally**. Reply contracts are untouched: the guard edits only the prompt, and every one of these parses its verdict out of **stdout**. |
+| **R4-C2** | **One fail-closed import surface** | `corvin_operator/bridges/shared/prompt_guard.py` | Copying a defensive `try: import … except: _guard = None` block into thirty modules is thirty chances to forget the `is None` branch and spawn unguarded. The shim imports `agents.claude_code.guard_prompt_head` once and **raises `PromptGuardUnavailable`** from its own `guard_prompt_head()` when that fails — there is no code path that returns the caller's text, so callers need no `None` check. Sites outside `corvin_operator/bridges/shared/` bootstrap the shim by walking up to the repo root; their fallback is a **raising stub**, never a pass-through. The three round-1..3 sites keep their inline `is None` refusal and are listed in the ledger's `_INLINE_NONE_CHECK`; `chat_runtime.py` / `summarize.py` import the helper directly with no fallback at all (`_DIRECT_HARD_IMPORT`). |
 | **R4-C3** | **L44 stays fail-closed** | `house_rules.py::_house_rules_classify_chunk_once` | A raising guard inside a compliance gate must not become a silent allow **or** a pointless retry storm. The guard failure is converted to `_HouseRulesClassifierError("guard_missing")` — the module's own error contract — and `guard_missing` joins `spawn_missing`/`auth_missing` as a **non-transient** cause, so the retry wrapper breaks immediately and the gate escalates. |
 | **R4-C4** | **Ledger categories** | `core/console/tests/test_claude_spawn_site_ledger.py` | `_PENDING` is now **empty and asserted empty** — anything landing there is an open finding, not a blessed exemption. A new `_NO_CLI_TEXT` category holds the two files the discovery regex finds that hand **no text at all** to the CLI (`compute/fabric/config.py` — an argv *template* dataclass default; `bridges/shared/engines/system_prompt_injector.py` — `claude -p` appears only in docstrings). `test_guarded_sites_fail_closed_when_the_helper_is_missing` now covers **every** `_MUST_GUARD` entry, not three of them. |
 
-Regression tests: `operator/bridges/shared/test_spawn_prompt_guard.py` — three of the most
+Regression tests: `corvin_operator/bridges/shared/test_spawn_prompt_guard.py` — three of the most
 exposed sites (`router.route`, `acs_classify.classify`, `house_rules._house_rules_classifier`)
 driven through their own entry points against a **recording `claude` stand-in the module
 actually execs**, asserting on what the CLI RECEIVED (argv + stdin), plus the shim's
@@ -457,7 +457,7 @@ were therefore structurally invisible, including `adapter.py`, `a2a_worker.py`,
 |---|---|---|---|
 | **R4b-F1** | **`/btw` mid-stream injection reached the CLI raw** `[CRITICAL]` | `agents/claude_code.py::ClaudeCodeEngine.inject` ← `adapter.py::inject_btw` ← `eci/dispatcher.py::dispatch_btw` ← `daemon.js` (`discord:781`, `telegram:313`, `slack:317`, `whatsapp:1281`, `teams:244`) | `inject()` writes a **second** user message into the live `claude` process and called no guard — a surface the round-1..3 model ("a spawn site builds an argv or a first stdin message") does not contain. The CLI applies its client-side expansions to **every** user message: measured live over `--input-format stream-json` with `--disallowedTools "*"`, a line whose content was `/r4probe` ran a project slash command and one containing `@cC.txt` inlined that file. Any chat user typing `/btw look at @/etc/hostname` (or `@~/.corvin/audit.jsonl`, `@.env`) read that file, inside a turn that runs `--dangerously-skip-permissions`. `inject()` now neutralises before framing. The **buffered** `/btw` transport was safe by accident: it lands in `--append-system-prompt`, which is **not** scanned for `@`. |
 | **R4b-F2** | **Gateway tenant Run route** `[HIGH]` | `core/gateway/corvin_gateway/dispatcher.py:381` → `:846` (`engine.spawn(prompt, env=env)`), route `app.py::submit_run` | `POST /v1/tenants/{tid}/runs` handed raw `spec.input` to the engine with `permission_mode is None` → `--dangerously-skip-permissions` and the prompt as the last positional argv element. On that transport a byte-0 `!cmd` is **local shell execution** (proven: `!echo R4BANG_OK_MARKER` ran with every tool disallowed, `permission_denials []`). Behind the tenant JWT — which does not remove it: a *tenant* is not the *operator* (ADR-0007). |
-| **R4b-F3** | **A2A worker, plus an ordering trap** `[HIGH]` | `operator/bridges/shared/a2a_worker.py:658` → `:778`, `_CONTROL_CHARS` at `:147` | The A2A framing block neutralises byte 0 (the payload starts `<a2a_instruction`) but nothing touched `@`, so a remote peer read arbitrary local files through an instruction body that passed every existing A2A defence. The guard is **not** a drop-in at this call site: `sanitize_instruction` strips U+2060 (`0x2060, # WORD JOINER — MED-04 fix`), so a guard applied *before* it silently re-arms the `@`. Correct order is `sanitize_instruction → frame_instruction → engine.spawn`, which the engine-level guard makes automatic. An ORDERING HAZARD comment now sits at `_CONTROL_CHARS` and `test_sanitize_instruction_would_strip_the_joiner_if_applied_first` pins it. |
+| **R4b-F3** | **A2A worker, plus an ordering trap** `[HIGH]` | `corvin_operator/bridges/shared/a2a_worker.py:658` → `:778`, `_CONTROL_CHARS` at `:147` | The A2A framing block neutralises byte 0 (the payload starts `<a2a_instruction`) but nothing touched `@`, so a remote peer read arbitrary local files through an instruction body that passed every existing A2A defence. The guard is **not** a drop-in at this call site: `sanitize_instruction` strips U+2060 (`0x2060, # WORD JOINER — MED-04 fix`), so a guard applied *before* it silently re-arms the `@`. Correct order is `sanitize_instruction → frame_instruction → engine.spawn`, which the engine-level guard makes automatic. An ORDERING HAZARD comment now sits at `_CONTROL_CHARS` and `test_sanitize_instruction_would_strip_the_joiner_if_applied_first` pins it. |
 | **R4b-F4** | **Ledger discovery rebuilt** | `core/console/tests/test_claude_spawn_site_ledger.py` | Discovery now recognises **both** shapes — hand-built argv (`"-p"` + a claude-binary reference) and engine-mediated (`ClaudeCodeEngine`/`claude_code` + a `.spawn(`/`.inject(` call) — and scans the **whole repo** minus `_SKIP_DIRS` instead of `core`/`operator`/`scripts` (which had left three `benchmark/` spawns unclassified). Categories: `_MUST_GUARD` (builds the payload itself → must call the helper; `adapter.py` added, since its own guard calls are load-bearing for the legacy raw-stdin `/btw` path), `_ENGINE_GUARDED` (guarded by the engine; asserted to build no argv of its own), `_NO_CLI_TEXT`, `_OFFLINE_FIXTURE_HARNESS` (operator-run `benchmark/` measurement scripts, asserted to live under `benchmark/` — deliberately unguarded because a sentinel line would corrupt the token counts they measure), `_PENDING` (empty, asserted empty). `adapter.py`'s raising import stub is a third fail-closed shape (`_RAISING_STUB`). |
 | **R4b-F5** | **`delegate_*` MCP tools** `[MEDIUM]` | `core/delegate/corvin_delegate/mcp_server.py:448` → `delegation.py:985/:1003` | `worker.spawn(prompt)` with zero `guard_prompt_head` references in the package; `_validate_prompt` is a type/length check, not an injection guard. Covered by the engine-level guard. |
 
@@ -481,7 +481,7 @@ the guarded payload, so argv snapshots carry the `User input:\n` sentinel
 `core/console/tests/test_task_worker_pool_argv.py`), and a `/btw` note echoed by a fake
 CLI comes back with the sentinel line (`test_adapter_engine_path.py`).
 
-Regression tests: `operator/bridges/shared/test_engine_guarded_spawn.py` — real
+Regression tests: `corvin_operator/bridges/shared/test_engine_guarded_spawn.py` — real
 `subprocess.Popen` of a recording stand-in, asserting on the bytes that reached argv and
 the stdin **pipe**, for `inject()`, the stdin transport, the argv transport, idempotency
 and the A2A worker driven through the real `spawn_a2a_worker`;
@@ -543,7 +543,7 @@ The structural sandbox-boundary is **Layer 10 path-gate**, not permission_mode.
 ## `/settings` — single-message config-state dump
 
 `/settings` (aliases `/einstellungen`, `/config`) renders full chat+system configuration.
-Implementation: `operator/bridges/shared/settings_view.py` (pure-Python, best-effort).
+Implementation: `corvin_operator/bridges/shared/settings_view.py` (pure-Python, best-effort).
 Three blocks: WORKING/PFADE, SESSION, SYSTEM.
 
 **Must NOT do:** Don't add sub-commands. Don't pull in PyYAML/Pydantic from the
@@ -809,7 +809,7 @@ the two fields is nonzero.
 
 ### `pending_outbox` must count only the caller's own channel
 
-`operator/bridges/shared/outbox/` is one directory shared by every bridge
+`corvin_operator/bridges/shared/outbox/` is one directory shared by every bridge
 daemon. Before 2026-07-27 every daemon's `/status` computed `pending_outbox`
 as `readdirSync(OUTBOX).filter(f => f.endsWith('.json')).length` — the
 **total** file count, not filtered by channel. Since the directory is
@@ -827,7 +827,7 @@ still call `countPending` for the health field.
 
 ### Tests must never write to the live outbox
 
-`operator/bridges/shared/outbox/` is polled by the *running* daemons every
+`corvin_operator/bridges/shared/outbox/` is polled by the *running* daemons every
 500 ms. The workflow `deliver`/`ask_human`/`answer` node types write there via
 `_write_outbox` (`core/workflows/corvin_workflows/node_types.py`), and that path
 was hardcoded to the repo directory — so every test run of those nodes handed
@@ -881,7 +881,7 @@ the send timeout, the tick-stall detector, the preCheck-stall detector, and
 
 ## Session state has one address (2026-08-28)
 
-`operator/bridges/shared/session_state.py` is the single source of truth for
+`corvin_operator/bridges/shared/session_state.py` is the single source of truth for
 **where** a bridge chat's Claude conversation state lives and **what** counts as
 that state. `adapter._reset_session_state()` and
 `session_reset._wipe_voice_state()` both call into it; neither builds a path of
@@ -909,12 +909,12 @@ L37-retained `cel-briefs/` audit sidecars. This is what the `/new` reply
 promises in so many words, and it is why the reset deletes entries rather than
 the directory.
 
-### `operator/forge/paths.py` was shadowing `bridges/shared/paths.py`
+### `corvin_operator/forge/paths.py` was shadowing `bridges/shared/paths.py`
 
 Removed the same day. It was a nine-line stub ("stub for audit_metrics
 compatibility") whose symbols nothing imported — `audit_metrics` uses the
 package-qualified `forge.paths` — but it sat on the top-level name `paths`, so
-any process that put `operator/forge/` earlier on `sys.path` got it instead of
+any process that put `corvin_operator/forge/` earlier on `sys.path` got it instead of
 the real resolver. About 25 modules under `bridges/shared/` do
 `from paths import corvin_home` (or `tenant_global_dir` / `voice_dir`) at import
 time and raised ImportError under the shadowed name. Two mattered to the reset
@@ -933,7 +933,7 @@ through a caller's path order.
 
 ## The channel list is one list (2026-07-28)
 
-`operator/bridges/shared/channels.py::BRIDGE_CHANNELS` is the canonical set of
+`corvin_operator/bridges/shared/channels.py::BRIDGE_CHANNELS` is the canonical set of
 shipped messenger channels — currently seven: whatsapp, telegram, discord, slack,
 email, signal, teams. `CHANNEL_LABELS` holds their short display names.
 
@@ -957,7 +957,7 @@ occurrences of one omission is what made this a test rather than a fix.
 copy — it lives in a different distribution package that must import without
 `operator/` on `sys.path` — and `shared/test_channel_list_ssot.py` pins the two
 together, plus every consumer above, plus both directions against
-`operator/bridges/*/daemon.js` on disk.
+`corvin_operator/bridges/*/daemon.js` on disk.
 
 **Must NOT do:** don't hand-write a channel list. Don't re-add a private
 `_BRIDGE_CHANNELS` frozenset to any `paths.py` — channel identity there is a

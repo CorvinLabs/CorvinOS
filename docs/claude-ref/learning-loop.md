@@ -43,7 +43,7 @@ next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tena
 
 | Piece | File | Contract |
 |---|---|---|
-| L5 shadow call sites | `operator/bridges/shared/delegation_policy.py::_acp_shadow_route`, called from `resolve_delegation_route` (turn stays native — the majority of turns) and `resolve_worker_engine` (delegation-worthy turn — engine chosen) | exactly ONE record per turn; runs AFTER the bundled rule + extension-point hook; never changes the answer; degrades to "no record" on any failure; skips un-booted processes without creating a phantom registry |
+| L5 shadow call sites | `corvin_operator/bridges/shared/delegation_policy.py::_acp_shadow_route`, called from `resolve_delegation_route` (turn stays native — the majority of turns) and `resolve_worker_engine` (delegation-worthy turn — engine chosen) | exactly ONE record per turn; runs AFTER the bundled rule + extension-point hook; never changes the answer; degrades to "no record" on any failure; skips un-booted processes without creating a phantom registry |
 | Outcome sink | `core/learning/outcome_sink.py` | `emit_task_outcome()` / `recent_outcomes()`; content-free; fail-soft; tenant from task metadata only |
 | Task chokepoint | `core/console/corvin_core/task_manager.py::TaskManager.record_event` | emits on `task.completed` / `task.failed`; `create_task(tenant_id=…)` at both console creation sites |
 | Audit-first store | `core/learning/event_store.py::EventStore.write_event` | core chain record (`learning.<event_type>`, content-free) FIRST via `event_persistence.core_audit_event`; no chain commit ⇒ no disk record (RuntimeError); disk record carries `audit_ref` |
@@ -271,7 +271,7 @@ by `POST /features/toggle`, so an operator decision is never stale.
   that write for tenant X run as tenant X (`CORVIN_TENANT_ID`).
 * `core/paths/tenant.py::corvin_home()` honours `CORVIN_HOME` (then a
   repo-local `.corvin`, then `~/.corvin`) — the same order as
-  `operator/bridges/shared/paths.py`. Nothing in learning/skills may hard-wire `~/.corvin`.
+  `corvin_operator/bridges/shared/paths.py`. Nothing in learning/skills may hard-wire `~/.corvin`.
 * The free-text feedback `reason` is used by the interpreter's keyword rules
   and is never persisted or chained.
 * `SkillConfig.apply_delta` clamps to `[0, 1]` and rejects unknown params;

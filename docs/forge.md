@@ -10,10 +10,10 @@ Three properties hold by construction:
 - **Sandboxed.** Every forged tool runs inside `bwrap` with a minimal mount set derived from the schema's `x-bind` annotations. No paths the schema did not name; the network namespace is unshared unless the **operator** opens it for that persona via `policy.persona_sandbox_overrides` (see below).
 - **Auditable.** Every call writes a `runs/<id>/run_manifest.json` and appends one entry to the SHA-chained audit log. Inputs marked `x-redact: true` are replaced with `<redacted>` in the manifest; the tool itself sees the real value.
 
-The plugin lives entirely in `operator/forge/`. It imports nothing from voice or cowork. It is splittable into its own repo without touching the rest of the OS.
+The plugin lives entirely in `corvin_operator/forge/`. It imports nothing from voice or cowork. It is splittable into its own repo without touching the rest of the OS.
 
 ```
-operator/forge/
+corvin_operator/forge/
 ├── SKILL.md              # the agent-facing reference (when to use forge)
 ├── forge.py              # thin entry point
 ├── forge/                # the actual modules
@@ -43,7 +43,7 @@ operator/forge/
 
 ## When to forge a tool
 
-The agent (Claude) reaches for `forge_tool` when one of these holds — it is documented this way in `operator/forge/SKILL.md` so the agent applies the same rule consistently:
+The agent (Claude) reaches for `forge_tool` when one of these holds — it is documented this way in `corvin_operator/forge/SKILL.md` so the agent applies the same rule consistently:
 
 - The same Bash/Python snippet is being written ≥ 3× with different parameters (paths, columns, thresholds)
 - Precise numerical results over a dataset are required (statistics, regression, aggregation, filtering, splitting)
@@ -335,7 +335,7 @@ Install the forge MCP server in a project's `.claude/mcp_servers.json`:
   "mcpServers": {
     "forge": {
       "command": "python3",
-      "args": ["/abs/path/to/operator/forge/forge.py"]
+      "args": ["/abs/path/to/corvin_operator/forge/forge.py"]
     }
   }
 }
@@ -382,7 +382,7 @@ The result is `{tools: [{name, description, scope, call_count}, …]}` (in `stru
 
 ## Testing
 
-Forge tests are part of `bash operator/bridges/run-all-tests.sh`. Highlights:
+Forge tests are part of `bash corvin_operator/bridges/run-all-tests.sh`. Highlights:
 
 - `test_voice_persona.py` — persona resolves correctly, ACL applies, `{{ALLOWED_FORGED_TOOLS}}` expands
 - `test_voice_persona_acl.py` — denied calls audit, allowed calls run, fallback persona behaves

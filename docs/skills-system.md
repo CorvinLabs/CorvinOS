@@ -198,7 +198,7 @@ attempt is audited as ``skill.disable.refused``.
   "execution_time_ms": 3.2,
   "timestamp": "2026-09-02T12:34:56.789Z",
   "tenant_id": "_default",
-  "lom": "operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
+  "lom": "corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
   "lom_hash": "sha256(...)",
   "hash": "sha256(...)",
   "prev_hash": "sha256(...)"

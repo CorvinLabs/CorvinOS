@@ -3,8 +3,8 @@
 Companion to the short CLAUDE.md section.
 
 → **ADR:** Corvin-ADR: decisions/0045-L36-erasure-orchestrator.md
-→ **Module:** `operator/bridges/shared/erasure_orchestrator.py`
-→ **Tests:** `operator/bridges/shared/test_erasure_orchestrator.py`
+→ **Module:** `corvin_operator/bridges/shared/erasure_orchestrator.py`
+→ **Tests:** `corvin_operator/bridges/shared/test_erasure_orchestrator.py`
 
 ---
 
@@ -422,7 +422,7 @@ silent.
   this is the supported DPO entry point. (The former admin-UI route
   `/v1/admin/tenants/{tid}/erasure` was removed with the admin plugin.)
 * **Per-layer handlers (partial — done where feasible):**
-  `operator/bridges/shared/erasure_handlers.py` ships:
+  `corvin_operator/bridges/shared/erasure_handlers.py` ships:
   * `WorkflowChatHandler` (R2-A7) — `<tenant>/workflows/`: the authoring
     transcript `<wid>.chat.jsonl` (verbatim user turns), the run logs under
     `<wid>/runs/`, and the whole workflow when its `.meta.json` names the
@@ -499,7 +499,7 @@ structural defence against accidental PII in audit details holds.
 ## Tests
 
 ```bash
-python3 operator/bridges/shared/test_erasure_orchestrator.py
+python3 corvin_operator/bridges/shared/test_erasure_orchestrator.py
 ```
 
 33 tests covering:

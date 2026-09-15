@@ -10,7 +10,7 @@
 ## Context: What Already Exists
 
 **Backend (CEL — Context Engineering Layer):**
-- ✅ `operator/context_engineering/` (ADR-0269) — modular stages: memory_lookup, graph_traversal, skill_injection, adr_loader
+- ✅ `corvin_operator/context_engineering/` (ADR-0269) — modular stages: memory_lookup, graph_traversal, skill_injection, adr_loader
 - ✅ Talent Score (`talent_score.py`) — accuracy, learning_rate, variety, efficiency metrics
 - ✅ Learning Queue (`learning_queue.py`) — feedback event loop
 - ✅ Uncertainty Tiers (HIGH/MEDIUM/LOW/UNCERTAIN) — confidence badges
@@ -181,7 +181,7 @@ class TalentAggregator:
 **React Component Skeleton:**
 
 ```typescript
-// operator/console/pages/context_pipeline.tsx
+// corvin_operator/console/pages/context_pipeline.tsx
 
 import React, { useState } from 'react'
 import { Card, Badge, Skeleton, Tabs } from '@/components/ui'
@@ -340,7 +340,7 @@ export default function ContextPipelineTab() {
 **Code Skeleton:**
 
 ```typescript
-// operator/console/components/ContextFlowGraph.tsx
+// corvin_operator/console/components/ContextFlowGraph.tsx
 
 import React from 'react'
 import { Sankey, Tooltip, Sink, Source, Node, Link } from 'recharts'
@@ -515,7 +515,7 @@ class ContextStage(ABC):
 Register via plugin registry:
 
 ```yaml
-# operator/context_engineering/custom_stages.yaml
+# corvin_operator/context_engineering/custom_stages.yaml
 plugins:
   - id: codebase-grep
     type: context-stage
@@ -535,7 +535,7 @@ plugins:
 **Implementation Skeleton:**
 
 ```python
-# operator/context_engineering/plugins/example_codebase_grep.py
+# corvin_operator/context_engineering/plugins/example_codebase_grep.py
 
 import asyncio
 from typing import List

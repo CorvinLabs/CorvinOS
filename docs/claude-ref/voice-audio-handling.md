@@ -104,7 +104,7 @@ log line nobody read).
 What it does, in order:
 1. **STT provider table** — reports `local` (`pywhispercpp`) and `openai`
    readiness with a human reason (missing package, missing API key, etc.).
-2. **STT round-trip** — actually transcribes `operator/voice/scripts/fixtures/stt_sample.wav`
+2. **STT round-trip** — actually transcribes `corvin_operator/voice/scripts/fixtures/stt_sample.wav`
    through the real resolver chain and fails loudly if the returned text is empty.
 3. **TTS provider table** — reports `openai`, `edge-tts`, and `piper` readiness.
 4. **TTS round-trip** — actually calls `adapter.synthesize_voice_note(...)` and fails

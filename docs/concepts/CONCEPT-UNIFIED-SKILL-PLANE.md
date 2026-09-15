@@ -21,7 +21,7 @@ from the running system.
 |---|---|---|---|---|
 | 1 | `<tenant>/skill-forge/` | **145** skills + manifest | Skill-Creator, CEL, SkillForge MCP | `skill_inject`, CEL, `/skill-creator/skills` |
 | 2 | `<tenant>/global/skill-forge/` | **3** skills, no manifest | `skills_manual.py`, pre-fix Skill-Creator | `/skills` only — **nothing consumes it** |
-| 3 | `<repo>/operator/skill-forge/skills/dyn/` | **36** mirrors | `registry.create()` for `user`/`project` scope | the native `claude` plugin loader — **the only path to the engine** |
+| 3 | `<repo>/corvin_operator/skill-forge/skills/dyn/` | **36** mirrors | `registry.create()` for `user`/`project` scope | the native `claude` plugin loader — **the only path to the engine** |
 | 4 | `~/.corvin/packages/<tenant>/installed/` | ZIP packages | `/packages` upload | `/packages` UI only |
 | 5 | `core/skills/corvin_skills/` | a second full skill system (store, grader, versioning, learning loop, composition) | — | `packages.py`, for manifest validation |
 
@@ -271,7 +271,7 @@ operator would first notice the system working.
 - [[ADR-0405]] — Skill-Creator on the Claude Code engine; registry promotion,
   reachability contract, console lifecycle
 - [[CONCEPT-SKILL-CREATOR]] — the generator that produces `assistant.*` skills
-- `operator/context_engineering/stages/skillforge.py` — CEL skill binding.
+- `corvin_operator/context_engineering/stages/skillforge.py` — CEL skill binding.
   Its code cites ADR-0283, which is not present in `Corvin-ADR/decisions/`
   on this checkout (that directory starts at ADR-0321); the code comments are
   the current record.

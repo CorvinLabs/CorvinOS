@@ -16,7 +16,7 @@ layers:
       - "docs/claude-ref/layer-plugins.md"
     code_patterns:
       - "core/cowork/**/*.py"
-      - "operator/cowork/**/*.py"
+      - "corvin_operator/cowork/**/*.py"
     keywords:
       - persona
       - cowork
@@ -45,7 +45,7 @@ layers:
       - "docs/claude-ref/layer-plugins.md"
     code_patterns:
       - "core/forge/**/*.py"
-      - "operator/forge/**/*.py"
+      - "corvin_operator/forge/**/*.py"
       - "core/plugins/corvin_plugins/**/*.py"
     keywords:
       - forge
@@ -63,7 +63,7 @@ layers:
       - "docs/claude-ref/layer-plugins.md"
     code_patterns:
       - "core/skillforge/**/*.py"
-      - "operator/skill-forge/**/*.py"
+      - "corvin_operator/skill-forge/**/*.py"
     keywords:
       - skillforge
       - skill generation
@@ -114,7 +114,7 @@ layers:
       - "docs/claude-ref/layer-11-dialectic.md"
     code_patterns:
       - "core/dialectic/**/*.py"
-      - "operator/bundle/skills/ldd/**/*.py"
+      - "corvin_operator/bundle/skills/ldd/**/*.py"
     keywords:
       - dialectic
       - decision
@@ -162,7 +162,7 @@ layers:
       - "docs/claude-ref/layer-14-ldd-toggle.md"
     code_patterns:
       - "core/ldd/**/*.py"
-      - "operator/bundle/skills/ldd/**/*.py"
+      - "corvin_operator/bundle/skills/ldd/**/*.py"
     keywords:
       - ldd
       - toggle
@@ -302,7 +302,7 @@ layers:
       - "docs/claude-ref/layer-24-data-snapshot.md"
     code_patterns:
       - "core/data/**/*.py"
-      - "operator/forge/**/*data*.py"
+      - "corvin_operator/forge/**/*data*.py"
     keywords:
       - large-data
       - snapshot
@@ -369,7 +369,7 @@ layers:
       - "docs/claude-ref/layer-29-delegation.md"
     code_patterns:
       - "core/forge/**/*.py"
-      - "operator/forge/**/*.py"
+      - "corvin_operator/forge/**/*.py"
     keywords:
       - engine-agnostic
       - forge
@@ -561,7 +561,7 @@ layers:
       - "docs/claude-ref/ldd-mandatory.md"
       - "docs/claude-ref/layer-11-dialectic.md"
     code_patterns:
-      - "operator/bundle/skills/ldd/**/*.py"
+      - "corvin_operator/bundle/skills/ldd/**/*.py"
       - "core/ldd/**/*.py"
     keywords:
       - ldd

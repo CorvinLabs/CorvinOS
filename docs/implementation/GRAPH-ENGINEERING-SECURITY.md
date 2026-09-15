@@ -61,7 +61,7 @@
 
 ## Security Test Coverage
 
-**File:** `operator/task_analysis/tests/test_security_validation.py` (250+ LoC)
+**File:** `corvin_operator/task_analysis/tests/test_security_validation.py` (250+ LoC)
 
 ### Test Classes
 
@@ -76,7 +76,7 @@
 ```
 Path Validation:
   ✅ Valid: core/voice/renderer.py
-  ✅ Valid: operator/task_analysis/normalizer.py
+  ✅ Valid: corvin_operator/task_analysis/normalizer.py
   ❌ Absolute: /etc/passwd
   ❌ Traversal: ../../../etc/passwd
   ❌ Current dir: ./core/voice.py
@@ -169,12 +169,12 @@ Input Validation:
 
 1. Run security tests:
    ```bash
-   pytest operator/task_analysis/tests/test_security_validation.py -v
+   pytest corvin_operator/task_analysis/tests/test_security_validation.py -v
    ```
 
 2. Check coverage:
    ```bash
-   pytest operator/task_analysis/tests/ --cov=operator/task_analysis --cov-report=term
+   pytest corvin_operator/task_analysis/tests/ --cov=corvin_operator/task_analysis --cov-report=term
    ```
 
 3. Verify audit logging:

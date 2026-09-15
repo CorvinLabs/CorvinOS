@@ -124,7 +124,7 @@ instruct the agent to escalate its own permissions, never dump a long base64 blo
 
 The linter runs **inside `registry.create()`** — i.e. only for skills generated
 through SkillForge (`skill_create`). **Hand-authored bundle/operator skills**
-(`operator/bundle/skills/…`, `operator/<plugin>/skills/…`) are loaded directly
+(`corvin_operator/bundle/skills/…`, `operator/<plugin>/skills/…`) are loaded directly
 by the bundle/plugin loader and are **not** passed through `lint()`, so the
 8192-byte cap is **not enforced** on them. Several mature LDD bundle skills
 legitimately exceed it (e.g. `loop-driven-engineering` ≈ 13 KB). They should

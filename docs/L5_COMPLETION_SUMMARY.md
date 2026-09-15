@@ -59,7 +59,7 @@ CorvinOS L5 (Automated Decision Approval System) is now **100% production-ready*
 **Pre-existing Implementation:**
 - `core/learning/alert_engine.py` (12K)
 - `core/learning/confidence_alerts.py` (8.8K)
-- Alert thresholds in `operator/monitoring/alertmanager_rules.yaml`
+- Alert thresholds in `corvin_operator/monitoring/alertmanager_rules.yaml`
 - PagerDuty/Slack integration in `alert_channels.py` (8.9K)
 - Tests in `test_alert_triggering.py`
 
@@ -82,7 +82,7 @@ CorvinOS L5 (Automated Decision Approval System) is now **100% production-ready*
 ### ✅ GAP 5: Performance Tuning (COMPLETE)
 
 **Pre-existing Implementation:**
-- Benchmark suite: `operator/benchmarking/run_benchmarks.py` (533 lines)
+- Benchmark suite: `corvin_operator/benchmarking/run_benchmarks.py` (533 lines)
 - Performance tracking: `scripts/capture_performance_baseline.py`
 - Documentation: `docs/performance_benchmark_compliance.md`
 - Tests: `test_adr_0324_performance_aggregation.py`

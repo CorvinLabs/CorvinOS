@@ -51,7 +51,7 @@ Corvin userspace is the four plugins:
 | `cowork` | user-account framework (PAM-like) — defines which "uid" a chat runs as |
 | `forge` | `ld-linux.so` + `auditd` combined — JIT-loads new tools, audits everything |
 
-Each is independently disable-able, just like userspace daemons in Linux — `systemctl stop sshd` doesn't take the kernel with it. Removing `operator/forge/` doesn't take voice or bridges with it; `bridges/shared/audit.py` no-ops gracefully.
+Each is independently disable-able, just like userspace daemons in Linux — `systemctl stop sshd` doesn't take the kernel with it. Removing `corvin_operator/forge/` doesn't take voice or bridges with it; `bridges/shared/audit.py` no-ops gracefully.
 
 ## 3. Shell — the messenger chat
 
@@ -154,7 +154,7 @@ Corvin follows the same pattern, just inside `~/.config/corvin-voice/`:
 | `~/.config/corvin-voice/forge/tools/` | `/usr/local/bin/` | promoted forged tools (durable across sessions) |
 | `~/.config/corvin-voice/forge/runs/` | `/var/log/audit/` | per-call manifests |
 | `~/.config/claude-cowork/personas/` | `~/.bashrc.d/` | user persona overrides |
-| `operator/bridges/<channel>/settings.json` | `/etc/<service>/` | per-bridge service config |
+| `corvin_operator/bridges/<channel>/settings.json` | `/etc/<service>/` | per-bridge service config |
 
 **Hot-reload is an FHS trick too.** The mtime cache in the daemons + adapter is the same pattern as `inotify` watches on `/etc/` — config edits take effect without restarting the service. See `CLAUDE.md` §"Hot-reload convention" for the rule.
 

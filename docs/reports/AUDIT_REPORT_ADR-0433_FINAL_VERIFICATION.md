@@ -10,7 +10,7 @@
 
 ## EXECUTIVE SUMMARY
 
-CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id` parameter in the central scope API (`scope_root()` in `operator/forge/forge/scope.py`). This creates cascading vulnerabilities:
+CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id` parameter in the central scope API (`scope_root()` in `corvin_operator/forge/forge/scope.py`). This creates cascading vulnerabilities:
 
 - **SkillForge, ToolForge, Bridge subsystems** use global paths instead of tenant-scoped paths
 - **8 CRITICAL/HIGH Security Findings** identified: Token Theft, Cross-Tenant Visibility, Metrics Poisoning, Audit Chain Fragmentation
@@ -64,9 +64,9 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 
 | ID | Finding | File(s) | Impact | Vulnerability Class | GDPR Article | Test Gate (Phase E) |
 |---|---|---|---|---|---|---|
-| **C1** | Split-Brain Audit Trail | `core/compliance/audit_chain.py`, `operator/skill-forge/` | Audit events scattered across `_default/audit.jsonl` + `<tid>/audit.jsonl`; Hash-chain verification fails if paths split | Audit Integrity Broken | Art. 30/32 | `test_audit_split_brain_elimination()` |
-| **C2** | ToolForge Tools User-Scope Shared | `operator/forge/forge/tool_registry.py`, `core/orchestration/subsystems/tool_forge.py` | Tools created in Tenant A leaked into Tenant B's registry; RCE risk if Tool A's code executes in Tenant B context | Code Disclosure + RCE | Art. 32 | `test_tool_forge_tenant_isolation()`, `test_adversarial_tool_loading()` |
-| **C3** | Skill Registry Not Tenant-Aware | `operator/skill-forge/skill_forge/multi_registry.py` | Skill IP theft; algorithm extraction; one tenant can enumerate/load all skills from all tenants | IP Leakage + Privacy | Art. 5, 32 | `test_skill_registry_tenant_isolation()` |
+| **C1** | Split-Brain Audit Trail | `core/compliance/audit_chain.py`, `corvin_operator/skill-forge/` | Audit events scattered across `_default/audit.jsonl` + `<tid>/audit.jsonl`; Hash-chain verification fails if paths split | Audit Integrity Broken | Art. 30/32 | `test_audit_split_brain_elimination()` |
+| **C2** | ToolForge Tools User-Scope Shared | `corvin_operator/forge/forge/tool_registry.py`, `core/orchestration/subsystems/tool_forge.py` | Tools created in Tenant A leaked into Tenant B's registry; RCE risk if Tool A's code executes in Tenant B context | Code Disclosure + RCE | Art. 32 | `test_tool_forge_tenant_isolation()`, `test_adversarial_tool_loading()` |
+| **C3** | Skill Registry Not Tenant-Aware | `corvin_operator/skill-forge/skill_forge/multi_registry.py` | Skill IP theft; algorithm extraction; one tenant can enumerate/load all skills from all tenants | IP Leakage + Privacy | Art. 5, 32 | `test_skill_registry_tenant_isolation()` |
 | **C4** | Instance Registry Shared | `~/.corvin/instances.json` (if exists) | Metrics cross-contamination; Tenant A can see Tenant B's instance IDs, versions, telemetry opt-out state | Privacy Leak | Art. 5, 32 | `test_instance_registry_tenant_isolation()` |
 | **C5** | Bridge Credentials Cross-Tenant Exposure | `~/.corvin/bridges/<channel>/settings.json` | OAuth tokens stored globally; Tenant A reads Tenant B's Discord/Slack auth token; account takeover, impersonation, message theft | Token Theft + Account Takeover | Art. 32 | `test_adversarial_bridge_credential_access()` |
 
@@ -76,7 +76,7 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 |---|---|---|---|---|---|
 | **H1** | Telemetry Consent Not Tenant-Scoped | `~/.corvin/aco/telemetry/consent.json` | One tenant's GDPR Art. 7 opt-out (withdrawal) affects machine-wide telemetry; Tenant A opts out → Tenant B also silenced (or vice versa) | Consent Violation | Art. 6, 7 | `test_telemetry_consent_per_tenant()` |
 | **H2** | Bridge State File Shared | `~/.corvin/bridges/state.json` | Tenant DoS: Tenant A disables another tenant's bridges by modifying shared state file | Denial of Service | Art. 32 | `test_bridge_state_isolation()` |
-| **H3** | scope_root() Missing tenant_id Parameter | `operator/forge/forge/scope.py` | Central API doesn't enforce tenant isolation at call-site level; ~100 callers forced to guess tenant context | Architectural Gap | Art. 5 (by construction) | `test_scope_root_requires_tenant_id()` |
+| **H3** | scope_root() Missing tenant_id Parameter | `corvin_operator/forge/forge/scope.py` | Central API doesn't enforce tenant isolation at call-site level; ~100 callers forced to guess tenant context | Architectural Gap | Art. 5 (by construction) | `test_scope_root_requires_tenant_id()` |
 
 ---
 
@@ -124,7 +124,7 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 **Goal:** Refactor `scope_root()` API to require `tenant_id` parameter; update ~100 call-sites.
 
 - **Critical Change:** `scope_root(scope, *, tenant_id: str, ...)` — tenant_id is keyword-only, required
-- **Call-site Updates:** ~100 locations across operator/skill-forge, operator/forge, core/orchestration, core/learning
+- **Call-site Updates:** ~100 locations across corvin_operator/skill-forge, corvin_operator/forge, core/orchestration, core/learning
 - **Strategy:** AST-based search + manual verification per location + pair programming
 - **Tests:** 10–15 unit tests + parametrized matrix (all scopes × all tenants)
 - **Estimate:** 2–3 Days (2 Engineers: 1 refactoring, 1 verification)

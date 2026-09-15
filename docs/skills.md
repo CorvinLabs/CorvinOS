@@ -32,12 +32,12 @@ Three properties hold by construction:
   ≥3 grades with mean ≥0.5, explicit force). Surviving scope is the
   signal of "this skill is genuinely useful," not the act of writing it.
 
-The plugin lives in `operator/skill-forge/`. It imports nothing from
+The plugin lives in `corvin_operator/skill-forge/`. It imports nothing from
 voice or cowork. The MCP server is reached only via a chat-pinned
 persona that has `skill_forge_enabled: true`.
 
 ```
-operator/skill-forge/
+corvin_operator/skill-forge/
 ├── SKILL.md                 # the agent-facing reference (when to create skills)
 ├── skill_forge.py           # thin entry point
 ├── skill_forge/             # the actual modules
@@ -117,7 +117,7 @@ What happens, in order:
 3. **Plugin-slot mirror** (only `project` and `user` scope —
    the **scope-gate** for cross-chat leak prevention). Writes a
    stripped projection (just `name` + `description` front-matter,
-   body verbatim) to `<repo>/operator/skill-forge/skills/dyn/<sanitized>/SKILL.md`.
+   body verbatim) to `<repo>/corvin_operator/skill-forge/skills/dyn/<sanitized>/SKILL.md`.
    Task-scope and session-scope skills do *not* get a slot mirror;
    they stay reachable via adapter-injection in the originating chat
    (see step 2 of the use-phase below).
@@ -239,7 +239,7 @@ grant exists for the chat (engaged via `/auth-up <pin>`).
 Skills with no grades after `--ttl-days N` (default 7) get purged by
 `scripts/skill_cleanup.py ungraded`. **User scope is never pruned** —
 human-promoted skills are durable. A scheduled run via
-`bash operator/bridges/bridge.sh up` ties the cleanup to the same
+`bash corvin_operator/bridges/bridge.sh up` ties the cleanup to the same
 03:30 daily timer that handles session timeouts.
 
 `skill.purged` event with reason
@@ -275,7 +275,7 @@ Every successful `SkillRegistry.create()` persists the skill **twice**:
    `<scope_root>/skill-forge/skills/<name>/SKILL.md` — full
    front-matter, source-of-truth for grade / promote / purge.
 2. **Engine-facing slot mirror** at
-   `<repo>/operator/skill-forge/skills/dyn/<sanitized>/SKILL.md` —
+   `<repo>/corvin_operator/skill-forge/skills/dyn/<sanitized>/SKILL.md` —
    only `name` + `description` in the front-matter, body verbatim.
    Dotted names get sanitised (`trading.score_reviews` →
    `trading_score_reviews`). This file is what the standard
@@ -292,7 +292,7 @@ leak across chats through the engine's plugin-skill loader.
    a dedicated, single-purpose variable every test that exercises
    `create()`/`delete()` sets explicitly.
 2. Walk-up from `registry.py` for a `.corvin_repo`/`plugins/` marker →
-   `<repo>/operator/skill-forge/skills/dyn/` — the real production path.
+   `<repo>/corvin_operator/skill-forge/skills/dyn/` — the real production path.
 3. Fallback `~/.corvin/plugin-slot/` (no repo marker found).
 
 2026-08-02: a prior step-2 redirected to `<CORVIN_HOME>/plugin-slot/`
@@ -404,7 +404,7 @@ Install the MCP server in `.claude/mcp_servers.json`:
   "mcpServers": {
     "skill-forge": {
       "command": "python3",
-      "args": ["/abs/path/to/operator/skill-forge/skill_forge.py"]
+      "args": ["/abs/path/to/corvin_operator/skill-forge/skill_forge.py"]
     }
   }
 }
@@ -431,7 +431,7 @@ unified mean_score that aggregates all signal sources.
 
 ## Testing
 
-Skill-forge tests are part of `bash operator/bridges/run-all-tests.sh`.
+Skill-forge tests are part of `bash corvin_operator/bridges/run-all-tests.sh`.
 Highlights:
 
 - `test_linter_normalisation.py` — NFKC + confusable folding closes the

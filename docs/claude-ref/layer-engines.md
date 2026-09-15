@@ -420,7 +420,7 @@ Note: The `local-coder` bundle persona was removed in v1.2. Use the
   `--mcp-config <path>` flag from `_build_claude_args` is not
   reused on this path.
 
-**Activation requires `bash operator/bridges/bridge.sh restart`** —
+**Activation requires `bash corvin_operator/bridges/bridge.sh restart`** —
 the adapter's spawn shape changed (new `_call_opencode_streaming_via_engine`
 function, new pre-dispatch branch in `call_claude_streaming`). Hot-
 reload covers settings.json edits, not adapter-Python edits.
@@ -577,7 +577,7 @@ runs three gates in order before `engine.spawn()`:
 2. L34 data-classification — `_check_compliance_or_fail()`
 3. L35 network-egress — `_check_egress_or_fail()`
 
-Trust manifest: `operator/bridges/shared/agents/trust/hermes.yaml`
+Trust manifest: `corvin_operator/bridges/shared/agents/trust/hermes.yaml`
 (tier=low, binary_sha256=null, valid 6 months, operator-overridable).
 
 `DEFAULT_ENGINE_COMPLIANCE` in `data_classification.py` now includes:
@@ -665,7 +665,7 @@ returns `""` — that is a success, not a degradation. Regression guard:
   machinery that used to keep this current, without a replacement, so the list went
   stale until 2026-09-07 (offered only the superseded opus-4.1/sonnet-4/haiku-4.5
   trio). It is kept in sync by hand with the canonical
-  `operator/bundle/config-templates/engine_model_registry.yaml`
+  `corvin_operator/bundle/config-templates/engine_model_registry.yaml`
   (`engines.claude_code.os_models`) — the live-refreshed source served at
   `GET /models/registry` (`core/console/corvin_console/routes/models.py`) — pending
   a follow-up that wires this route to that source directly instead of maintaining
@@ -707,7 +707,7 @@ pre-turn WebSocket guard (`get_engine_unavailable_message`) resolves with
 
 **M2.5 — Prometheus metrics**
 
-`operator/bridges/shared/engine_metrics.py` — lazy `prometheus_client`:
+`corvin_operator/bridges/shared/engine_metrics.py` — lazy `prometheus_client`:
 - `corvin_bridge_hermes_turns_total{outcome, persona}`
 - `corvin_bridge_hermes_turn_duration_seconds{outcome}`
 - `corvin_bridge_opencode_turns_total{outcome, persona}`
@@ -764,9 +764,9 @@ adapter boots normally without it.
   version string shown as `value_masked`
 
 **Files:**
-- `operator/bridges/shared/agents/copilot_cli.py` — `CopilotCliEngine`
-- `operator/bridges/shared/agents/test_copilot_cli.py` — 29 tests (20 unit + 9 live E2E)
-- `operator/cowork/personas/copilot-worker.json` — delegation persona
+- `corvin_operator/bridges/shared/agents/copilot_cli.py` — `CopilotCliEngine`
+- `corvin_operator/bridges/shared/agents/test_copilot_cli.py` — 29 tests (20 unit + 9 live E2E)
+- `corvin_operator/cowork/personas/copilot-worker.json` — delegation persona
 
 **Structural gaps (EAOS not bridged):**
 `mid_stream_inject`, `plan_mode`, `context_compaction`, `session_pinning`, `skills`, `streaming`, `hooks`
@@ -819,9 +819,9 @@ the worker subprocess' cwd). Returns a structured envelope:
 | `core/delegate/corvin_delegate/delegation.py` | `run_delegate(...)` core — wraps the Layer-22 `WorkerEngine.spawn`/`collect()` API into a single sync call. Caller-side validation (engine, prompt size, model length, budget clamp, absolute working_dir, env-extra shape) raises `DelegateError`; engine-side failures (timeout, missing binary, non-zero exit) land on `DelegateResult.error` with `ok=False` |
 | `core/delegate/corvin_delegate/audit.py` | Three metadata-only emitters with per-event allow-list + global `_FORBIDDEN_FIELDS` set — `delegate.invoked` / `delegate.completed` / `delegate.failed` land in the unified hash chain via `forge.security_events.write_event` |
 | `core/delegate/corvin_delegate/mcp_server.py` | stdio JSON-RPC 2.0 MCP server (mirror of forge / skill-forge transport). Four `delegate_*` tools with identical input schemas |
-| `operator/cowork/lib/resolver.py::_inject_delegate_capability` | Resolver hook — every persona with `delegate_enabled: true` inherits the five tools + the routing brief in `append_system` + the `corvin_delegate` MCP server in `mcp_servers` |
-| `operator/cowork/personas/orchestrator.json` | Bundle persona — opts into `delegate_enabled: true` plus forge + skill-forge + recall + outcome-grading. The OS-mode default |
-| `operator/forge/forge/security_events.py::EVENT_SEVERITY` | `delegate.invoked` / `delegate.completed` / `delegate.failed` registered for the unified `voice-audit verify` to cover |
+| `corvin_operator/cowork/lib/resolver.py::_inject_delegate_capability` | Resolver hook — every persona with `delegate_enabled: true` inherits the five tools + the routing brief in `append_system` + the `corvin_delegate` MCP server in `mcp_servers` |
+| `corvin_operator/cowork/personas/orchestrator.json` | Bundle persona — opts into `delegate_enabled: true` plus forge + skill-forge + recall + outcome-grading. The OS-mode default |
+| `corvin_operator/forge/forge/security_events.py::EVENT_SEVERITY` | `delegate.invoked` / `delegate.completed` / `delegate.failed` registered for the unified `voice-audit verify` to cover |
 
 ### Cost contract
 
@@ -859,9 +859,9 @@ write boundary. Mirror of L23 / L24 / L25 / L28 metadata-only rule.
 |---|---|---|
 | `core/delegate/tests/test_delegation.py` | 24 | Validation (unknown engine, empty/oversize/non-string prompt, non-absolute working_dir, bad env_extra, budget clamp low/high/default), happy path (final_text, model + working_dir pass-through, env_extra pass-through, AVAILABLE_ENGINES set), failure paths (engine error event, spawn raises, factory raises), audit-payload allow-list, forbidden-field rejection, unknown-event rejection, end-to-end chain integrity (invoked + completed land; failure path lands invoked + failed but NOT completed; no raw text in any event) |
 | `core/delegate/tests/test_mcp_server.py` | 11 | JSON-RPC handshake (initialize response, tools/list returns five delegates, ping, unknown method → error, parse error on bad JSON); tools/call (happy path with content[].text + structuredContent + isError, unknown tool → INVALID_PARAMS, non-delegate tool name → error, oversize prompt → error, non-dict arguments → error, engine-failure surfaces as `isError: true` with structured envelope) |
-| `operator/cowork/test/test_resolver_delegate.py` | 15 | orchestrator persona carries `delegate_enabled=True`, resolve injects five delegate tools + `corvin_delegate` MCP server + PYTHONPATH + persona env-tag, brief landed in `append_system`, idempotent (re-resolve doesn't double the brief), persona without `delegate_enabled` is unchanged, user-override `delegate_enabled=False` suppresses injection |
+| `corvin_operator/cowork/test/test_resolver_delegate.py` | 15 | orchestrator persona carries `delegate_enabled=True`, resolve injects five delegate tools + `corvin_delegate` MCP server + PYTHONPATH + persona env-tag, brief landed in `append_system`, idempotent (re-resolve doesn't double the brief), persona without `delegate_enabled` is unchanged, user-override `delegate_enabled=False` suppresses injection |
 
-Wired into `operator/bridges/run-all-tests.sh` (five delegate
+Wired into `corvin_operator/bridges/run-all-tests.sh` (five delegate
 test entries, all green standalone).
 
 ### What you, as Claude Code, must NOT do (Layer 29)
@@ -889,7 +889,7 @@ test entries, all green standalone).
   for per-chat pinning when you genuinely want OpenCode as the OS engine.
 - **Don't widen the `AVAILABLE_ENGINES` tuple to include hypothetical
   future engines** before they have an actual `WorkerEngine`
-  implementation under `operator/bridges/shared/agents/`. The
+  implementation under `corvin_operator/bridges/shared/agents/`. The
   delegation library raises `DelegateError` on unknown engine ids;
   silently widening would let an LLM call into a non-existent
   factory and surface confusing engine-construct-failed errors.
@@ -943,8 +943,8 @@ test entries, all green standalone).
   pattern in `cowork.lib.resolver` mirrored here
 - Layer 23 / 24 / 25 / 28 — metadata-only-audit precedent
 - `core/delegate/corvin_delegate/` — the package
-- `operator/cowork/personas/orchestrator.json` — bundle persona
-- `operator/cowork/personas/copilot-worker.json` — delegation persona for CopilotCliEngine
+- `corvin_operator/cowork/personas/orchestrator.json` — bundle persona
+- `corvin_operator/cowork/personas/copilot-worker.json` — delegation persona for CopilotCliEngine
 
 ## Layer 29.1 — Delegation hardening (engine safety + output integrity)
 
@@ -1393,7 +1393,7 @@ absent from every emitted ``delegate.output_judged`` event.
 - **Don't lower the env-floor by editing the persona/chat_profile
   JSON via Write/Edit/Bash.** As of Layer 10 v2 hardening (see
   the Layer 10 section), persona JSONs at every tier
-  (``operator/cowork/personas/*.json``,
+  (``corvin_operator/cowork/personas/*.json``,
   ``~/.config/claude-cowork/personas/*.json``,
   ``<corvin_home>/cowork/personas/*.json``) AND
   ``bridges/<channel>/settings.json`` at every tier are
@@ -1401,7 +1401,7 @@ absent from every emitted ``delegate.output_judged`` event.
   own ``delegate_output_judge_mode`` via Write/Edit/Bash; the
   only path to change the floor is operator-side editing
   outside Claude's tool calls. 15 regression-test cases in
-  ``operator/voice/hooks/test_path_gate.py`` lock this in
+  ``corvin_operator/voice/hooks/test_path_gate.py`` lock this in
   (cases 50-64).
 - **Don't add a fourth mode ("blocking") that REFUSES delegation
   outright on CORRECTED.** That would conflate "the output is
@@ -1445,9 +1445,9 @@ is the one the bridge ships with.
 
 | File | Role |
 |---|---|
-| `operator/bridges/shared/helper_model.py` | Resolver + argv composer + once-per-process announce-log. Stdlib only, no LLM-SDK import (AST lint gate) |
-| `operator/bridges/shared/test_helper_model.py` | 17-case pure-lib E2E: resolution order, opt-out keywords, argv composition, announce-log idempotency, no-SDK invariant, ALL_SITES coverage |
-| `operator/bridges/shared/test_helper_model_sites.py` | 13-case per-site E2E: every helper's argv is intercepted via `mock.patch.object(subprocess.run)` and asserted to carry `--model claude-haiku-4-5-20251001` (+ per-site override + opt-out paths) |
+| `corvin_operator/bridges/shared/helper_model.py` | Resolver + argv composer + once-per-process announce-log. Stdlib only, no LLM-SDK import (AST lint gate) |
+| `corvin_operator/bridges/shared/test_helper_model.py` | 17-case pure-lib E2E: resolution order, opt-out keywords, argv composition, announce-log idempotency, no-SDK invariant, ALL_SITES coverage |
+| `corvin_operator/bridges/shared/test_helper_model_sites.py` | 13-case per-site E2E: every helper's argv is intercepted via `mock.patch.object(subprocess.run)` and asserted to carry `--model claude-haiku-4-5-20251001` (+ per-site override + opt-out paths) |
 
 ### Curated site identifiers
 
@@ -1595,9 +1595,9 @@ export CORVIN_HELPER_MODEL=none
 
 ### References
 
-- `operator/bridges/shared/helper_model.py` — resolver + argv composer
-- `operator/bridges/shared/test_helper_model.py` — 17 cases
-- `operator/bridges/shared/test_helper_model_sites.py` — 13 cases
+- `corvin_operator/bridges/shared/helper_model.py` — resolver + argv composer
+- `corvin_operator/bridges/shared/test_helper_model.py` — 17 cases
+- `corvin_operator/bridges/shared/test_helper_model_sites.py` — 13 cases
 - Layer 11 (`dialectic.py`) — subscription-native `claude -p` pattern this layer
   generalises
 - Layer 22 (`WorkerEngine`) — worker engines are explicitly NOT in this layer's
@@ -1637,7 +1637,7 @@ bridge inbox → process_one()
 
 ### Test surface
 
-`operator/bridges/shared/test_adapter_os_model.py` covers explicit-model
+`corvin_operator/bridges/shared/test_adapter_os_model.py` covers explicit-model
 passthrough, env opt-out, env override, and falsy-value rejection.
 
 ### What Phase 3 supersedes from Phase 2
@@ -1659,8 +1659,8 @@ persona was removed in v1.2.
 
 ### References
 
-- `operator/bridges/shared/adapter.py::_resolve_os_model` — resolution helper
-- `operator/bridges/shared/test_adapter_os_model.py` — 11 cases (model:
+- `corvin_operator/bridges/shared/adapter.py::_resolve_os_model` — resolution helper
+- `corvin_operator/bridges/shared/test_adapter_os_model.py` — 11 cases (model:
   passthrough, env opt-out, env override, falsy-value rejection)
 - Layer 29.5 Phase 1 (above) — sister phase covering helper subprocesses
 - Layer 29 (`orchestrator` persona) — the current delegation persona
@@ -1673,7 +1673,7 @@ Sonnet for large ones automatically, with a Persona-Floor pin for
 safety-critical personas (forge) and a Retry-on-Thrashing backstop.
 
 **Single source of truth (fixed 2026-07-27):** the resolution cascade
-lives in ONE place — `operator/bridges/shared/model_selector.py::resolve_os_model()`.
+lives in ONE place — `corvin_operator/bridges/shared/model_selector.py::resolve_os_model()`.
 Both the console web-chat (`chat_runtime.py`) and the bridge adapter
 (`adapter.py::_resolve_os_model_bundled`, a thin backward-compat wrapper)
 call this same function. Before this fix, `chat_runtime.py` hand-rolled
@@ -1991,7 +1991,7 @@ Two implementations, same contract:
   `quota_fallback: true`. The console route
   (`routes/compute.py::submit_acs_workflow_run`) catches the 402 whose
   `detail.reason == "quota_exceeded"` and takes the same path.
-  Pinned by `operator/bridges/shared/test_acs_quota_fallback_adapter.py`.
+  Pinned by `corvin_operator/bridges/shared/test_acs_quota_fallback_adapter.py`.
 
 Load-bearing invariants of the fallback: (1) it fires ONLY on genuine
 `quota_exhausted` — a removed/shadowed license module
@@ -2017,20 +2017,20 @@ narrower bound always wins) and is race-safe capped at
 
 - `Corvin-ADR: decisions/0024-adaptive-os-model-selection.md` — the ADR
 - `Corvin-ADR: decisions/0112-acs-worker-model-inheritance.md` — worker split
-- `operator/bridges/shared/model_selector.py::resolve_os_model()` — the single
+- `corvin_operator/bridges/shared/model_selector.py::resolve_os_model()` — the single
   6-Tier resolver both surfaces call (moved here from
   `adapter.py::_resolve_os_model_bundled` 2026-07-27, see ADR-0119/0123)
-- `operator/bridges/shared/test_model_selector.py` — 37 cases
-- `operator/bridges/shared/test_os_model_single_source_of_truth.py` — proves
+- `corvin_operator/bridges/shared/test_model_selector.py` — 37 cases
+- `corvin_operator/bridges/shared/test_os_model_single_source_of_truth.py` — proves
   console (`profile=None`) and bridge (`profile={}`) resolve identically
-- `operator/bridges/shared/test_adapter_os_model.py` — Phase-3 cases
-- `operator/bridges/shared/adapter.py::_resolve_os_model` — composing wrapper
+- `corvin_operator/bridges/shared/test_adapter_os_model.py` — Phase-3 cases
+- `corvin_operator/bridges/shared/adapter.py::_resolve_os_model` — composing wrapper
   (bundled 6-Tier answer + ADR-0251 hook); bundled tier now delegates to
   `model_selector.resolve_os_model()`
 - `core/console/corvin_console/chat_runtime.py` — console call site, same
   `model_selector.resolve_os_model()` call, `profile=None`
-- `operator/bridges/shared/adapter.py::_resolve_spawn_inputs` — Phase-3c estimator wiring
-- `operator/forge/forge/security_events.py` — `os_model.*` event types
+- `corvin_operator/bridges/shared/adapter.py::_resolve_spawn_inputs` — Phase-3c estimator wiring
+- `corvin_operator/forge/forge/security_events.py` — `os_model.*` event types
 - `core/gateway/corvin_gateway/audit_metrics.py` — 2 new metric families
 - `docs/observability/grafana/corvin-overview.json` — 2 new panels
 - Layer 29.5 Phase 2 — `helper_model_default` + `SITE_OS_TURN` (still present, removed in 3h)
@@ -2200,7 +2200,7 @@ All 141 tests in the delegate plugin (Layer 29 + 29.1 + 29.2 +
 - `core/delegate/corvin_delegate/mcp_config_builder.py` — pillar B
 - `core/delegate/corvin_delegate/delegation.py::_build_skill_block_for_engine` / `::_wire_mcp_for_engine` — wiring
 - `core/delegate/corvin_delegate/audit.py::emit_skill_injected` / `::emit_mcp_wired` — pillar C
-- `operator/cowork/lib/resolver.py::_inject_delegate_capability` — persona-to-env-floor pass-through
+- `corvin_operator/cowork/lib/resolver.py::_inject_delegate_capability` — persona-to-env-floor pass-through
 - Layer 6 (Forge), Layer 7 (SkillForge) — the persisted engine capabilities
 - Layer 29 / 29.1 / 29.2 / 29.3a — delegation substrate + hardening
 - L23 / L24 / L25 / L28 — metadata-only-audit precedent
@@ -2224,7 +2224,7 @@ as the "HONEST REMAINING REQUIREMENT": an operator-run external proxy
 M3 (2026-07-14) closes it **in-process**, built in rather than left as an
 operator deployment:
 
-- **`operator/bridges/shared/anthropic_openai_bridge.py`** — a lightweight
+- **`corvin_operator/bridges/shared/anthropic_openai_bridge.py`** — a lightweight
   `ThreadingHTTPServer` that translates Anthropic Messages API requests to
   OpenAI Chat Completions requests and back, including streaming (SSE) and
   tool use. Started lazily, on demand, per `(chat_completions_url, model,
@@ -2243,7 +2243,7 @@ operator deployment:
     OpenAI-compat endpoint for qwen3-style thinking models (harmless no-op
     on servers that ignore the field) — same latency fix already applied to
     Hermes/`summarize.py`'s native-API calls.
-- **`operator/bridges/shared/engine_models.py::resolve_claude_code_provider_env(tenant_id)`**
+- **`corvin_operator/bridges/shared/engine_models.py::resolve_claude_code_provider_env(tenant_id)`**
   is the **single source of truth** for the whole redirect, called by both
   `adapter.py::_build_spawn_env` (OS-turn path) and
   `acs_runtime.py::_apply_provider_redirect` (ACS manager/worker paths — see
@@ -2276,11 +2276,11 @@ operator deployment:
     `resolve_claude_code_provider_env` too** — do not re-derive the redirect
     inline again.
 
-**BYOK key types** (`operator/bridges/shared/provider_keys.py::CANONICAL_ENV_VAR`):
+**BYOK key types** (`corvin_operator/bridges/shared/provider_keys.py::CANONICAL_ENV_VAR`):
 `openrouter_api_key` → `OPENROUTER_API_KEY`, `ollama_api_key` →
 `OLLAMA_API_KEY` (Ollama Cloud's bearer token; local Ollama needs none).
 Names MUST match the `credential_env` fields in
-`operator/bundle/config-templates/engine_model_registry.yaml`'s
+`corvin_operator/bundle/config-templates/engine_model_registry.yaml`'s
 `openrouter`/`ollama_cloud` provider entries exactly, or a saved key
 silently never matches what the engine-spawn code looks up. Written via the
 same `provider_keys.write_key()` every other BYOK key uses — Settings → API
@@ -2289,17 +2289,17 @@ one place that reads.
 
 ### Test surface
 
-- `operator/bridges/shared/test_anthropic_openai_bridge.py` — request/response
+- `corvin_operator/bridges/shared/test_anthropic_openai_bridge.py` — request/response
   translation (non-streaming + streaming), the real HTTP server end-to-end
   against a fake upstream, `disable_reasoning`, cache-key isolation, and a
   stalled-upstream-mid-stream regression (must close gracefully within the
   configured `request_timeout`, not hang the client).
-- `operator/bridges/shared/test_provider_keys.py` — `resolve_by_env_var`
+- `corvin_operator/bridges/shared/test_provider_keys.py` — `resolve_by_env_var`
   falls back to the literal env-var name (process env, then `service.env`)
   for any `credential_env` not in the small `CANONICAL_ENV_VAR` set, so a
   provider outside that hardcoded list still resolves a genuinely-set key
   instead of silently losing it.
-- `operator/bridges/shared/test_adapter_openrouter_routing.py` — the
+- `corvin_operator/bridges/shared/test_adapter_openrouter_routing.py` — the
   no-model-configured OpenRouter edge case: `ensure_proxy` must not be
   called with a bogus model, and `ANTHROPIC_BASE_URL` must stay unset so CC
   falls through instead of being redirected to a guaranteed-broken endpoint.
@@ -2336,7 +2336,7 @@ one place that reads.
 
 Investigated a reported crash: a very large ACS (Autonomous Compute Shell)
 delegation workflow on a Windows machine with 64GB RAM crashed. Root-caused
-to genuine unbounded memory growth in `operator/bridges/shared/acs_runtime.py`,
+to genuine unbounded memory growth in `corvin_operator/bridges/shared/acs_runtime.py`,
 compounded by coarse concurrency control — not a Windows-specific pipe
 deadlock (`subprocess.communicate()` is deadlock-safe by construction on
 every platform) and not a quadratic history-resend bug (prompt construction
@@ -2411,7 +2411,7 @@ still complete, just bounded rather than unlimited.
   caller-reachable — an unclamped one is a resource-exhaustion surface by
   default, not an oversight to fix "later."
 
-Tests: `operator/bridges/shared/test_acs_runtime.py` —
+Tests: `corvin_operator/bridges/shared/test_acs_runtime.py` —
 `test_call_worker_sync_caps_huge_output`,
 `test_call_manager_sync_caps_huge_output`,
 `test_communicate_capped_still_delivers_stdin_when_output_is_huge`,
@@ -2478,7 +2478,7 @@ authenticates with the AWS credential chain, not with an API key in the L16
 vault, so there is nothing for `provider_keys` to resolve. `claude_code`'s
 `supported_providers` gained `bedrock` as `native: true`.
 
-`operator/bridges/shared/aws_sigv4.py` is a stdlib-only signer (hmac / hashlib /
+`corvin_operator/bridges/shared/aws_sigv4.py` is a stdlib-only signer (hmac / hashlib /
 urllib). CorvinOS has no boto3 and no aws-CLI dependency, and taking one on for
 two GETs is a heavy price. Scope is deliberately narrow: signed GET only, no
 retries, no paginator, no service model.

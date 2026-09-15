@@ -102,17 +102,17 @@ Result: 0 matches found
 
 | File | API | Purpose | Compat Status | Migration Path |
 |------|-----|---------|---------------|-----------------|
-| `operator/bridges/voice/discord/handler.py` | `delegate_to_persona` | Routing user requests → Claude | ✅ Via compat layer | Direct Skill call |
-| `operator/bridges/voice/ollama/context_loader.py` | `get_session_context` | Load context for Ollama calls | ✅ Via compat layer | Direct Skill call |
-| `operator/bridges/voice/base_bridge.py` (2 refs) | `VibeBrainAdapter` | Multi-engine dispatch | ✅ Via compat layer | DelegationRouterSkill |
+| `corvin_operator/bridges/voice/discord/handler.py` | `delegate_to_persona` | Routing user requests → Claude | ✅ Via compat layer | Direct Skill call |
+| `corvin_operator/bridges/voice/ollama/context_loader.py` | `get_session_context` | Load context for Ollama calls | ✅ Via compat layer | Direct Skill call |
+| `corvin_operator/bridges/voice/base_bridge.py` (2 refs) | `VibeBrainAdapter` | Multi-engine dispatch | ✅ Via compat layer | DelegationRouterSkill |
 
 **Subcategory: Web Bridge**
 
 | File | API | Purpose | Compat Status |
 |------|-----|---------|---------------|
-| `operator/bridges/web/context_injector.py` | `get_context_layers` | Hybrid context for web UI | ✅ Via compat layer |
-| `operator/bridges/web/session_manager.py` (2 refs) | `recall_recent_sessions` | Session history in console | ✅ Via compat layer |
-| `operator/bridges/slack/event_handler.py` | `analyze_conversation` | Slack message analysis | ✅ Via compat layer |
+| `corvin_operator/bridges/web/context_injector.py` | `get_context_layers` | Hybrid context for web UI | ✅ Via compat layer |
+| `corvin_operator/bridges/web/session_manager.py` (2 refs) | `recall_recent_sessions` | Session history in console | ✅ Via compat layer |
+| `corvin_operator/bridges/slack/event_handler.py` | `analyze_conversation` | Slack message analysis | ✅ Via compat layer |
 
 **Risk Assessment:** ✅ **ACCEPTABLE** — All bridge code uses compat layer. Migration path documented (direct Skill calls). No hard blocking.
 
@@ -181,7 +181,7 @@ tests/integration/test_phase_b_compat_layer_e2e.py:156
   └─ Compat layer: ✅ routed to ContextAdapterSkill
   └─ Risk: LOW (monitoring harness, keep)
 
-operator/bridges/voice/ollama/context_loader.py:87
+corvin_operator/bridges/voice/ollama/context_loader.py:87
   └─ Load session context for Ollama inference
   └─ Compat layer: ✅ routed to ContextAdapterSkill
   └─ Risk: MEDIUM (bridge code; migration available)
@@ -199,13 +199,13 @@ operator/bridges/voice/ollama/context_loader.py:87
 **Call Sites:**
 
 ```
-operator/bridges/web/session_manager.py:134
+corvin_operator/bridges/web/session_manager.py:134
   └─ Populate session history dropdown in console UI
   └─ Compat layer: ✅ routed to ContextAdapterSkill
   └─ Risk: MEDIUM (bridge code)
   └─ Migration: Replace with ContextAdapterSkill().execute(...)
 
-operator/bridges/web/session_manager.py:189
+corvin_operator/bridges/web/session_manager.py:189
   └─ Session cache refresh on login
   └─ Compat layer: ✅ routed to ContextAdapterSkill
   └─ Risk: MEDIUM (bridge code)
@@ -223,14 +223,14 @@ operator/bridges/web/session_manager.py:189
 **Call Sites:**
 
 ```
-operator/bridges/voice/discord/handler.py:203
+corvin_operator/bridges/voice/discord/handler.py:203
   └─ Determine which Claude engine (Sonnet/Opus) handles user request
   └─ Compat layer: ✅ routed to DelegationRouterSkill
   └─ Risk: MEDIUM (bridge code; high-frequency)
   └─ Frequency: ~1 call/min during active sessions
   └─ Migration: Replace with DelegationRouterSkill().execute(...)
 
-operator/bridges/voice/base_bridge.py:312
+corvin_operator/bridges/voice/base_bridge.py:312
   └─ Multi-engine routing (fallback path)
   └─ Compat layer: ✅ routed to DelegationRouterSkill
   └─ Risk: MEDIUM (failover code)
@@ -258,13 +258,13 @@ tests/e2e/test_workflow_phase2_basics.py:51
   └─ Direct instantiation + marked @pytest.mark.deprecated
   └─ Risk: LOW (test only, will be skipped post-Phase C)
 
-operator/bridges/voice/base_bridge.py:95
+corvin_operator/bridges/voice/base_bridge.py:95
   └─ Initialize adapter for voice → engine routing
   └─ Compat layer: ✅ VibeBrainAdapter routes to DelegationRouterSkill
   └─ Risk: MEDIUM (active bridge code)
   └─ Migration: Replace with DelegationRouterSkill directly
 
-operator/bridges/web/context_injector.py:67
+corvin_operator/bridges/web/context_injector.py:67
   └─ Initialize adapter for web UI persona detection
   └─ Compat layer: ✅ maps to DelegationRouterSkill
   └─ Risk: MEDIUM (active bridge code)
@@ -287,7 +287,7 @@ tests/integration/test_week4_context_e2e.py:71
   └─ Marked @pytest.mark.deprecated
   └─ Risk: LOW (test only)
 
-operator/bridges/web/context_injector.py:142
+corvin_operator/bridges/web/context_injector.py:142
   └─ Fetch context layers for console "Inspect Context" panel
   └─ Compat layer: ✅ routed to HybridContextModel.get_layers()
   └─ Risk: LOW (read-only monitoring)
@@ -315,7 +315,7 @@ core/context_engineering/tests/test_merge_context.py:44
   └─ Marked @pytest.mark.deprecated
   └─ Risk: LOW (test only)
 
-operator/bridges/web/context_injector.py:198
+corvin_operator/bridges/web/context_injector.py:198
   └─ Finalize context for LLM consumption
   └─ Compat layer: ✅ routed to HybridContextModel.merge()
   └─ Risk: LOW (part of monitoring chain)
@@ -333,7 +333,7 @@ operator/bridges/web/context_injector.py:198
 **Call Sites:**
 
 ```
-operator/bridges/slack/event_handler.py:156
+corvin_operator/bridges/slack/event_handler.py:156
   └─ Analyze Slack thread for conversation type (complex/simple/retrieval)
   └─ Compat layer: ✅ routed to analyze_conversation Skill
   └─ Risk: MEDIUM (active bridge code)
@@ -412,7 +412,7 @@ find /home/shumway/projects/Corvin-Marketplace/plugins/ -name "*.py" -type f
 (Same grep patterns)
 
 # Bridge code
-find operator/bridges/ -name "*.py" -type f
+find corvin_operator/bridges/ -name "*.py" -type f
 (Same grep patterns)
 
 # Tests (separate scan)
@@ -462,7 +462,7 @@ All compat functions:
   "details": {
     "api_name": "delegate_to_persona",
     "module": "core.vibe_engineering.routing",
-    "caller_file": "operator/bridges/voice/discord/handler.py",
+    "caller_file": "corvin_operator/bridges/voice/discord/handler.py",
     "caller_line": 203,
     "caller_func": "route_user_message",
     "failed": false

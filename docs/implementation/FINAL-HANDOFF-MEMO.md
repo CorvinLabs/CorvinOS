@@ -114,7 +114,7 @@ A three-tier system that learns at the tenant level across months and hundreds o
 
 ### Code Owner (Dev Team)
 - [ ] Review commits: `bd13c5b` → `59acf28`
-- [ ] Run tests: `pytest operator/context_engineering/tests/ -v`
+- [ ] Run tests: `pytest corvin_operator/context_engineering/tests/ -v`
 - [ ] Verify: 10/10 pass
 - [ ] Merge strategy: Direct to main (all verified)
 - [ ] Deployment: Follow DEPLOYMENT-CHECKLIST.md
@@ -198,7 +198,7 @@ A three-tier system that learns at the tenant level across months and hundreds o
 
 **Dev Questions:**
 - Code: @dev-lead (see commits 59acf28 parent chain)
-- Tests: Run `uv run pytest operator/context_engineering/tests/ -v`
+- Tests: Run `uv run pytest corvin_operator/context_engineering/tests/ -v`
 - Architecture: Read ADR-0274 + K=5 verification report
 
 **Ops Questions:**

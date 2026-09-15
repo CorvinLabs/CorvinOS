@@ -8,7 +8,7 @@
 > the document) that no real Claude API calls were made — the "48.8%
 > aggregate token reduction" and "p=0.01 statistically significant" figures
 > come from a hand-modeled arithmetic simulation of expected savings per
-> task category, not from instrumenting `operator/orchestration/tde/`'s
+> task category, not from instrumenting `corvin_operator/orchestration/tde/`'s
 > actual execution. Independently verified: the real TDE pipeline has NO
 > per-call token-usage instrumentation anywhere (`worker_ipc.run_one_shot`
 > invokes the worker CLI with `--output-format text`, not `json`, so no
@@ -463,7 +463,7 @@ Optimistic scenario (larger tasks):
 
 ```bash
 cd /path/to/CorvinOS
-python3 operator/benchmarking/run_benchmarks.py
+python3 corvin_operator/benchmarking/run_benchmarks.py
 ```
 
 **Determinism:**
@@ -555,16 +555,16 @@ See `benchmark/results/2026-07-24_132624/raw_results.json` for:
 
 ### B. Benchmark Infrastructure
 
-- **Harness:** `operator/benchmarking/harness.py` (~200 LoC, deterministic simulation)
-- **Analysis:** `operator/benchmarking/analysis.py` (~250 LoC, descriptive only)
-- **Fixtures:** `operator/benchmarking/fixtures.py` (~400 LoC, 11 tasks)
+- **Harness:** `corvin_operator/benchmarking/harness.py` (~200 LoC, deterministic simulation)
+- **Analysis:** `corvin_operator/benchmarking/analysis.py` (~250 LoC, descriptive only)
+- **Fixtures:** `corvin_operator/benchmarking/fixtures.py` (~400 LoC, 11 tasks)
 
 ### C. TDE Implementation
 
-- **Detection:** `operator/orchestration/tde/robust_engine_detector.py`
-- **Routing:** `operator/orchestration/tde/send_integration.py`
-- **Execution:** `operator/orchestration/tde/streaming_executor.py`
-- **Plugins:** `operator/orchestration/tde/detector_plugin_registry.py`
+- **Detection:** `corvin_operator/orchestration/tde/robust_engine_detector.py`
+- **Routing:** `corvin_operator/orchestration/tde/send_integration.py`
+- **Execution:** `corvin_operator/orchestration/tde/streaming_executor.py`
+- **Plugins:** `corvin_operator/orchestration/tde/detector_plugin_registry.py`
 
 ---
 

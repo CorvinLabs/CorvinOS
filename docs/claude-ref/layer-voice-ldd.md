@@ -29,7 +29,7 @@ LLM-judged faithfulness on every voice summary.
 
 ### Cost contract
 
-`operator/bridges/shared/dialectic.py` MUST NOT
+`corvin_operator/bridges/shared/dialectic.py` MUST NOT
 `import anthropic`. Test `test_dialectic_lib.py` enforces this via
 AST walk. Modes:
 - `off` / `fast` — pure Python, 0 ms
@@ -367,7 +367,7 @@ static default produced e.g. a Chinese voice-summary audio for a German-language
 reply, even though the main chat-text reply correctly matched German. Fixed via
 `_resolve_voice_output_language(candidate_text)`: it still defaults to the static
 profile pin, but when that default is non-de/en AND `_detect_confident_de_en`
-(a thin wrapper around `operator/voice/scripts/detect_lang.py`'s existing
+(a thin wrapper around `corvin_operator/voice/scripts/detect_lang.py`'s existing
 function-word heuristic) confidently recognizes the actual text as de or en, the
 per-turn detection wins. Ambiguous/non-Latin-script text still falls through to
 the profile default unchanged — the pin keeps working for its actual use case
@@ -391,7 +391,7 @@ behavior with a real test rather than leave it unverified. Two gaps closed:
    had ZERO real coverage; every existing test mocked the language away.
    `TestWelcomeCheckLanguageResolution` in `test_setup_welcome_check.py` calls
    both functions unmocked for `de`/`en`/`zh` profiles. Finding: this repo's
-   i18n bundle dir (`operator/voice/i18n/`) ships only `de.json`/`en.json` —
+   i18n bundle dir (`corvin_operator/voice/i18n/`) ships only `de.json`/`en.json` —
    a `zh` (or any other) `display_language` silently produces an ENGLISH
    greeting via `i18n.t()`'s own fallback chain, not the profile's configured
    language and not the user's actual language either. This code path can't
@@ -410,7 +410,7 @@ behavior with a real test rather than leave it unverified. Two gaps closed:
    Tests: `test_profile_cli_lang.py` (5 cases), 2 new cases in
    `test_profile_routes.py`. The missing-`zh-Hans`-bundle gap itself (a
    genuinely Chinese-preferring user still got an English greeting) was
-   ALSO closed the same day: `operator/voice/i18n/zh-Hans.json` now ships
+   ALSO closed the same day: `corvin_operator/voice/i18n/zh-Hans.json` now ships
    real Simplified Chinese translations for every `lang`/`consent`/`welcome`
    key, matching the `de.json`/`en.json` key set exactly. Proven by
    `test_zh_profile_greeting_is_now_real_chinese`; the genuinely-unbundled
@@ -551,7 +551,7 @@ now aliases `no`→`nb-NO-PernilleNeural` and adds `el-GR-AthinaNeural`, so all
 20 dropdown languages in `voice.tsx` resolve to a real voice on the keyless
 edge path (the dropdown's Chinese option stores `zh-Hans`, matching
 `i18n.normalise`'s round-trip). Regression guards:
-`operator/bridges/shared/test_adapter_voice_text_first_lang.py`,
+`corvin_operator/bridges/shared/test_adapter_voice_text_first_lang.py`,
 `test_adapter_voice_lang_detect.py`.
 
 **Per-turn voice archive (ADR-0194 Phase 1).** Console voice used to be ephemeral:
@@ -751,7 +751,7 @@ AFTER the annex opener, "Und zur Einordnung," lands ~400-700 chars from the end 
 fell outside the window, so the guard missed it AND the spurious annex then pushed
 the original metapher out of ITS window → a second metapher too (the reported
 "Learning und Metapher doppelt"). Window widened to 900. Regression guard:
-`operator/bridges/shared/test_adapter_voice_annex_dedup.py`.
+`corvin_operator/bridges/shared/test_adapter_voice_annex_dedup.py`.
 
 **Chat-render is voice-ONLY by default.** The annex rides the TTS path only; it
 enters the visible chat/DM text solely when the user opts in via
@@ -825,7 +825,7 @@ it's pressed**.
   too, just from a different endpoint; it does NOT reuse `playFull`'s
   segmented-playlist machinery, since a ~700-char recap never needs
   segmentation. Regression guard: `core/console/tests/
-  test_voice_session_summary.py` (10 cases) + `operator/voice/scripts/
+  test_voice_session_summary.py` (10 cases) + `corvin_operator/voice/scripts/
   test_summarize.py` (7 new session-recap cases).
 
 **Adversarial hardening pass (2026-07-17)** — invariants added after a
@@ -975,7 +975,7 @@ Wired into `run-all-tests.sh`.
   loop's stdin-close on result.
 
 This change is **structural** — adapter spawn shape changed (stream-json
-input, stdin pipe). After updating, `bash operator/bridges/bridge.sh
+input, stdin pipe). After updating, `bash corvin_operator/bridges/bridge.sh
 restart` is required for the running adapter to pick it up.
 
 ## Layer 13b — Discord-native slash-command registration
@@ -985,7 +985,7 @@ with `"<name> isn't available in this environment"` when no application
 command of that name is registered for the bot. The bridge's text-based
 dispatcher in `daemon.js` never even sees the message.
 
-`operator/bridges/discord/slash_commands.js` registers every
+`corvin_operator/bridges/discord/slash_commands.js` registers every
 bridge command (`/btw`, `/stop`, `/reset`, `/voice-user-set`,
 `/voice-on`, `/dialectic-*`, `/ldd-*`, `/profile`, `/memory`, `/vault`,
 `/schedule`, …) as a CHAT_INPUT application command on `clientReady`.
@@ -1030,7 +1030,7 @@ copy-pasted `/<cmd>` messages when registration fails.
 
 This change is **structural** — `slash_commands.js` is loaded at
 daemon boot and `interactionCreate` is wired in. After updating, run
-`bash operator/bridges/bridge.sh restart` so the live Discord
+`bash corvin_operator/bridges/bridge.sh restart` so the live Discord
 daemon picks up the registration. First-time global propagation may
 take up to an hour; set `DISCORD_GUILD_IDS=<id>` for instant per-guild
 registration in your test guild.
@@ -1323,12 +1323,12 @@ WorkerEngine (Layer 22). Engines never see audio — they see the
 transcript. Multi-engine deployments (Claude Code / Codex CLI /
 Gemini CLI / future engines) all share the same STT path.
 
-**Where it lives:** `operator/voice/scripts/stt/` — a small package
+**Where it lives:** `corvin_operator/voice/scripts/stt/` — a small package
 with a Protocol + concrete providers + resolver. `transcribe.py` is
 now a thin CLI wrapper that delegates to the package.
 
 ```
-operator/voice/scripts/stt/
+corvin_operator/voice/scripts/stt/
 ├── __init__.py
 ├── base.py            # STTProvider Protocol + TranscriptResult + STTError tree
 ├── openai_whisper.py  # OpenAI Whisper-1 (default, ~0.006 $/min)
@@ -1427,7 +1427,7 @@ X" enforcement, mirroring engine-policy (Phase 3.2) and zone-policy
 (Phase 3.3). Phase-6.x will wire that gate; today the operator
 expresses the same intent via the env var on the bridge process.
 
-**Test surface** (`operator/voice/scripts/test_stt.py`, 35 cases):
+**Test surface** (`corvin_operator/voice/scripts/test_stt.py`, 35 cases):
 - TranscriptResult chars math
 - Real providers satisfy the Protocol
 - Pinned provider used; pinned-but-unavailable raises (no fallback)
@@ -1444,7 +1444,7 @@ expresses the same intent via the env var on the bridge process.
 - **`LocalWhisperPywhispercppTests`** (ADR-0185 M1): a REAL, non-mocked
   round trip — downloads the default GGML model (cached under
   a fixed OS-temp test dir) and transcribes a real speech fixture
-  (`operator/voice/scripts/fixtures/stt_sample.wav`), asserting the
+  (`corvin_operator/voice/scripts/fixtures/stt_sample.wav`), asserting the
   actual recognized text, detected language, lang-hint honouring,
   missing-file error, and timeout behavior. Skipped only when
   `pywhispercpp` itself isn't importable — never mocked.
@@ -1511,10 +1511,10 @@ already-present / success / network-failure / empty-result paths.
   shapes.
 
 **References:**
-- `operator/voice/scripts/stt/` — package
-- `operator/voice/scripts/transcribe.py` — CLI wrapper
-- `operator/voice/scripts/test_stt.py` — 15-case E2E
-- `operator/bridges/shared/adapter.py::transcribe_audio` —
+- `corvin_operator/voice/scripts/stt/` — package
+- `corvin_operator/voice/scripts/transcribe.py` — CLI wrapper
+- `corvin_operator/voice/scripts/test_stt.py` — 15-case E2E
+- `corvin_operator/bridges/shared/adapter.py::transcribe_audio` —
   in-process integration site
 - `core/gateway/corvin_gateway/audit_metrics.py` — two
   new metric families.

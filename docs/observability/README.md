@@ -154,5 +154,5 @@ renderer differs.
 - *(see Corvin-ADR repo)* — sub-phase fanout
 - `core/gateway/corvin_gateway/audit_metrics.py` — aggregator + renderer
 - `core/gateway/corvin_gateway/app.py` — `GET /v1/tenants/{tid}/metrics`
-- `operator/voice/scripts/voice_audit.py` — `metrics` subcommand
+- `corvin_operator/voice/scripts/voice_audit.py` — `metrics` subcommand
 - CLAUDE.md — Observability (audit-chain projection, complete)

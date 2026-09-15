@@ -221,7 +221,7 @@ corvinos-serve = "ops.launcher.corvin.serve_entry:main"
 corvin-run = "ops.launcher.corvin.run_entry:main"
 corvinos-run = "ops.launcher.corvin.run_entry:main"
 # ADR-0109: WDAT compliance report generator
-# Shim needed because operator/ conflicts with Python stdlib 'operator' module name.
+# Shim needed because corvin_operator/ conflicts with Python stdlib 'operator' module name.
 corvin-wdat-report = "ops.launcher.wdat_report_entry:main"
 # ADR-0121: CorvinFlow declarative multi-node workflow CLI
 corvin-flow = "ops.launcher.flow_entry:main"
@@ -232,7 +232,7 @@ corvin-live-collector = "core.learning.live_experiment_collector:main"
 # ADR-0142: Layer Extension API — manage user-managed layer extensions.
 corvin-layer = "ops.launcher.layer_entry:main"
 # L38 A2A: agent-to-agent pairing/send CLI + local instance identity.
-# Shims needed because operator/ shadows the Python stdlib 'operator' module.
+# Shims needed because the legacy operator/ directory name shadows the Python stdlib 'operator' module.
 corvin-a2a = "ops.launcher.a2a_entry:main"
 corvin-instance-id = "ops.launcher.instance_id_entry:main"
 # ADR-0153 M4: CorvinID instance certificate management CLI.
@@ -244,7 +244,7 @@ corvin-maintainer = "ops.launcher.maintainer_entry:main"
 # ADR-0184 Stufe 2: opt-in always-on system-service registration (admin/root).
 corvin-service = "ops.launcher.service_entry:main"
 # ADR-0185 M5: real, non-mocked STT+TTS round-trip self-test ("corvin-voice doctor").
-# Shim needed because operator/ shadows the Python stdlib 'operator' module.
+# Shim needed because the legacy operator/ directory name shadows the Python stdlib 'operator' module.
 corvin-voice = "ops.launcher.voice_entry:main"
 # Phase 6.5: Installation preset setup — configure tenant after install
 corvin-preset-setup = "ops.launcher.corvin.preset_setup:main"
@@ -455,18 +455,18 @@ path = "hatch_build.py"
 # ADR-0125: include engine detection + bootstrap helpers so the
 # /detect and /bootstrap endpoints work in a pure wheel install
 # (source-tree mode uses the sys.path injection in engine.py as before).
-"operator/bridges/shared/engine_detection.py" = "corvin_console/engine_detection.py"
+"corvin_operator/bridges/shared/engine_detection.py" = "corvin_console/engine_detection.py"
 # First-run language propagation (install-time Piper language -> profile
 # display_language): installer needs profile.set_value() in a pure wheel
 # install, same shim pattern as the two entries above.
-"operator/bridges/shared/profile.py" = "corvin_console/profile.py"
+"corvin_operator/bridges/shared/profile.py" = "corvin_console/profile.py"
 # Operator runtime-dependency vendoring (wheel-only) is performed by the
 # custom build hook in hatch_build.py (VendorOperatorHook). 56 console modules
-# reach into operator/* via repo-relative sys.path injection, which resolves
-# into a non-existent operator/ inside site-packages on a wheel install
+# reach into corvin_operator/* via repo-relative sys.path injection, which resolves
+# into a non-existent corvin_operator/ inside site-packages on a wheel install
 # (ModuleNotFoundError: No module named 'forge'). The hook stages PRUNED copies
 # (tests stripped — force-include ignores `exclude`, so pruning must happen in
-# the hook) of the needed subtrees into corvin_core/_vendor/operator/<same-
+# the hook) of the needed subtrees into corvin_core/_vendor/corvin_operator/<same-
 # relative-layout>; _operator_bootstrap.py then prepends them onto sys.path at
 # import time. Source-tree mode never gains a _vendor/ dir, so the bootstrap
 # stays a no-op there and the existing per-module injection keeps working.

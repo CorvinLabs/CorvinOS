@@ -82,7 +82,7 @@ in front of us. Two options:
 | Status | `docker compose -f /opt/corvin/docker-compose.yml ps` |
 | Logs (all) | `docker compose -f /opt/corvin/docker-compose.yml logs -f` |
 | Restart | `sudo systemctl restart corvin-compose` |
-| Audit-verify (manual) | `docker exec corvin /opt/corvin-repo/operator/voice/scripts/voice-audit.py verify` |
+| Audit-verify (manual) | `docker exec corvin /opt/corvin-repo/corvin_operator/voice/scripts/voice-audit.py verify` |
 | Backup home | `tar -czf /opt/corvin/backups/home-$(date +%F).tgz -C /opt/corvin home` |
 | Update | `cd /opt/corvin-repo && sudo git fetch --tags && sudo git checkout $(git tag -l 'v*' --sort=-v:refname \| head -n1) && sudo systemctl restart corvin-compose` |
 

@@ -177,7 +177,7 @@ audit chain   ✓ verified  (42 events, chain intact)
 If any component shows a red `✗`, check the logs:
 
 ```bash
-bash operator/bridges/bridge.sh tail
+bash corvin_operator/bridges/bridge.sh tail
 ```
 
 To specifically verify voice (STT+TTS) is working — a real, non-mocked round-trip,
@@ -203,7 +203,7 @@ either fails (ADR-0185 M5).
 3. BotFather replies with a **token** that looks like `7123456789:AAFsomething...`. Copy it.
 4. To find your Telegram **user ID** (needed for the whitelist), start a conversation
    with `@userinfobot` — it replies with your numeric user ID (e.g. `123456789`).
-5. Paste the token into `operator/bridges/telegram/settings.json` under `telegram_token`.
+5. Paste the token into `corvin_operator/bridges/telegram/settings.json` under `telegram_token`.
 6. Add your user ID to the `whitelist` array.
 
 ```json
@@ -228,7 +228,7 @@ either fails (ADR-0185 M5).
 7. Under **Bot Permissions**, check: `Send Messages`, `Read Message History`,
    `Attach Files`.
 8. Copy the generated URL, open it in your browser, and invite the bot to your server.
-9. Paste the token into `operator/bridges/discord/settings.json`:
+9. Paste the token into `corvin_operator/bridges/discord/settings.json`:
 
 ```json
 {
@@ -249,7 +249,7 @@ phone number is the credential.
 2. Run:
 
 ```bash
-bash operator/voice/scripts/whatsapp_cli.sh pair
+bash corvin_operator/voice/scripts/whatsapp_cli.sh pair
 ```
 
 3. A QR code is printed in the terminal. Open WhatsApp on your phone →
@@ -286,7 +286,7 @@ single-use for the pairing step.
    - `message.im`
    - `message.mpim`
 7. Save changes. Reinstall the app to your workspace if prompted.
-8. Paste both tokens into `operator/bridges/slack/settings.json`:
+8. Paste both tokens into `corvin_operator/bridges/slack/settings.json`:
 
 ```json
 {
@@ -345,7 +345,7 @@ Teams requires an Azure App Registration and a bot channel registration.
 6. For the messaging endpoint, you need a public HTTPS URL. For local development,
    use [ngrok](https://ngrok.com): `ngrok http 3979`. For production, use a proper
    HTTPS domain.
-7. Paste credentials into `operator/bridges/teams/settings.json`.
+7. Paste credentials into `corvin_operator/bridges/teams/settings.json`.
 
 ### Signal
 
@@ -366,7 +366,7 @@ signal-cli -u +491234567890 register
 signal-cli -u +491234567890 verify 123456
 ```
 
-4. See `operator/bridges/signal/README.md` for further configuration options
+4. See `corvin_operator/bridges/signal/README.md` for further configuration options
    including linking as a secondary device instead of registering fresh.
 
 ---
@@ -377,7 +377,7 @@ The `bridge.sh` script is the central control interface for all running componen
 Run it from the repository root:
 
 ```bash
-bash operator/bridges/bridge.sh <command>
+bash corvin_operator/bridges/bridge.sh <command>
 ```
 
 | Command | What it does |
@@ -395,19 +395,19 @@ Examples:
 
 ```bash
 # First-time start (no Claude Code required — configure in-browser):
-bash operator/bridges/bridge.sh console   # opens http://127.0.0.1:8765
+bash corvin_operator/bridges/bridge.sh console   # opens http://127.0.0.1:8765
 
 # First-time start with full bridges (Linux/WSL2 with systemd):
-bash operator/bridges/bridge.sh up
+bash corvin_operator/bridges/bridge.sh up
 
 # Watch logs live:
-bash operator/bridges/bridge.sh tail
+bash corvin_operator/bridges/bridge.sh tail
 
 # Restart after editing a token:
-bash operator/bridges/bridge.sh restart
+bash corvin_operator/bridges/bridge.sh restart
 
 # Run without systemd (macOS / WSL2 headless):
-bash operator/bridges/bridge.sh fg
+bash corvin_operator/bridges/bridge.sh fg
 ```
 
 ---

@@ -310,14 +310,14 @@ Copilot CLI + OpenCode Python import. Both call `SkillInvocationService`. A/B te
 
 | File | LoC | Purpose | Dependencies |
 |------|-----|---------|--------------|
-| `operator/cli/copilot_skill_wrapper.py` | 200 | CLI wrapper | Phase A |
+| `corvin_operator/cli/copilot_skill_wrapper.py` | 200 | CLI wrapper | Phase A |
 | `core/engine/opencode_integration.py` | 150 | OpenCode import | Phase A |
 | **Tests** | 150 | 10+ E2E tests | all above |
 | **Total** | **500** | | |
 
 ### Files
 
-#### 1. `operator/cli/copilot_skill_wrapper.py` (~200 LoC)
+#### 1. `corvin_operator/cli/copilot_skill_wrapper.py` (~200 LoC)
 
 ```python
 @click.group()

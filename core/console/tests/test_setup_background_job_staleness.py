@@ -7,7 +7,7 @@ recorded, no timeout/watchdog exists, and a second POST while the job is
 
 This is reachable in production, not theoretical: `bm.start_channel_detached`
 (-> `_materialise_channel`) shells out to `subprocess.run(_npm_install_cmd(...))`
-with NO `timeout=` argument (operator/bridges/bridge_manager.py). A stalled
+with NO `timeout=` argument (corvin_operator/bridges/bridge_manager.py). A stalled
 npm registry call genuinely blocks the daemon thread forever, and every
 subsequent poll (and even a fresh retry POST) returns the exact same stuck
 "running" state indefinitely, with no client-visible way to recover short

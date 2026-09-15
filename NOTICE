@@ -131,5 +131,5 @@ Web console runtime dependencies (web-next/package.json):
   vis-network                     Apache-2.0 OR MIT
   zod                             MIT
 
-The messaging bridges under operator/bridges/*/ carry their own package.json
+The messaging bridges under corvin_operator/bridges/*/ carry their own package.json
 files with additional Node.js dependencies.

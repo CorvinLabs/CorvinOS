@@ -31,9 +31,9 @@ fi
 # failures here flip the container to `unhealthy`.
 # Container layout: repo is at /opt/corvin-repo (Dockerfile line 64).
 # Outside the container we resolve relative to this script's location.
-SELF_TEST="/opt/corvin-repo/operator/bridges/shared/self_test.py"
+SELF_TEST="/opt/corvin-repo/corvin_operator/bridges/shared/self_test.py"
 if [[ ! -f "$SELF_TEST" ]]; then
-    SELF_TEST="$(dirname "$0")/../operator/bridges/shared/self_test.py"
+    SELF_TEST="$(dirname "$0")/../corvin_operator/bridges/shared/self_test.py"
 fi
 if [[ -f "$SELF_TEST" ]]; then
     # stdout (JSON) → capture file; stderr (debug logs) → healthcheck stderr.

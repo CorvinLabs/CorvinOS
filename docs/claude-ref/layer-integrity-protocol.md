@@ -46,7 +46,7 @@ source of truth shared with Tier 1.
 
 ## Tier 1 — Signed manifest + boot check
 
-`operator/security/layer-manifest.json` (cryptographically signed; private signing
+`corvin_operator/security/layer-manifest.json` (cryptographically signed; private signing
 key held offline at Corvin Labs).
 
 `layer_integrity.py`:
@@ -72,7 +72,7 @@ tampering:
 | all match | INFO |
 
 A *present* manifest is fully fail-closed; only the not-yet-shipped state is
-advisory. Signing tool: `operator/security/sign_layer_manifest.py`
+advisory. Signing tool: `corvin_operator/security/sign_layer_manifest.py`
 (`--key`, `--mandatory-after`, `--verify`).
 
 ## Tier 2 — A2A attestation (Protocol v7 marker)

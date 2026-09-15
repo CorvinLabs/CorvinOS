@@ -17,7 +17,7 @@ hints) — and they could disagree.
 | 6 | **L25 Compute** (deterministic data processing, DSI datasources) | statistics, charts, CSV/dataset transforms, ML | COMPUTE directive → `compute_run`; console compute routes | **yes** — compute units |
 | 7 | **Normal delegation** (`corvin_delegate` MCP: `delegate_claude_code/codex/opencode/hermes/copilot`) | one bounded call to a *named* engine | model-chosen tool; DELEGATE directive | no (deliberate, LIC-DELEGATE-MCP-COMPUTE-01) |
 | 8 | **Background tasks** (`/task`·`/bg` bridges; console TaskManager) | long-running detached jobs with completion notify | explicit user command / CCC `/create task` | task-count quotas |
-| 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | **off unless selected** — runs only while the operator has picked `worker_engine: tde` in Settings → Worker Engine | ADR-0114 delegated branch (auto, `_worker_engine_target`, `tde` mode only); console `/use-engine tiered_delegation <task>` (also `tde` mode only); `SendIntegration` for embedders | **yes** — shared agentic-compute pool (ADR-0216), charged at the `TieredDelegationEngine.execute` chokepoint |
+| 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `corvin_operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | **off unless selected** — runs only while the operator has picked `worker_engine: tde` in Settings → Worker Engine | ADR-0114 delegated branch (auto, `_worker_engine_target`, `tde` mode only); console `/use-engine tiered_delegation <task>` (also `tde` mode only); `SendIntegration` for embedders | **yes** — shared agentic-compute pool (ADR-0216), charged at the `TieredDelegationEngine.execute` chokepoint |
 
 **Remote instances (A2A, L38)** are not a ladder mechanism: like mechanism 7
 they are a model-chosen tool (`a2a_send` MCP, persona flag
@@ -295,7 +295,7 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
   exhausted pool must never re-route into a *different* delegation engine than
   the one the operator selected.
 - `_tde_available()` requires BOTH the TDE module set (source tree or the
-  wheel-vendored `_vendor/operator/orchestration`, wired via
+  wheel-vendored `_vendor/corvin_operator/orchestration`, wired via
   `_operator_bootstrap._OPERATOR_SUBTREES`) AND a resolvable `claude` CLI — a
   Hermes-only / no-API-key install reports TDE unavailable and delegates via
   ACS (which pins a local worker model) rather than failing every turn.

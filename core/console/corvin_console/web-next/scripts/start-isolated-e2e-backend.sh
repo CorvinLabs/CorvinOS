@@ -7,7 +7,7 @@ set -uo pipefail
 R=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)
 export CORVIN_HOME="${CORVIN_E2E_HOME:-/tmp/corvin-e2e-home}"
 mkdir -p "$CORVIN_HOME/tenants/_default/global"
-export PYTHONPATH="$R/core/console:$R/core/gateway:$R/core/license:$R/core/compliance:$R/operator/forge:$R/operator/skill-forge"
+export PYTHONPATH="$R/core/console:$R/core/gateway:$R/core/license:$R/core/compliance:$R/corvin_operator/forge:$R/corvin_operator/skill-forge"
 PORT="${CORVIN_E2E_PORT:-8799}"
 exec "$R/core/console/.venv/bin/python" -m uvicorn corvin_gateway.app:app \
   --host 127.0.0.1 --port "$PORT" --log-level info

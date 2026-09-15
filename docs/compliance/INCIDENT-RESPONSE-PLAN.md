@@ -52,8 +52,8 @@ SYSTEMD_USER=~/.config/systemd/user
 mkdir -p "$SYSTEMD_USER"
 sed -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
     -e "s|__PLUGIN_ROOT__|$PLUGIN_ROOT|g" \
-    operator/voice/scripts/systemd/corvin-incident-scan.service > "$SYSTEMD_USER/corvin-incident-scan.service"
-cp operator/voice/scripts/systemd/corvin-incident-scan.timer "$SYSTEMD_USER/corvin-incident-scan.timer"
+    corvin_operator/voice/scripts/systemd/corvin-incident-scan.service > "$SYSTEMD_USER/corvin-incident-scan.service"
+cp corvin_operator/voice/scripts/systemd/corvin-incident-scan.timer "$SYSTEMD_USER/corvin-incident-scan.timer"
 
 systemctl --user daemon-reload
 systemctl --user enable --now corvin-incident-scan.timer

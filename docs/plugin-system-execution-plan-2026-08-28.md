@@ -577,7 +577,7 @@ Week 3: Milestone 3 (E3) — 5–7 days OR drop + verification gate
 **Sessions budget:**
 - Each Milestone: 2–3 Claude Code sessions (6–12 hours per session, est.)
 - Refutation rounds: 1 per Milestone (find defects in own code)
-- Pre-commit: `bash operator/bridges/run-all-tests.sh` (budgets >15 min per commit)
+- Pre-commit: `bash corvin_operator/bridges/run-all-tests.sh` (budgets >15 min per commit)
 
 ---
 
@@ -620,7 +620,7 @@ Week 3: Milestone 3 (E3) — 5–7 days OR drop + verification gate
 **Tuesday–Wednesday (Days 2–3):**
 - [ ] Implement Task 1.1: `corvin plugin install <path>` (10 tests)
 - [ ] Implement Task 1.2: community plugin confirmation gate (3 tests)
-- [ ] Pre-commit: `bash operator/bridges/run-all-tests.sh`
+- [ ] Pre-commit: `bash corvin_operator/bridges/run-all-tests.sh`
 
 **Thursday (Day 4):**
 - [ ] **MAINTAINER DECISION POINT:** Generate Ed25519 key (Task 1.3, ~30 min offline)

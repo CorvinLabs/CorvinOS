@@ -27,8 +27,8 @@ the model, at the *lowest* token cost?
 
 | Component | Today | File |
 |---|---|---|
-| Memory retrieval | keyword **substring** match; title ×2, body ×1; threshold 0.3; top-5 | `operator/context_engineering/memory_lookup.py` (`search`, `_calculate_relevance`) |
-| "Semantic" filter | **hash-based pseudo-embedding STUB** — cosine over meaningless vectors | `operator/context_engineering/selective_injection.py` (`_embed`) |
+| Memory retrieval | keyword **substring** match; title ×2, body ×1; threshold 0.3; top-5 | `corvin_operator/context_engineering/memory_lookup.py` (`search`, `_calculate_relevance`) |
+| "Semantic" filter | **hash-based pseudo-embedding STUB** — cosine over meaningless vectors | `corvin_operator/context_engineering/selective_injection.py` (`_embed`) |
 | Storage/index | flat `.md` files, `glob("*.md")` re-scanned **every turn** (~180 files) | `memory_lookup.py` |
 | Body rendering | hard cut at **800 chars**, top-5 matches only | `pipeline.py` (`_memory_body`, `render_brief_to_text`) |
 

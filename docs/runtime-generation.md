@@ -140,7 +140,7 @@ What happens then:
 2. **Canonical write** — `<scope>/skill-forge/skills/<name>/SKILL.md`
    plus `meta.json` carrying provenance and grade history.
 3. **Slot mirror** — projection into
-   `<repo>/operator/skill-forge/skills/dyn/<sanitized>/SKILL.md` so
+   `<repo>/corvin_operator/skill-forge/skills/dyn/<sanitized>/SKILL.md` so
    the engine's plugin-skill loader picks it up at next subprocess
    boot.
 4. **Adapter inject** — on the *very next* bridge turn,
@@ -274,14 +274,14 @@ mechanics.
 
 ## Where to look in the code
 
-- `operator/forge/` — Forge plugin (registry, runner, MCP server)
-- `operator/skill-forge/` — Skill-Forge plugin
-- `operator/bridges/shared/skill_inject.py` — adapter-side
+- `corvin_operator/forge/` — Forge plugin (registry, runner, MCP server)
+- `corvin_operator/skill-forge/` — Skill-Forge plugin
+- `corvin_operator/bridges/shared/skill_inject.py` — adapter-side
   prompt-injection + auto-grade + outcome-grade
-- `operator/bridges/shared/personal_tools.py` — Layer 27
+- `corvin_operator/bridges/shared/personal_tools.py` — Layer 27
   personal-tools registry
-- `operator/voice/hooks/path_gate.py` — PreToolUse hook
-- `operator/forge/forge/security_events.py` — `EVENT_SEVERITY`
+- `corvin_operator/voice/hooks/path_gate.py` — PreToolUse hook
+- `corvin_operator/forge/forge/security_events.py` — `EVENT_SEVERITY`
   catalog for all forge / skill-forge / personal-tool events
 
 ## Adjacent docs

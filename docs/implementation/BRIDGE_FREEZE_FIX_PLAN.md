@@ -8,7 +8,7 @@ manual `Stop-Process` + `node daemon.js`. Reported on the WINDOWS instance
 
 ## Root cause (verified in code, not assumed)
 
-- **Linux/macOS is already covered.** `operator/bridges/watchdog.sh` runs on a
+- **Linux/macOS is already covered.** `corvin_operator/bridges/watchdog.sh` runs on a
   60-s systemd timer (`corvin-voice-bridge-watchdog.timer`), fetches each daemon's
   `/status`, and restarts on repeated HTTP failure (FAIL_THRESHOLD=3) OR on a
   wedge signal in the JSON body (`is_stalled` checks e.g. `poller_stalled_s`). An

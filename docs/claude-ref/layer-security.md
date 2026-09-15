@@ -286,7 +286,7 @@ and the confusable map only collapses pre-existing look-alike pairs.
 
 ### Phase 2A — Path-Gate v2 (extended Bash detection)
 
-`operator/voice/hooks/path_gate.py` extends the v1 deny-vectors with:
+`corvin_operator/voice/hooks/path_gate.py` extends the v1 deny-vectors with:
 
 | Vector | What | Behaviour with protected hint |
 |---|---|---|
@@ -314,7 +314,7 @@ on a recursive-shell trick) is structurally worse.
 ### Phase 2B — Slot-mirror scope-gate (cross-chat leak prevention)
 
 `SkillRegistry.create()` only writes the engine-facing slot mirror
-(`operator/skill-forge/skills/dyn/<sanitized>/SKILL.md`) when the
+(`corvin_operator/skill-forge/skills/dyn/<sanitized>/SKILL.md`) when the
 skill's scope is `project` or `user`. Task- and session-scope skills
 stay reachable via adapter-injection in the originating chat, but
 cannot leak across chats through the engine's plugin-skill loader —
@@ -325,7 +325,7 @@ Promotion through `MultiSkillRegistry.promote()` lets a session-scope
 skill cross the gate by re-creating it at the higher scope (slot
 written there). The lower-scope source delete uses
 `purge_slot=False` so the new authoritative copy keeps the slot.
-Tests in `operator/skill-forge/tests/test_plugin_slot.py` cover the
+Tests in `corvin_operator/skill-forge/tests/test_plugin_slot.py` cover the
 promote-path AND the negative cases (task / session creates leave the
 slot empty).
 
@@ -406,7 +406,7 @@ data minimisation, the audit chain captures only:
 
 Personas with `network: allow` (research) share the host
 net namespace via `--share-net`. Loopback-deny narrows that exposure:
-the runner binds `operator/forge/forge/sandbox_helpers/` read-only into
+the runner binds `corvin_operator/forge/forge/sandbox_helpers/` read-only into
 the bwrap and sets `PYTHONPATH=<helpers>` so Python's auto-import of
 `sitecustomize.py` patches `socket.socket.connect` /  `connect_ex` to
 refuse 127.0.0.0/8, `::1`, `localhost` (+ aliases) and 169.254.169.254
@@ -426,7 +426,7 @@ now carry `sandbox: bwrap+net-noloop` (default for research)
 or `bwrap+net` (when the operator opted into loopback) plus a
 `deny_loopback: bool` field.
 
-Coverage in `operator/forge/tests/test_persona_sandbox.py`: spawns a
+Coverage in `corvin_operator/forge/tests/test_persona_sandbox.py`: spawns a
 local 127.0.0.1 HTTP stub, runs a `urllib.request.urlopen` tool under
 three configs (research default, research+loopback:allow, coder) and
 asserts the inner result + audit-event sandbox label match the policy.
@@ -498,7 +498,7 @@ run, (c) existing canonical key beats silo (no overwrite).
 
 ### L — Daily audit-chain verify timer + bridge notification
 
-Two systemd user units in `operator/voice/scripts/systemd/`:
+Two systemd user units in `corvin_operator/voice/scripts/systemd/`:
 
 - `corvin-audit-verify.service` — oneshot calling
   `voice_audit.py verify --all --notify-bridge` (F-A5, 2026-09-07: `--all`
@@ -509,7 +509,7 @@ Two systemd user units in `operator/voice/scripts/systemd/`:
   and `ops/bootstrap/30-tenant-init.sh` install it alongside the timer; without
   it systemd cannot resolve the `OnFailure=` and a broken chain never alerts.
   Re-install on an existing box:
-  `operator/bridges/bridge.sh up` (user units) — or, for the docker layout,
+  `corvin_operator/bridges/bridge.sh up` (user units) — or, for the docker layout,
   `sudo install -m 0644 ops/systemd/corvin-audit-verify-failure@.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
 - `corvin-audit-verify.timer` — `OnCalendar=*-*-* 04:30:00`,
   `Persistent=true`.
@@ -522,7 +522,7 @@ and writes one outbox envelope per target with
 problems. Bridges then forward the warning to Telegram / Discord /
 WhatsApp / Slack / Email.
 
-Coverage in `operator/voice/scripts/test_audit_verify_notify.py`
+Coverage in `corvin_operator/voice/scripts/test_audit_verify_notify.py`
 (21 assertions): chain-break + relay → envelope written; clean chain
 → no envelope; no relay / disabled relay → exit 1 + no envelope; the
 systemd unit templates ship with the plugin and bridge.sh wires them
@@ -540,24 +540,24 @@ exclusively via the bwrap subprocess env — never the LLM context.
 
 **Files added/changed:**
 
-- `operator/forge/forge/secret_vault.py` — vault load + key validation
+- `corvin_operator/forge/forge/secret_vault.py` — vault load + key validation
   + best-effort literal redaction. Vault path:
   `~/.config/corvin-voice/secrets.json` (override via
   `CORVIN_SECRET_VAULT`), mode 0600 enforced.
-- `operator/forge/forge/policy.py` — adds `persona_secret_allow` field
+- `corvin_operator/forge/forge/policy.py` — adds `persona_secret_allow` field
   + `secrets_for_persona()` + `secret_check()` (fail-closed, no entry
   = no secrets).
-- `operator/forge/forge/registry.py::create()` — validates
+- `corvin_operator/forge/forge/registry.py::create()` — validates
   `meta.secrets` at create-time, audits declared refs by name.
-- `operator/forge/forge/runner.py` — resolves vault keys, applies the
+- `corvin_operator/forge/forge/runner.py` — resolves vault keys, applies the
   persona ACL, merges values into the bwrap subprocess env, walks the
   parsed envelope to redact accidental value leaks, audits
   `tool.secrets_injected` (names only).
-- `operator/voice/hooks/path_gate.py` — protects the vault file from
+- `corvin_operator/voice/hooks/path_gate.py` — protects the vault file from
   direct Write/Edit/Bash writes (read via `cat` stays allowed; the
   threat is plant-a-rogue-key, not exfil-via-cat which the read-side
   is not the right layer for anyway).
-- `operator/forge/tests/test_secret_injection.py` — 58-case
+- `corvin_operator/forge/tests/test_secret_injection.py` — 58-case
   per-subtask E2E (real bwrap, real vault, real audit chain).
 
 **Tool-side contract.** A tool declares its secret needs in
@@ -807,7 +807,7 @@ Both wired into `run-all-tests.sh`.
   through-after-N-retries" shim defeats the gate.
 - Don't move the consent store under `<scope_root>/forge/` or
   `<scope_root>/skill-forge/`. The path-gate hook
-  (`operator/voice/hooks/path_gate.py`) protects those subtrees from
+  (`corvin_operator/voice/hooks/path_gate.py`) protects those subtrees from
   direct Write/Edit/Bash; consent writes happen via the JS slash-
   command and the Python CLI, both of which are *off* the path-
   gate path. Sliding consent into one of the protected subtrees
@@ -882,7 +882,7 @@ sweeping rename.
   hot-path. It's an O(12) check meant to fire once per process, not
   per tool call — putting it inside `main()` would multiply the cost
   per Bash command without security gain.
-- Don't touch `<repo>/operator/skill-forge/skills/dyn/` from the
+- Don't touch `<repo>/corvin_operator/skill-forge/skills/dyn/` from the
   registry without going through the slot-gate. The scope-check is
   load-bearing — bypassing it re-opens the cross-chat leak vector.
 - Don't make the observer UUID session token discoverable before
@@ -897,7 +897,7 @@ sweeping rename.
 
 ## Path-Gate Hook (layer 10) — direct-FS-write protection on forge / skill-forge workspaces
 
-The layer-10 PreToolUse hook (`operator/voice/hooks/path_gate.py`) is the
+The layer-10 PreToolUse hook (`corvin_operator/voice/hooks/path_gate.py`) is the
 structural enforcement that lets every `zero_config` persona carry
 `forge_enabled` / `skill_forge_enabled` without giving up the sandbox.
 It runs before every `Write` / `Edit` / `MultiEdit` / `NotebookEdit` /
@@ -914,9 +914,9 @@ writable path.
 | `<corvin_home>/**/skill-forge/**` | SkillForge workspaces in any scope |
 | `<corvin_home>/**/audit.jsonl` | Unified hash-chain audit log |
 | `<corvin_home>/**/policy.json` | Per-scope policy override |
-| `<repo>/operator/skill-forge/skills/dyn/**` | Engine-facing slot-mirror |
-| `<repo>/operator/forge/forge/policy.json` | Bundled default policy |
-| `<repo>/operator/forge/forge/policy.default.json` | Bundled default policy (alt name) |
+| `<repo>/corvin_operator/skill-forge/skills/dyn/**` | Engine-facing slot-mirror |
+| `<repo>/corvin_operator/forge/forge/policy.json` | Bundled default policy |
+| `<repo>/corvin_operator/forge/forge/policy.default.json` | Bundled default policy (alt name) |
 
 **Bash detection** — write-target paths are extracted via:
 - `>` / `>>` / `&>` / `>&` redirects
@@ -961,7 +961,7 @@ through the same hash chain as `tool.created`, `skill.namespace_denied`,
   the persona's own prompt-injected output. There is no trustworthy
   persona signal at this layer.
 - Don't introduce a new write-tool (e.g. a future `WriteBatch`) without
-  adding it to the matcher in `operator/voice/hooks/hooks.json` AND a
+  adding it to the matcher in `corvin_operator/voice/hooks/hooks.json` AND a
   case in `test_path_gate.py`. A missed matcher = a missed gate.
 - Don't catch the audit-write failure silently in
   `path_gate._emit_audit` and elevate it to a deny — observability is
@@ -973,7 +973,7 @@ through the same hash chain as `tool.created`, `skill.namespace_denied`,
 
 ## CLAG — Chain-Locked Adaptive Gating (ADR-0133)
 
-Module: `operator/forge/forge/clag.py`
+Module: `corvin_operator/forge/forge/clag.py`
 
 `gate(path, layer_id, *, dna_seed=None, ttl=None)` must be called before any
 security-sensitive operation. It verifies the audit chain is intact and issues a
@@ -1124,14 +1124,14 @@ not deleted — they now assert the fixed behaviour),
 |---|---|---|
 | **NAT64 SSRF bypass** | `routes/datasources_http.py::_embedded_ipv4` + `_ip_is_blocked` (still one predicate, imported by `routes/custom_provider.py`) | `not is_global` is not sufficient for an IPv6 **wrapper** around an IPv4 address. `ipaddress` reports `64:ff9b::7f00:1` — the RFC 6052 NAT64 Well-Known Prefix carrying `127.0.0.1` — as `is_global=True` / `is_private=False`, so it passed the guard, and on any host behind a NAT64 gateway that address **is** loopback. The same trick reaches `10.0.0.1`, `192.168.x.x`, CGNAT and `169.254.169.254` (cloud metadata). Every embedded-IPv4 form — IPv4-mapped `::ffff:a.b.c.d`, 6to4 `2002::/16`, Teredo `2001::/32` and NAT64 `64:ff9b::/96` — is now unwrapped and re-checked against the IPv4 rules, fail-closed. (RFC 8215's local-use `64:ff9b:1::/48` was already `is_private`.) |
 | **Webhook replay** | `routes/webhooks.py::_replay_seen`, `receive_webhook` | The HMAC proves **who** signed a body, never **when**, and the signature is a deterministic function of the body — so a captured signed request was re-POSTable verbatim up to the hourly rate limit, each replay writing a fresh `webhook.message_received` event into the tenant's chain. Two layers: **(a)** a nonce cache, always on, no sender change — the signature is remembered per `(tenant, channel)` for `_REPLAY_WINDOW_S` (3600 s) and an exact repeat is refused **409** and audited as `webhook.replay_rejected`; it is checked **after** the HMAC, so an unauthenticated caller can neither probe nor poison it, and it is bounded by `_REPLAY_MAX_PER_CHANNEL`. **(b)** an opt-in per-channel `require_signed_timestamp`: the `X-Corvin-Timestamp` header becomes mandatory, the HMAC is computed over `<ts>.<body>` (so the timestamp cannot be rewritten by whoever captured the body), and the request is refused outside `_TIMESTAMP_SKEW_S` (300 s) — this is what closes a replay arriving after the nonce window. It is opt-in because making it mandatory would break every already-registered sender; a channel that enables it can never fall back to the body-only form. **Behaviour change:** an exact duplicate signed body inside the window is now 409, not 200. |
-| **Fail-open guard import** | `../../operator/bridges/shared/adapter.py` (double-`ImportError` branch) | `_guard_prompt_head` was set to `None`, so the three spawn sites raised an opaque `TypeError: 'NoneType' object is not callable` deep in the spawn path instead of the explicit refusal `task_worker_pool._worker_stdin_payload` uses. It is now a stand-in that raises `RuntimeError` naming the cause. Same outcome — no unguarded prompt ever reaches `claude -p` — with an operator-readable message. |
+| **Fail-open guard import** | `../../corvin_operator/bridges/shared/adapter.py` (double-`ImportError` branch) | `_guard_prompt_head` was set to `None`, so the three spawn sites raised an opaque `TypeError: 'NoneType' object is not callable` deep in the spawn path instead of the explicit refusal `task_worker_pool._worker_stdin_payload` uses. It is now a stand-in that raises `RuntimeError` naming the cause. Same outcome — no unguarded prompt ever reaches `claude -p` — with an operator-readable message. |
 
 See `adapter-runtime.md` § "Round 3" for the `@<path>` client-side file-expansion
 finding (R3-C2) and the spawn-site ledger (R3-C1), and § "Round 4" for the closure of
 the ledger's `_PENDING` backlog — 26 further `claude -p` spawn sites (the 12 bridge
 helper models fed raw public-channel chat text among them) now route their WHOLE
 payload through the shared neutraliser via the fail-closed shim
-`operator/bridges/shared/prompt_guard.py`, whose `guard_prompt_head` raises rather than
+`corvin_operator/bridges/shared/prompt_guard.py`, whose `guard_prompt_head` raises rather than
 ever returning unguarded text.
 § "Round 4, second pass" records the follow-up finding that made all of that
 insufficient: the ledger could only discover spawn sites that write a literal `-p`, so
@@ -1181,9 +1181,9 @@ still a real mutex.
 ### Console hardening — round 3b: the shared registries and the plugin registry (2026-09-07)
 
 Nine more unbounded `flock(LOCK_EX)` calls sat one import away from the same
-request paths — in the `operator/bridges/shared/` registries the console routes
+request paths — in the `corvin_operator/bridges/shared/` registries the console routes
 and the bridge message path use, and in the plugin registry. They are bounded
-now through the ONE shared helper `operator/bridges/shared/_bounded_lock.py`
+now through the ONE shared helper `corvin_operator/bridges/shared/_bounded_lock.py`
 (`LockBusy(TimeoutError)`, `acquire_exclusive(fd, what, *, timeout)`); each
 module keeps its own patchable `LOCK_TIMEOUT_SECONDS` (2 s) and its own alias
 for the exception.
@@ -1207,7 +1207,7 @@ compliance state a busy lock may never become an implicit allow.**
 Regression tests: `core/console/tests/test_route_lock_nonblocking_registries.py`
 (real router + real session + wedged lock → 503, each with a lock-free positive
 control, plus proof the refusal left the guarded state unchanged) and
-`operator/bridges/shared/test_registry_lock_nonblocking.py` (direct bounded-wait
+`corvin_operator/bridges/shared/test_registry_lock_nonblocking.py` (direct bounded-wait
 tests for the sites that are only reachable in-process; every compliance site
 asserts the busy path granted nothing, and every gate — `quota.check`,
 `roles.effective_role`, `disclosure.has_seen` — is proven to take no lock at

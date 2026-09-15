@@ -72,7 +72,7 @@ export CEL_PHASE4_MEASUREMENT=true
 
 ### Health Check (Run Every Hour)
 ```bash
-bash operator/context_engineering/scripts/health-check.sh --continuous --interval 60
+bash corvin_operator/context_engineering/scripts/health-check.sh --continuous --interval 60
 ```
 
 ### Watch Measurement Files Growing

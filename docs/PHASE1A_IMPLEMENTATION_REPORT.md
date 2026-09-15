@@ -392,7 +392,7 @@ Phase 1b will rewrite call-sites to use the Skills registry:
 1. **core/orchestration/context_bridge.py** — Routing logic (~50 LOC)
 2. **core/vibe_engineering/vibe_manager.py** — Vibe activation (~80 LOC)
 3. **core/console/corvin_console/app.py** — Startup gates (~30 LOC)
-4. **operator/context_engineering/pipeline.py** — Context pipeline (~40 LOC)
+4. **corvin_operator/context_engineering/pipeline.py** — Context pipeline (~40 LOC)
 5. **core/console/corvin_console/routes/admin.py** — Admin API (~25 LOC)
 
 ### k=2-4 Tasks:

@@ -285,7 +285,7 @@ See **TROUBLESHOOTING.md** for complete guide (30+ scenarios covered).
 | Restart | `sudo systemctl restart corvin-compose` |
 | Shell | `sudo docker exec -it corvin bash` |
 | Check health | `sudo docker exec corvin /usr/local/bin/corvin-healthcheck` |
-| Verify audit | `sudo docker exec corvin /opt/corvin-repo/operator/voice/scripts/voice-audit.py verify` |
+| Verify audit | `sudo docker exec corvin /opt/corvin-repo/corvin_operator/voice/scripts/voice-audit.py verify` |
 | Update | `cd /opt/corvin/repo && sudo git fetch --tags && sudo git checkout $(git tag -l 'v*' --sort=-v:refname \| head -n1) && sudo systemctl restart corvin-compose` |
 
 ---

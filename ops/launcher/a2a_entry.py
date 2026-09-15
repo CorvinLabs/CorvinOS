@@ -1,6 +1,6 @@
 """Entry-point shim for the corvin-a2a CLI (L38 A2A).
 
-corvin_operator/ shadows the Python stdlib 'operator' module, so we use a shim that
+the legacy operator/ directory name shadows the Python stdlib 'operator' module, so we use a shim that
 adds the voice/scripts directory to sys.path before importing corvin_a2a.
 In a wheel install the operator bootstrap vendored paths are used instead.
 """

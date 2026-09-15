@@ -58,16 +58,16 @@ first manager iteration onward.
   grep `_build_delegation_spec(task_text` for both) — every caller passes
   the real `task_text`, so the bug is entirely inside the builder, not at
   the call sites.
-- `operator/bridges/shared/acs_runtime.py:2946` — `initial_state =
+- `corvin_operator/bridges/shared/acs_runtime.py:2946` — `initial_state =
   dict(spec.get("state", {}).get("initial") or {})` copies the polluted
   dict into `RunContext.state` (`ctx.state`), so the placeholder isn't
   confined to iteration 0.
-- `operator/bridges/shared/acs_runtime.py:878-880` — `CURRENT STATE:` is
+- `corvin_operator/bridges/shared/acs_runtime.py:878-880` — `CURRENT STATE:` is
   rendered into the **manager prompt on every single iteration** of the
   delegation loop from `ctx.state`, meaning the manager LLM sees
   `{"task": "web-chat delegated turn (ADR-0114)"}` as the run's "state"
   block for the whole run, not just the first turn.
-- `operator/bridges/shared/acs_runtime.py:893-894` — `INITIAL STATE:` is
+- `corvin_operator/bridges/shared/acs_runtime.py:893-894` — `INITIAL STATE:` is
   additionally rendered (iteration 0 only) directly from
   `ctx.workflow_spec["state"]["initial"]`, doubling the misleading signal
   on the very first manager decision.
@@ -151,7 +151,7 @@ The current uncommitted working-tree diff (`git status` /
 `git diff --stat`: `chat_runtime.py`, `web-next/src/lib/{api.ts,
 chat-registry.ts}`, `web-next/src/pages/chat.tsx`, the two associated test
 files, `docs/claude-ref/{delegation-routing.md,layer-engines.md}`,
-`operator/orchestration/tde/tde_engine.py`,
+`corvin_operator/orchestration/tde/tde_engine.py`,
 `tests/test_tde_engine_summarize_honesty.py`, and the new
 `docs/claude-ref/tde-graph-concept.md`) is **unrelated, complete, and
 fully tested** feature work for the ADR-0216 TDE inline chat badge
@@ -229,7 +229,7 @@ isolated spec-builder check:
    cross-file test-order pollution (an L44 house-rules classifier state
    leak from an earlier-running `core/console/tests` file, not from
    `acs_runtime.py` itself — both tests pass standalone and alongside every
-   other `acs_runtime`-importing test file); 3 in `operator/voice/scripts/
+   other `acs_runtime`-importing test file); 3 in `corvin_operator/voice/scripts/
    test_summarize.py` are a pre-existing voice-summarize language-directive
    bug (fails identically in isolation, unrelated to delegation); 1 in
    `test_engine_span_coverage.py` is a pre-existing static-scan finding
@@ -259,7 +259,7 @@ closes that gap:
    `chat_runtime._build_delegation_spec(real_task, cr._DELEGATION_BUDGET_DEFAULTS)`
    — with `real_task = "Analysiere die Verkaufszahlen aus drei Quellen und
    vergleiche sie"`.
-2. Instantiates the real `operator/bridges/shared/acs_runtime.ACSRuntime` and
+2. Instantiates the real `corvin_operator/bridges/shared/acs_runtime.ACSRuntime` and
    calls its real `.run(spec)`, so the run goes through the actual
    `_manager_loop`, `_dispatch_workers`, `_build_manager_prompt` and
    `_build_worker_prompt` — no hand-rolled `RunContext`.
@@ -292,7 +292,7 @@ closes that gap:
 7. **Suites re-run green**: `core/console/tests/test_web_delegation.py`
    (81 tests, includes the new E2E test) + `core/console/tests/
    test_adr0213_context_sync.py` (8 tests) = 89/89 passed. Also re-ran
-   `operator/bridges/shared/test_acs_runtime.py` (66/66 passed) as a
+   `corvin_operator/bridges/shared/test_acs_runtime.py` (66/66 passed) as a
    non-regression check on the shared `acs_runtime` module the new test
    imports and monkeypatches.
 8. **`docs/claude-ref/delegation-routing.md`** — re-checked against this

@@ -247,7 +247,7 @@ Two things this trigger must respect, both discovered in this investigation:
 
 ### 5.4 WO GENAU — files to change (implementation-ready)
 
-1. **`operator/orchestration/tde/tde_engine.py`**
+1. **`corvin_operator/orchestration/tde/tde_engine.py`**
    - `_enforce_tde_compute_quota()` (line 127): after the successful `_cq_inc(...)` call
      (line 155), call `license.compute_quota.get_today_count(_license_corvin_home())` and
      `license.validator.get_limit("compute_units_per_day")`, and thread both through to the
@@ -359,7 +359,7 @@ every other key is dropped into `_dropped_fields`. `tde_run_id`, `step_num`,
 graph is built from, and `GET /v1/console/compute/tde/{run_id}/graph` answered
 404 for real turns that were sitting in the chain.
 
-`operator/orchestration/tde/tde_audit.py` — which already owns the closed
+`corvin_operator/orchestration/tde/tde_audit.py` — which already owns the closed
 CONTENT-FREE vocabulary (`_scrub` drops everything else and pins the identifier
 shape) — now declares it in `_EVENT_FIELDS` and folds it into the writer's
 registry with `security_events.register_event_allowlist()` at import

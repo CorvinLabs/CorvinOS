@@ -7,7 +7,7 @@ document explains the process.
 ## TL;DR
 
 1. Fork [`github.com/CorvinLabs/CorvinOS`](https://github.com/CorvinLabs/CorvinOS), branch off `main`.
-2. Make your change. Run the test suite (`bash operator/bridges/run-all-tests.sh`).
+2. Make your change. Run the test suite (`bash corvin_operator/bridges/run-all-tests.sh`).
 3. Open a pull request. **Add a comment:** `I have read CLA.md and accept its terms.`
 4. A maintainer checks [`CLA-SIGNATORIES.md`](CLA-SIGNATORIES.md) and merges.
 
@@ -90,7 +90,7 @@ for run-workspaces, real `bwrap` for sandbox isolation).
 Run the full suite:
 
 ```bash
-bash operator/bridges/run-all-tests.sh
+bash corvin_operator/bridges/run-all-tests.sh
 ```
 
 Mocks are accepted only where a network resource is the sole external
@@ -198,7 +198,7 @@ The CI/CD gate will still validate this; if you mark it wrong, you'll be caught 
   - [ ] ADR.commits field lists this PR's commits
   - [ ] ADR title accurately describes this change
 - [ ] If structural daemon code changed: PR description includes the
-  line *"Requires `bash operator/bridges/bridge.sh restart` to
+  line *"Requires `bash corvin_operator/bridges/bridge.sh restart` to
   take effect."*
 
 ## Reporting security issues

@@ -37,7 +37,7 @@ COPY --from=builder /root/.local /home/corvin/.local
 
 # Copy entire source tree (all core modules)
 COPY --chown=corvin:corvin core/ /app/core/
-COPY --chown=corvin:corvin operator/ /app/operator/
+COPY --chown=corvin:corvin corvin_operator/ /app/corvin_operator/
 
 # Ensure venv/pip are in PATH
 ENV PATH=/home/corvin/.local/bin:$PATH

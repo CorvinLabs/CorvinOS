@@ -449,36 +449,36 @@ How all four Phase 4 concepts work together in a self-reinforcing flywheel that 
 ### CorvinOS Codebase
 
 **Memory Lookup:**
-- `operator/context_engineering/memory_lookup.py` (360 LoC)
+- `corvin_operator/context_engineering/memory_lookup.py` (360 LoC)
   - `MemoryLookup` class: search, rank, enrich
   - TF-IDF scoring + age decay
   - 30-min LRU cache
 
 **Graph Traversal:**
-- `operator/context_engineering/graph_traversal.py` (250 LoC)
+- `corvin_operator/context_engineering/graph_traversal.py` (250 LoC)
   - `GraphTraversal` class: find_related_decisions
   - Dependency following (depth-limited)
   - Conflict detection
 
 **Skill Injection:**
-- `operator/context_engineering/skill_injection.py` (280 LoC)
+- `corvin_operator/context_engineering/skill_injection.py` (280 LoC)
   - `SkillInjection` class: map decisions → skills
   - Package skill loader integration
   - Relevance scoring
 
 **Package Skill Loader:**
-- `operator/context_engineering/package_skill_loader.py` (260 LoC)
+- `corvin_operator/context_engineering/package_skill_loader.py` (260 LoC)
   - Discovers skills from installed packages
   - Extracts from `manifest.json`
   - Scoring algorithm (base + category + package + preprocessing)
 
 **Data Models:**
-- `operator/context_engineering/rich_task_brief.py` (150 LoC)
+- `corvin_operator/context_engineering/rich_task_brief.py` (150 LoC)
   - `RichTaskBrief`, `MemoryContext`, `ConfidenceScore`
   - All Phase 4 data structures
 
 **Integration:**
-- `operator/context_engineering/__init__.py` (public API)
+- `corvin_operator/context_engineering/__init__.py` (public API)
 - `core/task_analysis/task_engine.py` (Phase 5.5 wired at routing point)
 
 ### Test Coverage

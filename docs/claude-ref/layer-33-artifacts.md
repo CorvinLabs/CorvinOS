@@ -1,10 +1,10 @@
 # Layer 33 — Session Artifact Memory — full reference
 
 ADR: `Corvin-ADR: decisions/0040-session-artifact-memory.md`
-Library: `operator/forge/forge/artifacts.py`
-MCP handlers: `operator/forge/forge/mcp_server.py`
-Auto-register hook: `operator/voice/hooks/path_gate.py` (PostToolUse branch)
-Tests: `operator/forge/tests/test_artifacts.py`, `operator/forge/tests/test_artifact_e2e.py`
+Library: `corvin_operator/forge/forge/artifacts.py`
+MCP handlers: `corvin_operator/forge/forge/mcp_server.py`
+Auto-register hook: `corvin_operator/voice/hooks/path_gate.py` (PostToolUse branch)
+Tests: `corvin_operator/forge/tests/test_artifacts.py`, `corvin_operator/forge/tests/test_artifact_e2e.py`
 
 This file covers what the ADR doesn't: per-tool semantics, error
 contracts, the auto-register decision tree, the pre-warn protocol,
@@ -249,7 +249,7 @@ from the first 4 KB of the artifact.
 
 ## Self-test hooks (Layer 33 entries)
 
-Added to `operator/bridges/shared/self_test.py`:
+Added to `corvin_operator/bridges/shared/self_test.py`:
 
 | Check | Severity |
 |---|---|

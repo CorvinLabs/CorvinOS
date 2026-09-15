@@ -5,7 +5,7 @@ How a background task reaches the user in Discord / WhatsApp / Telegram / Slack
 runs, and how a run that stopped before finishing is carried through to
 completion instead of being reported as a failure.
 
-Three cooperating stores, all in `operator/bridges/shared/`, all polled by the
+Three cooperating stores, all in `corvin_operator/bridges/shared/`, all polled by the
 same two idempotent pollers (the adapter main loop and the `bg_monitor` systemd
 timer):
 
@@ -27,13 +27,13 @@ across the per-turn boundary; a later `--resume` restores conversation history,
 not a dead process's in-flight agent. Three "done" signal paths also each wrote
 their envelope into a directory **no messenger daemon polls**:
 
-- `notification_relay.py` wrote to `operator/voice/bridges/shared/outbox` (orphan) — fixed to `operator/bridges/shared/outbox`.
+- `notification_relay.py` wrote to `corvin_operator/voice/bridges/shared/outbox` (orphan) — fixed to `corvin_operator/bridges/shared/outbox`.
 - `scheduler.py` workflow reports wrote to `bridges/<channel>/outbox` (orphan) — fixed to the shared outbox.
 - The Task Engine only published completion to in-memory browser SSE.
 
 ## The mechanism — a durable, acknowledged queue
 
-`operator/bridges/shared/completion_notify.py` is the backbone. Records live in
+`corvin_operator/bridges/shared/completion_notify.py` is the backbone. Records live in
 `CORVIN_HOME/pending_notifications/<id>.json` (routing PII lives here, NOT in the
 task JSONL/audit log — GDPR-safe; `purge_user` honours Art. 17).
 
@@ -97,7 +97,7 @@ contract cannot drift between them (`test_provenance.py` locks the shape).
 
 ## Delivery contract (all outbound messenger notifications)
 
-- Directory: `operator/bridges/shared/outbox` — the ONLY dir the 7 JS daemons poll (`SHARED = resolve(__dirname,'..','shared')`). `ADAPTER_OUTBOX` overrides it (tests / single-dir deploys).
+- Directory: `corvin_operator/bridges/shared/outbox` — the ONLY dir the 7 JS daemons poll (`SHARED = resolve(__dirname,'..','shared')`). `ADAPTER_OUTBOX` overrides it (tests / single-dir deploys).
 - Required field: `channel` (must equal the daemon's own channel).
 - Routing key: `chat_id` for discord/telegram/slack/signal/email; `to` (JID) for whatsapp.
 
@@ -282,4 +282,4 @@ injects the legacy idle wakeup **only** when `BGW_LEGACY_WAKEUP=1` (default OFF
 - `test_task_supervisor.py` — a dead / zombie / heartbeat-stale worker is resumed with a continuation prompt; a healthy one is left alone; a finished one is never resurrected; both budgets end in an honest failure that says what was tried; backoff and the `O_EXCL` spawn lock; **a resume spawns a REAL OS process**; `bg_monitor.run_once` drives it; flag-off never resumes and `completion_notify` still reaps an unsupervised dead worker.
 - `test_bg_task_worker_supervised.py` — the REAL `bg_task_worker.py` driven as a REAL subprocess (only the engine is stubbed): heartbeat, progress relay, timeout/crash recorded as resumable WITHOUT a premature failure message, the continuation prompt carrying the original goal, and flag-off reporting failure immediately as it always did.
 
-All wired into `operator/bridges/run-all-tests.sh`.
+All wired into `corvin_operator/bridges/run-all-tests.sh`.

@@ -170,7 +170,7 @@ manifest = load_manifest(force_refresh=True)
 
 ## Layer 4 — Self-Test (M4)
 
-`operator/bridges/shared/self_test.py` runs `_check_a2a_network_membership()` as
+`corvin_operator/bridges/shared/self_test.py` runs `_check_a2a_network_membership()` as
 part of `run_self_test()`.
 
 | Check name | Severity | Condition |
@@ -184,7 +184,7 @@ part of `run_self_test()`.
 
 ## Audit events (ADR-0103)
 
-Registered in `operator/forge/forge/security_events.py`:
+Registered in `corvin_operator/forge/forge/security_events.py`:
 
 | Event | Severity | When |
 |---|---|---|
@@ -209,13 +209,13 @@ Registered in `operator/forge/forge/security_events.py`:
 
 | File | Role |
 |---|---|
-| `operator/security/a2a_network_pubkey.pem` | Embedded trust anchor public key |
-| `operator/bridges/shared/a2a_manifest.py` | M3 manifest fetch / cache / expose |
-| `operator/voice/scripts/corvin_a2a.py` | M1 pairing gate (`_authorize_pairing_m1`) |
-| `operator/bridges/shared/remote_trigger_sender.py` | M2 build `network_attestation` |
-| `operator/bridges/shared/remote_trigger_receiver.py` | M2 validate `network_attestation` |
-| `operator/bridges/shared/self_test.py` | M4 CRITICAL checks |
-| `operator/forge/forge/security_events.py` | New A2A audit event types |
+| `corvin_operator/security/a2a_network_pubkey.pem` | Embedded trust anchor public key |
+| `corvin_operator/bridges/shared/a2a_manifest.py` | M3 manifest fetch / cache / expose |
+| `corvin_operator/voice/scripts/corvin_a2a.py` | M1 pairing gate (`_authorize_pairing_m1`) |
+| `corvin_operator/bridges/shared/remote_trigger_sender.py` | M2 build `network_attestation` |
+| `corvin_operator/bridges/shared/remote_trigger_receiver.py` | M2 validate `network_attestation` |
+| `corvin_operator/bridges/shared/self_test.py` | M4 CRITICAL checks |
+| `corvin_operator/forge/forge/security_events.py` | New A2A audit event types |
 
 ---
 
@@ -345,7 +345,7 @@ disabled peers too, via `peek_label()`, sanitized read-side).
 
 **Problem:** an instance behind a dynamic-IP connection (e.g. an LTE router)
 changes its public address at runtime. Every peer that already holds it as an
-ACTIVE friendship endpoint (`operator/cowork/remote_endpoints/<kid>.json`)
+ACTIVE friendship endpoint (`corvin_operator/cowork/remote_endpoints/<kid>.json`)
 keeps the stale URL until either an operator manually re-runs
 `activate_connection`, or the next real task send fails with a
 `TransportError` — a purely passive, timeout-driven recovery path.
@@ -430,9 +430,9 @@ known to have changed, instead of leaving peers to time out.
 
 | File | Role |
 |---|---|
-| `operator/bridges/shared/remote_trigger_receiver.py` | `TaskEnvelope.reconnect` field, `_handle_reconnect()` |
-| `operator/bridges/shared/remote_trigger_sender.py` | `RemoteTriggerSender.send_reconnect()` |
-| `operator/bridges/shared/a2a_friendship.py` | `update_endpoint_url()`, `detect_local_ip()`, `check_and_broadcast_reconnect()` |
+| `corvin_operator/bridges/shared/remote_trigger_receiver.py` | `TaskEnvelope.reconnect` field, `_handle_reconnect()` |
+| `corvin_operator/bridges/shared/remote_trigger_sender.py` | `RemoteTriggerSender.send_reconnect()` |
+| `corvin_operator/bridges/shared/a2a_friendship.py` | `update_endpoint_url()`, `detect_local_ip()`, `check_and_broadcast_reconnect()` |
 | `core/console/corvin_console/aco/heartbeat.py` | polls `check_and_broadcast_reconnect()` each 5-min tick |
 
 ---
@@ -547,7 +547,7 @@ signed callback, one round trip, no extra operator step:
 - `create_friendship_token()` call sites now also call
   `a2a_friendship.save_pending_friendship()` — a short-lived, single-use
   record (`kid` + the shared key) under a NEW directory,
-  `operator/cowork/remote_pending_friendships/` (env override
+  `corvin_operator/cowork/remote_pending_friendships/` (env override
   `REMOTE_PENDING_FRIENDSHIPS_DIR`, same 0600/atomic-write convention as
   `remote_origins`/`remote_endpoints`).
 - `friendship_import` (redeemer B), after writing its local files as before,
@@ -588,7 +588,7 @@ signed callback, one round trip, no extra operator step:
   — which could never match the receiver's origin file (named `<kid>.json`).
   Every authenticated call from a friendship-token-paired endpoint was
   rejected as "unknown origin" REGARDLESS of `state`. Now set to `token.kid`.
-- Tests: `operator/bridges/shared/test_a2a_friendship_handshake.py` (real
+- Tests: `corvin_operator/bridges/shared/test_a2a_friendship_handshake.py` (real
   HTTP, two instances, same harness style as `test_a2a_bidirectional.py`).
 - Existing pre-2026-07-29 friendship connections lack `origin_id_for_send`
   and were never reciprocal — delete and re-pair them.
@@ -743,7 +743,7 @@ demonstrably successful friendship-ack handshake:
   their OWN `__file__` for a `.corvin_repo`/`plugins` marker (a 2026-08-01/02 fix for a prior
   `IndexError` crash), with a "directory next to this file" fallback when no marker is
   found. In an installed/vendored deployment (these files live under
-  `corvin_console/_vendor/operator/bridges/shared/`) no marker exists anywhere up the tree,
+  `corvin_console/_vendor/corvin_operator/bridges/shared/`) no marker exists anywhere up the tree,
   so all four silently fall back to a bogus location — DIFFERENT from
   `core/console/corvin_console/routes/a2a_pair.py`'s own default (a fixed
   `Path(__file__).resolve().parents[3]`, which happens to still land correctly in this
@@ -755,7 +755,7 @@ demonstrably successful friendship-ack handshake:
   itself is nested, so it agrees with `a2a_pair.py` by construction), falling back to the
   marker-walk only when `corvin_console` genuinely isn't importable (the original minimal-
   standalone-deployment scenario). Regression test:
-  `operator/bridges/shared/test_a2a_installed_path_consistency.py` simulates an installed
+  `corvin_operator/bridges/shared/test_a2a_installed_path_consistency.py` simulates an installed
   layout and asserts all four resolvers agree.
 
 **LAN bind toggle (`a2a_lan_bind`, 2026-08-04).** Deliberately did NOT change the default

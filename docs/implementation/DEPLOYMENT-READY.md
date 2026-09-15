@@ -58,7 +58,7 @@ Queue:     ~/.corvin/tenants/_default/learning-queue.backup.1786187075
 ### Stage 1: Staging (Optional, ~1 hour)
 ```bash
 export CORVIN_ENVIRONMENT=staging
-bash operator/context_engineering/scripts/health-check.sh --continuous
+bash corvin_operator/context_engineering/scripts/health-check.sh --continuous
 ```
 
 **Success Criteria:**
@@ -70,8 +70,8 @@ bash operator/context_engineering/scripts/health-check.sh --continuous
 ### Stage 2: 10% Rollout (~1 hour monitoring)
 ```bash
 # Deploy to first 10% of instances
-bash operator/context_engineering/scripts/deploy-adr0274.sh --deploy
-bash operator/context_engineering/scripts/health-check.sh --continuous
+bash corvin_operator/context_engineering/scripts/deploy-adr0274.sh --deploy
+bash corvin_operator/context_engineering/scripts/health-check.sh --continuous
 ```
 
 **Metrics to Watch:**
@@ -92,7 +92,7 @@ bash operator/context_engineering/scripts/health-check.sh --continuous
 
 ### Health Check Command
 ```bash
-bash operator/context_engineering/scripts/health-check.sh --continuous --interval 60
+bash corvin_operator/context_engineering/scripts/health-check.sh --continuous --interval 60
 ```
 
 ### Key Metrics
@@ -107,7 +107,7 @@ bash operator/context_engineering/scripts/health-check.sh --continuous --interva
 ### Incident Response
 ```bash
 # If issues found:
-1. Check health: bash operator/context_engineering/scripts/health-check.sh
+1. Check health: bash corvin_operator/context_engineering/scripts/health-check.sh
 2. Review logs: tail -50 ~/.corvin/logs/session.log | grep -i "error\|critical"
 3. Restore backup: cp -r profiles.backup.* profiles/
 4. Restart service: corvin stop && sleep 2 && corvin-serve &

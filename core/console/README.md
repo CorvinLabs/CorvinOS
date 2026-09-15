@@ -58,7 +58,7 @@ The console mounts onto the gateway's ASGI app automatically when
 both plugin trees are present. To start the gateway with both:
 
 ```bash
-PYTHONPATH="core/console:core/gateway:operator/forge:operator/skill-forge" \
+PYTHONPATH="core/console:core/gateway:corvin_operator/forge:corvin_operator/skill-forge" \
   core/console/.venv/bin/python -m uvicorn \
   corvin_gateway.app:app --host 127.0.0.1 --port 8765
 ```

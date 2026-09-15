@@ -10,7 +10,7 @@
 ## Pre-Deployment Checklist
 
 - [ ] All commits on `main` branch
-- [ ] All tests green: `bash operator/bridges/run-all-tests.sh`
+- [ ] All tests green: `bash corvin_operator/bridges/run-all-tests.sh`
 - [ ] No uncommitted changes: `git status` clean
 - [ ] Latest commit has Co-Authored-By footer
 - [ ] ADRs in Corvin-ADR are synced and ACCEPTED

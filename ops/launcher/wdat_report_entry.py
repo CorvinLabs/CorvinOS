@@ -1,6 +1,6 @@
 """Entry-point shim for corvin-wdat-report CLI (ADR-0109 M5).
 
-corvin_operator/ shadows the Python stdlib 'operator' module, so we cannot use a dotted
+the legacy operator/ directory name shadows the Python stdlib 'operator' module, so we cannot use a dotted
 import path like operator.bridges.shared.wdat_report. This shim adds the shared
 directory to sys.path and delegates to the actual implementation.
 """

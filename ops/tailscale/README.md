@@ -86,7 +86,7 @@ login screen. Mint it on the server:
 docker exec corvin /opt/corvin-venv/bin/python -c '
 import sys
 sys.path.insert(0, "/opt/corvin-repo/core/gateway")
-sys.path.insert(0, "/opt/corvin-repo/operator/forge")
+sys.path.insert(0, "/opt/corvin-repo/corvin_operator/forge")
 from corvin_gateway.auth import issue_token
 print(issue_token("_default", label="laptop"))
 '

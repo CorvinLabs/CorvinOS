@@ -88,7 +88,7 @@ RUN python3.12 -m venv /opt/corvin-venv \
  && /opt/corvin-venv/bin/pip install -e /opt/corvin-repo/core/gateway
 
 # Node deps for each bridge daemon (per-channel package.json)
-RUN set -eux; for d in /opt/corvin-repo/operator/bridges/*/; do \
+RUN set -eux; for d in /opt/corvin-repo/corvin_operator/bridges/*/; do \
       if [ -f "$d/package.json" ]; then \
         (cd "$d" && npm install --omit=dev --no-audit --no-fund) || true; \
       fi; \

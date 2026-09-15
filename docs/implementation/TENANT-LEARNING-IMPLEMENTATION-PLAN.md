@@ -18,7 +18,7 @@ This plan implements three-tier tenant learning (CONCEPT-0003, ADR-0274) on top 
 
 ### 1.1 Create `learning_queue.py` Module
 
-**File:** `/home/shumway/projects/CorvinOS/operator/context_engineering/learning_queue.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/learning_queue.py`
 
 **Purpose:** Implement append-only, date-based JSONL queue for ContextEvaluation records.
 
@@ -135,7 +135,7 @@ class LearningQueue:
 
 ### 1.3 Integrate with ADR-0271 Feedback
 
-**Modify:** `/home/shumway/projects/CorvinOS/operator/context_engineering/feedback.py`
+**Modify:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/feedback.py`
 
 **Changes:**
 ```python
@@ -176,7 +176,7 @@ class ContextEvaluation:
 
 ### 2.1 Create `profile_aggregator.py` Module
 
-**File:** `/home/shumway/projects/CorvinOS/operator/context_engineering/profile_aggregator.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/profile_aggregator.py`
 
 **Purpose:** Read Tier 2 queue, compute aggregated profiles, write Tier 3.
 
@@ -462,7 +462,7 @@ def _compute_tenant_identity(self, profiles: Dict) -> Dict:
 
 ### 3.1 Modify `engine.py` to Load and Cache Tier 3
 
-**File:** `/home/shumway/projects/CorvinOS/operator/task_analysis/engine.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/task_analysis/engine.py`
 
 **Changes:**
 ```python
@@ -555,7 +555,7 @@ class ContextUsageTracker:
 
 ### 3.2 Modify ADR-0271 Feedback Collection
 
-**File:** `/home/shumway/projects/CorvinOS/operator/context_engineering/feedback.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/feedback.py`
 
 **Changes:**
 ```python
@@ -669,7 +669,7 @@ StandardError=journal
 
 ### 4.2 Create Monitoring & Alerting
 
-**File:** `/home/shumway/projects/CorvinOS/operator/monitoring/cel_monitoring.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/monitoring/cel_monitoring.py`
 
 **Checks:**
 ```python
@@ -745,7 +745,7 @@ groups:
 
 ### 4.3 Create GC & Retention Policy
 
-**File:** `/home/shumway/projects/CorvinOS/operator/context_engineering/profile_gc.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/profile_gc.py`
 
 **Policy:**
 ```python
@@ -793,7 +793,7 @@ class ProfileGarbageCollector:
 
 ### 5.1 End-to-End Test: Full Loop
 
-**File:** `/home/shumway/projects/CorvinOS/operator/context_engineering/tests/test_tier_integration_e2e.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/tests/test_tier_integration_e2e.py`
 
 **Test Scenario:**
 ```python
@@ -852,7 +852,7 @@ def test_full_loop_e2e():
 
 ### 5.2 Compliance Test: GDPR Audit Trail
 
-**File:** `/home/shumway/projects/CorvinOS/operator/context_engineering/tests/test_compliance_audit.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/tests/test_compliance_audit.py`
 
 **Test:**
 ```python
@@ -897,7 +897,7 @@ def test_gdpr_audit_trail():
 
 ### 6.1 Measurement Suite
 
-**File:** `/home/shumway/projects/CorvinOS/operator/context_engineering/measurement/cel_measurement.py`
+**File:** `/home/shumway/projects/CorvinOS/corvin_operator/context_engineering/measurement/cel_measurement.py`
 
 **Key Metrics:**
 

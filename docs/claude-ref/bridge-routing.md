@@ -8,7 +8,7 @@ tier; everything else keeps the user's chosen model / the adaptive tiers.
 
 **2026-07-27 update:** the 6-tier cascade moved out of
 `adapter.py::_resolve_os_model_bundled` into
-`operator/bridges/shared/model_selector.py::resolve_os_model()` — the SAME
+`corvin_operator/bridges/shared/model_selector.py::resolve_os_model()` — the SAME
 function the console web-chat (`chat_runtime.py`) now calls too, closing a
 gap where the console's own "OS Model" setting under Settings → AI Engines
 had no effect on the console's own chat. `adapter.py::_resolve_os_model_bundled`

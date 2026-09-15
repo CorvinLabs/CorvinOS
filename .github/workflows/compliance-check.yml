@@ -8,9 +8,9 @@ on:
   pull_request:
     paths:
       # Compliance-relevant code paths — add new entries when a new layer lands
-      - "operator/bridges/shared/**"
-      - "operator/voice/hooks/**"
-      - "operator/voice/scripts/stt/**"
+      - "corvin_operator/bridges/shared/**"
+      - "corvin_operator/voice/hooks/**"
+      - "corvin_operator/voice/scripts/stt/**"
       - "core/compliance/**"
       - "compliance/**"
       - "CLAUDE.md"

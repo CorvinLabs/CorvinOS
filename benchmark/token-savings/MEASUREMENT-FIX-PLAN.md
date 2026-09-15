@@ -4,7 +4,7 @@
 
 ## Review-Ergebnis + Umsetzungsstand (nach adversarialem Review, vor/während Bau)
 - ✅ **Additivität bestätigt korrekt** (kein Doppelzählen). Das Repo hat den Kanon schon inline
-  (`operator/orchestration/tde/worker_ipc.py:311`, `tde_engine.py:435`). → **Ein geteilter Helper**
+  (`corvin_operator/orchestration/tde/worker_ipc.py:311`, `tde_engine.py:435`). → **Ein geteilter Helper**
   `core/learning/token_accounting.py` gebaut + getestet (5/5), statt einer 3. Inline-Summe.
 - ✅ **Benchmark-Runner umgesetzt:** erfasst jetzt alle vier Klassen; Roh-JSONL trägt sie; Guard keyt auf
   summierten Input (nicht mehr `input_tokens=2>0`-Falschpass). **Echter Lauf verifiziert.**

@@ -81,7 +81,7 @@ def _use_os_trust_store() -> None:
     that actually contains the CA. Guarded: a missing ``truststore`` or any
     injection error leaves the default ``certifi`` behaviour exactly as before,
     so this only ever ADDS a working trust path. Mirrors
-    ``operator/voice/scripts/say.py::_use_os_trust_store`` (the same fix for the
+    ``corvin_operator/voice/scripts/say.py::_use_os_trust_store`` (the same fix for the
     voice subprocess). Runs at module import — before uvicorn imports the app or
     ``boot_platform`` runs — so it is in force before any socket opens.
     """

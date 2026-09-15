@@ -12,7 +12,7 @@ pytest
 edge-tts>=6.1.8
 # OS trust store for outbound TLS — lets edge-tts/OpenAI verify against a
 # corporate proxy's internal root CA (absent from certifi). See
-# operator/voice/scripts/say.py::_use_os_trust_store. Guarded no-op if missing.
+# corvin_operator/voice/scripts/say.py::_use_os_trust_store. Guarded no-op if missing.
 truststore>=0.9
 openai>=1.0
 anthropic>=0.25

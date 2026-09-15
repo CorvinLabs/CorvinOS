@@ -30,8 +30,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/consent.py"
-        test: "operator/bridges/shared/test_consent_gate.py"
+        file: "corvin_operator/bridges/shared/consent.py"
+        test: "corvin_operator/bridges/shared/test_consent_gate.py"
     invariants:
       - "consent gate is deny-by-default — no processing without prior consent"
       - "consent is per-uid, TTL-capped; expired consent = no processing"
@@ -57,8 +57,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/audit.py"
-        test: "operator/bridges/shared/test_audit_unified.py"
+        file: "corvin_operator/bridges/shared/audit.py"
+        test: "corvin_operator/bridges/shared/test_audit_unified.py"
     invariants:
       - "every auditable event is written to audit.jsonl with a hash-chain link"
       - "voice-audit verify must exit 0; any gap is CRITICAL"
@@ -83,8 +83,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/vault.py"
-        test: "operator/bridges/shared/test_vault.py"
+        file: "corvin_operator/bridges/shared/vault.py"
+        test: "corvin_operator/bridges/shared/test_vault.py"
     invariants:
       - "vault file mode is 0600 — world-readable vault is CRITICAL self-test failure"
       - "secret values are injected into bwrap env, never passed as tool args"
@@ -108,8 +108,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L10
-        file: "operator/voice/hooks/path_gate.py"
-        test: "operator/voice/hooks/test_path_gate.py"
+        file: "corvin_operator/voice/hooks/path_gate.py"
+        test: "corvin_operator/voice/hooks/test_path_gate.py"
     invariants:
       - "path-gate hook is registered for Write/Edit/MultiEdit/NotebookEdit/Bash/WebFetch"
       - "path-gate runs at PreToolUse, never PostToolUse"
@@ -134,8 +134,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L23
-        file: "operator/voice/scripts/stt/"
-        test: "operator/voice/scripts/test_stt.py"
+        file: "corvin_operator/voice/scripts/stt/"
+        test: "corvin_operator/voice/scripts/test_stt.py"
     invariants:
       - "voice.transcribed audit event contains metadata only (duration, provider, language)"
       - "transcript text is never written to audit.jsonl"
@@ -159,8 +159,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L36
-        file: "operator/bridges/shared/erasure_orchestrator.py"
-        test: "operator/bridges/shared/test_erasure_orchestrator.py"
+        file: "corvin_operator/bridges/shared/erasure_orchestrator.py"
+        test: "corvin_operator/bridges/shared/test_erasure_orchestrator.py"
     invariants:
       - "corvin-erasure <subject_id> walks all registered ErasureHandlers"
       - "subject_id matches ^[A-Za-z0-9.:_\\-]{1,128}$ — raw email/name rejected"
@@ -186,7 +186,7 @@ rules:
     severity: warning
     implemented_by:
       - layer: L32
-        file: "operator/bridges/shared/data_classification.py"
+        file: "corvin_operator/bridges/shared/data_classification.py"
         test: "core/gateway/tests/"
     invariants:
       - "strict_anonymization: true activates k=5 k-Anonymity + Laplace noise"
@@ -213,8 +213,8 @@ rules:
     severity: critical
     implemented_by:
       - layer: L16
-        file: "operator/bridges/shared/audit.py"
-        test: "operator/bridges/shared/test_audit_unified.py"
+        file: "corvin_operator/bridges/shared/audit.py"
+        test: "corvin_operator/bridges/shared/test_audit_unified.py"
     invariants:
       - "no uid, email, or name in Prometheus label values"
       - "audit event allow-list explicitly names every permitted detail key"

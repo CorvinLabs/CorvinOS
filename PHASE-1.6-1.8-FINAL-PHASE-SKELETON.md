@@ -39,7 +39,7 @@ class TestTwoGatewayFixture:
 
 ## Phase 1.7: Audit Events (~100 LoC, 15 min)
 
-**File:** `operator/license/audit_events.py` (new)
+**File:** `corvin_operator/license/audit_events.py` (new)
 
 ### Event Registration
 
@@ -67,7 +67,7 @@ AUDIT_EVENTS = {
 ### Implementation
 
 - Register all events in `forge/audit.py::register_events()`
-- Delete v1 paths from `operator/license/validator.py`
+- Delete v1 paths from `corvin_operator/license/validator.py`
 - Preserve: `license.chain_dna_seeded` (ADR-0117 seam verification)
 
 ---
@@ -96,7 +96,7 @@ trust root in product (tests monkeypatch ring).
 
 ## Free Tier Capabilities
 
-[Table auto-generated from operator/license/limits.py::CAPABILITIES]
+[Table auto-generated from corvin_operator/license/limits.py::CAPABILITIES]
 
 - compute.run: 10 per day
 - chat.turn: unlimited

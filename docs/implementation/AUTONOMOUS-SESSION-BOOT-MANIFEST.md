@@ -40,19 +40,19 @@ ls -lt ~/.claude/projects/-home-shumway-projects-CorvinOS/memory/*.md | head -5
 ### **PHASE 1: v1.0.0 Release Blockers (Session N+1, ~7h)**
 
 **Blocker 1:** Browser Sensitive-Confirms (H3)
-- File: `core/console/chat.tsx` + `operator/bridges/discord/confirm_handler.py`
+- File: `core/console/chat.tsx` + `corvin_operator/bridges/discord/confirm_handler.py`
 - Fix: Add confirm-event stream + UI buttons
 - Tests: UI Playwright tests
 - Effort: 2-3h
 
 **Blocker 2:** Bridge-Browser Governance (H4)
-- File: `operator/bridges/shared/activate.py` + ADR-0200 redesign
+- File: `corvin_operator/bridges/shared/activate.py` + ADR-0200 redesign
 - Fix: Remove Playwright from bridge arsenal OR implement cross-process token endpoint
 - Tests: E2E bridge isolation
 - Effort: 3-4h
 
 **Blocker 3:** CORVIN_HOME Split (CRITICAL)
-- File: `operator/cowork/remote_paths.py` (unified resolver exists)
+- File: `corvin_operator/cowork/remote_paths.py` (unified resolver exists)
 - Fix: Decide canonical path (maintainer input required)
 - Effort: 2-3h (once decided)
 

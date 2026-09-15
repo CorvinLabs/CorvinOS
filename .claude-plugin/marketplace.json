@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "voice",
-      "source": "./operator/voice",
+      "source": "./corvin_operator/voice",
       "description": "Voice mode for Claude Code: reads assistant replies aloud (TTS) with auto language detection (de/en) and optional summarization. Also provides the WhatsApp / Telegram / Discord / Slack / Email bridges that funnel inbound messages into a Claude subprocess.",
       "version": "0.3.0",
       "license": "MIT",
@@ -29,7 +29,7 @@
     },
     {
       "name": "cowork",
-      "source": "./operator/cowork",
+      "source": "./corvin_operator/cowork",
       "description": "Multi-Persona-Layer for Claude Code. Per-chat agent roles (Coder, Browser, Inbox, Research, ...) — each with its own tools, MCP servers, and system prompt. Optional, on top of voice or standalone.",
       "version": "0.3.0",
       "license": "MIT",
@@ -43,7 +43,7 @@
     },
     {
       "name": "forge",
-      "source": "./operator/forge",
+      "source": "./corvin_operator/forge",
       "description": "Runtime tool generation: chat-pinned personas can register and execute schema-bound tools, sandboxed via bubblewrap + rlimits, hash-chain audited, with task/session/project/user scope routing.",
       "version": "0.1.0",
       "license": "MIT",
@@ -57,7 +57,7 @@
     },
     {
       "name": "skill-forge",
-      "source": "./operator/skill-forge",
+      "source": "./corvin_operator/skill-forge",
       "description": "Runtime skill generation: chat-pinned personas can create Markdown skills with front-matter and prompt-inject them into sub-agents. Lint-gated, hash-chain audited, auto-purges ungraded skills after 7 days.",
       "version": "0.1.0",
       "license": "MIT",

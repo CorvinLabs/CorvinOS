@@ -111,7 +111,7 @@ CorvinOS v1.0 represents a production-grade release with enterprise security gua
   - `core/audit/audit_writer.py` (hash-chaining logic)
   - `core/security/consent_gate.py` (user consent, GDPR enforcement)
   - `core/ipc/socket_handler.py` (IPC authentication, capability tokens)
-  - `operator/bridges/adapter.py` (message parsing, input validation)
+  - `corvin_operator/bridges/adapter.py` (message parsing, input validation)
   - All cryptographic usage (hashlib, hmac, secrets module)
 
 - Line-by-line review checklist:

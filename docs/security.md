@@ -12,7 +12,7 @@ The model is **defense in depth, not redundancy** — each surface catches a dif
 
 ## Surface 1 — whitelist (the trust boundary)
 
-**Lives in:** every bridge daemon (`operator/bridges/<channel>/daemon.js` or the Python email bridge).
+**Lives in:** every bridge daemon (`corvin_operator/bridges/<channel>/daemon.js` or the Python email bridge).
 
 **What it catches:** unknown senders.
 
@@ -30,7 +30,7 @@ Nothing in the normal path. The audit log itself is read-only-from-the-outside; 
 
 ## Surface 2 — persona ACL
 
-**Lives in:** persona JSON files (`operator/cowork/personas/<name>.json`, `~/.config/claude-cowork/personas/<name>.json`) for declaration, `forge.permissions` for enforcement of the forge subset.
+**Lives in:** persona JSON files (`corvin_operator/cowork/personas/<name>.json`, `~/.config/claude-cowork/personas/<name>.json`) for declaration, `forge.permissions` for enforcement of the forge subset.
 
 **What it catches:** the trusted user asking the agent to do something *the persona is not for*.
 
@@ -56,7 +56,7 @@ It is **not** a sandbox. A persona with full Bash access can do anything Bash ca
 
 ## Surface 3 — policy (forge)
 
-**Lives in:** `operator/forge/policy.json`, loaded with mtime cache by `forge.policy`.
+**Lives in:** `corvin_operator/forge/policy.json`, loaded with mtime cache by `forge.policy`.
 
 **What it catches:** the trusted user (via the agent) trying to forge or call a tool that violates a *project-wide rule*.
 
@@ -139,7 +139,7 @@ A tool that wants to read `/etc/shadow` simply does not see `/etc/shadow`. A too
 
 ## Surface 5 — path-gate hook (structural write protection)
 
-**Lives in:** `operator/voice/hooks/path_gate.py`, registered as a Claude Code `PreToolUse` hook on the `Write|Edit|MultiEdit|NotebookEdit|Bash|WebFetch` matcher.
+**Lives in:** `corvin_operator/voice/hooks/path_gate.py`, registered as a Claude Code `PreToolUse` hook on the `Write|Edit|MultiEdit|NotebookEdit|Bash|WebFetch` matcher.
 
 **What it catches:** a persona — including one running in `bypassPermissions` — trying to write directly into the forge / skill-forge workspaces, going around the MCP server.
 
@@ -149,8 +149,8 @@ The previous four surfaces enforce *what* a persona may do. Surface 5 enforces *
 - `<corvin_home>/**/skill-forge/**`
 - `<corvin_home>/**/audit.jsonl`
 - `<corvin_home>/**/policy.json`
-- `<repo>/operator/skill-forge/skills/dyn/**` (engine-facing slot mirror)
-- `<repo>/operator/forge/forge/policy.json` (bundle default)
+- `<repo>/corvin_operator/skill-forge/skills/dyn/**` (engine-facing slot mirror)
+- `<repo>/corvin_operator/forge/forge/policy.json` (bundle default)
 
 For Bash, the hook scans for `>` / `>>` / `tee` / `mv` / `cp` / `install` / `sed -i` / `dd of=` / `python -c "open('…','w')"` / `rsync` and so on. **Fail-closed rule:** when a Bash command contains `eval` / `exec` / `$(…)` / backticks AND mentions a protected hint string (`forge`, `skill-forge`, `audit.jsonl`, `policy.json`), the hook denies even if it cannot enumerate the actual targets. A few false-positive denies on benign commands that happen to mention "forge" are acceptable cost; missing a write vector is a silent linter / policy bypass.
 

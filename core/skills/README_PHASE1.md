@@ -47,7 +47,7 @@
 
 ### Integration Layer (os_skills_integration.py)
 ✅ L5 production wiring: `os.delegation_router` in SHADOW mode from
-   `operator/bridges/shared/delegation_policy.py::_acp_shadow_route` (ADR-0613)  
+   `corvin_operator/bridges/shared/delegation_policy.py::_acp_shadow_route` (ADR-0613)  
 ⚠️ `route_task_l5()` — direct (non-shadow) entry point, tests only, no production caller  
 ❌ L10: `adapt_context_l10()` / `os.context_adapter` has NO production call site
    (the context pipeline does not consult it) — stated, not hidden (F-K4)  

@@ -208,7 +208,7 @@ claude plugin marketplace add "$REPO_ROOT" >/tmp/Corvin-marketplace.log 2>&1 || 
 
 | Change | Assessment | Note |
 |--------|-----------|------|
-| BRIDGES_DIR path fix | ✅ Good | Changed from `$PLUGIN_DIR/bridges` to `$REPO_ROOT/operator/bridges` — correct |
+| BRIDGES_DIR path fix | ✅ Good | Changed from `$PLUGIN_DIR/bridges` to `$REPO_ROOT/corvin_operator/bridges` — correct |
 | Claude Code login flow | ✅ Good | Improved: detects `.credentials.json` instead of interactive prompt. Safe fallback |
 | Step numbering | ✅ Good | Updated from 8 steps to 9 steps (added login as separate step) |
 | Plugin marketplace/plugin name | ⚠️ Watch | Uses `corvin-local` (new rebrand name). Verify it matches actual marketplace. |

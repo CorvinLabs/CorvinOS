@@ -210,7 +210,7 @@ Checkpoints and schedules are intentionally **excluded**, not missing — see th
 All eight checks run **before** any file is extracted. A single failure aborts with
 `InstallError` and leaves the filesystem untouched.
 
-The path-gate hook (`operator/voice/hooks/path_gate.py`) extends its protected subtree to
+The path-gate hook (`corvin_operator/voice/hooks/path_gate.py`) extends its protected subtree to
 include `<corvin_home>/**/packages/**` — no agent subprocess can write into an installed
 package directory directly. Only the installer CLI (or its future MCP surface) may write there.
 

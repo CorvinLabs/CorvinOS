@@ -146,7 +146,7 @@ After writing an ADR, ask: *"If this mechanism broke or were accidentally revert
 - Real subprocess, real filesystem, real bwrap — **no mocks for security/forge/policy/audit**
 - Test filename: `test_adr_XXXX_mechanism_name.py`
 - One test per structural invariant from the ADR's "Must NOT do" list
-- Register in test suite: `/operator/bridges/run-all-tests.sh`
+- Register in test suite: `/corvin_operator/bridges/run-all-tests.sh`
 - Commit together with implementation, not as a follow-up
 
 ### Examples: When to write ADRs
@@ -194,7 +194,7 @@ After writing an ADR, ask: *"If this mechanism broke or were accidentally revert
 
 **Infeasibility exception:** when the real entry point genuinely can't be driven end-to-end (hardware dependency, unavailable external system), name the reason explicitly instead of skipping silently. Phase 1 still applies unconditionally.
 
-Full rubric: `/operator/bundle/skills/ldd/e2e-wiring-proof/SKILL.md`
+Full rubric: `/corvin_operator/bundle/skills/ldd/e2e-wiring-proof/SKILL.md`
 
 ---
 
@@ -231,8 +231,8 @@ Quality disciplines are **LDD Layer 14 (LDD-Toggle-System)**. This section is ab
 (see below).
 
 Each persona declares which of the 12 LDD layers are active via `ldd_preset`, a per-persona
-JSON field consumed by `operator/cowork/lib/resolver.py` and expanded via
-`operator/bridges/shared/ldd.py`'s `PRESETS` dict — the actual code-enforced enum is:
+JSON field consumed by `corvin_operator/cowork/lib/resolver.py` and expanded via
+`corvin_operator/bridges/shared/ldd.py`'s `PRESETS` dict — the actual code-enforced enum is:
 - `"off"` (default for every shipped persona) — all 12 layers off; skills available in the
   prompt via `skill_forge_enabled: true`, not enforced
 - `"quick"` — a curated subset on (`e2e_driven_iteration`, `dialectical_reasoning`,
@@ -248,7 +248,7 @@ respects the philosophy: *guidance available, judgment yours.*
 
 **`adr_gate` and `e2e-wiring-proof` are NOT part of the 12-layer toggle set above** — see
 "E2E Wiring Proof" and "ADR Gate" sections. They are gated by the separate
-`operator/bridges/shared/quality_layers.py` module (global `<corvin_home>/global/
+`corvin_operator/bridges/shared/quality_layers.py` module (global `<corvin_home>/global/
 quality-layers.json`, exposed via the `quality-layer-control` skill), and are injected
 unconditionally by `skill_inject.py` regardless of SkillForge registry state or
 `ldd_preset` — this is the mechanism that makes them "on by default, every installation"
@@ -262,7 +262,7 @@ opts in.
 **Mechanism:** Skill-Forge (Layer 7) — Markdown skills prompt-injected into Claude Code sessions.
 
 **Activation:** Personas with `skill_forge_enabled: true` receive bundled skills:
-- Located at: `/operator/bundle/skills/ldd/<name>/SKILL.md`
+- Located at: `/corvin_operator/bundle/skills/ldd/<name>/SKILL.md`
 - Injected as Markdown into the system prompt
 - Appear as "available tools" in your session
 - Can be invoked by name or discovered dynamically

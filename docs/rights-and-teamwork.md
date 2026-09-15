@@ -421,7 +421,7 @@ the new layers (Phase-4 work):
 
 Any structural daemon change (new slash-command in
 `slash_commands.js`, new dispatch routing in `daemon.js`, new layer
-module loaded at boot) requires `bash operator/bridges/bridge.sh
+module loaded at boot) requires `bash corvin_operator/bridges/bridge.sh
 restart`. Pure data-only changes (settings.json, store JSON files)
 are picked up via mtime hot-reload.
 
@@ -458,7 +458,7 @@ All layers are opt-in:
 | 20 | `quota.py` + `audit_view.py` + `js/test_quota_dispatcher.js` | 15 + 15 | 72 + 34 |
 | 21 | `proposal.py` + `js/test_proposal_dispatcher.js` | 11 + 16 | 60 + 38 |
 
-All wired into `bash operator/bridges/run-all-tests.sh` (76
+All wired into `bash corvin_operator/bridges/run-all-tests.sh` (76
 test suites total). Every test sandboxes `CORVIN_HOME` to a
 tempdir; channel `settings.json` is snapshotted and restored on
 exit. The suite runs in ~30 seconds and is CI-suitable.

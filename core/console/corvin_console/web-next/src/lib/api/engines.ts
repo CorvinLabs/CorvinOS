@@ -424,7 +424,7 @@ export interface TaskModelConfig {
   alternatives: string[];
   // REAL, LEARNED (ADR-0644 Bayesian + EMA) — core.learning.
   // model_selection_optimizer.ConfidenceOptimizer, fed by real turn outcomes
-  // (operator/bridges/shared/model_selector_shadow.py::report_turn_outcome).
+  // (corvin_operator/bridges/shared/model_selector_shadow.py::report_turn_outcome).
   // 0 until real turns for this tier's current model have completed.
   confidence_score: number;
   run_count: number;
@@ -445,7 +445,7 @@ export interface EngineConfigResponse {
   last_updated: string;
   learning_status: "idle" | "learning" | "converged";
   last_learning_update: string | null;
-  // Real classification count (operator/bridges/shared/adapter.py's shadow
+  // Real classification count (corvin_operator/bridges/shared/adapter.py's shadow
   // classify, every real turn) — independent of which model was selected.
   total_samples: number;
   // Real outcome-feedback samples across all tiers' currently selected models.

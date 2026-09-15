@@ -15,7 +15,7 @@
 
 ### Phase 1: Update a2a_pair.py
 ```bash
-# File: operator/bridges/shared/a2a_pair.py or operator/cowork/a2a_pair.py
+# File: corvin_operator/bridges/shared/a2a_pair.py or corvin_operator/cowork/a2a_pair.py
 # Find: def _origins_dir() -> Path
 # Replace with: from operator.cowork.remote_paths import get_remote_origins_dir
 # Update callers: origins_dir = get_remote_origins_dir()
@@ -23,7 +23,7 @@
 
 ### Phase 2: Update remote_trigger_receiver.py
 ```bash
-# File: operator/bridges/shared/remote_trigger_receiver.py
+# File: corvin_operator/bridges/shared/remote_trigger_receiver.py
 # Find: def _default_repo_relative() 
 # Replace with: from operator.cowork.remote_paths import get_remote_origins_dir
 # Update callers: origins = get_remote_origins_dir()
@@ -62,18 +62,18 @@ Decision impacts L37 (rotation) + L36 (erasure) compliance fixes.
 
 ### Investigation Steps
 1. **Check Relay Health**
-   - File: operator/bridges/discord/relay_listener.py
+   - File: corvin_operator/bridges/discord/relay_listener.py
    - Verify: RelayListener.status() → healthy
    - Metrics: last_ping, connection_state, error_count
 
 2. **Inspect Queue State**
-   - File: operator/bridges/discord/outbox_queue.py
+   - File: corvin_operator/bridges/discord/outbox_queue.py
    - Count: undelivered messages in queue
    - Check: queue.put() → queue.get() chain integrity
    - Hypothesis: messages stuck in queue (never dequeued)
 
 3. **Trace Delivery Transport**
-   - File: operator/bridges/discord/webhook_sender.py
+   - File: corvin_operator/bridges/discord/webhook_sender.py
    - Verify: webhook URL valid, retries working
    - Log: last 10 delivery attempts (success/failure)
    - Fix hypothesis: Add timeout + fallback if webhook unresponsive
@@ -98,7 +98,7 @@ Decision impacts L37 (rotation) + L36 (erasure) compliance fixes.
 
 ### Investigation Steps
 1. **Analyze Precheck Loop**
-   - File: operator/bridges/discord/precheck.py
+   - File: corvin_operator/bridges/discord/precheck.py
    - Find: where does precheck.run() hang?
    - Hypothesis: deadlock in `checks.run()` vs `queue.put()`
 
@@ -132,12 +132,12 @@ Decision impacts L37 (rotation) + L36 (erasure) compliance fixes.
 
 ### Call Sites (6 total)
 ```
-1. operator/bridges/shared/feedback.py::submit_feedback()
+1. corvin_operator/bridges/shared/feedback.py::submit_feedback()
 2. core/orchestration/subsystems/learning_engine.py::record_outcome()
 3. core/skills/skill_executor.py::execute_and_feedback()
-4. operator/cowork/remote_trigger_receiver.py::on_feedback_received()
+4. corvin_operator/cowork/remote_trigger_receiver.py::on_feedback_received()
 5. core/console/feedback_handler.py::handle_user_feedback()
-6. operator/skill-forge/skill_grader.py::grade_skill_outcome()
+6. corvin_operator/skill-forge/skill_grader.py::grade_skill_outcome()
 ```
 
 ### Test Template (for each call site)

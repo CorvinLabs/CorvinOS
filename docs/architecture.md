@@ -238,7 +238,7 @@ reasoning honest.
 | Engine | `bridges/shared/agents/__init__.py` (Protocol) | `bridges/shared/agents/{claude_code,codex_cli,opencode_cli}.py` |
 | Surface | `bridges/<channel>/daemon.js` | `bridges/<channel>/settings.json` |
 
-For the dispatch glue see `operator/bridges/shared/adapter.py`
+For the dispatch glue see `corvin_operator/bridges/shared/adapter.py`
 (`process_one`, `_resolve_spawn_inputs`, `call_claude_streaming`).
 
 ## Adjacent docs

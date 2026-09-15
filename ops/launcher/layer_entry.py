@@ -1,6 +1,6 @@
 """Entry-point shim for the corvin-layer CLI (ADR-0142 M4).
 
-corvin_operator/ shadows the Python stdlib 'operator' module, so we use a shim that
+the legacy operator/ directory name shadows the Python stdlib 'operator' module, so we use a shim that
 adds the shared directory (and corvin_operator/forge for the audit chain) to sys.path
 before importing layer_cli.
 """

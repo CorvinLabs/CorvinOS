@@ -1,6 +1,6 @@
 # Layer 10 — Path-Gate (FS-write protection, fail-closed)
 
-**Source:** `operator/voice/hooks/path_gate.py` · **Tests:** `operator/voice/hooks/test_path_gate.py`
+**Source:** `corvin_operator/voice/hooks/path_gate.py` · **Tests:** `corvin_operator/voice/hooks/test_path_gate.py`
 
 The path-gate is a `PreToolUse` hook that inspects `Write`/`Edit`/`NotebookEdit`
 and `Bash` tool calls and **denies writes** that would tamper with the corvin
@@ -68,7 +68,7 @@ destructive forms; the interpreter class is the sandbox's responsibility.
 
 ## Enabling the hook (operator action — the platform cannot do this for you)
 
-`operator/voice/hooks/hooks.json` registers `path_gate.py` on
+`corvin_operator/voice/hooks/hooks.json` registers `path_gate.py` on
 `PreToolUse` (`Write|Edit|MultiEdit|NotebookEdit|Bash|WebFetch`) — but only when
 Claude Code loads the `voice` plugin. The boot tripwire
 `l10_hook_registered` (reporting-only, F-A8) checks `~/.claude/settings.json`,
@@ -86,7 +86,7 @@ or register the hook directly in `~/.claude/settings.json`:
 ```json
 {"hooks": {"PreToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|WebFetch",
   "hooks": [{"type": "command", "timeout": 3,
-             "command": "python3 /ABSOLUTE/PATH/CorvinOS/operator/voice/hooks/path_gate.py"}]}]}}
+             "command": "python3 /ABSOLUTE/PATH/CorvinOS/corvin_operator/voice/hooks/path_gate.py"}]}]}}
 ```
 
 `check()` is fail-CLOSED (F-A8): any internal exception is a deny (exit 2),
