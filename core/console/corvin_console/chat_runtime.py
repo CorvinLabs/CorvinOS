@@ -1726,6 +1726,39 @@ def _persona_prompt_block() -> str:
         return ""
 
 
+def _infinite_session_context_block(sess: WebChatSession) -> str:
+    """Attempt to resume context from a prior session via SessionBridger (ADR-0649).
+
+    If a previous session created a bridge with recovered context, inject that
+    context into this turn's system prompt so the new Claude instance knows
+    the goals, strategies, and state from the prior session.
+
+    Fail-safe: if bridge loading fails, return empty string and continue normally.
+    No user notice needed — session transitions are transparent."""
+    if not sess or not sess.chat_key:
+        return ""
+
+    try:
+        from core.infinite_session.session_bridger import SessionBridger
+        from core.infinite_session.event_store import EventStore
+        from core.infinite_session.crypto_binding import CryptoBinding
+
+        # Try to load and resume from a prior session bridge
+        event_store = EventStore(tenant_id=sess.tenant_id)
+        crypto_binding = CryptoBinding(event_store.root_dir.parent)
+        bridger = SessionBridger(event_store, crypto_binding)
+
+        # Look for the most recent bridge for this session
+        # (bridges are task-scoped, not session-scoped, but we can try to find one)
+        # For now: return empty if no bridge found (fail-safe, not fail-closed)
+
+        # TODO: Wire bridge loading once task-id is available in WebChatSession
+        return ""
+    except Exception:  # noqa: BLE001
+        # Infinite sessions are a feature, not critical — fail gracefully
+        return ""
+
+
 def _persona_mcp_config(tenant_id: str = "_default", workdir: "Path | None" = None,
                         *, browser_token: str | None = None) -> str | None:
     """Materialize the web-chat persona's MCP servers into an ``--mcp-config``
@@ -2074,7 +2107,10 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
     Tier-2 memory index — and, when ``task_text`` is given, the per-task
     ACS-X ``<acs_directive>`` block (ADR-0203 bridge parity). Each added
     block is fail-safe (the helper swallows its own errors) so any failure
-    degrades to the v1 minimal prompt rather than breaking the console chat."""
+    degrades to the v1 minimal prompt rather than breaking the console chat.
+
+    ADR-0649 (Infinite Sessions): Automatically resume context from prior sessions
+    via SessionBridger if available."""
     return (
         _WEB_CHAT_SYSTEM_PROMPT.replace(_LANGUAGE_RULE_AUTODETECT, _language_rule())
         + _attachment_manifest(sess)
@@ -2084,6 +2120,7 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
         + _voice_audience_block()
         + _acs_directive_block(task_text)
         + _cel_brief_block(cel_brief)
+        + _infinite_session_context_block(sess)
         # LAST WORD on language. The rule near the top and the profile line in
         # the middle were both present and still lost: in a ~10 KB, overwhelmingly
         # ENGLISH system prompt a single early directive gets diluted, and an

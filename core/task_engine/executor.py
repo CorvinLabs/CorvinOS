@@ -10,6 +10,14 @@ from .event_store import EventStore
 from .skill_dispatcher import SkillDispatcher, SkillResult
 from .models import AuditEvent, ExecutionResult
 
+try:
+    from core.session_manager.auto_starter import SessionAutoStarter
+    from core.session_manager.lifecycle_manager import SessionLifecycleManager
+    from core.session_manager.checkpoint_manager import CheckpointManager
+    _AUTO_STARTER_AVAILABLE = True
+except ImportError:
+    _AUTO_STARTER_AVAILABLE = False
+
 
 class TaskExecutor:
     """Orchestrates multi-phase task execution with audit trail (ADR-0540–0545)."""
@@ -19,6 +27,16 @@ class TaskExecutor:
         self.event_store = EventStore(tenant_id=tenant_id)
         self.skill_dispatcher = SkillDispatcher()
         self.session_counter = 0
+
+        # Initialize SessionAutoStarter for infinite sessions (ADR-0649)
+        self.auto_starter = None
+        if _AUTO_STARTER_AVAILABLE:
+            try:
+                lifecycle_mgr = SessionLifecycleManager(tenant_id=tenant_id)
+                checkpoint_mgr = CheckpointManager(tenant_id=tenant_id)
+                self.auto_starter = SessionAutoStarter(lifecycle_mgr, checkpoint_mgr)
+            except Exception:
+                pass  # Auto-starter optional, not critical
 
     def register_skill(self, skill_id: str, skill_fn):
         """Register a mock skill for testing."""
@@ -34,11 +52,12 @@ class TaskExecutor:
             planner = DAGPlanner(task_def)
             planner.validate()
 
-            # Emit task_started event
+            # Emit task_started event (ADR-0649: use task tenant_id, not process tenant)
             self._emit_event(
                 event_type="task_started",
                 task_id=task_def.task_id,
                 payload={"autonomy_level": task_def.autonomy_level},
+                tenant_id=task_def.tenant_id,
             )
 
             # Execute phases in order
@@ -52,6 +71,24 @@ class TaskExecutor:
                 session_id = self._new_session_id()
                 final_phase = phase_id
 
+                # Check for session split triggers (ADR-0649: infinite sessions)
+                if self.auto_starter:
+                    split_trigger = self.auto_starter.on_task_progress(
+                        task_id=task_def.task_id,
+                        phase_id=phase_id,
+                        phase_idx=phase_idx,
+                        total_phases=len(plan),
+                    )
+                    if split_trigger:
+                        # Emit split event and bridge to new session
+                        self._emit_event(
+                            event_type="session_auto_split",
+                            task_id=task_def.task_id,
+                            session_id=session_id,
+                            payload={"trigger": split_trigger.name, "next_session": self._new_session_id()},
+                            tenant_id=task_def.tenant_id,
+                        )
+
                 # Execute phase
                 phase_result = self._execute_phase(
                     task_def=task_def,
@@ -61,18 +98,20 @@ class TaskExecutor:
                 )
 
                 if not phase_result["success"]:
-                    # Phase failed, rollback
+                    # Phase failed, rollback (ADR-0649)
                     self._emit_event(
                         event_type="phase_failed",
                         task_id=task_def.task_id,
                         phase_id=phase_id,
                         payload={"error": phase_result.get("error")},
+                        tenant_id=task_def.tenant_id,
                     )
                     # Emit rollback event
                     self._emit_event(
                         event_type="task_rolled_back",
                         task_id=task_def.task_id,
                         payload={"reason": f"phase_failed: {phase_result.get('error')}"},
+                        tenant_id=task_def.tenant_id,
                     )
                     return ExecutionResult(
                         success=False,
@@ -88,13 +127,14 @@ class TaskExecutor:
                 completed_phases.add(phase_id)
                 current_state = phase_result.get("state", current_state)
 
-                # Emit phase_complete
+                # Emit phase_complete (ADR-0649)
                 self._emit_event(
                     event_type="phase_complete",
                     task_id=task_def.task_id,
                     session_id=session_id,
                     phase_id=phase_id,
                     payload={"skills_count": len(phase.skills), "gates_count": len(phase.gates)},
+                    tenant_id=task_def.tenant_id,
                 )
 
                 # Create snapshot for next session (if not last phase)
@@ -105,15 +145,16 @@ class TaskExecutor:
                         phase_id=phase_id,
                         state=current_state,
                     )
-                    # Emit snapshot_created event
+                    # Emit snapshot_created event (ADR-0649)
                     self._emit_event(
                         event_type="task_snapshot_created",
                         task_id=task_def.task_id,
                         session_id=session_id,
                         phase_id=phase_id,
                         payload={"snapshot_hash": snapshot.snapshot_hash},
+                        tenant_id=task_def.tenant_id,
                     )
-                    # Emit bridge event to next session
+                    # Emit bridge event to next session (ADR-0649)
                     next_session_id = self._new_session_id()
                     self._emit_event(
                         event_type="task_session_bridged",
@@ -125,9 +166,10 @@ class TaskExecutor:
                             "state_hash": snapshot.snapshot_hash,
                             "state_hash_verified": True,
                         },
+                        tenant_id=task_def.tenant_id,
                     )
 
-            # Emit task_complete
+            # Emit task_complete (ADR-0649)
             final_snapshot = self.event_store.create_snapshot(
                 task_id=task_def.task_id,
                 session_id=self._new_session_id(),
@@ -139,14 +181,16 @@ class TaskExecutor:
                 task_id=task_def.task_id,
                 phase_id=final_phase,
                 payload={"final_state_hash": final_snapshot.snapshot_hash},
+                tenant_id=task_def.tenant_id,
             )
 
-            # Verify audit chain
+            # Verify audit chain (ADR-0649)
             chain_valid = self.event_store.verify_chain(task_def.task_id)
             self._emit_event(
                 event_type="audit_chain_verified",
                 task_id=task_def.task_id,
                 payload={"chain_valid": chain_valid, "events_count": len(self.event_store.get_all_events())},
+                tenant_id=task_def.tenant_id,
             )
 
             return ExecutionResult(
@@ -159,11 +203,12 @@ class TaskExecutor:
             )
 
         except Exception as e:
-            # Unhandled exception
+            # Unhandled exception (ADR-0649)
             self._emit_event(
                 event_type="task_error",
                 task_id=task_def.task_id,
                 payload={"error": str(e)},
+                tenant_id=task_def.tenant_id,
             )
             return ExecutionResult(
                 success=False,
@@ -180,13 +225,14 @@ class TaskExecutor:
         """Execute single phase with skills + gates (ADR-0542)."""
         phase_id = phase.id
 
-        # Emit phase_started
+        # Emit phase_started (ADR-0649)
         self._emit_event(
             event_type="phase_started",
             task_id=task_def.task_id,
             session_id=session_id,
             phase_id=phase_id,
             payload={"skills_count": len(phase.skills)},
+            tenant_id=task_def.tenant_id,
         )
 
         # Dispatch skills
@@ -195,13 +241,14 @@ class TaskExecutor:
             error = skill_results[-1].error if skill_results else "Unknown skill error"
             return {"success": False, "error": error, "state": current_state}
 
-        # Emit skills_executed
+        # Emit skills_executed (ADR-0649)
         self._emit_event(
             event_type="phase_skills_executed",
             task_id=task_def.task_id,
             session_id=session_id,
             phase_id=phase_id,
             payload={"skills_count": len(skill_results), "all_success": True},
+            tenant_id=task_def.tenant_id,
         )
 
         # Evaluate gates (mock: all pass for now)
@@ -209,13 +256,14 @@ class TaskExecutor:
         if not gates_results["all_passed"]:
             return {"success": False, "error": "Gate failed", "state": current_state}
 
-        # Emit gates_evaluated
+        # Emit gates_evaluated (ADR-0649)
         self._emit_event(
             event_type="phase_gate_evaluated",
             task_id=task_def.task_id,
             session_id=session_id,
             phase_id=phase_id,
             payload={"gates_count": len(phase.gates), "all_passed": True},
+            tenant_id=task_def.tenant_id,
         )
 
         # Return updated state (for mock, just pass through skills output)
@@ -228,12 +276,14 @@ class TaskExecutor:
         return {"all_passed": True, "gates_count": len(gates)}
 
     def _emit_event(self, event_type: str, task_id: str, session_id: str = "",
-                    phase_id: str = "", payload: Dict[str, Any] = None) -> str:
-        """Emit audit event (ADR-0232)."""
+                    phase_id: str = "", payload: Dict[str, Any] = None, tenant_id: str = None) -> str:
+        """Emit audit event (ADR-0649: per-task tenant_id, not process tenant)."""
+        if tenant_id is None:
+            tenant_id = self.tenant_id
         event = AuditEvent(
             event_type=event_type,
             task_id=task_id,
-            tenant_id=self.tenant_id,
+            tenant_id=tenant_id,
             session_id=session_id or "",
             phase_id=phase_id or "",
             timestamp=datetime.utcnow().isoformat() + "Z",
