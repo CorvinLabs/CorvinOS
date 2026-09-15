@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -255,10 +256,32 @@ _CACHE_WRITE_MULTIPLIER = 1.25
 _CACHE_READ_MULTIPLIER = 0.1
 
 
+#: Cross-region inference-profile prefixes Bedrock prepends to the model id
+#: (``eu.anthropic.claude-sonnet-5``). The table below is keyed on the bare
+#: family, and the lookup is prefix-ANCHORED, so an unstripped routing prefix
+#: matches nothing and the turn is dropped from cost totals entirely.
+#:
+#: That is not a cosmetic miss. On a Bedrock-authenticated install every ACS
+#: worker turn inherits its model from ``ANTHROPIC_MODEL`` (acs_runtime.py's
+#: ``_resolve_worker_model`` step 3), which is exactly where the prefixed id
+#: comes from — so 100% of delegated worker spend priced as $0.00 while still
+#: counting toward ``total_turns``. Verified on this install 2026-09-15:
+#: ``ANTHROPIC_MODEL=eu.anthropic.claude-sonnet-5``.
+#:
+#: Stripping the prefix is NOT the same as guessing a price: the model family
+#: it names is identical, and Bedrock lists Claude at the same per-token rates
+#: as the first-party API. An id whose family is still unknown after stripping
+#: is excluded as before — the honesty rule is unchanged.
+_ROUTING_PREFIX = re.compile(r"^(?:[a-z]{2,6}\.)?anthropic\.")
+
+
 def _price_for_model(model: str) -> Optional[tuple[float, float]]:
     """(input_usd_per_1k, output_usd_per_1k) for a recognized model, else None."""
+    if not model:
+        return None
+    candidate = _ROUTING_PREFIX.sub("", model)
     for prefix, price in _MODEL_PRICING_USD_PER_1K.items():
-        if model and model.startswith(prefix):
+        if candidate.startswith(prefix):
             return price
     return None
 

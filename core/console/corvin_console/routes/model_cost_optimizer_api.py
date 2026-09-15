@@ -86,6 +86,11 @@ class DashboardStatusResponse(BaseModel):
     acs_cost_actual_usd: float = 0.0
     acs_cost_baseline_usd: float = 0.0
     acs_model_mix: Dict[str, int] = {}
+    # Whether ANY acs.engine_completed event with usable token data was found.
+    # Load-bearing for honesty: without it the UI cannot tell "workers cost
+    # $0.00" from "no worker turn was ever recorded", and the per-day
+    # acs_*_usd zeros below plot as a flat line that reads as the former.
+    acs_data_available: bool = False
     # Real per-model turn counts for every counted os_turn.completed event
     # (e.g. {"claude-haiku-4-5-20251001": 244}). A single-key mix means
     # cost_savings_percent is just that model's fixed price ratio against the
@@ -291,6 +296,7 @@ async def get_learning_status(
             "acs_cost_actual_usd": acs_total_actual,
             "acs_cost_baseline_usd": acs_total_baseline,
             "acs_model_mix": acs_model_mix,
+            "acs_data_available": acs_data_available,
             "accuracy_percent": accuracy,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
