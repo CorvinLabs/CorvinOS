@@ -14,13 +14,11 @@
 import { Suspense, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { MaturityDashboard } from './components/MaturityDashboard';
+import { LicensingAuditTab } from './tabs/LicensingAuditTab';
+import { MonitoringTab } from './tabs/MonitoringTab';
+import { ModelsTab } from './tabs/ModelsTab';
 
-interface Phase2Context {
-  auditEvents?: any[];
-  metrics?: any[];
-  models?: any[];
-  timestamp?: string;
-}
+type TabType = 'maturity' | 'audit' | 'metrics' | 'models';
 
 const LoadingFallback = () => (
   <div className="flex justify-center py-12">
@@ -28,57 +26,50 @@ const LoadingFallback = () => (
   </div>
 );
 
-/**
- * Fetch Phase 2 live data from feature endpoints.
- * Falls back gracefully if endpoints unavailable (demo mode).
- */
-async function fetchPhase2Context(): Promise<Phase2Context> {
-  try {
-    const [auditRes, metricsRes, modelsRes] = await Promise.all([
-      fetch('/v1/licensing/audit-events?limit=50').catch(() => null),
-      fetch('/v1/monitoring/metrics?range=1h').catch(() => null),
-      fetch('/v1/models/available').catch(() => null),
-    ]);
-
-    return {
-      auditEvents: auditRes?.ok ? (await auditRes.json()).events : [],
-      metrics: metricsRes?.ok ? (await metricsRes.json()).metrics : [],
-      models: modelsRes?.ok ? (await modelsRes.json()).models : [],
-      timestamp: new Date().toISOString(),
-    };
-  } catch (e) {
-    console.warn('Phase 2 Context Load Failed:', e);
-    return { timestamp: new Date().toISOString() };
-  }
-}
-
 export function VibeDashboard() {
-  const [phase2Context, setPhase2Context] = useState<Phase2Context | null>(null);
-
-  useEffect(() => {
-    // Load Phase 2 live data on mount + periodic refresh (5min)
-    const load = () => fetchPhase2Context().then(setPhase2Context);
-    load();
-    const interval = setInterval(load, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const [activeTab, setActiveTab] = useState<TabType>('maturity');
 
   return (
-    <div
-      data-testid="vibe-dashboard-panel"
-      className="min-h-screen bg-background text-foreground"
-      data-phase2-context={phase2Context ? 'live' : 'fallback'}
-    >
-      <Suspense fallback={<LoadingFallback />}>
-        <MaturityDashboard />
-      </Suspense>
-      {phase2Context && (
-        <div className="text-xs text-muted-foreground p-4 border-t">
-          Phase 2 Data: {phase2Context.auditEvents?.length || 0} audit events ·{' '}
-          {phase2Context.metrics?.length || 0} metrics · {phase2Context.models?.length || 0} models
-          · Last sync: {new Date(phase2Context.timestamp!).toLocaleTimeString()}
+    <div data-testid="vibe-dashboard-panel" className="min-h-screen bg-background text-foreground">
+      {/* Tab Navigation */}
+      <div className="border-b bg-muted/50">
+        <div className="flex gap-4 px-6 py-4">
+          {[
+            { id: 'maturity' as TabType, label: 'Maturity Metrics' },
+            { id: 'audit' as TabType, label: 'Audit Events' },
+            { id: 'metrics' as TabType, label: 'System Metrics' },
+            { id: 'models' as TabType, label: 'Models' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2 rounded font-medium text-sm transition-all ${
+                activeTab === tab.id
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
+
+      {/* Tab Content */}
+      <div className="min-h-screen">
+        <Suspense fallback={<LoadingFallback />}>
+          {activeTab === 'maturity' && <MaturityDashboard />}
+          {activeTab === 'audit' && <LicensingAuditTab />}
+          {activeTab === 'metrics' && <MonitoringTab />}
+          {activeTab === 'models' && <ModelsTab />}
+        </Suspense>
+      </div>
+
+      {/* Footer */}
+      <div className="border-t bg-muted/50 p-4 text-xs text-muted-foreground">
+        Phase 2 Features: Live audit events • System metrics • Model registry • Maturity dashboard
+        — All endpoints PII-safe (ADR-0297) • Last updated: {new Date().toLocaleTimeString()}
+      </div>
     </div>
   );
 }
