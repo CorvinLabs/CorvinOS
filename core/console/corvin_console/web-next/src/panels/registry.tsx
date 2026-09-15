@@ -17,9 +17,9 @@ import { VibeDashboard } from "@/pages/vibe-engineering";
 import {
   DashboardPage, SettingsPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
-  LddPage, CompliancePage, FilesPage, SpacePage, MemoryPage,
+  LddPage, CompliancePage, FilesPage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
-  RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
+  RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
   GitHubPage, SyncMonitorPage, EngineConfigPage,
   ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
@@ -50,7 +50,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   LddPage,
   CompliancePage,
   FilesPage,
-  SpacePage,
   MemoryPage,
   AgentHubPage,
   ConnectorsPage,
@@ -63,7 +62,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   CustomProviderPage,
   DataSourcesPage,
   FlowsPage,
-  AgentsPage,
   ExtensionsPage,
   McpPluginsPage,
   PluginsPage,
@@ -92,64 +90,64 @@ export const PANELS: ConsolePanel[] = [
   // pages/vibe-engineering.tsx (the retired Context Pipeline page), shadowed the
   // directory — file beats directory in module resolution — so this import
   // silently loaded the old page and the Dashboard was unreachable.
-  rc("vibe-engineering", "Learnings", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain" } }),
-  rc("dashboard", "Dashboard", DashboardPage),
-  rc("settings", "Settings", SettingsPage),
-  rc("engine-config", "Engine Config", EngineConfigPage, { nav: { label: "Engine Config", icon: "" } }),
-  rc("compute", "Compute", ComputePage),
-  rc("bridges", "Bridges", BridgesPage),
-  rc("voice", "Voice", VoicePage),
-  rc("forge", "Forge", ForgePage),
-  rc("skills", "Skills", SkillsPage),
-  rc("packages", "Packages", PackagesPage),
-  rc("ldd", "LDD", LddPage),
-  rc("compliance", "Compliance", CompliancePage),
-  rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle" } }),
-  rc("files", "Files", FilesPage),
-  rc("space", "Space", SpacePage),
-  rc("memory", "Memory", MemoryPage),
-  rc("agent-hub", "Agent Hub", AgentHubPage),
-  rc("connectors", "Connectors", ConnectorsPage),
-  rc("api-keys", "API Keys", ApiKeysPage),
-  rc("orgs", "Orgs", OrgsPage),
-  rc("people", "People", PeoplePage),
-  rc("license", "License", LicensePage),
-  rc("rag", "RAG", RAGPage),
-  rc("rag-hub", "RAG Hub", RAGHubPage),
-  rc("custom-provider", "Custom Provider", CustomProviderPage),
-  rc("data-sources", "Data Sources", DataSourcesPage),
-  rc("flows", "Flows", FlowsPage),
-  rc("agents", "Agents", AgentsPage),
+  rc("vibe-engineering", "Learnings", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain", group: "primary" } }),
+  rc("dashboard", "Dashboard", DashboardPage, { nav: { label: "Dashboard", icon: "LayoutDashboard", group: "primary" } }),
+  rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
+  rc("engine-config", "Engine Config", EngineConfigPage, { nav: { label: "Engine Config", icon: "Settings", group: "intelligence" } }),
+  rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),
+  rc("bridges", "Bridges", BridgesPage, { nav: { label: "Channels", icon: "Network", group: "messaging" } }),
+  rc("voice", "Voice", VoicePage, { nav: { label: "Profile", icon: "AudioLines", group: "messaging" } }),
+  rc("forge", "Forge", ForgePage, { nav: { label: "Forge", icon: "Hammer", group: "build" } }),
+  rc("skills", "Skills", SkillsPage, { nav: { label: "Skills", icon: "BookOpen", group: "build" } }),
+  rc("packages", "Packages", PackagesPage, { nav: { label: "Packages", icon: "Package", group: "build" } }),
+  rc("ldd", "LDD", LddPage, { nav: { label: "Quality", icon: "Boxes", group: "system" } }),
+  rc("compliance", "Compliance", CompliancePage, { nav: { label: "Audit & Compliance", icon: "ShieldCheck", group: "system" } }),
+  rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle", group: "observability" } }),
+  rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
+  // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
+  rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
+  rc("agent-hub", "Agent Hub", AgentHubPage, { nav: { label: "Agent Hub", icon: "Globe2", group: "network" } }),
+  rc("connectors", "Connectors", ConnectorsPage, { nav: { label: "Connectors", icon: "Plug", group: "network" } }),
+  rc("api-keys", "API Keys", ApiKeysPage, { nav: { label: "API Keys", icon: "KeyRound", group: "system" } }),
+  rc("orgs", "Orgs", OrgsPage, { nav: { label: "Orgs", icon: "" } }), // hidden from nav (for future)
+  rc("people", "People", PeoplePage, { nav: { label: "People", icon: "" } }), // hidden from nav (for future)
+  rc("license", "License", LicensePage, { nav: { label: "License", icon: "Lock", group: "system" } }),
+  rc("rag", "RAG", RAGPage, { nav: { label: "RAG", icon: "Database", group: "knowledge" } }),
+  rc("rag-hub", "RAG Hub", RAGHubPage, { nav: { label: "RAG Hub", icon: "Globe2", group: "knowledge" } }),
+  rc("custom-provider", "Custom Provider", CustomProviderPage, { nav: { label: "Custom Provider", icon: "Plug", group: "knowledge" } }),
+  rc("data-sources", "Data Sources", DataSourcesPage, { nav: { label: "Data Sources", icon: "Server", group: "knowledge" } }),
+  rc("flows", "Flows", FlowsPage, { nav: { label: "Flows", icon: "Workflow", group: "knowledge" } }),
+  // REMOVED 2026-09-15: "agents" panel (superseded by agent-hub, duplication)
   // Unified "Marketplace" hub (renamed from "Plugins & Extensions", 2026-09-12) —
   // the ONE sidebar entry for the three extend-CorvinOS subsystems (roadmap
   // de-dup of the plugin triple). It renders the three components below as
   // tabs. The three standalone routes stay mounted for deep-link stability
   // but are dropped from the sidebar — see NAV_EXEMPT in
   // tests/unit/panel-nav-wiring.test.ts.
-  rc("plugin-center", "Marketplace", PluginCenterPage),
-  rc("extensions", "Extensions", ExtensionsPage),
-  rc("mcp-plugins", "MCP Plugins", McpPluginsPage),
-  rc("plugins", "Plugins", PluginsPage),
+  rc("plugin-center", "Marketplace", PluginCenterPage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
+  rc("extensions", "Extensions", ExtensionsPage, { nav: { label: "Extensions", icon: "" } }), // hidden (marketplace renders as tab)
+  rc("mcp-plugins", "MCP Plugins", McpPluginsPage, { nav: { label: "MCP Plugins", icon: "" } }), // hidden (marketplace renders as tab)
+  rc("plugins", "Plugins", PluginsPage, { nav: { label: "Plugins", icon: "" } }), // hidden (marketplace renders as tab)
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
-     { nav: { label: "GitHub", icon: "Github", group: "settings" } }),
+     { nav: { label: "GitHub", icon: "Github", group: "system" } }),
   rc("sync-monitor", "Sync Monitor", SyncMonitorPage,
-     { nav: { label: "Sync Monitor", icon: "Activity" } }),
+     { nav: { label: "Sync Monitor", icon: "Activity", group: "observability" } }),
   // REMOVED: webhooks, audit, releases — backend routes 404 (not implemented)
   // Use compliance.tsx for audit needs; GitHub integration works via settings/github
   // REMOVED 2026-09-15 (operator request): learning-dashboard panel.
   rc("model-cost-optimizer", "Model Cost Optimizer", ModelCostOptimizerPage,
-     { nav: { label: "Model Cost Optimizer", icon: "Zap" } }),
+     { nav: { label: "Model Cost Optimizer", icon: "Zap", group: "observability" } }),
   rc("datahub-unified", "DataHub", DataHubUnifiedPage,
-     { nav: { label: "DataHub", icon: "Database" } }),
+     { nav: { label: "DataHub", icon: "Database", group: "knowledge" } }),
   rc("skill-forge-generator", "Skill Forge", SkillForgeGeneratorPage,
-     { nav: { label: "Skill Forge", icon: "Sparkles" } }),
+     { nav: { label: "Skill Forge", icon: "Sparkles", group: "build" } }),
   rc("licensing-audit", "Licensing Audit", LicensingAuditPage,
-     { nav: { label: "Licensing Audit", icon: "Lock", group: "admin" } }),
+     { nav: { label: "Licensing Audit", icon: "Lock", group: "system" } }),
   rc("otel-telemetry", "OTEL Telemetry", OTELTelemetryPage,
-     { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "monitoring" } }),
+     { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "observability" } }),
   rc("model-selection", "Model Selection", ModelSelectionPage,
-     { nav: { label: "Model Selection", icon: "Brain", group: "settings" } }),
+     { nav: { label: "Model Selection", icon: "Brain", group: "intelligence" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);
@@ -158,6 +156,65 @@ export const PANELS: ConsolePanel[] = [
 
 export function getPanel(id: string): ConsolePanel | undefined {
   return PANELS.find((p) => p.id === id);
+}
+
+/** Generate navigation groups from panel registry (ADR-0353 P1 dynamic nav).
+ *  Each panel's nav.group field determines its sidebar section. Panels without
+ *  a group are hidden from the sidebar (they're still mounted as routes, but
+ *  reachable only via deep-link or programmatic navigation).
+ *  @param panels — list of ConsolePanel to generate nav from
+ *  @returns NavGroup[] ready to render in layout.tsx
+ */
+export interface NavGroup {
+  id: string;
+  label?: string;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  items: Array<{ to: string; label: string; icon?: any; end?: boolean }>;
+}
+
+export function generateNavGroupsFromRegistry(panels: readonly ConsolePanel[]): NavGroup[] {
+  // Map panels by their nav.group (or "hidden" if no group)
+  const grouped = new Map<string, ConsolePanel[]>();
+  for (const p of panels) {
+    const group = p.nav.group || "hidden";
+    if (!grouped.has(group)) grouped.set(group, []);
+    grouped.get(group)!.push(p);
+  }
+
+  // Define group metadata (order, label, collapsible, defaultOpen)
+  const groupMeta: Record<string, { label?: string; order: number; collapsible?: boolean; defaultOpen?: boolean }> = {
+    primary: { order: 0 },
+    marketplace: { label: "Marketplace", order: 1, collapsible: true, defaultOpen: true },
+    observability: { label: "Observability", order: 2, collapsible: true, defaultOpen: true },
+    messaging: { label: "Messaging", order: 3 },
+    intelligence: { label: "Assistant", order: 4 },
+    build: { label: "Build", order: 5, collapsible: true, defaultOpen: true },
+    network: { label: "Network", order: 6, collapsible: true, defaultOpen: true },
+    knowledge: { label: "Data", order: 7, collapsible: true, defaultOpen: true },
+    system: { label: "System", order: 8, collapsible: true, defaultOpen: false },
+  };
+
+  // Build NavGroup[] in order
+  return Array.from(grouped.entries())
+    .filter(([groupId]) => groupId !== "hidden") // skip hidden group
+    .map(([groupId, groupPanels]) => {
+      const meta = groupMeta[groupId] || { order: 99 };
+      return {
+        id: groupId,
+        label: meta.label,
+        collapsible: meta.collapsible,
+        defaultOpen: meta.defaultOpen,
+        items: groupPanels
+          .sort((a, b) => (a.nav.order || 0) - (b.nav.order || 0))
+          .map((p) => ({
+            to: `/app/${p.route}`,
+            label: p.nav.label,
+            icon: p.nav.icon,
+          })),
+      };
+    })
+    .sort((a, b) => (groupMeta[a.id]?.order || 99) - (groupMeta[b.id]?.order || 99));
 }
 
 /** Render every react-kind panel as a <Route> under /app.
