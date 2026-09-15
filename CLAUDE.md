@@ -575,6 +575,44 @@ catalogue refresh as a failure (4 671 such records buried the real events).
 
 ---
 
+## Usage Counting Epoch (ADR-0760, load-bearing)
+
+**Never trim the audit chain to "reset" a counter.** It is append-only and
+hash-linked, the ADR-0232 boot tripwire verifies it before anything else runs,
+and it is the GDPR Art. 30/32 record — removing a record does not reset a
+number, it breaks the chain and fails the next boot. Reset the VIEW instead:
+one timestamp per tenant in `<tenant>/global/usage_epoch.json` says from when
+the console counts. Clearing it restores every historical turn, because nothing
+was ever removed.
+
+**One epoch, every reader.** `model_usage()` (turns) and
+`compute_cost_efficiency()` (dollars) both call `usage_epoch.epoch_ts()`. Two
+totals on one screen counted over different windows is worse than no reset.
+
+**Filter per EVENT, before folding spans.** A span starting before the epoch and
+ending after it must be excluded whole — folding only its end produces a turn
+with no start and no status, which reads as `unfinished`: a crash that never
+happened.
+
+**A narrowed total never travels without its window.** Every payload carrying
+one also carries `window` (`active`/`epoch_ts`/`since_iso`/`reason`), and the UI
+renders the period ABOVE the number.
+
+**Never average two savings percentages.** Sum the real dollars and divide once
+— averaging weights a 4-turn worker series like a 500-turn OS one. A combined
+figure is withheld entirely unless BOTH sides have data in the window.
+
+**Must NOT do:** trim/rewrite/delete the chain to reset a counter · give a panel
+its own window · filter after folding spans · return a narrowed total without
+`window` · average percentages into a combined saving · describe the reset as
+deleting data in UI or API · conflate the epoch with retention or GDPR Art. 17
+erasure (L36 owns those; they change what exists, this changes what is counted).
+
+→ Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Counting epoch
+→ ADR: See Corvin-ADR for ADR-0760
+
+---
+
 ## Console Frontend — Prove the NEW Build Is What Loads (load-bearing)
 
 Any change under `core/console/corvin_console/web-next/` is **not done when the source is

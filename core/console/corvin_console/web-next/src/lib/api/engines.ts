@@ -664,6 +664,14 @@ export interface ModelUsageResponse {
   models: ModelUsageRow[];
   providers: ProviderUsageRow[];
   roles: RoleUsageRow[];
+  /** ADR-0760 counting window. {active:false} = all-time. Shipped alongside the
+   *  numbers so a total can never be rendered without the period it covers. */
+  window?: {
+    active: boolean;
+    epoch_ts: number | null;
+    since_iso: string | null;
+    reason: string;
+  };
   totals: {
     turns: number;
     ok: number;

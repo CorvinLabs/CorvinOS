@@ -477,7 +477,20 @@ def compute_cost_efficiency(
 
         chain_path = _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
 
-    turns = _read_completed_turns(chain_path, _MAX_SCAN_BYTES)
+    # ADR-0760 — the SAME counting epoch model_usage applies. Two panels on one
+    # screen deriving their numbers from different windows is worse than no
+    # reset at all, so the window is read from one place, never re-decided here.
+    try:
+        from core.console.corvin_console import usage_epoch  # noqa: PLC0415
+
+        since_ts = usage_epoch.epoch_ts(tenant_id)
+    except Exception:  # noqa: BLE001
+        since_ts = 0.0
+
+    turns = [
+        t for t in _read_completed_turns(chain_path, _MAX_SCAN_BYTES)
+        if not since_ts or float(t.get("completed_ts") or 0) >= since_ts
+    ]
     baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
 
     by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])  # date -> [actual, baseline]
@@ -548,7 +561,10 @@ def compute_cost_efficiency(
             continue
         _seen_delegated.add(_key)
         _deduped.append(_c)
-    acs_completions = _deduped
+    acs_completions = [
+        c for c in _deduped
+        if not since_ts or float(c.get("completed_ts") or 0) >= since_ts
+    ]
     acs_by_day: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
     acs_by_day_total: dict[str, int] = defaultdict(int)
     acs_by_day_counted: dict[str, int] = defaultdict(int)
