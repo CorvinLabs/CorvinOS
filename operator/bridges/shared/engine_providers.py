@@ -269,7 +269,11 @@ def fetch_models(
     """Return {provider, reachable, models:[{id,label}], count, error}.
 
     ``models`` is empty for ``static`` sources (the console shows the curated
-    registry list for those). Never raises."""
+    registry list for those). Never raises.
+
+    Adds ``credential_absent: True`` when the provider needs an API key and this
+    host has none — a state that is normal, not broken, and that a caller must be
+    able to recognise WITHOUT parsing ``error``."""
     result: dict[str, Any] = {"provider": provider, "reachable": False,
                               "models": [], "count": 0, "error": None}
     if model_source == "static":
@@ -289,6 +293,12 @@ def fetch_models(
         # the curated model list" claimed a list THIS response does not contain
         # (merging the curated list is the caller's job, and neither live caller
         # does it) — which reads as a bug in the picker rather than an absent key.
+        # Distinguish "no credential here" from "the credential failed": the
+        # error string says both to a human, and nothing could tell them apart
+        # programmatically. A caller that already has a live answer from another
+        # provider (Bedrock, on a CLAUDE_CODE_USE_BEDROCK host) needs that
+        # distinction to stop presenting the normal state as a fault.
+        result["credential_absent"] = True
         result["error"] = (
             f"no {credential_env or 'ANTHROPIC_API_KEY'} configured, so no live "
             f"model list could be fetched. Add an API key under Settings → API "
@@ -320,6 +330,7 @@ def fetch_models(
             ]
         elif model_source == "openai":
             if not key:
+                result["credential_absent"] = True
                 result["error"] = (
                     f"no {credential_env or 'OPENAI_API_KEY'} configured — add an API "
                     f"key under Settings → API Keys to see OpenAI's live model list."

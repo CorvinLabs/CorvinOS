@@ -553,6 +553,11 @@ export interface ClaudeModelSource {
   live: boolean;
   /** e.g. Bedrock's resolved region + credential source */
   detail?: string | null;
+  /** This source needs an API key and the host has none. NOT a malfunction: a
+   *  Bedrock- or subscription-authenticated install never has an Anthropic key,
+   *  so the source is unused here rather than down. The panel drops it from the
+   *  compact line while another live source is answering. */
+  credential_absent?: boolean;
 }
 
 export interface ClaudeModelsResponse {

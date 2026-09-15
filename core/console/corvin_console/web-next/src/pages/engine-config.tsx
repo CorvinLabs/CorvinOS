@@ -175,6 +175,16 @@ function providerLabelOf(
  * every source, its count, its detail, its full error — moves into the title
  * attribute. Collapsing the sources into one "sources unavailable" summary is
  * still refused: a union is only readable if you can tell which half is missing.
+ *
+ * One source is dropped from the line entirely, and only under one condition: a
+ * `credential_absent` one, while another live source is answering. On this host
+ * Claude Code logs in through Bedrock, so `ANTHROPIC_API_KEY` is not a setting
+ * that is missing — it is a setting that does not apply, and naming it invited a
+ * fix for a non-problem (operator, 2026-09-15: "dieser key ist sinnlos"). The
+ * source stays in the response, stays queried, and stays in the hover text as
+ * "not used on this host"; it reappears inline the moment NO live source answers,
+ * because then the picker really is down to the shipped snapshot and an API key
+ * really is a remedy.
  */
 function ClaudeSourceLine({
   catalog,
@@ -193,11 +203,19 @@ function ClaudeSourceLine({
   }
   if (!catalog) return null;
 
+  // Does the host have a live answer at all? If not, even an inapplicable source
+  // is worth naming — "add an API key" is only useful advice when the shipped
+  // snapshot is all that is left.
+  const liveAnswered = catalog.sources.some((s) => s.live && s.reachable);
+  const shown = catalog.sources.filter((s) => !(s.credential_absent && liveAnswered));
+
   const tooltip = catalog.sources
     .map((s) => {
       const state = s.reachable
         ? `${s.count} Claude model${s.count === 1 ? '' : 's'}`
-        : 'unreachable';
+        : s.credential_absent && liveAnswered
+          ? 'not used on this host'
+          : 'unreachable';
       const extra = [s.detail, s.error].filter(Boolean).join(' · ');
       return `${s.label} (${s.live ? 'live' : 'shipped'}) — ${state}${extra ? ` · ${extra}` : ''}`;
     })
@@ -212,7 +230,7 @@ function ClaudeSourceLine({
       <span className="font-medium">
         {catalog.count} model{catalog.count === 1 ? '' : 's'}
       </span>
-      {catalog.sources.map((s) => (
+      {shown.map((s) => (
         <span
           key={s.id}
           className={cn(

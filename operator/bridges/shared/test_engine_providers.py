@@ -87,6 +87,41 @@ def test_fetch_http_401_hints_api_key(monkeypatch):
     assert r["reachable"] is False and "API key" in (r["error"] or "")
 
 
+def test_absent_key_is_flagged_and_distinguishable_from_a_failed_one(monkeypatch):
+    """No key at all → `credential_absent`; a key that fails → no such flag.
+
+    Both states arrive as reachable=False with an English sentence, and a caller
+    could only tell them apart by matching on that sentence. The console's model
+    picker has to: on a Bedrock-authenticated host ANTHROPIC_API_KEY does not
+    apply, so naming it in the source line reads as a defect to fix, while a
+    credential that was present and got rejected is a real lead worth printing.
+    """
+    def never(url, **k):  # a keyless request must not be attempted at all
+        raise AssertionError(f"egressed to {url} without a credential")
+    monkeypatch.setattr(EP._provider_keys, "resolve_by_env_var", lambda _n: None)
+    monkeypatch.setattr(EP, "_get_json", never)
+    absent = EP.fetch_models("anthropic", base_url="https://api.anthropic.com",
+                             model_source="anthropic", credential_env="ANTHROPIC_API_KEY")
+    assert absent["credential_absent"] is True
+    assert absent["reachable"] is False and absent["models"] == []
+    # The flag SHORTENS nothing: the full reason stays, because it is still what
+    # the panel shows on hover and inline when no other source answered.
+    assert "ANTHROPIC_API_KEY" in (absent["error"] or "")
+
+    import urllib.error
+    def unauth(url, **k):
+        raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
+    monkeypatch.setattr(EP._provider_keys, "resolve_by_env_var", lambda _n: "sk-ant-stale")
+    monkeypatch.setattr(EP, "_get_json", unauth)
+    rejected = EP.fetch_models("anthropic", base_url="https://api.anthropic.com",
+                               model_source="anthropic", credential_env="ANTHROPIC_API_KEY")
+    assert rejected["reachable"] is False
+    assert not rejected.get("credential_absent"), (
+        "a rejected key was reported as an absent one — the panel would hide the "
+        "one failure the operator can act on"
+    )
+
+
 def test_fetch_credential_read_from_env_name(monkeypatch):
     captured = {}
     def cap(url, *, bearer="", **k):
