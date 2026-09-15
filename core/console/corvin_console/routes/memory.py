@@ -47,9 +47,17 @@ def _memory_dir() -> Path:
         # Fallback: use cwd as the project path
         repo_root = Path.cwd()
 
-    # Claude Code uses str(path).replace("/", "-") as the project slug, with a
-    # leading "-" because the absolute path starts with "/".
-    slug = str(repo_root).replace("/", "-")
+    # Claude Code slugifies the project's absolute path by replacing EVERY
+    # non-alphanumeric character with "-" (so `/`, `\` and `:` all collapse to
+    # dashes, and consecutive specials become consecutive dashes — e.g.
+    # "C:\Users\me\Proj" -> "C--Users-me-Proj", verified against the real
+    # ~/.claude/projects/ dirs on this machine). The old `.replace("/", "-")`
+    # only handled POSIX separators, so on Windows the slug kept its backslashes
+    # and colon, pointed at a path that can never exist, and the Memory panel
+    # showed "No memory files yet" even when Claude Code HAD written memory here
+    # (2026-09-15 Windows finding). On POSIX this yields the same leading-dash
+    # slug as before ("/home/x/Proj" -> "-home-x-Proj"), so Linux is unchanged.
+    slug = re.sub(r"[^a-zA-Z0-9]", "-", str(repo_root))
     return Path.home() / ".claude" / "projects" / slug / "memory"
 
 
