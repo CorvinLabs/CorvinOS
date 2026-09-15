@@ -26,8 +26,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "voice" / "scripts"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "voice" / "scripts"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 PASS = 0
 FAIL = 0
@@ -304,7 +304,7 @@ def section_audit_cost() -> None:
         t("unknown event_type rejected", True)
 
     # Cost contract: AST walk for forbidden imports
-    p = REPO / "operator" / "voice" / "scripts" / "supply_chain_verify.py"
+    p = REPO / "corvin_operator" / "voice" / "scripts" / "supply_chain_verify.py"
     tree = ast.parse(p.read_text())
     forbidden = ("anthropic", "openai", "google.generativeai")
     bad: list[str] = []

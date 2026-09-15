@@ -13,7 +13,7 @@ from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
 
 import adapter  # noqa: E402
 

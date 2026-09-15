@@ -40,9 +40,9 @@ from typing import Any, Iterator
 # running this file directly.
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 # voice/bridges/shared/ — for the agents.claude_code engine
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -325,7 +325,7 @@ class CrossTenantIsolationTests(unittest.TestCase):
         # test fires TWO runs in one corvin_home to prove record isolation, so give
         # it an unlimited license — the quota axis is not what is under test here.
         import sys as _s
-        _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator"))
+        _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator"))
         import license.validator as _v
         _orig_lic, _orig_can = _v._ACTIVE_LICENSE, _v._ACTIVE_LICENSE_CANARY
         _v._set_active_license({"tier": "enterprise", "limits": {"compute_units_per_day": None}})
@@ -386,7 +386,7 @@ class GatewayComputeQuotaTests(unittest.TestCase):
         dispatch proves that; ten only prove Ollama is busy.
         """
         import sys as _s
-        _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator"))
+        _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator"))
         import license.validator as _v
         from license.compute_quota import increment_and_check as _charge
         from license.limits import FREE_TIER as _FREE
@@ -589,7 +589,7 @@ class GatewayL34GateTests(unittest.TestCase):
         # Give this control an unlimited license so compute-quota (a DIFFERENT
         # gate) doesn't fail the run and mask the L34 result.
         _s = sys
-        _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator"))
+        _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator"))
         import license.validator as _v
         _orig, _orig_can = _v._ACTIVE_LICENSE, _v._ACTIVE_LICENSE_CANARY
         _v._set_active_license({"tier": "enterprise",

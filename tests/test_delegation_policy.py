@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 from delegation_policy import (  # noqa: E402
     WORKER_ENGINE_DEFAULT,

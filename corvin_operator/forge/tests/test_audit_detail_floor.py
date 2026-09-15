@@ -500,7 +500,7 @@ def test_reserved_key_with_a_pii_shape_is_fingerprinted(key, value):
 def test_the_fingerprint_matches_the_adapter_s_own():
     """One pseudonym namespace: a value the adapter already redacted and one the
     floor redacts must collide, or the same person reads as two."""
-    sys.path.insert(0, str(ROOT.parents[1] / "operator" / "bridges" / "shared"))
+    sys.path.insert(0, str(ROOT.parents[1] / "corvin_operator" / "bridges" / "shared"))
     from adapter import _pii_fp  # type: ignore[import]
 
     out, _ = filter_audit_details({"user": "alice@company.com"},

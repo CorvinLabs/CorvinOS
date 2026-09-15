@@ -30,8 +30,8 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "console"))
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 import importlib
 
@@ -84,7 +84,7 @@ def _sandbox(tenant_id: str = "_default"):
     with tempfile.TemporaryDirectory(prefix="console-prof-test-") as td:
         home = Path(td) / "corvin"
         xdg = Path(td) / "xdg"
-        bridges = _REPO / "operator" / "bridges"
+        bridges = _REPO / "corvin_operator" / "bridges"
         # Pre-create the tenant tree (mirror of the migration helper).
         (home / "tenants" / tenant_id / "global" / "auth").mkdir(parents=True)
         (home / "tenants" / tenant_id / "global" / "forge").mkdir(parents=True)

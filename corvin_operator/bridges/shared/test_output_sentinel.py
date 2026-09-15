@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 PASS = 0
 FAIL = 0
@@ -363,7 +363,7 @@ def section_registry_and_cost() -> None:
           detail=se.EVENT_SEVERITY.get(ev, "<missing>"))
 
     # AST walk: NO anthropic / openai / google SDK imports
-    p = REPO / "operator" / "bridges" / "shared" / "output_sentinel.py"
+    p = REPO / "corvin_operator" / "bridges" / "shared" / "output_sentinel.py"
     tree = ast.parse(p.read_text())
     forbidden = ("anthropic", "openai", "google.generativeai",
                  "google_generativeai")

@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "operator" / "forge"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from forge.registry import Registry  # noqa: E402

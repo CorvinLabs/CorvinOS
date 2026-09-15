@@ -11,7 +11,7 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PLUGIN_ROOT.parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "operator" / "forge"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
 
 from corvin_compute.budget import Budget  # noqa: E402
 from corvin_compute.driver import ComputeRunSpec  # noqa: E402

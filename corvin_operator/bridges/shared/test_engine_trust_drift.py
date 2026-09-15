@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(REPO / "operator" / "voice" / "scripts"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "voice" / "scripts"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 PASS = 0
 FAIL = 0

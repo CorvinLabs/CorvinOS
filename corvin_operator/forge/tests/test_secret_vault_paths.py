@@ -35,7 +35,7 @@ def _clear_env() -> None:
 
 
 def _fresh_secret_vault():
-    sys.path.insert(0, str(REPO / "operator" / "forge"))
+    sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
     for mod in ("forge.secret_vault", "forge"):
         sys.modules.pop(mod, None)
     try:

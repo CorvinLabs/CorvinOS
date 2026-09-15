@@ -24,8 +24,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 # Sandbox CORVIN_HOME BEFORE importing dialectic so config writes go to
 # /tmp, not the real .corvinOS workspace.
@@ -347,7 +347,7 @@ def case_calibration_table():
 def case_no_anthropic_sdk_import():
     print("\n[11] dialectic.py must NOT import the Anthropic SDK")
     import ast
-    src_path = (REPO / "operator" / "bridges" / "shared"
+    src_path = (REPO / "corvin_operator" / "bridges" / "shared"
                 / "dialectic.py")
     tree = ast.parse(src_path.read_text())
     bad = []

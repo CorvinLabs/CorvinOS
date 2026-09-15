@@ -12,7 +12,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PLUGIN_ROOT.parents[1]
 
 sys.path.insert(0, str(PLUGIN_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "operator" / "forge"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
 
 from corvin_compute.audit import (  # noqa: E402
     AuditFieldNotAllowed, emit, redact_sensitive_fields,
@@ -145,7 +145,7 @@ class PathGateTests(unittest.TestCase):
 
     def setUp(self) -> None:
         # Bring the path_gate module in fresh per test so caches don't leak.
-        sys.path.insert(0, str(REPO_ROOT / "operator" / "voice" / "hooks"))
+        sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "voice" / "hooks"))
         for mod in [m for m in list(sys.modules) if m == "path_gate"]:
             del sys.modules[mod]
         import path_gate  # noqa: F401

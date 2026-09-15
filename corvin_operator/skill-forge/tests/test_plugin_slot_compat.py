@@ -44,7 +44,7 @@ def _clear_env() -> None:
 
 
 def _fresh_registry():
-    sys.path.insert(0, str(REPO / "operator" / "skill-forge"))
+    sys.path.insert(0, str(REPO / "corvin_operator" / "skill-forge"))
     for mod in ("skill_forge.registry", "skill_forge"):
         sys.modules.pop(mod, None)
     try:

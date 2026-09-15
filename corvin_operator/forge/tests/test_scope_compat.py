@@ -54,7 +54,7 @@ def _clear_env() -> None:
 
 
 def _fresh_scope():
-    sys.path.insert(0, str(REPO / "operator" / "forge"))
+    sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
     for mod in ("forge.scope", "forge.paths", "forge"):
         sys.modules.pop(mod, None)
     try:

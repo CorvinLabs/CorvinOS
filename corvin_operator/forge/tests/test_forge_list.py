@@ -18,7 +18,7 @@ from pathlib import Path
 import os
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Isolate the forge MCP subprocess from pre-existing repo-scope tools by

@@ -19,8 +19,8 @@ if str(_PARENT_DIR) not in sys.path:
 
 # Add corvin_operator/forge to path for security_events
 _REPO = Path(__file__).resolve().parents[3]
-if str(_REPO / "operator" / "forge") not in sys.path:
-    sys.path.insert(0, str(_REPO / "operator" / "forge"))
+if str(_REPO / "corvin_operator" / "forge") not in sys.path:
+    sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from metrics_recorders import (
     EngineMetricsCollector,

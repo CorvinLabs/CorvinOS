@@ -17,8 +17,8 @@ import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "skill-forge"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "skill-forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 from skill_forge.multi_registry import MultiSkillRegistry  # noqa: E402
 from skill_forge.registry import (  # noqa: E402

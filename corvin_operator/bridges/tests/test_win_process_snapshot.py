@@ -36,7 +36,7 @@ from pathlib import Path
 from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator" / "bridges"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges"))
 
 import bridge_manager as bm  # noqa: E402
 

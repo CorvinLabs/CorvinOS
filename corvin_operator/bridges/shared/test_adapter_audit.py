@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
 
 PASS = 0
@@ -212,7 +212,7 @@ def test_chain_is_continuous_across_two_messages():
 
         # And: the voice-audit verify CLI agrees
         import subprocess
-        cli = REPO_ROOT / "operator" / "voice" / "scripts" / "voice_audit.py"
+        cli = REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
         proc = subprocess.run(
             [sys.executable, str(cli), "--path", str(audit_path), "verify"],
             capture_output=True, text=True,

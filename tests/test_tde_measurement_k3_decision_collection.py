@@ -37,7 +37,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "core" / "console"))
-sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "orchestration"))
 
 # Import the tde package FIRST: importing corvin_console mutates sys.path (adds
 # corvin_operator/), which shadows corvin_operator/orchestration/initial_analysis.py with a

@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "voice" / "scripts"))
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "voice" / "scripts"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 PASS = 0
 FAIL = 0
@@ -377,7 +377,7 @@ def section_registry_and_cost() -> None:
           detail=se.EVENT_SEVERITY.get(ev, "<missing>"))
 
     # Cost-contract: AST walk for forbidden imports
-    ec_path = REPO / "operator" / "voice" / "scripts" / "engine_canary.py"
+    ec_path = REPO / "corvin_operator" / "voice" / "scripts" / "engine_canary.py"
     tree = ast.parse(ec_path.read_text())
     forbidden = ("anthropic", "openai", "google.generativeai", "google_generativeai")
     bad_imports: list[str] = []
@@ -408,7 +408,7 @@ def section_cli() -> None:
         env["CORVIN_CANARY_FAKE"] = "1"
 
         # CLI: run --engine claude_code
-        script = REPO / "operator" / "voice" / "scripts" / "engine_canary.py"
+        script = REPO / "corvin_operator" / "voice" / "scripts" / "engine_canary.py"
         res = subprocess.run(
             ["python3", str(script), "run", "--engine", "claude_code", "--quiet"],
             env=env, capture_output=True, text=True, timeout=60,

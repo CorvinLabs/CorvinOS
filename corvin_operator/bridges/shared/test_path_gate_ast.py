@@ -19,8 +19,8 @@ from pathlib import Path
 
 # Make path_gate importable.
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator" / "voice" / "hooks"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "voice" / "hooks"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 import path_gate  # noqa: E402  (side-effect import OK here)
 
@@ -299,7 +299,7 @@ class TestForgeExecIntegration(unittest.TestCase):
 
     def test_forge_exec_in_meta_allowlist(self):
         """_is_forged_tool_allowed must permit forge_exec."""
-        forge_path = _REPO / "operator" / "forge"
+        forge_path = _REPO / "corvin_operator" / "forge"
         sys.path.insert(0, str(forge_path))
         try:
             from forge.mcp_server import MCPServer  # type: ignore
@@ -320,7 +320,7 @@ class TestForgeExecIntegration(unittest.TestCase):
 
     def test_forge_exec_in_all_tools(self):
         """forge_exec must appear in _all_tools() output."""
-        forge_path = _REPO / "operator" / "forge"
+        forge_path = _REPO / "corvin_operator" / "forge"
         sys.path.insert(0, str(forge_path))
         try:
             import importlib

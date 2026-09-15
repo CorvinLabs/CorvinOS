@@ -25,8 +25,8 @@ _PKG_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PKG_DIR))
 _REPO = _PKG_DIR.parents[1]
 sys.path.insert(0, str(_REPO / "core" / "workflows"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from corvin_orchestration.mcp_server import (  # noqa: E402
     METHOD_NOT_FOUND,

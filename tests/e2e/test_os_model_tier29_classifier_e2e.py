@@ -77,7 +77,7 @@ class TestReachability:
 
     def test_resolver_consults_the_classifier(self) -> None:
         src = (
-            REPO_ROOT / "operator" / "bridges" / "shared" / "model_selector.py"
+            REPO_ROOT / "corvin_operator" / "bridges" / "shared" / "model_selector.py"
         ).read_text(encoding="utf-8")
         assert "def classify_os_model(" in src
         assert "classify_os_model(" in src.split("def resolve_os_model(", 1)[1], (
@@ -89,7 +89,7 @@ class TestReachability:
         uncertain/"medium" classification 0.60 and a keyword-only hint 0.70;
         only its own high-confidence verdicts (simple 0.85, complex 0.90) may
         move a turn off the default tier."""
-        sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
         import model_selector  # noqa: PLC0415
 
         assert model_selector._CLASSIFY_MIN_CONFIDENCE > 0.60

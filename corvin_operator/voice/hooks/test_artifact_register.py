@@ -20,8 +20,8 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parents[2] / "operator" / "forge"))
-sys.path.insert(0, str(HERE.parents[2] / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(HERE.parents[2] / "corvin_operator" / "forge"))
+sys.path.insert(0, str(HERE.parents[2] / "corvin_operator" / "bridges" / "shared"))
 
 import artifact_register as hook  # noqa: E402
 

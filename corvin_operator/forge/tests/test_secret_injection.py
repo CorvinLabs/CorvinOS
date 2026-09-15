@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 # ADR-0153 M3 — the additive instance_sig audit decoration lives in
 # security_events.py and imports ``instance_identity`` from the shared
 # package. Under the bare ``cd operator/forge && python3 tests/...``
@@ -24,7 +24,7 @@ sys.path.insert(0, str(REPO / "operator" / "forge"))
 # the shared dir on the path here so the instance_sig path is exercised
 # for real against a self-provisioned ephemeral key (CORVIN_HOME is
 # sandboxed to a tmp dir below, so the Ed25519 key is created there).
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
 
 from forge import secret_vault as sv  # noqa: E402
 from forge.policy import Policy  # noqa: E402
@@ -494,7 +494,7 @@ def case_runner_e2e() -> None:
 
 def case_path_gate_vault() -> None:
     print("\n[case_path_gate_vault: hook protects the vault file]")
-    sys.path.insert(0, str(REPO / "operator" / "voice"))
+    sys.path.insert(0, str(REPO / "corvin_operator" / "voice"))
     from hooks import path_gate  # type: ignore  # noqa: E402
 
     saved = os.environ.get("CORVIN_SECRET_VAULT")

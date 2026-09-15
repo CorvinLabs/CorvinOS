@@ -31,7 +31,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 from corvin_gateway import audit_metrics  # noqa: E402
 from forge import security_events as _se  # noqa: E402

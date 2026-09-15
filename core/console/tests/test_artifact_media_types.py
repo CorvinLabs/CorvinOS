@@ -22,8 +22,8 @@ from pathlib import Path
 _THIS = Path(__file__).resolve()
 _REPO = _THIS.parents[3]
 sys.path.insert(0, str(_REPO / "core" / "console"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 import corvin_console.chat_runtime as chat_runtime  # noqa: E402
 

@@ -28,12 +28,12 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 from forge.security_events import filter_audit_details  # noqa: E402
 
 _EMIT_FUNCS = {"write_event", "audit_event", "_emit", "_emit_audit", "_audit_emit"}
-_SCAN_ROOTS = ("core", "operator")
+_SCAN_ROOTS = ("core", "corvin_operator")
 _SKIP_PARTS = {
     ".venv", "venv", "node_modules", "site-packages", "dist-packages", ".git",
     ".corvin", "tests", "test", "__pycache__", "worktrees", ".claude",

@@ -19,11 +19,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 
 def _load():
-    ce = _REPO / "operator" / "context_engineering"
+    ce = _REPO / "corvin_operator" / "context_engineering"
     spec = importlib.util.spec_from_file_location(
         "context_engineering", str(ce / "__init__.py"),
         submodule_search_locations=[str(ce)])

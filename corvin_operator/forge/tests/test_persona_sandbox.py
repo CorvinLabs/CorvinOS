@@ -27,7 +27,7 @@ import threading
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 from forge.policy import Policy  # noqa: E402
 from forge.registry import Registry  # noqa: E402

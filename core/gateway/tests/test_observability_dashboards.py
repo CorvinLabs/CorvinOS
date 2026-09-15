@@ -23,7 +23,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 _DASH_DIR = _REPO / "docs" / "observability" / "grafana"
 _DASHBOARDS = ("corvin-overview.json", "corvin-security.json")

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
-if str(_REPO / "operator" / "bridges" / "shared") not in sys.path:
-    sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+if str(_REPO / "corvin_operator" / "bridges" / "shared") not in sys.path:
+    sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 from engine_models import get_model_tier_mapping, resolve_model_for_workload  # type: ignore
 

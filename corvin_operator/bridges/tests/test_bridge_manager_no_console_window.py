@@ -32,12 +32,12 @@ from pathlib import Path
 from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator" / "bridges"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 import bridge_manager  # noqa: E402
 
-_SRC_PATH = _REPO / "operator" / "bridges" / "bridge_manager.py"
+_SRC_PATH = _REPO / "corvin_operator" / "bridges" / "bridge_manager.py"
 
 
 def _bare_subprocess_run_lines() -> list[int]:

@@ -23,9 +23,9 @@ import pytest
 
 # Make operator.agent importable.
 _REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "operator"))
-sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
-sys.path.insert(0, str(_REPO / "operator" / "forge"))
+sys.path.insert(0, str(_REPO / "corvin_operator"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "corvin_operator" / "forge"))
 
 
 @pytest.fixture(autouse=True)

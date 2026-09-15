@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(REPO / "corvin_operator" / "bridges" / "shared"))
 
 _TD = Path(tempfile.mkdtemp(prefix="core-quality-skills-"))
 os.environ["CORVIN_HOME"] = str(_TD)
@@ -60,9 +60,9 @@ def case_bundle_dir_resolves_in_source_tree() -> None:
 def case_bundle_dir_resolves_in_simulated_wheel_layout() -> None:
     print("\n[2] bundle skills dir resolves from a simulated wheel _vendor layout")
     fake_vendor_root = Path(tempfile.mkdtemp(prefix="fake-vendor-"))
-    fake_shared_dir = fake_vendor_root / "operator" / "bridges" / "shared"
+    fake_shared_dir = fake_vendor_root / "corvin_operator" / "bridges" / "shared"
     fake_shared_dir.mkdir(parents=True)
-    fake_ldd_dir = fake_vendor_root / "operator" / "bundle" / "skills" / "ldd" / "adr_gate"
+    fake_ldd_dir = fake_vendor_root / "corvin_operator" / "bundle" / "skills" / "ldd" / "adr_gate"
     fake_ldd_dir.mkdir(parents=True)
     (fake_ldd_dir / "SKILL.md").write_text(
         "---\nname: adr_gate\ndescription: fake vendored copy\n---\n\nbody\n"
@@ -73,9 +73,9 @@ def case_bundle_dir_resolves_in_simulated_wheel_layout() -> None:
     # the parents-chain arithmetic (not just that today's source tree
     # happens to resolve).
     fake_here = fake_shared_dir
-    wheel_candidate = fake_here.parent.parent.parent / "operator" / "bundle" / "skills" / "ldd"
+    wheel_candidate = fake_here.parent.parent.parent / "corvin_operator" / "bundle" / "skills" / "ldd"
     t("wheel-layout candidate resolves to the fake vendored ldd dir",
-      wheel_candidate == fake_vendor_root / "operator" / "bundle" / "skills" / "ldd")
+      wheel_candidate == fake_vendor_root / "corvin_operator" / "bundle" / "skills" / "ldd")
     t("wheel-layout candidate is a real directory", wheel_candidate.is_dir())
     t("wheel-layout candidate contains the fake adr_gate SKILL.md",
       (wheel_candidate / "adr_gate" / "SKILL.md").is_file())
