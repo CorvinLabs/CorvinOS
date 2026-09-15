@@ -21,18 +21,28 @@ from typing import List, Dict, Any, Optional, Literal
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # Auth
 from .. import auth as session_auth
 from ..deps import require_session
+
+from . import maturity_live
 
 log = logging.getLogger(__name__)
 
 # ===== Request/Response Models =====
 
 class MaturityMeasurementRecord(BaseModel):
-    """Single measurement record."""
+    """Single measurement record.
+
+    Computed on demand by ``maturity_live.build_measurement`` — carries the
+    server-authoritative ``loop_scores`` and ``meta``/``signals`` alongside the
+    raw ``learning``/``system``/``component_health`` inputs. ``extra="allow"``
+    keeps the record forward-compatible with new derived fields.
+    """
+    model_config = ConfigDict(extra="allow")
+
     timestamp: str
     unix_time: int
     tenant_id: str
@@ -40,6 +50,9 @@ class MaturityMeasurementRecord(BaseModel):
     system: dict
     user_actions: dict
     component_health: dict
+    loop_scores: dict = {}
+    meta: dict = {}
+    signals: dict = {}
 
 
 class MaturityMeasurementsResponse(BaseModel):
@@ -51,70 +64,33 @@ class MaturityMeasurementsResponse(BaseModel):
 
 
 class MaturityMeasurementAPI:
+    """Serves the maturity dashboard from ON-DEMAND live measurements.
+
+    Historically this read per-minute JSONL files written by
+    ``core.learning.live_experiment_collector`` — but that collector is POSIX-
+    only (``import resource``/``os.getloadavg``), never ran on Windows and never
+    got started by the console, so the directory was empty and the panel fell
+    back to hardcoded sample data. We now compute each measurement on demand
+    from the real EventStore + audit chain (see ``maturity_live``), which is
+    cross-platform, always fresh, and needs no background writer.
+    """
+
     def __init__(self, corvin_home: str | None = None):
-        """Initialize with corvin_home path."""
-        if corvin_home is None:
-            corvin_home = str(Path.home() / ".corvin")
-        self.corvin_home = Path(corvin_home)
-        self.measurements_dir = self.corvin_home / "tenants" / "_default" / "experiments" / "live_measurements"
+        # Kept for signature compatibility; the live builder resolves paths via
+        # ``core.paths.tenant`` (honours CORVIN_HOME) rather than a hardcoded root.
+        self.corvin_home = Path(corvin_home) if corvin_home else None
 
     def get_measurements(self, window: str = "7d", tenant_id: str = "_default") -> List[Dict[str, Any]]:
-        """
-        Load measurements from JSONL files, filtered by time window.
+        """Return the current live measurement (one snapshot) for the tenant.
 
-        Args:
-            window: "7d", "30d", "90d", or "today"
-            tenant_id: Tenant to filter on
-
-        Returns:
-            List of measurement records
+        A single-element list keeps the historical list-shaped response contract
+        while the value itself is computed fresh from real sources on every call.
         """
-        if not self.measurements_dir.exists():
-            log.warning(f"Measurements directory does not exist: {self.measurements_dir}")
+        try:
+            return [maturity_live.build_measurement(tenant_id=tenant_id, window=window)]
+        except Exception as exc:  # noqa: BLE001 — never 500 the dashboard; log + empty
+            log.warning("maturity: on-demand measurement failed for %s/%s: %r", tenant_id, window, exc)
             return []
-
-        # Determine cutoff time
-        now = datetime.now()
-        cutoff_days = {
-            "today": 1,
-            "7d": 7,
-            "30d": 30,
-            "90d": 90,
-        }.get(window, 7)
-
-        cutoff_date = now - timedelta(days=cutoff_days)
-
-        measurements = []
-
-        # Load all JSONL files in measurements_dir
-        for jsonl_file in sorted(self.measurements_dir.glob("measurements_*.jsonl"), reverse=True):
-            try:
-                with open(jsonl_file, "r") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        try:
-                            record = json.loads(line)
-
-                            # Filter by tenant_id
-                            if record.get("tenant_id") != tenant_id:
-                                continue
-
-                            # Filter by time window
-                            ts = datetime.fromisoformat(record.get("timestamp", "").replace("Z", "+00:00"))
-                            if ts < cutoff_date:
-                                continue
-
-                            measurements.append(record)
-                        except json.JSONDecodeError as e:
-                            log.warning(f"Failed to parse JSONL line in {jsonl_file}: {e}")
-                            continue
-
-            except IOError as e:
-                log.warning(f"Failed to read {jsonl_file}: {e}")
-                continue
-
-        return measurements
 
     def to_dict(self, measurements: List[Dict[str, Any]], window: str) -> Dict[str, Any]:
         """Convert measurements list to API response."""

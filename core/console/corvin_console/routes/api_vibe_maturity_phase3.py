@@ -189,25 +189,19 @@ async def get_historical_data(
 
     Returns time-series points showing score, convergence, and drift.
     """
-    api = get_api()
-    measurements = api.get_measurements(window=window, tenant_id=rec.tenant_id)
+    from . import maturity_live
 
-    # Extract time-series for the loop
-    points = []
-    for m in measurements:
-        score = extract_loop_score(m, loop)
-        convergence = m.get("learning", {}).get("convergence_rate", 0)
-        drift = m.get("component_health", {}).get(loop, {}).get("drift", 0)
-
-        points.append(
-            HistoricalPoint(
-                timestamp=m.get("timestamp", ""),
-                unix_time=m.get("unix_time", 0),
-                score=score,
-                convergence_rate=convergence,
-                drift=drift,
-            )
+    raw = maturity_live.build_history(tenant_id=rec.tenant_id, loop=loop, window=window)
+    points = [
+        HistoricalPoint(
+            timestamp=str(p.get("timestamp", "")),
+            unix_time=int(p.get("unix_time", 0)),
+            score=float(p.get("score", 0)),
+            convergence_rate=float(p.get("convergence_rate", 0)),
+            drift=float(p.get("drift", 0)),
         )
+        for p in raw
+    ]
 
     return HistoricalDataResponse(
         loop=loop,
@@ -231,10 +225,10 @@ async def detect_anomalies(
 
     Checks for: score drops, drift spikes, convergence stalls.
     """
-    api = get_api()
-    measurements = api.get_measurements(window="7d", tenant_id=rec.tenant_id)
+    from . import maturity_live
 
-    anomalies = _detector.detect(measurements, window_seconds=window)
+    raw = maturity_live.build_anomalies(tenant_id=rec.tenant_id, window="7d")
+    anomalies = [AnomalyModel(**a) for a in raw]
 
     return AnomaliesResponse(
         anomalies=anomalies,

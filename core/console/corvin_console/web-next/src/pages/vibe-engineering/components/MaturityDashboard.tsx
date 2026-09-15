@@ -1,15 +1,18 @@
 /**
- * Maturity Metrics Dashboard — 9D Learning Loops Visualization (Phase 1)
+ * Maturity Metrics Dashboard — 9D Learning Loops Visualization
  *
  * Shows: Hexagon Radar Chart + Score Header + Tier Breakdown Cards
  * Scoring: (Tier1_Avg * 0.40) + (Tier2_Avg * 0.35) + (Meta * 0.25)
  * Colors: Red(0-2) → Orange(2-4) → Yellow(4-6) → Lime(6-8) → Cyan(8-9) → Purple(9-10)
  *
- * Test data only (Phase 1). Phase 2 wires to live_measurements/ data source.
+ * All values are REAL and computed on demand by the backend from the ADR-0314
+ * learning EventStore + the tenant audit chain (see routes/maturity_live.py).
+ * There is no sample/fallback data: when the endpoint returns nothing, the panel
+ * shows an explicit empty state.
  */
 
 import React, { useMemo, useState } from 'react';
-import { TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Database } from 'lucide-react';
 import { ScoreHeader } from './maturity/ScoreHeader';
 import { HexagonRadar } from './maturity/HexagonRadar';
 import { TierBreakdown } from './maturity/TierBreakdown';
@@ -18,42 +21,25 @@ import { AnomalyAlerts } from './maturity/AnomalyAlerts';
 import { SummaryTab } from './maturity/SummaryTab';
 import { PatternsTab } from './maturity/PatternsTab';
 import { MaturityData, LoopScores } from './maturity/types';
-import { useLiveMaturityData, type TimeWindow } from '../hooks/useLiveMaturityData';
-
-// Hardcoded test data (Phase 1)
-const SAMPLE_LOOP_DATA: LoopScores = {
-  // Tier 1: Core Loops
-  confidence: 7.8,
-  routing: 7.1,
-  context: 7.4,
-  workflow: 6.8,
-  data_flow: 7.0,
-  security: 7.3,
-  // Tier 2: Infrastructure Loops
-  memory: 7.2,
-  skills: 6.9,
-  plugins: 7.1,
-  audit: 6.8,
-  compliance: 7.0,
-  system: 7.1,
-  // Meta Loop
-  meta_convergence: 8.1,
-};
+import { useLiveMaturityData, type TimeWindow, type MaturityMeta } from '../hooks/useLiveMaturityData';
 
 type DashboardTab = 'radar' | 'summary' | 'patterns';
+
+const MARKER = 'vibe-maturity-live-v2'; // deploy proof marker — real on-demand data
 
 export function MaturityDashboard() {
   const [windowPref, setWindow] = useState<TimeWindow>('7d');
   const [selectedLoop, setSelectedLoop] = useState<{ name: string; key: string } | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>('radar');
-  const { loopScores, loading, error, lastUpdated, refresh } = useLiveMaturityData({ window: windowPref });
+  const { loopScores, meta, loading, error, lastUpdated, refresh } = useLiveMaturityData({ window: windowPref });
 
-  // Use live data if available, fallback to sample data
-  const loopData = loopScores || SAMPLE_LOOP_DATA;
-  const data = useMemo(() => computeMaturityScore(loopData), [loopData]);
+  const data = useMemo(
+    () => (loopScores ? computeMaturityScore(loopScores, meta) : null),
+    [loopScores, meta]
+  );
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-6" data-marker={MARKER}>
       {/* Anomaly Alerts */}
       {loopScores && <AnomalyAlerts windowSeconds={300} />}
 
@@ -74,14 +60,21 @@ export function MaturityDashboard() {
             </button>
           ))}
         </div>
-        <button
-          onClick={refresh}
-          disabled={loading}
-          className="flex items-center gap-2 px-3 py-1 rounded bg-muted text-muted-foreground hover:bg-muted/80 disabled:opacity-50 transition-all"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <span className="text-xs text-muted-foreground">
+              Updated {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <button
+            onClick={refresh}
+            disabled={loading}
+            className="flex items-center gap-2 px-3 py-1 rounded bg-muted text-muted-foreground hover:bg-muted/80 disabled:opacity-50 transition-all"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Error Alert */}
@@ -102,8 +95,21 @@ export function MaturityDashboard() {
         </div>
       )}
 
+      {/* Empty State — no synthetic fallback */}
+      {!loading && !loopScores && !error && (
+        <div className="border border-border bg-card rounded-lg p-8 text-center">
+          <Database size={28} className="mx-auto mb-3 text-muted-foreground" />
+          <div className="text-sm font-medium text-foreground mb-1">No maturity data yet</div>
+          <div className="text-xs text-muted-foreground max-w-md mx-auto">
+            Maturity is derived on demand from the learning EventStore and the tenant audit
+            chain. Once the system records learning outcomes and audited activity, the loops
+            populate automatically.
+          </div>
+        </div>
+      )}
+
       {/* Score Header */}
-      {loopScores && <ScoreHeader data={data} />}
+      {loopScores && data && <ScoreHeader data={data} />}
 
       {/* Tab Navigation */}
       {loopScores && (
@@ -144,7 +150,7 @@ export function MaturityDashboard() {
       {/* Tab Content */}
       {activeTab === 'radar' && loopScores && (
         <>
-          {/* Hexagon Radar + Tier Breakdown + Meta + Recommendations */}
+          {/* Hexagon Radar + Trend */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
               <div className="bg-card border border-border rounded-lg p-6">
@@ -152,94 +158,34 @@ export function MaturityDashboard() {
                   Learning Loops — 9D Maturity Radar (click loop for details)
                 </h3>
                 <HexagonRadar
-                  loopScores={loopData}
+                  loopScores={loopScores}
                   onLoopClick={(name, key) => setSelectedLoop({ name, key })}
                 />
               </div>
             </div>
 
-            {/* Trend Card */}
-            <div className="bg-card border border-border rounded-lg p-6 flex flex-col justify-between">
-              <div>
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-4">Trend</h4>
-                <div className="space-y-4">
-                  <div>
-                    <div className="flex items-baseline gap-2 mb-1">
-                      <span className="text-2xl font-bold text-accent">+0.3</span>
-                      <span className="text-xs text-muted-foreground">last 7 days</span>
-                    </div>
-                    <div className="w-full bg-muted rounded h-2">
-                      <div className="bg-accent h-2 rounded" style={{ width: '75%' }}></div>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Projected (30 days)</div>
-                    <div className="text-xl font-bold text-accent">8.2/10</div>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-6 pt-6 border-t border-border">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <TrendingUp size={14} />
-                  <span>Stable trajectory</span>
-                </div>
-              </div>
-            </div>
+            {/* Trend Card — real, from meta.trend / meta.projection_30d */}
+            <TrendCard meta={meta} />
           </div>
 
           <TierBreakdown loopScores={loopScores} />
 
-          <div className="bg-card border border-border rounded-lg p-6">
-            <h3 className="text-sm font-semibold mb-4 text-foreground">
-              Meta Loop — Hyperparameter Tuning
-            </h3>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <div className="text-xs text-muted-foreground uppercase">Convergence Rate</div>
-                <div className="text-lg font-semibold text-accent">0.87</div>
-                <div className="text-xs text-emerald-600 dark:text-emerald-400">Excellent</div>
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs text-muted-foreground uppercase">Drift</div>
-                <div className="text-lg font-semibold text-accent">0.12</div>
-                <div className="text-xs text-emerald-600 dark:text-emerald-400">Minimal</div>
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs text-muted-foreground uppercase">Prediction Accuracy</div>
-                <div className="text-lg font-semibold text-accent">92.3%</div>
-                <div className="text-xs text-emerald-600 dark:text-emerald-400">Highly accurate</div>
-              </div>
-            </div>
-          </div>
+          {/* Meta Loop Card — real, from meta */}
+          <MetaLoopCard meta={meta} />
 
-          <div className="bg-card border border-border rounded-lg p-6">
-            <h3 className="text-sm font-semibold mb-4 text-foreground">💡 Recommendations</h3>
-            <ul className="space-y-3 text-sm text-muted-foreground">
-              <li className="flex gap-3">
-                <span className="text-destructive flex-shrink-0">1.</span>
-                <span>Workflow Loop ({loopScores.workflow.toFixed(1)}) is bottleneck — focus on this</span>
-              </li>
-              <li className="flex gap-3">
-                <span className="text-destructive flex-shrink-0">2.</span>
-                <span>Skills config drift detected — rebalance weights</span>
-              </li>
-              <li className="flex gap-3">
-                <span className="text-emerald-600 dark:text-emerald-400 flex-shrink-0">3.</span>
-                <span>Meta-loop converging well — stable trajectory</span>
-              </li>
-            </ul>
-          </div>
+          {/* Recommendations — real, server-derived */}
+          <RecommendationsCard meta={meta} />
         </>
       )}
 
       {/* Summary Tab */}
       {activeTab === 'summary' && loopScores && (
-        <SummaryTab loopScores={loopData} lastUpdated={lastUpdated?.toISOString()} />
+        <SummaryTab loopScores={loopScores} lastUpdated={lastUpdated?.toISOString()} />
       )}
 
       {/* Patterns Tab */}
       {activeTab === 'patterns' && loopScores && (
-        <PatternsTab loopScores={loopData} />
+        <PatternsTab loopScores={loopScores} />
       )}
 
       {/* Hover Details Modal */}
@@ -254,24 +200,116 @@ export function MaturityDashboard() {
   );
 }
 
-function computeMaturityScore(loops: LoopScores): MaturityData {
-  const tier1 = [
-    loops.confidence,
-    loops.routing,
-    loops.context,
-    loops.workflow,
-    loops.data_flow,
-    loops.security,
-  ];
+function TrendCard({ meta }: { meta: MaturityMeta | null }) {
+  const trend = meta?.trend;
+  const TrendIcon = trend?.direction === 'up' ? TrendingUp : trend?.direction === 'down' ? TrendingDown : Minus;
+  const trendColor =
+    trend?.direction === 'up' ? 'text-emerald-500' : trend?.direction === 'down' ? 'text-destructive' : 'text-muted-foreground';
 
-  const tier2 = [
-    loops.memory,
-    loops.skills,
-    loops.plugins,
-    loops.audit,
-    loops.compliance,
-    loops.system,
-  ];
+  return (
+    <div className="bg-card border border-border rounded-lg p-6 flex flex-col justify-between">
+      <div>
+        <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-4">Trend</h4>
+        <div className="space-y-4">
+          <div>
+            <div className="flex items-baseline gap-2 mb-1">
+              {trend?.insufficient_history ? (
+                <span className="text-lg font-semibold text-muted-foreground">Not enough history</span>
+              ) : (
+                <>
+                  <span className={`text-2xl font-bold ${trendColor}`}>
+                    {trend && trend.value > 0 ? '+' : ''}
+                    {trend ? trend.value.toFixed(2) : '—'}
+                  </span>
+                  <span className="text-xs text-muted-foreground">meta score change</span>
+                </>
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground mb-1">Projected (30 days)</div>
+            <div className="text-xl font-bold text-accent">
+              {meta?.projection_30d != null ? `${meta.projection_30d.toFixed(1)}/10` : '—'}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="mt-6 pt-6 border-t border-border">
+        <div className={`flex items-center gap-2 text-xs ${trendColor}`}>
+          <TrendIcon size={14} />
+          <span>
+            {trend?.insufficient_history
+              ? 'Collecting data'
+              : trend?.direction === 'up'
+              ? 'Improving trajectory'
+              : trend?.direction === 'down'
+              ? 'Declining trajectory'
+              : 'Stable trajectory'}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetaLoopCard({ meta }: { meta: MaturityMeta | null }) {
+  const fmtPct = (v: number | null | undefined) => (v != null ? `${(v * 100).toFixed(1)}%` : '—');
+  return (
+    <div className="bg-card border border-border rounded-lg p-6">
+      <h3 className="text-sm font-semibold mb-4 text-foreground">Meta Loop — Hyperparameter Tuning</h3>
+      <div className="grid grid-cols-3 gap-4">
+        <div className="space-y-2">
+          <div className="text-xs text-muted-foreground uppercase">Convergence Rate</div>
+          <div className="text-lg font-semibold text-accent">
+            {meta ? meta.convergence_rate.toFixed(2) : '—'}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {meta?.optimizer_active ? 'Optimizer active' : 'Optimizer idle'}
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs text-muted-foreground uppercase">Drift (mean, active loops)</div>
+          <div className="text-lg font-semibold text-accent">{meta ? meta.drift.toFixed(2) : '—'}</div>
+          <div className="text-xs text-muted-foreground">
+            {meta ? `${meta.threshold_updates} threshold updates` : '—'}
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs text-muted-foreground uppercase">Prediction Accuracy</div>
+          <div className="text-lg font-semibold text-accent">{fmtPct(meta?.prediction_accuracy)}</div>
+          <div className="text-xs text-muted-foreground">recent outcome success</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecommendationsCard({ meta }: { meta: MaturityMeta | null }) {
+  const recs = meta?.recommendations ?? [];
+  const color = (sev: string) =>
+    sev === 'critical' ? 'text-destructive' : sev === 'warning' ? 'text-amber-500' : 'text-emerald-500';
+  return (
+    <div className="bg-card border border-border rounded-lg p-6">
+      <h3 className="text-sm font-semibold mb-4 text-foreground">💡 Recommendations</h3>
+      {recs.length === 0 ? (
+        <div className="text-sm text-muted-foreground">No recommendations — all loops within expected range.</div>
+      ) : (
+        <ul className="space-y-3 text-sm text-muted-foreground">
+          {recs.map((r, i) => (
+            <li key={i} className="flex gap-3">
+              <span className={`${color(r.severity)} flex-shrink-0`}>{i + 1}.</span>
+              <span>{r.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function computeMaturityScore(loops: LoopScores, meta: MaturityMeta | null): MaturityData {
+  const tier1 = [loops.confidence, loops.routing, loops.context, loops.workflow, loops.data_flow, loops.security];
+  const tier2 = [loops.memory, loops.skills, loops.plugins, loops.audit, loops.compliance, loops.system];
 
   const tier1Avg = tier1.reduce((a, b) => a + b, 0) / tier1.length;
   const tier2Avg = tier2.reduce((a, b) => a + b, 0) / tier2.length;
@@ -286,8 +324,12 @@ function computeMaturityScore(loops: LoopScores): MaturityData {
     tier2Avg,
     metaScore,
     lastUpdated: new Date().toISOString(),
-    trend: { direction: 'up', value: 0.3 },
-    projection: 8.2,
+    // Real trend/projection from the server-computed meta (fallback to stable/self).
+    trend: {
+      direction: meta?.trend?.direction ?? 'stable',
+      value: meta?.trend?.value ?? 0,
+    },
+    projection: meta?.projection_30d ?? Math.round(overallScore * 10) / 10,
   };
 }
 
