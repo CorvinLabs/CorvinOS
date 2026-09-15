@@ -132,7 +132,12 @@ const NAV_GROUPS: NavGroup[] = [
       // panelRoutes() mounts /app/<route> from PANELS, this list makes it
       // reachable. tests/unit/panel-nav-wiring.test.ts fails if the two drift
       // apart on ROUTE, but not on label — hence this label went stale.
-      { to: "/app/vibe-engineering", label: "Learnings", icon: TrendingUp, requiredFlag: "vibe_engineering" },
+      // Ungated (2026-09-15, operator request): the maturity panel now serves
+      // real on-demand data across all tabs, so it shows directly under
+      // Dashboard in this section-less primary group — no `vibe_engineering`
+      // flag gate (that legacy default-off UI flag kept it hidden; per the
+      // "all features always on" policy such flags are obsolete).
+      { to: "/app/vibe-engineering", label: "Learnings", icon: TrendingUp },
     ],
   },
   // Renamed from "Plugins & Extensions" (2026-09-12, operator request) and
