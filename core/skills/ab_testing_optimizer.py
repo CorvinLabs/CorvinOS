@@ -100,6 +100,7 @@ class ABTestingOptimizer:
         name: str,
         model_id: str,
         confidence_threshold: float = 0.80,
+        confidence_drop_threshold: float = 0.15,
     ) -> Dict:
         """Propose a new variant for testing.
 
@@ -107,6 +108,7 @@ class ABTestingOptimizer:
             name: Human-readable variant name
             model_id: Model to test (e.g., "claude-opus-4")
             confidence_threshold: Min confidence to promote to primary
+            confidence_drop_threshold: Revert if drop exceeds this (default 15%)
 
         Returns:
             {
@@ -130,6 +132,7 @@ class ABTestingOptimizer:
                 name=name,
                 model_id=model_id,
                 confidence_threshold=confidence_threshold,
+                confidence_drop_threshold=confidence_drop_threshold,
             )
             self._variants[variant_id] = variant
             self._metrics[variant_id] = VariantMetrics(variant_id=variant_id)
@@ -227,11 +230,16 @@ class ABTestingOptimizer:
                 metrics.successes += 1
 
             # Update confidence based on feedback
-            if metrics.trials > 0:
+            # success_rate = successes / feedback_count
+            # feedback_engagement = feedback_count / trials
+            if metrics.trials > 0 and metrics.feedback_count > 0:
+                success_rate = metrics.successes / metrics.feedback_count
+                feedback_engagement = min(1.0, metrics.feedback_count / metrics.trials)  # Clamp to [0, 1]
                 metrics.current_confidence = (
-                    0.7 * (metrics.successes / metrics.trials) +
-                    0.3 * (metrics.feedback_count / metrics.trials)
+                    0.7 * success_rate +
+                    0.3 * feedback_engagement
                 )
+                metrics.current_confidence = max(0.0, min(1.0, metrics.current_confidence))  # Clamp result
                 metrics.peak_confidence = max(
                     metrics.peak_confidence,
                     metrics.current_confidence,
