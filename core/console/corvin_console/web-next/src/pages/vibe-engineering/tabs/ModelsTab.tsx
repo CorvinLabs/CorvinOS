@@ -1,27 +1,45 @@
+/**
+ * Models tab — engine registry with published rates (ADR-0856).
+ *
+ * Was typed against a response that no longer exists, and in practice never
+ * did: `cost_per_1k` collapsed two rates that differ 5x, `latency_ms` was a
+ * constant the API invented (50/20/10), and the fetch omitted the /v1/console
+ * prefix so every request 404'd.
+ */
 import { useEffect, useState } from 'react';
-import { Loader2, AlertCircle, Zap } from 'lucide-react';
+import { Loader2, AlertCircle } from 'lucide-react';
 
 interface Model {
   id: string;
   name: string;
-  provider: string;
-  cost_per_1k: number;
-  latency_ms: number;
-  capabilities: string[];
+  engines: string[];
+  turns: string[];
+  input_usd_per_1k: number | null;
+  output_usd_per_1k: number | null;
+  priced: boolean;
 }
+
+/** "—" means not on the published rate card, never free. */
+const perMillion = (perThousand: number | null | undefined): string =>
+  perThousand === null || perThousand === undefined
+    ? '—'
+    : `$${(perThousand * 1000).toFixed(2)}`;
 
 export function ModelsTab() {
   const [models, setModels] = useState<Model[]>([]);
+  const [note, setNote] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const res = await fetch('/v1/models/available');
+        const res = await fetch('/v1/console/v1/models/available');
         if (!res.ok) throw new Error(`API ${res.status}`);
         const data = await res.json();
         setModels(data.models || []);
+        setNote(data.available === false ? (data.detail || 'Model registry not available on this build.') : '');
+        setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load');
       } finally {
@@ -30,7 +48,7 @@ export function ModelsTab() {
     };
 
     fetchModels();
-    const interval = setInterval(fetchModels, 60000); // Refresh every min
+    const interval = setInterval(fetchModels, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -43,39 +61,38 @@ export function ModelsTab() {
         {error && <span className="flex items-center gap-2 text-xs text-red-500"><AlertCircle className="h-4 w-4" />{error}</span>}
       </div>
 
+      {note && <div className="text-sm text-muted-foreground">{note}</div>}
+
       <div className="space-y-3">
         {models.map((m) => (
           <div key={m.id} className="border rounded-lg p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <h4 className="font-semibold">{m.name}</h4>
-                <p className="text-xs text-muted-foreground">{m.provider}</p>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1 min-w-0">
+                <h4 className="font-semibold break-all">{m.name}</h4>
+                <p className="text-xs text-muted-foreground break-all">{m.id}</p>
               </div>
-              <div className="text-right space-y-1">
-                <div className="text-sm font-mono">${m.cost_per_1k.toFixed(4)}/1K</div>
-                <div className="flex items-center gap-1 text-xs text-blue-600">
-                  <Zap className="h-3 w-3" />
-                  <span>{m.latency_ms}ms</span>
-                </div>
+              <div className="text-right space-y-1 shrink-0">
+                <div className="text-sm font-mono">{perMillion(m.input_usd_per_1k)} in</div>
+                <div className="text-sm font-mono">{perMillion(m.output_usd_per_1k)} out</div>
+                <div className="text-xs text-muted-foreground">per 1M tokens</div>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-1">
-              {m.capabilities.map((cap) => (
-                <span key={cap} className="px-2 py-1 rounded-sm bg-muted text-xs font-medium">
-                  {cap}
-                </span>
+              {m.engines.map((e) => (
+                <span key={e} className="px-2 py-1 rounded-sm bg-muted text-xs font-medium">{e}</span>
+              ))}
+              {m.turns.map((t) => (
+                <span key={t} className="px-2 py-1 rounded-sm border text-xs font-medium">{t}</span>
               ))}
             </div>
           </div>
         ))}
       </div>
 
-      {models.length === 0 && <div className="text-sm text-muted-foreground">No models available</div>}
-
-      <div className="text-xs text-muted-foreground">
-        Registry: Engine Manager • Last sync: {new Date().toLocaleTimeString()}
-      </div>
+      {models.length === 0 && !note && (
+        <div className="text-sm text-muted-foreground">The engine registry declares no models.</div>
+      )}
     </div>
   );
 }

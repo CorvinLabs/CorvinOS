@@ -19,6 +19,10 @@ interface AlertRule {
   active: boolean;
 }
 
+const formatMetric = (value: number, unit: string): string =>
+  // Event counts are integers; only rates and durations want decimals.
+  Number.isInteger(value) && unit !== '%' ? value.toLocaleString('en-US') : value.toFixed(2);
+
 export function OTELTelemetryPage() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [alerts, setAlerts] = useState<AlertRule[]>([]);
@@ -34,7 +38,7 @@ export function OTELTelemetryPage() {
   const fetchMetrics = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`/v1/monitoring/metrics?range=${timeRange}`);
+      const response = await fetch(`/v1/console/v1/monitoring/metrics?range=${timeRange}`);
       const data = await response.json();
       setMetrics(data.metrics || []);
       setAlerts(data.alerts || []);
@@ -106,7 +110,7 @@ export function OTELTelemetryPage() {
                 {metric.name}
               </div>
               <div className="text-2xl font-bold">
-                {metric.value.toFixed(2)}
+                {formatMetric(metric.value, metric.unit)}
                 <span className="text-sm ml-1 font-normal">{metric.unit}</span>
               </div>
               <div className="text-xs text-muted-foreground">

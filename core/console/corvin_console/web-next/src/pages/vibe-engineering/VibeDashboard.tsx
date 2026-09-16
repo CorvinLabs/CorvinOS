@@ -2,9 +2,9 @@
  * Vibe Engineering Dashboard — Phase 2 Live Data Wiring (2026-09-15)
  *
  * Integrated Maturity Metrics + Live Endpoints (ADR-0728)
- * - Licensing: /v1/licensing/audit-events (EventStore + PII filtering)
- * - Monitoring: /v1/monitoring/metrics (HealthMonitor + alerts)
- * - Models: /v1/models/available (Engine registry)
+ * - Licensing: /v1/console/v1/licensing/audit-events (EventStore + PII filtering)
+ * - Monitoring: /v1/console/v1/monitoring/metrics (HealthMonitor + alerts)
+ * - Models: /v1/console/v1/models/available (Engine registry)
  *
  * History: This route used to be a tabbed hub (Graph View, Inspector, Timeline, Learning).
  * On 2026-09-05 the operator requested Learning view alone — tabs are gone.
