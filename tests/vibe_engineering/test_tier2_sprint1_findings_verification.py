@@ -23,7 +23,7 @@ def test_finding_1_task_graph_api_requires_session_code():
     Expected: Source file contains require_session imports and usage.
     Status: FIXED ✅ (verified by grep: require_session used on protected routes)
     """
-    source_file = Path(__file__).parent.parent.parent / 'console/corvin_console/routes/task_graph_api.py'
+    source_file = Path(__file__).parents[2] / 'core/console/corvin_console/routes/task_graph_api.py'
     source_code = open(source_file).read()
 
     # Verify require_session is imported
@@ -46,7 +46,7 @@ def test_finding_1_authenticated_routes():
 
     Expected: Multiple POST endpoints use Depends(require_session)
     """
-    source_file = Path(__file__).parent.parent.parent / 'console/corvin_console/routes/task_graph_api.py'
+    source_file = Path(__file__).parents[2] / 'core/console/corvin_console/routes/task_graph_api.py'
     source_code = open(source_file).read()
 
     # Count occurrences of require_session usage in route parameters
@@ -72,7 +72,7 @@ def test_finding_2_checkpoint_manager_imported():
     Expected: Source imports CheckpointManager from vibe_engineering.
     Status: FIXED ✅
     """
-    source_file = Path(__file__).parent.parent.parent / 'console/corvin_console/routes/task_graph_api.py'
+    source_file = Path(__file__).parents[2] / 'core/console/corvin_console/routes/task_graph_api.py'
     source_code = open(source_file).read()
 
     # Verify CheckpointManager is imported
@@ -92,7 +92,7 @@ def test_finding_2_vibe_orchestrator_available():
 
     Expected: Module imports VibeOrchestrator and checks availability.
     """
-    source_file = Path(__file__).parent.parent.parent / 'console/corvin_console/routes/task_graph_api.py'
+    source_file = Path(__file__).parents[2] / 'core/console/corvin_console/routes/task_graph_api.py'
     source_code = open(source_file).read()
 
     # Verify VibeOrchestrator is imported
@@ -109,9 +109,9 @@ def test_finding_2_checkpoint_manager_methods():
     """
     Verify: CheckpointManager has required methods for producing checkpoints.
 
-    Expected: write, list_checkpoints, get_latest methods exist.
+    Expected: create_checkpoint, save, list_checkpoints, get_latest methods exist.
     """
-    source_file = Path(__file__).parent.parent / 'checkpoint_manager.py'
+    source_file = Path(__file__).parents[2] / 'core/vibe_engineering/checkpoint_manager.py'
     source_code = open(source_file).read()
 
     required_methods = ['def create_checkpoint', 'def save', 'def list_checkpoints', 'def get_latest']
@@ -133,7 +133,7 @@ def test_finding_4_checkpoint_sorting_by_timestamp():
     Expected: Checkpoints sorted by (timestamp, iteration_num) in reverse order (newest first).
     Status: FIXED ✅ (line 737 of checkpoint_manager.py shows correct sort)
     """
-    source_file = Path(__file__).parent.parent / 'checkpoint_manager.py'
+    source_file = Path(__file__).parents[2] / 'core/vibe_engineering/checkpoint_manager.py'
     source_code = open(source_file).read()
 
     # Verify the sort statement
