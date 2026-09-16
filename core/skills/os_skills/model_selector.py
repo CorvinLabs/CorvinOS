@@ -442,19 +442,19 @@ class ModelSelector:
         # Apply learned threshold
         if feature_complexity < complexity_threshold:
             if features.code_blocks <= self.config.simple_max_code_blocks:
-                return "simple", 0.85  # High confidence
+                return "SIMPLE", 0.85  # High confidence
         elif feature_complexity > (complexity_threshold + 0.3):
             if (features.code_blocks > self.config.medium_max_code_blocks
                     or features.dependency_count > self.config.medium_max_dependencies):
-                return "complex", 0.90  # High confidence
+                return "COMPLEX", 0.90  # High confidence
 
         # Medium category (default, medium confidence)
         if base_complexity == "complex":
-            return "complex", 0.70
+            return "COMPLEX", 0.70
         elif base_complexity == "simple":
-            return "simple", 0.70
+            return "SIMPLE", 0.70
         else:
-            return "medium", 0.60  # Uncertain
+            return "MEDIUM", 0.60  # Uncertain
 
     def _compute_feature_complexity(self, features: ExtractedFeatures) -> float:
         """Compute normalized feature-based complexity (0.0-1.0).
@@ -477,48 +477,46 @@ class ModelSelector:
         """
         Select provider based on complexity.
 
-        SIMPLE → Ollama (local, free) if available, else OpenRouter
-        MEDIUM → OpenRouter (cost/quality balance)
-        COMPLEX → Anthropic/OpenAI (best quality)
+        SIMPLE → Anthropic/Haiku (cost-optimized, high success)
+        MEDIUM → Anthropic/Sonnet (balanced)
+        COMPLEX → Anthropic/Opus (best quality)
         """
-        if complexity == "simple":
-            # Prefer local Ollama for simple tasks
-            if self.config.prefer_local_for_simple:
-                return "ollama"
-            return "openrouter"
-        elif complexity == "medium":
-            return "openrouter"
-        else:  # complex
-            return "anthropic"
+        # k=2 (ADR-0845): Always prefer Anthropic for consistency + Haiku for SIMPLE
+        if complexity == "SIMPLE":
+            return "anthropic"  # Use Haiku for cost-optimization
+        elif complexity == "MEDIUM":
+            return "anthropic"  # Use Sonnet for balanced quality
+        else:  # COMPLEX
+            return "anthropic"  # Use Opus for best quality
 
     def _select_model_for_provider(self, provider: str, complexity: str) -> str:
         """Select model within provider based on complexity."""
         if provider == "anthropic":
-            if complexity == "complex":
+            if complexity == "COMPLEX":
                 return "claude-opus-5"
-            elif complexity == "medium":
+            elif complexity == "MEDIUM":
                 return "claude-sonnet-5"
-            else:
+            else:  # SIMPLE
                 return "claude-haiku-4-5"
 
         elif provider == "ollama":
-            if complexity == "complex":
-                return "mistral:latest"  # Or dolphin, neural, etc.
+            if complexity == "COMPLEX":
+                return "mistral:latest"
             else:
-                return "mistral:7b"  # Lightweight
+                return "mistral:7b"
 
         elif provider == "openrouter":
-            if complexity == "complex":
+            if complexity == "COMPLEX":
                 return "openai/gpt-4-turbo"
-            elif complexity == "medium":
+            elif complexity == "MEDIUM":
                 return "anthropic/claude-opus"
             else:
                 return "open-mistral-7b"
 
         elif provider == "openai":
-            if complexity == "complex":
+            if complexity == "COMPLEX":
                 return "gpt-4"
-            elif complexity == "medium":
+            elif complexity == "MEDIUM":
                 return "gpt-4-turbo"
             else:
                 return "gpt-3.5-turbo"
