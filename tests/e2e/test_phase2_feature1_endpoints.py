@@ -8,9 +8,15 @@ Tests verify:
 Compliance: ADR-0297 (PII), ADR-0728 (Feature Architecture), GDPR Art. 5+32
 """
 
+import pytest
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
+import os
+import sys
+
+# Add project root to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 
 class TestLicensingAuditEventsEndpoint:
