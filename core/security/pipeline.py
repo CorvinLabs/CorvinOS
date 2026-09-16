@@ -90,7 +90,7 @@ class IntegratedSecurityPipeline:
         Returns: (success, result, context)
         Raises: PipelineExecutionError or subclass on any gate failure
         """
-        # Process tenant, fail-closed. The former ``from operator.context
+        # Process tenant, fail-closed. The former ``from corvin_operator.context
         # import get_current_tenant`` could never resolve (the stdlib
         # ``operator`` module shadows the repo directory, and no such module
         # exists) — so every SecurityContext carried tenant_id="unknown" and

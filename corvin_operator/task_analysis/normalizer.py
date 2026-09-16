@@ -77,7 +77,7 @@ clarification request and a list of missing fields.
 
 ## Example
 
-    >>> from operator.task_analysis.normalizer import TaskNormalizer
+    >>> from corvin_operator.task_analysis.normalizer import TaskNormalizer
     >>> normalizer = TaskNormalizer()
     >>>
     >>> task = '''Fix crash in voice module when processing audio > 5min

@@ -22,7 +22,7 @@ Two impedance mismatches are bridged here:
    parent group at dispatch time.
 
 2. **Import path** — ``operator`` is also a Python stdlib module, so
-   ``from operator.cli.skill_commands import …`` resolves to the wrong
+   ``from corvin_operator.cli.skill_commands import …`` resolves to the wrong
    ``operator`` and fails (the repo notes this shadow in several places). We
    therefore load the two modules by file path via ``importlib`` and call
    their own ``register_*`` functions, honouring the package's documented

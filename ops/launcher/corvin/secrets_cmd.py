@@ -31,7 +31,7 @@ def _warn(msg: str) -> None:
 def cmd_set(args: argparse.Namespace) -> int:
     """Set a secret value."""
     try:
-        from operator.bridges.shared.provider_keys import SecretsStore
+        from corvin_operator.bridges.shared.provider_keys import SecretsStore
     except ImportError as exc:
         _err(f"provider_keys module not available: {exc}")
         return 2
@@ -56,7 +56,7 @@ def cmd_set(args: argparse.Namespace) -> int:
 def cmd_get(args: argparse.Namespace) -> int:
     """Get a secret value."""
     try:
-        from operator.bridges.shared.provider_keys import SecretsStore
+        from corvin_operator.bridges.shared.provider_keys import SecretsStore
     except ImportError as exc:
         _err(f"provider_keys module not available: {exc}")
         return 2
@@ -81,7 +81,7 @@ def cmd_get(args: argparse.Namespace) -> int:
 def cmd_delete(args: argparse.Namespace) -> int:
     """Delete a secret."""
     try:
-        from operator.bridges.shared.provider_keys import SecretsStore
+        from corvin_operator.bridges.shared.provider_keys import SecretsStore
     except ImportError as exc:
         _err(f"provider_keys module not available: {exc}")
         return 2
@@ -110,7 +110,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
 def cmd_list(args: argparse.Namespace) -> int:
     """List all secret keys (not values)."""
     try:
-        from operator.bridges.shared.provider_keys import SecretsStore
+        from corvin_operator.bridges.shared.provider_keys import SecretsStore
     except ImportError as exc:
         _err(f"provider_keys module not available: {exc}")
         return 2
@@ -140,7 +140,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_migrate(args: argparse.Namespace) -> int:
     """Migrate secrets from legacy .env to encrypted secrets.enc."""
     try:
-        from operator.bridges.shared.provider_keys import SecretsStore
+        from corvin_operator.bridges.shared.provider_keys import SecretsStore
     except ImportError as exc:
         _err(f"provider_keys module not available: {exc}")
         return 2

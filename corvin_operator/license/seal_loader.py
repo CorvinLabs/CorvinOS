@@ -2,7 +2,7 @@
 
 Import this module, never the stub or the extension directly:
 
-    from operator.license.seal_loader import unseal, verify_manifest, seal_version
+    from corvin_operator.license.seal_loader import unseal, verify_manifest, seal_version
 
 Resolution order:
   1. ``operator/license/_corvin_seal.<platform-ext>`` (compiled Rust binary)

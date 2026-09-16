@@ -169,7 +169,7 @@ class AutonomousDeploymentManager:
         logger.info(f"Running validation (Day {day})...")
 
         try:
-            from operator.task_analysis.staging_harness import StagingHarness
+            from corvin_operator.task_analysis.staging_harness import StagingHarness
 
             harness = StagingHarness()
             harness.run(str(self.staging_dir / "test_data.json"))

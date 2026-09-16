@@ -14,8 +14,8 @@ ADR exists to close (see ADR-0215 in Corvin-ADR/decisions/):
 
 2. **Dotted ``operator.`` import lint.** ``operator/`` has no
    ``__init__.py`` and always loses to the stdlib ``operator`` module
-   regardless of sys.path order — ``from operator.X.Y import Z`` /
-   ``import operator.X.Y`` can NEVER resolve. This scans real import
+   regardless of sys.path order — ``from corvin_operator.X.Y import Z`` /
+   ``import corvin_operator.X.Y`` can NEVER resolve. This scans real import
    statements (not comments, not string literals) repo-wide for that
    pattern.
 
@@ -223,7 +223,7 @@ def check_deferred_has_reason(result: GateResult) -> None:
 
 
 def _dotted_operator_import_lines(text: str) -> list[tuple[int, str]]:
-    """AST-based scan for real `import operator.X` / `from operator.X import
+    """AST-based scan for real `import corvin_operator.X` / `from corvin_operator.X import
     Y` statements — deliberately NOT a regex over raw text, so docstring
     usage examples and comments (which regularly quote import lines as
     documentation) can never produce a false positive. A regex-based first
@@ -240,7 +240,7 @@ def _dotted_operator_import_lines(text: str) -> list[tuple[int, str]]:
         if isinstance(node, ast.ImportFrom):
             # `from operator import X` (bare, the real stdlib module) is
             # fine and deliberately excluded — only the dotted submodule
-            # form (`from operator.X... import Y`) can never resolve.
+            # form (`from corvin_operator.X... import Y`) can never resolve.
             if (node.module or "").startswith("operator."):
                 names = ", ".join(a.name for a in node.names)
                 hits.append((node.lineno, f"from {node.module} import {names}"))

@@ -38,7 +38,7 @@ from typing import Any
 
 # Make the sibling elr modules importable (operator/license on sys.path), exactly
 # like the egress_gate consumer does. `operator` is the stdlib module, so a
-# `from operator.license...` import would never work.
+# `from corvin_operator.license...` import would never work.
 _LIC_DIR = Path(__file__).resolve().parent
 if str(_LIC_DIR) not in sys.path:
     sys.path.insert(0, str(_LIC_DIR))

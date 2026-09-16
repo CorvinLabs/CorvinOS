@@ -25,7 +25,7 @@ from .sob_crypto import unseal_sob
 #
 # Test code may set these before calling ``unseal()``:
 #
-#   from operator.license import _corvin_seal_stub as _seal
+#   from corvin_operator.license import _corvin_seal_stub as _seal
 #   _seal._TEST_SUB_PRIVATE_KEY_RAW = my_priv_bytes
 #   _seal._TEST_SERVER_VERIFY_KEY_RAW = my_pub_bytes
 #

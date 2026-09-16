@@ -242,7 +242,7 @@ async def _heal_cycle() -> None:
         logger.debug("[ACO] Chat subsystem liveness check failed", exc_info=True)
 
     # Verify voice STT resolver is importable (beyond just binary checks).
-    # ADR-0215 F5: the previous dotted `from operator.voice.scripts.stt import
+    # ADR-0215 F5: the previous dotted `from corvin_operator.voice.scripts.stt import
     # resolver` could NEVER resolve (stdlib `operator` always wins over the
     # repo's `corvin_operator/` directory) — this check silently no-opped on every
     # single scan since inception. Fixed via the repo's working pattern:

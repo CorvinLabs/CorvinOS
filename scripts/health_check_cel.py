@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 def check_cel_import() -> bool:
     """Check if MemoryLookup can be imported."""
     try:
-        from operator.context_engineering import MemoryLookup
+        from corvin_operator.context_engineering import MemoryLookup
         logger.info("✓ MemoryLookup import successful")
         return True
     except Exception as e:
@@ -43,7 +43,7 @@ def check_cel_import() -> bool:
 def check_memory_lookup() -> bool:
     """Test MemoryLookup basic operations."""
     try:
-        from operator.context_engineering import MemoryLookup
+        from corvin_operator.context_engineering import MemoryLookup
 
         lookup = MemoryLookup()
 
@@ -64,7 +64,7 @@ def check_memory_lookup() -> bool:
 def check_task_engine_cel() -> bool:
     """Test TaskEngine with CEL enabled."""
     try:
-        from operator.task_analysis.engine import TaskEngine
+        from corvin_operator.task_analysis.engine import TaskEngine
 
         # Create engine with CEL
         engine = TaskEngine(enable_cel=True)
@@ -100,7 +100,7 @@ def check_task_engine_cel() -> bool:
 def check_prometheus_metrics() -> bool:
     """Check if Prometheus metrics are initialized."""
     try:
-        from operator.task_analysis.metrics import TaskMetrics, MetricsPhase
+        from corvin_operator.task_analysis.metrics import TaskMetrics, MetricsPhase
 
         metrics = TaskMetrics()
 

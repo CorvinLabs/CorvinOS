@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-# ADR-0215 F5: the dotted `from operator.bridges.shared...` imports below
+# ADR-0215 F5: the dotted `from corvin_operator.bridges.shared...` imports below
 # used to be the only import path in this example — they can never resolve
 # (stdlib `operator` always shadows the repo's operator/ directory), so
 # this example script itself was broken from inception, exactly the kind of

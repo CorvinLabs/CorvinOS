@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class FeedbackRecord:
-    """Single feedback record from operator."""
+    """Single feedback record from corvin_operator."""
     turn_id: str
     task_text: str
     predicted_complexity: str

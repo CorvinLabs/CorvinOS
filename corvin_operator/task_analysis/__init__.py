@@ -11,7 +11,7 @@ This module is part of the Task Engine (ADR-0267) and implements:
     - Phase 1: Skill Injector (skill_injector.py)
 
 Example:
-    >>> from operator.task_analysis import TaskNormalizer, TaskClassifier
+    >>> from corvin_operator.task_analysis import TaskNormalizer, TaskClassifier
     >>> normalizer = TaskNormalizer()
     >>> task = "Fix crash in voice module when processing long audio files"
     >>> normalized = normalizer.normalize(task)

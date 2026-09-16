@@ -38,7 +38,7 @@ REPO = Path(__file__).resolve().parents[1]
 LEGACY_DIRS = ("operator", "core/operator")
 
 #: Ratchet for the dotted-import defect (PLAN-0730 Phase 3, still open).
-#: ``from operator.X import Y`` can NEVER resolve — ``operator`` is a stdlib
+#: ``from corvin_operator.X import Y`` can NEVER resolve — ``operator`` is a stdlib
 #: module, so Python raises "'operator' is not a package". Every one of these
 #: sits in a try/except and fails silently; core/orchestration/quota_gate.py
 #: records that the license quota was consequently never enforced.
@@ -125,7 +125,7 @@ def test_build_files_reference_only_the_canonical_tree() -> None:
 
 
 def test_dotted_operator_imports_do_not_grow() -> None:
-    """Ratchet: ``from operator.X`` can never resolve, so it must not spread.
+    """Ratchet: ``from corvin_operator.X`` can never resolve, so it must not spread.
 
     This is a ratchet, not a clean gate — PLAN-0730 Phase 3 still has to
     repair the existing ones, and that is a behaviour change (it activates the

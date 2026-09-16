@@ -33,7 +33,7 @@ FeedbackType = Literal["quality", "relevance", "correctness"]
 
 @dataclass(frozen=True)
 class FeedbackRecord:
-    """An immutable feedback submission from operator."""
+    """An immutable feedback submission from corvin_operator."""
 
     feedback_id: str
     job_id: str

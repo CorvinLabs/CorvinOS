@@ -24,7 +24,7 @@ import pytest
 
 def test_refresh_daemon_state_serialization():
     """Test RefreshDaemonState serialization."""
-    from operator.license.refresh_daemon import RefreshDaemonState
+    from corvin_operator.license.refresh_daemon import RefreshDaemonState
 
     state = RefreshDaemonState(cycle_count=5, last_crl_merge=1000, last_asrl_fetch=2000)
     data = state.to_dict()
@@ -39,7 +39,7 @@ def test_refresh_daemon_state_serialization():
 
 def test_refresh_daemon_initialization(tmp_path):
     """Test daemon initialization with custom corvin_home."""
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -51,7 +51,7 @@ def test_refresh_daemon_initialization(tmp_path):
 
 def test_refresh_daemon_state_persistence(tmp_path):
     """Test daemon state is persisted to disk."""
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -76,7 +76,7 @@ def test_refresh_daemon_state_persistence(tmp_path):
 
 def test_refresh_daemon_counter_increment(tmp_path):
     """Test counter protocol (monotonic increment with fsync + rename)."""
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -102,7 +102,7 @@ def test_refresh_daemon_lock_posix(tmp_path):
     if sys.platform.startswith("win"):
         pytest.skip("POSIX lock test on Windows")
 
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -129,7 +129,7 @@ def test_refresh_daemon_lock_windows(tmp_path):
     if not sys.platform.startswith("win"):
         pytest.skip("Windows lock test on POSIX")
 
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -148,7 +148,7 @@ def test_refresh_daemon_lock_windows(tmp_path):
 
 def test_refresh_daemon_no_credential(tmp_path):
     """Test daemon doesn't start when no credential file exists."""
-    from operator.license.refresh_daemon import start_background_daemon
+    from corvin_operator.license.refresh_daemon import start_background_daemon
 
     corvin_home = tmp_path / "corvin"
     corvin_home.mkdir(parents=True)
@@ -164,7 +164,7 @@ def test_refresh_daemon_no_credential(tmp_path):
 
 def test_refresh_daemon_with_credential(tmp_path):
     """Test daemon starts when credential file exists."""
-    from operator.license.refresh_daemon import start_background_daemon
+    from corvin_operator.license.refresh_daemon import start_background_daemon
 
     corvin_home = tmp_path / "corvin"
     license_dir = corvin_home / "global" / "license"
@@ -180,7 +180,7 @@ def test_refresh_daemon_with_credential(tmp_path):
 
 def test_refresh_daemon_idempotent_startup(tmp_path):
     """Test start_background_daemon is idempotent."""
-    from operator.license.refresh_daemon import start_background_daemon
+    from corvin_operator.license.refresh_daemon import start_background_daemon
 
     corvin_home = tmp_path / "corvin"
     license_dir = corvin_home / "global" / "license"
@@ -200,7 +200,7 @@ def test_refresh_daemon_idempotent_startup(tmp_path):
 
 def test_refresh_daemon_lock_unavailable_deduplication(tmp_path):
     """Test hourly de-duplication of lock unavailable emissions."""
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -238,7 +238,7 @@ def test_refresh_daemon_lock_unavailable_deduplication(tmp_path):
 
 def test_refresh_daemon_three_cycles(tmp_path):
     """Test three independent refresh cycles (permit, CRL, ASRL)."""
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -277,7 +277,7 @@ def test_refresh_daemon_three_cycles(tmp_path):
 
 def test_refresh_daemon_cycle_timers_independent(tmp_path):
     """Test permit/CRL/ASRL cycles are independent and don't trigger early."""
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -316,7 +316,7 @@ def test_refresh_daemon_cycle_timers_independent(tmp_path):
 
 def test_refresh_daemon_state_increments_cycle_count(tmp_path):
     """Test daemon increments cycle_count and saves state."""
-    from operator.license.refresh_daemon import RefreshWorkerThread
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
@@ -375,7 +375,7 @@ def test_boot_refresh_calls_daemon_start(tmp_path, monkeypatch):
         "operator.license.refresh_daemon.start_background_daemon",
         side_effect=mock_daemon_start
     ):
-        from operator.license import session_refresh
+        from corvin_operator.license import session_refresh
         session_refresh.boot_refresh()
 
         assert len(daemon_started) == 1

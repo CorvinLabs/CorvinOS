@@ -181,7 +181,7 @@ def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
     """
     findings: list[IntegrityFinding] = []
     try:
-        # ADR-0215 F5: the dotted `from operator.bridges.shared...` primary
+        # ADR-0215 F5: the dotted `from corvin_operator.bridges.shared...` primary
         # attempt this used to have can never resolve (stdlib `operator`
         # always shadows the repo's corvin_operator/ directory) — dead code,
         # removed. parents[4] is the repo root (core/console/corvin_console/

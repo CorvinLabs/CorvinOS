@@ -132,7 +132,7 @@ def load_baseline() -> Dict[str, Any]:
 
 def main():
     """Run Day 9-12 measurement loop."""
-    from operator.task_analysis.engine import TaskEngine
+    from corvin_operator.task_analysis.engine import TaskEngine
 
     parser = argparse.ArgumentParser(description="Measure CEL performance")
     parser.add_argument("--day", type=int, default=9, help="Day number (9-12)")

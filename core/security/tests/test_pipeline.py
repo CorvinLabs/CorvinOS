@@ -181,7 +181,7 @@ async def test_system_service_bypass(pipeline):
 
 
 # ── Process tenant (2026-09-07 hardening) ────────────────────────────────────
-# ``from operator.context import get_current_tenant`` could never resolve, so
+# ``from corvin_operator.context import get_current_tenant`` could never resolve, so
 # every SecurityContext carried tenant_id="unknown". The pipeline now resolves
 # the same process tenant the audit chain enforces (CORVIN_TENANT_ID →
 # _default, validated) and refuses to run when it cannot.

@@ -9,7 +9,7 @@ root and ``tests/``) and resolves to whichever was imported first.
 # Importing modules out of corvin_operator/
 #
 # `corvin_operator/` cannot be imported as a package: `operator` is a Python stdlib
-# module, so `from operator.marketplace.generate_index import ...` resolves to
+# module, so `from corvin_operator.marketplace.generate_index import ...` resolves to
 # the stdlib and raises "'operator' is not a package".
 #
 # Putting `corvin_operator/` on sys.path and importing bare is not reliable either:
