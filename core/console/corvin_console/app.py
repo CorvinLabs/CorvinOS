@@ -95,6 +95,7 @@ from .routes import (
     quality_layers as quality_layers_route,
     quality_gates as quality_gates_route,
     skill_creator_api as skill_creator_route,
+    skill_manager_routes as skill_manager_route,
     chat as chat_route,
     voice as voice_route,
     workflows as workflows_route,
@@ -215,6 +216,8 @@ router.include_router(skills_manual_route.router, tags=["console-skills-manual"]
 router.include_router(tools_manual_route.router, tags=["console-tools-manual"])
 router.include_router(tools.router, tags=["console-tools"])
 router.include_router(skills.router, tags=["console-skills"])
+# ADR-0681 — Skill Forge v2.0 Phase 5: Console UI (Skill Manager)
+router.include_router(skill_manager_route.router, tags=["console-skill-manager"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
