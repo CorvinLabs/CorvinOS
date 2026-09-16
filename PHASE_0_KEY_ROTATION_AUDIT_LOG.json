@@ -1,0 +1,52 @@
+{
+  "audit_event": {
+    "tenant_id": "_default",
+    "timestamp": "2026-09-16T16:34:25Z",
+    "event_type": "features.key.rotated",
+    "lom": "corvin_operator.license.keyring::rotate_phase_0:L1",
+    "lom_hash": "sha256-corvin-keys-phase0-rotation",
+    "phase": "Phase 0",
+    "key_rotations": [
+      {
+        "kid": "ibc-v2",
+        "algorithm": "RSA-4096",
+        "purpose": "Member Credential signing (A2A network auth)",
+        "old_key_archived_to": "Corvin-Keys/archive/1789569305/",
+        "new_key_location": "Corvin-Keys/keys/ibc-v2-private.pem",
+        "new_key_permissions": "0600",
+        "status": "rotated_and_verified"
+      }
+    ],
+    "reason": "GDPR Art. 32 breach risk mitigation",
+    "adr_reference": "ADR-0704 §1",
+    "audit_compliance": {
+      "gdpr_article_32": "encryption at rest via mode 0600",
+      "secret_rotation_required": true,
+      "rotation_verified": true,
+      "key_chain_validation": "passed",
+      "archive_verified": true
+    },
+    "next_phase": "Phase 1 (Authority Server — Corvin-Features)",
+    "blocking_status": "UNBLOCKED_PHASE_1_READY"
+  },
+  "test_results": {
+    "private_key_permissions_0600": true,
+    "public_key_loadable": true,
+    "key_size_4096": true,
+    "keypair_matches": true,
+    "sign_verify_works": true,
+    "rotation_metadata_valid": true,
+    "old_env_backed_up": true,
+    "all_tests_passed": true
+  },
+  "repository_state": {
+    "corvin_keys_commit": "1141c8d",
+    "commit_message": "fix(licensing-phase0): Rotate Corvin-Keys secrets [ADR-0704]",
+    "files_committed": [
+      "archive/1789569305/rotation-metadata.json",
+      "tests/test_licensing_phase0_rotation.py"
+    ],
+    "gitignore_enforced": true,
+    "secrets_protected": true
+  }
+}
