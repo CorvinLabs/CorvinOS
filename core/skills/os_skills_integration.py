@@ -9,10 +9,10 @@ What is PRODUCTION-WIRED (verified 2026-09-07, adversarial review F-K4):
   _acp_shadow_route`` — the bundled engine stands, the Skill's advice is audited
   and learned from. ``route_task_l5`` below is the direct (non-shadow) entry
   point; it has no production caller today and is exercised by tests only.
-- L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` has NO production
-  call site. The context pipeline (CEL stages, ``core/context_engineering``) does
-  not consult it. Do not describe L10 as "wired"; wiring it is a follow-up that
-  needs a call site in the context pipeline (out of this module's reach).
+- L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` is wired into the
+  CEL pipeline via ``corvin_operator/context_engineering/stages/l10_adapter.py``,
+  which executes the Skill after the graph stage and before LLM synthesis. The Skill
+  learns context adjustments (vibe_score, priority, attention_budget) from feedback.
 - Learning loop integration (ADR-0314): every execution through the registry.
 
 Design:

@@ -26,6 +26,8 @@ ACTIVE_PIPELINE = [
     {"stage": "memory"},
     {"stage": "graph"},
     {"stage": "skill"},
+    {"stage": "approach_synthesis"},
+    {"stage": "l10_adapter"},  # L10: Context Adapter Skill (ADR-0532 Phase 2b)
     {"stage": "llm_synthesis", "config": {"egress_ok": True}},
     {"stage": "toolforge"},
     {"stage": "skillforge"},
