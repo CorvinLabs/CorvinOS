@@ -16,6 +16,61 @@ under the maintainer account. Confirmation is not required.
 
 ---
 
+## Task Completion Registry — Single Source of Truth (load-bearing)
+
+**Problem:** Before 2026-09-16, task completion status was fragmented:
+- MEMORY.md had visual markers (✅ COMPLETE) but no machine reading
+- ADR status (ACCEPTED) didn't link to operator task status
+- Git commits used inconsistent markers ([DONE], [COMPLETE], etc.)
+- Context pipeline suggested completed tasks repeatedly (e.g., "Skill Forge v2.0", "Model Selector")
+
+**Solution: Canonical Task Registry** (`~/.corvin/task_registry.json`)
+
+1. **Single Source of Truth:** ADR status (`status: ACCEPTED` in frontmatter) is canonical
+   - ADRs with `status: ACCEPTED` = tasks marked done by the architect
+   - Context pipeline reads this registry, not MEMORY.md visual markers
+   - No more re-suggestions of completed work
+
+2. **Automated Daily Sync**
+   - Service: `~/.config/systemd/user/corvin-task-registry-sync.service`
+   - Timer: `~/.config/systemd/user/corvin-task-registry-sync.timer`
+   - Runs at 03:00 UTC daily via `scripts/task_completion_registry.py`
+   - Scans: Corvin-ADR/decisions/ → task_registry.json
+
+3. **Context Pipeline Integration**
+   - Module: `core/console/corvin_console/task_completion_verifier.py`
+   - Provides: `is_task_completed(task_id)`, `filter_suggestions(list)`
+   - Injects status brief: "✅ 84 COMPLETED, 🟡 X IN_PROGRESS, ❌ Y BLOCKED"
+   - Never suggests ACCEPTED tasks again
+
+4. **How to Mark a Task Done**
+   - In ADR frontmatter, set: `status: ACCEPTED` (not PROPOSED)
+   - Commit to Corvin-ADR/decisions/
+   - Registry syncs daily → task automatically filtered from future suggestions
+
+**Must NOT do (absolute):**
+- Don't keep `status: PROPOSED` in an ADR if the work is done (sync won't recognize it)
+- Don't use visual markers in MEMORY.md alone (update ADR status instead)
+- Don't suggest tasks from MEMORY.md visual marks if ADR says `status: ACCEPTED`
+- Don't run the registry manually between scheduled syncs without reason
+
+**Verify the Registry Works:**
+```bash
+# Check what's in the registry
+cat ~/.corvin/task_registry.json | jq '.tasks | length'  # Should show 370+
+
+# Verify ACCEPTED tasks
+cat ~/.corvin/task_registry.json | jq '.tasks | to_entries | map(select(.value.status == "ACCEPTED")) | length'  # Should show 84+
+
+# Check systemd timer
+systemctl --user status corvin-task-registry-sync.timer
+```
+
+→ Full implementation: `scripts/task_completion_registry.py` (Python, ~300 LOC)
+→ Verifier: `core/console/corvin_console/task_completion_verifier.py` (integration layer)
+
+---
+
 ## Classified Content — Corvin-Marketplace (2026-08-31)
 
 **Status: REDACTED FROM PUBLIC REPO**
