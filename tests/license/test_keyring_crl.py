@@ -10,8 +10,8 @@ import json
 import time
 from pathlib import Path
 
-from operator.license.keyring import RING, RingKey, Ring
-from operator.license.crl import CRLPage, CRLState, load_crl_state, merge_crl_delta, is_revoked, crl_age_seconds
+from core.operator.license.keyring import RING, RingKey, Ring
+from core.operator.license.crl import CRLPage, CRLState, load_crl_state, merge_crl_delta, is_revoked, crl_age_seconds
 
 
 class TestRingEmbedding:

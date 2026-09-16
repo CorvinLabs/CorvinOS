@@ -11,7 +11,7 @@ from pathlib import Path
 from io import StringIO
 import sys
 
-from operator.license.cli import (
+from core.operator.license.cli import (
     main,
     cmd_activate_request,
     cmd_activate_redeem,
