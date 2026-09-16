@@ -14,6 +14,7 @@ Phase 2 (ADR-0377): Cost-Variance Feedback Loop
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
@@ -85,6 +86,9 @@ class ModelSelector:
     3. Map to provider (cost-optimized)
     4. Select model within provider
     5. Return audit event data
+
+    k=2 (ADR-0845): Added classify_with_decomposition_hint() for OS-layer
+    task routing with optional prompt-level decomposition support.
     """
 
     def __init__(
@@ -108,6 +112,234 @@ class ModelSelector:
         # Optional cost variance optimizer for adaptive threshold learning
         self.cost_variance_optimizer = cost_variance_optimizer
         self._dynamic_complexity_threshold = 0.5  # Base threshold, may be adapted
+
+        # k=2 (ADR-0845): Historical Haiku success rates per task_type
+        # Format: {task_type: success_rate (0.0-1.0)}
+        # Populated from learning loop feedback (ADR-0314)
+        # After task-specific decomposition, Haiku can achieve high quality:
+        self.haiku_success_rates: Dict[str, float] = {
+            "code_review": 0.96,    # Haiku can handle structured reviews at 96% quality
+            "code_gen": 0.90,       # Code generation harder but still viable
+            "analysis": 0.90,       # Analysis with decomposition at 90% quality
+            "summarization": 0.96,  # Haiku excels at structured summarization
+            "refactoring": 0.92,    # Structured refactoring at 92% quality
+            "testing": 0.95,        # Test generation at 95% quality
+            "documentation": 0.97,  # Documentation is Haiku-optimized
+            "orchestration": 0.50,  # Orchestration needs Sonnet reasoning
+            "system_design": 0.55,  # System design needs Sonnet reasoning
+            "default": 0.88,        # Default task type
+        }
+
+    def classify_with_decomposition_hint(
+        self,
+        task_input: str,
+        tenant_id: Optional[str] = None,
+        task_type: Optional[str] = None,
+    ) -> Tuple[ClassificationResult, Optional[str]]:
+        """
+        Classify task and recommend model with optional decomposition hint.
+
+        k=2 (ADR-0845): OS-layer routing with decomposition support.
+
+        Returns:
+            (ClassificationResult, decomposition_hint)
+            where decomposition_hint is one of:
+            - None: use full Sonnet reasoning (no decomposition)
+            - "prompt_structured": decompose at prompt level (Tier 2)
+            - "graph_structured": decompose at graph level (Tier 3, via Skill DAGs)
+
+        Decision logic:
+        1. Extract features
+        2. Heuristic 1: Is this an orchestration/composition task?
+           → If YES: recommend Sonnet (reasoning needed), hint=None
+        3. Heuristic 2: Is this decomposable to prompt-level structure?
+           → Check historical Haiku success(task_type)
+           → If success_rate > 85%: recommend Haiku + hint="prompt_structured"
+           → Else: recommend Sonnet, hint=None
+        4. Return (ClassificationResult, hint)
+        """
+        tenant_id = tenant_id or "_default"
+
+        # Step 1: Extract features
+        features = self.feature_extractor.extract(task_input, tenant_id)
+
+        # Step 2: Classify base complexity
+        complexity, confidence = self._classify_complexity(
+            features,
+            task_type=task_type,
+            tenant_id=tenant_id,
+        )
+
+        # Step 3: Heuristic 1 — Detect orchestration/composition tasks
+        is_orchestration = self._is_orchestration_task(task_input, features, task_type)
+
+        # Step 4: Heuristic 2 — Check decomposability & historical Haiku success
+        is_decomposable = self._is_decomposable_task(task_input, features, task_type)
+        decomposition_hint = None
+
+        # Determine model and hint
+        if is_orchestration:
+            # Orchestration tasks need Sonnet for reasoning (no decomposition)
+            provider = "anthropic"
+            model = "claude-sonnet-5"
+            decomposition_hint = None
+        elif is_decomposable:
+            # Check historical Haiku success rate
+            haiku_success_rate = self._get_haiku_success_rate(task_type)
+
+            if haiku_success_rate > 0.85:
+                # Haiku can handle this task type successfully
+                provider = "anthropic"
+                model = "claude-haiku-4-5"
+                decomposition_hint = "prompt_structured"  # Tier 2
+                confidence = haiku_success_rate  # Confidence based on historical data
+            else:
+                # Haiku hasn't proven itself for this task type
+                provider = "anthropic"
+                model = "claude-sonnet-5"
+                decomposition_hint = None
+        else:
+            # Standard routing (not decomposable)
+            provider = self._select_provider(complexity)
+            model = self._select_model_for_provider(provider, complexity)
+            decomposition_hint = None
+
+        # Build reasoning with decomposition context
+        reasoning = self._build_reasoning_with_decomposition(
+            features,
+            complexity,
+            provider,
+            model,
+            decomposition_hint,
+            is_orchestration,
+            is_decomposable,
+        )
+
+        result = ClassificationResult(
+            complexity=complexity,
+            confidence=confidence,
+            recommended_provider=provider,
+            recommended_model=model,
+            reasoning=reasoning,
+            features=features,
+        )
+
+        # Track for learning
+        self.classification_history.append(result)
+
+        return result, decomposition_hint
+
+    def _is_orchestration_task(
+        self,
+        task_input: str,
+        features: ExtractedFeatures,
+        task_type: Optional[str] = None,
+    ) -> bool:
+        """
+        Detect if task requires orchestration/composition reasoning.
+
+        Heuristic 1 (ADR-0845):
+        - Keywords: "coordinate", "orchestrate", "compose", "delegate", "manage"
+        - Involves multiple sub-tasks or skills
+        - Requires high-level planning (reasoning_depth > 3)
+        """
+        orchestration_keywords = {
+            "coordinate", "orchestrate", "compose", "delegate", "manage",
+            "plan", "design system", "workflow", "pipeline", "skill",
+            "multi-step", "sequence", "aggregate", "combine"
+        }
+
+        task_lower = task_input.lower()
+
+        # Check keywords
+        keyword_match = any(kw in task_lower for kw in orchestration_keywords)
+
+        # Check reasoning depth
+        high_reasoning_depth = features.reasoning_depth > 3
+
+        # Check task type
+        is_orchestration_type = task_type in {"orchestration", "composition", "workflow", "system_design"}
+
+        # Decision: any two of three signals indicate orchestration
+        signals = [keyword_match, high_reasoning_depth, is_orchestration_type]
+        return sum(signals) >= 2
+
+    def _is_decomposable_task(
+        self,
+        task_input: str,
+        features: ExtractedFeatures,
+        task_type: Optional[str] = None,
+    ) -> bool:
+        """
+        Detect if task can be decomposed to prompt-level steps.
+
+        Heuristic 2 (ADR-0845):
+        - Not an orchestration task
+        - Has clear structure (bullet points, steps, numbered lists)
+        - Reasonable complexity (token_estimate 200-8000)
+        - Known task type with good Haiku track record
+        """
+        # Already orchestration? Don't decompose (higher reasoning level)
+        if self._is_orchestration_task(task_input, features, task_type):
+            return False
+
+        # Check for structured format
+        has_structured_format = (
+            re.search(r'^\s*[-•*]\s', task_input, re.MULTILINE) or  # Bullets
+            re.search(r'^\s*\d+\.\s', task_input, re.MULTILINE) or  # Numbered list
+            ":" in task_input  # Structured headers (e.g., "Review code for:")
+        )
+
+        # Check token range (decomposition works best in manageable tasks)
+        # Lower bound: at least 15 tokens (short but structured lists are OK)
+        # Upper bound: 8000 tokens (beyond this needs full Sonnet reasoning)
+        in_decomposable_range = 15 < features.token_estimate < 8000
+
+        # Check if task type has reasonable Haiku track record
+        known_task_type = task_type and task_type in self.haiku_success_rates
+
+        # Decision: All three signals needed
+        return has_structured_format and in_decomposable_range and known_task_type
+
+    def _get_haiku_success_rate(self, task_type: Optional[str] = None) -> float:
+        """Get historical Haiku success rate for task type."""
+        if not task_type or task_type not in self.haiku_success_rates:
+            return self.haiku_success_rates.get("default", 0.80)
+        return self.haiku_success_rates[task_type]
+
+    def _build_reasoning_with_decomposition(
+        self,
+        features: ExtractedFeatures,
+        complexity: str,
+        provider: str,
+        model: str,
+        decomposition_hint: Optional[str],
+        is_orchestration: bool,
+        is_decomposable: bool,
+    ) -> str:
+        """Build reasoning including decomposition context."""
+        reasons = []
+
+        if is_orchestration:
+            reasons.append("Orchestration/composition task requires Sonnet reasoning")
+        elif is_decomposable and decomposition_hint:
+            success_rate = self._get_haiku_success_rate()
+            reasons.append(f"Decomposable task: Haiku {success_rate*100:.0f}% success rate")
+            reasons.append(f"Decomposition hint: {decomposition_hint}")
+
+        if features.token_estimate < self.config.simple_max_tokens:
+            reasons.append(f"Low token count ({features.token_estimate})")
+
+        if features.code_blocks > self.config.medium_max_code_blocks:
+            reasons.append(f"Multiple code blocks ({features.code_blocks})")
+
+        if features.reasoning_depth > 3:
+            reasons.append(f"Deep reasoning needed (depth {features.reasoning_depth})")
+
+        reasoning = f"{complexity.upper()} complexity. {', '.join(reasons) or 'Balanced task'}. " \
+                   f"Selected {provider}/{model} for cost/quality tradeoff."
+
+        return reasoning
 
     def classify(
         self,
