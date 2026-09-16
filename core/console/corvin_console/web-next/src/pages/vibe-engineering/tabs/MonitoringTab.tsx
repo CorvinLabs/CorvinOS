@@ -8,6 +8,10 @@ interface Metric {
   status?: string;
 }
 
+const formatMetric = (value: number, unit: string): string =>
+  // Event counts are integers; only rates and durations want decimals.
+  Number.isInteger(value) && unit !== '%' ? value.toLocaleString('en-US') : value.toFixed(2);
+
 export function MonitoringTab() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [loading, setLoading] = useState(true);
@@ -16,7 +20,7 @@ export function MonitoringTab() {
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
-        const res = await fetch('/v1/monitoring/metrics?range=1h');
+        const res = await fetch('/v1/console/v1/monitoring/metrics?range=1h');
         if (!res.ok) throw new Error(`API ${res.status}`);
         const data = await res.json();
         setMetrics(data.metrics || []);
@@ -55,7 +59,7 @@ export function MonitoringTab() {
               {m.status && <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(m.status)}`}>{m.status}</span>}
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold">{m.value.toFixed(2)}</span>
+              <span className="text-2xl font-bold">{formatMetric(m.value, m.unit)}</span>
               <span className="text-xs text-muted-foreground">{m.unit}</span>
             </div>
             <div className="flex items-center gap-1 text-xs text-green-600">

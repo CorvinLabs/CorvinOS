@@ -364,6 +364,21 @@ _CACHE_READ_MULTIPLIER = 0.1
 _ROUTING_PREFIX = re.compile(r"^(?:[a-z]{2,6}\.)?anthropic\.")
 
 
+def model_price_per_1k(model: str) -> Optional[tuple[float, float]]:
+    """Public: (input_usd_per_1k, output_usd_per_1k) for a model, else None.
+
+    The published first-party rate card is held once, here, next to the code
+    that bills against it. Consumers that need to SHOW a price (the console's
+    model list) must read it through this function rather than carry a second
+    table — features_phase2.py used to default Opus 5 to 0.015/1k, which is
+    neither its input ($0.005) nor its output ($0.025) rate.
+
+    None means "not in the rate card", which callers must render as unknown,
+    never as free or as an estimate.
+    """
+    return _price_for_model(model)
+
+
 def _price_for_model(model: str) -> Optional[tuple[float, float]]:
     """(input_usd_per_1k, output_usd_per_1k) for a recognized model, else None."""
     if not model:
