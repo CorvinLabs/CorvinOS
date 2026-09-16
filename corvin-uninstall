@@ -1,0 +1,38 @@
+#!/bin/bash
+# Uninstall CorvinOS — clean shutdown & removal (systemd + Docker)
+set -e
+
+CORVIN_HOME="${CORVIN_HOME:-$HOME/.corvin}"
+echo "🔴 Uninstalling CorvinOS from $CORVIN_HOME..."
+
+# Detect deployment mode (systemd vs Docker)
+DEPLOYMENT_MODE="systemd"
+if docker ps 2>/dev/null | grep -q corvinOS; then
+  DEPLOYMENT_MODE="docker"
+fi
+
+# Stop services
+if [ "$DEPLOYMENT_MODE" = "systemd" ]; then
+  echo "📌 Stopping systemd services..."
+  systemctl --user stop corvin-console.service corvin-gateway.service corvin-notification-router.service 2>/dev/null || true
+  systemctl --user disable corvin-console.service corvin-gateway.service corvin-notification-router.service 2>/dev/null || true
+  rm -f ~/.config/systemd/user/corvin-*.service
+  systemctl --user daemon-reload
+else
+  echo "📌 Stopping Docker containers..."
+  docker stop corvinOS-console corvinOS-gateway corvinOS-notification 2>/dev/null || true
+  docker rm corvinOS-console corvinOS-gateway corvinOS-notification 2>/dev/null || true
+  docker rmi corvinOS:latest 2>/dev/null || true
+  docker volume rm corvinOS-data 2>/dev/null || true
+fi
+
+# Remove files
+echo "🗑️  Removing CorvinOS files..."
+rm -rf "$CORVIN_HOME"
+rm -f ~/bin/corvinOS ~/bin/corvin
+
+# Remove Corvin-ADR symlink (if exists)
+rm -f ~/projects/Corvin-ADR
+
+echo "✅ CorvinOS uninstalled successfully"
+echo "ℹ️  Audit trail preserved at: /var/log/corvinOS/ (if applicable)"
