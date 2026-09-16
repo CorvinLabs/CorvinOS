@@ -30,6 +30,8 @@ from .grades import (  # noqa: E402  (ADR-0285)
 )
 # Phase 5: Advanced Context Optimizations (ADR-0394)
 from . import selective_injection_stage, memory_pruning_stage, adr_reranking_stage  # noqa: F401,E402
+# Phase 2b: L10 Context Adapter Skill (ADR-0532)
+from . import l10_adapter  # noqa: F401,E402
 
 __all__ = [
     "ContextBundle", "StageCtx", "StageTelemetry", "ContextStage", "SCRATCH_KEYS",
