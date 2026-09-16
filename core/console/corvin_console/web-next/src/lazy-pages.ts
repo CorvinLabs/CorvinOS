@@ -157,6 +157,11 @@ export const PluginCenterPage = React.lazy(() =>
   import("@/pages/plugin-center").then((m) => ({ default: m.PluginCenterPage }))
 );
 
+// New Marketplace Hub (replaces plugin-center as the unified discovery + install experience)
+export const MarketplaceHubPage = React.lazy(() =>
+  import("@/pages/marketplace-hub").then((m) => ({ default: m.MarketplaceHub }))
+);
+
 
 export const VibeEngineeringPage = React.lazy(() =>
   import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
