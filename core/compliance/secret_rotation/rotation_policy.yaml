@@ -1,0 +1,51 @@
+# GDPR Art. 32 Compliant Secret Rotation Policy
+# ADR-0758 — Encryption Key Management
+rotation:
+  enabled: true
+  interval_days: 90
+  audit_trail_enabled: true
+  
+secrets:
+  api_keys:
+    count: 14
+    type: hmac-sha256
+    storage: ~/.corvin/secrets/api_keys.json
+    rotation_enabled: true
+    
+  session_tokens:
+    count: null  # dynamic generation
+    type: fernet
+    ttl_hours: 1
+    rotation_enabled: true
+    
+rotation_phases:
+  phase_1_generate:
+    description: Generate new keys (cryptographically secure)
+    duration_minutes: 5
+    
+  phase_2_dual_write:
+    description: Deploy new keys (accept old + new, 48h window)
+    duration_hours: 48
+    allow_old_keys: true
+    
+  phase_3_revoke:
+    description: Revoke old keys (hard cutoff)
+    duration_minutes: 10
+    allow_old_keys: false
+    
+  phase_4_cleanup:
+    description: Cleanup old key files
+    duration_minutes: 5
+    
+compliance:
+  audit_every_rotation: true
+  hash_chain_validation: true
+  gdpr_article_32: "security_of_processing"
+  audit_retention_days: 2555  # 7 years
+  
+monitoring:
+  log_key_rotation: true
+  alert_on_failure: true
+  alert_channels:
+    - email: security@corvin.dev
+    - slack: "#security-incidents"

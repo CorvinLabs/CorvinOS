@@ -13,7 +13,7 @@ from typing import Any
 
 from .registry import get_stage
 
-DEFAULT_PIPELINE = ["memory", "graph", "skill", "approach_synthesis", "blocker_id"]
+DEFAULT_PIPELINE = ["memory", "graph", "skill", "approach_synthesis", "l10_adapter", "blocker_id"]
 
 # The full "Context Brain" pipeline (ADR-0282/0283) used when the operator turns
 # on the active pipeline (vibe_engineering_active flag) and has NOT hand-authored
