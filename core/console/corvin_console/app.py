@@ -115,6 +115,7 @@ from .routes import (
     tokens as tokens_route,
     assistant as assistant_route,
     license as license_route,
+    a2a_licensing_gate_routes as a2a_licensing_gate_route,
     instance as instance_route,
     rag as rag_route,
     rag_hub as rag_hub_route,
@@ -315,6 +316,8 @@ router.include_router(rag_hub_analytics_route.router, tags=["console-rag-hub-ana
 router.include_router(custom_provider_route.router, tags=["console-custom-provider"])
 # ADR-0017 Phase IV — License management (upload, revoke, status, audit).
 router.include_router(license_route.router, tags=["console-license"])
+# ADR-0704/0769 — A2A RSA Gate (member credentials, signed task verification).
+router.include_router(a2a_licensing_gate_route.router, tags=["console-a2a-licensing"])
 router.include_router(instance_route.router, tags=["console-instance"])
 # ADR-0096 M3 — MCP Plugin Manager console UI.
 router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
@@ -680,6 +683,16 @@ def create_app() -> FastAPI:
             logger.error("❌ CRITICAL: Failed to bootstrap session manager: %s", exc)
             logger.error("Cannot start console without session recovery.")
             raise  # CRITICAL FIX: Fail startup on bootstrap failure (HIGH #9)
+
+        # Initialize A2A Licensing Gate services (ADR-0704/0769)
+        try:
+            from . import _bootstrap
+            from .routes.a2a_licensing_gate_routes import init_service
+            corvin_home = _bootstrap.forge_paths.corvin_home()
+            init_service(corvin_home)
+            logger.info("✅ A2A Licensing Gate services initialized")
+        except Exception as exc:
+            logger.warning("A2A Licensing Gate initialization failed: %s", exc)
 
         # Resume GitHub auto-sync for every tenant that had it enabled before
         # the last restart. The worker is a plain in-memory thread (no
