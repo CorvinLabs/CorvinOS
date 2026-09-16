@@ -137,7 +137,6 @@ class LearningEventStore:
         # Recreate event with updated hashes
         if isinstance(event, SkillExecutedEvent):
             event = SkillExecutedEvent(
-                event_type=event.event_type,
                 skill_id=event.skill_id,
                 tenant_id=event.tenant_id,
                 timestamp=event.timestamp,
@@ -151,7 +150,6 @@ class LearningEventStore:
             )
         elif isinstance(event, OutcomeFeedbackEvent):
             event = OutcomeFeedbackEvent(
-                event_type=event.event_type,
                 skill_id=event.skill_id,
                 tenant_id=event.tenant_id,
                 timestamp=event.timestamp,
@@ -165,7 +163,6 @@ class LearningEventStore:
             )
         elif isinstance(event, ConfidenceScoreEvent):
             event = ConfidenceScoreEvent(
-                event_type=event.event_type,
                 skill_id=event.skill_id,
                 tenant_id=event.tenant_id,
                 timestamp=event.timestamp,
