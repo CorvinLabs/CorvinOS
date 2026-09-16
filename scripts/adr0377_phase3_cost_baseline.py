@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
 """
-ADR-0377 Phase 3 Cost Baseline Benchmark
-Validates 50-70% cost savings with multi-model routing.
+ADR-0377 Phase 3 cost ESTIMATE (not a validation).
+
+Projects what a synthetic 100-task workload would cost under three routing
+policies, using the published rate card. The task list below is invented for
+comparison; the PRICES are real. It measures a pricing difference, not a
+quality outcome, and it observes nothing running in production.
+
+Until 2026-09-16 this was billed as validating "50-70% cost savings" against
+model profiles whose accuracy figures were hand-written constants and whose
+models (claude-3-opus, gemini-1.5-pro) this install cannot run. See ADR-0857.
 
 Run: python3 scripts/adr0377_phase3_cost_baseline.py
 """
 
 import json
 import sys
+from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, List
 
 # Add repo to path
-sys.path.insert(0, '/home/shumway/projects/CorvinOS')
+_REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO))
 
 from core.models.multi_model_router import (
+    ModelTier,
     MultiModelRouter,
     default_router,
 )
@@ -141,154 +152,141 @@ BENCHMARK_TASKS: List[TaskEstimate] = [
 ]
 
 
+# Complexity -> minimum capability tier. An EXPLICIT policy input to this
+# estimate, stated here so a reader can disagree with it. The previous version
+# hid the equivalent choice inside per-model "aptitude" constants.
+_TIER_FOR_COMPLEXITY = {
+    "simple": ModelTier.FAST_CHEAP,
+    "medium": ModelTier.BALANCED,
+    "complex": ModelTier.BEST_QUALITY,
+}
+
+# The counterfactual: what the same traffic would cost entirely on the
+# top non-frontier tier.
+BASELINE_MODEL = "claude-opus-5"
+
+
+def _cost(router, model: str, task: "TaskEstimate") -> float:
+    """Cost for one task, or abort — an unpriced model must not read as $0.
+
+    estimate_task_cost returns None when the rate card does not price a model.
+    Silently adding 0.0 would understate the total and make an unrunnable
+    model look free.
+    """
+    value = router.estimate_task_cost(
+        model, task.estimated_input_tokens, task.estimated_output_tokens
+    )
+    if value is None:
+        raise SystemExit(
+            f"Model {model!r} is not on the published rate card, so this "
+            f"estimate cannot be produced. Check the engine registry."
+        )
+    return value
+
+
+def _pick(router, min_tier: "ModelTier") -> str:
+    """Cheapest model the registry declares at or above ``min_tier``.
+
+    Resolved from the registry rather than written as a literal: it declares
+    dated ids (claude-haiku-4-5-20251001), so a hardcoded "claude-haiku-4-5"
+    is not a model this install has.
+    """
+    ranking = router.rank_models(min_tier=min_tier, allow_local=False)
+    if ranking.recommended_model is None:
+        raise SystemExit(
+            f"No runnable model clears tier {min_tier.name}. "
+            f"Check the engine registry."
+        )
+    return ranking.recommended_model
+
+
 def baseline_all_opus() -> float:
-    """Calculate cost baseline: all tasks use Opus."""
+    """Counterfactual: every task on the top non-frontier tier."""
+    router = default_router()
+    model = _pick(router, ModelTier.BEST_QUALITY)
+    return sum(_cost(router, model, t) for t in BENCHMARK_TASKS)
+
+
+def tier_routed() -> tuple[float, Dict]:
+    """Each task on the cheapest model that clears its complexity's tier.
+
+    There is ONE routed scenario here, not the two ("Phase 1" fixed mapping
+    and "Phase 3" multi-model) this script used to report. Those differed only
+    because Phase 3 ranked on per-task-type `aptitude` constants that were
+    invented; once model choice is driven by the declared tier ordering alone,
+    a fixed complexity->tier mapping and "cheapest model clearing that tier"
+    are the same policy. The 70.5% "incremental improvement" between them was
+    an artefact of those constants.
+    """
     router = default_router()
     total_cost = 0.0
-
+    model_usage: Dict[str, int] = {}
     for task in BENCHMARK_TASKS:
-        cost = router.estimate_task_cost(
-            "claude-3-opus",
-            task.estimated_input_tokens,
-            task.estimated_output_tokens,
-        )
-        total_cost += cost
-
-    return total_cost
-
-
-def phase1_sonnet_haiku() -> float:
-    """Calculate cost: Phase 1 routing (Sonnet/Haiku)."""
-    router = default_router()
-    total_cost = 0.0
-
-    for task in BENCHMARK_TASKS:
-        if task.complexity == "simple":
-            model = "claude-3-5-haiku"
-        elif task.complexity == "medium":
-            model = "claude-3-5-sonnet"
-        else:
-            model = "claude-3-opus"
-
-        cost = router.estimate_task_cost(
-            model,
-            task.estimated_input_tokens,
-            task.estimated_output_tokens,
-        )
-        total_cost += cost
-
-    return total_cost
-
-
-def phase3_multimodel() -> tuple[float, Dict]:
-    """Calculate cost: Phase 3 multi-model routing."""
-    router = default_router()
-    total_cost = 0.0
-    model_usage = {}
-
-    for task in BENCHMARK_TASKS:
-        # Rank models for this task
-        ranking = router.rank_models(
-            task_type=task.task_type,
-            quality_threshold=task.quality_requirement,
-        )
-
-        selected_model = ranking.recommended_model
-
-        cost = router.estimate_task_cost(
-            selected_model,
-            task.estimated_input_tokens,
-            task.estimated_output_tokens,
-        )
-
-        total_cost += cost
-        model_usage[selected_model] = model_usage.get(selected_model, 0) + 1
-
+        model = _pick(router, _TIER_FOR_COMPLEXITY.get(task.complexity, ModelTier.BALANCED))
+        total_cost += _cost(router, model, task)
+        model_usage[model] = model_usage.get(model, 0) + 1
     return total_cost, model_usage
 
 
-def print_benchmark_report(
-    baseline_cost: float,
-    phase1_cost: float,
-    phase3_cost: float,
-    phase3_usage: Dict,
-):
-    """Print benchmark report."""
+def print_benchmark_report(baseline_cost: float, routed_cost: float, usage: Dict):
+    """Print the estimate.
+
+    Reports ONE routed scenario. The previous version printed "Phase 1" and
+    "Phase 3" plus a 70.5% incremental improvement between them; that gap came
+    entirely from per-task-type `aptitude` constants that were invented, and
+    disappears once model choice follows the declared tier ordering.
+
+    It also printed "Cost Savings Validation" with PASS lines against a
+    50-70% target. Nothing here is validated: this compares published RATES
+    over a synthetic task list. It never observed a production run.
+    """
+    savings = ((baseline_cost - routed_cost) / baseline_cost) * 100 if baseline_cost else 0.0
+
     print("\n" + "=" * 80)
-    print("ADR-0377 Phase 3: Multi-Model Routing Cost Baseline")
+    print("ADR-0377: multi-model routing cost ESTIMATE")
     print("=" * 80)
-
-    print(f"\nBenchmark Dataset: 100 tasks")
-    print(f"  - Simple (40 tasks): code reviews, summaries (quality ≥ 0.80)")
-    print(f"  - Medium (35 tasks): complex reviews, refactoring (quality ≥ 0.90)")
-    print(f"  - Complex (25 tasks): research, deep refactoring (quality ≥ 0.95)")
+    print("\nSynthetic dataset: 100 tasks (40 simple / 35 medium / 25 complex).")
+    print("Task sizes are invented for comparison; per-token RATES are the")
+    print("published card. This is a pricing projection, not a measurement.")
 
     print("\n" + "-" * 80)
-    print("Cost Comparison")
+    print("Estimated cost")
     print("-" * 80)
-
-    print(f"\nBaseline (All Opus):                  ${baseline_cost:.2f}")
-    phase1_savings = ((baseline_cost - phase1_cost) / baseline_cost) * 100
-    print(f"Phase 1 (Sonnet/Haiku):              ${phase1_cost:.2f}  ({phase1_savings:.1f}% savings)")
-    phase3_savings = ((baseline_cost - phase3_cost) / baseline_cost) * 100
-    print(f"Phase 3 (Multi-Model):               ${phase3_cost:.2f}  ({phase3_savings:.1f}% savings)")
-
-    incremental_savings = ((phase1_cost - phase3_cost) / phase1_cost) * 100
-    print(f"\nIncremental Phase 3 improvement:     {incremental_savings:.1f}%")
+    print(f"\nAll on the top non-frontier tier:  ${baseline_cost:8.2f}")
+    print(f"Tier-routed by complexity:        ${routed_cost:8.2f}   ({savings:.1f}% lower)")
+    print("\nThe difference is a property of the rate card, not evidence that")
+    print("routing preserved quality: this estimate measures no outcomes.")
 
     print("\n" + "-" * 80)
-    print("Phase 3 Model Distribution")
+    print("Model distribution (tier-routed)")
     print("-" * 80)
-
-    total_tasks = sum(phase3_usage.values())
-    for model, count in sorted(phase3_usage.items(), key=lambda x: -x[1]):
-        pct = (count / total_tasks) * 100
-        print(f"  {model:30s}: {count:3d} tasks ({pct:5.1f}%)")
-
-    print("\n" + "-" * 80)
-    print("Cost Savings Validation")
-    print("-" * 80)
-
-    print(f"\n✓ Phase 1 achieves {phase1_savings:.1f}% savings (target: 30-40%)")
-    if 30 <= phase1_savings <= 50:
-        print(f"  → PASS (within target range)")
-    else:
-        print(f"  → WARNING (outside expected range)")
-
-    print(f"\n✓ Phase 3 achieves {phase3_savings:.1f}% savings (target: 50-70%)")
-    if 50 <= phase3_savings <= 80:
-        print(f"  → PASS (within target range)")
-    else:
-        print(f"  → WARNING (outside expected range)")
-
+    total_tasks = sum(usage.values()) or 1
+    for model, count in sorted(usage.items(), key=lambda x: -x[1]):
+        print(f"  {model:34s}: {count:3d} tasks ({count / total_tasks * 100:5.1f}%)")
     print("\n" + "=" * 80)
 
     return {
-        "baseline_cost": round(baseline_cost, 4),
-        "phase1_cost": round(phase1_cost, 4),
-        "phase3_cost": round(phase3_cost, 4),
-        "phase1_savings_pct": round(phase1_savings, 1),
-        "phase3_savings_pct": round(phase3_savings, 1),
-        "phase3_model_distribution": phase3_usage,
+        "kind": "estimate",
+        "basis": "published rate card applied to a synthetic 100-task workload",
+        "measures_quality": False,
+        "baseline_cost_usd": round(baseline_cost, 4),
+        "tier_routed_cost_usd": round(routed_cost, 4),
+        "rate_difference_pct": round(savings, 1),
+        "model_distribution": usage,
     }
 
 
 if __name__ == "__main__":
-    print("\nRunning ADR-0377 Phase 3 Cost Baseline Benchmark...")
+    print("\nEstimating ADR-0377 multi-model routing cost...")
 
-    # Calculate costs
     baseline = baseline_all_opus()
-    phase1 = phase1_sonnet_haiku()
-    phase3, usage = phase3_multimodel()
+    routed, usage = tier_routed()
 
-    # Print report
-    results = print_benchmark_report(baseline, phase1, phase3, usage)
+    results = print_benchmark_report(baseline, routed, usage)
 
-    # Save results
-    with open("/home/shumway/projects/CorvinOS/docs/adr0377_phase3_cost_baseline_results.json", "w") as f:
+    _out = _REPO / "docs" / "adr0377_phase3_cost_baseline_results.json"
+    with open(_out, "w") as f:
         json.dump(results, f, indent=2)
 
-    print(f"\n✓ Results saved to docs/adr0377_phase3_cost_baseline_results.json")
-
-    # Exit with success
+    print(f"\n\u2713 Results saved to {_out}")
     sys.exit(0)

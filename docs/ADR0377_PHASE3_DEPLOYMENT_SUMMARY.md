@@ -1,9 +1,42 @@
 # ADR-0377 Phase 3: Multi-Model Routing — Deployment Summary
 
+> **CORRECTION, 2026-09-16 (ADR-0857).** The headline figures below were
+> withdrawn. They came from `scripts/adr0377_phase3_cost_baseline.py` run
+> against model profiles that were not usable as evidence:
+>
+> * the profiled models — `claude-3-opus-20240229`, `claude-3-5-sonnet-20241022`,
+>   `gemini-1.5-flash`, `gemini-1.5-pro` — are a 2024 line-up. The engine
+>   registry declares none of them and **no Gemini provider exists on this
+>   install**, so the reported distribution ("Sonnet 74%, Gemini 26%") names
+>   models CorvinOS cannot run;
+> * prices were the 2024 rates, collapsed into one averaged `cost_per_1k`.
+>   The baseline was priced at Opus-2024 ($15/$75 per MTok); Opus 5 is
+>   $5/$25, so the "savings" were measured against a counterfactual ~3x too
+>   expensive;
+> * "Quality maintained: all models meet their quality thresholds" rested on
+>   an `accuracy` field and four `*_aptitude` fields that were hand-written
+>   constants introduced as "based on empirical data". No such data existed.
+>   `accuracy=1.0` for Opus was a definition, not a measurement;
+> * the "70.5% incremental improvement (Phase 1 -> Phase 3)" was an artefact
+>   of those aptitude constants. Under a tier ordering alone, the fixed
+>   complexity mapping and "cheapest capable model" are the same policy and
+>   the gap disappears.
+>
+> **Re-run on real prices against the models this install declares: ~29%
+> lower cost than an all-Opus-5 counterfactual** (40 Haiku / 35 Sonnet /
+> 25 Opus over the same synthetic 100-task list).
+>
+> That number is a **pricing projection, not a validation**: the task list is
+> invented, and the estimate observes no production run and measures no
+> quality outcome. Real measured spend lives in the console's cost panels,
+> which read actual `os_turn.completed` token counts (ADR-0760/0761).
+>
+> Everything below is kept for the record. Read the figures as withdrawn.
+
 **Date:** 2026-09-11  
-**Status:** ✅ LIVE (100% Immediate Deployment)  
+**Status:** superseded by the correction above  
 **Effort:** 2 weeks  
-**Cost Savings:** 81.9% (vs 50-70% target) — **EXCEEDS EXPECTATIONS**
+**Cost Savings:** ~~81.9% (vs 50-70% target) — **EXCEEDS EXPECTATIONS**~~ — withdrawn, see above
 
 ---
 
