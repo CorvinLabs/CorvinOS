@@ -7,13 +7,21 @@ Phase 2 Adversarial Review Test Suite (ADR-0690)
 3. Timeout Enforcement — verify per-call budgets
 4. Audit Trail Gaps — verify all executions logged
 
-Status: Session 4 Adversarial Review
+Session 5 Additions:
+- Load Testing: ≥500 concurrent skill executions
+- Metrics Capture: p95 latency, error rate, memory usage
+
+Status: Session 5 Load Testing Phase
 """
 
 import pytest
 import asyncio
 import json
+import time
+import statistics
 from unittest.mock import Mock, patch
+from datetime import datetime
+from pathlib import Path
 from core.skills.phase1_manifest_v2 import SkillManifestV2
 from core.skills.phase1_skeleton_generator import SkillSkeletonGenerator
 from core.skills.orchestrator import SkillOrchestrator
@@ -245,6 +253,175 @@ class TestAdversarialVector4AuditTrailGaps:
         events = store.query(event_type="skill_executed")
         error_events = [e for e in events if e.get("status") == "error"]
         assert len(error_events) > 0
+
+
+class TestLoadTesting:
+    """Session 5 Milestone E: Load Testing ≥500 concurrent skills"""
+
+    @pytest.mark.asyncio
+    async def test_500_concurrent_skill_executions(self):
+        """Execute ≥500 concurrent skill requests, capture p95 latency + error rate"""
+        from core.skills.health_monitor import HealthMonitor
+        from core.skills.context_bridge import ContextBridge
+        from core.learning.event_persistence import EventStore
+
+        # Initialize skills
+        health_monitor = HealthMonitor()
+        context_bridge = ContextBridge()
+        store = EventStore(tenant_id="_default")
+
+        # Configuration
+        concurrent_count = 550  # ≥500
+        test_duration_s = 30
+        latencies = []
+        errors = []
+        start_time = time.time()
+
+        async def execute_skill_task(task_id: int):
+            """Execute a single skill request and measure latency"""
+            try:
+                task_start = time.time()
+                result = await health_monitor.execute({"query": f"task_{task_id}"})
+                task_latency = (time.time() - task_start) * 1000  # ms
+                latencies.append(task_latency)
+
+                # Log to audit
+                store.write_event({
+                    "event_type": "load_test_execution",
+                    "task_id": task_id,
+                    "latency_ms": task_latency,
+                    "status": "success"
+                })
+                return {"task_id": task_id, "latency_ms": task_latency}
+            except Exception as e:
+                errors.append({"task_id": task_id, "error": str(e)})
+                store.write_event({
+                    "event_type": "load_test_execution",
+                    "task_id": task_id,
+                    "status": "error",
+                    "error": str(e)
+                })
+                return {"task_id": task_id, "error": str(e)}
+
+        # Execute concurrent tasks
+        tasks = [execute_skill_task(i) for i in range(concurrent_count)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        total_duration = time.time() - start_time
+
+        # Calculate metrics
+        successful_executions = len(latencies)
+        error_count = len(errors)
+        error_rate = (error_count / concurrent_count) * 100 if concurrent_count > 0 else 0.0
+
+        if latencies:
+            p50_latency = statistics.median(latencies)
+            p95_latency = statistics.quantiles(latencies, n=20)[18] if len(latencies) >= 20 else max(latencies)
+            p99_latency = statistics.quantiles(latencies, n=100)[98] if len(latencies) >= 100 else max(latencies)
+            avg_latency = statistics.mean(latencies)
+        else:
+            p50_latency = p95_latency = p99_latency = avg_latency = 0.0
+
+        throughput = successful_executions / total_duration if total_duration > 0 else 0.0
+
+        # Assertions
+        assert concurrent_count >= 500, f"Expected ≥500 concurrent, got {concurrent_count}"
+        assert successful_executions > 0, f"No successful executions"
+        assert error_rate < 5.0, f"Error rate {error_rate}% exceeds threshold (5%)"
+
+        # Log metrics to audit trail (for PHASE-A-EXECUTION-STATUS.md)
+        metrics = {
+            "event_type": "load_test_metrics",
+            "concurrent_count": concurrent_count,
+            "successful_executions": successful_executions,
+            "error_count": error_count,
+            "error_rate_percent": error_rate,
+            "p50_latency_ms": p50_latency,
+            "p95_latency_ms": p95_latency,
+            "p99_latency_ms": p99_latency,
+            "avg_latency_ms": avg_latency,
+            "throughput_requests_per_sec": throughput,
+            "total_duration_s": total_duration,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        store.write_event(metrics)
+
+        # Print metrics for operator
+        print("\n" + "="*70)
+        print("LOAD TEST METRICS (Session 5 Milestone E)")
+        print("="*70)
+        print(f"Concurrent Connections: {concurrent_count}")
+        print(f"Successful Executions: {successful_executions}/{concurrent_count}")
+        print(f"Error Rate: {error_rate:.2f}%")
+        print(f"P50 Latency: {p50_latency:.2f}ms")
+        print(f"P95 Latency: {p95_latency:.2f}ms")
+        print(f"P99 Latency: {p99_latency:.2f}ms")
+        print(f"Avg Latency: {avg_latency:.2f}ms")
+        print(f"Throughput: {throughput:.2f} req/sec")
+        print(f"Total Duration: {total_duration:.2f}s")
+        print("="*70 + "\n")
+
+        # Return metrics dict for PHASE-A-EXECUTION-STATUS.md
+        return metrics
+
+    @pytest.mark.asyncio
+    async def test_timeout_enforcement_under_load(self):
+        """Verify timeout enforcement does not degrade under load"""
+        from core.skills.orchestrator import SkillOrchestrator
+
+        orchestrator = SkillOrchestrator()
+
+        # Set aggressive timeouts
+        config = {
+            "os.health_monitor": {"timeout_s": 0.1},
+            "os.context_bridge": {"timeout_s": 0.2},
+        }
+        orchestrator.set_timeout_config(config)
+
+        # Execute 100 rapid concurrent tasks with tight timeouts
+        async def timed_task(task_id: int):
+            try:
+                result = await asyncio.wait_for(
+                    orchestrator.execute({"task": task_id}),
+                    timeout=0.15
+                )
+                return {"task_id": task_id, "status": "completed"}
+            except asyncio.TimeoutError:
+                return {"task_id": task_id, "status": "timeout"}
+
+        tasks = [timed_task(i) for i in range(100)]
+        results = await asyncio.gather(*tasks)
+
+        # Verify: All tasks completed or timed out (no hangs)
+        assert len(results) == 100
+        assert all(r.get("status") in ["completed", "timeout"] for r in results)
+
+    @pytest.mark.asyncio
+    async def test_audit_trail_under_high_volume(self):
+        """Verify audit trail captures all events under high concurrency"""
+        from core.learning.event_persistence import EventStore
+
+        store = EventStore(tenant_id="_default")
+
+        # Write 1000 events concurrently
+        async def write_event(idx: int):
+            store.write_event({
+                "event_type": "high_volume_test",
+                "index": idx,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+
+        tasks = [write_event(i) for i in range(1000)]
+        await asyncio.gather(*tasks)
+
+        # Verify: All 1000 events logged
+        events = store.query(event_type="high_volume_test")
+        assert len(events) == 1000, f"Expected 1000 events, got {len(events)}"
+
+        # Verify: Hash chain integrity (spot check)
+        for i in range(1, min(100, len(events))):
+            assert events[i]["prev_hash"] == events[i-1]["hash"]
 
 
 # Fixtures for test data

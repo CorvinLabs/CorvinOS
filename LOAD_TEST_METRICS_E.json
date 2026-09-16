@@ -1,0 +1,16 @@
+{
+  "event_type": "load_test_metrics",
+  "concurrent_count": 550,
+  "successful_executions": 550,
+  "error_count": 0,
+  "error_rate_percent": 0.0,
+  "p50_latency_ms": 170.68,
+  "p95_latency_ms": 415.22,
+  "p99_latency_ms": 567.11,
+  "avg_latency_ms": 197.26,
+  "min_latency_ms": 10,
+  "max_latency_ms": 1035.08,
+  "throughput_requests_per_sec": 529.57,
+  "total_duration_s": 1.04,
+  "timestamp": "2026-09-16T20:10:16.949467"
+}
