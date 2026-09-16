@@ -1,6 +1,6 @@
 """OS-Skills Integration Layer — boot wiring + Skill entry points.
 
-What is PRODUCTION-WIRED (verified 2026-09-07, adversarial review F-K4):
+What is PRODUCTION-WIRED (verified 2026-09-16, Phase 2 Blocker 2 FIX):
 
 - Boot: ``initialize_integration`` is called from ``core.skills.boot.boot_skills``
   (← ``corvin_plugins.bootstrap.boot_platform``) and populates the global registry.
@@ -9,10 +9,11 @@ What is PRODUCTION-WIRED (verified 2026-09-07, adversarial review F-K4):
   _acp_shadow_route`` — the bundled engine stands, the Skill's advice is audited
   and learned from. ``route_task_l5`` below is the direct (non-shadow) entry
   point; it has no production caller today and is exercised by tests only.
-- L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` is wired into the
-  CEL pipeline via ``corvin_operator/context_engineering/stages/l10_adapter.py``,
-  which executes the Skill after the graph stage and before LLM synthesis. The Skill
-  learns context adjustments (vibe_score, priority, attention_budget) from feedback.
+- L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` IS NOW WIRED into the
+  CEL pipeline via ``corvin_operator/context_engineering/stages/l10_adapter.py:68``
+  (Blocker 2 fix, 2026-09-16). The L10AdapterStage runs after the graph stage (pre-Gate-1)
+  and executes the context_adapter Skill to learn context adjustments (vibe_score,
+  priority, attention_budget) from feedback. E2E proof: tests/e2e/test_l10_adapter_e2e.py.
 - Learning loop integration (ADR-0314): every execution through the registry.
 
 Design:

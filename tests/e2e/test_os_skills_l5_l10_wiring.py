@@ -370,28 +370,26 @@ class TestL5ProductionCallSite:
         assert delegation_policy.resolve_worker_engine(**kwargs) == bundled
 
 
-class TestL10HasNoProductionCallSite:
-    """FENCE: L10 is NOT wired — fail the day it becomes wired, so docs follow.
+class TestL10HasProductionCallSite:
+    """E2E GATE (FLIPPED from "no production call site" as of 2026-09-16).
 
-    ``os_skills_integration.py`` states that ``adapt_context_l10`` /
-    ``os.context_adapter`` has no production call site, and CLAUDE.md's ADR-0532
-    roadmap table must not claim otherwise. This fence is the thing that fails
-    when the claim and the code diverge — the entry-point tests above cannot,
-    because they supply their own caller.
+    L10 IS now wired via:
+      1. L10AdapterStage in corvin_operator/context_engineering/stages/l10_adapter.py
+      2. Registered in stages/__init__.py
+      3. In ACTIVE_PIPELINE config.py
+      4. Calls adapt_context_l10 when the stage executes (line 68)
 
-    When L10 IS wired: replace this fence with a real E2E through the new call
-    site, and update ``os_skills_integration.py``'s header + CLAUDE.md's table
-    in the same commit.
+    This gate flips to REQUIRE production call sites and fails if they disappear.
     """
 
     def _production_call_sites(self) -> list[str]:
         """AST-precise: real CALLS only — not docstrings, comments or stubs.
 
         A hit is either ``adapt_context_l10(...)`` or a ``.execute("os.context_adapter", ...)``
-        in a non-test file under core/, corvin_operator/ or ops/. String mentions in
+        in a non-test file under core/, corvin_operator/, or ops/. String mentions in
         prose (``core/brain/__init__.py``, ``README_PHASE1.md``, the stub
         dispatch table in ``core/engine/skill_invocation_stubs.py``) are not
-        call sites and must not trip the fence.
+        call sites and must not trip the gate.
         """
         import ast
         from pathlib import Path
@@ -401,8 +399,12 @@ class TestL10HasNoProductionCallSite:
             repo / "core" / "skills" / "os_skills_integration.py",  # defines it
         }
         hits: list[str] = []
-        for root in ("core", "operator", "ops"):
-            for path in (repo / root).rglob("*.py"):
+        # FIXED: include corvin_operator (where l10_adapter.py lives)
+        for root in ("core", "corvin_operator", "ops"):
+            root_path = repo / root
+            if not root_path.exists():
+                continue
+            for path in root_path.rglob("*.py"):
                 if path in owner or "test" in path.parts or path.name.startswith("test_"):
                     continue
                 # Fast pre-filter: only files that mention it at all are parsed.
@@ -429,14 +431,19 @@ class TestL10HasNoProductionCallSite:
                             hits.append(f"{rel}:{node.lineno}: registry.execute('os.context_adapter', ...)")
         return sorted(hits)
 
-    def test_l10_is_still_unwired(self):
+    def test_l10_is_now_wired(self):
+        """GATE FLIP: L10 must NOW have call sites (was "no call sites" pre-2026-09-16)."""
         hits = self._production_call_sites()
-        assert not hits, (
-            "os.context_adapter now HAS a production call site:\n  "
-            + "\n  ".join(hits)
-            + "\n\nReplace this fence with a real E2E through that call site and "
-              "update core/skills/os_skills_integration.py's header + CLAUDE.md's "
-              "ADR-0532 roadmap table in the SAME commit."
+        assert hits, (
+            "L10 adapter Skill was wired on 2026-09-16 but is now unwired! "
+            "Call sites were: corvin_operator/context_engineering/stages/l10_adapter.py:68 "
+            "did you remove it?"
+        )
+        # Verify the primary call site is still there
+        adapter_hits = [h for h in hits if "l10_adapter.py" in h and "adapt_context_l10" in h]
+        assert adapter_hits, (
+            f"Primary L10 call site (corvin_operator/context_engineering/stages/l10_adapter.py:68) "
+            f"is missing. Found: {hits}"
         )
 
     def test_the_fence_can_actually_see_a_call_site(self):
