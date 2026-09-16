@@ -1,13 +1,14 @@
 """
 E2E Test: VIBE Phase 2 Sprint 1 Full Cycle Proof
 
-Verifies entire flow: Context Pipeline → Checkpoint Manager → Sorting
+Verifies entire flow: Context Pipeline → Checkpoint Manager → Sorting → Vector Store Fallback
 """
 
 import pytest
 from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, MagicMock
+from core.vibe_engineering.vector_store import VectorStore, Vector
 
 
 @pytest.mark.tier1
@@ -159,28 +160,38 @@ def test_e2e_sprint1_no_silent_failures():
 
     Expected: All operations either succeed or raise exceptions
     (no degradation to mocked/dummy values)
+
+    Finding 3: Vector store graceful fallback to in-memory cache.
     """
-    # Finding 3 check: If vector WRITE were implemented, it should NOT silently fail
-    # (Currently not implemented, so we verify the concept)
+    # Finding 3: Vector-WRITE fallback implementation
+    # Mock DB that will fail
+    mock_db = Mock()
+    mock_db.write = Mock(side_effect=RuntimeError("Vector store unavailable"))
 
-    # Mock scenario: vector write failure
-    def write_vector_with_fallback(vector_data):
-        """
-        Simulates proper error handling (if vector_store.py existed).
-        Should raise exception or use fallback, never silent failure.
-        """
-        try:
-            # Simulate write failure
-            raise RuntimeError("Vector store unavailable")
-        except RuntimeError as e:
-            # Proper behavior: Log and fallback or raise
-            # NOT: silently ignore and return success
-            return False, str(e)
+    # Create vector store with failing DB
+    store = VectorStore(db_writer=mock_db, tenant_id="test_tenant")
 
-    success, error = write_vector_with_fallback({"vector": [1, 2, 3]})
+    # Create test vector
+    vector = Vector(
+        vector_id="vec_test",
+        embedding=[0.1, 0.2, 0.3],
+        metadata={"source": "e2e_test"}
+    )
 
-    assert not success, "Write should fail explicitly"
-    assert error, "Error message should be present"
+    # Write should NOT silently fail - should fall back to cache
+    result = store.write(vector)
+
+    # Verify: write returned False (fell back), not True (pretended success)
+    assert result is False, "Write should return False when falling back (not True pretending success)"
+
+    # Verify: vector is in fallback cache
+    assert store.cache_size == 1, "Vector should be in fallback cache"
+    assert store.is_cache_enabled, "Cache should be enabled after fallback"
+
+    # Verify: can read the vector back from cache (no silent loss)
+    retrieved = store.read(vector.vector_id)
+    assert retrieved is not None, "Vector should be retrievable from cache"
+    assert retrieved.vector_id == vector.vector_id, "Vector ID should match"
 
 
 @pytest.mark.tier1
@@ -190,9 +201,9 @@ def test_e2e_sprint1_summary():
 
     ✅ Finding 1: Auth required for protected operations
     ✅ Finding 2: Checkpoint producer methods available and callable
+    ✅ Finding 3: Vector-WRITE fallback to in-memory cache (no silent failures)
     ✅ Finding 4: Checkpoints sorted by timestamp (newest first)
-    ⏸️ Finding 3: Vector-WRITE fallback not yet implemented (out of scope)
 
-    All tests demonstrate end-to-end working flow.
+    All tests demonstrate end-to-end working flow with all 4 findings resolved.
     """
-    assert True, "Sprint 1 E2E proof complete: all findings work together"
+    assert True, "Sprint 1 E2E proof complete: all 4 findings work together"
