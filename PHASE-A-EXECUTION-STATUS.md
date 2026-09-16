@@ -27,19 +27,19 @@
 
 | Milestone | Status | Progress | Deadline |
 |---|---|---|---|
-| **A. Adversarial Review** | 🟡 TODO | 0% | Session 4, day 1 |
-| Vector 1: Input Injection | 🔲 TODO | – | Session 4, 2h |
-| Vector 2: Composition DAG | 🔲 TODO | – | Session 4, 2h |
-| Vector 3: Timeout Enforcement | 🔲 TODO | – | Session 4, 2h |
-| Vector 4: Audit Trail Gaps | 🔲 TODO | – | Session 4, 2h |
+| **A. Adversarial Review** | 🟢 IN_PROGRESS | 20% | Session 4, day 1 |
+| Vector 1: Input Injection | 🟢 CREATED | Test suite ready | Session 4, 2h |
+| Vector 2: Composition DAG | 🟢 CREATED | Test suite ready | Session 4, 2h |
+| Vector 3: Timeout Enforcement | 🟢 CREATED | Test suite ready | Session 4, 2h |
+| Vector 4: Audit Trail Gaps | 🟢 CREATED | Test suite ready | Session 4, 2h |
 | **B. Load Testing** | 🟡 TODO | 0% | Session 5, day 1 |
 | Mock ≥500 concurrent | 🔲 TODO | – | Session 5, 3h |
 | Latency/Memory metrics | 🔲 TODO | – | Session 5, 2h |
 | **C. Merge PR** | 🟡 TODO | 0% | Session 5, end |
 | Acceptance criteria signed | 🔲 TODO | – | Session 5, 1h |
 
-**Current Blocker:** None (ADR-0690 ready)  
-**Next Action:** Create adversarial test suite (Session 4, hour 1)
+**Status:** ✅ Test suite created (`core/skills/tests/test_phase2_adversarial.py`)  
+**Next Action:** Run adversarial review, fix findings (Session 4, hours 2–6)
 
 ---
 
