@@ -184,7 +184,7 @@ class NotificationRouter:
     async def _deliver_discord(self, notification: RoutedNotification):
         """Deliver to Discord via completion_notify.deliver_ready()."""
         try:
-            from operator.bridges.shared.completion_notify import deliver_ready
+            from core.operator.bridges.shared.completion_notify import deliver_ready
 
             # Call deliver_ready with Discord routing
             deliver_ready(
@@ -217,7 +217,7 @@ class NotificationRouter:
 
             # Try to synthesize via operator voice module
             try:
-                from operator.voice.scripts.tts_openai import synthesize
+                from core.operator.voice.scripts.tts_openai import synthesize
                 voice_path = await synthesize(
                     text=voice_text,
                     output_dir=self.corvin_home / "notifications" / "voice",

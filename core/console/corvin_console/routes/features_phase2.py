@@ -112,8 +112,8 @@ async def get_metrics(range: str = "1h"):
 async def get_models():
     """Phase 2: Live model registry with provider integration"""
     try:
-        from operator.bridges.shared.engine_registry import get_enabled_engines
-        from operator.bridges.shared.engine_switch import ENGINE_COSTS
+        from core.operator.bridges.shared.engine_registry import get_enabled_engines
+        from core.operator.bridges.shared.engine_switch import ENGINE_COSTS
 
         # Get available models from registry
         engines = get_enabled_engines() if hasattr(get_enabled_engines, '__call__') else {}
