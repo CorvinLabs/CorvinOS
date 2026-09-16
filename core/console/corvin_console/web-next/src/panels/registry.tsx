@@ -20,7 +20,7 @@ import {
   LddPage, CompliancePage, FilesPage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
-  ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage,
+  ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage, MarketplaceHubPage,
   GitHubPage, SyncMonitorPage, EngineConfigPage,
   ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
@@ -66,6 +66,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   McpPluginsPage,
   PluginsPage,
   PluginCenterPage,
+  MarketplaceHubPage,
   GitHubPage,
   SyncMonitorPage,
   ModelCostOptimizerPage,
@@ -120,11 +121,9 @@ export const PANELS: ConsolePanel[] = [
   // REMOVED 2026-09-15: "agents" panel (superseded by agent-hub, duplication)
   // Unified "Marketplace" hub (renamed from "Plugins & Extensions", 2026-09-12) —
   // the ONE sidebar entry for the three extend-CorvinOS subsystems (roadmap
-  // de-dup of the plugin triple). It renders the three components below as
-  // tabs. The three standalone routes stay mounted for deep-link stability
-  // but are dropped from the sidebar — see NAV_EXEMPT in
-  // tests/unit/panel-nav-wiring.test.ts.
-  rc("plugin-center", "Marketplace", PluginCenterPage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
+  // de-dup of the plugin triple). New MarketplaceHubPage (2026-09-16) replaces
+  // the old PluginCenterPage with improved UX, trending/newest, and search.
+  rc("marketplace-hub", "Marketplace", MarketplaceHubPage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
   rc("extensions", "Extensions", ExtensionsPage, { nav: { label: "Extensions", icon: "" } }), // hidden (marketplace renders as tab)
   rc("mcp-plugins", "MCP Plugins", McpPluginsPage, { nav: { label: "MCP Plugins", icon: "" } }), // hidden (marketplace renders as tab)
   rc("plugins", "Plugins", PluginsPage, { nav: { label: "Plugins", icon: "" } }), // hidden (marketplace renders as tab)
