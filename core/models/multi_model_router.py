@@ -1,288 +1,325 @@
-"""
-Multi-Model Routing for ADR-0377 Phase 3
-Ranks models by cost, latency, accuracy per task type.
-Supports Gemini, Llama (Ollama), Haiku, Sonnet, Opus.
+"""Model cost/quality ranking for planning (ADR-0857).
+
+WHAT THIS IS: an offline estimator. Given a capability bar, it ranks the
+models this install can actually run and estimates what a task would cost.
+
+WHAT THIS IS NOT: the router. Nothing in the request path calls it. Live
+worker-engine routing is ``corvin_operator/bridges/shared/delegation_policy.py``
+(ADR-0759), with ``os.delegation_router`` advising in shadow mode (ADR-0613).
+The name predates that split; read it as "multi-model cost model".
+
+Rewritten 2026-09-16. The previous version was unusable for either purpose:
+
+  * It profiled ``claude-3-5-haiku-20241022``, ``claude-3-5-sonnet-20241022``,
+    ``claude-3-opus-20240229``, ``gemini-1.5-flash`` and ``gemini-1.5-pro`` —
+    a 2024 line-up. The engine registry declares none of them, and no Gemini
+    provider exists on this install at all, so a recommendation could name a
+    model the system cannot run.
+  * Prices were stale and collapsed into one ``cost_per_1k_tokens`` "average"
+    per model (0.0450 for Opus, the 2024 rate). Input and output bill at rates
+    that differ 5x on every current model, so no single average is correct for
+    any token mix.
+  * ``accuracy`` and the four ``*_aptitude`` fields were introduced as
+    "based on empirical data". There is no such data: they are hand-written
+    constants, and ``accuracy=1.0`` for Opus was a definition, not a
+    measurement. Ranking by them produced a confident-looking order with
+    nothing behind it.
+  * ``latency_ms`` was likewise invented; nothing here measures latency.
+
+What replaced them:
+
+  * models and prices come from the SAME sources the rest of the console
+    uses — the engine registry for what exists, and
+    ``model_selection_learner.model_price_per_1k`` for the published rate
+    card. No third table to drift;
+  * input and output rates stay separate, and cost estimates take a real
+    token split;
+  * the one quality signal is ``tier``, an ORDERING the vendor's own line-up
+    asserts (haiku < sonnet < opus < fable). It is a declared prior, named as
+    one, with no per-task-type aptitude invented on top of it.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
-from enum import Enum
+from __future__ import annotations
+
 import logging
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
-class ModelTier(Enum):
-    """Model performance tier."""
-    FAST_CHEAP = "fast_cheap"      # Haiku, Gemini Flash
-    BALANCED = "balanced"            # Sonnet, Gemini Pro
-    BEST_QUALITY = "best_quality"    # Opus
-    LOCAL_FREE = "local_free"        # Ollama/Llama local
+class ModelTier(int, Enum):
+    """Capability ordering. The ONLY quality signal this module carries.
+
+    An ordering, not a score: it says Sonnet is positioned above Haiku, which
+    the vendor's line-up and pricing both assert. It does NOT say by how much —
+    that would be the invented ``accuracy`` this replaces.
+    """
+    LOCAL_FREE = 0      # local compute, no per-token cost
+    FAST_CHEAP = 1      # Haiku
+    BALANCED = 2        # Sonnet
+    BEST_QUALITY = 3    # Opus
+    FRONTIER = 4        # Fable / Mythos
 
 
 @dataclass(frozen=True)
 class ModelProfile:
-    """Cost, latency, accuracy profile for a model."""
-    model_id: str                # "haiku", "sonnet", "opus", "gemini-1.5-pro", "llama-7b"
-    provider: str                # "anthropic", "google", "ollama"
+    """What is KNOWN about a model: identity, price, tier, limits.
+
+    No accuracy and no aptitude fields. If a quality number belongs here one
+    day it must come from measurement — ``/v1/console/v1/engine/analytics``
+    already computes a real per-model mean_quality WITH a sample count — not
+    from a constant typed into a table.
+    """
+    model_id: str
+    provider: str
     tier: ModelTier
 
-    # Pricing (in USD)
-    cost_per_1k_tokens: float    # Average cost per 1000 tokens
+    # Published rate card, per 1k tokens, kept SEPARATE. None = not on the
+    # card; callers must treat that as unknown, never as free. Local models
+    # are the one legitimate 0.0.
+    input_usd_per_1k: Optional[float]
+    output_usd_per_1k: Optional[float]
 
-    # Performance
-    latency_ms: float            # Typical response time in milliseconds
-    accuracy: float              # Relative accuracy (0.0-1.0, normalized vs Opus=1.0)
+    max_context_tokens: int = 0
+    max_output_tokens: int = 0
 
-    # Constraints
-    max_context_tokens: int      # Max input context window
-    max_output_tokens: int       # Max output tokens
+    @property
+    def priced(self) -> bool:
+        return self.input_usd_per_1k is not None and self.output_usd_per_1k is not None
 
-    # Task suitability (0.0-1.0)
-    code_review_aptitude: float
-    research_aptitude: float
-    summary_aptitude: float
-    refactor_aptitude: float
+    @property
+    def is_local(self) -> bool:
+        return self.tier is ModelTier.LOCAL_FREE
 
 
-# Pre-defined model profiles (based on empirical data)
-MODEL_PROFILES: Dict[str, ModelProfile] = {
-    # Claude/Anthropic
-    "claude-3-5-haiku": ModelProfile(
-        model_id="claude-3-5-haiku-20241022",
-        provider="anthropic",
-        tier=ModelTier.FAST_CHEAP,
-        cost_per_1k_tokens=0.0042,  # ~$0.80/M input, $4/M output avg
-        latency_ms=200,
-        accuracy=0.88,
-        max_context_tokens=200_000,
-        max_output_tokens=4_096,
-        code_review_aptitude=0.85,
-        research_aptitude=0.70,
-        summary_aptitude=0.90,
-        refactor_aptitude=0.80,
-    ),
-    "claude-3-5-sonnet": ModelProfile(
-        model_id="claude-3-5-sonnet-20241022",
-        provider="anthropic",
-        tier=ModelTier.BALANCED,
-        cost_per_1k_tokens=0.0090,  # ~$3/M input, $15/M output avg
-        latency_ms=500,
-        accuracy=0.95,
-        max_context_tokens=200_000,
-        max_output_tokens=4_096,
-        code_review_aptitude=0.95,
-        research_aptitude=0.92,
-        summary_aptitude=0.94,
-        refactor_aptitude=0.94,
-    ),
-    "claude-3-opus": ModelProfile(
-        model_id="claude-3-opus-20240229",
-        provider="anthropic",
-        tier=ModelTier.BEST_QUALITY,
-        cost_per_1k_tokens=0.0450,  # ~$15/M input, $75/M output avg
-        latency_ms=1500,
-        accuracy=1.0,  # Reference baseline
-        max_context_tokens=200_000,
-        max_output_tokens=4_096,
-        code_review_aptitude=1.0,
-        research_aptitude=1.0,
-        summary_aptitude=1.0,
-        refactor_aptitude=1.0,
-    ),
+@dataclass
+class ModelRanking:
+    """A ranking plus the reason it came out that way."""
+    task_tier: ModelTier
+    ranked_models: List[Tuple[str, float, str]] = field(default_factory=list)
+    recommended_model: Optional[str] = None
+    recommended_reason: str = ""
+    fallback_chain: List[str] = field(default_factory=list)
+    #: Models left out because the rate card does not price them — reported so
+    #: an absent candidate is visible rather than silently dropped.
+    unpriced: List[str] = field(default_factory=list)
 
-    # Google Gemini
-    "gemini-1.5-flash": ModelProfile(
-        model_id="gemini-1.5-flash",
-        provider="google",
-        tier=ModelTier.FAST_CHEAP,
-        cost_per_1k_tokens=0.001125,  # ~$0.075/M input, $0.30/M output avg
-        latency_ms=300,
-        accuracy=0.82,
-        max_context_tokens=1_000_000,
-        max_output_tokens=8_000,
-        code_review_aptitude=0.75,
-        research_aptitude=0.60,
-        summary_aptitude=0.85,
-        refactor_aptitude=0.70,
-    ),
-    "gemini-1.5-pro": ModelProfile(
-        model_id="gemini-1.5-pro",
-        provider="google",
-        tier=ModelTier.BALANCED,
-        cost_per_1k_tokens=0.003750,  # ~$1.50/M input, $6/M output avg
-        latency_ms=600,
-        accuracy=0.93,
-        max_context_tokens=1_000_000,
-        max_output_tokens=8_000,
-        code_review_aptitude=0.90,
-        research_aptitude=0.88,
-        summary_aptitude=0.92,
-        refactor_aptitude=0.89,
-    ),
 
-    # Ollama/Llama (local, free)
-    "llama-2-7b": ModelProfile(
-        model_id="llama2:7b",
-        provider="ollama",
-        tier=ModelTier.LOCAL_FREE,
-        cost_per_1k_tokens=0.0,  # Free (local compute)
-        latency_ms=2000,  # Slower (local CPU)
-        accuracy=0.65,  # Lower accuracy than commercial models
-        max_context_tokens=4_096,
-        max_output_tokens=2_048,
-        code_review_aptitude=0.50,
-        research_aptitude=0.40,
-        summary_aptitude=0.70,
-        refactor_aptitude=0.45,
-    ),
+# Context/output limits per family, from the published model table.
+_LIMITS: Dict[str, Tuple[int, int]] = {
+    "claude-fable-5-1": (1_000_000, 128_000),
+    "claude-fable-5": (1_000_000, 128_000),
+    "claude-opus-5": (1_000_000, 128_000),
+    "claude-sonnet-5": (1_000_000, 128_000),
+    "claude-haiku-4-5": (200_000, 64_000),
+}
+
+# Tier by family prefix; longest match wins, the same rule the rate card uses.
+_TIERS: Dict[str, ModelTier] = {
+    "claude-fable": ModelTier.FRONTIER,
+    "claude-mythos": ModelTier.FRONTIER,
+    "claude-opus": ModelTier.BEST_QUALITY,
+    "claude-sonnet": ModelTier.BALANCED,
+    "claude-haiku": ModelTier.FAST_CHEAP,
 }
 
 
-@dataclass(frozen=True)
-class ModelRanking:
-    """Ranked models for a task with rationale."""
-    task_type: str
-    quality_threshold: float  # Minimum accuracy required (0.0-1.0)
+def _strip_namespace(model_id: str) -> str:
+    """``anthropic/claude-opus-5`` -> ``claude-opus-5``.
 
-    # Ranked candidates (best to worst)
-    ranked_models: List[Tuple[str, float, str]] = field(default_factory=list)  # (model_id, score, reason)
+    The registry declares OpenCode models with a provider namespace. Without
+    this, tier and limit lookups miss and every such model looks unknown.
+    """
+    return model_id.split("/", 1)[1] if "/" in model_id else model_id
 
-    # Recommended model
-    recommended_model: str = ""
-    recommended_reason: str = ""
 
-    # Fallback chain
-    fallback_chain: List[str] = field(default_factory=list)
+def _lookup(table: Dict[str, Any], model_id: str) -> Any:
+    """Longest-prefix match against a family table."""
+    candidate = _strip_namespace(model_id)
+    best_key: Optional[str] = None
+    for key in table:
+        if candidate.startswith(key) and (best_key is None or len(key) > len(best_key)):
+            best_key = key
+    return table[best_key] if best_key is not None else None
+
+
+def _tier_for(model_id: str) -> ModelTier:
+    if model_id.startswith("ollama/") or model_id.startswith("ollama:"):
+        return ModelTier.LOCAL_FREE
+    tier = _lookup(_TIERS, model_id)
+    return tier if isinstance(tier, ModelTier) else ModelTier.BALANCED
+
+
+def _provider_for(model_id: str) -> str:
+    if "/" in model_id:
+        return model_id.split("/", 1)[0]
+    return "anthropic" if model_id.startswith("claude-") else "unknown"
+
+
+def build_profiles(model_ids: List[str]) -> Dict[str, ModelProfile]:
+    """Profiles for the given model ids, priced from the one rate card."""
+    from core.learning.model_selection_learner import model_price_per_1k
+
+    profiles: Dict[str, ModelProfile] = {}
+    for mid in model_ids:
+        if not mid:
+            continue  # the registry's "engine default" sentinel, not a model
+        tier = _tier_for(mid)
+        if tier is ModelTier.LOCAL_FREE:
+            in_rate: Optional[float] = 0.0
+            out_rate: Optional[float] = 0.0
+        else:
+            price = model_price_per_1k(_strip_namespace(mid))
+            in_rate, out_rate = price if price else (None, None)
+
+        limits = _lookup(_LIMITS, mid)
+        max_ctx, max_out = limits if isinstance(limits, tuple) else (0, 0)
+
+        profiles[mid] = ModelProfile(
+            model_id=mid,
+            provider=_provider_for(mid),
+            tier=tier,
+            input_usd_per_1k=in_rate,
+            output_usd_per_1k=out_rate,
+            max_context_tokens=max_ctx,
+            max_output_tokens=max_out,
+        )
+    return profiles
+
+
+def registry_model_ids() -> List[str]:
+    """Every model the engine registry declares — what this install can run."""
+    import sys
+    from pathlib import Path
+
+    shared = str(Path(__file__).resolve().parents[2]
+                 / "corvin_operator" / "bridges" / "shared")
+    if shared not in sys.path:
+        sys.path.insert(0, shared)
+    import engine_models  # type: ignore
+
+    ids: List[str] = []
+    for engine in (engine_models.registry_as_dict(force_reload=True) or {}).values():
+        if not isinstance(engine, dict):
+            continue
+        for field_name in ("os_models", "worker_models"):
+            for entry in engine.get(field_name) or []:
+                mid = (entry.get("id") or "").strip() if isinstance(entry, dict) else ""
+                if mid and mid not in ids:
+                    ids.append(mid)
+    return ids
 
 
 class MultiModelRouter:
-    """Ranks models by cost, quality, and task suitability."""
+    """Ranks runnable models by tier and price. Estimates, never routes."""
 
     def __init__(self, profiles: Optional[Dict[str, ModelProfile]] = None):
-        """Initialize router with model profiles."""
-        self.profiles = profiles or MODEL_PROFILES
+        if profiles is None:
+            try:
+                profiles = build_profiles(registry_model_ids())
+            except Exception as exc:  # noqa: BLE001
+                # An empty router is the honest answer; a hardcoded line-up is
+                # the bug this module was rewritten to remove.
+                logger.warning("engine registry unavailable, no profiles: %s", exc)
+                profiles = {}
+        self.profiles = profiles
 
     def rank_models(
         self,
-        task_type: str,
-        quality_threshold: float = 0.85,
-        max_cost_per_1k: Optional[float] = None,
+        min_tier: ModelTier = ModelTier.FAST_CHEAP,
+        max_output_usd_per_1k: Optional[float] = None,
+        allow_local: bool = True,
     ) -> ModelRanking:
+        """Rank models at or above ``min_tier``, cheapest capable first.
+
+        Takes a TIER, not a ``task_type``. The previous signature took one and
+        looked up ``f"{task_type}_aptitude"`` on the profile — four
+        hand-written constants per model that no measurement supported. A
+        caller that knows a task needs Opus-class reasoning can say so; this
+        module does not pretend to know that mapping itself.
+
+        Among models that clear the bar, OUTPUT rate decides, because output
+        is the larger rate on every current model.
         """
-        Rank models for a task.
+        candidates: List[ModelProfile] = []
+        unpriced: List[str] = []
 
-        Args:
-            task_type: "code_review", "research", "summary", "refactor"
-            quality_threshold: Minimum accuracy (0.0-1.0)
-            max_cost_per_1k: Max cost per 1000 tokens (optional)
-
-        Returns:
-            ModelRanking with ranked candidates
-        """
-        # Get aptitude for this task type
-        aptitude_key = f"{task_type}_aptitude"
-
-        # Filter models by quality threshold
-        candidates = []
-        for model_id, profile in self.profiles.items():
-            if profile.accuracy < quality_threshold:
-                continue  # Below threshold
-
-            # Get aptitude (default to 0.5 if task type unknown)
-            aptitude = getattr(profile, aptitude_key, 0.5)
-
-            # Respect cost limit
-            if max_cost_per_1k and profile.cost_per_1k_tokens > max_cost_per_1k:
+        for profile in self.profiles.values():
+            if profile.is_local and not allow_local:
                 continue
+            if profile.tier < min_tier:
+                continue
+            if not profile.priced:
+                unpriced.append(profile.model_id)
+                continue
+            if (max_output_usd_per_1k is not None
+                    and (profile.output_usd_per_1k or 0.0) > max_output_usd_per_1k):
+                continue
+            candidates.append(profile)
 
-            candidates.append((model_id, profile, aptitude))
+        # Cheapest first; ties broken by the HIGHER tier.
+        candidates.sort(key=lambda p: ((p.output_usd_per_1k or 0.0), -int(p.tier)))
 
-        # If no candidates meet quality threshold, relax it
-        if not candidates:
-            logger.warning(f"No models meet quality threshold {quality_threshold} for {task_type}; relaxing")
-            for model_id, profile in self.profiles.items():
-                aptitude = getattr(profile, aptitude_key, 0.5)
-                if max_cost_per_1k and profile.cost_per_1k_tokens > max_cost_per_1k:
-                    continue
-                candidates.append((model_id, profile, aptitude))
+        ranked = [
+            (p.model_id, p.output_usd_per_1k or 0.0, self._reason(p))
+            for p in candidates
+        ]
 
-        # Score candidates: accuracy + aptitude - cost penalty
-        scored = []
-        for model_id, profile, aptitude in candidates:
-            # Normalize cost as penalty (0.0 = free, 1.0 = most expensive)
-            max_cost = max(p.cost_per_1k_tokens for p in self.profiles.values())
-            cost_penalty = (profile.cost_per_1k_tokens / max_cost) if max_cost > 0 else 0.0
-
-            # Score = accuracy + aptitude - 0.3 * cost_penalty
-            # Higher is better
-            score = (profile.accuracy + aptitude) / 2.0 - (0.3 * cost_penalty)
-            scored.append((model_id, score, profile))
-
-        # Sort by score (descending)
-        scored.sort(key=lambda x: x[1], reverse=True)
-
-        # Build ranked list
-        ranked = []
-        for model_id, score, profile in scored:
-            reason = self._score_reason(profile, task_type)
-            ranked.append((model_id, score, reason))
-
-        # Recommended model (top ranked)
-        if ranked:
-            recommended_model, rec_score, rec_reason = ranked[0]
-        else:
-            recommended_model = "claude-3-5-sonnet"
-            rec_reason = "Fallback: no candidates met quality threshold"
-
-        # Fallback chain (top 3, excluding recommended)
-        fallback = [m for m, _, _ in ranked[1:4]]
+        if not ranked:
+            return ModelRanking(
+                task_tier=min_tier,
+                ranked_models=[],
+                recommended_model=None,
+                recommended_reason=(
+                    "No runnable model meets this tier and price bound. "
+                    "Nothing is recommended, rather than falling back to a "
+                    "model the registry may not declare."
+                ),
+                fallback_chain=[],
+                unpriced=sorted(unpriced),
+            )
 
         return ModelRanking(
-            task_type=task_type,
-            quality_threshold=quality_threshold,
+            task_tier=min_tier,
             ranked_models=ranked,
-            recommended_model=recommended_model,
-            recommended_reason=rec_reason,
-            fallback_chain=fallback,
+            recommended_model=ranked[0][0],
+            recommended_reason=ranked[0][2],
+            fallback_chain=[m for m, _, _ in ranked[1:4]],
+            unpriced=sorted(unpriced),
         )
 
-    def _score_reason(self, profile: ModelProfile, task_type: str) -> str:
-        """Generate human-readable reason for model recommendation."""
-        aptitude_key = f"{task_type}_aptitude"
-        aptitude = getattr(profile, aptitude_key, 0.5)
-
-        if profile.tier == ModelTier.FAST_CHEAP:
-            return f"Fast & cheap ({profile.cost_per_1k_tokens:.5f}/1K tokens, {aptitude*100:.0f}% apt)"
-        elif profile.tier == ModelTier.BALANCED:
-            return f"Balanced cost/quality ({profile.cost_per_1k_tokens:.5f}/1K tokens, {aptitude*100:.0f}% apt)"
-        elif profile.tier == ModelTier.BEST_QUALITY:
-            return f"Best quality ({profile.accuracy*100:.0f}% acc, {aptitude*100:.0f}% apt)"
-        elif profile.tier == ModelTier.LOCAL_FREE:
-            return f"Free local compute (0/1K tokens, {aptitude*100:.0f}% apt)"
-        else:
-            return "Unknown tier"
+    def _reason(self, profile: ModelProfile) -> str:
+        if profile.is_local:
+            return f"{profile.tier.name.lower()} - local compute, no per-token cost"
+        return (
+            f"{profile.tier.name.lower()} - "
+            f"${(profile.input_usd_per_1k or 0) * 1000:.2f} in / "
+            f"${(profile.output_usd_per_1k or 0) * 1000:.2f} out per 1M tokens"
+        )
 
     def estimate_task_cost(
         self,
         model_id: str,
-        estimated_input_tokens: int,
-        estimated_output_tokens: int,
-    ) -> float:
-        """Estimate cost for a model."""
-        if model_id not in self.profiles:
-            return 0.0
+        input_tokens: int,
+        output_tokens: int,
+    ) -> Optional[float]:
+        """USD for a task at the published rates, or None if unpriced.
 
-        profile = self.profiles[model_id]
-        total_tokens = estimated_input_tokens + estimated_output_tokens
-
-        return profile.cost_per_1k_tokens * (total_tokens / 1000.0)
-
-    def get_model_profile(self, model_id: str) -> Optional[ModelProfile]:
-        """Get profile for a specific model."""
-        return self.profiles.get(model_id)
+        Takes the token split and applies each rate to its own side. The old
+        signature multiplied ``(input + output)`` by one averaged rate, which
+        is wrong for every mix except the one the average came from, and
+        returned 0.0 for an unknown model — indistinguishable from a genuinely
+        free local one.
+        """
+        profile = self.profiles.get(model_id)
+        if profile is None or not profile.priced:
+            return None
+        return ((input_tokens / 1000.0) * (profile.input_usd_per_1k or 0.0)
+                + (output_tokens / 1000.0) * (profile.output_usd_per_1k or 0.0))
 
 
 def default_router() -> MultiModelRouter:
-    """Get the default multi-model router."""
+    """Router over whatever the engine registry currently declares."""
     return MultiModelRouter()
