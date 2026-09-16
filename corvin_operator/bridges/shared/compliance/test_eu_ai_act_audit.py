@@ -2,7 +2,7 @@
 must actually run, not structurally always report "fail".
 
 Before this fix, all three checks below did a dotted
-``from operator.bridges.shared... import ...`` — which can NEVER resolve
+``from corvin_operator.bridges.shared... import ...`` — which can NEVER resolve
 (stdlib ``operator`` always wins) — so every call raised inside the ``try``
 block and fell through to a generic ``except Exception`` that reported
 ``status="fail"``. The checks LOOKED fail-closed (correct posture for a

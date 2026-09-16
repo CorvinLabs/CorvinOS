@@ -27,7 +27,7 @@ if not hasattr(stdlib_operator, 'task_analysis'):
     sys.modules['operator.task_analysis'] = task_analysis_pkg
     spec.loader.exec_module(task_analysis_pkg)
 
-# NOW we can import from operator.task_analysis
+# NOW we can import from corvin_operator.task_analysis
 from core.operator.task_analysis.server import main
 
 if __name__ == "__main__":

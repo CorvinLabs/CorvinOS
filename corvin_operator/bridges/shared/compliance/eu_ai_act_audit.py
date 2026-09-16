@@ -102,7 +102,7 @@ class ComplianceAuditor:
                     )
 
                 # Check self-test
-                # ADR-0215 F5: dotted `from operator.voice.hooks...` can never
+                # ADR-0215 F5: dotted `from corvin_operator.voice.hooks...` can never
                 # resolve (stdlib `operator` always wins) — this check has
                 # structurally always reported "fail" for L10, never actually
                 # running the self-test. Fixed via repo-relative sys.path
@@ -350,7 +350,7 @@ class ComplianceAuditor:
           - Per-engine locality/egress matrix enforced
         """
         try:
-            # ADR-0215 F5: dotted `from operator.bridges.shared...` can never
+            # ADR-0215 F5: dotted `from corvin_operator.bridges.shared...` can never
             # resolve — this L34 check has structurally always failed. Fixed
             # via repo-relative sys.path insert + bare leaf-module import
             # (this file already lives inside operator/bridges/shared/, so
@@ -419,7 +419,7 @@ class ComplianceAuditor:
           - Fail-closed (default=deny)
         """
         try:
-            # ADR-0215 F5: dotted `from operator.bridges.shared...` can never
+            # ADR-0215 F5: dotted `from corvin_operator.bridges.shared...` can never
             # resolve — this L35 check has structurally always failed. Fixed
             # the same way as the L34 check above.
             _shared_dir = Path(__file__).resolve().parents[1]

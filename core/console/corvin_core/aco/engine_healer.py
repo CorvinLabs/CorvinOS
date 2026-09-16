@@ -98,7 +98,7 @@ def _claude_binary_ok() -> bool:
 def _hermes_reachable() -> bool:
     """Return True if Ollama HTTP API answers on its configured URL."""
     try:
-        # ADR-0215 F5: the dotted `from operator.bridges.shared...` import
+        # ADR-0215 F5: the dotted `from corvin_operator.bridges.shared...` import
         # here could never resolve (stdlib `operator` always shadows the
         # repo's corvin_operator/ directory) — this silently skipped straight to
         # the generic HTTP fallback below on every call, never exercising

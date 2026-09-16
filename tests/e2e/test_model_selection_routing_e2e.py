@@ -21,7 +21,7 @@ class TestATORoutingInjection:
 
     def test_ato_plan_hint_applied_tier_28(self):
         """Verify Tier 2.8 (ATO) is applied after explicit override check."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         # Tier 2.8 should NOT override explicit model
         profile = {"model": "claude-opus-4-7"}
@@ -42,7 +42,7 @@ class TestATORoutingInjection:
 
     def test_ato_plan_hint_applied_when_no_explicit(self):
         """Verify Tier 2.8 (ATO) is applied when explicit model is absent."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "sonnet",
@@ -61,7 +61,7 @@ class TestATORoutingInjection:
 
     def test_ato_haiku_recommendation_applied(self):
         """Verify ATO can recommend Haiku (lowest cost model)."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "haiku",
@@ -79,7 +79,7 @@ class TestATORoutingInjection:
 
     def test_ato_low_confidence_falls_through(self):
         """Verify low-confidence ATO recommendation falls through to Tier 3."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "haiku",
@@ -101,7 +101,7 @@ class TestATORoutingInjection:
 
     def test_ato_none_hint_falls_through(self):
         """Verify None ato_plan_hint doesn't break routing."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         result = resolve_os_model(
             profile=None,
@@ -114,7 +114,7 @@ class TestATORoutingInjection:
 
     def test_ato_audit_event_emitted(self):
         """Verify audit event is emitted when ATO routing is applied."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         audit_events = []
 
@@ -153,7 +153,7 @@ class TestATORoutingInjection:
         """Integration test: adapter.py passes _ato_plan to _resolve_os_model."""
         # This test is more complex as it requires mocking the full adapter flow
         # For now, we just verify the adapter code has the right signature
-        from operator.bridges.shared import adapter
+        from corvin_operator.bridges.shared import adapter
 
         sig = adapter._resolve_os_model.__code__.co_varnames
         assert "ato_plan_hint" in sig, "ato_plan_hint parameter missing from _resolve_os_model"
@@ -229,7 +229,7 @@ class TestATOPlanHintNullSafety:
 
     def test_ato_plan_with_none_recommended_model(self):
         """Verify None recommended_model is handled safely."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": None,
@@ -248,7 +248,7 @@ class TestATOPlanHintNullSafety:
 
     def test_ato_plan_with_empty_hint_dict(self):
         """Verify empty hint dict is handled safely."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         result = resolve_os_model(
             profile=None,
@@ -261,7 +261,7 @@ class TestATOPlanHintNullSafety:
 
     def test_ato_plan_with_malformed_confidence(self):
         """Verify malformed confidence value is handled safely."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "sonnet",
@@ -284,7 +284,7 @@ class TestATORoutingTierPriority:
 
     def test_explicit_model_beats_ato_recommendation(self):
         """Tier 2 (explicit) should win over Tier 2.8 (ATO)."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         profile = {"model": "claude-opus-4-7"}
         ato_plan_hint = {
@@ -304,7 +304,7 @@ class TestATORoutingTierPriority:
 
     def test_override_env_var_beats_ato(self):
         """Tier 1 (override env) should win over Tier 2.8 (ATO)."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "haiku",
@@ -328,7 +328,7 @@ class TestATORoutingBackwardCompatibility:
 
     def test_resolve_os_model_works_without_ato_plan_hint(self):
         """Old code calling resolve_os_model without ato_plan_hint should work."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         # Old-style call without ato_plan_hint
         result = resolve_os_model(
@@ -341,7 +341,7 @@ class TestATORoutingBackwardCompatibility:
 
     def test_resolve_os_model_bundled_backward_compat(self):
         """_resolve_os_model_bundled should work without ato_plan_hint."""
-        from operator.bridges.shared.adapter import _resolve_os_model_bundled
+        from corvin_operator.bridges.shared.adapter import _resolve_os_model_bundled
 
         # Old-style call without ato_plan_hint
         result = _resolve_os_model_bundled(
@@ -358,7 +358,7 @@ class TestATOModelNormalization:
 
     def test_ato_haiku_maps_to_claude_haiku(self):
         """Verify 'haiku' shorthand maps to actual Haiku model."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "haiku",
@@ -376,7 +376,7 @@ class TestATOModelNormalization:
 
     def test_ato_sonnet_maps_to_claude_sonnet(self):
         """Verify 'sonnet' shorthand maps to actual Sonnet model."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "sonnet",
@@ -394,7 +394,7 @@ class TestATOModelNormalization:
 
     def test_ato_opus_maps_to_claude_opus(self):
         """Verify 'opus' shorthand maps to actual Opus model."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "opus",
@@ -412,7 +412,7 @@ class TestATOModelNormalization:
 
     def test_ato_unknown_model_falls_through(self):
         """Verify unknown model recommendation falls through to Tier 3."""
-        from operator.bridges.shared.model_selector import resolve_os_model
+        from corvin_operator.bridges.shared.model_selector import resolve_os_model
 
         ato_plan_hint = {
             "recommended_model": "unknown_model",  # Not in model map

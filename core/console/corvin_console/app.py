@@ -216,9 +216,15 @@ router.include_router(task_audit_route.router, tags=["console-task-audit"])
 router.include_router(skills_manual_route.router, tags=["console-skills-manual"])
 router.include_router(tools_manual_route.router, tags=["console-tools-manual"])
 router.include_router(tools.router, tags=["console-tools"])
-router.include_router(skills.router, tags=["console-skills"])
-# ADR-0681 — Skill Forge v2.0 Phase 5: Console UI (Skill Manager)
+# ADR-0681 — Skill Forge v2.0 Phase 5: Console UI (Skill Manager).
+# MUST be registered BEFORE skills.router for the same reason the manual
+# routes above are: skills.py owns the wildcard GET /skills/{name}, and
+# FastAPI matches in registration order. Registered after it, this router's
+# literal GET /skills/installed and GET /skills/generate/{job_id} were both
+# swallowed by that wildcard and answered 404 "skill 'installed' not found"
+# — the Skill Manager panel's list and its generation-status poll.
 router.include_router(skill_manager_route.router, tags=["console-skill-manager"])
+router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
@@ -397,7 +403,7 @@ def healthz() -> dict[str, Any]:
     still returns 200 (not 503) because the router itself is working.
 
     ADR-0215 F1: the import below used to be the bare dotted form
-    ``from operator.bridges.shared.engine_detection import ...``, which can
+    ``from corvin_operator.bridges.shared.engine_detection import ...``, which can
     NEVER resolve — ``corvin_operator/`` has no ``__init__.py`` and always loses to
     the stdlib ``operator`` module regardless of sys.path order — so this
     unauthenticated liveness probe raised ``ModuleNotFoundError`` on every

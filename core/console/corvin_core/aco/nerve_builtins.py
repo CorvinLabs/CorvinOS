@@ -33,7 +33,7 @@ def _bridges_shared_dir() -> Path:
     """Repo-relative ``corvin_operator/bridges/shared`` (source-tree mode).
 
     ``corvin_operator/`` has no ``__init__.py`` and shadows the stdlib ``operator``
-    module, so ``from operator.bridges.shared.x import y`` can NEVER resolve
+    module, so ``from corvin_operator.bridges.shared.x import y`` can NEVER resolve
     (regular stdlib modules always win over namespace-package candidates,
     regardless of sys.path order) — confirmed structurally broken, not just
     theoretically: every prior fiber that tried the dotted form silently

@@ -8,8 +8,8 @@ patched to ``return True``.
 
 Usage::
 
-    from operator.license.sob import SobClient
-    from operator.license.capability import Capability
+    from corvin_operator.license.sob import SobClient
+    from corvin_operator.license.capability import Capability
 
     sob = SobClient(corvin_home)
     sob.load()
@@ -218,7 +218,7 @@ class Capability:
 # a migration path: create it once at boot, share it everywhere.
 #
 # Usage:
-#   from operator.license.capability import get_capability
+#   from corvin_operator.license.capability import get_capability
 #   cap = get_capability()   # returns the module-level Capability singleton
 #
 # Call ``init_capability(sob_client)`` once at adapter boot.

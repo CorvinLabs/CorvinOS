@@ -6,7 +6,7 @@ Three orchestration call sites enforce a per-day license quota before doing
 paid work (brain tasks, skill_forge, tool_forge). All three reached the
 counter through an import path that can never resolve:
 
-    from operator.license.quota_counter import increment_and_check   # x2
+    from corvin_operator.license.quota_counter import increment_and_check   # x2
     from core.operator.license.quota_counter import increment_and_check
 
 ``operator`` is a Python *stdlib* module, so the first form resolves to the

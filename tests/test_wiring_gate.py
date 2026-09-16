@@ -162,7 +162,7 @@ def test_deferred_with_reason_passes(tmp_path, monkeypatch):
 def test_lint_catches_dotted_import(tmp_path, monkeypatch):
     scan_root = tmp_path / "scan"
     _write(scan_root / "bad.py", """
-        from operator.bridges.shared.audit import audit_path
+        from corvin_operator.bridges.shared.audit import audit_path
     """)
     monkeypatch.setattr(wiring_gate, "_LINT_SCAN_ROOTS", (scan_root,))
     result = wiring_gate.GateResult()
@@ -192,9 +192,9 @@ def test_lint_ignores_docstring_and_comment_mentions(tmp_path, monkeypatch):
         """
         Usage::
 
-            from operator.license.sob import SobClient
+            from corvin_operator.license.sob import SobClient
         """
-        # from operator.bridges.shared.audit import audit_path
+        # from corvin_operator.bridges.shared.audit import audit_path
         X = 1
     ''')
     monkeypatch.setattr(wiring_gate, "_LINT_SCAN_ROOTS", (scan_root,))
@@ -206,7 +206,7 @@ def test_lint_ignores_docstring_and_comment_mentions(tmp_path, monkeypatch):
 def test_lint_excludes_vendored_dirs(tmp_path, monkeypatch):
     scan_root = tmp_path / "scan4"
     _write(scan_root / "node_modules" / "somepkg" / "bad.py", """
-        from operator.bridges.shared.audit import audit_path
+        from corvin_operator.bridges.shared.audit import audit_path
     """)
     monkeypatch.setattr(wiring_gate, "_LINT_SCAN_ROOTS", (scan_root,))
     result = wiring_gate.GateResult()

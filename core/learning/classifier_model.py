@@ -33,7 +33,7 @@ def import_context_engineering():
     """Return the ``context_engineering`` package (corvin_operator/context_engineering).
 
     ``corvin_operator/`` has no ``__init__.py`` and always loses to the stdlib
-    ``operator`` module, so ``from operator.context_engineering ...`` can NEVER
+    ``operator`` module, so ``from corvin_operator.context_engineering ...`` can NEVER
     resolve (ADR-0215 F1). The package is importable under its own top-level
     name once it has been registered — the console does this at boot
     (``corvin_console.chat_runtime``); outside the console, load it from the

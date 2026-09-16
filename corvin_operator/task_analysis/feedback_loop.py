@@ -45,7 +45,7 @@ class RoutingFeedback:
     """Operator who gave feedback."""
 
     notes: str = ""
-    """Optional notes from operator."""
+    """Optional notes from corvin_operator."""
 
     def __post_init__(self):
         """Validate feedback."""

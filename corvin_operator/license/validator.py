@@ -48,7 +48,7 @@ from typing import Any
 
 try:
     # Package context (operator.license.validator). NB: a bare
-    # `import operator.license...` can never work — `operator` is a stdlib
+    # `import corvin_operator.license...` can never work — `operator` is a stdlib
     # module that shadows the repo dir — so consumers load this module
     # top-level (e.g. custom_layer_gate after inserting operator/license on
     # sys.path). A bare relative import then raised "no known parent package"

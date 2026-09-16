@@ -529,7 +529,7 @@ def _verify_segment_manifest(audit_dir: Path, live_first_prev_hash: str):
         )
     except ImportError:
         # ADR-0215 F5: the second-level fallback here used to be a dotted
-        # `from operator.bridges.shared.audit_sealer import ...`, which can
+        # `from corvin_operator.bridges.shared.audit_sealer import ...`, which can
         # NEVER resolve (stdlib `operator` always shadows the repo's
         # operator/ directory) — dead code, since module load time this
         # file already inserts `operator/bridges/shared` onto sys.path

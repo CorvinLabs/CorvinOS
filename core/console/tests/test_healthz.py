@@ -1,7 +1,7 @@
 """ADR-0215 F1 regression: /healthz must never raise, on any install shape.
 
 Before this fix, ``healthz()`` did an unguarded dotted
-``from operator.bridges.shared.engine_detection import ...`` at the top of
+``from corvin_operator.bridges.shared.engine_detection import ...`` at the top of
 the function body — that import can NEVER resolve (stdlib ``operator``
 always wins over the repo's ``corvin_operator/`` directory regardless of sys.path
 order), so this unauthenticated liveness probe raised

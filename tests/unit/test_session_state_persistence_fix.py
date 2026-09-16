@@ -314,7 +314,7 @@ def _load_session_reset():
     """Import bridges/shared/session_reset.py.
 
     ``corvin_operator/`` is a directory, not a package, and ``operator`` is taken by
-    the stdlib — so ``from operator.bridges.shared...`` never resolves. Put the
+    the stdlib — so ``from corvin_operator.bridges.shared...`` never resolves. Put the
     directory on sys.path and import by module name instead.
     """
     import sys

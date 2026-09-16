@@ -116,8 +116,8 @@ class TestQuotaGateWiring:
 
         This is the fix for the three broken import paths:
         - brain.py: used `from core.operator.license.quota_counter import ...` (BROKEN)
-        - skill_forge_subsystem: used `from operator.license.quota_counter import ...` (BROKEN)
-        - tool_forge_subsystem: used `from operator.license.quota_counter import ...` (BROKEN)
+        - skill_forge_subsystem: used `from corvin_operator.license.quota_counter import ...` (BROKEN)
+        - tool_forge_subsystem: used `from corvin_operator.license.quota_counter import ...` (BROKEN)
 
         quota_gate centralizes the sys.path setup so all three can use it.
         """

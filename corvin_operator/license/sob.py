@@ -2,8 +2,8 @@
 
 Typical usage (call once at adapter boot)::
 
-    from operator.license.sob import SobClient
-    from operator.license.capability import Capability
+    from corvin_operator.license.sob import SobClient
+    from corvin_operator.license.capability import Capability
 
     sob = SobClient(corvin_home)
     sob.load()                          # reads sob.enc from disk, unseals

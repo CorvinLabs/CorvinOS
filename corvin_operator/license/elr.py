@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 # Reuse existing crypto primitives from sob_crypto.
-# ADR-0215 F5: the dotted `from operator.license.sob_crypto import ...` that
+# ADR-0215 F5: the dotted `from corvin_operator.license.sob_crypto import ...` that
 # used to be the primary attempt here can NEVER resolve (stdlib `operator`
 # always shadows the repo's operator/ directory) — it was dead code, and the
 # bare form below was doing all the real work via the `except` branch. Made

@@ -3538,7 +3538,7 @@ def write_event(
                     # the chain integrity computation (they are out-of-band attestation,
                     # not chain state). Best-effort: any failure skips silently.
                     try:
-                        # ADR-0215 F5: the dotted `from operator.bridges.shared
+                        # ADR-0215 F5: the dotted `from corvin_operator.bridges.shared
                         # import ...` primary attempt below can NEVER
                         # resolve (stdlib `operator` always shadows the
                         # repo's operator/ directory) — this whole block is

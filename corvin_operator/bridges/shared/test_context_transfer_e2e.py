@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-# ADR-0215 F5: the dotted `from operator.bridges.shared import ...` can never
+# ADR-0215 F5: the dotted `from corvin_operator.bridges.shared import ...` can never
 # resolve (stdlib `operator` always wins over the repo's `operator/` dir),
 # so HAS_DEPS was always False and both tests below were permanently skipped
 # since this file's inception — `core.console...` resolves fine on its own
