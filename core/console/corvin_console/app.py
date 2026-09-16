@@ -193,6 +193,8 @@ from .routes import (
     model_cost_optimizer_api as model_cost_optimizer_api_route,
     # ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI)
     video_producer_api as video_producer_route,
+    # ADR-0677 — Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
+    skill_forge_distribution_routes as skill_forge_distribution_route,
 )
 
 
@@ -224,6 +226,8 @@ router.include_router(tools.router, tags=["console-tools"])
 # swallowed by that wildcard and answered 404 "skill 'installed' not found"
 # — the Skill Manager panel's list and its generation-status poll.
 router.include_router(skill_manager_route.router, tags=["console-skill-manager"])
+# ADR-0677 — Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
+router.include_router(skill_forge_distribution_route.router, tags=["console-skill-forge-distribution"])
 router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
