@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+#
+# ADR Gate — Layer 1 of the five-layer Code/Docs-Sync enforcement
+# (CLAUDE.md § Code/Docs Sync). Blocks a commit that touches source code
+# without either referencing an ADR or naming an explicit exemption.
+#
+# This is a `commit-msg` hook, NOT `pre-commit`, because only `commit-msg`
+# is handed the message: git passes its path as $1. The previous
+# implementation lived in `pre-commit` and read
+#
+#     COMMIT_MSG=$(git diff --cached --format=%B -p | head -20)
+#
+# `--format=%B` is a git-log option; `git diff` ignores it and prints a
+# DIFF. So the gate matched the exemption flag against the first 20 lines
+# of changed file CONTENT: commits carrying a correct flag were rejected,
+# while any commit whose diff happened to contain the literal string
+# passed. It also referenced $1 to detect an amend, but `pre-commit`
+# receives no arguments, so that branch never ran.
+#
+set -euo pipefail
+
+MSG_FILE="${1:-}"
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+
+# Strip comment lines and the diff that `commit --verbose` appends.
+MSG="$(sed -e '/^#/d' -e '/^diff --git /,$d' "$MSG_FILE")"
+
+SUBJECT="$(printf '%s\n' "$MSG" | sed -e '/^[[:space:]]*$/d' | head -1)"
+[ -n "$SUBJECT" ] || exit 0   # empty message: git aborts on its own
+
+# Flags are read from the SUBJECT LINE ONLY. Searching the whole message
+# means any commit that merely MENTIONS a flag in prose — a message
+# explaining the gate itself, a revert quoting the original subject —
+# silently takes on that exemption. Caught the first time this hook ran
+# against its own commit.
+FLAGS="$SUBJECT"
+
+# Machine-generated messages carry no design decision of their own.
+case "$SUBJECT" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *|amend!\ *) exit 0 ;;
+esac
+
+ADR_REPO="${CORVIN_ADR_REPO:-$HOME/projects/Corvin-ADR}"
+
+die() {
+  echo "❌ ADR Gate: $1" >&2
+  shift
+  for line in "$@"; do echo "   $line" >&2; done
+  echo >&2
+  echo "   Every commit touching source must carry ONE of:" >&2
+  echo "     [ADR-XXXX]       reference an architectural decision" >&2
+  echo "     [docs-only]      documentation only" >&2
+  echo "     [test-only]      tests / fixtures only" >&2
+  echo "     [skip-adr-check] rare exemption — REQUIRES a body explaining why" >&2
+  exit 1
+}
+
+# ── An explicit ADR reference must point at an ADR that exists ──────────
+if printf '%s' "$FLAGS" | grep -qE '\[ADR-[0-9]{4}\]'; then
+  if [ -d "$ADR_REPO/decisions" ]; then
+    missing=""
+    for id in $(printf '%s' "$FLAGS" | grep -oE '\[ADR-[0-9]{4}\]' | tr -d '[]' | sort -u); do
+      ls "$ADR_REPO/decisions/${id}"-*.md >/dev/null 2>&1 || missing="$missing $id"
+    done
+    [ -z "$missing" ] || die "referenced ADR not found in $ADR_REPO/decisions:$missing" \
+      "Write the ADR first — a reference to a non-existent decision is worse" \
+      "than none, because the graph then has a dangling node (ADR-0264)."
+  fi
+  exit 0
+fi
+
+# ── docs-only / test-only: the flag must match what is actually staged ──
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR || true)"
+[ -n "$STAGED" ] || exit 0
+
+is_test() { printf '%s' "$1" | grep -qE '(^|/)tests?/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$|(^|/)conftest\.py$'; }
+
+# Extension first, then a shebang for extensionless executables. Without the
+# second check the hooks in THIS directory — `commit-msg`, `post-merge`, both
+# shell, both without a suffix — would slip through the gate they implement.
+is_code() {
+  printf '%s' "$1" | grep -qE '\.(py|ts|tsx|js|jsx|mjs|sh|bash)$' && return 0
+  case "$1" in *.*) return 1 ;; esac
+  [ -f "$1" ] || return 1
+  head -c 2 -- "$1" 2>/dev/null | grep -q '#!'
+}
+
+CODE_FILES=""
+NONTEST_CODE=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if is_code "$f"; then
+    CODE_FILES="$CODE_FILES $f"
+    is_test "$f" || NONTEST_CODE="$NONTEST_CODE $f"
+  fi
+done <<EOF
+$STAGED
+EOF
+
+if printf '%s' "$FLAGS" | grep -qE '\[docs-only\]'; then
+  [ -z "$CODE_FILES" ] || die "[docs-only] but these code files are staged:" $CODE_FILES
+  exit 0
+fi
+
+if printf '%s' "$FLAGS" | grep -qE '\[test-only\]'; then
+  [ -z "$NONTEST_CODE" ] || die "[test-only] but these non-test files are staged:" $NONTEST_CODE
+  exit 0
+fi
+
+if printf '%s' "$FLAGS" | grep -qE '\[skip-adr-check\]'; then
+  # CLAUDE.md: the exemption "requires documented justification". A bare
+  # subject line is not one, so demand a body.
+  BODY="$(printf '%s\n' "$MSG" | tail -n +2 | sed -e '/^[[:space:]]*$/d')"
+  [ -n "$BODY" ] || die "[skip-adr-check] needs a justification in the commit body." \
+    "State what changed and why no architectural decision is involved."
+  exit 0
+fi
+
+# ── No flag: source changes require an ADR, everything else is fine ─────
+[ -n "$CODE_FILES" ] || exit 0
+[ -n "$NONTEST_CODE" ] || exit 0
+
+die "source files staged with no ADR reference and no exemption:" $NONTEST_CODE

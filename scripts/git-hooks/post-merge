@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# Auto-sync the ADR-derived memory after a merge/pull (Layer 5 of the
+# Code/Docs-Sync enforcement, CLAUDE.md § Code/Docs Sync). Non-blocking.
+#
+# The previous copy resolved its script as
+# "$(dirname "$0")/../operator/scripts/sync_memory_from_adrs.py" — from
+# .git/hooks that is .git/operator/scripts/, which has never existed, and
+# `operator/` was renamed to `corvin_operator/` (ADR-0730) besides. Guarded
+# by `if [ -f ]`, it therefore did nothing, silently, every time.
+#
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SYNC_SCRIPT="$REPO_ROOT/corvin_operator/scripts/sync_memory_from_adrs.py"
+
+MERGED_FILES="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)"
+printf '%s' "$MERGED_FILES" | grep -q 'decisions/ADR-' || exit 0
+
+if [ ! -f "$SYNC_SCRIPT" ]; then
+  echo "⚠ ADR memory sync skipped: $SYNC_SCRIPT not found" >&2
+  exit 0
+fi
+
+echo "🔄 Syncing memory from ADRs..."
+if python3 "$SYNC_SCRIPT" --commit; then
+  echo "✓ Memory synced"
+else
+  echo "⚠ Memory sync failed (non-blocking)" >&2
+fi
+exit 0
