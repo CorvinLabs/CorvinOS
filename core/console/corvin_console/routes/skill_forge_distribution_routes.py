@@ -6,18 +6,21 @@ HTTP routes for:
 - Phase 4: Install Skill from ZIP
 - Phase 6: Download from marketplace
 
-ADR-0677: Skill Package & ZIP Distribution
+ADR-0674: Skill Package & ZIP Distribution
 License: Apache-2.0
 """
 
-from fastapi import APIRouter, HTTPException, File, UploadFile, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Dict, Optional
 import json
 import logging
 from datetime import datetime
+import re
 
-from core.skills.skill_packager import SkillPackager
+from core.skills.skill_packager import SkillPackager, ChecksumVerificationError
+from core.skills.skill_installer import SkillInstaller, InstallationError
 from core.skills.phase1_manifest_v2 import SkillManifestV2
 
 logger = logging.getLogger(__name__)
@@ -46,7 +49,7 @@ async def package_skill(
             "metadata": {
                 "skill_id": "my_awesome_skill",
                 "version": "1.0.0",
-                "packaged_at": "2026-09-16T10:00:00Z",
+                "packaged_at": "2026-09-17T10:00:00Z",
                 "zip_path": "~/.corvin/skills_packages/...",
                 "checksum_count": 42,
                 "audit_trail_events": 8
@@ -113,7 +116,7 @@ async def list_packages() -> Dict:
                     "filename": "my_awesome_skill_1.0.0.zip",
                     "skill_id": "my_awesome_skill",
                     "version": "1.0.0",
-                    "created_at": "2026-09-16T10:00:00Z",
+                    "created_at": "2026-09-17T10:00:00Z",
                     "size_bytes": 45678,
                     "download_url": "/v1/skill-forge/download/..."
                 }
@@ -144,7 +147,7 @@ async def list_packages() -> Dict:
 
 
 @router.get("/download/{filename}")
-async def download_package(filename: str):
+async def download_package(filename: str, request: Request = None):
     """
     Download a packaged Skill ZIP file.
 
@@ -157,25 +160,171 @@ async def download_package(filename: str):
     Raises:
         HTTPException(404): Package not found
     """
-    from fastapi.responses import FileResponse
-
     try:
+        # Validate filename (prevent directory traversal)
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         packages_dir = Path.home() / ".corvin" / "skills_packages"
         zip_path = packages_dir / filename
 
         if not zip_path.exists():
             raise HTTPException(status_code=404, detail=f"Package not found: {filename}")
 
+        # Extract skill_id and version for audit
+        match = re.match(r"^([a-z0-9_]+)_([a-z0-9.]+)\.zip$", filename)
+        if match:
+            skill_id, version = match.groups()
+            _emit_audit_event({
+                "event_type": "skill_downloaded",
+                "skill_id": skill_id,
+                "version": version,
+                "package_hash": SkillPackager._compute_file_hash(zip_path),
+                "lom": "core.console.corvin_console.routes.skill_forge_distribution_routes:download_package:L158"
+            })
+
         return FileResponse(
             path=zip_path,
             filename=filename,
             media_type="application/zip",
+            headers={"X-Skill-Hash": SkillPackager._compute_file_hash(zip_path)}
         )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"Error downloading package: {filename}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+@router.post("/install")
+async def install_skill(
+    zip_path: Optional[str] = Query(None, description="Path to ZIP file"),
+    url: Optional[str] = Query(None, description="URL to download ZIP from"),
+    verify_checksum: bool = Query(True, description="Verify checksums before installation")
+) -> Dict:
+    """
+    Install Skill from ZIP file or URL.
+
+    **Phase 4 Operation**
+
+    Args:
+        zip_path: Local path to .zip file (OR)
+        url: URL to download .zip from (OR upload via FormData)
+        verify_checksum: Whether to verify checksums
+
+    Returns:
+        {
+            "installed_path": "/home/user/.corvin/skills/custom/my_awesome_skill",
+            "skill_id": "my_awesome_skill",
+            "version": "1.0.0",
+            "status": "success|already_installed|partial",
+            "errors": []
+        }
+
+    Raises:
+        HTTPException(400): Invalid request
+        HTTPException(404): ZIP not found
+        HTTPException(409): Installation conflict
+        HTTPException(500): Installation error
+    """
+    try:
+        if not zip_path and not url:
+            raise HTTPException(status_code=400, detail="Either zip_path or url must be provided")
+
+        # Resolve ZIP path
+        if zip_path:
+            pkg_path = Path(zip_path).expanduser()
+            if not pkg_path.exists():
+                raise HTTPException(status_code=404, detail=f"ZIP not found: {zip_path}")
+        elif url:
+            # Download from URL
+            import httpx
+            async with httpx.AsyncClient() as client:
+                try:
+                    response = await client.get(url, follow_redirects=True, timeout=300.0)
+                    if response.status_code != 200:
+                        raise HTTPException(status_code=400, detail=f"Failed to download from {url}")
+                    pkg_path = Path("/tmp") / f"skill_download_{datetime.utcnow().timestamp()}.zip"
+                    pkg_path.write_bytes(response.content)
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Download failed: {str(e)}")
+        else:
+            raise HTTPException(status_code=400, detail="No ZIP source provided")
+
+        # Install
+        installer = SkillInstaller()
+        result = await installer.install_skill(
+            str(pkg_path),
+            installed_by="http_api",
+            verify_checksum=verify_checksum
+        )
+
+        logger.info(f"Skill installed: {result['skill_id']} v{result['version']} ({result['status']})")
+        _emit_audit_event({
+            "event_type": "skill_install_completed",
+            "skill_id": result["skill_id"],
+            "version": result["version"],
+            "status": result["status"],
+            "errors": result.get("errors", []),
+            "lom": "core.console.corvin_console.routes.skill_forge_distribution_routes:install_skill:L261"
+        })
+
+        return result
+
+    except HTTPException:
+        raise
+    except InstallationError as e:
+        logger.exception(f"Installation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Installation error: {str(e)}")
+    except Exception as e:
+        logger.exception("Error installing skill")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+@router.get("/installed")
+async def list_installed_skills() -> Dict:
+    """
+    List all installed Skills.
+
+    Returns:
+        {
+            "skills": [
+                {
+                    "skill_id": "my_awesome_skill",
+                    "version": "1.0.0",
+                    "installed_at": "2026-09-17T12:34:56Z",
+                    "path": "/home/user/.corvin/skills/custom/my_awesome_skill",
+                    "status": "healthy|unhealthy"
+                }
+            ]
+        }
+    """
+    try:
+        installer = SkillInstaller()
+        registry = await installer._load_registry()
+
+        skills = []
+        for record in registry.get("installed_skills", []):
+            skill_dir = Path(record["path"]) if "path" in record else None
+            if not skill_dir or not skill_dir.exists():
+                skill_dir = installer.skills_dir / record["skill_id"]
+
+            status = "healthy" if skill_dir.exists() else "unhealthy"
+
+            skills.append({
+                "skill_id": record["skill_id"],
+                "version": record["version"],
+                "installed_at": record["installed_at"],
+                "path": str(skill_dir),
+                "status": status,
+                "boot_layer": record.get("boot_layer", "installed")
+            })
+
+        return {"skills": skills}
+
+    except Exception as e:
+        logger.exception("Error listing installed skills")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
@@ -199,6 +348,7 @@ async def get_package_metadata(skill_id: str, version: str) -> Dict:
         HTTPException(404): Package not found
     """
     try:
+        import zipfile
         packages_dir = Path.home() / ".corvin" / "skills_packages"
         zip_filename = f"{skill_id}_{version}.zip"
         zip_path = packages_dir / zip_filename
@@ -207,8 +357,6 @@ async def get_package_metadata(skill_id: str, version: str) -> Dict:
             raise HTTPException(status_code=404, detail=f"Package not found: {zip_filename}")
 
         # Read metadata from .forge/ inside ZIP
-        import zipfile
-
         with zipfile.ZipFile(zip_path, "r") as zf:
             try:
                 generation_context = json.loads(
@@ -240,6 +388,20 @@ async def get_package_metadata(skill_id: str, version: str) -> Dict:
     except Exception as e:
         logger.exception(f"Error retrieving metadata: {skill_id} v{version}")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+def _emit_audit_event(event: Dict) -> None:
+    """Emit audit event for skill distribution operations."""
+    try:
+        # Try to get audit backend from context
+        from core.compliance.corvin_compliance_reports.audit_backend import get_audit_backend
+        backend = get_audit_backend()
+        if backend:
+            event.setdefault("timestamp", datetime.utcnow().isoformat() + "Z")
+            event.setdefault("tenant_id", "_default")
+            backend.emit_event(event)
+    except Exception as e:
+        logger.warning(f"Failed to emit audit event: {e}")
 
 
 def register_skill_forge_routes(app):

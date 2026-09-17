@@ -4,22 +4,49 @@ Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
 Packages complete Skills (folders from Phase 1-2) into distributable ZIP archives
 with metadata, checksums, and audit trails.
 
-ADR-0677: Skill Package & ZIP Distribution Format
+ADR-0674: Skill Package & ZIP Distribution Format
 License: Apache-2.0
 """
 
 import json
 import zipfile
 import hashlib
+import shutil
+import sys
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Tuple, Optional, List
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import logging
 
 from core.skills.phase1_manifest_v2 import SkillManifestV2
 
 logger = logging.getLogger(__name__)
+
+
+class PackagingError(Exception):
+    """Raised when skill packaging fails."""
+    pass
+
+
+class ChecksumVerificationError(Exception):
+    """Raised when checksum verification fails."""
+    pass
+
+
+@dataclass(frozen=True)
+class PackageMetadata:
+    """Immutable package metadata."""
+    skill_id: str
+    version: str
+    packaged_at: str
+    zip_path: str
+    zip_hash: str
+    file_count: int
+    size_bytes: int
+    generation_context: Dict
+    audit_trail_events: int
 
 
 class SkillPackager:
@@ -200,6 +227,75 @@ class SkillPackager:
                 relative_path = file_path.relative_to(folder)
                 archive_path = arcname / relative_path
                 zf.write(file_path, arcname=str(archive_path))
+
+    def verify_package(self, zip_path: Path, checksum_file: Optional[Path] = None) -> bool:
+        """
+        Verify package integrity using checksums.
+
+        Args:
+            zip_path: Path to ZIP file
+            checksum_file: Path to checksum.sha256 file (if None, read from ZIP)
+
+        Returns:
+            True if all checksums verify
+
+        Raises:
+            ChecksumVerificationError: If verification fails
+        """
+        if not zip_path.exists():
+            raise FileNotFoundError(f"ZIP not found: {zip_path}")
+
+        # Extract checksums from .forge/checksum.sha256 inside ZIP
+        if checksum_file is None:
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    checksum_content = zf.read(".forge/checksum.sha256").decode("utf-8")
+            except KeyError:
+                logger.warning(f"No checksum file in {zip_path}, skipping verification")
+                return True
+        else:
+            if not checksum_file.exists():
+                raise FileNotFoundError(f"Checksum file not found: {checksum_file}")
+            checksum_content = checksum_file.read_text()
+
+        # Parse checksums (format: "sha256:hash path")
+        checksums = {}
+        for line in checksum_content.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2:
+                raise ChecksumVerificationError(f"Invalid checksum line: {line}")
+            hash_value, file_path = parts
+            checksums[file_path] = hash_value
+
+        # Verify each file in ZIP
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for arcname in zf.namelist():
+                # Skip .forge directory from verification (it's metadata)
+                if arcname.startswith(".forge/") or arcname == ".forge":
+                    continue
+
+                file_data = zf.read(arcname)
+                computed_hash = self._compute_hash(file_data)
+
+                if arcname in checksums:
+                    expected_hash = checksums[arcname]
+                    if computed_hash != expected_hash:
+                        raise ChecksumVerificationError(
+                            f"Checksum mismatch for {arcname}: "
+                            f"expected {expected_hash}, got {computed_hash}"
+                        )
+
+        logger.info(f"Package verification passed: {zip_path}")
+        return True
+
+    @staticmethod
+    def _compute_hash(data: bytes) -> str:
+        """Compute SHA256 hash of data."""
+        sha256 = hashlib.sha256()
+        sha256.update(data)
+        return f"sha256:{sha256.hexdigest()}"
 
 
 def package_skill(
