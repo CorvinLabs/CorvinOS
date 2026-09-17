@@ -82,6 +82,87 @@ if ($Editable -ne "") {
     $EditablePath = (Resolve-Path $Editable).Path
 }
 
+# ── 1a. ensure local Node.js runtime (self-contained, no admin) ──────────────
+# Read .nvmrc from repo root if present
+$RepoRoot = $PSScriptRoot
+if (-not $RepoRoot -or $RepoRoot -eq "") {
+    $RepoRoot = (Get-Location).Path
+}
+$NvmrcPath = Join-Path $RepoRoot ".nvmrc"
+$NodeVersion = if (Test-Path $NvmrcPath) { (Get-Content $NvmrcPath).Trim() } else { "v24.18.0" }
+$NodeVersion = $NodeVersion -replace '^v', ''
+
+$CorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else { Join-Path $env:USERPROFILE ".corvin" }
+$NodeRoot = Join-Path $CorvinHome "node"
+$NodeBin = Join-Path $NodeRoot "bin"
+$NodeExe = Join-Path $NodeBin "node.exe"
+
+# Check if node already installed
+$NodeAlreadyExists = $false
+if (Test-Path $NodeExe) {
+    try {
+        $InstalledVersion = (& $NodeExe --version 2>$null) -replace '^v', ''
+        if ($InstalledVersion -eq $NodeVersion) {
+            $NodeAlreadyExists = $true
+            Write-Ok "Node.js v$NodeVersion already available at $NodeRoot"
+        }
+    } catch { }
+}
+
+if (-not $NodeAlreadyExists) {
+    Write-Step "Bootstrapping local Node.js runtime (v$NodeVersion, self-contained) ..."
+
+    # Determine platform
+    $Platform = "win"
+    $Arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+    $NodeFilename = "node-v$NodeVersion-$Platform-$Arch"
+    $DownloadUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeFilename.zip"
+
+    # Ensure %USERPROFILE%\.corvin exists
+    if (-not (Test-Path $CorvinHome)) {
+        New-Item -ItemType Directory -Force -Path $CorvinHome | Out-Null
+    }
+
+    try {
+        # Download Node.js ZIP
+        $NodeZip = Join-Path ([System.IO.Path]::GetTempPath()) "$NodeFilename.zip"
+        Write-Step "Downloading Node.js from $DownloadUrl ..."
+        Invoke-WebRequest -UseBasicParsing -Uri $DownloadUrl -OutFile $NodeZip -TimeoutSec 300 -ErrorAction Stop
+
+        # Extract
+        Write-Step "Extracting Node.js to $NodeRoot ..."
+        if (Test-Path $NodeRoot) {
+            Remove-Item -Recurse -Force $NodeRoot -ErrorAction SilentlyContinue
+        }
+
+        $TempExtractDir = Join-Path ([System.IO.Path]::GetTempPath()) "$NodeFilename-extract"
+        if (Test-Path $TempExtractDir) {
+            Remove-Item -Recurse -Force $TempExtractDir -ErrorAction SilentlyContinue
+        }
+
+        New-Item -ItemType Directory -Force -Path $TempExtractDir | Out-Null
+        Expand-Archive -Path $NodeZip -DestinationPath $TempExtractDir -ErrorAction Stop
+
+        # Move extracted folder to final location
+        Move-Item -Path (Join-Path $TempExtractDir $NodeFilename) -Destination $NodeRoot -ErrorAction Stop
+
+        # Cleanup
+        Remove-Item -Force $NodeZip -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $TempExtractDir -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path $NodeExe)) {
+            Write-Fail "Node.js executable not found after extraction at $NodeExe"
+        }
+
+        Write-Ok "Node.js v$NodeVersion installed to $NodeRoot"
+    } catch {
+        Write-Warn "Node.js installation failed ($_) -- will use system Node.js if available"
+    }
+}
+
+# Update PATH to include local node
+$env:Path = "$NodeBin;$env:Path"
+
 # ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Step "Bootstrapping the uv $UvPinVersion runtime (brings its own Python) ..."

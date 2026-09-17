@@ -202,6 +202,22 @@ if [ "$SKIP_CLAUDE" != "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 1a: Bootstrap local Node.js runtime (self-contained, no sudo)
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -n "$EDITABLE" ]; then
+    REPO_DIR="$EDITABLE"
+else
+    REPO_DIR="$(pwd)"
+fi
+
+if [ -f "${REPO_DIR}/scripts/ensure-node.sh" ]; then
+    echo "  Bootstrapping local Node.js runtime ..."
+    if ! bash "${REPO_DIR}/scripts/ensure-node.sh"; then
+        echo "  Node.js bootstrap failed — falling back to system Node.js"
+    fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 1c: Cross-platform compatibility check (ADR-0666 supplement)
 # ─────────────────────────────────────────────────────────────────────────────
 if [ -n "$EDITABLE" ]; then
