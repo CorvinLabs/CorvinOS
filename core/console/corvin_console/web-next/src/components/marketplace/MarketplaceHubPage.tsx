@@ -6,11 +6,13 @@
  * - MarketplaceCards (5 card types)
  * - MarketplaceSearch (query + filters)
  * - Backend APIs (/marketplace/plugins/available, /marketplace/plugins/installed)
+ *
+ * NOTE: Uses Tailwind CSS (consistent with project design system).
+ * Refactored from Mantine to reduce dependencies.
  */
 
 import React, { useState, useEffect } from 'react';
-import { Container, Grid, Stack, Loader, Alert, Tabs } from '@mantine/core';
-import { IconAlertCircle, IconDownload } from '@tabler/icons-react';
+import { AlertCircle } from 'lucide-react';
 import {
   PluginCard,
   SkillCard,
@@ -55,7 +57,7 @@ export const MarketplaceHubPage: React.FC = () => {
   const [installedPlugins, setInstalledPlugins] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string | null>('discover');
+  const [activeTab, setActiveTab] = useState<'discover' | 'installed' | 'search'>('discover');
   const [installing, setInstalling] = useState<Set<string>>(new Set());
 
   // ============================================================================
@@ -138,22 +140,28 @@ export const MarketplaceHubPage: React.FC = () => {
 
   if (loading) {
     return (
-      <Container py="xl">
-        <Stack align="center" gap="md">
-          <Loader size="lg" />
-          <p>Loading marketplace…</p>
-        </Stack>
-      </Container>
+      <div className="w-full flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+          <p className="text-gray-600">Loading marketplace…</p>
+        </div>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <Container py="xl">
-        <Alert icon={<IconAlertCircle />} title="Error" color="red">
-          {error}
-        </Alert>
-      </Container>
+      <div className="w-full px-4 py-8">
+        <div className="max-w-4xl mx-auto border border-red-200 rounded-lg p-4 bg-red-50">
+          <div className="flex gap-3">
+            <AlertCircle className="text-red-600 flex-shrink-0" size={20} />
+            <div>
+              <h3 className="font-semibold text-red-900">Error</h3>
+              <p className="text-red-800 text-sm mt-1">{error}</p>
+            </div>
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -167,26 +175,45 @@ export const MarketplaceHubPage: React.FC = () => {
   }));
 
   return (
-    <Container fluid py="xl" data-testid="marketplace-hub-page">
-      <Tabs value={activeTab} onTabChange={setActiveTab} defaultValue="discover">
-        <Tabs.List>
-          <Tabs.Tab value="discover">Discover</Tabs.Tab>
-          <Tabs.Tab value="installed">Installed</Tabs.Tab>
-          <Tabs.Tab value="search">Search</Tabs.Tab>
-        </Tabs.List>
+    <div className="w-full" data-testid="marketplace-hub-page">
+      {/* Tabs Navigation */}
+      <div className="border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="flex gap-8">
+            {['discover', 'installed', 'search'].map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab as 'discover' | 'installed' | 'search')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm capitalize transition ${
+                  activeTab === tab
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
+      {/* Tab Content */}
+      <div className="max-w-7xl mx-auto px-4 py-8">
         {/* ============================================================================
           TAB 1: DISCOVER
           ============================================================================ */}
-        <Tabs.Panel value="discover" py="lg">
-          <Stack gap="lg">
+        {activeTab === 'discover' && (
+          <div className="space-y-6">
             <div>
-              <h2>Featured Plugins</h2>
-              <p>Discover and install plugins, skills, datasets, and templates</p>
+              <h2 className="text-2xl font-bold text-gray-900">Featured Plugins</h2>
+              <p className="text-gray-600 mt-1">Discover and install plugins, skills, datasets, and templates</p>
             </div>
 
             {/* Card Grid — responsive */}
-            <Grid data-testid="plugin-cards-grid" gutter={{ xs: 'sm', md: 'md' }}>
+            <div
+              data-testid="plugin-cards-grid"
+              className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4"
+            >
               {plugins.slice(0, 6).map((plugin, idx) => {
                 const isInstalled = installedPlugins.has(plugin.id);
                 const isInstalling = installing.has(plugin.id);
@@ -202,11 +229,13 @@ export const MarketplaceHubPage: React.FC = () => {
                 const cardType = cardTypes[idx % cardTypes.length];
 
                 return (
-                  <Grid.Col
-                    key={plugin.id}
-                    span={{ xs: 12, sm: 6, md: 4, lg: 3 }}
-                    data-testid={`card-${plugin.id}`}
-                  >
+                  <div key={plugin.id} data-testid={`card-${plugin.id}`} className="relative">
+                    {isInstalling && (
+                      <div className="absolute inset-0 bg-black/10 rounded-lg flex items-center justify-center z-10">
+                        <div className="inline-block animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent"></div>
+                      </div>
+                    )}
+
                     {cardType === 'plugin' && (
                       <PluginCard
                         id={plugin.id}
@@ -252,29 +281,29 @@ export const MarketplaceHubPage: React.FC = () => {
                         onUse={() => handleInstallPlugin(plugin.id)}
                       />
                     )}
-                  </Grid.Col>
+                  </div>
                 );
               })}
-            </Grid>
-          </Stack>
-        </Tabs.Panel>
+            </div>
+          </div>
+        )}
 
         {/* ============================================================================
           TAB 2: INSTALLED
           ============================================================================ */}
-        <Tabs.Panel value="installed" py="lg">
-          <Stack gap="lg">
+        {activeTab === 'installed' && (
+          <div className="space-y-6">
             <div>
-              <h2>Installed Plugins</h2>
-              <p>{installedPlugins.size} plugin(s) installed</p>
+              <h2 className="text-2xl font-bold text-gray-900">Installed Plugins</h2>
+              <p className="text-gray-600 mt-1">{installedPlugins.size} plugin(s) installed</p>
             </div>
 
             {installedPlugins.size > 0 ? (
-              <Grid gutter={{ xs: 'sm', md: 'md' }}>
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                 {plugins
                   .filter((p) => installedPlugins.has(p.id))
                   .map((plugin) => (
-                    <Grid.Col key={plugin.id} span={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
+                    <div key={plugin.id}>
                       <PluginCard
                         id={plugin.id}
                         name={plugin.name}
@@ -282,26 +311,28 @@ export const MarketplaceHubPage: React.FC = () => {
                         description={plugin.description}
                         onInstall={() => console.log('Already installed:', plugin.id)}
                       />
-                    </Grid.Col>
+                    </div>
                   ))}
-              </Grid>
+              </div>
             ) : (
-              <Alert>No plugins installed yet. Explore the Discover tab to get started!</Alert>
+              <div className="border border-blue-200 rounded-lg p-4 bg-blue-50">
+                <p className="text-blue-900">No plugins installed yet. Explore the Discover tab to get started!</p>
+              </div>
             )}
-          </Stack>
-        </Tabs.Panel>
+          </div>
+        )}
 
         {/* ============================================================================
           TAB 3: SEARCH
           ============================================================================ */}
-        <Tabs.Panel value="search" py="lg">
+        {activeTab === 'search' && (
           <MarketplaceSearch
             data={searchResults}
             onResultSelect={handleSearchResult}
           />
-        </Tabs.Panel>
-      </Tabs>
-    </Container>
+        )}
+      </div>
+    </div>
   );
 };
 
