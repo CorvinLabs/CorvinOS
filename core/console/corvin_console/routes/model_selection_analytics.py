@@ -349,3 +349,72 @@ async def export_weights(
     except Exception as e:
         logger.error(f"Failed to export weights: {e}")
         raise HTTPException(status_code=500, detail="Failed to export weights")
+
+
+class HaikuTaskTypeStats(BaseModel):
+    """Haiku success statistics for a task type."""
+    task_type: str
+    success_rate: float
+    n_samples: int
+    confidence_interval: Optional[List[float]] = None
+    converged: bool
+    model: str = "claude-haiku-4-5"
+
+
+class HaikuStatsResponse(BaseModel):
+    """Response with Haiku success stats by task type."""
+    timestamp: str
+    tenant_id: str
+    task_types: List[HaikuTaskTypeStats]
+
+
+@router.get("/haiku-stats", response_model=HaikuStatsResponse)
+async def get_haiku_stats(
+    rec: session_auth.SessionRecord = Depends(require_session),
+) -> Dict[str, Any]:
+    """Get Haiku success statistics by task type.
+
+    Returns real learned success rates from the learning store (ADR-0314).
+    Fallback to hardcoded defaults if learning data is not available.
+    Tenant-scoped query (GDPR Art. 5).
+
+    Returns:
+        HaikuStatsResponse with per-task-type Haiku success rates and confidence intervals
+    """
+    tenant_id = rec.tenant_id
+
+    try:
+        from core.skills.os_skills.model_selector import ModelSelector
+
+        selector = ModelSelector()
+        stats = selector.get_haiku_stats_by_task_type(tenant_id=tenant_id)
+
+        task_types_data = []
+        for task_type, stat in stats.items():
+            entry = HaikuTaskTypeStats(
+                task_type=task_type,
+                success_rate=stat["success_rate"],
+                n_samples=stat["n_samples"],
+                confidence_interval=stat["confidence_interval"],
+                converged=stat["converged"],
+                model=stat["model"],
+            )
+            task_types_data.append(entry)
+
+        # Sort by success rate (descending)
+        task_types_data.sort(key=lambda x: x.success_rate, reverse=True)
+
+        logger.info(
+            f"Haiku stats retrieved for tenant {tenant_id}: "
+            f"{len(task_types_data)} task types"
+        )
+
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tenant_id": tenant_id,
+            "task_types": task_types_data,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get Haiku stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get Haiku stats")
