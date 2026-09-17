@@ -13,7 +13,6 @@ import { Loader2 } from "lucide-react";
 import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
-import { VibeDashboard } from "@/pages/vibe-engineering";
 import {
   DashboardPage, SettingsPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
@@ -24,7 +23,7 @@ import {
   GitHubPage, SyncMonitorPage, EngineConfigPage,
   ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
-  LicensingAuditPage, OTELTelemetryPage, ModelSelectionPage,
+  LicensingAuditPage, OTELTelemetryPage, ModelSelectionPage, VibeEngineeringPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -91,7 +90,7 @@ export const PANELS: ConsolePanel[] = [
   // pages/vibe-engineering.tsx (the retired Context Pipeline page), shadowed the
   // directory — file beats directory in module resolution — so this import
   // silently loaded the old page and the Dashboard was unreachable.
-  rc("vibe-engineering", "Learnings", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain", group: "primary" } }),
+  rc("vibe-engineering", "Learnings", VibeEngineeringPage as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain", group: "primary" } }),
   rc("dashboard", "Dashboard", DashboardPage, { nav: { label: "Dashboard", icon: "LayoutDashboard", group: "primary" } }),
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
   rc("engine-config", "Engine Config", EngineConfigPage, { nav: { label: "Engine Config", icon: "Settings", group: "intelligence" } }),
