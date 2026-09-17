@@ -680,7 +680,7 @@ $ConsoleURL = "http://localhost:$ConsolePort/console/"
 # freshly-written venv is new to Defender's on-access scanner, so this window
 # is disproportionately more likely to be lost on install than on a routine
 # restart later. Still bounded; a genuinely broken server does not wait longer.
-$MaxRetries = 90
+$MaxRetries = 30  # Reduced from 90s to 30s for faster feedback (ADR-0666 supplement)
 $RetryCount = 0
 $ServerReady = $false
 
@@ -763,7 +763,8 @@ try {
 # a freshly spawned python.exe can push this well past 30s with zero output
 # otherwise, which read as a hang to a user watching the terminal (confirmed
 # via a screenshot showing this exact step frozen with no further line
-# printed).
+# printed). Reduced from 90s to 30s for faster feedback on quick installs
+# (server is often ready in 5-15s; if it hangs longer, user can reload manually).
 while ($RetryCount -lt $MaxRetries) {
     try {
         $response = Invoke-WebRequest -Uri "http://localhost:8765/v1/console/healthz" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
@@ -794,7 +795,7 @@ catch { Write-Ok "Open the console in your browser: $ConsoleURL" }
 
 # Safety net for the not-ready case (2026-08-02, live report: "after a fresh
 # install the console doesn't open by itself"): the tab opened above shows a
-# native browser connection-error page once the ${MaxRetries}s budget is lost
+# native browser connection-error page once the 30s budget is lost
 # on a slow cold start -- and NOTHING in that page can self-refresh, because
 # it never loaded anything CorvinOS served in the first place. A user who
 # doesn't know (or forgets) to manually reload perceives this as "the
@@ -856,7 +857,7 @@ if ($ServerReady) {
     Write-Head "========================================================"
     Write-Host ""
     Write-Host " Autostart was registered and a start was attempted, but the console" -ForegroundColor White
-    Write-Host " did not respond within ${MaxRetries}s. It may still be coming up (slow first" -ForegroundColor White
+    Write-Host " did not respond within 30s. It may still be coming up (slow first" -ForegroundColor White
     Write-Host " boot / Defender scan), or it could be crash-looping. Check:" -ForegroundColor White
     Write-Host ""
     Write-Cmd  "$ConsoleURL   # try reloading in a few seconds"

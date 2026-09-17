@@ -80,7 +80,7 @@ export const MarketplaceHubPage: React.FC = () => {
       const response = await fetch('/v1/marketplace/plugins/installed');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      const installed = new Set(data.plugins.map((p: any) => p.id));
+      const installed = new Set<string>(data.plugins.map((p: any) => p.id));
       setInstalledPlugins(installed);
     } catch (err) {
       console.warn('Failed to fetch installed plugins:', err);
