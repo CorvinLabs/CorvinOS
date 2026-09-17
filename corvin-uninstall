@@ -1,38 +1,174 @@
 #!/bin/bash
-# Uninstall CorvinOS — clean shutdown & removal (systemd + Docker)
+# Uninstall CorvinOS — clean shutdown & removal (systemd + Docker) [ADR-0868]
 set -e
 
 CORVIN_HOME="${CORVIN_HOME:-$HOME/.corvin}"
-echo "🔴 Uninstalling CorvinOS from $CORVIN_HOME..."
+CORVIN_EXPORT_DIR="${CORVIN_EXPORT_DIR:-$HOME/.corvin-exports}"
 
-# Detect deployment mode (systemd vs Docker)
-DEPLOYMENT_MODE="systemd"
-if docker ps 2>/dev/null | grep -q corvinOS; then
-  DEPLOYMENT_MODE="docker"
-fi
+# Styling utilities
+_bold()  { printf '\033[1m%s\033[0m' "$*"; }
+_green() { printf '\033[32m%s\033[0m' "$*"; }
+_red()   { printf '\033[31m%s\033[0m' "$*"; }
+_yellow(){ printf '\033[33m%s\033[0m' "$*"; }
+_dim()   { printf '\033[2m%s\033[0m' "$*"; }
+
+echo "$(_bold '🔴 Uninstalling CorvinOS from '"$CORVIN_HOME"'...')"
+
+# Enhanced deployment mode detection [ADR-0868]
+detect_deployment_mode() {
+    # Check for Docker daemon
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "systemd"
+        return
+    fi
+    
+    # Check if Docker daemon is running
+    if ! docker ps >/dev/null 2>&1; then
+        echo "systemd"
+        return
+    fi
+    
+    # Check for CorvinOS containers with label matching
+    if docker ps --all --filter "label=app=corvinOS" --quiet 2>/dev/null | grep -q . ; then
+        echo "docker"
+        return
+    fi
+    
+    # Fallback: check name pattern (legacy)
+    if docker ps --all 2>/dev/null | grep -qi "corvinOS\|corvin-console\|corvin-gateway"; then
+        echo "docker"
+        return
+    fi
+    
+    echo "systemd"
+}
+
+# Export audit trail before Docker volumes are destroyed [ADR-0868]
+export_audit_trail() {
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    local export_file="$CORVIN_EXPORT_DIR/audit-trail-export-$timestamp.jsonl"
+    
+    mkdir -p "$CORVIN_EXPORT_DIR"
+    
+    # Try to copy audit trail from running/stopped containers
+    if docker ps --all --filter "name=corvinOS" --quiet 2>/dev/null | head -1 | xargs -I {} docker cp {}:/root/.corvin/audit.jsonl "$export_file" 2>/dev/null; then
+        echo "  $(_green '✓') Audit trail exported to: $export_file"
+        return 0
+    else
+        echo "  $(_yellow '⚠') Warning: could not export audit trail from Docker container"
+        return 1
+    fi
+}
+
+# Comprehensive Docker cleanup [ADR-0868]
+cleanup_docker() {
+    echo "  📌 Detecting Docker containers by label and name..."
+    
+    # Stop and remove containers with label
+    local containers=$(docker ps --all --filter "label=app=corvinOS" --quiet 2>/dev/null || echo "")
+    if [ -n "$containers" ]; then
+        echo "  📌 Stopping containers..."
+        echo "$containers" | xargs -r docker stop 2>/dev/null || true
+        echo "$containers" | xargs -r docker rm -f 2>/dev/null || true
+    fi
+    
+    # Legacy name-based cleanup
+    docker stop corvinOS-console corvinOS-gateway corvinOS-notification 2>/dev/null || true
+    docker rm -f corvinOS-console corvinOS-gateway corvinOS-notification 2>/dev/null || true
+    
+    # Remove images
+    echo "  📌 Removing images..."
+    docker rmi corvinOS:latest 2>/dev/null || true
+    docker rmi corvinOS:* 2>/dev/null || true
+    docker image prune -af --filter "label=app=corvinOS" 2>/dev/null || true
+    
+    # Remove volumes (with per-tenant confirmation for multi-tenant) [ADR-0007]
+    echo "  📌 Removing volumes..."
+    local volumes=$(docker volume ls --filter "label=app=corvinOS" --quiet 2>/dev/null || echo "")
+    if [ -n "$volumes" ]; then
+        echo "  📌 Volumes to remove: $volumes"
+        if [ -t 0 ]; then
+            read -p "  Remove CorvinOS volumes? (y/n): " confirm
+            [ "$confirm" = "y" ] || return 0
+        fi
+        echo "$volumes" | xargs -r docker volume rm 2>/dev/null || true
+    fi
+    
+    # Legacy volume removal
+    docker volume rm corvinOS-data 2>/dev/null || true
+    
+    # Remove networks
+    echo "  📌 Removing networks..."
+    docker network ls --filter "label=app=corvinOS" --quiet 2>/dev/null | xargs -r docker network rm 2>/dev/null || true
+}
+
+# Verify all Docker resources were removed [ADR-0868]
+verify_docker_cleanup() {
+    local errors=0
+    
+    # Check containers
+    if docker ps --all --filter "label=app=corvinOS" --quiet 2>/dev/null | grep -q . ; then
+        echo "  $(_red '✗') Error: CorvinOS containers still exist"
+        errors=$((errors + 1))
+    fi
+    
+    # Check images
+    if docker images --filter "reference=corvinOS*" --quiet 2>/dev/null | grep -q . ; then
+        echo "  $(_red '✗') Error: CorvinOS images still exist"
+        errors=$((errors + 1))
+    fi
+    
+    # Check volumes
+    if docker volume ls --filter "label=app=corvinOS" --quiet 2>/dev/null | grep -q . ; then
+        echo "  $(_red '✗') Error: CorvinOS volumes still exist"
+        errors=$((errors + 1))
+    fi
+    
+    if [ $errors -eq 0 ]; then
+        echo "  $(_green '✓') All Docker resources cleaned up successfully"
+        return 0
+    else
+        echo "  $(_yellow '⚠') Warning: $errors Docker resource(s) remain"
+        return 1
+    fi
+}
+
+# Determine deployment mode
+DEPLOYMENT_MODE=$(detect_deployment_mode)
+echo "  📌 Deployment mode: $DEPLOYMENT_MODE"
 
 # Stop services
 if [ "$DEPLOYMENT_MODE" = "systemd" ]; then
-  echo "📌 Stopping systemd services..."
+  echo "  📌 Stopping systemd services..."
   systemctl --user stop corvin-console.service corvin-gateway.service corvin-notification-router.service 2>/dev/null || true
   systemctl --user disable corvin-console.service corvin-gateway.service corvin-notification-router.service 2>/dev/null || true
-  rm -f ~/.config/systemd/user/corvin-*.service
-  systemctl --user daemon-reload
+  rm -f ~/.config/systemd/user/corvin-*.service ~/.config/systemd/user/corvin-alert.service
+  systemctl --user daemon-reload 2>/dev/null || true
+  echo "  $(_green '✓') Systemd services stopped and disabled"
 else
-  echo "📌 Stopping Docker containers..."
-  docker stop corvinOS-console corvinOS-gateway corvinOS-notification 2>/dev/null || true
-  docker rm corvinOS-console corvinOS-gateway corvinOS-notification 2>/dev/null || true
-  docker rmi corvinOS:latest 2>/dev/null || true
-  docker volume rm corvinOS-data 2>/dev/null || true
+  echo "  📌 Handling Docker deployment..."
+  export_audit_trail || true
+  cleanup_docker
+  verify_docker_cleanup || echo "  $(_yellow '⚠') Manual cleanup may be needed for remaining Docker resources"
+  echo "  $(_green '✓') Docker cleanup complete"
 fi
 
 # Remove files
-echo "🗑️  Removing CorvinOS files..."
+echo "  🗑️  Removing CorvinOS files..."
 rm -rf "$CORVIN_HOME"
 rm -f ~/bin/corvinOS ~/bin/corvin
 
 # Remove Corvin-ADR symlink (if exists)
 rm -f ~/projects/Corvin-ADR
 
-echo "✅ CorvinOS uninstalled successfully"
-echo "ℹ️  Audit trail preserved at: /var/log/corvinOS/ (if applicable)"
+# Remove watchdog logs
+rm -f "$CORVIN_HOME/watchdog.log"
+
+echo ""
+echo "$(_bold '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')"
+echo "$(_green '✅ CorvinOS uninstalled successfully')"
+echo "$(_bold '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')"
+echo ""
+echo "  $(_dim 'Exported data:') $CORVIN_EXPORT_DIR (audit trail)"
+echo "  $(_dim 'Logs:') Check '$HOME/.corvin-exports/' for audit trail exports"
+echo ""
