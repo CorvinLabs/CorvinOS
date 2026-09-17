@@ -264,6 +264,10 @@ class MarketplaceHub:
         """
         index = self.get_index()
         filters = filters or {}
+
+        # Validate and coerce filter values
+        filters = self._validate_filters(filters)
+
         categories = categories or list(DiscoveryCategory.__members__.keys())
 
         # Normalize category names
@@ -337,6 +341,37 @@ class MarketplaceHub:
             filters=filters,
             facets=facets,
         )
+
+    def _validate_filters(self, filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and coerce filter values to correct types.
+
+        Ensures type safety for filter values, preventing injection attacks
+        via malformed filter values (e.g., string instead of float for rating_min).
+
+        Args:
+            filters: Raw filter dict from query params
+
+        Returns:
+            Validated filters dict with correct types
+        """
+        validated = {}
+
+        # String filters: tier, domain, origin
+        if "tier" in filters and filters["tier"]:
+            validated["tier"] = str(filters["tier"]).strip()
+        if "domain" in filters and filters["domain"]:
+            validated["domain"] = str(filters["domain"]).strip()
+        if "origin" in filters and filters["origin"]:
+            validated["origin"] = str(filters["origin"]).strip()
+
+        # Numeric filters: rating_min
+        if "rating_min" in filters and filters["rating_min"]:
+            try:
+                validated["rating_min"] = float(filters["rating_min"])
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid rating_min value: {filters['rating_min']}, skipping")
+
+        return validated
 
     def _build_facets(self, scored_items: List[tuple]) -> Dict[str, Dict[str, int]]:
         """Build facet counts from scored items."""
