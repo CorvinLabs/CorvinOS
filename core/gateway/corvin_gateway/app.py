@@ -618,8 +618,22 @@ try:
                 def _telemetry_dashboard() -> _HTMLResponse:
                     return _HTMLResponse(content=_telemetry_html_path.read_text(encoding="utf-8"))
 
-except ImportError:
-    pass
+except ImportError as _console_imp_err:
+    # "Absent" and "broken" are different findings and must not share `pass`.
+    # 2026-09-17 23:30: the console package was present but one of its route
+    # modules raised ImportError (an API removed under it); this clause
+    # swallowed it and the operator saw /console 404 with NOTHING in the
+    # journal. The gateway still boots without the console (ADR-0015 opt-in),
+    # but a present-and-broken console is logged with its traceback.
+    import logging as _logging
+    if isinstance(_console_imp_err, ModuleNotFoundError) and _console_imp_err.name == "corvin_console":
+        _logging.getLogger(__name__).info("corvin_console package absent — console not mounted")
+    else:
+        _logging.getLogger(__name__).error(
+            "corvin_console is present but failed to import — /console and every "
+            "/v1/console/* route are NOT mounted on this process: %r",
+            _console_imp_err, exc_info=True,
+        )
 except Exception as _plugin_exc:
     import logging as _logging
     _logging.getLogger(__name__).warning("plugin load failed: %r", _plugin_exc)

@@ -826,6 +826,19 @@ fallback route instead of the SPA mount and keeps serving it — a rebuild alone
 it, only a restart will. When `dist/` existed at boot, `_SPAStaticFiles` resolves per request and
 a rebuild is picked up live.
 
+**A bare 404 on `/console` (not 503) is a BACKEND import failure, not a build problem.** The
+live host is `corvin-webui.service` (`corvin_gateway.app` on :8765); it mounts the console
+through an opt-in `try: from corvin_console import app` (ADR-0015), so an ImportError anywhere
+in the console's ~120 route modules does not crash the boot — it removes `/console` AND every
+`/v1/console/*` route from the process. Until 2026-09-17 that clause was `except ImportError:
+pass`, so the journal showed nothing; 9433de4b had removed `get_optimizer` from
+`core.learning.model_selection_optimizer` under `routes/model_selection_analytics.py`, the
+running console pre-dated the commit, and the next `systemctl --user restart corvin-webui`
+took the whole console down. Now the gateway logs `corvin_console is present but failed to
+import` with the traceback, and `tests/test_console_app_importable.py` imports the console
+app in a fresh interpreter with the unit's PYTHONPATH. On a 404: `journalctl --user -u
+corvin-webui | grep 'failed to import'` first, then restart after the fix.
+
 **Layer 3 — the browser tab.** With the `console_auto_reload` flag ON, an open tab
 re-fetches the no-cache SPA shell every 3s, compares its entry-bundle hash against the
 one it booted with, and reloads itself onto a new build (banner instead of reload while
