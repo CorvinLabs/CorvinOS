@@ -1,199 +1,152 @@
-"""Phase 2c: Feedback Batcher — Batch Learning Outcomes for Unified Optimizer.
+"""Feedback Batcher — Gate 3 Implementation (ADR-0676).
 
-Buffers learning outcomes (task completions, feedback events) into batches for
-the unified optimizer to process. Ensures non-blocking, tenant-scoped batching.
+Buffers feedback until threshold is met, then triggers optimization.
 
-Triggers:
-  - 100 outcomes accumulated, OR
-  - 5 minutes elapsed (whichever comes first)
+Trigger conditions:
+- At least 10 new feedback samples collected, OR
+- At least 1 hour since last optimization trigger
 
-Guarantees:
-  - Each batch contains outcomes from BOTH routing (L5) + context (L10) decisions
-  - Outcomes ordered by timestamp
-  - Tenant-scoped (no cross-tenant batches)
-  - Non-blocking append-only (no locks on main request path)
-
-ADR-0532 Phase 2c: Learning Optimizer
+Architecture (event-driven):
+1. FeedbackCollector emits FeedbackReceivedEvent
+2. FeedbackBatcher listens, buffers feedback
+3. When threshold met, emits OptimizationTriggeredEvent
+4. Optimizer listens for OptimizationTriggeredEvent
 """
-from __future__ import annotations
 
-import dataclasses
 import logging
-import time
-import threading
-from collections import deque
-from pathlib import Path
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Callable
+from collections import defaultdict
 
-if TYPE_CHECKING:
-    from core.learning.event_persistence import TaskOutcome
-
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass(frozen=True)
-class FeedbackBatch:
-    """A batch of learning outcomes ready for optimizer."""
-
-    batch_id: str  # UUID
-    tenant_id: str
-    skill_ids: set[str]  # Which skills' decisions are in this batch
-    outcome_count: int
-    timestamp_range: tuple[float, float]  # (earliest, latest)
-    outcomes: tuple  # tuple of TaskOutcome (immutable)
-    outcome_distribution: dict  # {success: N, partial: N, failure: N}
+@dataclass
+class BatcherState:
+    """State of a feedback batch."""
+    skill_id: str
+    feedback_count: int = 0
+    last_triggered_at: Optional[datetime] = None
+    buffered_feedback_ids: List[str] = field(default_factory=list)
 
 
 class FeedbackBatcher:
-    """Buffers learning outcomes into batches for optimizer processing."""
+    """Buffers feedback, triggers optimization on threshold."""
 
     def __init__(
         self,
-        batch_size: int = 100,
-        batch_timeout_sec: int = 300,  # 5 minutes
-        storage_dir: Path | None = None,
+        threshold_count: int = 10,
+        threshold_time_seconds: int = 3600,  # 1 hour
     ):
-        """Initialize feedback batcher.
+        """
+        Initialize feedback batcher.
 
         Args:
-            batch_size: Flush batch when this many outcomes accumulated
-            batch_timeout_sec: Flush batch after this many seconds
-            storage_dir: Optional path to persist batches (for durability)
+            threshold_count: Trigger optimization after N feedback samples
+            threshold_time_seconds: Trigger optimization after N seconds (1h default)
         """
-        self.batch_size = batch_size
-        self.batch_timeout = batch_timeout_sec
-        self.storage_dir = storage_dir
+        self.threshold_count = threshold_count
+        self.threshold_time_seconds = threshold_time_seconds
 
-        # Per-tenant buffers (tenant_id -> deque of outcomes)
-        self._buffers: dict[str, deque] = {}
-        self._last_flush_time: dict[str, float] = {}
-        # MEDIUM FIX #2: Lock for concurrent feedback batching
-        self._lock = threading.Lock()
+        # Per-skill state: skill_id → BatcherState
+        self.state: Dict[str, BatcherState] = {}
 
-    def add_outcome(self, outcome: TaskOutcome) -> FeedbackBatch | None:
-        """Add one outcome to the buffer.
+        # Callbacks for optimization trigger
+        self.on_trigger_callbacks: List[Callable[[str], None]] = []
 
-        Returns:
-            FeedbackBatch if buffer reached threshold, else None
-
-        MEDIUM FIX #2: Thread-safe via Lock
+    def add_feedback(self, skill_id: str, feedback_id: str) -> bool:
         """
-        # MEDIUM FIX #2: Acquire lock for concurrent feedback batching
-        with self._lock:
-            tenant_id = outcome.tenant_id
-            self._buffers.setdefault(tenant_id, deque())
+        Add feedback to buffer.
 
-            # Add to buffer
-            self._buffers[tenant_id].append(outcome)
-
-            # Check flush conditions
-            should_flush = (
-                len(self._buffers[tenant_id]) >= self.batch_size
-                or (time.time() - self._last_flush_time.get(tenant_id, 0)) > self.batch_timeout
-            )
-
-            if should_flush:
-                return self.flush_batch(tenant_id)
-
-            return None
-
-    def flush_batch(self, tenant_id: str) -> FeedbackBatch | None:
-        """Flush accumulated outcomes for a tenant into a batch.
-
-        Returns:
-            FeedbackBatch with all buffered outcomes, or None if buffer empty
-
-        MEDIUM FIX #2: Thread-safe via Lock
+        Returns: True if threshold reached and optimization triggered
         """
-        # MEDIUM FIX #2: Acquire lock for flush operations
-        with self._lock:
-            buffer = self._buffers.get(tenant_id)
-            if not buffer or len(buffer) == 0:
-                return None
+        if skill_id not in self.state:
+            self.state[skill_id] = BatcherState(skill_id=skill_id)
 
-            outcomes = tuple(buffer)
-            buffer.clear()
+        state = self.state[skill_id]
+        state.feedback_count += 1
+        state.buffered_feedback_ids.append(feedback_id)
 
-            # Compute batch metadata
-            skill_ids = set()
-            outcome_distribution = {"success": 0, "partial": 0, "failure": 0}
-            timestamps = []
+        logger.debug(
+            f"Feedback buffered: skill={skill_id}, count={state.feedback_count}, "
+            f"threshold={self.threshold_count}"
+        )
 
-            for outcome in outcomes:
-                skill_ids.add(outcome.decision_skill_id)
-                timestamps.append(outcome.timestamp)
-                status = "success" if outcome.success else ("partial" if outcome.partial else "failure")
-                outcome_distribution[status] += 1
+        # Check if threshold met
+        if self._should_trigger(skill_id):
+            self._trigger_optimization(skill_id)
+            return True
 
-            # Create batch
-            import uuid
+        return False
 
-            batch = FeedbackBatch(
-                batch_id=str(uuid.uuid4()),
-                tenant_id=tenant_id,
-                skill_ids=skill_ids,
-                outcome_count=len(outcomes),
-                timestamp_range=(min(timestamps), max(timestamps)) if timestamps else (0, 0),
-                outcomes=outcomes,
-                outcome_distribution=outcome_distribution,
-            )
+    def _should_trigger(self, skill_id: str) -> bool:
+        """Check if optimization should be triggered."""
+        state = self.state[skill_id]
 
-            # Persist to disk
-            if self.storage_dir:
-                self._persist_batch(batch)
+        # Check count threshold
+        if state.feedback_count >= self.threshold_count:
+            return True
 
-            # Update flush time
-            self._last_flush_time[tenant_id] = time.time()
+        # Check time threshold (if at least one was triggered before)
+        if state.last_triggered_at:
+            elapsed = datetime.now(timezone.utc) - state.last_triggered_at
+            if elapsed.total_seconds() >= self.threshold_time_seconds:
+                return True
 
-            _log.info(
-                "Feedback batch flushed: batch_id=%s tenant_id=%s count=%d skills=%s",
-                batch.batch_id,
-                tenant_id,
-                batch.outcome_count,
-                batch.skill_ids,
-            )
+        return False
 
-            return batch
+    def _trigger_optimization(self, skill_id: str) -> None:
+        """Trigger optimization for skill."""
+        state = self.state[skill_id]
 
-    def _persist_batch(self, batch: FeedbackBatch) -> None:
-        """Persist batch to disk for durability."""
-        try:
-            import json
+        logger.info(
+            f"Optimization triggered: skill={skill_id}, "
+            f"feedback_count={state.feedback_count}, buffered={len(state.buffered_feedback_ids)}"
+        )
 
-            self.storage_dir.mkdir(parents=True, exist_ok=True)
-            batch_path = self.storage_dir / f"{batch.batch_id}.json"
+        # Update state
+        state.last_triggered_at = datetime.now(timezone.utc)
+        state.feedback_count = 0
+        state.buffered_feedback_ids = []
 
-            # Serialize batch (outcomes are already serializable)
-            batch_dict = {
-                "batch_id": batch.batch_id,
-                "tenant_id": batch.tenant_id,
-                "skill_ids": list(batch.skill_ids),
-                "outcome_count": batch.outcome_count,
-                "timestamp_range": batch.timestamp_range,
-                "outcome_distribution": batch.outcome_distribution,
-                "created_at": time.time(),
-            }
+        # Call registered callbacks
+        for callback in self.on_trigger_callbacks:
+            try:
+                callback(skill_id)
+            except Exception as e:
+                logger.error(f"Callback failed for skill {skill_id}: {e}")
 
-            with open(batch_path, "w") as f:
-                json.dump(batch_dict, f)
+    def register_trigger_callback(self, callback: Callable[[str], None]) -> None:
+        """Register callback to be called when optimization is triggered."""
+        self.on_trigger_callbacks.append(callback)
 
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("Failed to persist batch: %s", exc)
+    def get_state(self, skill_id: str) -> Optional[BatcherState]:
+        """Get current batch state for skill."""
+        return self.state.get(skill_id)
 
-    def get_pending_batches(self) -> list[FeedbackBatch]:
-        """Get list of batches not yet processed by optimizer.
+    def get_all_states(self) -> Dict[str, BatcherState]:
+        """Get all batch states."""
+        return dict(self.state)
 
-        Returns:
-            List of batches ready for processing (may be empty)
-        """
-        pending = []
-        for tenant_id in list(self._buffers.keys()):
-            if len(self._buffers[tenant_id]) > 0:
-                batch = self.flush_batch(tenant_id)
-                if batch:
-                    pending.append(batch)
-        return pending
+    def reset_state(self, skill_id: Optional[str] = None) -> None:
+        """Reset batcher state (useful for testing)."""
+        if skill_id:
+            if skill_id in self.state:
+                del self.state[skill_id]
+                logger.debug(f"Reset batcher state for skill: {skill_id}")
+        else:
+            self.state.clear()
+            logger.debug("Reset all batcher states")
 
-    def buffer_size(self, tenant_id: str) -> int:
-        """Get current buffer size for a tenant."""
-        return len(self._buffers.get(tenant_id, []))
+
+# Global singleton
+_feedback_batcher = None
+
+
+def get_feedback_batcher() -> FeedbackBatcher:
+    """Get or create feedback batcher singleton."""
+    global _feedback_batcher
+    if _feedback_batcher is None:
+        _feedback_batcher = FeedbackBatcher(threshold_count=10, threshold_time_seconds=3600)
+    return _feedback_batcher
