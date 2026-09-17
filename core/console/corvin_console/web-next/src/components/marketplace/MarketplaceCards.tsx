@@ -9,12 +9,13 @@
  * 5. Template Card — workflow templates
  *
  * Session 4 Milestone C
+ *
+ * NOTE: Uses Tailwind CSS + lucide-react (consistent with project design system).
+ * Refactored from Mantine/Tabler to reduce dependencies.
  */
 
 import React from 'react';
-import { Badge, Button, Card, Image, Text, Stack, Group } from '@mantine/core';
-import { IconDownload, IconPlus, IconCheck, IconClock } from '@tabler/icons-react';
-import styles from './MarketplaceCards.module.css';
+import { Download, Plus, Check, Clock } from 'lucide-react';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -65,6 +66,47 @@ export interface TemplateCardProps extends BaseCardProps {
 }
 
 // ============================================================================
+// SHARED CARD WRAPPER
+// ============================================================================
+
+const CardWrapper: React.FC<{ children: React.ReactNode; testId: string }> = ({
+  children,
+  testId,
+}) => (
+  <div
+    data-testid={testId}
+    className="border border-gray-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow bg-white"
+  >
+    {children}
+  </div>
+);
+
+// ============================================================================
+// BADGE COMPONENT
+// ============================================================================
+
+const Badge: React.FC<{ children: React.ReactNode; color?: string; size?: 'xs' | 'sm' | 'lg' }> = ({
+  children,
+  color = 'blue',
+  size = 'sm',
+}) => {
+  const colorClasses = {
+    blue: 'bg-blue-100 text-blue-800',
+    green: 'bg-green-100 text-green-800',
+    yellow: 'bg-yellow-100 text-yellow-800',
+    red: 'bg-red-100 text-red-800',
+  }[color] || 'bg-gray-100 text-gray-800';
+
+  const sizeClasses = {
+    xs: 'px-2 py-1 text-xs',
+    sm: 'px-3 py-1.5 text-sm',
+    lg: 'px-4 py-2 text-base',
+  }[size];
+
+  return <span className={`inline-block rounded-full font-medium ${colorClasses} ${sizeClasses}`}>{children}</span>;
+};
+
+// ============================================================================
 // COMPONENT 1: PLUGIN CARD
 // ============================================================================
 
@@ -77,35 +119,31 @@ export const PluginCard: React.FC<PluginCardProps> = ({
   installCount = 0,
   onInstall,
 }) => (
-  <Card data-testid="plugin-card" className={styles.card} shadow="sm" padding="lg" radius="md" withBorder>
-    {icon && <Image src={icon} alt={name} height={48} mb="md" />}
+  <CardWrapper testId="plugin-card">
+    {icon && <img src={icon} alt={name} className="w-12 h-12 mb-3 rounded" />}
 
-    <Stack gap="xs">
+    <div className="space-y-3">
       <div>
-        <Text fw={600} size="md">
-          {name}
-        </Text>
-        <Text size="xs" c="dimmed">
-          v{version}
-        </Text>
+        <h3 className="font-semibold text-base text-gray-900">{name}</h3>
+        <p className="text-xs text-gray-500">v{version}</p>
       </div>
 
-      {description && (
-        <Text size="sm" c="gray">
-          {description.substring(0, 80)}...
-        </Text>
-      )}
+      {description && <p className="text-sm text-gray-600">{description.substring(0, 80)}...</p>}
 
-      <Group justify="space-between">
-        <Badge size="lg" variant="light" color="blue">
+      <div className="flex items-center justify-between pt-2">
+        <Badge size="lg" color="blue">
           {installCount} installs
         </Badge>
-        <Button size="xs" onClick={onInstall} leftSection={<IconPlus size={14} />}>
+        <button
+          onClick={onInstall}
+          className="inline-flex items-center gap-1 px-3 py-1 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition"
+        >
+          <Plus size={14} />
           Install
-        </Button>
-      </Group>
-    </Stack>
-  </Card>
+        </button>
+      </div>
+    </div>
+  </CardWrapper>
 );
 
 // ============================================================================
@@ -129,30 +167,30 @@ export const SkillCard: React.FC<SkillCardProps> = ({
   }[confidenceLevel];
 
   return (
-    <Card data-testid="skill-card" className={styles.card} shadow="sm" padding="lg" radius="md" withBorder>
-      {icon && <Image src={icon} alt={name} height={48} mb="md" />}
+    <CardWrapper testId="skill-card">
+      {icon && <img src={icon} alt={name} className="w-12 h-12 mb-3 rounded" />}
 
-      <Stack gap="xs">
+      <div className="space-y-3">
         <div>
-          <Text fw={600} size="md">
-            {name}
-          </Text>
-          <Badge size="lg" color={confidenceColor} variant="light" mt="xs">
-            {confidenceScore}% confidence
-          </Badge>
+          <h3 className="font-semibold text-base text-gray-900">{name}</h3>
+          <div className="mt-2">
+            <Badge size="lg" color={confidenceColor}>
+              {confidenceScore}% confidence
+            </Badge>
+          </div>
         </div>
 
-        {description && (
-          <Text size="sm" c="gray">
-            {description.substring(0, 80)}...
-          </Text>
-        )}
+        {description && <p className="text-sm text-gray-600">{description.substring(0, 80)}...</p>}
 
-        <Button size="xs" onClick={onInstall} leftSection={<IconPlus size={14} />} fullWidth>
+        <button
+          onClick={onInstall}
+          className="w-full inline-flex items-center justify-center gap-1 px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition"
+        >
+          <Plus size={14} />
           Install Skill
-        </Button>
-      </Stack>
-    </Card>
+        </button>
+      </div>
+    </CardWrapper>
   );
 };
 
@@ -169,37 +207,34 @@ export const DatasetCard: React.FC<DatasetCardProps> = ({
   lastUpdated,
   onDownload,
 }) => (
-  <Card data-testid="dataset-card" className={styles.card} shadow="sm" padding="lg" radius="md" withBorder>
-    {icon && <Image src={icon} alt={name} height={48} mb="md" />}
+  <CardWrapper testId="dataset-card">
+    {icon && <img src={icon} alt={name} className="w-12 h-12 mb-3 rounded" />}
 
-    <Stack gap="xs">
+    <div className="space-y-3">
       <div>
-        <Text fw={600} size="md">
-          {name}
-        </Text>
-        <Text size="xs" c="dimmed">
-          {rowCount.toLocaleString()} rows
-        </Text>
+        <h3 className="font-semibold text-base text-gray-900">{name}</h3>
+        <p className="text-xs text-gray-500">{rowCount.toLocaleString()} rows</p>
       </div>
 
-      {description && (
-        <Text size="sm" c="gray">
-          {description.substring(0, 80)}...
-        </Text>
-      )}
+      {description && <p className="text-sm text-gray-600">{description.substring(0, 80)}...</p>}
 
-      <Group justify="space-between" align="center">
+      <div className="flex items-center justify-between pt-2">
         {lastUpdated && (
-          <Text size="xs" c="dimmed" leftSection={<IconClock size={12} />}>
+          <div className="inline-flex items-center gap-1 text-xs text-gray-500">
+            <Clock size={12} />
             Updated: {lastUpdated}
-          </Text>
+          </div>
         )}
-        <Button size="xs" onClick={onDownload} leftSection={<IconDownload size={14} />}>
+        <button
+          onClick={onDownload}
+          className="inline-flex items-center gap-1 px-3 py-1 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition"
+        >
+          <Download size={14} />
           Download
-        </Button>
-      </Group>
-    </Stack>
-  </Card>
+        </button>
+      </div>
+    </div>
+  </CardWrapper>
 );
 
 // ============================================================================
@@ -222,44 +257,31 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   };
 
   return (
-    <Card data-testid="service-card" className={styles.card} shadow="sm" padding="lg" radius="md" withBorder>
-      {icon && <Image src={icon} alt={name} height={48} mb="md" />}
+    <CardWrapper testId="service-card">
+      {icon && <img src={icon} alt={name} className="w-12 h-12 mb-3 rounded" />}
 
-      <Stack gap="xs">
+      <div className="space-y-3">
         <div>
-          <Text fw={600} size="md">
-            {name}
-          </Text>
-          <Badge
-            size="lg"
-            color={statusColors[healthStatus]}
-            variant="light"
-            mt="xs"
-            leftSection={<IconCheck size={12} />}
-          >
-            {healthStatus}
-          </Badge>
+          <h3 className="font-semibold text-base text-gray-900">{name}</h3>
+          <div className="mt-2">
+            <Badge size="lg" color={statusColors[healthStatus]}>
+              <Check size={12} className="inline mr-1" />
+              {healthStatus}
+            </Badge>
+          </div>
         </div>
 
         {endpointUrl && (
-          <Text size="xs" c="dimmed" truncate>
-            {endpointUrl}
-          </Text>
+          <p className="text-xs text-gray-500 truncate">{endpointUrl}</p>
         )}
 
-        {description && (
-          <Text size="sm" c="gray">
-            {description.substring(0, 80)}...
-          </Text>
-        )}
+        {description && <p className="text-sm text-gray-600">{description.substring(0, 80)}...</p>}
 
         {uptime !== undefined && (
-          <Text size="xs" c="dimmed">
-            Uptime: {uptime.toFixed(2)}%
-          </Text>
+          <p className="text-xs text-gray-500">Uptime: {uptime.toFixed(2)}%</p>
         )}
-      </Stack>
-    </Card>
+      </div>
+    </CardWrapper>
   );
 };
 
@@ -276,37 +298,33 @@ export const TemplateCard: React.FC<TemplateCardProps> = ({
   useCount = 0,
   onUse,
 }) => (
-  <Card data-testid="template-card" className={styles.card} shadow="sm" padding="lg" radius="md" withBorder>
-    {icon && <Image src={icon} alt={name} height={48} mb="md" />}
+  <CardWrapper testId="template-card">
+    {icon && <img src={icon} alt={name} className="w-12 h-12 mb-3 rounded" />}
 
-    <Stack gap="xs">
+    <div className="space-y-3">
       <div>
-        <Text fw={600} size="md">
-          {name}
-        </Text>
+        <h3 className="font-semibold text-base text-gray-900">{name}</h3>
         {category && (
-          <Badge size="xs" variant="light">
-            {category}
-          </Badge>
+          <div className="mt-1">
+            <Badge size="xs">{category}</Badge>
+          </div>
         )}
       </div>
 
-      {description && (
-        <Text size="sm" c="gray">
-          {description.substring(0, 80)}...
-        </Text>
-      )}
+      {description && <p className="text-sm text-gray-600">{description.substring(0, 80)}...</p>}
 
-      <Group justify="space-between">
-        <Text size="xs" c="dimmed">
-          {useCount} uses
-        </Text>
-        <Button size="xs" onClick={onUse} leftSection={<IconPlus size={14} />}>
+      <div className="flex items-center justify-between pt-2">
+        <span className="text-xs text-gray-500">{useCount} uses</span>
+        <button
+          onClick={onUse}
+          className="inline-flex items-center gap-1 px-3 py-1 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition"
+        >
+          <Plus size={14} />
           Use Template
-        </Button>
-      </Group>
-    </Stack>
-  </Card>
+        </button>
+      </div>
+    </div>
+  </CardWrapper>
 );
 
 // ============================================================================
