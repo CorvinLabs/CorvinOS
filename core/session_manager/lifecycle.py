@@ -20,11 +20,13 @@ from enum import Enum
 from typing import Optional, List, Any
 from uuid import uuid4
 
+from core.session_manager.monitors.goal_alignment import GoalAlignmentMonitor
+
 logger = logging.getLogger(__name__)
 
 
 class SessionSplitTrigger(str, Enum):
-    """6 Canonical split triggers for session lifecycle."""
+    """7 Canonical split triggers for session lifecycle."""
 
     PHASE_EXIT = "phase_exit"
     CONTEXT_LIMIT = "context_limit"
@@ -32,6 +34,7 @@ class SessionSplitTrigger(str, Enum):
     EXPLICIT_MILESTONE = "explicit_milestone"
     ITERATION_CAP = "iteration_cap"
     STALL_DETECTED = "stall_detected"
+    GOAL_DRIFT_DETECTED = "goal_drift_detected"  # k=4: ADR-0407 Goal Alignment Gate
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,7 @@ class SessionLifecycleManager:
         self.hub = hub
         self.active_sessions: dict[str, SessionMetadata] = {}
         self.session_metrics: dict[str, SessionMetrics] = {}
+        self.goal_alignment_monitor = GoalAlignmentMonitor()  # k=4: Wire goal alignment
 
     def startup(self, hub: Any) -> None:
         """Register with SubsystemHub and subscribe to events.
@@ -252,9 +256,12 @@ class SessionLifecycleManager:
         self.session_metrics[session_id].token_budget_used = fraction_used
 
     def check_split_triggers(
-        self, session_id: str, max_context_tokens: int = 200000
+        self,
+        session_id: str,
+        max_context_tokens: int = 200000,
+        current_work: Optional[str] = None,
     ) -> Optional[SplitTriggerEvent]:
-        """Check all 6 split triggers for a session.
+        """Check all 7 split triggers for a session (including goal drift).
 
         Returns first triggered (highest priority), or None if no trigger.
 
@@ -262,13 +269,15 @@ class SessionLifecycleManager:
         1. Token Burn (quota exhausted)
         2. Context Limit (approaching max)
         3. Iteration Cap (50+ iterations)
-        4. Stall Detected (no progress 30+ min)
-        5. Phase Exit (signal via explicit API)
-        6. Explicit Milestone (signal via explicit API)
+        4. Goal Drift Detected (semantic divergence from original goal) [k=4: ADR-0407]
+        5. Stall Detected (no progress 30+ min)
+        6. Phase Exit (signal via explicit API)
+        7. Explicit Milestone (signal via explicit API)
 
         Args:
             session_id: Session identifier
             max_context_tokens: Max context size (default 200k)
+            current_work: Optional current work transcript for goal alignment check [k=4]
 
         Returns:
             SplitTriggerEvent if triggered, None otherwise
@@ -320,6 +329,31 @@ class SessionLifecycleManager:
             )
             self._audit_log_event(event)
             return event
+
+        # Trigger 4: Goal Drift Detected (k=4: ADR-0407)
+        # Check goal alignment if current_work provided
+        if current_work and session_id in self.goal_alignment_monitor.session_states:
+            goal_state = self.goal_alignment_monitor.session_states.get(session_id)
+            if goal_state:
+                # Update current work in monitor state
+                goal_state.metadata["current_work"] = current_work
+                # Check for drift
+                drift_alert = self.goal_alignment_monitor.check(goal_state)
+                if drift_alert:
+                    # Convert alert to split trigger event
+                    event = self._create_split_event(
+                        SessionSplitTrigger.GOAL_DRIFT_DETECTED,
+                        metadata,
+                        now,
+                        reason=f"Goal drift detected: {drift_alert.reason}",
+                        metadata_dict={
+                            "similarity_score": drift_alert.metadata.get("similarity_score", 0.0),
+                            "threshold": drift_alert.metadata.get("threshold", 0.6),
+                            "original_goal": drift_alert.metadata.get("original_goal", ""),
+                        },
+                    )
+                    self._audit_log_event(event)
+                    return event
 
         # Trigger 6: Stall Detected (no progress ≥30 min)
         stall_minutes = (now - metrics.last_progress_at).total_seconds() / 60
