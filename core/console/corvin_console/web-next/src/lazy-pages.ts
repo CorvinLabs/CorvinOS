@@ -187,7 +187,7 @@ export const EngineConfigPage = React.lazy(() =>
 );
 
 export const ModelCostOptimizerPage = React.lazy(() =>
-  import("@/panels/ModelCostOptimizer").then((m) => ({ default: m.ModelCostOptimizer }))
+  import("@/pages/model-cost-optimizer").then((m) => ({ default: m.default }))
 );
 
 export const QualityGatesPage = React.lazy(() =>
