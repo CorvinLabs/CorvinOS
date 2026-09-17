@@ -1,29 +1,44 @@
 /**
- * Unit tests for the Vibe Engineering panel — the Learning Dashboard.
+ * Unit tests for the Vibe Engineering panel (route id `vibe-engineering`,
+ * sidebar label "Learnings").
  *
- * The panel's shape has changed twice, so these tests pin the current one:
- *   - it was five sidebar entries (Dashboard · Brain Monitor · Context
- *     Intelligence · Learning Hub · Session Explorer) until 2026-09-05,
+ * The panel's shape has changed several times, so these tests pin the
+ * current one:
+ *   - five sidebar entries (Dashboard · Brain Monitor · Context Intelligence ·
+ *     Learning Hub · Session Explorer) until 2026-09-05,
  *   - then one tabbed panel (Graph View · Inspector · Timeline · Learning),
- *   - and now the Learning view alone, with no tab bar at all.
+ *   - then the Learning view alone,
+ *   - and since 2026-09-15 (ADR-0728 Phase 2 live-data wiring) four tabs:
+ *     Maturity Metrics · Audit Events · System Metrics · Models, with
+ *     Maturity Metrics open by default.
  *
- * The route id stays `vibe-engineering`; only the visible name is "Learning
- * Dashboard".
+ * 2026-09-17: a sibling FILE pages/vibe-engineering.tsx shadowed this
+ * directory and the route crashed on nine 404s (95ecc2b6). This test renders
+ * the directory's component; tests/unit/page-dir-shadow.test.ts guards the
+ * resolution.
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { VibeDashboard } from '@/pages/vibe-engineering/VibeDashboard';
 
-// recharts needs a real layout box; the panel's own wiring is what's under test.
-vi.mock('@/pages/vibe-engineering/components/LearningDashboard', () => ({
-  default: () => (
-    <div data-testid="learning-dashboard">
-      <h1>Learning Dashboard</h1>
-    </div>
-  ),
+// The tabs fetch live endpoints and recharts needs a layout box; the panel's
+// own wiring (tab bar → which tab body mounts) is what's under test.
+vi.mock('@/pages/vibe-engineering/components/MaturityDashboard', () => ({
+  MaturityDashboard: () => <div data-testid="tab-maturity">Maturity body</div>,
 }));
+vi.mock('@/pages/vibe-engineering/tabs/LicensingAuditTab', () => ({
+  LicensingAuditTab: () => <div data-testid="tab-audit">Audit body</div>,
+}));
+vi.mock('@/pages/vibe-engineering/tabs/MonitoringTab', () => ({
+  MonitoringTab: () => <div data-testid="tab-metrics">Metrics body</div>,
+}));
+vi.mock('@/pages/vibe-engineering/tabs/ModelsTab', () => ({
+  ModelsTab: () => <div data-testid="tab-models">Models body</div>,
+}));
+
+const TABS = ['Maturity Metrics', 'Audit Events', 'System Metrics', 'Models'];
 
 describe('Vibe Engineering panel', () => {
   const renderComponent = () =>
@@ -33,22 +48,31 @@ describe('Vibe Engineering panel', () => {
       </BrowserRouter>,
     );
 
-  it('renders the learning dashboard', async () => {
+  it('mounts the dashboard container', () => {
     renderComponent();
-    expect(await screen.findByTestId('learning-dashboard')).toBeInTheDocument();
+    expect(screen.getByTestId('vibe-dashboard-panel')).toBeInTheDocument();
   });
 
-  it('is named Learning Dashboard', async () => {
+  it('offers exactly the four Phase 2 tabs', () => {
     renderComponent();
-    expect(
-      await screen.findByRole('heading', { name: /learning dashboard/i }),
-    ).toBeInTheDocument();
+    for (const label of TABS) {
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+    }
   });
 
-  it('has no tab bar — the audit tabs were removed', () => {
-    const { container } = renderComponent();
-    expect(container.querySelector('[role="tablist"]')).toBeNull();
-    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+  it('opens on Maturity Metrics', async () => {
+    renderComponent();
+    expect(await screen.findByTestId('tab-maturity')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-audit')).toBeNull();
+  });
+
+  it('switches tab bodies on click', async () => {
+    renderComponent();
+    fireEvent.click(screen.getByRole('button', { name: 'Audit Events' }));
+    expect(await screen.findByTestId('tab-audit')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-maturity')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Models' }));
+    expect(await screen.findByTestId('tab-models')).toBeInTheDocument();
   });
 
   it('renders no retired view', () => {
@@ -56,6 +80,7 @@ describe('Vibe Engineering panel', () => {
     for (const gone of [
       /graph view/i, /inspector/i, /timeline/i,
       /brain monitor/i, /context intelligence/i, /learning hub/i, /session explorer/i,
+      /learning loops/i,
     ]) {
       expect(screen.queryByText(gone)).toBeNull();
     }
