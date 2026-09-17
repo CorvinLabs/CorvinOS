@@ -9,11 +9,14 @@ License: Apache-2.0
 """
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -138,18 +141,8 @@ class SkillSkeletonGenerator:
             "capabilities": [config.domain],
             "parameters": config.parameters or [],
             "dependencies": config.dependencies or [],
-            "input_schema": {
-                "type": "object",
-                "required": list(config.input_schema.keys()),
-                "properties": {k: {"type": v} for k, v in config.input_schema.items()},
-            },
-            "output_schema": {
-                "type": "object",
-                "required": ["result", "confidence"],
-                "properties": {
-                    k: {"type": v} for k, v in config.output_schema.items()
-                },
-            },
+            "input_schema": config.input_schema,  # Simple dict: {"field": "type", ...}
+            "output_schema": config.output_schema,  # Simple dict: {"result": "string", "confidence": "float"}
             "hooks": {
                 "on_load": "hooks/on_load.py",
                 "on_execute": "hooks/on_execute.py",
