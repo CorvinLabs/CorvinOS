@@ -32,7 +32,12 @@ except ImportError:
     RING = None
     load_crl_state = lambda *a, **k: None
     is_revoked = lambda *a, **k: False
-    CAPABILITIES = {}
+    CAPABILITIES = {
+        "compute.run": {"class": "L", "free": {"limit": 10}, "member": {"limit": None}},
+        "forge.create": {"class": "L", "free": {"limit": 0}, "member": {"limit": None}},
+        "a2a.network": {"class": "N", "free": {"limit": 0}, "member": {"limit": None}},
+        "chat.turns": {"class": "B", "free": {"limit": None}, "member": {"limit": None}},
+    }
     FREE_TIER = {}
     def active_tier(**k): return "free"
 
@@ -150,38 +155,38 @@ def require_capability(
         _ENFORCEMENT_AVAILABLE = False
         _ENFORCEMENT_ERROR = str(e)
 
-    # Look up capability in CAPABILITIES matrix
+    # Look up capability in CAPABILITIES matrix (ADR-0700 §2.1)
     if capability not in CAPABILITIES:
         _log.warning("Unknown capability: %s", capability)
-        decision = CapabilityDecision(
-            decision=Decision.DENY,
-            tier=tier,
-            capability=capability,
-            requested=requested,
-            allowed=0,
-            reason="unknown_capability",
-        )
-        if decision.decision == Decision.DENY:
-            raise LicenseDenied(
-                capability=capability,
-                tier=tier,
-                reason="unknown_capability",
-            )
-        return decision
-
-    # Resolve allowed count from tier
-    tier_limits = CAPABILITIES[capability].get(tier.value, {})
-    allowed = tier_limits.get("limit", 0)
-
-    # Determine decision
-    if allowed >= requested:
-        decision_enum = Decision.ALLOW
-    elif allowed > 0:
+        reason = "unknown_capability"
         decision_enum = Decision.DENY
-        reason = "quota_exceeded"
+        allowed = 0
     else:
-        decision_enum = Decision.DENY
-        reason = "not_available_in_tier"
+        cap_spec = CAPABILITIES[capability]
+        # Resolve limit from tier-specific entry
+        tier_limits = cap_spec.get(tier.value, {})
+        allowed = tier_limits.get("limit", 0)
+
+        # Determine decision based on limit
+        if allowed is None:
+            # None = unlimited
+            decision_enum = Decision.ALLOW
+            reason = None
+        elif isinstance(allowed, int):
+            if allowed == 0:
+                decision_enum = Decision.DENY
+                reason = "not_available_in_tier"
+            elif allowed >= requested:
+                decision_enum = Decision.ALLOW
+                reason = None
+            else:
+                decision_enum = Decision.DENY
+                reason = "quota_exceeded"
+        else:
+            # Fallback for malformed data
+            decision_enum = Decision.DENY
+            reason = "enforcement_unavailable"
+            allowed = 0
 
     result = CapabilityDecision(
         decision=decision_enum,
