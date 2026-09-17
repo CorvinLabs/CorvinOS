@@ -7,8 +7,11 @@
  * - Models: /v1/console/v1/models/available (Engine registry)
  *
  * History: This route used to be a tabbed hub (Graph View, Inspector, Timeline, Learning).
- * On 2026-09-05 the operator requested Learning view alone — tabs are gone.
- * The route id stays `vibe-engineering` for bookmark stability.
+ * On 2026-09-05 the operator requested the Learning view alone; on 2026-09-15 the
+ * Phase 2 live-data tabs above replaced it (Maturity Metrics · Audit Events ·
+ * System Metrics · Models). The route id stays `vibe-engineering` for bookmark
+ * stability. This directory is the page: a sibling FILE pages/vibe-engineering.tsx
+ * wins over it silently (happened 2026-08-27 and 2026-09-17) — never add one.
  */
 
 import { Suspense, useEffect, useState } from 'react';

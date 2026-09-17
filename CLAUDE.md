@@ -831,10 +831,15 @@ warning from vite, tsc or eslint. A new panel built as `pages/foo/` while the ol
 **the old page**, which presents exactly like a stale bundle and sends debugging into the
 three caches or the backend. It happened to the ADR-0400 Vibe Dashboard: the directory
 shipped 2026-08-26, `pages/vibe-engineering.tsx` kept winning, and the panel was
-unreachable until the file was deleted on 2026-08-27 (ADR-0431). When a rewrite lands as
+unreachable until the file was deleted on 2026-08-27 (ADR-0431). It happened AGAIN on
+2026-09-17: 95ecc2b6 re-added `pages/vibe-engineering.tsx`, the route crashed on nine
+404s, and the same commit routed `/app/model-cost-optimizer` to a page fetching
+`/api/v1/...` paths that exist nowhere in this console. When a rewrite lands as
 a directory, DELETE the same-named file in the same commit — never keep both — and prove
 which one loads with a marker string only the new code contains
 (`scripts/console-deploy.sh --marker '<string>'`), not by reading the diff.
+`web-next/tests/unit/page-dir-shadow.test.ts` fails on the next sibling file; a
+deliberately dead pair goes in its `SHADOW_EXEMPT` map WITH a reason.
 
 **Children of `<Routes>` must be `<Route>` elements — never a component that returns them.**
 react-router walks the `<Routes>` tree statically (`createRoutesFromChildren`) and throws

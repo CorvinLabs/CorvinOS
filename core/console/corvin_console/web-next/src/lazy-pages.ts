@@ -163,6 +163,10 @@ export const MarketplaceHubPage = React.lazy(() =>
 );
 
 
+// Resolves to src/pages/vibe-engineering/index.tsx (VibeDashboard, ADR-0400/0728).
+// A sibling FILE pages/vibe-engineering.tsx wins over the directory silently —
+// it shadowed this dashboard twice (2026-08-27 ADR-0431, 2026-09-17 95ecc2b6);
+// tests/unit/page-dir-shadow.test.ts fails on the next one.
 export const VibeEngineeringPage = React.lazy(() =>
   import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
 );
@@ -186,8 +190,12 @@ export const EngineConfigPage = React.lazy(() =>
   import("@/pages/engine-config").then((m) => ({ default: m.EngineConfigPage }))
 );
 
+// ADR-0760/0761 panel — its endpoints (/v1/console/learning/model-cost-optimizer/*)
+// are live. 95ecc2b6 pointed this at pages/model-cost-optimizer.tsx, which fetched
+// nine /api/v1/engine/* routes that exist nowhere in this console and crashed on
+// the 404 body; restored 2026-09-17.
 export const ModelCostOptimizerPage = React.lazy(() =>
-  import("@/pages/model-cost-optimizer").then((m) => ({ default: m.default }))
+  import("@/panels/ModelCostOptimizer").then((m) => ({ default: m.ModelCostOptimizer }))
 );
 
 export const QualityGatesPage = React.lazy(() =>
