@@ -16,6 +16,42 @@ under the maintainer account. Confirmation is not required.
 
 ---
 
+## ADR Submodule Integration — Single Source of Truth (load-bearing, ADR-0862)
+
+**Canonical ADR Location:** `corvin_decisions/` (git submodule) → `/home/shumway/projects/Corvin-ADR/decisions/`
+
+**Developer Workflow:**
+1. **After clone:** `git submodule update --init --recursive` (one-time)
+2. **To access ADRs:** Read from `corvin_decisions/decisions/ADR-XXXX-*.md` (always up-to-date via git submodule)
+3. **CI/CD:** Workflows automatically fetch submodules at build start
+
+**Why Submodule?**
+- ADRs live in the **external Corvin-ADR repo**, not duplicated in CorvinOS
+- Submodule keeps the local copy in sync without manual management
+- Task Registry (`~/.corvin/task_registry.json`) scans submodule path for ADR status
+- Prevents fragmentation (no local ADR copies that diverge from canonical repo)
+
+**Path Resolution:**
+| Lookup Type | Where | Resolution |
+|---|---|---|
+| ADR Git reference | Code comments | `corvin_decisions/decisions/ADR-XXXX.md` (submodule path) |
+| ADR by ID | Task registry sync | Via `corvin_decisions/` submodule absolute path |
+| Old paths (deprecated) | `docs/decisions/`, `core/console/decisions/`, etc. | **→ See deprecation notice below** |
+
+**Deprecation Notices Placed:**
+- `docs/decisions/README.md` — Points to `corvin_decisions/decisions/`
+- `core/console/README.md` — Notes submodule location
+- All ADR references in code now use submodule path
+
+**Must NOT do:**
+- Keep local ADR copies under `docs/decisions/` or `outputs/decisions/` (sync only via submodule)
+- Reference ADRs by old paths in commit messages (use submodule path)
+- Manually update `corvin_decisions/` without `git submodule update`
+
+→ Full ADR details: See `corvin_decisions/decisions/` or `/home/shumway/projects/Corvin-ADR/decisions/`
+
+---
+
 ## Task Completion Registry — Single Source of Truth (load-bearing)
 
 **Problem:** Before 2026-09-16, task completion status was fragmented:
