@@ -294,6 +294,34 @@ if (-not $NoClaudeCode) {
     }
 }
 
+# ── 2c. Cross-platform compatibility check (ADR-0666 supplement) ───────────────
+if ($EditablePath -ne "") {
+    $RepoDir = $EditablePath
+} else {
+    $RepoDir = (Get-Location).Path
+}
+
+$RepairScript = Join-Path $RepoDir "scripts\install_repair.ps1"
+if (Test-Path $RepairScript) {
+    Write-Host ""
+    Write-Step "Checking cross-platform compatibility (operator→corvin_operator rename) ..."
+    try {
+        $diagResult = & powershell -ExecutionPolicy Bypass -File $RepairScript -Diagnose 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Platform issues detected. Attempting repair..."
+            & powershell -ExecutionPolicy Bypass -File $RepairScript -Repair -Force
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "Platform compatibility repair failed. Please run manually: powershell -ExecutionPolicy Bypass -File $RepairScript -Repair -Force"
+            }
+            Write-Ok "Platform issues fixed."
+        }
+    } catch {
+        Write-Warn "Repair check skipped: $_"
+    }
+} else {
+    Write-Hint "Repair script not found at $RepairScript (skipping compatibility check)"
+}
+
 # ── 3. setup wizard ───────────────────────────────────────────────────────────
 if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
     Write-Host ""
