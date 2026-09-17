@@ -4,19 +4,19 @@ rotation:
   enabled: true
   interval_days: 90
   audit_trail_enabled: true
-  
-secrets:
-  api_keys:
-    count: 14
-    type: hmac-sha256
-    storage: ~/.corvin/secrets/api_keys.json
-    rotation_enabled: true
-    
-  session_tokens:
-    count: null  # dynamic generation
-    type: fernet
-    ttl_hours: 1
-    rotation_enabled: true
+
+  secrets:
+    - id: api_keys
+      count: 14
+      type: hmac-sha256
+      storage: ~/.corvin/secrets/api_keys.json
+      rotation_enabled: true
+
+    - id: session_tokens
+      count: 8
+      type: fernet
+      ttl_hours: 1
+      rotation_enabled: true
     
 rotation_phases:
   phase_1_generate:
