@@ -202,6 +202,30 @@ if [ "$SKIP_CLAUDE" != "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 1c: Cross-platform compatibility check (ADR-0666 supplement)
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -n "$EDITABLE" ]; then
+    REPO_DIR="$EDITABLE"
+else
+    REPO_DIR="$(pwd)"
+fi
+
+REPAIR_SCRIPT="$REPO_DIR/scripts/install_repair.sh"
+if [ -f "$REPAIR_SCRIPT" ]; then
+    echo "  Checking cross-platform compatibility (operator→corvin_operator rename) ..."
+    if ! bash "$REPAIR_SCRIPT" --diagnose >/dev/null 2>&1; then
+        printf '  %s Platform issues detected. Attempting repair...\n' "$(_yellow '⚠')"
+        if bash "$REPAIR_SCRIPT" --repair; then
+            printf '  %s Platform issues fixed.\n' "$(_green '✓')"
+        else
+            die "Platform compatibility repair failed. Please run manually: bash $REPAIR_SCRIPT --repair --force"
+        fi
+    fi
+else
+    printf '  %s Repair script not found at %s (skipping compatibility check)\n' "$(_dim 'ℹ')" "$REPAIR_SCRIPT"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 2: Install CorvinOS via uv
 # ─────────────────────────────────────────────────────────────────────────────
 if [ -n "$EDITABLE" ]; then
