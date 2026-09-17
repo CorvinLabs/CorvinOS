@@ -23,6 +23,12 @@ from .feature_extractor import FeatureExtractor, ExtractedFeatures
 
 logger = logging.getLogger(__name__)
 
+# Optional import for learning store integration
+try:
+    from core.learning.learned_threshold_store import get_store
+except ImportError:
+    get_store = None
+
 
 @dataclass(frozen=True)
 class ModelSelectorConfig:
@@ -184,8 +190,11 @@ class ModelSelector:
             model = "claude-sonnet-5"
             decomposition_hint = None
         elif is_decomposable:
-            # Check historical Haiku success rate
-            haiku_success_rate = self._get_haiku_success_rate(task_type)
+            # Check historical Haiku success rate (from learning store or defaults)
+            haiku_success_rate = self._get_haiku_success_rate(
+                task_type=task_type,
+                tenant_id=tenant_id
+            )
 
             if haiku_success_rate > 0.85:
                 # Haiku can handle this task type successfully
@@ -213,6 +222,8 @@ class ModelSelector:
             decomposition_hint,
             is_orchestration,
             is_decomposable,
+            task_type=task_type,
+            tenant_id=tenant_id,
         )
 
         result = ClassificationResult(
@@ -301,11 +312,124 @@ class ModelSelector:
         # Decision: All three signals needed
         return has_structured_format and in_decomposable_range and known_task_type
 
-    def _get_haiku_success_rate(self, task_type: Optional[str] = None) -> float:
-        """Get historical Haiku success rate for task type."""
-        if not task_type or task_type not in self.haiku_success_rates:
-            return self.haiku_success_rates.get("default", 0.80)
-        return self.haiku_success_rates[task_type]
+    def _get_haiku_success_rate(
+        self,
+        task_type: Optional[str] = None,
+        tenant_id: str = "_default",
+    ) -> float:
+        """Get historical Haiku success rate for task type.
+
+        Tries to query learning store first (ADR-0314), then falls back to
+        hardcoded defaults. Returns success rate [0.0, 1.0].
+
+        Args:
+            task_type: task classification (e.g., "code_review")
+            tenant_id: tenant scope for learning store query (GDPR Art. 5)
+
+        Returns:
+            Success rate [0.0, 1.0], or default 0.88 if unknown
+        """
+        # Step 1: Try learning store first (real learned data)
+        if get_store is not None and task_type:
+            try:
+                store = get_store(tenant_id)
+                if store:
+                    # Query for Haiku success rate per task type
+                    thresholds = store.get_all()
+                    for threshold in thresholds:
+                        # Match on task_type (e.g., "code_review")
+                        if (threshold.task_type == task_type and
+                            threshold.success_rate > 0.0 and
+                            threshold.converged and
+                            threshold.sample_count >= 10):
+                            # Use real learned success rate
+                            logger.debug(
+                                f"Using learned success rate for {task_type}: "
+                                f"{threshold.success_rate:.2%} (n={threshold.sample_count})"
+                            )
+                            return threshold.success_rate
+            except Exception as e:
+                logger.debug(
+                    f"Failed to query learning store for {task_type} "
+                    f"(tenant {tenant_id}): {e}, falling back to defaults"
+                )
+
+        # Step 2: Fallback to hardcoded defaults
+        if task_type and task_type in self.haiku_success_rates:
+            return self.haiku_success_rates[task_type]
+
+        # Step 3: Ultimate fallback
+        return self.haiku_success_rates.get("default", 0.88)
+
+    def get_haiku_stats_by_task_type(
+        self,
+        tenant_id: str = "_default",
+    ) -> Dict[str, Dict[str, Any]]:
+        """Get Haiku success statistics by task type from learning store.
+
+        Returns real data from learning store with fallback to hardcoded defaults.
+        Tenant-scoped query (GDPR Art. 5).
+
+        Args:
+            tenant_id: tenant scope for learning store query
+
+        Returns:
+            Dict mapping task_type → {success_rate, n_samples, confidence_interval}
+            Example:
+            {
+                "code_review": {
+                    "success_rate": 0.96,
+                    "n_samples": 42,
+                    "confidence_interval": [0.91, 1.0],
+                    "model": "claude-haiku-4-5"
+                },
+                ...
+            }
+        """
+        stats = {}
+
+        # Step 1: Try learning store
+        if get_store is not None:
+            try:
+                store = get_store(tenant_id)
+                if store:
+                    thresholds = store.get_all()
+                    for threshold in thresholds:
+                        if threshold.success_rate > 0.0 and threshold.sample_count >= 10:
+                            # Compute 95% confidence interval using binomial proportion
+                            n = threshold.sample_count
+                            p = threshold.success_rate
+                            se = (p * (1 - p) / n) ** 0.5
+                            ci_margin = 1.96 * se  # 95% CI
+
+                            stats[threshold.task_type] = {
+                                "success_rate": p,
+                                "n_samples": n,
+                                "confidence_interval": [
+                                    max(0.0, p - ci_margin),
+                                    min(1.0, p + ci_margin),
+                                ],
+                                "converged": threshold.converged,
+                                "model": "claude-haiku-4-5",
+                            }
+            except Exception as e:
+                logger.debug(
+                    f"Failed to query learning store for {tenant_id}: {e}, "
+                    f"falling back to hardcoded defaults"
+                )
+
+        # Step 2: Fill in missing task types from hardcoded defaults
+        for task_type, success_rate in self.haiku_success_rates.items():
+            if task_type not in stats:
+                stats[task_type] = {
+                    "success_rate": success_rate,
+                    "n_samples": 0,  # Hardcoded, no samples
+                    "confidence_interval": None,  # N/A for hardcoded
+                    "converged": False,
+                    "model": "claude-haiku-4-5",
+                }
+
+        return stats
 
     def _build_reasoning_with_decomposition(
         self,
@@ -316,6 +440,8 @@ class ModelSelector:
         decomposition_hint: Optional[str],
         is_orchestration: bool,
         is_decomposable: bool,
+        task_type: Optional[str] = None,
+        tenant_id: str = "_default",
     ) -> str:
         """Build reasoning including decomposition context."""
         reasons = []
@@ -323,7 +449,8 @@ class ModelSelector:
         if is_orchestration:
             reasons.append("Orchestration/composition task requires Sonnet reasoning")
         elif is_decomposable and decomposition_hint:
-            success_rate = self._get_haiku_success_rate()
+            # Get success rate from learning store (with fallback to defaults)
+            success_rate = self._get_haiku_success_rate(task_type=task_type, tenant_id=tenant_id)
             reasons.append(f"Decomposable task: Haiku {success_rate*100:.0f}% success rate")
             reasons.append(f"Decomposition hint: {decomposition_hint}")
 
