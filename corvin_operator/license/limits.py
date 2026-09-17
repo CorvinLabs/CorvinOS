@@ -205,6 +205,117 @@ for _legacy in ("universal", "starter", "personal", "professional",
                 "pro", "business", "enterprise"):
     TIER_RESOURCE_LIMITS[_legacy] = dict(TIER_RESOURCE_LIMITS["member"])
 
+# ── ADR-0700/0703 Canonical Capability Matrix ──────────────────────────────────
+# Single source of truth for all capabilities (§2.1 table).
+# Format: capability_id → {class: "L|N|B", free: {limit: int | None}, member: {limit: int | None}}
+#
+# Class L (Locally gated): quota enforcer resolves offline from licence JWT
+# Class N (Network-verified): requires Member Credential (MC, 7d TTL) + CRL check
+# Class B (Baseline): available on both tiers, no gating needed
+
+CAPABILITIES: dict[str, dict[str, Any]] = {
+    # ── Class B: Baseline (both tiers, no gating) ──
+    "chat.turns": {
+        "class": "B",
+        "free": {"limit": None},      # unlimited
+        "member": {"limit": None},
+    },
+    "voice.summaries": {
+        "class": "B",
+        "free": {"limit": None},
+        "member": {"limit": None},
+    },
+    "bridges.all": {
+        "class": "B",
+        "free": {"limit": None},
+        "member": {"limit": None},
+    },
+    "engines.all": {
+        "class": "B",
+        "free": {"limit": None},
+        "member": {"limit": None},
+    },
+    "skills.run_vetted": {
+        "class": "B",
+        "free": {"limit": None},      # signature verified at load
+        "member": {"limit": None},
+    },
+    "skills.run_local": {
+        "class": "B",
+        "free": {"limit": None},      # unsigned code confirmation
+        "member": {"limit": None},
+    },
+    "telemetry.opt_out": {
+        "class": "B",
+        "free": {"limit": None},
+        "member": {"limit": None},
+    },
+
+    # ── Class L: Locally gated (offline, licence JWT) ──
+    "compute.run": {
+        "class": "L",
+        "free": {"limit": 10},        # 10/day per UTC calendar day per installation
+        "member": {"limit": None},    # unlimited
+    },
+    "context.enrich": {
+        "class": "L",
+        "free": {"limit": 10},        # 10/day (degrade-not-block)
+        "member": {"limit": None},
+    },
+    "context.enrich_llm": {
+        "class": "L",
+        "free": {"limit": 5},         # 5/day (LLM synthesis, degrade-not-block)
+        "member": {"limit": None},
+    },
+    "workflows.max": {
+        "class": "L",
+        "free": {"limit": 1},         # max 1 workflow exists
+        "member": {"limit": None},
+    },
+    "workflows.concurrent": {
+        "class": "L",
+        "free": {"limit": 1},         # max 1 concurrent workflow
+        "member": {"limit": None},
+    },
+    "rag.providers": {
+        "class": "L",
+        "free": {"limit": 1},
+        "member": {"limit": None},
+    },
+    "space.domains": {
+        "class": "L",
+        "free": {"limit": 1},
+        "member": {"limit": None},
+    },
+    "datasource.connections_concurrent": {
+        "class": "L",
+        "free": {"limit": 1},
+        "member": {"limit": None},
+    },
+    "layers.custom_bc": {
+        "class": "L",
+        "free": {"limit": 1},         # Tier-B/C custom layers
+        "member": {"limit": None},
+    },
+    "forge.create": {
+        "class": "L",
+        "free": {"limit": 0},         # MEMBER ONLY — Forge/Skill-Forge authoring
+        "member": {"limit": None},
+    },
+
+    # ── Class N: Network-verified (Member Credential + CRL) ──
+    "marketplace.publish": {
+        "class": "N",
+        "free": {"limit": 0},         # MEMBER ONLY
+        "member": {"limit": None},
+    },
+    "a2a.network": {
+        "class": "N",
+        "free": {"limit": 0},         # MEMBER ONLY
+        "member": {"limit": None},
+    },
+}
+
 # Freeze both tables so in-process mutation raises TypeError instead of silently
 # downgrading all users.  _deep_freeze() wraps dicts recursively in MappingProxyType
 # and converts lists to tuples.  Any code that read these values via dict literals
@@ -212,3 +323,4 @@ for _legacy in ("universal", "starter", "personal", "professional",
 # pattern already in place for _ACTIVE_LICENSE after _freeze_license().
 FREE_TIER = _deep_freeze(FREE_TIER)
 TIER_RESOURCE_LIMITS = _deep_freeze(TIER_RESOURCE_LIMITS)
+CAPABILITIES = _deep_freeze(CAPABILITIES)

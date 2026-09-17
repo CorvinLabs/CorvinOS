@@ -1,67 +1,45 @@
-"""
-Watchdog Health Check Tests (ADR-0867)
-Tests for post-installation health verification and daemon auto-restart.
-"""
+"""Test suite for Watchdog Timer Health Check (ADR-0867)"""
 
-import pytest
-from unittest.mock import Mock, patch
 import subprocess
-import time
+from pathlib import Path
 
+def test_health_check_probe_in_install_sh():
+    """Verify health_check_probe function is in install.sh"""
+    install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
+    assert install_sh.exists()
+    content = install_sh.read_text()
+    assert "healthz_check_probe" in content
+    assert "exponential backoff" in content or "backoff" in content
 
-class TestWatchdogHealthCheckProbe:
-    """Test health check probe for individual endpoints."""
-    
-    def test_healthz_probe_success(self):
-        """Test successful health check response."""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 0
-            result = subprocess.run(['curl', '-fs', '-m', '2', 'http://localhost:8765/v1/console/healthz'], 
-                                   capture_output=True)
-            assert result.returncode == 0
-    
-    def test_healthz_probe_timeout(self):
-        """Test health check timeout."""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 28  # curl timeout
-            result = subprocess.run(['curl', '-fs', '-m', '2', 'http://localhost:8765/v1/console/healthz'],
-                                   capture_output=True)
-            assert result.returncode != 0
+def test_console_endpoint_check():
+    """Verify console health endpoint is checked"""
+    install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
+    content = install_sh.read_text()
+    assert "/v1/console/healthz" in content
 
+def test_gateway_endpoint_check():
+    """Verify gateway health endpoint is checked"""
+    install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
+    content = install_sh.read_text()
+    assert "/v1/gateway/healthz" in content
 
-class TestWatchdogAuditEvents:
-    """Test audit trail integration."""
-    
-    def test_health_check_passed_audit_event(self):
-        """Test audit event on successful health check."""
-        with patch('core.compliance.corvin_compliance_reports.audit_chain.AuditChain.write_event') as mock_write:
-            mock_write({"event_type": "health_check_passed"})
-            assert mock_write.called
-    
-    def test_health_check_failed_audit_event(self):
-        """Test audit event on failed health check."""
-        with patch('core.compliance.corvin_compliance_reports.audit_chain.AuditChain.write_event') as mock_write:
-            mock_write({"event_type": "health_check_failed"})
-            assert mock_write.called
+def test_fail_closed_exit_code():
+    """Verify health check exits with code 2 on failure"""
+    install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
+    content = install_sh.read_text()
+    assert "exit 2" in content
+    assert "HEALTHZ_PASS" in content
 
-
-class TestDaemonAutoRestart:
-    """Test systemd daemon auto-restart behavior."""
-    
-    def test_restart_configured(self):
-        """Test that systemd service has Restart configuration."""
-        # Would verify systemd service file contains Restart=on-failure
-        assert True
-
-
-class TestWatchdogCrashLoopDetection:
-    """Test crash loop detection."""
-    
-    def test_restart_count_tracking(self):
-        """Test restart count tracking."""
-        # Would verify audit events for restarts
-        assert True
-
+def test_backoff_logic():
+    """Verify exponential backoff logic is present"""
+    install_sh = Path("/home/shumway/projects/CorvinOS/install.sh")
+    content = install_sh.read_text()
+    assert "backoff=$((backoff * 2))" in content or "backoff*" in content
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    test_health_check_probe_in_install_sh()
+    test_console_endpoint_check()
+    test_gateway_endpoint_check()
+    test_fail_closed_exit_code()
+    test_backoff_logic()
+    print("✓ All watchdog health check tests passed")

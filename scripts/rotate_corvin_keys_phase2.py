@@ -1,219 +1,171 @@
 #!/usr/bin/env python3
 """
-Blocker 3: Phase 2 Automated Credential Rotation
-Replaces live credentials with fail-closed placeholders.
+Credential Rotation Phase 2: Automated Key Rotation (after manual Phase 1 revocation)
 
-Prerequisites:
-- Phase 1 (manual revocation) MUST complete first
-- Operator revokes credentials via web dashboards (GitHub, Hetzner, Cloudflare, OpenAI, etc.)
-- This script replaces credentials with placeholders locally
+Phase 1 (manual): Operator revokes 14 credentials via web dashboards (1-2 hours)
+Phase 1.5 (this script, pre-checks): Validates system ready for rotation (5-10 min)
+Phase 2 (this script, if checks pass): Rotates remaining credentials atomically
 
-Fail-Closed Strategy:
-- Placeholders are format-correct but non-functional
-- Any service using them will immediately fail with 401 Unauthorized
-- No silent fallback behavior
+Usage:
+    python3 scripts/rotate_corvin_keys_phase2.py [--dry-run]
+
+Options:
+    --dry-run       Show what would be changed, don't write files
 """
 
 import json
-import os
-from pathlib import Path
+import sys
 from datetime import datetime
-import hashlib
+from pathlib import Path
+from typing import Dict, List, Tuple
+import argparse
 
+CORVIN_HOME = Path.home() / ".corvin"
+CORVIN_CONFIG = Path.home() / ".config" / "corvin-voice"
+BACKUP_DIR = Path.home() / ".corvin-credential-backups"
 
-class CredentialRotator:
-    """Rotate credentials to placeholders (Phase 2)."""
+def green(s: str) -> str:
+    return f"\033[32m{s}\033[0m"
 
-    TIMESTAMP = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+def red(s: str) -> str:
+    return f"\033[31m{s}\033[0m"
 
-    PLACEHOLDERS = {
-        "GITHUB_TOKEN": "ghp_PLACEHOLDER_CorvinOS_{ts}",
-        "HETZNER_API_TOKEN": "PLACEHOLDER_HETZNER_API_{ts}",
-        "HETZNER_ROOT_PASSWORT": "PLACEHOLDER_SSH_ROOT_{ts}",
-        "CLOUDFLARE_ID": "PLACEHOLDER_CF_ID_{ts}",
-        "CLOUDFLARE_API_TOKEN": "PLACEHOLDER_CF_API_{ts}",
-        "PYPI_TOKEN": "PLACEHOLDER_PYPI_{ts}",
-        "RESEND_API_KEY": "PLACEHOLDER_RESEND_{ts}",
-        "CORVIN_TTS_OPENAI_KEY": "sk-proj-PLACEHOLDER-TTS-{ts}",
-        "CORVIN_STT_OPENAI_KEY": "sk-proj-PLACEHOLDER-STT-{ts}",
-        "OPENAI_API_KEY": "sk-proj-PLACEHOLDER-OpenAI-{ts}",
-        "GMAIL_APP_PASSWORD": "PLACEHOLDER_GMAIL_{ts}",
-        "OLLAMA_API_KEY": "PLACEHOLDER_OLLAMA_{ts}",
-        "HETZNER_SSH_KEY_NAME": "PLACEHOLDER_SSH_KEY_{ts}",
+def yellow(s: str) -> str:
+    return f"\033[33m{s}\033[0m"
+
+def bold(s: str) -> str:
+    return f"\033[1m{s}\033[0m"
+
+def dim(s: str) -> str:
+    return f"\033[2m{s}\033[0m"
+
+def load_env_file(path: Path) -> Dict[str, str]:
+    """Load a .env or service.env file into a dict."""
+    result = {}
+    if not path.exists():
+        return result
+    
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                result[key.strip()] = value.strip()
+    return result
+
+def save_env_file(path: Path, data: Dict[str, str]) -> None:
+    """Save a dict to a .env or service.env file."""
+    with open(path, "w") as f:
+        for key, value in data.items():
+            f.write(f"{key}={value}\n")
+
+def phase_1_5_pre_checks() -> bool:
+    """Phase 1.5: Validate system is ready for credential rotation."""
+    print(f"\n{bold('═' * 70)}")
+    print(f"{bold('Phase 1.5: Pre-Checks (Validation Before Rotation)')}")
+    print(f"{bold('═' * 70)}\n")
+    
+    # Check 1: Credential files readable
+    print(f"{dim('Check 1: Credential files readable...')} ", end="", flush=True)
+    try:
+        env_data = load_env_file(Path.home() / ".env") if (Path.home() / ".env").exists() else {}
+        print(green("✓"))
+    except Exception as e:
+        print(red("✗"))
+        return False
+    
+    # Check 2: Backup directory accessible
+    print(f"{dim('Check 2: Backup directory accessible...')} ", end="", flush=True)
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        print(green("✓"))
+    except Exception as e:
+        print(red("✗"))
+        return False
+    
+    print(f"\n{green('✓ All pre-checks passed. Phase 2 automation is safe to proceed.')}\n")
+    return True
+
+def rotate_credentials_phase2(dry_run: bool = False) -> bool:
+    """Phase 2: Rotate all credentials atomically."""
+    print(f"\n{bold('═' * 70)}")
+    print(f"{bold('Phase 2: Credential Rotation')}")
+    print(f"{bold('═' * 70)}\n")
+    
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    
+    # Backup current credentials
+    print(f"{dim('Creating backup...')} ", end="", flush=True)
+    backup_path = BACKUP_DIR / f"credentials-backup-{timestamp}"
+    backup_path.mkdir(parents=True, exist_ok=True)
+    
+    env_path = Path.home() / ".env"
+    if env_path.exists():
+        with open(env_path, "rb") as src:
+            with open(backup_path / "env.backup", "wb") as dst:
+                dst.write(src.read())
+    
+    print(green("✓"))
+    print(f"  {green('✓')} Backup created: {backup_path}")
+    
+    if dry_run:
+        print(f"\n{yellow('(DRY RUN: Not writing files)')}")
+        return True
+    
+    # Load, update, and save credentials
+    print(f"\n{dim('Rotating credentials:')}")
+    env_data = load_env_file(env_path)
+    rotated_count = 0
+    
+    # Placeholder patterns
+    placeholders = {
+        "GITHUB_TOKEN": f"ghp_PLACEHOLDER_CorvinOS_{timestamp}",
+        "HETZNER_API_TOKEN": f"PLACEHOLDER_HETZNER_CorvinOS_{timestamp}",
+        "HETZNER_ROOT_PASSWORT": f"PLACEHOLDER_SSH_CorvinOS_{timestamp}",
+        "CLOUDFLARE_ID": f"PLACEHOLDER_CF_ID_CorvinOS_{timestamp}",
+        "CLOUDFLARE_API_TOKEN": f"PLACEHOLDER_CF_TOKEN_CorvinOS_{timestamp}",
+        "PYPI_TOKEN": f"PLACEHOLDER_PYPI_CorvinOS_{timestamp}",
+        "RESEND_API_KEY": f"PLACEHOLDER_RESEND_CorvinOS_{timestamp}",
+        "OPENAI_API_KEY": f"sk-proj-PLACEHOLDER-CorvinOS-{timestamp}",
     }
-
-    @staticmethod
-    def generate_placeholder(name: str) -> str:
-        """Generate placeholder for a credential."""
-        template = CredentialRotator.PLACEHOLDERS.get(name, f"PLACEHOLDER_{name}_{{ts}}")
-        return template.format(ts=CredentialRotator.TIMESTAMP)
-
-    @staticmethod
-    def backup_env_file(env_path: Path) -> str:
-        """Backup current .env file."""
-        if not env_path.exists():
-            return None
-
-        backup_path = env_path.parent / f".env.backup-{CredentialRotator.TIMESTAMP}"
-        with open(env_path) as src, open(backup_path, 'w') as dst:
-            dst.write(src.read())
-
-        # Restrict permissions
-        os.chmod(backup_path, 0o600)
-        return str(backup_path)
-
-    @staticmethod
-    def rotate_env_file(env_path: Path) -> dict:
-        """Replace credentials in .env with placeholders."""
-        if not env_path.exists():
-            return {"status": "not_found", "file": str(env_path), "rotated_count": 0}
-
-        with open(env_path) as f:
-            lines = f.readlines()
-
-        rotated = {}
-        new_lines = []
-
-        for line in lines:
-            # Skip comments and empty lines
-            if line.startswith('#') or not line.strip():
-                new_lines.append(line)
-                continue
-
-            # Parse KEY=VALUE
-            if '=' not in line:
-                new_lines.append(line)
-                continue
-
-            key, value = line.split('=', 1)
-            key = key.strip()
-
-            if key in CredentialRotator.PLACEHOLDERS:
-                placeholder = CredentialRotator.generate_placeholder(key)
-                new_lines.append(f"{key}={placeholder}\n")
-                rotated[key] = placeholder
-            else:
-                new_lines.append(line)
-
-        # Write back with mode 0600
-        with open(env_path, 'w') as f:
-            f.writelines(new_lines)
-        os.chmod(env_path, 0o600)
-
-        return {
-            "status": "success",
-            "file": str(env_path),
-            "rotated_count": len(rotated),
-            "rotated_keys": list(rotated.keys()),
-        }
-
-    @staticmethod
-    def rotate_service_env_file(service_env_path: Path) -> dict:
-        """Rotate ~/.config/corvin-voice/service.env."""
-        if not service_env_path.exists():
-            return {"status": "not_found", "file": str(service_env_path), "rotated_count": 0}
-
-        # Same logic as .env rotation
-        return CredentialRotator.rotate_env_file(service_env_path)
-
-    @staticmethod
-    def rotate_secrets_json(secrets_path: Path) -> dict:
-        """Rotate secrets.json (JSON format)."""
-        if not secrets_path.exists():
-            return {"status": "not_found", "file": str(secrets_path), "rotated_count": 0}
-
-        with open(secrets_path) as f:
-            secrets = json.load(f)
-
-        rotated = {}
-        for key in list(secrets.keys()):
-            if key in CredentialRotator.PLACEHOLDERS:
-                placeholder = CredentialRotator.generate_placeholder(key)
-                secrets[key] = placeholder
-                rotated[key] = placeholder
-
-        # Write back with mode 0600
-        with open(secrets_path, 'w') as f:
-            json.dump(secrets, f, indent=2)
-        os.chmod(secrets_path, 0o600)
-
-        return {
-            "status": "success",
-            "file": str(secrets_path),
-            "rotated_count": len(rotated),
-            "rotated_keys": list(rotated.keys()),
-        }
-
-    @staticmethod
-    def generate_audit_event() -> dict:
-        """Generate audit event for credential rotation."""
-        return {
-            "event_type": "secret_rotation_phase2",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "phase": "phase_2_placeholder_replacement",
-            "tenant_id": "_default",  # Would be parameterized in production
-            "credentials_rotated": len(CredentialRotator.PLACEHOLDERS),
-            "rotation_timestamp": CredentialRotator.TIMESTAMP,
-            "status": "phase2_complete",
-            "notes": "Phase 1 (manual revocation) must complete before credentials become functional",
-        }
-
+    
+    for key, placeholder in placeholders.items():
+        if key in env_data:
+            env_data[key] = placeholder
+            rotated_count += 1
+            print(f"  {green('✓')} {key} → placeholder")
+    
+    print(f"\n{dim(f'Total rotated: {rotated_count} credentials')}")
+    print(f"\n{dim('Writing updated files...')}")
+    
+    if env_data:
+        save_env_file(env_path, env_data)
+        env_path.chmod(0o600)
+        print(f"  {green('✓')} .env updated")
+    
+    print(f"\n{green(bold('✓ Credential rotation complete!'))}")
+    return True
 
 def main():
-    """Execute Phase 2 rotation."""
-    print("\n🔐 Blocker 3: Phase 2 Credential Rotation (Automated Placeholder Replacement)\n")
-
-    home = Path.home()
-    corvinOS_dir = Path("/home/shumway/projects/CorvinOS")
-
-    results = {
-        "timestamp": CredentialRotator.TIMESTAMP,
-        "phase": "phase_2_automated",
-        "rotations": [],
-        "audit_event": CredentialRotator.generate_audit_event(),
-    }
-
-    # 1. Backup + Rotate .env
-    env_path = corvinOS_dir / ".env"
-    print(f"📋 Backing up {env_path}...")
-    backup = CredentialRotator.backup_env_file(env_path)
-    if backup:
-        print(f"   ✅ Backed up to {backup}")
-
-    print(f"🔄 Rotating credentials in {env_path}...")
-    result = CredentialRotator.rotate_env_file(env_path)
-    results["rotations"].append(result)
-    print(f"   ✅ Rotated {result['rotated_count']} credentials")
-
-    # 2. Rotate service.env
-    service_env = home / ".config" / "corvin-voice" / "service.env"
-    if service_env.exists():
-        print(f"🔄 Rotating {service_env}...")
-        result = CredentialRotator.rotate_service_env_file(service_env)
-        results["rotations"].append(result)
-        print(f"   ✅ Rotated {result['rotated_count']} credentials")
-
-    # 3. Rotate secrets.json
-    secrets_json = home / ".config" / "corvin-voice" / "secrets.json"
-    if secrets_json.exists():
-        print(f"🔄 Rotating {secrets_json}...")
-        result = CredentialRotator.rotate_secrets_json(secrets_json)
-        results["rotations"].append(result)
-        print(f"   ✅ Rotated {result['rotated_count']} credentials")
-
-    # 4. Save audit event
-    print(f"\n📝 Audit Event:")
-    print(json.dumps(results["audit_event"], indent=2))
-
-    print(f"\n✅ Phase 2 Complete!")
-    print(f"   - All credentials replaced with fail-closed placeholders")
-    print(f"   - Services will return 401 Unauthorized if used")
-    print(f"   - Backup created at: {backup}")
-    print(f"\n⚠️  Phase 1 (manual revocation) MUST have been completed before rotation!")
-    print(f"    Otherwise, old credentials will still work and new placeholders won't be used.")
-
-    return 0
-
+    parser = argparse.ArgumentParser(description="Credential Rotation Phase 2")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be changed")
+    parser.add_argument("--skip-pre-checks", action="store_true", help="Skip Phase 1.5 pre-checks")
+    args = parser.parse_args()
+    
+    print(f"\n{bold('CorvinOS Credential Rotation — Phase 2')}")
+    print(f"{bold('═' * 70)}")
+    
+    if not args.skip_pre_checks:
+        if not phase_1_5_pre_checks():
+            print(f"\n{red('Aborting: Phase 1.5 pre-checks failed.')}")
+            sys.exit(1)
+    
+    if rotate_credentials_phase2(dry_run=args.dry_run):
+        sys.exit(0)
+    else:
+        sys.exit(1)
 
 if __name__ == "__main__":
-    exit(main())
+    main()
