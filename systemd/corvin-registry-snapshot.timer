@@ -1,0 +1,16 @@
+[Unit]
+Description=Timer for Task Registry Snapshots
+Documentation=file:///home/shumway/projects/CorvinOS/docs/claude-ref/task-registry-snapshots.md
+After=corvin-task-registry-sync.timer
+
+[Timer]
+# Run immediately after registry sync completes (300 seconds after sync timer fires)
+OnBootSec=5min
+OnUnitActiveSec=1d
+Persistent=true
+
+# Run the service after sync completes
+Unit=corvin-registry-snapshot.service
+
+[Install]
+WantedBy=timers.target
