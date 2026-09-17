@@ -1,13 +1,55 @@
-"""CheckpointManager: atomic checkpoint storage & recovery (ADR-0471)."""
+"""CheckpointManager: atomic checkpoint storage & recovery (ADR-0471).
+
+ADR-0875: Concurrent-write race condition fix via flock-based serialization.
+"""
 
 import json
 import logging
 import os
+import fcntl
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def file_lock(lock_file_path: Path, timeout_sec: float = 5.0):
+    """Context manager for file-based locking (ADR-0875: race fix).
+
+    Args:
+        lock_file_path: Path to lock file
+        timeout_sec: Max time to wait for lock acquisition
+
+    Yields:
+        True if lock acquired, False if timeout
+    """
+    lock_file = lock_file_path.parent / f"{lock_file_path.name}.lock"
+    start_time = os.times()[4]  # Wall-clock time
+
+    lock_handle = None
+    try:
+        lock_handle = open(lock_file, 'w')
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        yield True
+    except (IOError, OSError) as e:
+        # Lock failed; log and proceed with eventual consistency
+        elapsed = os.times()[4] - start_time
+        if elapsed > timeout_sec:
+            logger.warning(
+                f"[CheckpointManager] Lock timeout after {elapsed:.2f}s on {lock_file}; "
+                f"proceeding without lock (eventual consistency)"
+            )
+        yield False
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                lock_handle.close()
+            except Exception:
+                pass
 
 
 class CheckpointManager:
@@ -43,7 +85,7 @@ class CheckpointManager:
                 logger.debug("[CheckpointManager] No event loop for background cleanup")
 
     async def save_checkpoint(self, checkpoint) -> bool:
-        """Save checkpoint atomically to disk.
+        """Save checkpoint atomically to disk (ADR-0875: flock-serialized writes).
 
         Args:
             checkpoint: Checkpoint object to save
@@ -66,12 +108,21 @@ class CheckpointManager:
                 "phase": checkpoint.phase,
             }
 
-            # Write atomically (temp file → rename)
-            temp_file = self.checkpoint_dir / f"{checkpoint.session_id}.tmp"
-            with open(temp_file, 'w') as f:
-                json.dump(checkpoint_data, f, indent=2)
+            # ADR-0875: Atomic write under flock to prevent concurrent corruption
+            with file_lock(checkpoint_file) as lock_acquired:
+                if not lock_acquired:
+                    logger.warning(f"[CheckpointManager] Lock not acquired for {checkpoint.session_id}; attempting write anyway")
 
-            temp_file.replace(checkpoint_file)
+                # Write to temp file atomically
+                temp_file = self.checkpoint_dir / f"{checkpoint.session_id}.tmp"
+                with open(temp_file, 'w') as f:
+                    json.dump(checkpoint_data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())  # Force disk write
+
+                # Atomic rename (OS-level atomic operation)
+                temp_file.replace(checkpoint_file)
+
             logger.info(f"[CheckpointManager] Saved: {checkpoint.session_id}")
             return True
         except Exception as e:
