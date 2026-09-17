@@ -1,0 +1,128 @@
+# Context-Drift Prometheus Alert Rules
+# ADR-0407: Session Context Drift Prevention
+# ADR-0362: Production Deployment Framework
+
+groups:
+  - name: context_drift
+    interval: 30s
+    rules:
+      # High drift detection rate
+      - alert: HighDriftDetectionRate
+        expr: |
+          (increase(corvin_context_drift_goal_alignment_checks_total{result="drifted"}[5m]) /
+           increase(corvin_context_drift_goal_alignment_checks_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: context-drift
+        annotations:
+          summary: "High drift detection rate (>50%)"
+          description: "{{ $value | humanizePercentage }} of goals are drifting. Check if threshold needs tuning."
+
+      # Very high drift rate
+      - alert: CriticalDriftDetectionRate
+        expr: |
+          (increase(corvin_context_drift_goal_alignment_checks_total{result="drifted"}[5m]) /
+           increase(corvin_context_drift_goal_alignment_checks_total[5m])) > 0.8
+        for: 2m
+        labels:
+          severity: critical
+          service: context-drift
+        annotations:
+          summary: "Critical drift detection rate (>80%)"
+          description: "{{ $value | humanizePercentage }} of goals are drifting. Immediate action required."
+
+      # Low feedback quality
+      - alert: LowFeedbackQuality
+        expr: corvin_context_drift_feedback_quality < 0.70
+        for: 10m
+        labels:
+          severity: warning
+          service: context-drift
+        annotations:
+          summary: "Low feedback quality (<70%)"
+          description: "Feedback accuracy: {{ $value | humanizePercentage }}. Feedback may be unreliable."
+
+      # Threshold not tuning
+      - alert: ThresholdNotTuning
+        expr: |
+          (time() - corvin_context_drift_last_threshold_tuning_timestamp) > 604800
+        for: 1h
+        labels:
+          severity: warning
+          service: context-drift
+        annotations:
+          summary: "Threshold not tuned in 7 days"
+          description: "Automatic threshold tuning has not run. Check feedback collection."
+
+      # Performance SLO violation
+      - alert: AlignmentCheckSloViolation
+        expr: |
+          histogram_quantile(0.95, rate(corvin_context_drift_alignment_check_latency_ms_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: context-drift
+        annotations:
+          summary: "Alignment check latency SLO violated (>5ms)"
+          description: "p95 latency: {{ $value | humanize }}ms (target: <5ms)"
+
+      # Persistent high latency
+      - alert: AlignmentCheckHighLatency
+        expr: |
+          histogram_quantile(0.95, rate(corvin_context_drift_alignment_check_latency_ms_bucket[5m])) > 10
+        for: 10m
+        labels:
+          severity: critical
+          service: context-drift
+        annotations:
+          summary: "Alignment check latency critical (>10ms)"
+          description: "p95 latency: {{ $value | humanize }}ms. Check system load/resources."
+
+      # No feedback in last hour
+      - alert: NoFeedbackCollected
+        expr: |
+          increase(corvin_context_drift_goal_alignment_checks_total[1h]) == 0
+        for: 1h
+        labels:
+          severity: warning
+          service: context-drift
+        annotations:
+          summary: "No alignment checks in last hour"
+          description: "No alignment check activity detected. System may be down or inactive."
+
+      # Escalated drift alerts
+      - alert: EscalatedDriftDetected
+        expr: |
+          increase(corvin_context_drift_drift_alerts_total{severity="critical"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: context-drift
+        annotations:
+          summary: "Escalated drift alert detected"
+          description: "{{ $value }} critical drift alerts in last 5 minutes. Requires operator review."
+
+      # Tuning improvement degradation
+      - alert: ThresholdTuningDegrading
+        expr: |
+          corvin_context_drift_last_tuning_improvement < -0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: context-drift
+        annotations:
+          summary: "Threshold tuning degrading accuracy"
+          description: "Last tuning decreased accuracy by {{ $value | humanizePercentage }}. Check feedback quality."
+
+      # Many goals being restored
+      - alert: ManyGoalsRestored
+        expr: |
+          increase(corvin_context_drift_goals_restored_total[1h]) > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: context-drift
+        annotations:
+          summary: "Many goals being restored from checkpoint"
+          description: "{{ $value }} goals restored in last hour. May indicate drift persistence."
