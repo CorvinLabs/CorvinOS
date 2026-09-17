@@ -193,6 +193,10 @@ class SessionContinuationManager:
             ]
             checkpoints = execution_context.checkpoints or []
 
+            # Extract goal fields for cross-session drift prevention (ADR-0407)
+            original_goal = getattr(execution_context, 'original_goal', None)
+            goal_alignment_score = getattr(execution_context, 'goal_alignment_score', 1.0)
+
             # Create SessionCheckpoint
             checkpoint = SessionCheckpoint(
                 checkpoint_id=checkpoint_id,
@@ -206,6 +210,8 @@ class SessionContinuationManager:
                 tokens_consumed=tokens_consumed,
                 cost_consumed_cents=cost_consumed_cents,
                 error_recovery_state=error_recovery_state,
+                original_goal=original_goal,  # ADR-0405: Persist goal
+                goal_alignment_score=goal_alignment_score,  # ADR-0405: Persist score
             )
 
             # Save to latest.json
@@ -402,6 +408,33 @@ class SessionContinuationManager:
                 guidance_overrides=checkpoint.context_state.get("guidance_overrides", {}),
                 checkpoints=checkpoint.checkpoints,
             )
+
+            # PHASE 3: Restore goal for context-drift prevention (ADR-0407)
+            # This enables cross-session goal alignment validation on resume
+            if checkpoint.original_goal:
+                ctx.original_goal = checkpoint.original_goal
+                # Re-initialize goal_alignment_monitor with restored goal
+                if hasattr(ctx, 'goal_alignment_monitor') and ctx.goal_alignment_monitor:
+                    try:
+                        ctx.goal_alignment_monitor.set_goal(
+                            goal=checkpoint.original_goal,
+                            task_id=checkpoint.task_id,
+                            tenant_id=checkpoint.tenant_id
+                        )
+                        logger.info(
+                            f"Restored goal_alignment_monitor with original_goal '{checkpoint.original_goal}' "
+                            f"for task '{checkpoint.task_id}' (score={checkpoint.goal_alignment_score})"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to initialize goal_alignment_monitor on resume: {e}. "
+                            f"Drift detection may be unavailable."
+                        )
+
+            # Store goal alignment score for reference
+            # (score will be re-measured on first check after resume)
+            if hasattr(ctx, 'goal_alignment_score'):
+                ctx.goal_alignment_score = checkpoint.goal_alignment_score
 
             # Restore decision history (with type safety)
             from .decision_record import DecisionRecord
