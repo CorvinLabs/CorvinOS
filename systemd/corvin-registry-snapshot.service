@@ -1,0 +1,19 @@
+[Unit]
+Description=Commit Task Registry Snapshots to Git
+Documentation=file:///home/shumway/projects/CorvinOS/docs/claude-ref/task-registry-snapshots.md
+After=corvin-task-registry-sync.service
+Requires=corvin-task-registry-sync.service
+
+[Service]
+Type=oneshot
+User=shumway
+WorkingDirectory=/home/shumway/projects/CorvinOS
+ExecStart=/home/shumway/projects/CorvinOS/scripts/commit_registry_snapshot.sh
+StandardOutput=journal
+StandardError=journal
+
+# Safety: Don't fail if script returns error (snapshot may be unchanged)
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target
