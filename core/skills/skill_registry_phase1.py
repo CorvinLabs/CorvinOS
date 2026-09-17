@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +158,8 @@ class SkillMetadata:
     learn: bool = True
     #: See :class:`SkillTier`. ``compliance`` cannot be unregistered or disabled.
     tier: SkillTier = SkillTier.CORE
+    #: Skill dependencies (ADR-0535): list of SkillDependency objects
+    depends_on: List[Any] = field(default_factory=list)
 
 
 def _utc_now_iso() -> str:
@@ -1283,3 +1285,44 @@ def is_skill_enabled(skill_id: str, version: Optional[str] = None) -> bool:
     """Check if a Skill is enabled (replacement for feature flags)."""
     registry = get_registry()
     return registry.is_enabled(skill_id, version)
+
+
+def load_skills_with_dag(
+    registry: Optional[SkillsRegistry] = None,
+    skill_ids: Optional[List[str]] = None,
+    strict_mode: bool = True,
+) -> Tuple[List[Skill], List[str]]:
+    """Load skills in dependency order using topological sort (ADR-0535 Gate 3).
+
+    Args:
+        registry: SkillsRegistry to load from (None → get_registry())
+        skill_ids: List of skill IDs to load (None → all skills)
+        strict_mode: If True, any missing dependency blocks load
+
+    Returns:
+        Tuple of (loaded_skills, error_messages)
+        - loaded_skills: Skills in dependency order, ready for execution
+        - error_messages: Any validation/loading errors encountered
+    """
+    if registry is None:
+        registry = get_registry()
+
+    if skill_ids is None:
+        skill_ids = [m.id for m in registry.list_skills()]
+
+    # Use the DAG loader for composition support (ADR-0535)
+    try:
+        from .skill_dag_loader import SkillDAGLoader  # noqa: PLC0415
+        loader = SkillDAGLoader(registry)
+        return loader.load_with_dag(skill_ids, strict_mode=strict_mode)
+    except ImportError:
+        # Fallback: simple load without DAG (backward compat)
+        loaded = []
+        errors = []
+        for skill_id in skill_ids:
+            skill = registry.get(skill_id)
+            if skill is None:
+                errors.append(f"Skill not found: {skill_id}")
+            else:
+                loaded.append(skill)
+        return (loaded, errors)
