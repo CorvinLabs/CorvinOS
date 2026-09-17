@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from core.learning import hybrid_context_request_pipeline as hcrp
-from core.learning.hybrid_context import HybridContextModel
-from core.learning.hybrid_context_request_pipeline import (
+from core.context_engineering.archived_v2 import hybrid_context_request_pipeline as hcrp
+from core.context_engineering.archived_v2.hybrid_context import HybridContextModel
+from core.context_engineering.archived_v2.hybrid_context_request_pipeline import (
     AttentionTrackerAdapter,
     DecisionHistoryAdapter,
     HybridContextRequestPipeline,

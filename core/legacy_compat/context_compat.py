@@ -20,7 +20,7 @@ from dataclasses import asdict
 from typing import Optional, Any, Dict
 
 from core.telemetry.deprecated_api_calls import log_deprecated_call, log_deprecated_error
-from core.learning.hybrid_context import HybridContextModel
+from core.context_engineering.archived_v2.hybrid_context import HybridContextModel
 
 _V1_MODULE = "core.context_engineering.snapshot"
 

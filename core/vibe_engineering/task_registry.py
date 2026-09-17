@@ -1,14 +1,18 @@
 """
 TaskRegistry: Persistent registry of in-flight tasks and phases.
 
-Implements ADR-0402: Task-Orchestration Engine.
-- Registry: persistent JSONL store (~/.corvin/tasks/registry.jsonl)
-- Atomic writes via content-hash checksums (detect/fail on conflicts)
-- Immutable phase snapshots (write-once append)
+Implements:
+- ADR-0402: Task-Orchestration Engine
+  - Registry: persistent JSONL store (~/.corvin/tasks/registry.jsonl)
+  - Atomic writes via content-hash checksums (detect/fail on conflicts)
+  - Immutable phase snapshots (write-once append)
+- FIX #2 / ADR-0863: Task-ID Canonicalization
+  - Lowercase snake_case normalization for case-insensitive lookups
+  - Deduplication of tasks varying only in case/formatting
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal, Set, Tuple
 from datetime import datetime
 import json
 import hashlib
@@ -16,6 +20,75 @@ import os
 from pathlib import Path
 import asyncio
 from enum import Enum
+import re
+
+
+# ============================================================================
+# FIX #2: Task-ID Canonicalization (ADR-0863)
+# ============================================================================
+
+def _normalize_task_id(task_id: str) -> str:
+    """Canonicalize task-id to lowercase snake_case (FIX #2 — ADR-0863)
+
+    Normalization rules:
+    - Convert to lowercase
+    - Replace spaces with underscores
+    - Replace hyphens with underscores
+    - Collapse multiple underscores to single
+    - Strip leading/trailing whitespace
+
+    Examples:
+        "Task-1" → "task_1"
+        "Blocker-2-Complete" → "blocker_2_complete"
+        "task_1" → "task_1" (idempotent)
+        "  TASK_ID  " → "task_id"
+        "task__id" → "task_id" (collapsing)
+
+    Args:
+        task_id: Input task identifier (any case/formatting)
+
+    Returns:
+        Normalized task_id (lowercase snake_case)
+    """
+    # Step 1: Strip whitespace
+    normalized = task_id.strip()
+
+    # Step 2: Convert to lowercase
+    normalized = normalized.lower()
+
+    # Step 3: Replace hyphens and spaces with underscores
+    normalized = normalized.replace('-', '_').replace(' ', '_')
+
+    # Step 4: Collapse multiple consecutive underscores
+    normalized = re.sub(r'_+', '_', normalized)
+
+    # Step 5: Strip leading/trailing underscores
+    normalized = normalized.strip('_')
+
+    return normalized
+
+
+def detect_task_id_duplicates(task_ids: Set[str]) -> Dict[str, Set[str]]:
+    """Detect task-id duplicates that differ only in formatting
+
+    Args:
+        task_ids: Set of task IDs to analyze
+
+    Returns:
+        {canonical_id: {original_forms}} mapping (empty if no duplicates)
+    """
+    groups: Dict[str, Set[str]] = {}
+    for task_id in task_ids:
+        normalized = _normalize_task_id(task_id)
+        if normalized not in groups:
+            groups[normalized] = set()
+        groups[normalized].add(task_id)
+
+    # Return only groups with duplicates
+    return {k: v for k, v in groups.items() if len(v) > 1}
+
+
+# ============================================================================
 
 
 class PhaseStatus(str, Enum):
@@ -199,12 +272,25 @@ class TaskRegistryPersistence:
                 raise RuntimeError(f"Failed to append to registry: {e}")
 
     async def get_task(self, task_id: str, tenant_id: str = "_default") -> Optional[TaskMetadata]:
-        """Retrieve latest version of a task from registry."""
+        """Retrieve latest version of a task from registry.
+
+        Supports case-insensitive lookup (FIX #2 — ADR-0863):
+        - Input "Task-1" is normalized to "task_1" before lookup
+        - Returns task regardless of original formatting
+        """
         async with self._lock:
             if not self.registry_path.exists():
                 return None
             self._refresh_index()
-            record = self._index.get((tenant_id, task_id))
+
+            # Try normalized form first (FIX #2)
+            normalized_id = _normalize_task_id(task_id)
+            record = self._index.get((tenant_id, normalized_id))
+
+            # Fallback to exact form (backward compat with existing entries)
+            if record is None:
+                record = self._index.get((tenant_id, task_id))
+
             if record is None:
                 return None
             try:
