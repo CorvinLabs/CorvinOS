@@ -196,6 +196,8 @@ from .routes import (
     video_producer_api as video_producer_route,
     # ADR-0677 — Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
     skill_forge_distribution_routes as skill_forge_distribution_route,
+    # TRACK I — DataHub Creator (6-phase project workspace + learning visualization)
+    datahub_creator_routes as datahub_creator_route,
 )
 
 
@@ -237,6 +239,8 @@ router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(marketplace_hub_route.router, tags=["console-marketplace"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
+# TRACK I — DataHub Creator (6-phase project workspace with skill metrics + learning visualization)
+router.include_router(datahub_creator_route.router, tags=["console-datahub-creator"])
 router.include_router(features_phase2_route.router, tags=["console-phase2-features"])
 router.include_router(deprecated_api_metrics_route.router, tags=["console-deprecated-api-metrics"])
 router.include_router(world_map_route.router, tags=["console-world-map"])
@@ -706,6 +710,16 @@ def create_app() -> FastAPI:
             logger.info("✅ A2A Licensing Gate services initialized")
         except Exception as exc:
             logger.warning("A2A Licensing Gate initialization failed: %s", exc)
+
+        # Initialize Marketplace Hub service (ADR-0678)
+        try:
+            from . import _bootstrap
+            from .routes import marketplace_hub_routes
+            corvin_home = _bootstrap.forge_paths.corvin_home()
+            marketplace_hub_routes.init_service(corvin_home)
+            logger.info("✅ Marketplace Hub service initialized")
+        except Exception as exc:
+            logger.warning("Marketplace Hub initialization failed: %s", exc)
 
         # Resume GitHub auto-sync for every tenant that had it enabled before
         # the last restart. The worker is a plain in-memory thread (no

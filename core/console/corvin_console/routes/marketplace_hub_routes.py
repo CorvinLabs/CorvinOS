@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Optional, List, Dict, Any
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Path
 from pydantic import BaseModel
 
 from core.skills.marketplace_hub import MarketplaceHub, DiscoveryItem, SearchResult
@@ -196,7 +196,7 @@ async def search(
         if categories:
             category_list = [c.strip().lower() for c in categories.split(",")]
 
-        # Build filters
+        # Build filters dict (match service signature)
         filters = {}
         if tier:
             filters["tier"] = tier
@@ -294,8 +294,8 @@ async def get_newest(
 
 @router.get("/hub/{category}/{item_id}")
 async def get_detail(
-    category: str = Query(..., description="Category (skills, plugins, tools, connectors, layers)"),
-    item_id: str = Query(..., description="Item ID"),
+    category: str = Path(..., description="Category (skills, plugins, tools, connectors, layers)"),
+    item_id: str = Path(..., description="Item ID"),
 ) -> DiscoveryItemResponse:
     """Get detailed view of a single item.
 
