@@ -116,6 +116,7 @@ from .routes import (
     assistant as assistant_route,
     license as license_route,
     a2a_licensing_gate_routes as a2a_licensing_gate_route,
+    licensing_verify as licensing_verify_route,
     instance as instance_route,
     rag as rag_route,
     rag_hub as rag_hub_route,
@@ -125,7 +126,7 @@ from .routes import (
     plugins as plugins_route,
     marketplace as marketplace_route,
     marketplace_custom_repos as marketplace_custom_repos_route,
-    marketplace_hub as marketplace_hub_route,
+    marketplace_hub_routes as marketplace_hub_route,
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
@@ -328,6 +329,8 @@ router.include_router(custom_provider_route.router, tags=["console-custom-provid
 router.include_router(license_route.router, tags=["console-license"])
 # ADR-0704/0769 — A2A RSA Gate (member credentials, signed task verification).
 router.include_router(a2a_licensing_gate_route.router, tags=["console-a2a-licensing"])
+# ADR-0700/0703 — Licensing Verification Endpoint (E2E testing + client-side checks).
+router.include_router(licensing_verify_route.router, tags=["console-licensing-verify"])
 router.include_router(instance_route.router, tags=["console-instance"])
 # ADR-0096 M3 — MCP Plugin Manager console UI.
 router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])

@@ -337,6 +337,36 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 4: Start console server & launch browser
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Health Check Probe with Exponential Backoff (ADR-0867)
+# ─────────────────────────────────────────────────────────────────────────────
+healthz_check_probe() {
+    local endpoint="$1"
+    local label="$2"
+    local retry_count=0
+    local backoff=1
+    local max_retries=60
+
+    printf '  %s Checking %s... ' "$(_dim '⏳')" "$label"
+
+    while [ $retry_count -lt $max_retries ]; do
+        if curl -fs -m 2 "$endpoint" >/dev/null 2>&1; then
+            printf '%s\n' "$(_green '✓')"
+            return 0
+        fi
+        retry_count=$((retry_count + 1))
+        printf '.'
+        sleep "$backoff"
+        # Exponential backoff: 1s → 2s → 4s → 8s (capped at 8s)
+        if [ $backoff -lt 8 ]; then
+            backoff=$((backoff * 2))
+        fi
+    done
+
+    printf '%s (timeout after %ds)\n' "$(_red '✗')" "$((max_retries))"
+    return 1
+}
+
 echo ""
 echo "  Starting CorvinOS console server ..."
 
@@ -368,6 +398,21 @@ done
 
 if [ "$SERVER_READY" -ne 1 ]; then
     printf '  %s Server is taking longer than expected — opening the console anyway; reload the tab if it does not connect immediately: %s\n' "$(_yellow '⚠')" "$CONSOLE_URL"
+    exit 2
+fi
+
+# Health Check Phase (ADR-0867: Two-layer verification)
+printf '\n'
+HEALTHZ_PASS=0
+if healthz_check_probe "http://localhost:8765/v1/console/healthz" "console endpoint" && \
+   healthz_check_probe "http://localhost:8765/v1/gateway/healthz" "gateway endpoint"; then
+    HEALTHZ_PASS=1
+fi
+
+if [ "$HEALTHZ_PASS" -ne 1 ]; then
+    printf '%s — daemon health check failed.\n' "$(_red 'Error')"
+    printf 'Try: kill %s && corvinos-serve && corvin-install\n' "$SERVER_PID"
+    exit 2
 fi
 
 if [ -t 1 ]; then
