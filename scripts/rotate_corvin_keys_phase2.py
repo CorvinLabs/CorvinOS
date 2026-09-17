@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
 import argparse
+import shutil
 
 CORVIN_HOME = Path.home() / ".corvin"
 CORVIN_CONFIG = Path.home() / ".config" / "corvin-voice"
@@ -61,6 +62,38 @@ def save_env_file(path: Path, data: Dict[str, str]) -> None:
         for key, value in data.items():
             f.write(f"{key}={value}\n")
 
+def backup_credentials(backup_name: str = None) -> Path:
+    """Create a backup of all current credentials."""
+    if backup_name is None:
+        backup_name = datetime.now().strftime("%Y%m%d-%H%M%S")
+    
+    backup_path = BACKUP_DIR / f"credentials-backup-{backup_name}"
+    backup_path.mkdir(parents=True, exist_ok=True)
+    
+    # Backup .env
+    env_path = Path.home() / ".env"
+    if env_path.exists():
+        shutil.copy2(env_path, backup_path / "env.backup")
+    
+    # Ensure backup is only readable by owner (0600)
+    for f in backup_path.glob("*"):
+        f.chmod(0o600)
+    
+    return backup_path
+
+def restore_credentials(backup_path: Path) -> bool:
+    """Restore credentials from a backup."""
+    try:
+        # Restore .env
+        env_backup = backup_path / "env.backup"
+        if env_backup.exists():
+            shutil.copy2(env_backup, Path.home() / ".env")
+        
+        return True
+    except Exception as e:
+        print(f"{red('✗')} Rollback failed: {e}")
+        return False
+
 def phase_1_5_pre_checks() -> bool:
     """Phase 1.5: Validate system is ready for credential rotation."""
     print(f"\n{bold('═' * 70)}")
@@ -98,15 +131,7 @@ def rotate_credentials_phase2(dry_run: bool = False) -> bool:
     
     # Backup current credentials
     print(f"{dim('Creating backup...')} ", end="", flush=True)
-    backup_path = BACKUP_DIR / f"credentials-backup-{timestamp}"
-    backup_path.mkdir(parents=True, exist_ok=True)
-    
-    env_path = Path.home() / ".env"
-    if env_path.exists():
-        with open(env_path, "rb") as src:
-            with open(backup_path / "env.backup", "wb") as dst:
-                dst.write(src.read())
-    
+    backup_path = backup_credentials(timestamp)
     print(green("✓"))
     print(f"  {green('✓')} Backup created: {backup_path}")
     
@@ -116,6 +141,7 @@ def rotate_credentials_phase2(dry_run: bool = False) -> bool:
     
     # Load, update, and save credentials
     print(f"\n{dim('Rotating credentials:')}")
+    env_path = Path.home() / ".env"
     env_data = load_env_file(env_path)
     rotated_count = 0
     
@@ -140,13 +166,19 @@ def rotate_credentials_phase2(dry_run: bool = False) -> bool:
     print(f"\n{dim(f'Total rotated: {rotated_count} credentials')}")
     print(f"\n{dim('Writing updated files...')}")
     
-    if env_data:
-        save_env_file(env_path, env_data)
-        env_path.chmod(0o600)
-        print(f"  {green('✓')} .env updated")
-    
-    print(f"\n{green(bold('✓ Credential rotation complete!'))}")
-    return True
+    try:
+        if env_data:
+            save_env_file(env_path, env_data)
+            env_path.chmod(0o600)
+            print(f"  {green('✓')} .env updated")
+        
+        print(f"\n{green(bold('✓ Credential rotation complete!'))}")
+        return True
+    except Exception as e:
+        print(f"{red('✗')} Rotation failed: {e}")
+        if restore_credentials(backup_path):
+            print(f"  {green('✓')} Credentials restored from backup")
+        return False
 
 def main():
     parser = argparse.ArgumentParser(description="Credential Rotation Phase 2")
