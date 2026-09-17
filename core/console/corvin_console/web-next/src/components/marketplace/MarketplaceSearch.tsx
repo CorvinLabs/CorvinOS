@@ -7,30 +7,19 @@
  * - ResultsTable: sortable results with filtering
  *
  * Session 4 Milestone C
+ *
+ * NOTE: Uses Tailwind CSS + lucide-react (consistent with project design system).
+ * Refactored from Mantine/Tabler to reduce dependencies.
  */
 
 import React, { useState, useMemo } from 'react';
 import {
-  TextInput,
-  MultiSelect,
-  Group,
-  Button,
-  Table,
-  Stack,
-  ActionIcon,
-  Badge,
-  Container,
-  Drawer,
-  Checkbox,
-  Select,
-} from '@mantine/core';
-import {
-  IconSearch,
-  IconX,
-  IconChevronUp,
-  IconChevronDown,
-  IconFilter,
-} from '@tabler/icons-react';
+  Search,
+  X,
+  ChevronUp,
+  ChevronDown,
+  Filter,
+} from 'lucide-react';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -63,6 +52,29 @@ export interface MarketplaceSearchProps {
 }
 
 // ============================================================================
+// HELPER: Badge Component
+// ============================================================================
+
+const Badge: React.FC<{ children: React.ReactNode; color?: string; size?: 'sm' | 'md' }> = ({
+  children,
+  color = 'gray',
+  size = 'sm',
+}) => {
+  const colorClasses = {
+    gray: 'bg-gray-100 text-gray-800',
+    green: 'bg-green-100 text-green-800',
+    red: 'bg-red-100 text-red-800',
+  }[color] || 'bg-gray-100 text-gray-800';
+
+  const sizeClasses = {
+    sm: 'px-2 py-0.5 text-xs',
+    md: 'px-3 py-1 text-sm',
+  }[size];
+
+  return <span className={`inline-block rounded-full font-medium ${colorClasses} ${sizeClasses}`}>{children}</span>;
+};
+
+// ============================================================================
 // COMPONENT: SEARCH INPUT
 // ============================================================================
 
@@ -71,23 +83,25 @@ export const SearchInput: React.FC<{
   onChange: (value: string) => void;
   onClear: () => void;
 }> = ({ value, onChange, onClear }) => (
-  <Group gap="xs" mb="md">
-    <TextInput
+  <div className="relative mb-4">
+    <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+    <input
       data-testid="search-query"
+      type="text"
       placeholder="Find plugins, skills, datasets, services, templates…"
       value={value}
-      onChange={(e) => onChange(e.currentTarget.value)}
-      leftSection={<IconSearch size={16} />}
-      rightSection={
-        value && (
-          <ActionIcon size="xs" color="gray" radius="xl" variant="transparent" onClick={onClear}>
-            <IconX size={14} />
-          </ActionIcon>
-        )
-      }
-      style={{ flex: 1 }}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
     />
-  </Group>
+    {value && (
+      <button
+        onClick={onClear}
+        className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+      >
+        <X size={14} />
+      </button>
+    )}
+  </div>
 );
 
 // ============================================================================
@@ -121,86 +135,92 @@ export const FilterPanel: React.FC<{
   ];
 
   const content = (
-    <Stack gap="md">
+    <div className="space-y-4">
+      {/* Content Type Filter */}
       <div>
-        <label style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.5rem', display: 'block' }}>
-          Content Type
-        </label>
-        <Group gap="xs">
+        <label className="block text-sm font-medium text-gray-700 mb-2">Content Type</label>
+        <div className="space-y-2">
           {typeOptions.map((option) => (
-            <Checkbox
-              key={option.value}
-              data-testid={`filter-type-${option.value}`}
-              label={option.label}
-              checked={filters.types.includes(option.value as ContentType)}
-              onChange={(e) => {
-                const newTypes = e.currentTarget.checked
-                  ? [...filters.types, option.value as ContentType]
-                  : filters.types.filter((t) => t !== option.value);
-                onFilterChange({ ...filters, types: newTypes });
-              }}
-            />
+            <label key={option.value} className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                data-testid={`filter-type-${option.value}`}
+                checked={filters.types.includes(option.value as ContentType)}
+                onChange={(e) => {
+                  const newTypes = e.currentTarget.checked
+                    ? [...filters.types, option.value as ContentType]
+                    : filters.types.filter((t) => t !== option.value);
+                  onFilterChange({ ...filters, types: newTypes });
+                }}
+                className="w-4 h-4 text-blue-600 rounded"
+              />
+              <span className="text-sm text-gray-700">{option.label}</span>
+            </label>
           ))}
-        </Group>
+        </div>
       </div>
 
+      {/* Status Filter */}
       <div>
-        <label style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.5rem', display: 'block' }}>
-          Status
-        </label>
-        <Group gap="xs">
+        <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
+        <div className="space-y-2">
           {statusOptions.map((option) => (
-            <Checkbox
-              key={option.value}
-              label={option.label}
-              checked={filters.statuses.includes(option.value as any)}
-              onChange={(e) => {
-                const newStatuses = e.currentTarget.checked
-                  ? [...filters.statuses, option.value as any]
-                  : filters.statuses.filter((s) => s !== option.value);
-                onFilterChange({ ...filters, statuses: newStatuses });
-              }}
-            />
+            <label key={option.value} className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={filters.statuses.includes(option.value as any)}
+                onChange={(e) => {
+                  const newStatuses = e.currentTarget.checked
+                    ? [...filters.statuses, option.value as any]
+                    : filters.statuses.filter((s) => s !== option.value);
+                  onFilterChange({ ...filters, statuses: newStatuses });
+                }}
+                className="w-4 h-4 text-blue-600 rounded"
+              />
+              <span className="text-sm text-gray-700">{option.label}</span>
+            </label>
           ))}
-        </Group>
+        </div>
       </div>
 
+      {/* Sort By */}
       <div>
-        <label style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.5rem', display: 'block' }}>
-          Sort By
-        </label>
-        <Select
-          data={sortOptions}
+        <label className="block text-sm font-medium text-gray-700 mb-2">Sort By</label>
+        <select
           value={filters.sortField}
-          onChange={(value) => onFilterChange({ ...filters, sortField: value as SortField })}
-          clearable={false}
-        />
+          onChange={(e) => onFilterChange({ ...filters, sortField: e.target.value as SortField })}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          {sortOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <Group justify="space-between">
-        <Button
-          variant="light"
-          size="sm"
-          onClick={() => {
-            onFilterChange({
-              types: [],
-              statuses: [],
-              sortField: 'name',
-              sortOrder: 'asc',
-            });
-          }}
-        >
-          Clear Filters
-        </Button>
-      </Group>
-    </Stack>
+      {/* Clear Filters Button */}
+      <button
+        onClick={() => {
+          onFilterChange({
+            types: [],
+            statuses: [],
+            sortField: 'name',
+            sortOrder: 'asc',
+          });
+        }}
+        className="w-full px-4 py-2 bg-gray-100 text-gray-900 rounded-lg hover:bg-gray-200 transition text-sm font-medium"
+      >
+        Clear Filters
+      </button>
+    </div>
   );
 
   if (isDrawer) {
     return content;
   }
 
-  return <div style={{ borderRight: '1px solid #e9ecef', paddingRight: '1rem', minWidth: '250px' }}>{content}</div>;
+  return <div className="border-r border-gray-200 pr-4 min-w-60">{content}</div>;
 };
 
 // ============================================================================
@@ -211,41 +231,43 @@ export const ResultsTable: React.FC<{
   data: SearchResult[];
   onRowClick: (result: SearchResult) => void;
 }> = ({ data, onRowClick }) => {
-  const rows = data.map((item) => (
-    <Table.Tr key={item.id} onClick={() => onRowClick(item)} style={{ cursor: 'pointer' }}>
-      <Table.Td>
-        <strong>{item.name}</strong>
-      </Table.Td>
-      <Table.Td>
-        <Badge size="sm" variant="light">
-          {item.type}
-        </Badge>
-      </Table.Td>
-      <Table.Td>{item.updated || '—'}</Table.Td>
-      <Table.Td>{item.rating ? `${item.rating}★` : '—'}</Table.Td>
-      <Table.Td>
-        {item.status && (
-          <Badge size="sm" color={item.status === 'active' ? 'green' : 'red'}>
-            {item.status}
-          </Badge>
-        )}
-      </Table.Td>
-    </Table.Tr>
-  ));
-
   return (
-    <Table data-testid="results-table" striped highlightOnHover>
-      <Table.Thead>
-        <Table.Tr>
-          <Table.Th>Name</Table.Th>
-          <Table.Th>Type</Table.Th>
-          <Table.Th>Updated</Table.Th>
-          <Table.Th>Rating</Table.Th>
-          <Table.Th>Status</Table.Th>
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>{rows}</Table.Tbody>
-    </Table>
+    <div className="overflow-x-auto border border-gray-200 rounded-lg" data-testid="results-table">
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 border-b border-gray-200">
+          <tr>
+            <th className="text-left px-4 py-2 font-medium text-gray-900">Name</th>
+            <th className="text-left px-4 py-2 font-medium text-gray-900">Type</th>
+            <th className="text-left px-4 py-2 font-medium text-gray-900">Updated</th>
+            <th className="text-left px-4 py-2 font-medium text-gray-900">Rating</th>
+            <th className="text-left px-4 py-2 font-medium text-gray-900">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((item) => (
+            <tr
+              key={item.id}
+              onClick={() => onRowClick(item)}
+              className="border-b border-gray-200 hover:bg-gray-50 cursor-pointer transition"
+            >
+              <td className="px-4 py-2 font-medium text-gray-900">{item.name}</td>
+              <td className="px-4 py-2">
+                <Badge size="sm">{item.type}</Badge>
+              </td>
+              <td className="px-4 py-2 text-gray-600">{item.updated || '—'}</td>
+              <td className="px-4 py-2 text-gray-600">{item.rating ? `${item.rating}★` : '—'}</td>
+              <td className="px-4 py-2">
+                {item.status && (
+                  <Badge size="sm" color={item.status === 'active' ? 'green' : 'red'}>
+                    {item.status}
+                  </Badge>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 };
 
@@ -288,7 +310,11 @@ export const MarketplaceSearch: React.FC<MarketplaceSearchProps> = ({ data, onRe
       let aVal = a[filters.sortField] ?? '';
       let bVal = b[filters.sortField] ?? '';
 
-      if (typeof aVal === 'string') {
+      // Convert to string for comparison if needed
+      if (typeof aVal === 'number') aVal = String(aVal);
+      if (typeof bVal === 'number') bVal = String(bVal);
+
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
         aVal = aVal.toLowerCase();
         bVal = bVal.toLowerCase();
       }
@@ -301,8 +327,8 @@ export const MarketplaceSearch: React.FC<MarketplaceSearchProps> = ({ data, onRe
   }, [data, searchQuery, filters]);
 
   return (
-    <Container fluid data-testid="marketplace-search">
-      <Stack gap="md">
+    <div className="w-full" data-testid="marketplace-search">
+      <div className="space-y-4">
         {/* Search Input */}
         <SearchInput
           value={searchQuery}
@@ -311,46 +337,54 @@ export const MarketplaceSearch: React.FC<MarketplaceSearchProps> = ({ data, onRe
         />
 
         {/* Desktop Layout: Filters + Results */}
-        <Group align="flex-start" gap="md">
+        <div className="flex gap-4">
           {/* Desktop Filters (hidden on mobile) */}
-          <div style={{ display: 'none', '@media (min-width: 768px)': { display: 'block' } }}>
+          <div className="hidden md:block min-w-60">
             <FilterPanel filters={filters} onFilterChange={setFilters} />
           </div>
 
           {/* Results */}
-          <div style={{ flex: 1 }} data-testid="card-grid">
-            <Group justify="space-between" mb="md">
+          <div className="flex-1" data-testid="card-grid">
+            <div className="flex items-center justify-between mb-4">
               <Badge>{filteredResults.length} results</Badge>
-              <Button
-                leftSection={<IconFilter size={14} />}
-                variant="light"
+              <button
                 onClick={() => setDrawerOpen(true)}
+                className="md:hidden inline-flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-900 rounded-lg hover:bg-gray-200 transition text-sm font-medium"
               >
+                <Filter size={14} />
                 Filters
-              </Button>
-            </Group>
+              </button>
+            </div>
 
             {filteredResults.length > 0 ? (
               <ResultsTable data={filteredResults} onRowClick={onResultSelect} />
             ) : (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>
-                <p>No results found</p>
+              <div className="text-center py-8">
+                <p className="text-gray-600">No results found</p>
               </div>
             )}
           </div>
-        </Group>
+        </div>
 
         {/* Mobile Filter Drawer */}
-        <Drawer
-          opened={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          title="Filters"
-          padding="md"
-        >
-          <FilterPanel filters={filters} onFilterChange={setFilters} isDrawer={true} />
-        </Drawer>
-      </Stack>
-    </Container>
+        {drawerOpen && (
+          <div className="fixed inset-0 z-50 bg-black/50">
+            <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-lg p-4 max-h-[80vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">Filters</h2>
+                <button
+                  onClick={() => setDrawerOpen(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <FilterPanel filters={filters} onFilterChange={setFilters} isDrawer={true} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
