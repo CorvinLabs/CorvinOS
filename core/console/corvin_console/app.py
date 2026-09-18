@@ -198,6 +198,8 @@ from .routes import (
     skill_forge_distribution_routes as skill_forge_distribution_route,
     # TRACK I — DataHub Creator (6-phase project workspace + learning visualization)
     datahub_creator_routes as datahub_creator_route,
+    # Corvin-Knowledge Marketplace Plugin API
+    plugins_corvin_knowledge_api as plugins_corvin_knowledge_api_route,
 )
 
 
@@ -346,6 +348,8 @@ router.include_router(plugins_route.router, tags=["console-plugins"])
 router.include_router(marketplace_route.router, tags=["console-marketplace"])
 router.include_router(marketplace_custom_repos_route.router,
                       tags=["console-marketplace-custom-repos"])
+# Corvin-Knowledge Marketplace Plugin API (Graph visualization, settings, sync)
+router.include_router(plugins_corvin_knowledge_api_route.router, tags=["console-corvin-knowledge"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
 # packages_route.router already has prefix="/packages", so mount without additional prefix
 router.include_router(packages_route.router, tags=["console-packages"])

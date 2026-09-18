@@ -127,7 +127,7 @@ export function DataHubCreatorPanel({ projectId, onProjectCreated }: DataHubCrea
               <CardDescription>{project.description}</CardDescription>
             </div>
             <div className="flex gap-2">
-              <Badge variant={project.status === "converged" ? "success" : "secondary"}>
+              <Badge variant={project.status === "converged" ? "ok" : "secondary"}>
                 {project.status}
               </Badge>
               {project.latest_metrics && (

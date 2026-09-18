@@ -87,7 +87,7 @@ GraphPanel
 
 All endpoints are RESTful and work with the console's built-in authentication.
 
-### GET `/api/v1/console/plugins/corvin-knowledge/config`
+### GET `/v1/console/plugins/corvin-knowledge/config`
 
 Fetch current configuration.
 
@@ -101,7 +101,7 @@ Fetch current configuration.
 }
 ```
 
-### GET `/api/v1/console/plugins/corvin-knowledge/graph`
+### GET `/v1/console/plugins/corvin-knowledge/graph`
 
 Fetch graph data (entities + relations).
 
@@ -127,7 +127,7 @@ Fetch graph data (entities + relations).
 }
 ```
 
-### POST `/api/v1/console/plugins/corvin-knowledge/config`
+### POST `/v1/console/plugins/corvin-knowledge/config`
 
 Update configuration.
 
@@ -141,7 +141,7 @@ Update configuration.
 }
 ```
 
-### POST `/api/v1/console/plugins/corvin-knowledge/sync`
+### POST `/v1/console/plugins/corvin-knowledge/sync`
 
 Trigger sync operation.
 
@@ -161,11 +161,11 @@ Trigger sync operation.
 }
 ```
 
-### POST `/api/v1/console/plugins/corvin-knowledge/init`
+### POST `/v1/console/plugins/corvin-knowledge/init`
 
 Called on plugin installation.
 
-### POST `/api/v1/console/plugins/corvin-knowledge/cleanup`
+### POST `/v1/console/plugins/corvin-knowledge/cleanup`
 
 Called on plugin uninstallation.
 
