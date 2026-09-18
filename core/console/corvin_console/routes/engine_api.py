@@ -142,6 +142,105 @@ def _model_config_module():
         raise HTTPException(status_code=503, detail=f"model_selection_config unavailable: {exc}") from exc
 
 
+CLASSIFIED_EVENT = "skill.model_selector.classified"
+
+
+def _classified_chain_path(tenant_id: str) -> Path | None:
+    """THE tenant chain, through the pinned ``forge.paths.tenant_audit_chain``
+    mirror (never a hand-composed path). ``forge`` is importable only after
+    ``corvin_core._bootstrap`` — ``skill_audit._ensure_operator_on_path`` is
+    what made it importable for the old inline reader, so it is called here
+    explicitly. ``None`` when the path cannot be resolved: the caller then sees
+    no records, exactly as the old reader degraded to zeros."""
+    try:
+        from core.skills.skill_audit import _ensure_operator_on_path  # noqa: PLC0415
+        _ensure_operator_on_path()
+        from forge.paths import (
+            tenant_audit_chain,  # type: ignore[import-not-found]  # noqa: PLC0415
+        )
+        return tenant_audit_chain(tenant_id)
+    except Exception:  # noqa: BLE001
+        try:
+            from core.skills.skill_audit import audit_chain_path  # noqa: PLC0415
+            return audit_chain_path(tenant_id)
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _iter_classified(
+    tenant_id: str,
+    *,
+    since_ts: float = 0.0,
+    newest_first: bool = False,
+    max_lines: int | None = None,
+):
+    """Yield the tenant's ``skill.model_selector.classified`` records (ADR-0885).
+
+    ONE reader for every consumer — ``_real_stats`` (windowed aggregate), the
+    analytics ``recent`` list and the ``feedback`` resolver. ``since_ts`` is the
+    ADR-0760 epoch filter (0 = no filter). ``newest_first`` walks the file from
+    its end; with ``max_lines`` the walk stops after that many lines were
+    SCANNED (classified or not), which bounds the cost on a long chain —
+    measured density on the service chain is 0.44 % classified, so 50 000
+    lines hold ~220 classified records. An unreadable or absent chain yields
+    nothing and never raises.
+    """
+    path = _classified_chain_path(tenant_id)
+    if path is None or not path.exists():
+        return
+    try:
+        if newest_first:
+            lines_iter = _iter_lines_backwards(path)
+        else:
+            lines_iter = path.open("r", encoding="utf-8")
+        scanned = 0
+        try:
+            for line in lines_iter:
+                scanned += 1
+                if max_lines is not None and scanned > max_lines:
+                    return
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if rec.get("event_type") != CLASSIFIED_EVENT:
+                    continue
+                rec_ts = rec.get("ts")
+                if since_ts and isinstance(rec_ts, (int, float)) and rec_ts < since_ts:
+                    continue
+                yield rec
+        finally:
+            close = getattr(lines_iter, "close", None)
+            if close:
+                close()
+    except OSError:
+        return
+
+
+def _iter_lines_backwards(path: Path, block_size: int = 64 * 1024):
+    """Lines of ``path`` from the last to the first, without reading the whole
+    file — the chain is append-only, so its newest records are at the end."""
+    with path.open("rb") as fh:
+        fh.seek(0, 2)
+        pos = fh.tell()
+        tail = b""
+        while pos > 0:
+            step = min(block_size, pos)
+            pos -= step
+            fh.seek(pos)
+            chunk = fh.read(step) + tail
+            parts = chunk.split(b"\n")
+            tail = parts[0]
+            for part in reversed(parts[1:]):
+                if part:
+                    yield part.decode("utf-8", errors="replace")
+        if tail:
+            yield tail.decode("utf-8", errors="replace")
+
+
 def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | None]:
     """Aggregate REAL ``skill.model_selector.classified`` audit events into
     per-task-type {run_count, confidence_score} — never fabricated.
@@ -169,41 +268,18 @@ def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | N
     counts: dict[str, int] = {t: 0 for t in TASK_TYPES}
     last_ts: float | None = None
 
-    try:
-        from core.skills.skill_audit import audit_chain_path  # noqa: PLC0415
-        path = audit_chain_path(tenant_id)
-    except Exception:  # noqa: BLE001
-        path = None
-
-    if path is not None and path.exists():
-        try:
-            with path.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except Exception:  # noqa: BLE001
-                        continue
-                    if rec.get("event_type") != "skill.model_selector.classified":
-                        continue
-                    rec_ts = rec.get("ts")
-                    if since_ts and isinstance(rec_ts, (int, float)) and rec_ts < since_ts:
-                        continue
-                    details = rec.get("details") or {}
-                    task_type = complexity_to_task.get(details.get("complexity"))
-                    if task_type is None:
-                        continue
-                    confidence = details.get("confidence")
-                    if isinstance(confidence, (int, float)):
-                        sums[task_type] += float(confidence)
-                        counts[task_type] += 1
-                    ts = rec.get("ts")
-                    if isinstance(ts, (int, float)):
-                        last_ts = ts if last_ts is None else max(last_ts, ts)
-        except OSError:
-            pass
+    for rec in _iter_classified(tenant_id, since_ts=since_ts):
+        details = rec.get("details") or {}
+        task_type = complexity_to_task.get(details.get("complexity"))
+        if task_type is None:
+            continue
+        confidence = details.get("confidence")
+        if isinstance(confidence, (int, float)):
+            sums[task_type] += float(confidence)
+            counts[task_type] += 1
+        ts = rec.get("ts")
+        if isinstance(ts, (int, float)):
+            last_ts = ts if last_ts is None else max(last_ts, ts)
 
     stats: dict[str, dict[str, Any]] = {}
     for t in TASK_TYPES:
@@ -256,6 +332,35 @@ def _is_claude_model_id(model_id: str) -> bool:
     """
     lowered = model_id.lower()
     return "claude" in lowered or "anthropic" in lowered
+
+
+def claude_catalog_or_503() -> set[str]:
+    """The offline Claude catalogue for a PUT validator — or 503 when the
+    engine registry FAILED to load and nothing ever loaded (ADR-0885 step 2b).
+
+    Before this, ``PUT /v1/engine/config`` accepted any id on an empty
+    catalogue because an empty set could mean either "the YAML is unreadable"
+    (refusing every save would lock the operator out) or "nothing declared";
+    the two were indistinguishable. ``engine_models.registry_load_status``
+    now separates them: a real load failure is a 503 the operator can act on,
+    a loaded-but-empty catalogue is still accepted with a warning (as before),
+    and a failure AFTER a good load is served from the stale-good cache and is
+    not an error. Shared by ``engine_api`` and ``engine`` so both Save paths
+    have ONE semantic.
+    """
+    try:
+        from engine_models import registry_load_status  # type: ignore[import]  # noqa: PLC0415
+        ok, error = registry_load_status()
+    except Exception:  # noqa: BLE001 — stripped install: behave as before
+        ok, error = True, None
+    known = _claude_catalog_offline()
+    if not ok and not known:
+        raise HTTPException(
+            status_code=503,
+            detail=f"The engine model registry could not be loaded ({error}); "
+                   f"model ids cannot be validated. Fix the registry file and retry.",
+        )
+    return known
 
 
 def _claude_catalog_offline() -> set[str]:
@@ -588,11 +693,10 @@ async def update_engine_config(
         if task_type not in TASK_TYPES:
             raise HTTPException(status_code=400, detail=f"Invalid task_type: {task_type}")
         if model_cfg.provider is None:
-            known_claude = _claude_catalog_offline()
-            # An empty catalogue means the registry could not be read AND no live
-            # fetch has ever cached anything — refusing every save on that basis
-            # would lock the operator out over an unreadable YAML, so accept and
-            # let the model-source panel surface the broken catalogue instead.
+            # 503 when the registry failed to load (ADR-0885 step 2b); a
+            # loaded-but-empty catalogue still accepts, as before — refusing
+            # every save because nothing is declared would lock the operator out.
+            known_claude = claude_catalog_or_503()
             if known_claude and model_cfg.selected_model not in known_claude:
                 raise HTTPException(
                     status_code=400,

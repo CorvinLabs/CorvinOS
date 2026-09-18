@@ -41,8 +41,9 @@ from core.learning.model_selection_learner import model_price_per_1k  # noqa: E4
 
 def _as_process_tenant(tenant_id: str):
     """Patch forge.security_events._current_tenant_id for one tenant."""
-    import corvin_core._bootstrap  # noqa: F401
     from unittest import mock
+
+    import corvin_core._bootstrap  # noqa: F401
     from forge import security_events  # type: ignore[import-not-found]
     return mock.patch.object(security_events, "_current_tenant_id", lambda: tenant_id)
 
@@ -163,6 +164,182 @@ class ModelRankingRouteTests(unittest.TestCase):
             "/v1/engine/analytics/task-type/SIMPLE", params={"max_output_usd_per_1k": -1},
         )
         self.assertEqual(r.status_code, 422)
+
+
+
+# ─────────────────────────────────────────────────────────────────
+# ADR-0885 step 2b — GET /recent and POST /feedback over HTTP
+# ─────────────────────────────────────────────────────────────────
+
+CLASSIFIED = "skill.model_selector.classified"
+CLASSIFIED_FIELDS = {
+    "complexity", "confidence", "recommended_provider", "recommended_model",
+    "shadow", "token_estimate", "code_blocks", "dependency_count",
+}
+
+
+def _seed_classified(tenant_id: str, complexity: str, model: str, confidence: float) -> None:
+    """Write one REAL classified record to the tenant chain under the temp home.
+
+    ``emit_skill_audit`` registers only its generic vocabulary for an event
+    type and the chain writer DROPS every unlisted detail — the classified
+    fields are registered by the shadow emitter at call time, so the fixture
+    registers them first (positive control below asserts they landed)."""
+    import corvin_core._bootstrap  # noqa: F401
+    from forge import security_events  # type: ignore[import-not-found]
+
+    from core.skills.skill_audit import emit_skill_audit
+    security_events.register_event_allowlist(CLASSIFIED, CLASSIFIED_FIELDS)
+    ok = emit_skill_audit(
+        tenant_id, CLASSIFIED, tool="os.model_selector",
+        details={
+            "complexity": complexity, "confidence": confidence,
+            "recommended_provider": None, "recommended_model": model,
+            "shadow": True, "token_estimate": 120, "code_blocks": 0, "dependency_count": 0,
+        },
+    )
+    assert ok, "seeding must reach the chain"
+
+
+def _chain_records(home: str, tenant_id: str) -> list[dict]:
+    import json
+    p = Path(home) / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
+    if not p.exists():
+        return []
+    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+
+
+class RecentAndFeedbackRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._prev_home = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = self._tmp.name
+        MSO._optimizer = None
+
+    def tearDown(self) -> None:
+        MSO._optimizer = None
+        if self._prev_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._prev_home
+        self._tmp.cleanup()
+
+    def _client(self, tenant_id: str = "_default", *, csrf_override: bool = True) -> TestClient:
+        app = FastAPI()
+        app.include_router(MSA.router)
+        app.dependency_overrides[console_deps.require_session] = lambda: _fake_record(tenant_id)
+        if csrf_override:
+            app.dependency_overrides[console_deps.require_csrf] = lambda: None
+        return TestClient(app)
+
+    # positive control FIRST: the seeded record carries the classified fields
+    def test_seeded_record_carries_the_classified_fields(self) -> None:
+        _seed_classified("_default", "medium", MID, 0.8)
+        recs = [r for r in _chain_records(self._tmp.name, "_default") if r.get("event_type") == CLASSIFIED]
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["details"].get("complexity"), "medium")
+        self.assertEqual(recs[0]["details"].get("recommended_model"), MID)
+        self.assertRegex(recs[0]["hash"], r"^[0-9a-f]{16}$")
+
+    def test_recent_empty_on_fresh_home(self) -> None:
+        r = self._client().get("/v1/engine/analytics/recent")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json(), {"tenant_id": "_default", "windowed": False, "items": []})
+
+    def test_recent_newest_first_projection_and_limit(self) -> None:
+        _seed_classified("_default", "simple", CHEAP, 0.6)
+        _seed_classified("_default", "medium", MID, 0.7)
+        _seed_classified("_default", "complex", DEAR, 0.9)
+        r = self._client().get("/v1/engine/analytics/recent")
+        self.assertEqual(r.status_code, 200, r.text)
+        items = r.json()["items"]
+        self.assertEqual([x["task_type"] for x in items], ["COMPLEX", "MEDIUM", "SIMPLE"])
+        self.assertEqual([x["model"] for x in items], [DEAR, MID, CHEAP])
+        for x in items:
+            self.assertEqual(set(x), {"record_hash", "ts", "task_type", "model", "confidence"})
+        self.assertGreaterEqual(items[0]["ts"], items[-1]["ts"])
+        r2 = self._client().get("/v1/engine/analytics/recent", params={"limit": 2})
+        self.assertEqual(len(r2.json()["items"]), 2)
+        self.assertEqual(self._client().get("/v1/engine/analytics/recent", params={"limit": 0}).status_code, 422)
+        self.assertEqual(self._client().get("/v1/engine/analytics/recent", params={"limit": 51}).status_code, 422)
+
+    def test_feedback_moves_confidence_then_replay_is_409(self) -> None:
+        _seed_classified("_default", "medium", MID, 0.7)
+        client = self._client()
+        h = client.get("/v1/engine/analytics/recent").json()["items"][0]["record_hash"]
+        before = client.get("/v1/engine/analytics/task-type/MEDIUM").json()["models"]
+        self.assertEqual(before, [])  # nothing learned yet
+        r = client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "good"})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual((body["task_type"], body["model"], body["n_samples"]), ("MEDIUM", MID, 1))
+        self.assertGreater(body["confidence"], 0.5)
+        after = client.get("/v1/engine/analytics/task-type/MEDIUM").json()["models"]
+        self.assertEqual([(x["model"], x["n_samples"]) for x in after], [(MID, 1)])
+        # the learner's fail-closed record is on the chain
+        types = [x.get("event_type") for x in _chain_records(self._tmp.name, "_default")]
+        self.assertIn("confidence_updated", types)
+        # replay
+        r2 = client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "poor"})
+        self.assertEqual(r2.status_code, 409)
+        self.assertEqual(client.get("/v1/engine/analytics/task-type/MEDIUM").json()["models"][0]["n_samples"], 1)
+
+    def test_feedback_unknown_hash_404(self) -> None:
+        r = self._client().post("/v1/engine/analytics/feedback",
+                                json={"record_hash": "0123456789abcdef", "rating": "good"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_feedback_other_tenants_hash_404(self) -> None:
+        with _as_process_tenant("tenant_a"):
+            _seed_classified("tenant_a", "medium", MID, 0.7)
+            h = self._client("tenant_a").get("/v1/engine/analytics/recent").json()["items"][0]["record_hash"]
+        with _as_process_tenant("tenant_b"):
+            r = self._client("tenant_b").post("/v1/engine/analytics/feedback",
+                                              json={"record_hash": h, "rating": "good"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_feedback_requires_csrf(self) -> None:
+        from unittest import mock
+        _seed_classified("_default", "medium", MID, 0.7)
+        client = self._client(csrf_override=False)
+        h = client.get("/v1/engine/analytics/recent").json()["items"][0]["record_hash"]
+        # require_csrf validates the session ITSELF (plain call, not Depends) and
+        # only then the header — with a valid session and no x-csrf-token → 403.
+        with mock.patch.object(console_deps, "require_session", lambda **_k: _fake_record()):
+            r = client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "good"})
+        self.assertEqual(r.status_code, 403, r.text)
+        # and nothing was learned
+        self.assertEqual(self._client().get("/v1/engine/analytics/task-type/MEDIUM").json()["models"], [])
+
+    def test_feedback_rejects_free_text_and_bad_rating(self) -> None:
+        _seed_classified("_default", "medium", MID, 0.7)
+        client = self._client()
+        h = client.get("/v1/engine/analytics/recent").json()["items"][0]["record_hash"]
+        r = client.post("/v1/engine/analytics/feedback",
+                        json={"record_hash": h, "rating": "good", "reason": "free text"})
+        self.assertEqual(r.status_code, 422)
+        r = client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "meh"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_feedback_503_when_chain_refuses_and_learns_nothing(self) -> None:
+        from unittest import mock
+
+        import corvin_core._bootstrap  # noqa: F401
+        from forge import security_events  # type: ignore[import-not-found]
+        _seed_classified("_default", "medium", MID, 0.7)
+        client = self._client()
+        h = client.get("/v1/engine/analytics/recent").json()["items"][0]["record_hash"]
+
+        def refuse(*_a, **_k):
+            raise RuntimeError("chain refused")
+
+        with mock.patch.object(security_events, "write_event", refuse):
+            r = client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "good"})
+        self.assertEqual(r.status_code, 503, r.text)
+        self.assertEqual(client.get("/v1/engine/analytics/task-type/MEDIUM").json()["models"], [])
+        # not marked as rated either — the operator can retry once the chain is back
+        r2 = client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "good"})
+        self.assertEqual(r2.status_code, 200, r2.text)
 
 
 if __name__ == "__main__":

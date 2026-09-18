@@ -177,6 +177,24 @@ class EngineModelSpec:
 
 _registry_cache: dict[str, EngineModelSpec] | None = None
 _providers_cache: dict[str, ProviderSpec] | None = None
+#: ADR-0885 step 2b — why the LAST _load_raw produced an empty registry, when it
+#: did so because the YAML could not be read or parsed and nothing had ever
+#: loaded. None when the last load succeeded (or a stale-good cache is being
+#: served). Without this, a caller cannot tell "unreadable registry" from
+#: "nothing declared": both are ``{}``.
+_load_error: str | None = None
+
+
+def registry_load_status() -> "tuple[bool, str | None]":
+    """``(ok, error)`` for the registry as currently served.
+
+    ``ok`` is False ONLY when the YAML failed to load and no earlier load ever
+    succeeded — the one case in which ``load_registry()`` returns ``{}`` for a
+    reason other than "the file declares nothing". A failure AFTER a good load
+    keeps serving the stale-good cache (by design, see _load_raw) and reports
+    ``(True, None)``. The status persists until a ``force_reload=True`` retries.
+    """
+    return (_load_error is None, _load_error)
 
 
 def _load_raw(force_reload: bool) -> None:
@@ -187,21 +205,24 @@ def _load_raw(force_reload: bool) -> None:
     wipe the registry for every other reader — review MEDIUM). We only fall back
     to empty when nothing has ever loaded. Both caches are committed atomically
     at the end, so a mid-parse error can never leave one populated + one None."""
-    global _registry_cache, _providers_cache  # noqa: PLW0603
+    global _registry_cache, _providers_cache, _load_error  # noqa: PLW0603
     if _registry_cache is not None and _providers_cache is not None and not force_reload:
         return
     try:
         import yaml  # type: ignore[import-untyped]
         raw: dict[str, Any] = yaml.safe_load(_REGISTRY_FILE.read_text("utf-8")) or {}
         providers, result = _parse_raw(raw)
-    except Exception:
+    except Exception as e:
         if _registry_cache is None:
             _registry_cache = {}
+            # Nothing ever loaded: the empty registry is a FAILURE, say so.
+            _load_error = f"{type(e).__name__}: {e}"[:200]
         if _providers_cache is None:
             _providers_cache = {}
         return
     _providers_cache = providers
     _registry_cache = result
+    _load_error = None
 
 
 def _parse_raw(raw: dict[str, Any]) -> "tuple[dict[str, ProviderSpec], dict[str, EngineModelSpec]]":
