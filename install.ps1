@@ -560,7 +560,7 @@ if ($DryRun) {
 } else {
     try {
         $taskName = "CorvinOS-AutoRestart"
-        $taskPath = "\CorvinOS\"
+        $taskPath = '\CorvinOS\'
 
         # Check if task already exists
         $existingTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath `
