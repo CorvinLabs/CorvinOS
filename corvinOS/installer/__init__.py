@@ -1,7 +1,7 @@
 """Corvin universal installer package.
 
 Pip-based, self-contained, cross-platform (Linux/macOS/Windows).
-Entry point: python -m operator.installer [install|uninstall|status]
+Entry point: python -m corvin_operator.installer [install|uninstall|status]
 """
 
 import sys

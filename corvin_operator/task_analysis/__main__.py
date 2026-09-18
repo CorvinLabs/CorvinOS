@@ -10,6 +10,6 @@ if __name__ == "__main__":
         from .server import main
         main()
     else:
-        print("Usage: python -m operator.task_analysis server [options]")
-        print("       python -m operator.task_analysis --help")
+        print("Usage: python -m corvin_operator.task_analysis server [options]")
+        print("       python -m corvin_operator.task_analysis --help")
         sys.exit(1)

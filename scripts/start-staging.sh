@@ -59,7 +59,7 @@ echo "   Dashboard: http://localhost:9093"
 sleep 2
 
 # Start TaskEngine server
-# Note: Can't use -m operator.task_analysis due to stdlib 'operator' module conflict
+# Note: Can't use -m corvin_operator.task_analysis due to stdlib 'operator' module conflict
 # Use standalone script instead
 echo "🔧 Starting TaskEngine server..."
 uv run python scripts/taskengine-server.py \
