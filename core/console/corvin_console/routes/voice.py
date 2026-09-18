@@ -54,7 +54,7 @@ _VENDOR_OPERATOR = _THIS_DIR.parent / "_vendor" / "corvin_operator"
 
 
 def _resolve_operator_dir(*parts: str) -> Path:
-    repo = _REPO.joinpath("operator", *parts)
+    repo = _REPO.joinpath("corvin_operator", *parts)
     if repo.is_dir():
         return repo
     vendored = _VENDOR_OPERATOR.joinpath(*parts)
