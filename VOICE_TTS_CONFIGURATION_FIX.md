@@ -1,344 +1,75 @@
-# Voice TTS Provider Configuration Fix
-
-## Problem Summary
-
-Voice Summary auf Discord Voice ist auf Edge TTS konfiguriert, obwohl ein OpenAI API Key verfügbar ist. Die Fallback-Logik funktioniert korrekt (OpenAI → Edge → Piper), aber OpenAI wird übersprungen.
-
-**Root Causes gefunden:**
-1. ❌ **OpenAI API Keys sind PLACEHOLDERS** in `~/.config/corvin-voice/service.env`
-2. ❌ **openai Python SDK nicht installiert** in der voice daemon Umgebung
-3. ✓ **Fallback-Logik ist korrekt** — Edge TTS wird korrekt verwendet als Fallback
-
----
-
-## Configuration Status Report
-
-### Current State (nach Diagnose)
-```
-Environment Variable           Status              Value
-─────────────────────────────────────────────────────────────
-CORVIN_TTS_OPENAI_KEY        ❌ PLACEHOLDER      sk-proj-PLACEHOLDER-TTS-20260916_201207
-OPENAI_API_KEY               ❌ PLACEHOLDER      sk-proj-PLACEHOLDER-OpenAI-20260916_201207
-CORVIN_TTS_LOCAL_ONLY        ✓ NOT SET           (OpenAI allowed)
-
-Python Packages
-─────────────────────────────────────────────────────────────
-openai                       ❌ NOT INSTALLED
-edge_tts                     ❌ NOT INSTALLED
-
-Provider Availability
-─────────────────────────────────────────────────────────────
-OpenAI TTS                   ❌ NOT AVAILABLE    (SDK missing, key is placeholder)
-Edge TTS                     ❌ NOT AVAILABLE    (SDK missing)
-Piper TTS                    ✓ AVAILABLE         (used as fallback)
-```
-
----
-
-## Fix: Step-by-Step Instructions
-
-### Step 1: Obtain Real OpenAI API Key
-
-Der echte OpenAI API Key ist in der Vault gespeichert:
-
-```bash
-# Vault auslesen (benötigt Vault-Zugriff)
-vault_cli=$(find ~ -name "vault_cli.py" 2>/dev/null | head -1)
-if [ -z "$vault_cli" ]; then
-    echo "⚠️ vault_cli.py nicht gefunden"
-    echo "Nutze alternativ: CorvinOS console → Settings → API Keys → OpenAI"
-    exit 1
-fi
-
-# Key aus Vault abrufen
-python3 "$vault_cli" get openai_api_key
-```
-
-Oder über die CorvinOS Console:
-1. Öffne http://localhost:8765/console
-2. Gehe zu Settings → Secrets → OpenAI TTS
-3. Kopiere den API Key
-
-### Step 2: Update service.env mit echtem Key
-
-```bash
-# 1. Datei öffnen
-nano ~/.config/corvin-voice/service.env
-
-# 2. Zeile ersetzen:
-# FALSCH (PLACEHOLDER):
-# CORVIN_TTS_OPENAI_KEY=sk-proj-PLACEHOLDER-TTS-20260916_201207
-
-# RICHTIG (echter Key):
-# CORVIN_TTS_OPENAI_KEY=sk-proj-xxxxxxxxxxxx...
-
-# 3. Datei speichern und rechte setzen:
-chmod 600 ~/.config/corvin-voice/service.env
-
-# 4. Überprüfen:
-grep CORVIN_TTS_OPENAI_KEY ~/.config/corvin-voice/service.env | head -c 30
-# Sollte: sk-proj-xxxx zeigen, NICHT PLACEHOLDER
-```
-
-### Step 3: Install Python Dependencies
-
-```bash
-# In der Python-Umgebung, wo voice daemon läuft:
-python3 -m pip install openai edge-tts
-
-# Überprüfen:
-python3 -c "import openai; print(f'✓ openai {openai.__version__}')"
-python3 -c "import edge_tts; print('✓ edge-tts installed')"
-```
-
-### Step 4: Restart Voice Daemon
-
-```bash
-# Voice daemon neustarten (damit neue Umgebung geladen wird)
-systemctl --user restart corvin-voice
-
-# Überprüfen:
-systemctl --user is-active corvin-voice
-# Sollte: active zeigen
-```
-
-### Step 5: Verify Configuration
-
-```bash
-# Konfiguration überprüfen
-bash /tmp/diagnose_tts.sh
-
-# Logs überprüfen (live):
-journalctl --user -u corvin-voice -f | grep -i "tts\|openai\|edge"
-
-# Sollte zeigen:
-# ✓ TTS: Trying primary provider (OpenAI)...
-# ✓ TTS: OpenAI synthesis succeeded
-```
-
----
-
-## TTS Provider Priority (korrekter Fallback-Stack)
-
-```
-┌──────────────────────────────────────┐
-│  1. OpenAI TTS (Preferred)           │
-│     ✓ High quality (0.95)            │
-│     ✓ Supports multiple languages    │
-│     ✓ Natural-sounding voices        │
-│     ⚠️  Requires OPENAI_API_KEY      │
-│     ⚠️  Requires openai SDK          │
-└────────────┬─────────────────────────┘
-             │ (API error, no key, SDK missing)
-             ↓
-┌──────────────────────────────────────┐
-│  2. Microsoft Edge TTS (Fallback)    │
-│     ✓ Good quality (0.75)            │
-│     ✓ Free (no API key)              │
-│     ⚠️  Requires internet            │
-│     ⚠️  Requires ffmpeg              │
-│     ⚠️  Requires edge-tts SDK        │
-└────────────┬─────────────────────────┘
-             │ (Network error, ffmpeg missing, SDK missing)
-             ↓
-┌──────────────────────────────────────┐
-│  3. Piper Local TTS (Fallback)       │
-│     ✓ Offline (no internet)          │
-│     ⚠️  Lower quality                │
-│     ⚠️  Requires piper binary        │
-│     ⚠️  Requires ONNX models         │
-└────────────┬─────────────────────────┘
-             │ (Piper unavailable)
-             ↓
-┌──────────────────────────────────────┐
-│  4. Text-Only Fallback               │
-│     • No voice note                  │
-│     • User sees skip reason          │
-│     • Text delivery still works       │
-└──────────────────────────────────────┘
-```
-
----
-
-## Key Resolution Precedence
-
-```
-CORVIN_TTS_OPENAI_KEY
-    ↓ (if empty/missing)
-OPENAI_API_KEY (general OpenAI key)
-    ↓ (if empty/missing)
-OPENAI_APIKEY (legacy alias)
-    ↓ (if empty/missing)
-❌ None → OpenAI unavailable
-```
-
-**Wichtig:** Der erste gefundene Key wird verwendet. Die Suche stoppt beim ersten Hit:
-- Environment variables werden ZUERST geprüft (höchste Priorität)
-- Dann service.env
-- Dann vault/secrets.enc
-
----
-
-## Common Issues & Troubleshooting
-
-### Issue 1: PLACEHOLDER Keys in service.env
-```bash
-❌ CORVIN_TTS_OPENAI_KEY=sk-proj-PLACEHOLDER-TTS-20260916_201207
-
-✓ Lösung: Replace with real key from vault (siehe Step 2)
-```
-
-### Issue 2: openai SDK Not Installed
-```bash
-Log: "synth: openai package not installed"
-
-✓ Lösung:
-python3 -m pip install openai
-systemctl --user restart corvin-voice
-```
-
-### Issue 3: CORVIN_TTS_LOCAL_ONLY=1 Set
-```bash
-❌ CORVIN_TTS_LOCAL_ONLY=1
-# Diese Variable blockiert ALLE OpenAI-Zugriffe
-
-✓ Lösung:
-unset CORVIN_TTS_LOCAL_ONLY
-# Oder aus service.env entfernen
-```
-
-### Issue 4: OpenAI API Quota Exceeded (429)
-```bash
-Log: "insufficient_quota" or "Error code: 429"
-
-✓ Fallback aktiv: Edge TTS wird verwendet
-✓ Automatischer Backoff: 1 Stunde warten, dann retry
-✓ Kein Operator-Eingriff notwendig
-```
-
-### Issue 5: Network/ffmpeg Issues with Edge TTS
-```bash
-Log: "edge TTS failed" (but fallback should work)
-
-✓ Überprüfen:
-which ffmpeg
-which piper
-
-✓ Fallback sollte zu Piper gehen
-```
-
----
-
-## Verification Checklist
-
-Nach der Konfiguration:
-
-- [ ] `service.env` enthält echten OPENAI_API_KEY (nicht PLACEHOLDER)
-- [ ] `chmod 600 ~/.config/corvin-voice/service.env` ausgeführt
-- [ ] `python3 -c "import openai"` erfolgreich
-- [ ] `python3 -c "import edge_tts"` erfolgreich
-- [ ] `systemctl --user status corvin-voice` = active
-- [ ] `journalctl --user -u corvin-voice` zeigt OpenAI-Logs
-- [ ] Voice Summary Test erfolgreich: 
-  ```bash
-  cd /path/to/CorvinOS
-  python3 tests/test_tts_provider_selection_e2e.py
-  # Sollte: OpenAI TTS succeeded zeigen
-  ```
-
----
-
-## ADR & References
-
-- **ADR-0554:** Voice summaries on proactive messages (TTS configuration)
-- **ADR-0193:** Budget/Fallback strategy for TTS/STT
-- **ADR-0445:** Resilience patterns (fallback logic)
-- **provider_keys.py:** Canonical key resolver (single source of truth)
-- **adapter.py:** Voice synthesis orchestration (synthesize_voice_note)
-
----
-
-## Appendix: Testing E2E Behavior
-
-### Test Scenario 1: OpenAI Success
-```bash
-# Mit korrektem OPENAI_API_KEY:
-python3 -c "
-import asyncio
-from corvin_operator.bridges.shared import adapter
-
-async def test():
-    path = await asyncio.to_thread(adapter.synthesize_voice_note, 'Hello world', 'en')
-    print(f'✓ Voice created: {path}')
-    
-asyncio.run(test())
-"
-```
-
-### Test Scenario 2: OpenAI Unavailable (Key Missing)
-```bash
-# Mit OPENAI_API_KEY='' (leer):
-export OPENAI_API_KEY=""
-unset CORVIN_TTS_OPENAI_KEY
-
-# Sollte auf Edge TTS fallback:
-python3 -c "
-import asyncio
-from corvin_operator.bridges.shared import adapter
-
-async def test():
-    path = await asyncio.to_thread(adapter.synthesize_voice_note, 'Fallback test', 'en')
-    print(f'✓ Fallback used: {path}')
-    
-asyncio.run(test())
-"
-```
-
-### Test Scenario 3: Quota Exceeded (429)
-```bash
-# Mit invalid/quota-exceeded key:
-# Sollte automatisch auf Edge fallback:
-python3 -c "
-from corvin_operator.bridges.shared import adapter
-
-state = adapter._voice_engine_state
-print(f'Quota backoff active: {state.get(\"quota_until\", 0) > 0}')
-"
-```
-
----
-
-## Summary: Was hat sich geändert?
-
-| Bereich | Vorher | Nachher |
-|---------|--------|---------|
-| OPENAI_API_KEY in service.env | PLACEHOLDER | ✓ Echter Key |
-| openai SDK | ❌ Nicht installiert | ✓ Installiert |
-| Voice daemon | ❌ Nicht laufen | ✓ Läuft |
-| TTS Fallback | (funktioniert, aber OpenAI übersprungen) | ✓ OpenAI wird versucht, Edge Fallback aktiv |
-| Voice Summary | Edge TTS verwendet | ✓ OpenAI TTS wenn verfügbar, Edge als Fallback |
-
----
-
-## How to Apply This Fix
-
-```bash
-# 1. Vault-Key abrufen
-# (siehe Step 1)
-
-# 2. service.env aktualisieren
-nano ~/.config/corvin-voice/service.env
-# CORVIN_TTS_OPENAI_KEY=<INSERT_REAL_KEY_HERE>
-
-# 3. Dependencies installieren
-python3 -m pip install openai edge-tts
-
-# 4. Voice daemon neustarten
-systemctl --user restart corvin-voice
-
-# 5. Überprüfen
-bash /tmp/diagnose_tts.sh
-journalctl --user -u corvin-voice -f
-
-# Done! OpenAI TTS sollte jetzt bevorzugt werden.
-```
+# Voice TTS Provider — Discord voice summary spoke via edge-tts instead of OpenAI
+
+**Status:** RESOLVED 2026-09-18 [ADR-0883]. This file supersedes the first
+analysis committed the same day at 13:37, which was wrong on three points
+(see "Corrections" below). The durable description lives in
+`docs/bridge-setup.md` § "Pinning the TTS provider"; this file is the incident
+record.
+
+## What was actually happening
+
+The Discord voice summary is synthesised by the **bridge adapter**
+(`corvin-voice-bridge-adapter.service`, `corvin_operator/bridges/shared/adapter.py::synthesize_voice_note`),
+not by `say.py` and not by a `corvin-voice` unit (no such unit exists).
+
+1. **2026-09-16 20:12:07** — `scripts/rotate_corvin_keys_blocker3.py` (Track 3
+   credential rotation) replaced every OpenAI key in
+   `~/.config/corvin-voice/service.env` with `sk-proj-PLACEHOLDER-…-20260916_201207`.
+   The running adapter kept the previous, valid key in its process
+   environment, so nothing changed for two days.
+2. **2026-09-18 08:59** — reboot. The adapter loaded the placeholders through
+   the unit's `EnvironmentFile=`. From 09:03 every turn logged
+   `synth OpenAI failed: Error code: 401 … ***1207` and fell through to
+   edge-tts (Microsoft). Roughly one turn in six edge-tts failed too and Piper
+   spoke.
+3. **13:51** — `service.env` was repaired with a valid key (verified against
+   `GET /v1/models` → 200). No unit was restarted, so the adapter and the
+   Discord daemon still held the placeholder: `provider_keys.resolve_key`
+   checks the process environment before any file, and the file is only read
+   at unit start. The last 401 with the placeholder suffix is from 15:03.
+
+## Corrections to the 13:37 analysis
+
+| Claim (13:37) | Reality |
+|---|---|
+| `openai` and `edge-tts` SDKs not installed | Both installed in the adapter's interpreter (`.venv`: openai 3.1.0, edge-tts 7.2.8). The check was run against the wrong Python. |
+| Restart `corvin-voice` | The units are `corvin-voice-bridge-adapter` and `corvin-voice-bridge-discord`. |
+| Keys are placeholders | True until 13:51; stale afterwards. The *running process* still had them. |
+
+## Fix
+
+1. Restart the daemons after any `service.env` change (this is now documented
+   in `docs/bridge-setup.md`):
+   ```bash
+   systemctl --user restart corvin-voice-bridge-adapter corvin-voice-bridge-discord
+   ```
+2. ADR-0883 — the bridge adapter honours the TTS pin (`CORVIN_TTS_PROVIDER`
+   env, then `profile.tts_provider`), Variant A: a pinned cloud provider falls
+   back to local Piper only, never to the other cloud. `profile.json` on this
+   install is pinned to `openai`.
+3. `VoiceTtsPinnedProviderReset` (ACO healer) now resolves the key through
+   `provider_keys.resolve_key` instead of the console process's own
+   `OPENAI_API_KEY`, so it no longer clears a valid pin.
+
+## Second finding after the restart (15:48): the OpenAI account has no credits
+
+With the valid key loaded, `POST /v1/audio/speech` answers
+`429 insufficient_quota / credit_balance_exhausted`. The adapter treats every
+429 as quota, backs off for 60 minutes and — by design — logged nothing, so the
+only evidence was the fallback voice. Under the `openai` pin the fallback is
+now local Piper (never edge-tts). Fix on the OpenAI side: add credits at
+platform.openai.com → Billing. The backoff clears after 60 minutes or on
+`systemctl --user restart corvin-voice-bridge-adapter`. Since ADR-0883 the
+adapter logs one content-free line per backoff window:
+`synth OpenAI: quota/credits exhausted (429) — backing off 60 min, using fallback tier`.
+
+## Still open (out of scope of ADR-0883)
+
+- `CORVIN_STT_OPENAI_KEY` (and the vault entries `openai_api_key` /
+  `stt_openai_api_key`, which hold that same value) return 401 — OpenAI
+  Whisper STT is dead and falls back to local whisper.
+- `summarize.py` runs degraded (Hermes + CLI timeouts), so voice summaries are
+  near-verbatim (~4 000 chars) and occasionally exceed the adapter's 15 s
+  OpenAI timeout.
+- The rotation scripts write placeholders into the live `service.env` without
+  restarting units or validating the replacement.

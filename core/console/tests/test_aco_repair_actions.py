@@ -260,6 +260,7 @@ def test_voice_tts_pinned_provider_reset_clears_unusable_provider(tmp_path, monk
     """When tts_provider is pinned to an unusable provider, the action resets it to None."""
     import json as _j
     import sys as _sys
+    from pathlib import Path as _Path
 
     # Build a minimal stub profile module pointing at tmp_path/profile.json.
     profile_path = tmp_path / "profile.json"
@@ -290,6 +291,16 @@ def test_voice_tts_pinned_provider_reset_clears_unusable_provider(tmp_path, monk
 
     action = RA.VoiceTtsPinnedProviderReset()
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)  # ensure OpenAI is "broken"
+    monkeypatch.delenv("CORVIN_TTS_OPENAI_KEY", raising=False)
+    # ADR-0883: "usable" is decided by provider_keys.resolve_key (env →
+    # secrets.enc → service.env), so the REAL service.env of the machine
+    # running this test would otherwise make the pin usable. Isolate the
+    # resolver, not the action under test.
+    _bridges_shared = _Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"
+    if str(_bridges_shared) not in _sys.path:
+        _sys.path.insert(0, str(_bridges_shared))
+    import provider_keys as _pk  # noqa: PLC0415
+    monkeypatch.setattr(_pk, "resolve_key", lambda key_name: None)
 
     # Patch _load_profile_module to return our fake module.
     monkeypatch.setattr(action, "_load_profile_module", lambda ctx: fake_mod)

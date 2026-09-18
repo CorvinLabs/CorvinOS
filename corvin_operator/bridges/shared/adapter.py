@@ -9389,8 +9389,17 @@ def _try_openai_tts(
                     or "rate_limit_exceeded" in msg)
         if is_quota:
             with _voice_engine_lock:
+                already = _voice_engine_state.get("first_quota_logged", False)
                 _voice_engine_state["quota_until"] = now + _VOICE_QUOTA_BACKOFF_S
                 _voice_engine_state["first_quota_logged"] = True
+            if not already:
+                # ONE content-free line per backoff window (ADR-0883). The
+                # per-turn silence below is deliberate; total silence was
+                # not: on 2026-09-18 a `credit_balance_exhausted` 429 sent
+                # every summary to the fallback tier and the only evidence
+                # was the voice itself.
+                log("synth OpenAI: quota/credits exhausted (429) — backing "
+                    f"off {int(_VOICE_QUOTA_BACKOFF_S // 60)} min, using fallback tier")
             # CRITICAL: Do NOT log quota errors here. The calling code will
             # attempt Piper fallback. If Piper succeeds, the user never needs to
             # know about the quota error. If Piper also fails, the error will be
@@ -9570,22 +9579,97 @@ def _try_piper_tts(text: str, lang: str = "de") -> Path | None:
             pass
 
 
+# ── TTS provider pin (ADR-0883) ───────────────────────────────────────
+# Kept in lock-step with operator/voice/scripts/say.py::_AUTO_CHAIN and the
+# console's routes/voice.py::_resolve_tts_provider. Until 2026-09-18 the
+# bridge path was the ONE TTS caller that ignored the pin: say.py and the
+# console honoured CORVIN_TTS_PROVIDER / profile.tts_provider, adapter.py
+# ran a hard-wired openai → edge → piper chain, so a Discord/WhatsApp voice
+# summary silently shipped to Microsoft the moment OpenAI failed — and
+# docs/bridge-setup.md claimed the pin worked here. Guard:
+# test_tts_provider_pin.py.
+_TTS_AUTO_CHAIN: tuple[str, ...] = ("openai", "edge", "piper")
+_TTS_PROVIDERS: frozenset[str] = frozenset(_TTS_AUTO_CHAIN)
+_TTS_LOCAL_PROVIDER = "piper"
+_tts_pin_warned: set[str] = set()
+
+
+def _resolve_tts_provider() -> str | None:
+    """Return the pinned TTS provider, or None for the auto-chain.
+
+    Precedence mirrors the console (routes/voice.py::_resolve_tts_provider)
+    and say.py: the operator env var ``CORVIN_TTS_PROVIDER`` beats the user
+    profile's ``tts_provider``; the literal ``auto`` (either place) means
+    "no pin". An unknown value is treated as no pin and logged once, so a
+    typo degrades to today's behaviour instead of to silence.
+    """
+    env_provider = os.environ.get("CORVIN_TTS_PROVIDER", "").strip().lower()
+    if env_provider == "auto":
+        return None
+    candidate = env_provider
+    if not candidate and _voice_profile is not None:
+        try:
+            raw = _voice_profile.load().get("tts_provider")
+        except Exception:  # noqa: BLE001
+            raw = None
+        if isinstance(raw, str):
+            candidate = raw.strip().lower()
+            if candidate == "auto":
+                return None
+    if not candidate:
+        return None
+    if candidate not in _TTS_PROVIDERS:
+        if candidate not in _tts_pin_warned:
+            _tts_pin_warned.add(candidate)
+            log(f"synth: unknown tts_provider pin {candidate!r} — using auto-chain")
+        return None
+    return candidate
+
+
+def _tts_chain_for(pin: str | None) -> tuple[str, ...]:
+    """Provider attempt order for a pin.
+
+    Variant A (operator decision 2026-09-18): a pinned CLOUD provider falls
+    back to the LOCAL provider only — never to the other cloud. Pinning
+    ``openai`` therefore means "OpenAI, else local Piper, else text-only";
+    edge-tts (Microsoft) is never attempted. Pinning ``piper`` is local-only.
+    No pin keeps the historical auto-chain.
+    """
+    if pin is None:
+        return _TTS_AUTO_CHAIN
+    if pin == _TTS_LOCAL_PROVIDER:
+        return (_TTS_LOCAL_PROVIDER,)
+    return (pin, _TTS_LOCAL_PROVIDER)
+
+
+def _run_tts_provider(name: str, text: str, lang: str, voice: str | None) -> Path | None:
+    if name == "openai":
+        return _try_openai_tts(text, lang, voice)
+    if name == "edge":
+        return _try_edge_tts(text, lang)
+    if name == "piper":
+        return _try_piper_tts(text, lang)
+    return None
+
+
 def synthesize_voice_note(
     text: str,
     lang: str = "de",
     voice: str | None = None,
 ) -> Path | None:
-    """Generate an OGG-Opus voice note. Tries OpenAI → edge-tts → Piper → text-only.
+    """Generate an OGG-Opus voice note. Honours the TTS provider pin.
 
     Returns the path to the OGG file, or None when all engines are
     unavailable. On None the caller delivers text only; voice_skip_reason()
     carries an optional notice to append so the user knows why voice is off.
 
-    Fallback order:
-      1. OpenAI TTS (skipped silently if no key / quota backoff / import error)
-      2. edge-tts (Microsoft Neural TTS, no API key, requires internet + ffmpeg)
-      3. Piper local TTS (skipped if binary / model / ffmpeg absent)
-      4. None → caller falls back to text-only delivery
+    Attempt order (see ``_resolve_tts_provider`` / ``_tts_chain_for``):
+      no pin  → OpenAI → edge-tts → Piper → text-only
+      openai  → OpenAI → Piper → text-only        (edge never attempted)
+      edge    → edge-tts → Piper → text-only
+      piper   → Piper → text-only
+    Every tier is skipped silently on its own preconditions (no key / quota
+    backoff / package or binary missing / CORVIN_TTS_LOCAL_ONLY).
     """
     # All three engines write into ROOT/outbox, which only adapter.main()
     # creates — `corvin-voice doctor` (and any pre-first-boot caller) ran all
@@ -9596,26 +9680,33 @@ def synthesize_voice_note(
     except OSError as _e:
         log(f"synth: outbox dir unavailable: {_e}")
 
-    path = _try_openai_tts(text, lang, voice)
-    if path is not None:
-        _set_voice_skip_reason(None)
-        return path
-
-    path = _try_edge_tts(text, lang)
-    if path is not None:
-        _set_voice_skip_reason(None)
-        return path
-
-    path = _try_piper_tts(text, lang)
-    if path is not None:
-        _set_voice_skip_reason(None)
-        return path
+    pin = _resolve_tts_provider()
+    chain = _tts_chain_for(pin)
+    for idx, name in enumerate(chain):
+        path = _run_tts_provider(name, text, lang, voice)
+        if path is not None:
+            if pin is not None and idx > 0:
+                log(f"synth: pinned provider '{pin}' failed — spoke via local "
+                    f"'{name}' (pin skips {', '.join(sorted(_TTS_PROVIDERS - set(chain)))})")
+            # CONTENT-FREE provenance line: which tier produced the audio.
+            # Until 2026-09-18 a successful tier logged nothing, so "which
+            # voice is this?" could only be answered by listening.
+            log(f"synth: voice via {name} (pin={pin or 'auto'}, lang={lang})")
+            _set_voice_skip_reason(None)
+            return path
 
     # All engines failed — set a user-facing notice explaining why.
     now = time.time()
     with _voice_engine_lock:
         in_backoff = now < _voice_engine_state.get("quota_until", 0.0)
-    if in_backoff:
+    if pin is not None:
+        reason = (
+            f"Voice note unavailable — TTS provider is pinned to '{pin}' "
+            f"and it failed; local Piper could not speak either. "
+            "Set tts_provider to 'auto' in the voice profile (or "
+            "CORVIN_TTS_PROVIDER=auto) to allow the full fallback chain."
+        )
+    elif in_backoff:
         reason = (
             "Voice note unavailable — OpenAI hit rate limit, "
             "edge-tts unavailable (no internet / ffmpeg), "
