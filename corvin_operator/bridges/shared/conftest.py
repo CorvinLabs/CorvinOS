@@ -121,3 +121,35 @@ def _snapshot_and_restore_environ():
     for k in before_keys:
         if os.environ.get(k) != before[k]:
             os.environ[k] = before[k]
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit_chain(monkeypatch, tmp_path):
+    """Autouse fixture 4 (2026-09-19): keep every test in this directory out of
+    the LIVE audit chain.
+
+    ``paths.corvin_home()`` falls back to the REPO-LOCAL ``.corvin`` when
+    ``CORVIN_HOME`` is unset — which on a developer host is exactly the root
+    the running services use (``Environment=CORVIN_HOME=<repo>/.corvin``). A
+    test that spawns a stub engine through awp_walker / a2a_worker emits
+    ``engine.span.start/end`` via ``audit.audit_event`` → ``audit.audit_path()``
+    → the canonical tenant chain of the live install. Found 2026-09-19: 40 such
+    worker spans from 2026-09-18 13:46 (span ids ``spn-awp-fetch``,
+    ``spn-a2a-t1``; engine ids ``fake``, ``x``, ``bidirectional-fake``) and 11
+    from 2026-09-07 — permanent records in the GDPR Art. 30 chain, counted by
+    the Models console as delegated worker runs.
+
+    Scope is the CHAIN, not the whole home. ``tests/conftest.py`` redirects
+    ``CORVIN_HOME`` wholesale; measured here (2026-09-19), that turns 70 tests
+    of this directory red because they read the install's own config (house
+    rules, social federation, spawn gates, remote-trigger keys) — a coupling
+    of its own, out of scope of this fixture. ``VOICE_AUDIT_PATH`` is the
+    writer's first-precedence override (``audit.audit_path()``), so every
+    ``audit_event`` write lands under tmp while the install stays readable.
+    Known limit: a writer that composes the path through
+    ``forge.paths.tenant_audit_chain()`` directly does not see this variable.
+
+    Script-style runs (``python test_awp_walker.py``) do not load conftest;
+    those files import ``_test_isolation`` for the same effect."""
+    monkeypatch.setenv(
+        "VOICE_AUDIT_PATH", str(tmp_path / "audit-sandbox" / "global" / "forge" / "audit.jsonl"))

@@ -27,6 +27,7 @@ if str(_here) not in sys.path:
 # / `from license.limits import ...` then hit `ModuleNotFoundError: import of
 # license.limits halted; None in sys.modules` instead of importing the real
 # module.
+import _test_isolation  # noqa: E402,F401 — never the live audit chain (2026-09-19)
 import a2a_worker as w  # noqa: E402
 
 # L44 house-rules is MANDATORY + fail-closed (ADR-0143): spawn_gates.check_l44

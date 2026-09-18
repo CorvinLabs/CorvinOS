@@ -53,6 +53,7 @@ if str(_here) not in sys.path:
 
 # Import modules first, THEN patch their module-level _forge_se references
 # (patching before import = no module attribute to patch yet).
+import _test_isolation  # noqa: E402,F401 — never the live audit chain (2026-09-19)
 import remote_trigger_receiver as rtr  # noqa: E402
 import remote_trigger_sender as rts  # noqa: E402
 import a2a_http_server  # noqa: E402
