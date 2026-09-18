@@ -462,3 +462,139 @@ class SkillAdapter:
     def get_version_history(self) -> list[SkillConfigVersion]:
         """Get all versions (for dashboard)."""
         return list(self.state.config_versions)
+
+    def apply_config_delta(
+        self,
+        param_deltas: dict[str, float],
+        confidence_delta: float,
+    ) -> dict[str, float]:
+        """Apply configuration delta from feedback optimizer (ADR-0876).
+
+        This method implements the feedback→config→execution closure: when an
+        optimizer computes a delta from user feedback, this method atomically
+        applies it, emits an audit event, and persists the new config.
+
+        Args:
+            param_deltas: Dict of parameter name → delta value. E.g.,
+                {"confidence_threshold": +0.05, "speed_weight": -0.02}
+            confidence_delta: Overall confidence improvement score (for audit).
+
+        Returns:
+            Updated config as dict (e.g., {"confidence_threshold": 0.75, ...})
+
+        Raises:
+            RuntimeError: if audit chain write fails (fail-closed — config is
+                not applied if we cannot record it).
+            SkillConfigLockBusy: if the config lock is held by another writer.
+
+        Side effects:
+            - Emits skill_config_updated audit event (hash-chained)
+            - Persists new config to ~/.corvin/skills/<skill_id>_config.json
+            - Announces the change via on_config_change callback (if set)
+        """
+        with self._locked():
+            return self._apply_config_delta_locked(param_deltas, confidence_delta)
+
+    def _apply_config_delta_locked(
+        self,
+        param_deltas: dict[str, float],
+        confidence_delta: float,
+    ) -> dict[str, float]:
+        """Apply delta under the config lock (reload + mutate + persist + audit)."""
+        # 1. Reload current config (in case another writer changed it)
+        self._load_or_init()
+        old_config = self.state.best_config
+
+        # 2. Apply each delta to the current config
+        updated = old_config
+        for param, delta in param_deltas.items():
+            if delta != 0.0:
+                updated = updated.apply_delta(param, delta)
+
+        # 3. Update state
+        self.state.best_config = updated
+
+        # 4. Create version entry
+        version = SkillConfigVersion(
+            version_id=f"v{len(self.state.config_versions) + 1}",
+            skill_id=self.skill_id,
+            timestamp=datetime.now(timezone.utc),
+            config=updated,
+            change_reason="feedback_delta",
+            improvement_pct=confidence_delta * 100,
+            user_can_undo=True,
+        )
+        self.state.config_versions.append(version)
+
+        # 5. Emit audit event FIRST (fail-closed: no audit write → no persist)
+        self._emit_config_update_audit_event(
+            old_config=old_config,
+            new_config=updated,
+            param_deltas=param_deltas,
+            confidence_delta=confidence_delta,
+            version_id=version.version_id,
+        )
+
+        # 6. Persist config (audit succeeded, so this is safe)
+        self._persist()
+
+        # 7. Announce the change
+        self._announce(
+            "config_delta_applied",
+            param_deltas=param_deltas,
+            confidence_delta=confidence_delta,
+            version_id=version.version_id,
+        )
+
+        return updated.to_dict()
+
+    def _emit_config_update_audit_event(
+        self,
+        old_config: SkillConfig,
+        new_config: SkillConfig,
+        param_deltas: dict[str, float],
+        confidence_delta: float,
+        version_id: str,
+    ) -> None:
+        """Emit skill_config_updated event to audit chain (ADR-0314, ADR-0876).
+
+        This is audit-first: if the chain write fails, we raise RuntimeError
+        and the caller's transaction is aborted. The config is never persisted
+        without a corresponding audit record.
+
+        Raises:
+            RuntimeError: if the audit chain write fails.
+        """
+        try:
+            from core.learning.learning_events import EventType, LearningEvent
+            from core.learning.event_store import EventStore
+            from core.paths.tenant import tenant_home  # noqa: PLC0415
+        except ImportError as e:
+            raise RuntimeError(f"Cannot emit audit event: missing learning module: {e}") from e
+
+        # Build skill_config_updated event
+        signal = {
+            "param_deltas": param_deltas,
+            "confidence_before": old_config.confidence_threshold,
+            "confidence_after": new_config.confidence_threshold,
+            "confidence_delta": confidence_delta,
+            "version_id": version_id,
+            "params_before": old_config.to_dict(),
+            "params_after": new_config.to_dict(),
+        }
+
+        event = LearningEvent.create(
+            event_type=EventType.CONFIG_UPDATED,
+            skill_id=self.skill_id,
+            tenant_id=self.tenant_id,
+            signal=signal,
+            lom="core.skills.os_skills.skill_adapter:SkillAdapter.apply_config_delta",
+        )
+
+        # Write to audit chain (fail-closed)
+        try:
+            home = tenant_home(self.tenant_id)
+            store = EventStore(home, tenant_id=self.tenant_id)
+            store.write_event(event)
+        except Exception as e:
+            raise RuntimeError(f"Failed to emit config update audit event: {e}") from e
