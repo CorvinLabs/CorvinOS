@@ -336,6 +336,56 @@ corvin diagnose windows
 
 ---
 
+## 🟠 HIGH — "INSTALLED, BUT THE CONSOLE IS NOT SERVING" (install.ps1 exit 3)
+
+### Symptom
+
+`install.ps1` finishes with exit code 3 and this summary:
+
+```
+ Status:    INSTALLED, BUT THE CONSOLE IS NOT SERVING
+ ...
+The corvinos package IS installed. Only the running console is missing.
+   Reason: The console exited during startup (exit code 3).
+```
+
+The package is installed correctly. Only the server process failed to come up,
+so the installer refuses to claim success or open a browser onto a dead port.
+
+### Diagnosis
+
+The summary names two log files. Read the **console** one first -- it is the
+server's own output, not the installer's:
+
+```powershell
+# The installer prints the exact paths; they live under the run's log directory
+Get-Content "$env:TEMP\corvinos-install-<timestamp>\console-stderr.log" -Tail 40
+```
+
+The installer already classifies the four failure shapes it can recognise and
+prints the explanation inline. Reproduce any of them in the foreground with:
+
+```powershell
+corvinos-serve --port 8765
+```
+
+| Server output contains | Cause | Recovery |
+|---|---|---|
+| `TripwireError ... audit_chain_intact` with `chain_replaced` / `tail_truncated` | The ADR-0232/0233 boot tripwire refuses to start: the audit chain under `CORVIN_HOME` does not match its out-of-tree anchor in `%USERPROFILE%\.config\corvin-voice\`. The anchor is keyed by chain *path*, so it also fires when a `CORVIN_HOME` is deleted and recreated at the same path. | Restore `audit_anchor.key` (and the chain) from backup, **or** install into a new home: `$env:CORVIN_HOME = "$env:USERPROFILE\.corvin-new"`. **Keep the existing chain** -- it is the GDPR Art. 30 record, it is append-only, and there is no override flag by design. Never trim or rewrite `audit.jsonl` to make this go away; that breaks the chain instead of fixing it. |
+| `Address already in use` / `WinError 10048` | Something else owns the port. The installer tree-kills a stale *CorvinOS* process automatically but leaves a foreign owner alone. | `Get-NetTCPConnection -LocalPort 8765 -State Listen` to see the owner, then pick another port: `.\install.ps1 -Port 8790` |
+| `ModuleNotFoundError` / `ImportError` | An editable install points at a clone whose dependencies moved, or a console route imports a symbol that no longer exists. Note the gateway removes `/console` **and every `/v1/console/*` route** on such an error, which presents as a bare 404 rather than a 503. | Re-run the installer (it reinstalls the package), then `corvinos-serve --port 8765` and read the traceback. |
+| `npm ERR` / `vite` / `error TS####` | The console SPA failed to build, so the app mounted its 503 "build failed" route. That decision is made once at boot: a later rebuild alone does not recover it. | `.\install.ps1 -RebuildWeb` (rebuilds, restarts, and re-verifies) |
+
+### Why exit 3 exists at all
+
+An open TCP port is not a working console. `uvicorn` binds seconds before the
+app is mounted, and it stays bound forever when the app mounted the 503 route.
+The installer therefore waits for an HTTP 200 carrying the SPA shell and for
+`POST /v1/console/auth/local-login` to issue a session cookie. Exit 3 means
+exactly one thing: everything was installed, and that proof did not come.
+
+---
+
 ## Support
 
 If errors persist after following these steps:

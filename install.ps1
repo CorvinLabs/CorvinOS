@@ -31,17 +31,43 @@
     Additionally run 'corvin-install --yes' (voice/STT/TTS + services). Off by
     default because it downloads models and can take several minutes.
 
+.PARAMETER NoStart
+    Install only: do not start the console and do not open a browser.
+
+.PARAMETER NoBrowser
+    Start and verify the console, but leave the browser closed.
+
+.PARAMETER RebuildWeb
+    Rebuild the console SPA even when a build already exists. Without it, an
+    existing web-next/dist/index.html is reused (a full build takes minutes).
+
+.PARAMETER Port
+    Port the console listens on (default 8765). The URL is always 127.0.0.1:
+    the server binds v4 loopback only, and Windows resolves "localhost" to ::1
+    first, which would fail to connect.
+
+.PARAMETER StartTimeoutSeconds
+    How long to wait for the console to answer HTTP 200 with the SPA shell
+    (default 180).
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install.ps1 -Editable .
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install.ps1 -DryRun -Verbose
 
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File install.ps1 -Editable . -Port 8790 -NoBrowser
+
 .NOTES
     Exit codes:
-      0 = Success
+      0 = Success: package installed, console answers HTTP 200 with the SPA,
+          local login issues a session cookie, browser opened (unless
+          -NoBrowser / -NoStart)
       1 = Installation failed (check log)
       2 = Prerequisites missing/failed
+      3 = Installed, but the console is not serving. The package is fine; the
+          summary names the reason and prints the server's own last lines.
       4 = Configuration error (editable path invalid)
 #>
 
