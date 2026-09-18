@@ -57,7 +57,13 @@ def unavailable_reason() -> tuple[str | None, str]:
 
     web_next = pkg_dir / "web-next"
     dist = web_next / "dist"
-    if not dist.exists():
+    # The ENTRY DOCUMENT, not the directory. `dist.exists()` alone reported
+    # "available" for an EMPTY dist/, which is the state vite leaves behind when
+    # a build fails: it empties outDir first, then `tsc -b` errors out. The
+    # console then booted, mount_static() found no index.html, registered the
+    # 503 fallback route instead of the SPA mount, and the installer opened a
+    # browser onto a 503 page (2026-09-18, fresh-install roundtrip).
+    if not (dist / "index.html").exists():
         return "spa", str(web_next)
 
     return None, ""
