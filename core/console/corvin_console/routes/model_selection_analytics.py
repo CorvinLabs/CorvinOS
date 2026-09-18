@@ -51,13 +51,22 @@ router = APIRouter(prefix="/v1/engine/analytics", tags=["model-selection-analyti
 # ── Pydantic models for responses ──────────────────────────────────────
 
 class ConfidenceEntry(BaseModel):
-    """Single model's confidence and stats."""
+    """Single model's confidence and stats.
+
+    The four optional fields are filled by the per-task-type ranking
+    (``ConfidenceOptimizer.rank_models``, ADR-0885): the raw Beta mean and the
+    published rate card. A rate of ``null`` means "not on the rate card" and
+    must be rendered as unknown, never as free."""
     model: str
     confidence: float
     n_samples: int
     mean_quality: float
     variance: float
     is_converged: bool
+    posterior_mean: Optional[float] = None
+    input_usd_per_1k: Optional[float] = None
+    output_usd_per_1k: Optional[float] = None
+    priced: Optional[bool] = None
 
 
 class AnalyticsSummary(BaseModel):
@@ -154,35 +163,41 @@ async def get_analytics(
 async def get_task_type_analytics(
     task_type: str,
     rec: session_auth.SessionRecord = Depends(require_session),
+    max_output_usd_per_1k: Optional[float] = Query(
+        None, ge=0.0,
+        description="Keep only models whose published output rate is known and "
+                    "at or under this cap (USD per 1k tokens). Unpriced models "
+                    "are excluded under a cap, never treated as free.",
+    ),
 ) -> Dict[str, Any]:
     """Get per-task-type confidence breakdown.
 
-    Shows all models' confidences for a specific task type.
+    Shows all models' confidences for a specific task type, ranked by
+    ``ConfidenceOptimizer.rank_models`` (ADR-0885) — the ONE ranking the
+    learning tab and the selector share, with the rate card attached.
     """
     optimizer = get_optimizer()
     tenant_id = rec.tenant_id
 
     try:
-        from core.learning.confidence_persistence import list_entries
-
         models_data = []
 
-        for tt, model in list_entries(tenant_id):
-            if tt != task_type:
-                continue
-            stats = optimizer.get_stats(task_type, model, tenant_id)
-
-            entry = ConfidenceEntry(
-                model=model,
-                confidence=stats.confidence_score,
-                n_samples=stats.n_samples,
+        for row in optimizer.rank_models(
+            task_type, None, tenant_id, max_output_usd_per_1k=max_output_usd_per_1k,
+        ):
+            stats = optimizer.get_stats(task_type, row.model, tenant_id)
+            models_data.append(ConfidenceEntry(
+                model=row.model,
+                confidence=row.confidence,
+                n_samples=row.n_samples,
                 mean_quality=stats.mean_quality,
                 variance=stats.variance,
-                is_converged=optimizer.is_converged(task_type, model, tenant_id),
-            )
-            models_data.append(entry)
-
-        models_data.sort(key=lambda x: x.confidence, reverse=True)
+                is_converged=row.is_converged,
+                posterior_mean=row.posterior_mean,
+                input_usd_per_1k=row.input_usd_per_1k,
+                output_usd_per_1k=row.output_usd_per_1k,
+                priced=row.priced,
+            ))
 
         logger.info(f"Task-type analytics retrieved: {task_type}, {len(models_data)} models")
 

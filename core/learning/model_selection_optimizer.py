@@ -31,7 +31,13 @@ Constraints (ADR-0644):
 - EMA alpha=0.1 (hard constant, never user-adjustable)
 - Minimum N=5 (hard constant)
 
-Two optimizers live in this module, and BOTH are public API:
+Two optimizers live in this module, and BOTH are public API. Since 2026-09-18
+(ADR-0885 step 0) the first also carries the ONE multi-model ranking,
+``ConfidenceOptimizer.rank_models`` / ``select_model`` / ``RankedModel`` — the
+replacement for the deleted ``os_skills/model_selector_learning_enhancement.py``
+(an unpersisted, unaudited second Beta learner with its own id and price tables).
+Its production caller is ``routes/model_selection_analytics.py`` (task-type
+breakdown); ``core/console/tests/test_model_ranking_route.py`` drives it over HTTP.
 
 * ``ConfidenceOptimizer`` / ``ModelStats`` / ``get_optimizer()`` — the persisted,
   audit-first per-(task_type, model, tenant) confidence learner (ADR-0644). Read by
@@ -54,7 +60,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Optional, Dict, List, Tuple, Any, Callable
 import json
 import logging
 import math
@@ -103,6 +109,44 @@ class ModelStats:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class RankedModel:
+    """One row of :meth:`ConfidenceOptimizer.rank_models` (immutable, audit-safe).
+
+    ``confidence`` is the EMA-smoothed learned score the console already shows;
+    ``posterior_mean`` is the raw Beta mean alpha/(alpha+beta). Rates are the
+    published rate card, ``None`` when the model is not on it — which a consumer
+    must render as unknown, never as free (ADR-0763)."""
+    model: str
+    task_type: str
+    tenant_id: str
+    confidence: float
+    posterior_mean: float
+    n_samples: int
+    is_converged: bool
+    input_usd_per_1k: Optional[float]
+    output_usd_per_1k: Optional[float]
+
+    @property
+    def priced(self) -> bool:
+        return self.input_usd_per_1k is not None and self.output_usd_per_1k is not None
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["priced"] = self.priced
+        return d
+
+
+def _default_price_of(model: str) -> Optional[Tuple[float, float]]:
+    """The one published rate card (``model_selection_learner.model_price_per_1k``).
+    ``None`` on a stripped install — every model then ranks as unpriced."""
+    try:
+        from .model_selection_learner import model_price_per_1k  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+    return model_price_per_1k(model)
 
 
 class ConfidenceOptimizer:
@@ -295,6 +339,117 @@ class ConfidenceOptimizer:
         """Has this model converged for this task type?"""
         key = (task_type, model, tenant_id)
         return self._check_convergence(key)
+
+    def rank_models(
+        self,
+        task_type: str,
+        candidates: Optional[List[str]] = None,
+        tenant_id: str = "_default",
+        *,
+        max_output_usd_per_1k: Optional[float] = None,
+        price_of: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None,
+    ) -> List["RankedModel"]:
+        """Rank candidate models for ``task_type`` by what this tenant has learned.
+
+        ADR-0885 step 0. This is the ONE multi-model ranking; it replaced
+        ``os_skills/model_selector_learning_enhancement.py``, an in-memory,
+        unaudited, unpersisted second Beta learner that carried its own model-id
+        table (two of the four ids did not exist) and its own price table. Both
+        tables now come from the places that already own them:
+
+        * ``candidates=None`` — every model this tenant has persisted stats for
+          (``confidence_persistence.list_entries``). Pass the engine registry's
+          ids (``engine_models.registry_as_dict``) to rank a fixed catalogue.
+        * ``price_of`` — defaults to ``model_selection_learner.model_price_per_1k``,
+          the one published rate card the cost panels bill against.
+
+        Budget: with ``max_output_usd_per_1k`` set, a model survives only if its
+        published OUTPUT rate is known and at or under the cap. An unpriced model
+        is dropped under a cap — never treated as free (ADR-0763). Output is the
+        rate a long generation is dominated by, and the larger of the two on
+        every current model, which is why it is the one a budget binds.
+
+        Order: learned confidence desc, then samples desc, then cheaper output
+        rate, then model id — stable across calls with equal inputs.
+
+        Pure read. No store write, no audit event: a ranking is a VIEW over
+        learned state. The decision a caller makes with it is what gets audited
+        (``skill.model_selector.classified``, ``engine.config.updated``).
+        """
+        if candidates is None:
+            try:
+                from . import confidence_persistence  # noqa: PLC0415
+                candidates = [
+                    m for tt, m in confidence_persistence.list_entries(tenant_id)
+                    if tt == task_type
+                ]
+            except Exception as e:  # noqa: BLE001 — stripped install: rank the cache only
+                logger.warning(f"list_entries unavailable, ranking cached keys only: {e}")
+                candidates = [
+                    k[1] for k in self._stats_cache if k[0] == task_type and k[2] == tenant_id
+                ]
+
+        if price_of is None:
+            price_of = _default_price_of
+
+        seen: set[str] = set()
+        ranked: List[RankedModel] = []
+        for model in candidates:
+            if not model or model in seen:
+                continue
+            seen.add(model)
+            try:
+                price = price_of(model)
+            except Exception as e:  # noqa: BLE001 — a rate-card fault must not hide the ranking
+                logger.warning(f"price lookup failed for {model}: {e}")
+                price = None
+            in_rate = price[0] if price else None
+            out_rate = price[1] if price else None
+            if max_output_usd_per_1k is not None and (
+                out_rate is None or out_rate > max_output_usd_per_1k
+            ):
+                continue
+            stats = self._load_stats((task_type, model, tenant_id))
+            denom = stats.alpha + stats.beta
+            ranked.append(RankedModel(
+                model=model,
+                task_type=task_type,
+                tenant_id=tenant_id,
+                confidence=stats.confidence_score,
+                posterior_mean=(stats.alpha / denom) if denom > 0 else 0.5,
+                n_samples=stats.n_samples,
+                is_converged=self._check_convergence((task_type, model, tenant_id)),
+                input_usd_per_1k=in_rate,
+                output_usd_per_1k=out_rate,
+            ))
+
+        ranked.sort(key=lambda r: (
+            -r.confidence,
+            -r.n_samples,
+            r.output_usd_per_1k if r.output_usd_per_1k is not None else float("inf"),
+            r.model,
+        ))
+        return ranked
+
+    def select_model(
+        self,
+        task_type: str,
+        candidates: Optional[List[str]] = None,
+        tenant_id: str = "_default",
+        *,
+        max_output_usd_per_1k: Optional[float] = None,
+        price_of: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None,
+    ) -> Optional["RankedModel"]:
+        """The top entry of :meth:`rank_models`, or ``None`` when nothing
+        survives the candidate set and budget. ``None`` is the honest answer —
+        there is deliberately no hard-coded fallback model here; the caller's
+        pinned default (``spec.engine_models`` / ``model_selection_config``)
+        is the fallback, and it is the caller who knows it."""
+        ranked = self.rank_models(
+            task_type, candidates, tenant_id,
+            max_output_usd_per_1k=max_output_usd_per_1k, price_of=price_of,
+        )
+        return ranked[0] if ranked else None
 
     def reset_learning(self, tenant_id: str = "_default"):
         """Reset all learning data for a tenant (for testing/debugging).
