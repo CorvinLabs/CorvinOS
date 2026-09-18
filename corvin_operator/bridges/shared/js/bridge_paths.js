@@ -135,8 +135,8 @@ function legacyBridgeRuntimeDir(channel, kind) {
     cur = parent;
   }
   if (repo === null) return null;
-  // Try new operator/bridges layout first, fall back to legacy plugins/ location
-  const newChannelDir = path.join(repo, 'operator', 'bridges', channel);
+  // Try new corvin_operator/bridges layout first, fall back to legacy plugins/ location
+  const newChannelDir = path.join(repo, 'corvin_operator', 'bridges', channel);
   const channelDir = fs.existsSync(newChannelDir) ? newChannelDir : path.join(repo, 'plugins', 'voice', 'bridges', channel);
   if (kind === 'settings' || kind === 'root') return channelDir;
   return path.join(channelDir, kind);
