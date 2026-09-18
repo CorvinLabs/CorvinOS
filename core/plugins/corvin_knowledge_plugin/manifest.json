@@ -1,0 +1,167 @@
+{
+  "id": "corvin-knowledge",
+  "name": "Corvin-Knowledge: Agentic Knowledge Mesh",
+  "version": "1.0.0",
+  "description": "Query, sync, and propose knowledge across distributed teams. Integrates with GitHub-backed knowledge bases.",
+  "author": "Shumway + Claude Haiku 4.5",
+  "license": "Apache-2.0",
+  "type": "knowledge-management",
+  "boot_layer": "installed",
+
+  "capabilities": [
+    "query_entities",
+    "get_graph",
+    "sync_repository",
+    "propose_entity",
+    "validate_consistency"
+  ],
+
+  "commands": [
+    {
+      "name": "query",
+      "description": "Search knowledge by tag, project, or status",
+      "example": "mesh query --tag=skills --project=CorvinOS --status=accepted",
+      "args": [
+        {
+          "name": "tag",
+          "type": "string",
+          "required": false,
+          "help": "Filter by tag (e.g., skills, compliance, architecture)"
+        },
+        {
+          "name": "project",
+          "type": "string",
+          "required": false,
+          "help": "Filter by project (e.g., CorvinOS, MyTeam)"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false,
+          "enum": ["proposed", "accepted", "verified", "superseded"],
+          "help": "Filter by status"
+        }
+      ]
+    },
+    {
+      "name": "sync",
+      "description": "Sync with remote repository (pull latest changes)",
+      "example": "mesh sync --pull --consistency=strict",
+      "args": [
+        {
+          "name": "pull",
+          "type": "bool",
+          "default": true,
+          "help": "Fetch from remote (default: true)"
+        },
+        {
+          "name": "push",
+          "type": "bool",
+          "default": false,
+          "help": "Push to remote (requires write access)"
+        },
+        {
+          "name": "consistency",
+          "type": "string",
+          "enum": ["strict", "warn", "ignore"],
+          "default": "warn",
+          "help": "Fail on consistency errors (strict), warn (warn), or ignore (ignore)"
+        }
+      ]
+    },
+    {
+      "name": "propose",
+      "description": "Propose new entity (idea, concept, implementation)",
+      "example": "mesh propose --type=idea --title='New Skill X' --body='...' --project=CorvinOS",
+      "args": [
+        {
+          "name": "type",
+          "type": "string",
+          "required": true,
+          "enum": ["idea", "concept", "implementation"],
+          "help": "Entity type"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "help": "Entity title"
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": true,
+          "help": "Markdown content"
+        },
+        {
+          "name": "project",
+          "type": "string",
+          "required": false,
+          "default": "CorvinOS",
+          "help": "Project name (default: CorvinOS)"
+        }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "Configure plugin (repo path, remote URL)",
+      "example": "mesh config --repo-path ~/.corvin-knowledge --remote-url https://github.com/CorvinLabs/Corvin-Knowledge.git",
+      "args": [
+        {
+          "name": "repo-path",
+          "type": "string",
+          "required": false,
+          "help": "Local path to knowledge repository"
+        },
+        {
+          "name": "remote-url",
+          "type": "string",
+          "required": false,
+          "help": "Git remote URL"
+        }
+      ]
+    }
+  ],
+
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "repo_path": {
+        "type": "string",
+        "description": "Local path to Corvin-Knowledge repository",
+        "default": "~/.corvin-knowledge/",
+        "examples": ["~/.corvin-knowledge", "~/my-team-knowledge"]
+      },
+      "remote_url": {
+        "type": "string",
+        "description": "Git remote URL (canonical Corvin-Knowledge or custom fork)",
+        "default": "https://github.com/CorvinLabs/Corvin-Knowledge.git",
+        "examples": [
+          "https://github.com/CorvinLabs/Corvin-Knowledge.git",
+          "https://github.com/my-org/knowledge.git"
+        ]
+      },
+      "auto_sync_on_query": {
+        "type": "boolean",
+        "description": "Automatically pull latest before queries (default: true)",
+        "default": true
+      },
+      "consistency_level": {
+        "type": "string",
+        "enum": ["strict", "warn", "ignore"],
+        "description": "How to handle consistency errors (strict=fail, warn=log, ignore=skip)",
+        "default": "warn"
+      }
+    },
+    "required": ["repo_path"]
+  },
+
+  "dependencies": {
+    "python": ">=3.9",
+    "git": ">=2.25"
+  },
+
+  "source_url": "https://github.com/CorvinLabs/Corvin-Knowledge/tree/main/sync",
+  "documentation_url": "https://github.com/CorvinLabs/Corvin-Knowledge#claude-code-plugin",
+  "support_url": "https://github.com/CorvinLabs/Corvin-Knowledge/issues"
+}
