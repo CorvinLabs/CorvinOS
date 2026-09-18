@@ -16,7 +16,7 @@ import pytest
 def test_strip_for_tts_fallback():
     """E2E: If strip_for_tts fails, adapter uses raw text for summarize.py."""
     proj_root = Path(__file__).parent.parent.parent
-    adapter_path = proj_root / "operator" / "bridges" / "shared" / "adapter.py"
+    adapter_path = proj_root / "corvin_operator" / "bridges" / "shared" / "adapter.py"
 
     # Verify adapter.py has fallback logic
     adapter_code = adapter_path.read_text()
@@ -34,7 +34,7 @@ def test_strip_for_tts_fallback():
 def test_voice_summary_context_preservation(tmp_path):
     """Live E2E: build_voice_summary (real `claude -p` summariser) preserves the context."""
     proj_root = Path(__file__).parent.parent.parent
-    shared = proj_root / "operator" / "bridges" / "shared"
+    shared = proj_root / "corvin_operator" / "bridges" / "shared"
 
     # Fresh interpreter: adapter.py must be importable as a bare module with
     # <repo>/corvin_operator/bridges/shared on sys.path (no dotted operator.* import).

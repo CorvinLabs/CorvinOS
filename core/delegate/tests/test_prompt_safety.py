@@ -24,9 +24,9 @@ os.environ.setdefault("CORVIN_INTEGRATION_TEST", "1")
 
 _PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PLUGIN_DIR))
-_AGENTS_PARENT = _PLUGIN_DIR.parents[1] / "operator" / "bridges" / "shared"
+_AGENTS_PARENT = _PLUGIN_DIR.parents[1] / "corvin_operator" / "bridges" / "shared"
 sys.path.insert(0, str(_AGENTS_PARENT))
-_FORGE_PKG = _PLUGIN_DIR.parents[1] / "operator" / "forge"
+_FORGE_PKG = _PLUGIN_DIR.parents[1] / "corvin_operator" / "forge"
 sys.path.insert(0, str(_FORGE_PKG))
 
 from agents import StreamEvent  # type: ignore  # noqa: E402

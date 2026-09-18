@@ -31,8 +31,8 @@ ROOT = Path(__file__).resolve().parent
 SESSION_RESET_PY = ROOT / "session_reset.py"
 TIMEOUT_SWEEP_PY = ROOT.parent.parent / "voice" / "scripts" / "session_timeout_sweep.py"
 REPO = ROOT.parent.parent.parent  # ADR-0035: operator/bridges/shared/ -> repo
-SKILL_FORGE_PKG = REPO / "operator" / "skill-forge"
-FORGE_PKG = REPO / "operator" / "forge"
+SKILL_FORGE_PKG = REPO / "corvin_operator" / "skill-forge"
+FORGE_PKG = REPO / "corvin_operator" / "forge"
 
 
 # ── PASS/FAIL counter ───────────────────────────────────────────────────────

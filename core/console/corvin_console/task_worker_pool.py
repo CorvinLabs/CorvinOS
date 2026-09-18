@@ -41,7 +41,7 @@ try:
 except Exception:  # noqa: BLE001
     try:
         _shared_es = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                  "..", "..", "operator", "bridges", "shared")
+                                  "..", "..", "corvin_operator", "bridges", "shared")
         if _shared_es not in sys.path:
             sys.path.insert(0, os.path.abspath(_shared_es))
         import engine_span as _espan  # type: ignore
@@ -97,7 +97,7 @@ from forge import paths as _forge_paths  # type: ignore  # noqa: E402
 # ClaudeCodeEngine argv builder
 try:
     _shared = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _agents_dir = os.path.join(_shared, "..", "..", "operator", "bridges", "shared")
+    _agents_dir = os.path.join(_shared, "..", "..", "corvin_operator", "bridges", "shared")
     if _agents_dir not in sys.path:
         sys.path.insert(0, os.path.abspath(_agents_dir))
     from agents.claude_code import ClaudeCodeEngine as _ClaudeCodeEngine  # type: ignore

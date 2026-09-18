@@ -18,13 +18,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[3]
-for p in (_REPO / "operator" / "forge", _REPO / "core" / "console"):
+for p in (_REPO / "corvin_operator" / "forge", _REPO / "core" / "console"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
 
 def _load():
-    ce = _REPO / "operator" / "context_engineering"
+    ce = _REPO / "corvin_operator" / "context_engineering"
     spec = importlib.util.spec_from_file_location(
         "context_engineering", str(ce / "__init__.py"),
         submodule_search_locations=[str(ce)])

@@ -1657,7 +1657,7 @@ def canary_percentage_routing(
             import sys as _sys  # noqa: PLC0415
             from pathlib import Path as _Path  # noqa: PLC0415
 
-            _op = _Path(__file__).resolve().parents[3] / "operator"
+            _op = _Path(__file__).resolve().parents[3] / "corvin_operator"
             if _op.is_dir() and str(_op) not in _sys.path:
                 _sys.path.insert(0, str(_op))
             from measurement.canary_router import CanaryRouter  # type: ignore[import-not-found]  # noqa: PLC0415

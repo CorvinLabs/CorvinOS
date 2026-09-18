@@ -28,9 +28,9 @@ for _p in (
     str(_HERE.parents[1]),                        # core/plugins
     str(_REPO / "core" / "console"),
     str(_REPO / "core" / "compliance"),
-    str(_REPO / "operator"),
-    str(_REPO / "operator" / "forge"),
-    str(_REPO / "operator" / "bridges" / "shared"),
+    str(_REPO / "corvin_operator"),
+    str(_REPO / "corvin_operator" / "forge"),
+    str(_REPO / "corvin_operator" / "bridges" / "shared"),
     str(_REPO),
 ):
     if _p not in sys.path:

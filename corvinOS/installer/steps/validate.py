@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_SHARED_DIR = str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared")
+_SHARED_DIR = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared")
 
 
 def _windows_shim(argv: list[str]):

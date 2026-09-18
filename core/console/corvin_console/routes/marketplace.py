@@ -120,7 +120,7 @@ def resolve_index_path() -> Path:
     if override:
         return Path(override).expanduser()
 
-    legacy = Path.cwd() / "operator" / "marketplace" / "index" / "plugins.json"
+    legacy = Path.cwd() / "corvin_operator" / "marketplace" / "index" / "plugins.json"
     # core/console/corvin_console/routes/marketplace.py -> repo root -> its parent
     repo_root = Path(__file__).resolve().parents[4]
     sibling = repo_root.parent / "Corvin-Marketplace" / "index" / "plugins.json"

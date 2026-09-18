@@ -64,11 +64,11 @@ from ..deps import require_csrf, require_session
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
 
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_BRIDGES_SHARED) not in sys.path:
     sys.path.insert(0, str(_BRIDGES_SHARED))
 
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 if str(_OPERATOR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR))
 
@@ -81,7 +81,7 @@ except ImportError:
         _FREE_TIER: dict = {}
     _lic_get_limit = _FREE_TIER.get  # type: ignore[assignment]
 
-_COWORK_DIR = _REPO / "operator" / "cowork"
+_COWORK_DIR = _REPO / "corvin_operator" / "cowork"
 _ORIGINS_DEFAULT = _COWORK_DIR / "remote_origins"
 _ENDPOINTS_DEFAULT = _COWORK_DIR / "remote_endpoints"
 _PENDING_DEFAULT = _COWORK_DIR / "pending_invites"

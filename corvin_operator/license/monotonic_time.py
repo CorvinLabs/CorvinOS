@@ -29,7 +29,7 @@ def _monotonic_timestamp_path() -> Path:
     else:
         corvin_home = Path("~/.corvin").expanduser()
 
-    return corvin_home / "operator" / "license" / "monotonic.timestamp"
+    return corvin_home / "corvin_operator" / "license" / "monotonic.timestamp"
 
 
 def _load_prior_max() -> Optional[int]:

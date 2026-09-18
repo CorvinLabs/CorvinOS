@@ -52,7 +52,7 @@ def _load_completion_notify():
     """Import the bridge-side completion_notify (best-effort). Adds the bridge
     shared dir to sys.path — compute lives in core/, the backbone in corvin_operator/."""
     try:
-        shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
         if shared.exists() and str(shared) not in sys.path:
             sys.path.insert(0, str(shared))
         import completion_notify as _cn  # type: ignore

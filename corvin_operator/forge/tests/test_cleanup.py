@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-SCRIPT = REPO / "operator" / "forge" / "scripts" / "forge_cleanup.py"
+SCRIPT = REPO / "corvin_operator" / "forge" / "scripts" / "forge_cleanup.py"
 
 PASS = 0; FAIL = 0
 

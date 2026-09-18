@@ -1074,7 +1074,7 @@ def test_say_env_injects_the_resolved_openai_key(monkeypatch) -> None:
     import sys as _sys
     from pathlib import Path as _P
     _sys.path.insert(0, str(_P(voice_routes.__file__).resolve().parents[3]
-                            / "operator" / "bridges" / "shared"))
+                            / "corvin_operator" / "bridges" / "shared"))
     import provider_keys as _pk
     monkeypatch.setattr(_pk, "resolve_key",
                         lambda kn: "sk-INJECTED" if kn == "tts_openai_api_key" else None)
@@ -1087,7 +1087,7 @@ def test_say_env_never_clobbers_an_explicit_export(monkeypatch) -> None:
     import sys as _sys
     from pathlib import Path as _P
     _sys.path.insert(0, str(_P(voice_routes.__file__).resolve().parents[3]
-                            / "operator" / "bridges" / "shared"))
+                            / "corvin_operator" / "bridges" / "shared"))
     import provider_keys as _pk
     monkeypatch.setattr(_pk, "resolve_key", lambda kn: "sk-FROM-VAULT")
     monkeypatch.setenv("CORVIN_TTS_OPENAI_KEY", "sk-OPERATOR-EXPORT")
@@ -1100,7 +1100,7 @@ def test_say_env_survives_a_broken_resolver(monkeypatch) -> None:
     import sys as _sys
     from pathlib import Path as _P
     _sys.path.insert(0, str(_P(voice_routes.__file__).resolve().parents[3]
-                            / "operator" / "bridges" / "shared"))
+                            / "corvin_operator" / "bridges" / "shared"))
     import provider_keys as _pk
     def _boom(kn): raise RuntimeError("vault locked")
     monkeypatch.setattr(_pk, "resolve_key", _boom)

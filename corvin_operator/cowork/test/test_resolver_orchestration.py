@@ -95,7 +95,7 @@ def main() -> int:
                f"args={args}")
         env = cfg.get("env") or {}
         py = env.get("PYTHONPATH", "")
-        for needle in ("core/orchestration", "core/workflows", "operator/bridges/shared", "operator/forge"):
+        for needle in ("core/orchestration", "core/workflows", "corvin_operator/bridges/shared", "corvin_operator/forge"):
             expect(needle in py, f"PYTHONPATH carries {needle}", f"PYTHONPATH={py}")
         expect(env.get("CORVIN_CALLER_PERSONA") == "assistant",
                "CORVIN_CALLER_PERSONA tag set to persona name")

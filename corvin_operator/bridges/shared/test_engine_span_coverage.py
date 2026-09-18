@@ -26,7 +26,7 @@ _REPO = _SHARED.parents[2]
 
 # Production source roots that can spawn an engine.
 _SCAN_DIRS = [
-    _REPO / "operator" / "bridges" / "shared",
+    _REPO / "corvin_operator" / "bridges" / "shared",
     _REPO / "core" / "console" / "corvin_console",
     _REPO / "core" / "gateway" / "corvin_gateway",
     _REPO / "core" / "delegate" / "corvin_delegate",

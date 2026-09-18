@@ -291,14 +291,14 @@ def is_protected_path(path: str | Path) -> bool:
 
     repo = _repo_root()
     if repo is not None:
-        slot = repo / "operator" / "skill-forge" / "skills" / "dyn"
+        slot = repo / "corvin_operator" / "skill-forge" / "skills" / "dyn"
         slot_str = str(slot)
         if abs_str == slot_str or abs_str.startswith(slot_str + sep):
             return True
-        bundled_policy = str(repo / "operator" / "forge" / "forge" / "policy.json")
+        bundled_policy = str(repo / "corvin_operator" / "forge" / "forge" / "policy.json")
         if abs_str == bundled_policy:
             return True
-        bundled_default = str(repo / "operator" / "forge" / "forge" / "policy.default.json")
+        bundled_default = str(repo / "corvin_operator" / "forge" / "forge" / "policy.default.json")
         if abs_str == bundled_default:
             return True
         # ADR-0143 Layer 44 — house-rules acceptable-use policy + its gate module.
@@ -308,7 +308,7 @@ def is_protected_path(path: str | Path) -> bool:
         # the L44 acceptable-use guarantee without touching the audit chain.
         # Operator-side edits happen via git, not an in-process write tool.
         house_rules_policy = str(repo / "corvin_operator" / "policy" / "house_rules.yaml")
-        house_rules_mod = str(repo / "operator" / "bridges" / "shared" / "house_rules.py")
+        house_rules_mod = str(repo / "corvin_operator" / "bridges" / "shared" / "house_rules.py")
         if abs_str in (house_rules_policy, house_rules_mod):
             return True
         # ADR-0093 M1.3 — license plugin source tree (verifier.py, tier_flags.py,
@@ -328,7 +328,7 @@ def is_protected_path(path: str | Path) -> bool:
         # An LLM-side drop of a malicious .so (shadowing the verifier) or a
         # rewritten .pem (forging the attestation anchor) bypasses the gate that
         # blocks the equivalent .py edit. Block code + trust-anchor suffixes.
-        op_license = repo / "operator" / "license"
+        op_license = repo / "corvin_operator" / "license"
         op_license_str = str(op_license)
         if abs_str.startswith(op_license_str + sep) and abs_p.suffix in (
             ".py", ".so", ".dylib", ".pyd", ".pem",
@@ -1428,7 +1428,7 @@ def _emit_audit(payload: dict, reason: str) -> None:
         # Make `forge` package importable when called as a hook subprocess.
         repo = _repo_root()
         if repo is not None:
-            forge_pkg_parent = repo / "operator" / "forge"
+            forge_pkg_parent = repo / "corvin_operator" / "forge"
             if str(forge_pkg_parent) not in sys.path:
                 sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore
@@ -1472,7 +1472,7 @@ def _emit_code_exec_audit(
     try:
         repo = _repo_root()
         if repo is not None:
-            forge_pkg_parent = repo / "operator" / "forge"
+            forge_pkg_parent = repo / "corvin_operator" / "forge"
             if str(forge_pkg_parent) not in sys.path:
                 sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore
@@ -1511,7 +1511,7 @@ def _emit_tool_trace(payload: dict, decision: str) -> None:
     try:
         repo = _repo_root()
         if repo is not None:
-            forge_pkg_parent = repo / "operator" / "forge"
+            forge_pkg_parent = repo / "corvin_operator" / "forge"
             if str(forge_pkg_parent) not in sys.path:
                 sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore
@@ -1628,7 +1628,7 @@ def _self_test_vectors() -> list[tuple[str, dict]]:
     policy_path = home / "global" / "forge" / "policy.json"
     repo = _repo_root()
     if repo is not None:
-        slot_path = repo / "operator" / "skill-forge" / "skills" / "dyn" / "x" / "SKILL.md"
+        slot_path = repo / "corvin_operator" / "skill-forge" / "skills" / "dyn" / "x" / "SKILL.md"
         slot_str = str(slot_path)
     else:
         slot_str = str(forge_skill)  # fall back to scope path
@@ -1816,7 +1816,7 @@ def path_gate_self_test() -> tuple[bool, list[str]]:
     try:
         repo = _repo_root()
         if repo is not None:
-            forge_pkg_parent = repo / "operator" / "forge"
+            forge_pkg_parent = repo / "corvin_operator" / "forge"
             if str(forge_pkg_parent) not in sys.path:
                 sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore

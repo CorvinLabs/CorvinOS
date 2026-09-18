@@ -51,7 +51,7 @@ class TestNonInteractiveNeverPrompts:
     def test_non_interactive_never_calls_input_and_reports_unconfigured(
         self, tmp_path: Path, bridge: str, field: str
     ) -> None:
-        bridges_dir = tmp_path / "operator" / "bridges"
+        bridges_dir = tmp_path / "corvin_operator" / "bridges"
 
         with mock.patch("builtins.input", side_effect=AssertionError("input() must not be called")):
             results = bridges_mod.configure_bridges(tmp_path, [bridge], interactive=False)
@@ -90,7 +90,7 @@ class TestInteractiveWritesToken:
 
         result = results[0]
         assert result.configured is True
-        settings_path = tmp_path / "operator" / "bridges" / "telegram" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "telegram" / "settings.json"
         assert settings_path.exists()
         data = json.loads(settings_path.read_text())
         assert data["telegram_token"] == "123456:ABC-DEF-token"
@@ -103,7 +103,7 @@ class TestInteractiveWritesToken:
 
         result = results[0]
         assert result.configured is True
-        settings_path = tmp_path / "operator" / "bridges" / "discord" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "discord" / "settings.json"
         data = json.loads(settings_path.read_text())
         assert data["discord_token"] == "discord-secret-token"
         assert data["whitelist"] == ["999999999999999999"]
@@ -115,7 +115,7 @@ class TestInteractiveWritesToken:
 
         result = results[0]
         assert result.configured is True
-        settings_path = tmp_path / "operator" / "bridges" / "slack" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "slack" / "settings.json"
         data = json.loads(settings_path.read_text())
         assert data["slack_bot_token"] == "xoxb-bot-token"
         assert data["slack_app_token"] == "xapp-app-token"
@@ -128,7 +128,7 @@ class TestIdempotentSkipsRePrompt:
     preserve the existing token."""
 
     def test_telegram_existing_token_is_kept_without_prompting(self, tmp_path: Path) -> None:
-        settings_path = tmp_path / "operator" / "bridges" / "telegram" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "telegram" / "settings.json"
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({"telegram_token": "already-set-token", "whitelist": ["42"]}))
 
@@ -144,7 +144,7 @@ class TestIdempotentSkipsRePrompt:
     def test_discord_placeholder_token_is_not_treated_as_configured(self, tmp_path: Path) -> None:
         """A leftover 'DEIN_' placeholder value must NOT count as already-configured —
         it should fall through to the prompt path."""
-        settings_path = tmp_path / "operator" / "bridges" / "discord" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "discord" / "settings.json"
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({"discord_token": "DEIN_DISCORD_TOKEN"}))
 
@@ -158,7 +158,7 @@ class TestIdempotentSkipsRePrompt:
         assert data["discord_token"] == "real-token"
 
     def test_slack_existing_tokens_kept_without_prompting(self, tmp_path: Path) -> None:
-        settings_path = tmp_path / "operator" / "bridges" / "slack" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "slack" / "settings.json"
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({
             "slack_bot_token": "xoxb-existing",
@@ -175,7 +175,7 @@ class TestIdempotentSkipsRePrompt:
         assert data["slack_app_token"] == "xapp-existing"
 
     def test_email_existing_user_kept_without_prompting(self, tmp_path: Path) -> None:
-        settings_path = tmp_path / "operator" / "bridges" / "email" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "email" / "settings.json"
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({"imap_user": "me@example.com"}))
 
@@ -204,7 +204,7 @@ class TestPermissionsAsymmetryWithKeysModule:
         with mock.patch("builtins.input", side_effect=lambda *_a, **_k: next(answers)):
             bridges_mod.configure_bridges(tmp_path, ["telegram"], interactive=True)
 
-        settings_path = tmp_path / "operator" / "bridges" / "telegram" / "settings.json"
+        settings_path = tmp_path / "corvin_operator" / "bridges" / "telegram" / "settings.json"
         assert settings_path.exists()
         # bridges.py never calls chmod — the resulting mode is whatever the
         # process umask leaves write_text() with. It is explicitly NOT narrowed

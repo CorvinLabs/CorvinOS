@@ -25,11 +25,11 @@ from typing import Any
 # Make shared/ modules importable when running as a standalone process.
 _HERE = Path(__file__).resolve()
 for _p in [_HERE, *_HERE.parents]:
-    if (_p / "operator").is_dir():
-        _shared = _p / "operator" / "bridges" / "shared"
+    if (_p / "corvin_operator").is_dir():
+        _shared = _p / "corvin_operator" / "bridges" / "shared"
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
-        _forge = _p / "operator" / "forge"
+        _forge = _p / "corvin_operator" / "forge"
         if str(_forge) not in sys.path:
             sys.path.insert(0, str(_forge))
         break

@@ -46,7 +46,7 @@ _TENANT_YAML_FILENAME = "tenant.corvin.yaml"
 # them — the modules themselves were never deleted, only the route wiring.
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 

@@ -229,7 +229,7 @@ def _persona_files() -> list[Path]:
     # Repo-relative resolution: settings_view.py → operator/bridges/shared
     # → repo root is three parents up.
     repo_root = HERE.parent.parent.parent
-    bundle = repo_root / "operator" / "cowork" / "personas"
+    bundle = repo_root / "corvin_operator" / "cowork" / "personas"
     if bundle.is_dir():
         candidates.append(bundle)
     user = paths.tenant_cowork_dir() / "personas"
@@ -585,7 +585,7 @@ def _forge_summary(tenant_id: str | None, lang: str) -> str:
         pass
     # Policy max_budget — read the bundled default; per-scope overrides
     # are too noisy for a one-line summary.
-    bundled = HERE.parent.parent.parent / "operator" / "forge" / "forge" / "policy.json"
+    bundled = HERE.parent.parent.parent / "corvin_operator" / "forge" / "forge" / "policy.json"
     budget = "—"
     pol = _read_json_safe(bundled) if bundled.is_file() else {}
     if isinstance(pol, dict):

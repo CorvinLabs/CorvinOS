@@ -17,7 +17,7 @@ from pathlib import Path
 
 repo_root = Path(__file__).resolve().parents[3]
 core_root = repo_root / "core"
-operator_root = repo_root / "operator"
+operator_root = repo_root / "corvin_operator"
 
 sys.path.insert(0, str(core_root))
 sys.path.insert(0, str(operator_root))

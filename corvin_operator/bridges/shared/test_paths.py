@@ -28,7 +28,7 @@ def _import(modpath_dir):
 def test_default_resolution():
     print("\n[default — repo-root discovery]")
     os.environ.pop("CORVIN_HOME", None)
-    p = _import(REPO / "operator" / "bridges" / "shared")
+    p = _import(REPO / "corvin_operator" / "bridges" / "shared")
     home = p.corvin_home()
     # Post-rebrand: resolver prefers .corvin, falls back to .corvinOS.
     t("ends with /.corvin or /.corvinOS",
@@ -45,7 +45,7 @@ def test_env_override():
     print("\n[CORVIN_HOME override]")
     with tempfile.TemporaryDirectory() as td:
         os.environ["CORVIN_HOME"] = td
-        p = _import(REPO / "operator" / "bridges" / "shared")
+        p = _import(REPO / "corvin_operator" / "bridges" / "shared")
         t("home == td", str(p.corvin_home()) == td)
         t("voice_dir ends with /voice", p.voice_dir().name == "voice")
     os.environ.pop("CORVIN_HOME", None)
@@ -54,11 +54,11 @@ def test_env_override():
 def test_env_override_whitespace():
     print("\n[CORVIN_HOME whitespace-only override falls back to default]")
     os.environ.pop("CORVIN_HOME", None)
-    p = _import(REPO / "operator" / "bridges" / "shared")
+    p = _import(REPO / "corvin_operator" / "bridges" / "shared")
     default_home = p.corvin_home()
     for bogus in (" ", "   ", "\t", "\n"):
         os.environ["CORVIN_HOME"] = bogus
-        p = _import(REPO / "operator" / "bridges" / "shared")
+        p = _import(REPO / "corvin_operator" / "bridges" / "shared")
         home = p.corvin_home()
         t(f"CORVIN_HOME={bogus!r} does not resolve to Path({bogus!r})",
           home != Path(bogus), detail=f"got {home}")
@@ -70,9 +70,9 @@ def test_env_override_whitespace():
 def test_all_three_plugins_agree():
     print("\n[all three plugins resolve to same root]")
     os.environ.pop("CORVIN_HOME", None)
-    voice_p = _import(REPO / "operator" / "bridges" / "shared")
-    cowork_p = _import(REPO / "operator" / "cowork" / "lib")
-    forge_p = _import(REPO / "operator" / "forge" / "forge")
+    voice_p = _import(REPO / "corvin_operator" / "bridges" / "shared")
+    cowork_p = _import(REPO / "corvin_operator" / "cowork" / "lib")
+    forge_p = _import(REPO / "corvin_operator" / "forge" / "forge")
     t("voice == cowork", voice_p.corvin_home() == cowork_p.corvin_home())
     t("cowork == forge", cowork_p.corvin_home() == forge_p.corvin_home())
 

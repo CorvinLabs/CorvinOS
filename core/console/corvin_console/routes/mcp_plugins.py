@@ -33,7 +33,7 @@ _log = logging.getLogger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_MCP_ROOT = _REPO / "operator" / "mcp_manager"
+_MCP_ROOT = _REPO / "corvin_operator" / "mcp_manager"
 if str(_MCP_ROOT) not in sys.path:
     sys.path.insert(0, str(_MCP_ROOT))
 

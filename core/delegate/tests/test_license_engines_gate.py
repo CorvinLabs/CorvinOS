@@ -11,8 +11,8 @@ _PLUGIN_DIR = Path(__file__).resolve().parents[1]  # core/delegate
 _REPO = _PLUGIN_DIR.parents[1]
 for _p in (
     str(_PLUGIN_DIR),
-    str(_REPO / "operator" / "bridges" / "shared"),  # agents package parent
-    str(_REPO / "operator"),                          # license package
+    str(_REPO / "corvin_operator" / "bridges" / "shared"),  # agents package parent
+    str(_REPO / "corvin_operator"),                          # license package
 ):
     if _p not in sys.path:
         sys.path.insert(0, _p)

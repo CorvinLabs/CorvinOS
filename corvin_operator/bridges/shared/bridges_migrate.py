@@ -127,7 +127,7 @@ def _plan_moves(
     Sources that don't exist are skipped.
     """
     plan: list[dict[str, Any]] = []
-    bridges_root = repo_root / "operator" / "bridges"
+    bridges_root = repo_root / "corvin_operator" / "bridges"
     dst_root = corvin_home / "bridges"
 
     for channel in _CHANNELS:
@@ -348,7 +348,7 @@ def migrate_bridges_state_if_needed(
     # mid-flight still leaves a chain entry naming what was attempted.
     intent_summary = {
         "stage":   "intent",
-        "from":    str(repo_root / "operator" / "bridges"),
+        "from":    str(repo_root / "corvin_operator" / "bridges"),
         "to":      str(corvin_home / "bridges"),
         "planned": [
             {"channel": e["channel"], "kind": e["kind"],
@@ -397,7 +397,7 @@ def migrate_bridges_state_if_needed(
 
     final_summary = {
         "stage":     "complete",
-        "from":      str(repo_root / "operator" / "bridges"),
+        "from":      str(repo_root / "corvin_operator" / "bridges"),
         "to":        str(corvin_home / "bridges"),
         "completed": completed,
         "failed":    failed,

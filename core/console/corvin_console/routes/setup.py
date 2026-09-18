@@ -29,7 +29,7 @@ from ..deps import require_csrf, require_session, verify_reauth
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 from forge import paths as _forge_paths  # noqa: E402
@@ -42,7 +42,7 @@ _SETUP_COMPLETE_PATH = _forge_paths.voice_config_dir() / ".corvin_setup_complete
 _ONBOARDING_JSON_PATH = _forge_paths.corvin_home() / "tenants" / "_default" / "global" / "onboarding.json"
 
 # Shared path to engine_detector module
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 
 
 def _onboarding_complete() -> bool:
@@ -603,7 +603,7 @@ def bridge_setup_info(
                     (base / "auth" / "creds.json").exists()
                     for base in (
                         _forge_paths.corvin_home() / "bridges" / "whatsapp",
-                        _REPO / "operator" / "bridges" / "whatsapp",
+                        _REPO / "corvin_operator" / "bridges" / "whatsapp",
                     )
                 )
         except Exception:
@@ -667,8 +667,8 @@ def _import_bridge_manager():
         return bridge_manager
     except ImportError:
         pass
-    for cand in (_REPO / "operator" / "bridges",
-                 _THIS_DIR.parent / "_vendor" / "operator" / "bridges"):
+    for cand in (_REPO / "corvin_operator" / "bridges",
+                 _THIS_DIR.parent / "_vendor" / "corvin_operator" / "bridges"):
         if (cand / "bridge_manager.py").is_file():
             if str(cand) not in sys.path:
                 sys.path.insert(0, str(cand))

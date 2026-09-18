@@ -24,13 +24,13 @@ _REPO = Path(__file__).resolve().parents[3]
 # _REPO itself must be importable so `core.pii` (the fail-closed skill-body PII
 # gate) resolves exactly as it does in the console runtime; without it the gate
 # would fail-closed on ImportError and silently redact every body.
-for p in (_REPO, _REPO / "operator" / "forge", _REPO / "core" / "console"):
+for p in (_REPO, _REPO / "corvin_operator" / "forge", _REPO / "core" / "console"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
 
 def _load():
-    ce = _REPO / "operator" / "context_engineering"
+    ce = _REPO / "corvin_operator" / "context_engineering"
     spec = importlib.util.spec_from_file_location(
         "context_engineering", str(ce / "__init__.py"),
         submodule_search_locations=[str(ce)])

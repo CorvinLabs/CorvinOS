@@ -46,8 +46,8 @@ _REPO = _HERE.parents[3]
 
 for _p in (
     str(_REPO / "core" / "console"),
-    str(_REPO / "operator"),
-    str(_REPO / "operator" / "forge"),
+    str(_REPO / "corvin_operator"),
+    str(_REPO / "corvin_operator" / "forge"),
     str(_REPO),
 ):
     if _p not in sys.path:

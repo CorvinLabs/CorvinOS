@@ -445,7 +445,7 @@ def run_e2e_validation() -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, "operator/bridges/shared")
+    sys.path.insert(0, "corvin_operator/bridges/shared")
     results = run_e2e_validation()
 
     logger.info("\n" + "=" * 70)

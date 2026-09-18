@@ -110,7 +110,7 @@ def case_legacy_path_points_at_repo() -> None:
     assert legacy is not None
     assert legacy.is_absolute()
     # the legacy path is the in-repo path
-    assert "operator/bridges/email/attachments" in str(legacy)
+    assert "corvin_operator/bridges/email/attachments" in str(legacy)
 
 
 def case_known_channels_all_accepted() -> None:

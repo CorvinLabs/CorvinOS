@@ -26,7 +26,7 @@ try:  # pragma: no cover - import shape
     import os as _pg_os, sys as _pg_sys
     _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
     while _pg_d != _pg_os.path.dirname(_pg_d):
-        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        _pg_c = _pg_os.path.join(_pg_d, "corvin_operator", "bridges", "shared")
         if _pg_os.path.isdir(_pg_c):
             if _pg_c not in _pg_sys.path:
                 _pg_sys.path.insert(0, _pg_c)

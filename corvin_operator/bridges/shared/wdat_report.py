@@ -28,7 +28,7 @@ _SHARED = Path(__file__).resolve().parent
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 
-_FORGE_PATH = str(Path(__file__).resolve().parents[3] / "operator" / "forge")
+_FORGE_PATH = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "forge")
 
 _WDAT_EVENTS = frozenset({
     "acs.manager_decided",

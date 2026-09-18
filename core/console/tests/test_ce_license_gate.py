@@ -26,7 +26,7 @@ _REPO = _THIS.parents[3]
 
 def _load_cel():
     """Load the CEL package by file path (the same trick chat_runtime uses)."""
-    cel_dir = _REPO / "operator" / "context_engineering"
+    cel_dir = _REPO / "corvin_operator" / "context_engineering"
     spec = importlib.util.spec_from_file_location(
         "context_engineering", str(cel_dir / "__init__.py"),
         submodule_search_locations=[str(cel_dir)])

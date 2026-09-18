@@ -21,8 +21,8 @@ _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]
 _PKG = _HERE.parents[1]
 _COMPLIANCE = _REPO / "core" / "compliance"
-_FORGE = _REPO / "operator" / "forge"
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_FORGE = _REPO / "corvin_operator" / "forge"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 
 #: The module name a plugin ``class_path`` must use to reach the fakes below.
 #:

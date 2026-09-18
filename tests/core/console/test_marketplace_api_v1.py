@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 def create_test_index(tmpdir: Path) -> Path:
     """Create a test marketplace index (plugins.json)."""
-    index_dir = tmpdir / "operator" / "marketplace" / "index"
+    index_dir = tmpdir / "corvin_operator" / "marketplace" / "index"
     index_dir.mkdir(parents=True, exist_ok=True)
 
     index = {

@@ -51,7 +51,7 @@ def test_reveals_a_well_known_key_saved_via_service_env(monkeypatch, tmp_path):
 
 def test_reveals_a_custom_key_from_the_vault(monkeypatch, tmp_path):
     _isolated(monkeypatch, tmp_path)
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"))
     import vault as _vault_mod  # type: ignore
     _vault_mod.set_item("custom_stripe_key", "sk_live_stripe_secret", tags=["byok"])
 

@@ -24,7 +24,7 @@ from collections import defaultdict, Counter
 def _resolve_core_audit():
     """Lazy-init core audit module (matches deprecated_api_metrics.py pattern)."""
     repo = Path(__file__).resolve().parent.parent
-    bridges_shared = repo / "operator" / "bridges" / "shared"
+    bridges_shared = repo / "corvin_operator" / "bridges" / "shared"
     if str(bridges_shared) not in sys.path:
         sys.path.insert(0, str(bridges_shared))
 

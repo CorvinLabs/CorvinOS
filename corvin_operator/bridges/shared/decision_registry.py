@@ -253,7 +253,7 @@ def _emit_audit_event(event_type: str, audit_path: Path, **details: Any) -> None
     try:
         import sys
         repo_root = Path(__file__).resolve().parents[3]
-        for p in [str(Path(__file__).resolve().parent), str(repo_root / "operator" / "forge")]:
+        for p in [str(Path(__file__).resolve().parent), str(repo_root / "corvin_operator" / "forge")]:
             if p not in sys.path:
                 sys.path.insert(0, p)
         from forge.security_events import write_event  # type: ignore

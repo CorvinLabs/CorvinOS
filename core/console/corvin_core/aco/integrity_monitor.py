@@ -187,7 +187,7 @@ def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
         # removed. parents[4] is the repo root (core/console/corvin_console/
         # aco/integrity_monitor.py -> aco -> corvin_console -> console ->
         # core -> repo root).
-        bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        bridge_shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
         import sys
         if str(bridge_shared) not in sys.path:
             sys.path.insert(0, str(bridge_shared))
@@ -367,7 +367,7 @@ def check_global_acs_anomaly(tenant_id: str) -> list[IntegrityFinding]:
     try:
         # ADR-0215 F5: dead dotted primary removed (see
         # check_audit_chain_integrity() above for the same fix).
-        bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        bridge_shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
         import sys
         if str(bridge_shared) not in sys.path:
             sys.path.insert(0, str(bridge_shared))
@@ -581,7 +581,7 @@ def _repo_root() -> Path | None:
         pass
     # Heuristik: 5 Ebenen nach oben (aco/ → corvin_console/ → console/ → core/ → CorvinOS/)
     candidate = Path(__file__).resolve().parents[4]
-    if (candidate / "operator").is_dir():
+    if (candidate / "corvin_operator").is_dir():
         return candidate
     return None
 

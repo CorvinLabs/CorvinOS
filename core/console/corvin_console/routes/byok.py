@@ -61,7 +61,7 @@ if str(_AGENT_PATH) not in sys.path:
 # "openai_api_key" presence check). Now delegates to the single canonical
 # resolver — same one say.py / stt/openai_whisper.py / BYOK's write path
 # all agree with. See corvin_operator/bridges/shared/provider_keys.py.
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 import provider_keys  # type: ignore
@@ -287,7 +287,7 @@ def list_secrets(
         # Only include items tagged "byok" — prevents internal vault entries
         # (provision tokens, friendship keys, etc.) from appearing in the UI.
         try:
-            _shared = str(_REPO / "operator" / "bridges" / "shared")
+            _shared = str(_REPO / "corvin_operator" / "bridges" / "shared")
             if _shared not in sys.path:
                 sys.path.insert(0, _shared)
             import vault as _vault_mod  # type: ignore
@@ -370,7 +370,7 @@ def get_secret_value(
     value: str | None
     if key_name.startswith("custom_"):
         try:
-            _shared = str(_REPO / "operator" / "bridges" / "shared")
+            _shared = str(_REPO / "corvin_operator" / "bridges" / "shared")
             if _shared not in sys.path:
                 sys.path.insert(0, _shared)
             import vault as _vault_mod  # type: ignore

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, AsyncMock
 # on sys.path, `tde` as a top-level package). Importing it as `orchestration.tde`
 # collided with `core/orchestration` when the full suite had already bound the
 # name `orchestration` to that package (collection error, 2026-09-07).
-_tde_root = Path(__file__).parent.parent / "operator" / "orchestration"
+_tde_root = Path(__file__).parent.parent / "corvin_operator" / "orchestration"
 if str(_tde_root) not in sys.path:
     sys.path.insert(0, str(_tde_root))
 

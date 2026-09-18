@@ -267,7 +267,7 @@ layers:
     code_patterns:
       - "core/engines/**/*.py"
       - "core/worker/**/*.py"
-      - "operator/task_engine/**/*.py"
+      - "corvin_operator/task_engine/**/*.py"
     keywords:
       - worker engine
       - clausecode
@@ -319,7 +319,7 @@ layers:
       - "docs/claude-ref/layer-25-compute-worker.md"
     code_patterns:
       - "core/compute/**/*.py"
-      - "operator/compute/**/*.py"
+      - "corvin_operator/compute/**/*.py"
     keywords:
       - compute worker
       - optimization
@@ -351,7 +351,7 @@ layers:
       - "docs/claude-ref/layer-29-delegation.md"
     code_patterns:
       - "core/delegation/**/*.py"
-      - "operator/task_engine/**/*.py"
+      - "corvin_operator/task_engine/**/*.py"
     keywords:
       - delegation
       - mcp

@@ -53,7 +53,7 @@ from typing import Any, Callable, Iterator
 # is absent (e.g. CI runs that only need the delegation library or its
 # MCP-server surface).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_AGENTS_DIR = _REPO_ROOT / "operator" / "bridges" / "shared"
+_AGENTS_DIR = _REPO_ROOT / "corvin_operator" / "bridges" / "shared"
 
 
 BUDGET_DEFAULT_S = 60
@@ -679,7 +679,7 @@ def run_delegate(
     ):
         _eng_lic_err: "type | None" = None
         try:
-            _eng_op = str(Path(__file__).resolve().parents[3] / "operator")
+            _eng_op = str(Path(__file__).resolve().parents[3] / "corvin_operator")
             if _eng_op not in sys.path:
                 sys.path.insert(0, _eng_op)
             from license.validator import assert_limit as _eng_assert  # type: ignore
@@ -1137,7 +1137,7 @@ def run_delegate(
 # WDAT run directory writer — makes delegation runs visible in the Audit graph
 # ---------------------------------------------------------------------------
 
-_FORGE_PATH_FOR_WDAT = str(Path(__file__).resolve().parents[3] / "operator" / "forge")
+_FORGE_PATH_FOR_WDAT = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "forge")
 
 
 def _write_wdat_run_for_delegation(
@@ -1289,7 +1289,7 @@ def _write_wdat_run_for_delegation(
         # engine-agnostically (any engine_id), not only via acs.* heuristics.
         try:
             _shared_dir = str(Path(__file__).resolve().parents[3]
-                              / "operator" / "bridges" / "shared")
+                              / "corvin_operator" / "bridges" / "shared")
             if _shared_dir not in sys.path:
                 sys.path.insert(0, _shared_dir)
             import engine_span as _espan  # type: ignore

@@ -29,8 +29,8 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
-_FORGE = _REPO / "operator" / "forge"
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_FORGE = _REPO / "corvin_operator" / "forge"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 
 
 def _run_isolated(body: str, corvin_home: str | None) -> str:

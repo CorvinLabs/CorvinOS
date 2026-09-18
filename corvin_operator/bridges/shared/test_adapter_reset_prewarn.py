@@ -36,7 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parents[2]  # operator/bridges/shared -> repo root
-FORGE_PKG = REPO / "operator" / "forge"
+FORGE_PKG = REPO / "corvin_operator" / "forge"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FORGE_PKG))
 

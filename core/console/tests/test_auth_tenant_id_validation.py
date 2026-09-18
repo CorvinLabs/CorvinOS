@@ -30,8 +30,8 @@ import pytest
 _REPO = Path(__file__).resolve().parents[3]
 for _p in (
     str(_REPO / "core" / "console"),
-    str(_REPO / "operator"),
-    str(_REPO / "operator" / "forge"),
+    str(_REPO / "corvin_operator"),
+    str(_REPO / "corvin_operator" / "forge"),
 ):
     if _p not in sys.path:
         sys.path.insert(0, _p)

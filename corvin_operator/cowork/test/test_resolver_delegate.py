@@ -89,7 +89,7 @@ def main() -> int:
         py = env.get("PYTHONPATH", "")
         expect("core/delegate" in py,
                "PYTHONPATH carries core/delegate")
-        expect("operator/forge" in py,
+        expect("corvin_operator/forge" in py,
                "PYTHONPATH carries operator/forge")
         expect(env.get("CORVIN_CALLER_PERSONA") == "orchestrator",
                "CORVIN_CALLER_PERSONA tag set to persona name")

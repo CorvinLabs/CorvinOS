@@ -19,10 +19,10 @@ import pytest
 # ── Path setup ────────────────────────────────────────────────────────────────
 _REPO = Path(__file__).resolve().parents[3]
 # Add corvin_operator/ dir so that `license` is importable as a package
-_OPERATOR_PATH = str(_REPO / "operator")
+_OPERATOR_PATH = str(_REPO / "corvin_operator")
 if _OPERATOR_PATH not in sys.path:
     sys.path.insert(0, _OPERATOR_PATH)
-_LIC_PATH = str(_REPO / "operator" / "license")
+_LIC_PATH = str(_REPO / "corvin_operator" / "license")
 
 from license import validator as _v  # noqa: E402
 from license.limits import FREE_TIER, TIER_RESOURCE_LIMITS, LicenseLimitError  # noqa: E402

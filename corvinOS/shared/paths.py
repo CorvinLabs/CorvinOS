@@ -287,7 +287,7 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     repo = _repo_root()
     if repo is None:
         return None
-    channel_dir = repo / "operator" / "bridges" / channel
+    channel_dir = repo / "corvin_operator" / "bridges" / channel
     if kind in ("settings", "root"):
         return channel_dir
     return channel_dir / kind

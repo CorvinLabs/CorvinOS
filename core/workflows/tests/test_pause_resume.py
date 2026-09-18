@@ -41,7 +41,7 @@ def _outbox_dir() -> Path:
     override = os.environ.get("ADAPTER_OUTBOX")
     if override:
         return Path(override)
-    return _PKG_ROOT.parent.parent / "operator" / "bridges" / "shared" / "outbox"
+    return _PKG_ROOT.parent.parent / "corvin_operator" / "bridges" / "shared" / "outbox"
 
 
 def _redirect_outbox(case: unittest.TestCase) -> None:

@@ -91,7 +91,7 @@ def _load_registry_module():
     except ImportError:
         pass
 
-    pkg_dir = _repo_root() / "operator" / "skill-forge" / "skill_forge"
+    pkg_dir = _repo_root() / "corvin_operator" / "skill-forge" / "skill_forge"
     reg_path = pkg_dir / "registry.py"
     if not reg_path.is_file():
         raise RegistryUnavailable(f"SkillForge registry not found at {reg_path}")

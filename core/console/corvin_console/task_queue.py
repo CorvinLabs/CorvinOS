@@ -276,7 +276,7 @@ class TaskQueue:
         if channel and chat_id:
             try:
                 root = Path(__file__).resolve().parents[2]
-                shared = root / "operator" / "bridges" / "shared"
+                shared = root / "corvin_operator" / "bridges" / "shared"
                 if str(shared) not in sys.path:
                     sys.path.insert(0, str(shared))
                 import completion_notify as _cn

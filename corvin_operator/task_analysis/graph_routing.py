@@ -244,7 +244,7 @@ class CallGraphRouter:
                         match = re.search(r"(?:from|import)\s+([\w.]+)", line)
                         if match:
                             module = match.group(1).split(".")[0]
-                            if module in ("core", "operator", "forge", "voice", "bridge"):
+                            if module in ("core", "corvin_operator", "forge", "voice", "bridge"):
                                 new_components.append(module)
                 except (subprocess.TimeoutExpired, Exception) as e:
                     logger.debug(f"grep failed for {f}: {e}")
@@ -270,7 +270,7 @@ class CallGraphRouter:
         modules = set()
         for f in files:
             parts = f.split("/")
-            if parts and parts[0] in ("core", "operator", "forge", "voice"):
+            if parts and parts[0] in ("core", "corvin_operator", "forge", "voice"):
                 modules.add(parts[0])
         return min(3, len(modules))
 

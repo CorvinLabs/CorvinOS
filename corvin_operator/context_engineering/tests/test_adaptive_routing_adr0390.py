@@ -14,15 +14,15 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-for p in (_REPO / "operator" / "forge", _REPO / "core" / "console",
-          _REPO / "operator" / "skill-forge"):
+for p in (_REPO / "corvin_operator" / "forge", _REPO / "core" / "console",
+          _REPO / "corvin_operator" / "skill-forge"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
 
 def _load_ce():
     """Load context_engineering module dynamically."""
-    ce = _REPO / "operator" / "context_engineering"
+    ce = _REPO / "corvin_operator" / "context_engineering"
     spec = importlib.util.spec_from_file_location(
         "context_engineering", str(ce / "__init__.py"),
         submodule_search_locations=[str(ce)])

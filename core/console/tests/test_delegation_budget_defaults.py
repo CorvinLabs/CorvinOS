@@ -201,7 +201,7 @@ def test_the_raised_defaults_are_what_acs_actually_enforces() -> None:
     # conftest.py snapshots/restores sys.modules between tests, so a plain
     # import resolves to whatever a previously-run test left behind (this test
     # passed alone and failed in the suite — pollution, not a real defect).
-    shared = _P(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    shared = _P(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     spec_mod = importlib.util.spec_from_file_location(
         "_acs_runtime_for_budget_test", shared / "acs_runtime.py")
     if spec_mod is None or spec_mod.loader is None:
@@ -262,7 +262,7 @@ def test_the_manager_llm_cannot_raise_the_operator_bounds() -> None:
     import importlib.util
     import sys
     from pathlib import Path as _P
-    shared = _P(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    shared = _P(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     spec_mod = importlib.util.spec_from_file_location(
         "_acs_runtime_for_spawn_test", shared / "acs_runtime.py")
     if spec_mod is None or spec_mod.loader is None:

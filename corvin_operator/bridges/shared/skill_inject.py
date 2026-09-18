@@ -378,7 +378,7 @@ def _persona_namespace(persona: str | None) -> str | None:
             import json  # noqa: PLC0415
             policy = _HERE.parent.parent / "forge" / "forge" / "policy.json"
             if not policy.is_file():
-                policy = (_HERE.parent.parent.parent / "operator" / "forge"
+                policy = (_HERE.parent.parent.parent / "corvin_operator" / "forge"
                           / "forge" / "policy.json")
             data = json.loads(policy.read_text(encoding="utf-8"))
             ns_map = (data.get("persona_namespaces") or {}) if isinstance(data, dict) else {}

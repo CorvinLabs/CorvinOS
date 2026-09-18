@@ -13,11 +13,11 @@ from typing import Optional
 from . import config as cfg
 
 _BRIDGE_CANDIDATES = [
-    Path(os.environ.get("CORVIN_REPO", "")) / "operator" / "bridges",
+    Path(os.environ.get("CORVIN_REPO", "")) / "corvin_operator" / "bridges",
     # Source-tree location relative to THIS launcher file (ops/launcher/corvin/
     # native_backend.py → repo root = parents[3]); replaces a baked-in personal
     # ~/projects/CorvinOS path that only worked on one dev machine (path-audit #LOW7).
-    Path(__file__).resolve().parents[3] / "operator" / "bridges",
+    Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges",
     Path("/opt/corvin-repo/corvin_operator/bridges"),
 ]
 
@@ -49,7 +49,7 @@ def _find_bridge_manager() -> Optional[Path]:
         import importlib.util as _ilu
         spec = _ilu.find_spec("corvin_console")
         if spec and spec.origin:
-            p = Path(spec.origin).parent / "_vendor" / "operator" / "bridges" / "bridge_manager.py"
+            p = Path(spec.origin).parent / "_vendor" / "corvin_operator" / "bridges" / "bridge_manager.py"
             if p.exists():
                 return p
     except Exception:

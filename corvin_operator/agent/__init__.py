@@ -1,4 +1,4 @@
-"""operator/agent — Instance Agent for ADR-0047 (Hosted-Mode Tenant Console + BYOK).
+"""corvin_operator/agent — Instance Agent for ADR-0047 (Hosted-Mode Tenant Console + BYOK).
 
 The Instance Agent runs inside each tenant's container and bridges the
 Management API (control plane) with the Corvin core (data plane).
