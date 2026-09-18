@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import yaml  # type: ignore[import-not-found]
-from fastapi import APIRouter, Depends, HTTPException, status as http_status
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
 from .. import audit as console_audit
@@ -256,16 +257,7 @@ def get_engine_setting(
         _log.info(f"Auto-correcting legacy engine {default!r} → claude_code")
         default = "claude_code"
 
-    raw_em = spec.get("engine_models") or {}
-    engine_models = {
-        eid: EngineModelConfig(
-            os_model=cfg.get("os_model") or None,
-            worker_model=cfg.get("worker_model") or None,
-            provider=cfg.get("provider") or None,
-        )
-        for eid, cfg in raw_em.items()
-        if isinstance(cfg, dict)
-    }
+    engine_models = _engine_models_as_served(_rec.tenant_id, spec)
 
     return EngineSettingResponse(
         default_engine=default,
@@ -275,16 +267,56 @@ def get_engine_setting(
     )
 
 
+def _engine_models_as_served(tenant_id: str, spec: dict) -> "dict[str, EngineModelConfig]":
+    """The pins exactly as the runtime resolves them (ADR-0885 step 2b).
+
+    Until 2026-09-18 this route parsed the YAML itself (``cfg.get("os_model")
+    or None``) while the cost optimizer and the worker spawn path read the same
+    key through ``engine_models.get_tenant_engine_model`` (``.strip()``,
+    non-string → None). A whitespace-only pin therefore read "pinned" here and
+    "adaptive" on the cost page. ONE resolver now: the runtime's."""
+    raw_em = spec.get("engine_models") or {}
+    try:
+        from engine_models import get_tenant_engine_model  # type: ignore[import]  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — stripped install: fall back to the raw parse
+        get_tenant_engine_model = None  # type: ignore[assignment]
+    out: dict[str, EngineModelConfig] = {}
+    for eid, cfg in raw_em.items():
+        if not isinstance(cfg, dict):
+            continue
+        if get_tenant_engine_model is not None:
+            os_model = get_tenant_engine_model(tenant_id, eid, "os_model")
+            worker_model = get_tenant_engine_model(tenant_id, eid, "worker_model")
+        else:
+            os_model = (cfg.get("os_model") or "").strip() or None
+            worker_model = (cfg.get("worker_model") or "").strip() or None
+        provider = cfg.get("provider")
+        out[eid] = EngineModelConfig(
+            os_model=os_model,
+            worker_model=worker_model,
+            provider=(provider.strip() or None) if isinstance(provider, str) else None,
+        )
+    return out
+
+
 @router.put("", response_model=EngineSettingResponse)
 def put_engine_setting(
     body: EngineSettingUpdate,
     _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     _csrf: Annotated[None, Depends(require_csrf)],
 ) -> EngineSettingResponse:
-    """Update the tenant-level default engine.
+    """Update the tenant-level default engine and the per-engine model pins.
 
     Claude Code only — accepts "claude_code" or None (defaults to claude_code).
-    Writes to tenant.corvin.yaml::spec.default_engine.
+    Writes to tenant.corvin.yaml::spec.default_engine and, when given,
+    REPLACES ``spec.engine_models`` wholesale — it does not merge. A client
+    that wants to change one pin must send the full map it read from GET
+    (the console's Routing tab does). ADR-0885 step 2b added validation of
+    ``os_model``/``worker_model`` for the Claude-native path against the
+    offline Claude catalogue (503 when the registry failed to load, accept
+    with a warning when it is loaded but empty — the same semantic as
+    ``PUT /v1/engine/config``); platform providers (Bedrock/Vertex/Foundry,
+    ``auth_mode: platform``) accept their registry ids unchanged.
 
     ADR-0007: tenant_id from SessionRecord, never env var.
     """
@@ -311,10 +343,13 @@ def put_engine_setting(
     if body.engine_models is not None:
         try:
             from engine_models import load_providers  # type: ignore[import]  # noqa: PLC0415
-            known_providers = set(load_providers(force_reload=True).keys())
+            providers = load_providers(force_reload=True)
+            known_providers = set(providers.keys())
         except Exception:  # noqa: BLE001
+            providers = {}
             known_providers = set()
         for eid, cfg in body.engine_models.items():
+            _validate_pins(_rec, eid, cfg, providers)
             if cfg.provider is not None and known_providers and cfg.provider not in known_providers:
                 console_audit.action_failed(
                     tenant_id=_rec.tenant_id,
@@ -374,6 +409,40 @@ def put_engine_setting(
     )
 
 
+def _validate_pins(rec, eid: str, cfg: "EngineModelConfig", providers: dict) -> None:
+    """ADR-0885 step 2b — a pin that names no known Claude model would disable
+    every turn of that role (ADR-0759). Validated for the Claude-native path
+    only (provider null or anthropic); a platform provider's ids come from
+    its own registry entry and are accepted as declared."""
+    from .engine_api import _is_claude_model_id, claude_catalog_or_503  # noqa: PLC0415
+    spec = providers.get(cfg.provider) if cfg.provider else None
+    if spec is not None and (getattr(spec, "is_platform", False) or spec.model_source != "static"):
+        return
+    if cfg.provider not in (None, "anthropic"):
+        return
+    known = claude_catalog_or_503()
+    if not known:
+        return  # loaded-but-empty catalogue: accept, the model-source line shows it
+    for role in ("os_model", "worker_model"):
+        val = getattr(cfg, role)
+        if val is None:
+            continue
+        if not _is_claude_model_id(val) or val not in known:
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="engine.setting.update",
+                target_kind="engine_setting",
+                target_id=f"engine_models.{eid}.{role}",
+                reason="unknown_model",
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unknown Claude model {val!r} for {eid}.{role}. Not offered by the "
+                       f"curated registry or by any provider's last live model list.",
+            )
+
+
 def _assess_model_compliance(engine_models: "dict[str, EngineModelConfig]", tenant_id: str) -> list[str]:
     """ADR-0181 — non-blocking advisories when an engine is pointed at a CLOUD
     provider. Cloud egress happens both when the engine runs a cloud MODEL
@@ -382,9 +451,10 @@ def _assess_model_compliance(engine_models: "dict[str, EngineModelConfig]", tena
     pre-spawn L34/L35 gates are the hard enforcement; this is advisory only."""
     warnings: list[str] = []
     try:
-        from engine_models import load_providers  # type: ignore[import]  # noqa: PLC0415
-        from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]  # noqa: PLC0415
         from urllib.parse import urlparse
+
+        from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]  # noqa: PLC0415
+        from engine_models import load_providers  # type: ignore[import]  # noqa: PLC0415
         providers = load_providers()
         gate = load_egress_gate_for_tenant(tenant_id or "_default")
     except Exception:  # noqa: BLE001
@@ -393,7 +463,11 @@ def _assess_model_compliance(engine_models: "dict[str, EngineModelConfig]", tena
         spec = providers.get(cfg.provider) if cfg.provider else None
         if spec is None or spec.kind != "cloud":
             continue
-        host = urlparse(spec.base_url).hostname or ""
+        # ADR-0759: a platform provider (Bedrock/Vertex/Foundry) has an EMPTY
+        # base_url and a region-derived egress host — gating on base_url skipped
+        # the L35 check entirely for exactly the providers that egress to a
+        # cloud region. egress_url covers both shapes.
+        host = urlparse(getattr(spec, "egress_url", "") or spec.base_url).hostname or ""
         if gate is not None and host:
             try:
                 gate.validate_or_raise(host)
@@ -402,12 +476,21 @@ def _assess_model_compliance(engine_models: "dict[str, EngineModelConfig]", tena
                     f"{eid}: egress to '{host}' is blocked by the L35 policy — "
                     f"add it to allowed_hosts. ({str(e)[:120]})"
                 )
-        warnings.append(
-            f"{eid}: '{spec.label}' is a cloud provider. Store your API key under "
-            f"{spec.credential_env or 'the provider env var'} in Settings -> API Keys. Cloud "
-            f"egress occurs when the engine runs a cloud model or is proxy-routed to this "
-            f"provider at spawn, where L34/L35 apply."
-        )
+        if getattr(spec, "is_platform", False):
+            # No API key exists for a platform provider — the credential is a
+            # chain (profile / IMDS / IRSA / ADC). Telling the operator to store
+            # one would be wrong advice (ADR-0759).
+            warnings.append(
+                f"{eid}: '{spec.label}' is reached natively through the platform credential "
+                f"chain; cloud egress occurs at spawn, where L34/L35 apply."
+            )
+        else:
+            warnings.append(
+                f"{eid}: '{spec.label}' is a cloud provider. Store your API key under "
+                f"{spec.credential_env or 'the provider env var'} in Settings -> API Keys. Cloud "
+                f"egress occurs when the engine runs a cloud model or is proxy-routed to this "
+                f"provider at spawn, where L34/L35 apply."
+            )
     return warnings
 
 
@@ -499,9 +582,9 @@ def _refresh_model_catalog_now(provider: str, tenant_id: str) -> None:
     """Fetch one provider's model list and store it. NEVER raises; always
     releases the in-flight guard."""
     try:
+        import model_catalog  # type: ignore[import]  # noqa: PLC0415
         from engine_models import load_providers  # type: ignore[import]  # noqa: PLC0415
         from engine_providers import fetch_models  # type: ignore[import]  # noqa: PLC0415
-        import model_catalog  # type: ignore[import]  # noqa: PLC0415
 
         spec = load_providers(force_reload=True).get(provider)
         if spec is None:
@@ -529,6 +612,7 @@ def _egress_denied(base_url: str, tenant_id: str) -> str | None:
     but honours an EXPLICIT policy denial."""
     try:
         from urllib.parse import urlparse
+
         from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]
         host = urlparse(base_url).hostname or ""
         gate = load_egress_gate_for_tenant(tenant_id or "_default")
@@ -622,9 +706,9 @@ def detect_engines(
     values (credential_source is an enum string only).
     """
     try:
-        from engine_detection import detect_all, recommended_engine  # type: ignore[import]
-
         import concurrent.futures
+
+        from engine_detection import detect_all, recommended_engine  # type: ignore[import]
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(detect_all)
             try:
