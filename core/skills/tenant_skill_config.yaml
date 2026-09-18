@@ -1,0 +1,65 @@
+# Tenant Skill Architecture (ADR-0213, ADR-0226)
+# Schema for multi-tenant skill deployment & versioning
+
+tenants:
+  _default:
+    skills:
+      registry_url: "http://localhost:8000/v1/skills/registry"
+      auto_update: true
+      max_concurrent: 10
+      timeout_ms: 5000
+
+    capabilities:
+      tier: "community"  # community, professional, enterprise
+      features:
+        - "os_skills"
+        - "marketplace_plugins"
+        - "learning_loop"
+
+    constraints:
+      max_skills_deployed: 50
+      max_config_size_bytes: 1048576
+      audit_retention_days: 90
+      pii_detection: "fail_closed"
+
+    versioning:
+      allow_prerelease: false
+      min_skill_version: "1.0.0"
+      lock_file: "~/.corvin/tenants/_default/skills/lock.json"
+
+validation_rules:
+  - id: "skill_id_format"
+    pattern: "^[a-z0-9_]+\\.[a-z0-9_]+$"
+    description: "skill_id must be namespace.name"
+
+  - id: "version_semver"
+    pattern: "^\\d+\\.\\d+\\.\\d+$"
+    description: "version must be semantic"
+
+  - id: "required_fields"
+    fields: ["id", "version", "status", "audit_events"]
+    description: "All skills must declare audit events"
+
+audit_schema:
+  skill_loaded:
+    - skill_id
+    - version
+    - tenant_id
+    - config_hash
+    - timestamp
+
+  skill_executed:
+    - skill_id
+    - version
+    - tenant_id
+    - input_hash
+    - output_hash
+    - latency_ms
+    - lom  # Line of Moral Responsibility
+
+  skill_feedback:
+    - skill_id
+    - tenant_id
+    - feedback_type
+    - signal_strength
+    - timestamp
