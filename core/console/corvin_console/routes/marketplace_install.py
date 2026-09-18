@@ -60,6 +60,17 @@ from .. import feature_flags as _feature_flags
 from ..deps import require_csrf, require_session
 from . import marketplace_resolve as _resolve
 
+# Licensing gate (ADR-0700, ADR-0701, ADR-0703)
+try:
+    from corvin_operator.license.capability_api import (
+        require_capability,
+        LicenseDenied,
+        get_tier
+    )
+    _LICENSING_AVAILABLE = True
+except ImportError:
+    _LICENSING_AVAILABLE = False
+
 log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["marketplace-install"])
@@ -150,6 +161,40 @@ def _lifecycle(tenant_id: str):
     )
 
 
+def _is_utility_plugin(plugin_id: str) -> bool:
+    """
+    Determine if a plugin is a utility (free tier allowed) or requires forge.create.
+
+    Utility plugins: integrations, datasources, analyzers, etc.
+    Generator plugins: Forge, SkillForge, Plugin-Builder (require forge.create)
+
+    Plugin ID format: "plugin:buildin-<category>-<name>"
+    Categories that require forge.create: "generator", "forge", "skillforge", "plugin-builder"
+    """
+    if not plugin_id.startswith("plugin:buildin-"):
+        return False
+
+    # Extract category from plugin_id
+    # Format: plugin:buildin-<category>-<name>
+    parts = plugin_id.split("-", 2)  # Split on first two dashes
+    if len(parts) < 3:
+        return False
+
+    category = parts[1]
+
+    # List of categories that require forge.create (member-only)
+    member_only_categories = [
+        "generator",
+        "forge",
+        "skillforge",
+        "plugin-builder",
+        "skill-creator"
+    ]
+
+    # If category is in member-only list, it's not a utility plugin
+    return category not in member_only_categories
+
+
 def _index_has(plugin_id: str) -> bool:
     """True when the marketplace index knows this id (install source of truth)."""
     from . import marketplace as _mkt
@@ -228,6 +273,32 @@ async def install_plugin(
             "manifest failed the ADR-0247 gate: "
             + "; ".join(f.message for f in report.errors[:3])
         )
+
+    # 3.5. LICENSING GATE (ADR-0700, ADR-0701, ADR-0703) — Check if user can install this plugin
+    # Some plugins require forge.create capability (only member tier).
+    if _LICENSING_AVAILABLE:
+        try:
+            # Check forge.create capability for plugins that require it
+            if not _is_utility_plugin(plugin_id):
+                require_capability(
+                    "forge.create",
+                    requested=1,
+                    tenant_id=rec.tenant_id,
+                    entry_point="http"
+                )
+        except LicenseDenied as exc:
+            _audit(rec, "marketplace.install_denied_license", plugin_id)
+            # Return HTTP 403 Forbidden with license denial details
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "license_required",
+                    "capability": exc.capability,
+                    "tier": exc.tier,
+                    "reason": exc.reason,
+                    "upgrade_url": exc.upgrade_url
+                }
+            )
 
     # 4. Project onto a record (origin=builtin is location-derived) and install.
     try:
