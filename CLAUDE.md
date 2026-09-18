@@ -318,9 +318,7 @@ without operator review · add in-process MCP server without operator review.
    cd /home/shumway/projects/Corvin-ADR && git add decisions/ADR-XXXX-*.md
    git commit -m "feat(module): description
 
-   ADR-XXXX documents the design (see Corvin-ADR repo).
-
-   Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+   ADR-XXXX documents the design (see Corvin-ADR repo)."
    ```
 
 3. **Pre-commit hook validates** (layer 1):
@@ -345,9 +343,7 @@ If you're absolutely certain no ADR is needed, add a skip flag to the commit mes
 ```bash
 git commit -m "fix(module): urgent security patch [skip-adr-check]
 
-This is a one-line security hotfix with no structural change.
-
-Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+This is a one-line security hotfix with no structural change."
 ```
 
 Valid skip reasons (in commit message):

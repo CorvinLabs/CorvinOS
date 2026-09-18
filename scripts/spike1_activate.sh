@@ -100,9 +100,7 @@ Phase 2 Tasks (EST. ≤10h):
   6. Testing suite (2–3h)
   7. Documentation & rollout plan (0.5–1h)
 
-Next: Real-time progress tracking, Phase 2 code execution.
-
-Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+Next: Real-time progress tracking, Phase 2 code execution."
 
 echo "✅ Checkpoint commit created"
 echo ""
