@@ -297,6 +297,27 @@ if [ -n "$PRESET" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 3d: Watchdog setup (systemd service installation) [ADR-0867]
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "  Setting up watchdog service (health monitoring) ..."
+if [ -n "$EDITABLE" ]; then
+    SETUP_SCRIPT="${EDITABLE}/scripts/setup.sh"
+else
+    SETUP_SCRIPT="${REPO_DIR}/scripts/setup.sh"
+fi
+
+if [ -f "$SETUP_SCRIPT" ]; then
+    if bash "$SETUP_SCRIPT" --no-autostart; then
+        printf '  %s Watchdog service installed and enabled.\n' "$(_green '✓')"
+    else
+        printf '  %s Watchdog setup encountered an error — continuing anyway.\n' "$(_yellow '⚠')"
+    fi
+else
+    printf '  %s Watchdog setup script not found at %s (skipping)\n' "$(_dim 'ℹ')" "$SETUP_SCRIPT"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 3b: Always-on mode (optional, survives reboot)
 # ─────────────────────────────────────────────────────────────────────────────
 if [ "$ALWAYS_ON" = "1" ]; then
