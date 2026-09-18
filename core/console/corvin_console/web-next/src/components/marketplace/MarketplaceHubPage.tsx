@@ -66,7 +66,7 @@ export const MarketplaceHubPage: React.FC = () => {
 
   const fetchAvailablePlugins = async () => {
     try {
-      const response = await fetch('/v1/marketplace/plugins/available');
+      const response = await fetch('/api/v1/marketplace/plugins');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       setPlugins(data.plugins || []);
@@ -77,10 +77,16 @@ export const MarketplaceHubPage: React.FC = () => {
 
   const fetchInstalledPlugins = async () => {
     try {
-      const response = await fetch('/v1/marketplace/plugins/installed');
+      // Read installed plugins from the real plugin registry via GET /api/v1/plugins
+      const response = await fetch('/api/v1/plugins');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      const installed = new Set<string>(data.plugins.map((p: any) => p.id));
+      // Filter to only marketplace-origin plugins (origin !== 'builtin' are from marketplace)
+      const installed = new Set<string>(
+        data.plugins
+          .filter((p: any) => p.origin !== 'builtin')
+          .map((p: any) => p.plugin_id)
+      );
       setInstalledPlugins(installed);
     } catch (err) {
       console.warn('Failed to fetch installed plugins:', err);
@@ -108,13 +114,24 @@ export const MarketplaceHubPage: React.FC = () => {
   const handleInstallPlugin = async (pluginId: string) => {
     setInstalling((prev) => new Set([...prev, pluginId]));
     try {
-      const response = await fetch(`/v1/marketplace/plugins/${pluginId}/install`, {
+      // Call the real plugin registry install endpoint (wired to marketplace via ADR-0511)
+      const response = await fetch(`/api/v1/marketplace/plugins/${pluginId}/install`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // CSRF token should be sent via the session auth (global interceptor)
+        },
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(err.error || `HTTP ${response.status}`);
+      }
       const data = await response.json();
-      if (data.status === 'installing' || data.status === 'installed') {
+      // The marketplace install endpoint returns { status: "completed"|"failed", job_id, plugin_id, ...}
+      if (data.status === 'completed' || data.status === 'installed') {
         setInstalledPlugins((prev) => new Set([...prev, pluginId]));
+      } else if (data.status === 'failed') {
+        throw new Error(data.error || 'Installation failed');
       }
     } catch (err) {
       setError(
