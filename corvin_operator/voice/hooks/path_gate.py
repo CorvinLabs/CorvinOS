@@ -341,10 +341,10 @@ def is_protected_path(path: str | Path) -> bool:
         # poison the SBOM (paper-trail forgery). Operator-side updates
         # via `pip-compile --upgrade --generate-hashes`, npm tooling,
         # or `python -m corvin_gateway.cli sbom build`.
-        # Supply-chain manifests live under core/ and operator/ (was plugins/ before ADR-0035)
+        # Supply-chain manifests live under core/ and corvin_operator/ (was plugins/ before ADR-0035)
         _in_plugin_tree = any(
             abs_str.startswith(str(repo / _d) + sep)
-            for _d in ("core", "operator", "plugins")
+            for _d in ("core", "corvin_operator", "plugins")
         )
         if _in_plugin_tree:
             _abs_last = abs_p.name
