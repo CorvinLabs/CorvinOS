@@ -33,8 +33,14 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Editable .\
 1. ✅ Bootstraps a fresh Python environment (no system Python required)
 2. ✅ Installs CorvinOS + voice models (STT + TTS, offline)
 3. ✅ Auto-detects & installs Claude Code (if not already present)
-4. ✅ Starts the console → browser opens to `http://localhost:8765/console/`
+4. ✅ Starts the console → browser opens to `http://127.0.0.1:8765/console/`
 5. ✅ Ready to use — no onboarding, no setup screens
+
+Step 4 is verified, not assumed: the installer waits for an HTTP 200 carrying
+the app shell and for a local login to issue a session cookie before it opens
+your browser. If that proof does not come, the Windows installer exits 3 with
+the server's own error and a diagnosis instead of reporting success — see
+[docs/windows-installation-errors.md](docs/windows-installation-errors.md).
 
 **Advanced options:**
 
@@ -43,6 +49,14 @@ bash install.sh --lan                    # Allow pairing over LAN
 bash install.sh --no-claude-code         # Skip Claude Code installation
 bash install.sh --preset minimal         # Lightweight setup (console only)
 ```
+
+```powershell
+.\install.ps1 -Port 8790                 # Different port (URL is always 127.0.0.1)
+.\install.ps1 -RebuildWeb                # Force a console SPA rebuild
+.\install.ps1 -NoStart                   # Install only, start nothing
+```
+
+Full Windows reference: [docs/windows-installation-guide.md](docs/windows-installation-guide.md)
 
 ---
 

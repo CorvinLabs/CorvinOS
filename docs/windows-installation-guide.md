@@ -28,6 +28,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 .\install.ps1 -Editable C:\path\to\CorvinOS
 ```
 
+A successful run ends with the console serving and your browser open on
+`http://127.0.0.1:8765/console/`. If it does not, the run exits 3 and says why
+(see [Exit codes](#exit-codes)) instead of reporting success.
+
 ### Options
 
 ```powershell
@@ -39,7 +43,45 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 # Custom CorvinOS home
 $env:CORVIN_HOME = "C:\Custom\CorvinOS"; .\install.ps1
+
+# Different port (the URL is always 127.0.0.1, never localhost)
+.\install.ps1 -Port 8790
+
+# Install without starting anything / start but do not open a browser
+.\install.ps1 -NoStart
+.\install.ps1 -NoBrowser
+
+# Force a console SPA rebuild (otherwise an existing build is reused)
+.\install.ps1 -RebuildWeb
+
+# Give a slow machine more time to reach the first HTTP 200 (default 180s)
+.\install.ps1 -StartTimeoutSeconds 300
+
+# Report every action, change nothing
+.\install.ps1 -DryRun -Verbose
 ```
+
+### What the installer verifies before claiming success
+
+Each of these is a real check, not an assumption:
+
+| Check | Why it is not optional |
+|---|---|
+| Console answers **HTTP 200 carrying the SPA shell** | A TCP connect succeeds the moment uvicorn binds -- seconds before the app is mounted, and forever when the app mounted the 503 "build failed" route instead. An open port proves nothing. |
+| The SPA is **built before the console starts** | `mount_static()` decides once at boot. A console that boots without `web-next/dist/index.html` serves 503 for its whole life; a later rebuild does not fix it, only a restart does. |
+| `POST /v1/console/auth/local-login` returns **3xx + a session cookie** | This is the step between "a page loads" and "you can chat". |
+| The browser actually opened | Tried through the `http://` association, `explorer.exe`, `cmd /c start ""`, then known Edge/Chrome/Firefox binaries. A failure to open is reported, not swallowed. |
+| Port ownership | A console already serving on the port is reused; a stale CorvinOS process is tree-killed (the launcher spawns uvicorn as a child, so killing only the parent orphans the listener); a *foreign* owner is reported and left alone. |
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Installed, console serving, login verified, browser opened |
+| 1 | Installation failed (see the error log named in the summary) |
+| 2 | Prerequisites missing |
+| 3 | **Installed, but the console is not serving.** The package is fine. The summary prints the server's own last log lines plus a diagnosis -- audit-chain tripwire, port already in use, a Python import error, or a failed web build -- and the command to reproduce it in the foreground. |
+| 4 | `-Editable` path is not a CorvinOS clone |
 
 ## Path Handling
 
@@ -92,20 +134,34 @@ create_symlink(source, link_path, is_dir=True)
 ### 1. PowerShell Installer (`install.ps1`)
 
 - **File:** `install.ps1`
-- **Size:** ~50 KB
-- **Runtime:** 2-5 minutes (includes Python bootstrap)
+- **Size:** ~75 KB
+- **Runtime:** 2-5 minutes (includes Python bootstrap; add several minutes when
+  the console SPA has to be built)
 - **Privileges:** No admin rights needed (except optional firewall rule)
+- **Encoding:** ASCII-only **by contract**. Windows PowerShell 5.1 decodes a
+  BOM-less script as cp1252, so UTF-8 box-drawing or check-mark characters
+  arrive as smart quotes that PowerShell honours as string delimiters -- a
+  parse error before line 1 runs. CI enforces this with a byte scan and an AST
+  parse of the file.
 
 **Features:**
 - Bootstraps `uv` package manager (brings own Python)
+- Bootstraps a local Node.js runtime (version from `.nvmrc`)
+- Builds the console SPA when no build is present (`-RebuildWeb` forces it)
 - Detects & installs Claude Code (optional)
 - Creates autostart task (Scheduled Task or Startup folder)
-- Health checks console readiness
-- Opens browser to console
+- Starts the console and waits for a real HTTP 200 carrying the SPA shell
+- Verifies local login issues a session cookie, then opens the browser
 
 **Failure Recovery:**
-- Automatically retries on connection timeout
-- Logs to `$CORVIN_HOME\logs\console-supervisor.log`
+- Every external command runs under a timeout and is logged separately per
+  step in the log directory named in the summary
+- `uv tool install --force` is retried once after stopping processes that run
+  out of the tool venv (they are named `python.exe` and live under `%APPDATA%`,
+  which is why a name-based sweep misses them and the install failed with
+  "Access is denied (os error 5)")
+- A console that fails to start produces exit 3, its own last log lines and a
+  diagnosis -- never a success message
 - Safe to re-run multiple times (idempotent)
 
 ### 2. Cross-Platform Path Utilities
