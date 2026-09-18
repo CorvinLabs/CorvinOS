@@ -47,7 +47,7 @@ test.describe('Phase 1: Cost Dashboard Real Data', () => {
   });
 
   test('Cost dashboard panel renders without critical errors', async ({ page }) => {
-    await page.goto('/console/app/model-cost-optimizer', { waitUntil: 'domcontentloaded' });
+    await page.goto('/console/app/models?tab=usage-cost', { waitUntil: 'domcontentloaded' });
     
     // Check for panic/error boundaries
     const errorBanner = await page.locator('[role="alert"]').count();
@@ -57,7 +57,7 @@ test.describe('Phase 1: Cost Dashboard Real Data', () => {
   });
 
   test('Cost dashboard viz tokens exist in both themes', async ({ page }) => {
-    await page.goto('/console/app/model-cost-optimizer');
+    await page.goto('/console/app/models?tab=usage-cost');
     
     for (const theme of ['light', 'dark']) {
       await setTheme(page, theme as 'light' | 'dark');
@@ -91,12 +91,12 @@ test.describe('Phase 2: Panel Consistency', () => {
       if (msg.type() === 'error') errors.push(msg.text());
     });
     
-    await page.goto('/console/app/model-cost-optimizer', { waitUntil: 'networkidle' });
+    await page.goto('/console/app/models?tab=usage-cost', { waitUntil: 'networkidle' });
     expect(errors.filter(e => !e.includes('404')).length).toBeLessThan(2);
   });
 
   test('Dark mode toggle works on model-cost-optimizer', async ({ page }) => {
-    await page.goto('/console/app/model-cost-optimizer');
+    await page.goto('/console/app/models?tab=usage-cost');
     
     let theme = await getTheme(page);
     expect(['light', 'dark']).toContain(theme);
@@ -118,7 +118,7 @@ test.describe('Phase 2: Panel Consistency', () => {
   });
 
   test('Panel consistency: both panels use CSS variables (not hardcoded colors)', async ({ page }) => {
-    const panels = ['/console/app/model-cost-optimizer', '/console/app/marketplace'];
+    const panels = ['/console/app/models?tab=usage-cost', '/console/app/marketplace'];
     
     for (const panel of panels) {
       await page.goto(panel);
@@ -209,7 +209,7 @@ test.describe('Phase 5: Real vs Mock Data', () => {
       route.abort('failed');
     });
     
-    await page.goto('/console/app/model-cost-optimizer');
+    await page.goto('/console/app/models?tab=usage-cost');
     const content = await page.textContent('body');
     
     // Should not show random numbers

@@ -1065,7 +1065,7 @@ function AcsEmptyState({ onViewOs }: { onViewOs: () => void }) {
       detail = "Configure a Worker Engine in Engine Settings to enable delegation runs.";
       hint = (
         <a
-          href="/settings/engine"
+          href="/console/app/models?tab=routing"
           className="mt-1 rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
         >
           Open Engine Settings →
@@ -1075,7 +1075,7 @@ function AcsEmptyState({ onViewOs }: { onViewOs: () => void }) {
       detail = "A Worker Engine is configured but delegation is disabled.";
       hint = (
         <a
-          href="/settings/engine"
+          href="/console/app/models?tab=routing"
           className="mt-1 rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
         >
           Enable delegation in Engine Settings →

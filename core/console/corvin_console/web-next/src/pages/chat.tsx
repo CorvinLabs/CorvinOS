@@ -686,7 +686,7 @@ const ChatStatusBar = React.memo(function ChatStatusBar({
     <div className="border-t border-border/30 bg-background/60 px-8 py-1.5">
       <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
         <button
-          onClick={() => navigate("/app/engine-config")}
+          onClick={() => navigate("/app/models?tab=routing")}
           title="AI Engine — click to change"
           className={cn(
             "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
@@ -2206,9 +2206,9 @@ const CCC_ENTITY_LINKS: Record<string, string> = {
   audit_query:     "/app/compliance",
   erasure_request: "/app/compliance",
   vault_entry:     "/app/compliance",
-  worker_engine:   "/app/engine-config",
+  worker_engine:   "/app/models?tab=routing",
   rag_source:      "/app/rag",
-  a2a_session:     "/app/engine-config",
+  a2a_session:     "/app/models?tab=routing",
 };
 
 const CCC_STATUS_COLORS: Record<string, string> = {

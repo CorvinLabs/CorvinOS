@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
-import re
 import socket
 import urllib.error
 import urllib.request
@@ -62,8 +61,10 @@ PROVIDER_SOURCES = {
 REMOVED_MOCK_LABEL = "Claude Sonnet 5 (Balanced)"
 
 #: A string only the rewritten panel contains. Asserted PRESENT, so the crawl
-#: below provably reached the engine-config chunk before concluding the mock
-#: label is gone from it.
+#: below provably reached the panel's chunk before concluding the mock label
+#: is gone from it. Since ADR-0885 (2026-09-18) the panel is the Model Usage
+#: block of the Models console (pages/models/components/engine-parts.tsx);
+#: the literal is unchanged.
 PANEL_MARKER = "Reading the audit chain"
 
 
@@ -342,40 +343,10 @@ def test_model_usage_shares_are_internally_consistent(opener) -> None:
 
 
 def _crawl_served_chunks() -> dict[str, str]:
-    """Every JS chunk the browser can reach, fetched over HTTP, name → body.
-
-    A one-level scan of the SPA shell is NOT enough and silently passes: the
-    engine-config panel is a lazily-imported chunk, so its filename appears only
-    inside an eager bundle, never in index.html. Scanning just the shell's eight
-    assets made this check vacuous — it proved the mock label was absent from
-    files it was never in. Hence the transitive crawl, and hence the positive
-    marker asserted below, which fails if the crawl stops short of the panel.
-    """
-    plain = urllib.request.build_opener()
-    with plain.open(f"{BASE}/console/", timeout=30) as resp:
-        shell = resp.read().decode("utf-8", "replace")
-
-    pending = set(re.findall(r"assets/[A-Za-z0-9._-]+\.js", shell))
-    assert pending, f"no JS assets referenced by the SPA shell: {shell[:200]!r}"
-
-    bodies: dict[str, str] = {}
-    while pending:
-        asset = pending.pop()
-        if asset in bodies:
-            continue
-        try:
-            with plain.open(f"{BASE}/console/{asset}", timeout=60) as resp:
-                bodies[asset] = resp.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError:
-            # A chunk name assembled at runtime from string fragments can crawl
-            # into a 404; a genuinely missing chunk shows up as the positive
-            # marker going missing, which is asserted separately.
-            continue
-        pending |= {
-            ref for ref in re.findall(r"assets/[A-Za-z0-9._-]+\.js", bodies[asset])
-            if ref not in bodies
-        }
-    return bodies
+    """See tests/e2e/_console_chunks.py (extracted 2026-09-18, ADR-0885 step 3,
+    so the Models-console bundle proof shares ONE transitive crawler)."""
+    from tests.e2e._console_chunks import crawl_served_chunks  # noqa: PLC0415
+    return crawl_served_chunks()
 
 
 def test_served_bundle_carries_no_hardcoded_model_list() -> None:

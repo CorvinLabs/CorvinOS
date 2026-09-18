@@ -2427,6 +2427,8 @@ Tests: `corvin_operator/bridges/shared/test_acs_runtime.py` —
 
 ## Engine Configuration panel: every list and every percentage is real (2026-09-15)
 
+> **Since 2026-09-18 (ADR-0885)** this panel is the **Routing** tab (classifier overrides + turn pins) and the Model Usage block of the **Usage & Cost** tab of the Models console at `/app/models`; `/app/engine-config` redirects there. Every rule below still holds; the components moved verbatim to `web-next/src/pages/models/components/engine-parts.tsx`.
+
 *ADR pending: this pass is structural (two new endpoints, a new ADR-0181 provider,
 a new `model_source`) and needs a record in the Corvin-ADR repo, which is not
 present on the Windows maintainer host this was built on. The number must be
@@ -2956,6 +2958,8 @@ original event every cycle.
 
 ## Counting epoch for the usage + cost panels (ADR-0760, 2026-09-15)
 
+> **Since 2026-09-18 (ADR-0885)** the window is shown and moved ONLY in the Models console header (`/app/models`, every tab); `/app/model-cost-optimizer` redirects to its Usage & Cost tab. See "Models console" below.
+
 After ADR-0759 made worker turns visible, the two series were incomparable: ~500
 OS turns of history against 3 worker turns from the day the emitter was fixed.
 The operator asked for both to start level.
@@ -3322,3 +3326,73 @@ against the real persistent optimizer under a temp `CORVIN_HOME`.
   is the caller's.
 - **Don't mount `billing_savings` as it stands** (no session, `demo_user`).
 - **Don't call ADR-0856 "wired".** It is superseded.
+
+---
+
+## Models console (ADR-0885 steps 1–4, 2026-09-18)
+
+`/app/models` is ONE panel for what used to be three: Engine Config,
+Model Cost Optimizer and Model Selection. The three old paths redirect to its
+tabs (`?tab=routing|usage-cost|catalog`); `/app/engines` and
+`/app/engine-control` redirect to `routing`. Source: `web-next/src/pages/models/`.
+
+| Tab | Backed by | Writes |
+|---|---|---|
+| Routing | block 1 **Turn pins** — `GET/PUT /v1/console/settings/engine` (what actually serves, ADR-0759; PUT REPLACES the map, the form sends the full map) · block 2 **Classifier overrides**, labelled *advisory* — `GET/PUT /v1/engine/config` (shadow classifier) · block 3 providers | "Save pins", "Save overrides" — two buttons, because the two routes validate and fail differently |
+| Usage & Cost | `…/model-cost-optimizer/status`, `/v1/engine/model-usage` — rules of ADR-0760/0761/0763/0764 unchanged; routed-to keeps its role dimension; Model Usage keeps its own named denominators | nothing |
+| Learning | `/v1/engine/analytics/*` (`task-type/{tt}` ranking from `rank_models`, `recent`, `feedback`, `reset`), `…/model-cost-optimizer/{reset,export,import}` | ONE reset (confidence store, then thresholds — sequential, per-store failure copy, retry of the failed half), export/import, ratings |
+| Catalog | `/v1/console/v1/models/available` — the one rate card | nothing; "Use for OS/worker turn" hands a model to Routing via `?preselect=&turn=` |
+
+**Header, on every tab:** Claude Code auth status; the turn pins (from
+`/settings/engine`, resolved by the runtime's own `get_tenant_engine_model`
+since step 2b, so header and cost tab cannot disagree); the ONE counting window
+with "Reset counters to now" AND "Show full history" (ADR-0760 — clearing
+restores every turn, nothing is ever deleted). Its caption is the deploy
+marker: `Which model serves each turn, what it costs, and what the selector
+has learned.` — a rendered literal, because terser strips component names and
+`console-deploy.sh --marker` greps the built assets.
+
+**Tab ↔ URL:** the tab is `?tab=` (PUSH on a click, so back returns; a bogus
+or missing tab is rewritten to `routing` with REPLACE). The Routing content is
+`forceMount`ed so a half-edited pin form survives a tab switch.
+
+**Writes:** every request goes through `lib/api/client.ts::api()` (base
+`/v1/console`, `X-CSRF-Token`, `ApiError` on non-2xx); an eslint override
+forbids `fetch` under `src/pages/models/**`. The old cost panel's bare
+`fetch()` writes — reset, window, import, override — all answered 403 on the
+live host; Import was additionally sent as `FormData` to a JSON route. Window
+and reset bodies are fixed objects; no operator text reaches the chain.
+
+**Learning tab honesty:** "Shadow classifications" is IN WINDOW
+(`/v1/engine/config.total_samples`), "Outcome samples" is ALL TIME
+(`/v1/engine/analytics.total_samples`), and both say so (ADR-0764). Ranking rows
+are rendered as the learner stored them — never merged; the live store holds
+both `claude-haiku-…` and `anthropic/claude-haiku-…`. Below 5 samples the row
+says "recommendation withheld". Ratings are of a **shadow classification**
+("did the recommended tier fit?"), keyed on the record's chain hash — a
+classified event carries no turn id and its `recommended_model` is not the
+model that served the turn.
+
+**Proofs:** `tests/unit/models-page.test.tsx` (real router + Radix tabs, CSRF
+via MSW); `tests/e2e/test_models_console_bundle_e2e.py` (transitive crawl of
+the served chunks: the header caption found FIRST, then the deleted h1s
+`Engine Configuration` / `Model Cost Optimizer` absent — helper in
+`tests/e2e/_console_chunks.py`, shared with the engine-config real-data test);
+`tests/e2e/models-redirects.spec.ts` (Playwright, chromium, live host,
+read-only).
+
+### What you, as Claude Code, must NOT do (Models console)
+
+- **Don't give a tab its own window.** The header owns reset/clear; tabs only
+  read `status.window` for their caption.
+- **Don't call `fetch` under `pages/models/`.** `api()` or nothing.
+- **Don't merge ranking rows across id variants** or fold OS and worker turns
+  into one bar. Label, never fold.
+- **Don't label the shadow override as the OS-turn control.** The pins serve;
+  the classifier observes.
+- **Don't send an operator-typed string in a reset/window body.**
+- **Don't re-add `pages/models.tsx`** beside `pages/models/` (file beats
+  directory — `page-dir-shadow.test.ts`).
+- **Don't put the redirects before the panel routes** in `App.tsx` for a path
+  a mounted panel still owns — the earlier sibling wins and the redirect is dead.
+
