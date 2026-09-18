@@ -186,10 +186,6 @@ export const SyncMonitorPage = React.lazy(() =>
 // REMOVED: WebhooksPage, AuditPage, ReleasesPage — backend routes return 404
 // These are not implemented and should not be referenced
 
-// ADR-0760/0761 panel — its endpoints (/v1/console/learning/model-cost-optimizer/*)
-// are live. 95ecc2b6 pointed this at pages/model-cost-optimizer.tsx, which fetched
-// nine /api/v1/engine/* routes that exist nowhere in this console and crashed on
-// the 404 body; restored 2026-09-17.
 export const QualityGatesPage = React.lazy(() =>
   import("@/pages/quality").then((m) => ({ default: m.default }))
 );

@@ -135,11 +135,29 @@ def _is_localhost(request: Request) -> bool:
     return client.host in ("127.0.0.1", "::1", "localhost")
 
 
+def _safe_next(next_: str | None) -> str | None:
+    """A console deep link to return to after login — or None.
+
+    Same-origin, path-only, under /console/ — never a scheme, host, protocol-
+    relative ``//host`` or backslash form (an open redirect through the login
+    route would be a phishing primitive). Anything else is ignored, not 400'd:
+    the login must still succeed, only the destination falls back.
+    """
+    if not next_ or len(next_) > 512:
+        return None
+    if not next_.startswith("/console/") or next_.startswith("//") or "\\" in next_:
+        return None
+    if "://" in next_ or "\n" in next_ or "\r" in next_:
+        return None
+    return next_
+
+
 @router.get("/local-login", include_in_schema=False)
 def local_login(
     request: Request,
     response: Response,
     user_agent: Annotated[str | None, Header(alias="user-agent")] = None,
+    next: str | None = None,
 ) -> RedirectResponse:
     """Auto-login for localhost operators — no token needed.
 
@@ -194,7 +212,11 @@ def local_login(
     # 302 would hand a freshly-authenticated caller a 404. The session is still
     # created and the cookie still set — only the destination changes, because
     # an API-only deployment logging in is a legitimate thing to do.
-    _target = "/console/"
+    # ADR-0885 (2026-09-18): a bounce through this route used to land every
+    # deep link on /console/ (then /app/chat) — path AND query lost, so an old
+    # bookmark never even reached the SPA's redirects. The SPA forwards the
+    # link it was going to as ``next``; validated above, honoured here.
+    _target = _safe_next(next) or "/console/"
     try:
         from ..app import headless_enabled
 

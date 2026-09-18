@@ -200,7 +200,9 @@ def _iter_classified(
                 if max_lines is not None and scanned > max_lines:
                     return
                 line = line.strip()
-                if not line:
+                # Cheap substring prefilter: a 137k-line chain is 0.44 %
+                # classified, and json.loads on every line is the cost.
+                if not line or CLASSIFIED_EVENT not in line:
                     continue
                 try:
                     rec = json.loads(line)
@@ -234,11 +236,11 @@ def _iter_lines_backwards(path: Path, block_size: int = 64 * 1024):
             chunk = fh.read(step) + tail
             parts = chunk.split(b"\n")
             tail = parts[0]
+            # Empty parts are yielded too, so ``max_lines`` counts the same
+            # thing in both directions (the forward reader counts blank lines).
             for part in reversed(parts[1:]):
-                if part:
-                    yield part.decode("utf-8", errors="replace")
-        if tail:
-            yield tail.decode("utf-8", errors="replace")
+                yield part.decode("utf-8", errors="replace")
+        yield tail.decode("utf-8", errors="replace")
 
 
 def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | None]:
@@ -348,12 +350,15 @@ def claude_catalog_or_503() -> set[str]:
     not an error. Shared by ``engine_api`` and ``engine`` so both Save paths
     have ONE semantic.
     """
+    # Load FIRST (through _claude_catalog_offline → load_registry), read the
+    # status SECOND — in a process where nothing has loaded yet the status is
+    # (True, None) until a load was attempted (review 2026-09-18).
+    known = _claude_catalog_offline()
     try:
         from engine_models import registry_load_status  # type: ignore[import]  # noqa: PLC0415
         ok, error = registry_load_status()
     except Exception:  # noqa: BLE001 — stripped install: behave as before
         ok, error = True, None
-    known = _claude_catalog_offline()
     if not ok and not known:
         raise HTTPException(
             status_code=503,

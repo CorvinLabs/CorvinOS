@@ -9,9 +9,9 @@
  *  - `?tab=catalog` opens the Catalog tab (aria-selected);
  *  - `?tab=bogus` is rewritten to `routing` with REPLACE;
  *  - clicking a tab is a PUSH (browser back returns to the previous tab);
- *  - every POST/PUT the page sends carries X-CSRF-Token (an MSW handler fails
- *    the request otherwise) — the invariant behind the old cost panel's broken
- *    writes.
+ *  - the header's window reset carries X-CSRF-Token (asserted on the captured
+ *    header value); the tabs' writes are covered by routing-tab.test.tsx and
+ *    learning-tab.test.tsx against the real tab components.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -118,8 +118,10 @@ describe("Models console — tab ↔ URL", () => {
     });
     expect(screen.getByTestId("probe").getAttribute("data-nav")).toBe("PUSH");
     expect(screen.getByTestId("tab-learning")).toBeInTheDocument();
-    // The Routing content stays mounted (hidden) so a half-edited form survives.
-    expect(screen.getByTestId("tab-routing")).toBeInTheDocument();
+    // The Routing content stays mounted but HIDDEN so a half-edited form survives.
+    const routingPanel = screen.getByTestId("tab-routing").closest('[role="tabpanel"]');
+    expect(routingPanel).not.toBeNull();
+    expect(routingPanel).toHaveAttribute("hidden");
   });
 
   it("sends X-CSRF-Token on the window reset (two-click confirm)", async () => {

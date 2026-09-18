@@ -213,7 +213,7 @@ class ModelSelectionLearningListener:
             )
             return True
         except Exception as e:  # noqa: BLE001 — never break task processing
-            logger.warning("Failed to process outcome: %s", type(e).__name__)
+            logger.warning("Failed to process outcome: %s: %s", type(e).__name__, e)
             return False
 
     def run_epoch(

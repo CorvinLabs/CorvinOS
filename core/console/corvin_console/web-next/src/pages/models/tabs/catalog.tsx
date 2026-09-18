@@ -116,8 +116,12 @@ export function CatalogTab({ onUseFor }: { onUseFor: (id: string, turn: "os" | "
                         <div>{perMillion(m.output_usd_per_1k)} out</div>
                         <div className="text-xs text-muted-foreground">per 1M tokens</div>
                         <div className="mt-2 flex gap-1 justify-end">
-                          <Button size="sm" variant="ghost" onClick={() => onUseFor(m.id, "os")}>Use for OS turn</Button>
-                          <Button size="sm" variant="ghost" onClick={() => onUseFor(m.id, "worker")}>Use for worker turn</Button>
+                          {m.turns.includes("os") && (
+                            <Button size="sm" variant="ghost" onClick={() => onUseFor(m.id, "os")}>Use for OS turn</Button>
+                          )}
+                          {m.turns.includes("worker") && (
+                            <Button size="sm" variant="ghost" onClick={() => onUseFor(m.id, "worker")}>Use for worker turn</Button>
+                          )}
                         </div>
                       </div>
                     </div>

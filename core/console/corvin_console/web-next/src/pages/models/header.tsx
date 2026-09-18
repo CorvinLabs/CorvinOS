@@ -19,14 +19,19 @@ import { useCostOptimizerStatus } from "./hooks/use-cost-status";
 import { MARKER_HEADER } from "./tabs";
 import type { TabId } from "./tabs";
 
-const shortId = (id: string | null) =>
-  id ? id.replace(/^claude-/, "").replace(/-\d{8}$/, "") : "adaptive";
+const shortId = (id: string | null, whenNull: string) =>
+  id ? id.replace(/^claude-/, "").replace(/-\d{8}$/, "") : whenNull;
 
 export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const status = useCostOptimizerStatus(false);
-  const { pins } = usePins(status.data);
+  const { pins, loading: pinsLoading, error: pinsError } = usePins(status.data);
+  // Fabricate nothing: "—" until the setting answered; a null OS pin means the
+  // adaptive default, a null worker pin means the engine's default (the API's
+  // own words), and a failed read says so.
+  const osLabel = pinsError ? "unavailable" : !pins ? "—" : shortId(pins.os_model, "adaptive");
+  const workerLabel = pinsError ? "unavailable" : !pins ? "—" : shortId(pins.worker_model, "engine default");
   const win = useUsageWindow(csrf);
   const [confirm, setConfirm] = useState(false);
   const w = win.window;
@@ -54,7 +59,7 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
                 onClick={() => onGoTo("routing")}
                 title="Change on the Routing tab"
               >
-                {shortId(pins?.os_model ?? null)}
+                {osLabel}
               </button>
             </span>
             <span>
@@ -65,12 +70,12 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
                 onClick={() => onGoTo("routing")}
                 title="Change on the Routing tab"
               >
-                {shortId(pins?.worker_model ?? null)}
+                {workerLabel}
               </button>
             </span>
             <span>
               <span className="text-muted-foreground">Engine:</span>{" "}
-              <span className="font-mono font-medium">{pins?.default_engine ?? "—"}</span>
+              <span className="font-mono font-medium">{pinsLoading ? "—" : pins?.default_engine ?? "—"}</span>
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -108,6 +113,9 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
               </Button>
             )}
           </div>
+          {pinsError && (
+            <p className="w-full text-xs text-destructive">The engine settings could not be loaded — the pins above are unknown, not empty.</p>
+          )}
           <p className="w-full text-xs text-muted-foreground">
             This only moves the counting window every tab counts over. The audit trail is
             append-only and hash-chained — nothing is deleted, and “Show full history”

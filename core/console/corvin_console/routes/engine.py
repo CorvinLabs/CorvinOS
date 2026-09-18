@@ -391,16 +391,8 @@ def put_engine_setting(
         pass
 
     saved_spec = data.get("spec") or {}
-    raw_em = saved_spec.get("engine_models") or {}
-    engine_models = {
-        eid: EngineModelConfig(
-            os_model=cfg.get("os_model") or None,
-            worker_model=cfg.get("worker_model") or None,
-            provider=cfg.get("provider") or None,
-        )
-        for eid, cfg in raw_em.items()
-        if isinstance(cfg, dict)
-    }
+    # ONE resolver for GET and PUT responses (the runtime's).
+    engine_models = _engine_models_as_served(_rec.tenant_id, saved_spec)
     return EngineSettingResponse(
         default_engine="claude_code",
         valid_engines=["claude_code"],
@@ -416,9 +408,15 @@ def _validate_pins(rec, eid: str, cfg: "EngineModelConfig", providers: dict) -> 
     its own registry entry and are accepted as declared."""
     from .engine_api import _is_claude_model_id, claude_catalog_or_503  # noqa: PLC0415
     spec = providers.get(cfg.provider) if cfg.provider else None
-    if spec is not None and (getattr(spec, "is_platform", False) or spec.model_source != "static"):
-        return
+    # Claude-native = no provider, or the registry's own "anthropic" entry
+    # (model_source "anthropic"). Everything else — a platform provider
+    # (Bedrock/Vertex/Foundry) or a proxy provider (Ollama/OpenRouter) — offers
+    # its own ids and is accepted as declared. (Review 2026-09-18: the first
+    # version skipped on ``model_source != "static"`` and let
+    # ``provider: "anthropic"`` bypass the check entirely.)
     if cfg.provider not in (None, "anthropic"):
+        return
+    if spec is not None and getattr(spec, "is_platform", False):
         return
     known = claude_catalog_or_503()
     if not known:
