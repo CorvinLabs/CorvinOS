@@ -147,7 +147,7 @@ def _shared_profile_module():
     `_seed_profile_display_language` (and lang_cli.py / adapter.py) do —
     `operator.bridges.shared.profile` is never actually importable as a
     dotted path (no `corvin_operator/__init__.py`, name collides with stdlib)."""
-    shared_dir = Path(__file__).resolve().parent.parent / "operator" / "bridges" / "shared"
+    shared_dir = Path(__file__).resolve().parent.parent / "corvin_operator" / "bridges" / "shared"
     if str(shared_dir) not in sys.path:
         sys.path.insert(0, str(shared_dir))
     import profile as _profile_mod  # type: ignore  # noqa: PLC0415
@@ -293,7 +293,7 @@ def test_installer_output_resolves_via_say_py_for_every_language(
 
     saved_voice_config_dir = os.environ.get("VOICE_CONFIG_DIR")
     os.environ["VOICE_CONFIG_DIR"] = str(voice_config_dir)
-    scripts_dir = Path(__file__).resolve().parent.parent / "operator" / "voice" / "scripts"
+    scripts_dir = Path(__file__).resolve().parent.parent / "corvin_operator" / "voice" / "scripts"
     sys.path.insert(0, str(scripts_dir))
     try:
         import say as say_mod  # noqa: PLC0415

@@ -142,7 +142,7 @@ class TestWindowsInstallerEncoding:
         # `operator` module), so the dotted form here can never resolve —
         # put corvin_operator/bridges/shared on sys.path and import bare, matching
         # every other _win_shim call site in this codebase.
-        _shared_dir = str(Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared")
+        _shared_dir = str(Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared")
         if _shared_dir not in sys.path:
             sys.path.insert(0, _shared_dir)
         from agents._win_shim import windows_shim_command

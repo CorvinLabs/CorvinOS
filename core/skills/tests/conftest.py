@@ -23,7 +23,7 @@ import pytest
 # so the directory must be on sys.path. Without it these tests fail standalone
 # with "core audit writer unavailable" and pass only when another suite in the
 # same session happens to add the path first (2026-09-07 round-2 review).
-_SHARED = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+_SHARED = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
 if _SHARED.is_dir() and str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 

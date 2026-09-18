@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterator
 # Make forge paths importable from this plugin's venv.
 _THIS = Path(__file__).resolve().parent
 _REPO = _THIS.parents[2]
-_FORGE = _REPO / "operator" / "forge"
+_FORGE = _REPO / "corvin_operator" / "forge"
 if str(_FORGE) not in sys.path:
     sys.path.insert(0, str(_FORGE))
 

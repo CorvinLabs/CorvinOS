@@ -157,7 +157,7 @@ class RunAllTestsSkipGateTests(unittest.TestCase):
     """
 
     def test_runner_script_mentions_corvin_compute(self) -> None:
-        runner = REPO_ROOT / "operator" / "bridges" / "run-all-tests.sh"
+        runner = REPO_ROOT / "corvin_operator" / "bridges" / "run-all-tests.sh"
         self.assertTrue(runner.is_file(), "run-all-tests.sh missing")
         text = runner.read_text(encoding="utf-8")
         self.assertIn(

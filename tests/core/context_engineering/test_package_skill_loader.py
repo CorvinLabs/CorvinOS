@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 # Add operator directory to path to avoid collision with built-in operator module
-operator_path = Path(__file__).parent.parent.parent.parent / "operator"
+operator_path = Path(__file__).parent.parent.parent.parent / "corvin_operator"
 if str(operator_path) not in sys.path:
     sys.path.insert(0, str(operator_path))
 

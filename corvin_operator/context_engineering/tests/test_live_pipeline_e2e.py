@@ -47,8 +47,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[3]
-for p in (_REPO / "operator" / "forge", _REPO / "core" / "console",
-          _REPO / "operator" / "skill-forge", _REPO / "operator" / "bridges" / "shared"):
+for p in (_REPO / "corvin_operator" / "forge", _REPO / "core" / "console",
+          _REPO / "corvin_operator" / "skill-forge", _REPO / "corvin_operator" / "bridges" / "shared"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
@@ -56,7 +56,7 @@ _LIVE = os.environ.get("CORVIN_LIVE_E2E") == "1"
 
 
 def _load():
-    ce = _REPO / "operator" / "context_engineering"
+    ce = _REPO / "corvin_operator" / "context_engineering"
     spec = importlib.util.spec_from_file_location(
         "context_engineering", str(ce / "__init__.py"),
         submodule_search_locations=[str(ce)])

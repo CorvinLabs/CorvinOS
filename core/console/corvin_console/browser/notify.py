@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_SHARED = _HERE.parents[3] / "operator" / "bridges" / "shared"
+_SHARED = _HERE.parents[3] / "corvin_operator" / "bridges" / "shared"
 if _SHARED.is_dir() and str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 

@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-_FORGE_ROOT = Path(__file__).resolve().parents[3] / "operator" / "forge"
+_FORGE_ROOT = Path(__file__).resolve().parents[3] / "corvin_operator" / "forge"
 
 # Operator opt-in for running a `code` node WITHOUT the bwrap namespace jail.
 # On hosts where bwrap is unavailable (macOS, Windows, no-bwrap Linux) a code

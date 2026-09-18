@@ -49,14 +49,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #  files so the discovered name matches the manifest's `module:` field).
 _MANIFESTS: tuple[tuple[Path, Path, Path], ...] = (
     (
-        _REPO_ROOT / "operator" / "orchestration" / "tde",
-        _REPO_ROOT / "operator" / "orchestration" / "tde" / "WIRING.yaml",
-        _REPO_ROOT / "operator" / "orchestration",  # so `tde.X` imports work
+        _REPO_ROOT / "corvin_operator" / "orchestration" / "tde",
+        _REPO_ROOT / "corvin_operator" / "orchestration" / "tde" / "WIRING.yaml",
+        _REPO_ROOT / "corvin_operator" / "orchestration",  # so `tde.X` imports work
     ),
     (
-        _REPO_ROOT / "operator" / "orchestration",
-        _REPO_ROOT / "operator" / "orchestration" / "WIRING.yaml",
-        _REPO_ROOT / "operator" / "orchestration",
+        _REPO_ROOT / "corvin_operator" / "orchestration",
+        _REPO_ROOT / "corvin_operator" / "orchestration" / "WIRING.yaml",
+        _REPO_ROOT / "corvin_operator" / "orchestration",
     ),
 )
 
@@ -64,7 +64,7 @@ _MANIFESTS: tuple[tuple[Path, Path, Path], ...] = (
 # than the whole tree — vendored/third-party code (node_modules, .venv) must
 # never be scanned, and would produce meaningless noise if it were.
 _LINT_SCAN_ROOTS: tuple[Path, ...] = (
-    _REPO_ROOT / "operator",
+    _REPO_ROOT / "corvin_operator",
     _REPO_ROOT / "core",
 )
 _LINT_EXCLUDE_DIR_NAMES = {

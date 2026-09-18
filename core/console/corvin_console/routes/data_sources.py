@@ -34,7 +34,7 @@ except ImportError:
     _FORGE_AVAILABLE = False
 
 # License gate — same PYTHONPATH setup as other console routes (e.g. space.py)
-_OPERATOR = Path(__file__).resolve().parents[4] / "operator"
+_OPERATOR = Path(__file__).resolve().parents[4] / "corvin_operator"
 if str(_OPERATOR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR))
 

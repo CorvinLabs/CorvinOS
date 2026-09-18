@@ -272,7 +272,7 @@ async def get_learning_status(
         os_model_pin: Optional[str] = None
         try:
             import sys
-            _bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+            _bridge_shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
             if str(_bridge_shared) not in sys.path:
                 sys.path.insert(0, str(_bridge_shared))
             from engine_models import get_tenant_engine_model  # type: ignore  # noqa: PLC0415

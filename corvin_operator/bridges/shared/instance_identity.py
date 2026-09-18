@@ -280,12 +280,12 @@ class InstanceIdentityMissing(RuntimeError):
 def _emit_missing_audit(path: Path) -> None:
     """Best-effort CRITICAL audit emit when the identity file is missing."""
     try:
-        _forge_pkg = path.parents[2] / "operator" / "forge"
+        _forge_pkg = path.parents[2] / "corvin_operator" / "forge"
         if not _forge_pkg.is_dir():
             here = Path(__file__).resolve()
             for parent in here.parents:
                 if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-                    _forge_pkg = parent / "operator" / "forge"
+                    _forge_pkg = parent / "corvin_operator" / "forge"
                     break
         if str(_forge_pkg) not in sys.path:
             sys.path.insert(0, str(_forge_pkg))
@@ -332,7 +332,7 @@ def _emit_rotation_audit(
         here = Path(__file__).resolve()
         for parent in here.parents:
             if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-                forge_pkg = parent / "operator" / "forge"
+                forge_pkg = parent / "corvin_operator" / "forge"
                 if str(forge_pkg) not in sys.path:
                     sys.path.insert(0, str(forge_pkg))
                 break
@@ -622,12 +622,12 @@ def _authenticated_features_request(path: str, body: dict) -> dict:
         here = Path(__file__).resolve()
         lic_dir = None
         for parent in here.parents:
-            candidate = parent / "operator" / "license"
+            candidate = parent / "corvin_operator" / "license"
             if candidate.is_dir():
                 lic_dir = candidate
                 break
         if lic_dir is None:
-            raise ImportError("operator/license directory not found")
+            raise ImportError("corvin_operator/license directory not found")
         if str(lic_dir) not in sys.path:
             sys.path.insert(0, str(lic_dir))
         import session_refresh as _sr  # type: ignore[import-not-found]

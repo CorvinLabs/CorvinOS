@@ -429,7 +429,7 @@ def healthz() -> dict[str, Any]:
 
     # Check 1: Claude credentials
     try:
-        _shared_dir = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        _shared_dir = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
         if _shared_dir.is_dir() and str(_shared_dir) not in sys.path:
             sys.path.insert(0, str(_shared_dir))
         from engine_detection import _find_claude_credentials  # type: ignore[import]

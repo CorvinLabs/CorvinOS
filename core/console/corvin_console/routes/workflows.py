@@ -47,7 +47,7 @@ except ModuleNotFoundError:  # Windows: no stdlib fcntl.
 
     # parents[4] == repo root (this file is core/console/corvin_console/routes/…);
     # mirrors the _REPO = _THIS_DIR.parents[3] resolution used below.
-    _forge_pkg = _Path(__file__).resolve().parents[4] / "operator" / "forge"
+    _forge_pkg = _Path(__file__).resolve().parents[4] / "corvin_operator" / "forge"
     if str(_forge_pkg) not in _sys.path:
         _sys.path.insert(0, str(_forge_pkg))
     from forge import _wincompat as _wc
@@ -108,7 +108,7 @@ try:  # pragma: no cover - import shape
     import os as _pg_os, sys as _pg_sys
     _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
     while _pg_d != _pg_os.path.dirname(_pg_d):
-        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        _pg_c = _pg_os.path.join(_pg_d, "corvin_operator", "bridges", "shared")
         if _pg_os.path.isdir(_pg_c):
             if _pg_c not in _pg_sys.path:
                 _pg_sys.path.insert(0, _pg_c)
@@ -126,7 +126,7 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 
@@ -189,7 +189,7 @@ def _bounded_flock(lock_path: Path, what: str, *, timeout: float | None = None):
 
 
 # ── License gate (soft dep) ───────────────────────────────────────────────
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 if str(_OPERATOR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR))
 try:
@@ -245,7 +245,7 @@ except ImportError:
 
 # ── corvin-scheduler (Phase 4, soft dep) ─────────────────────────────────
 
-_SCHEDULER_PATH = _REPO / "operator" / "bridges" / "shared"
+_SCHEDULER_PATH = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_SCHEDULER_PATH) not in sys.path:
     sys.path.insert(0, str(_SCHEDULER_PATH))
 
@@ -274,7 +274,7 @@ except Exception:
 
 # ── Voice scripts path (Phase 7, soft dep) ────────────────────────────────
 
-_VOICE_SCRIPTS = _REPO / "operator" / "voice" / "scripts"
+_VOICE_SCRIPTS = _REPO / "corvin_operator" / "voice" / "scripts"
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -538,12 +538,12 @@ def _build_mcp_with_forge(
 
     if forge_tools:
         # Add the forge stdio MCP server so forge tools are available
-        forge_mcp_py = str(_REPO / "operator" / "forge" / "forge" / "mcp_server.py")
+        forge_mcp_py = str(_REPO / "corvin_operator" / "forge" / "forge" / "mcp_server.py")
         cfg["mcpServers"]["__forge__"] = {
             "command": sys.executable,
             "args": [forge_mcp_py],
             "env": {
-                "PYTHONPATH": str(_REPO / "operator" / "forge"),
+                "PYTHONPATH": str(_REPO / "corvin_operator" / "forge"),
                 "CORVIN_HOME": str(_forge_paths.corvin_home()),
             },
         }
@@ -553,7 +553,7 @@ def _read_skill_content(skill_name: str) -> str | None:
     """Read a skill's SKILL.md body from the slot mirror or skill-forge directory."""
     slug = re.sub(r"[^a-z0-9_-]", "_", skill_name.lower())
     candidates = [
-        _REPO / "operator" / "skill-forge" / "skills" / "dyn" / slug / "SKILL.md",
+        _REPO / "corvin_operator" / "skill-forge" / "skills" / "dyn" / slug / "SKILL.md",
         _forge_paths.tenant_skill_forge_dir("_default") / "user" / slug / "SKILL.md",
         _forge_paths.tenant_skill_forge_dir("_default") / "project" / slug / "SKILL.md",
     ]
@@ -811,7 +811,7 @@ def _execute_deliver_node(node: dict[str, Any], state: dict[str, Any]) -> str:
         return "[deliver] skipped — no upstream output to deliver"
 
     # Write to shared outbox
-    outbox_dir = _REPO / "operator" / "bridges" / "shared" / "outbox"
+    outbox_dir = _REPO / "corvin_operator" / "bridges" / "shared" / "outbox"
     outbox_dir.mkdir(parents=True, exist_ok=True)
 
     tok = secrets.token_hex(6)

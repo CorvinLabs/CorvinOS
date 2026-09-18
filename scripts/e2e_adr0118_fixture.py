@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 
 # bootstrap forge path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "operator" / "forge"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "corvin_operator" / "forge"))
 from forge.paths import corvin_home  # noqa: E402
 from forge.security_events import write_event  # noqa: E402
 

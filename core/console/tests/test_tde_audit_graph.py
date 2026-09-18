@@ -15,8 +15,8 @@ import pytest
 from fastapi import HTTPException
 
 _REPO = Path(__file__).resolve().parents[3]
-for _p in (_REPO / "core" / "console", _REPO / "operator" / "forge",
-           _REPO / "operator" / "bridges" / "shared"):
+for _p in (_REPO / "core" / "console", _REPO / "corvin_operator" / "forge",
+           _REPO / "corvin_operator" / "bridges" / "shared"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -37,7 +37,7 @@ from forge import security_events as se  # noqa: E402
 # without importing the world.
 import importlib.util as _ilu  # noqa: E402
 
-_TDE_AUDIT_PY = _REPO / "operator" / "orchestration" / "tde" / "tde_audit.py"
+_TDE_AUDIT_PY = _REPO / "corvin_operator" / "orchestration" / "tde" / "tde_audit.py"
 _spec = _ilu.spec_from_file_location("tde_audit_vocab", _TDE_AUDIT_PY)
 _tde_audit = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_tde_audit)

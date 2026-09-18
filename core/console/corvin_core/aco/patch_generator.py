@@ -177,7 +177,7 @@ def default_llm(*, model: Optional[str] = None, timeout: float = 300.0,
     try:
         import sys as _sys
         from pathlib import Path as _P
-        _shared = _P(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        _shared = _P(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
         if str(_shared) not in _sys.path:
             _sys.path.insert(0, str(_shared))
         from agents.claude_code import ClaudeCodeEngine  # type: ignore

@@ -478,7 +478,7 @@ class TestOpenBatchesState(unittest.TestCase):
 class TestL34AllowList(unittest.TestCase):
     def test_anthropic_batch_in_default_compliance(self):
         sys.path.insert(0, str(
-            Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+            Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
         ))
         from data_classification import DEFAULT_ENGINE_COMPLIANCE
         self.assertIn("anthropic_batch", DEFAULT_ENGINE_COMPLIANCE)

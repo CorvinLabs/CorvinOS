@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 REPO = Path(__file__).resolve().parents[3]
-SKILL_FORGE_PKG = REPO / "operator" / "skill-forge"
-FORGE_PKG = REPO / "operator" / "forge"
+SKILL_FORGE_PKG = REPO / "corvin_operator" / "skill-forge"
+FORGE_PKG = REPO / "corvin_operator" / "forge"
 sys.path.insert(0, str(SKILL_FORGE_PKG))
 sys.path.insert(0, str(FORGE_PKG))
 

@@ -1,9 +1,9 @@
 """CLI entry point for CorvinOS installer.
 
 Usage:
-  python -m operator.installer install [--yes]
-  python -m operator.installer uninstall
-  python -m operator.installer status
+  python -m corvin_operator.installer install [--yes]
+  python -m corvin_operator.installer uninstall
+  python -m corvin_operator.installer status
 """
 
 import argparse

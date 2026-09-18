@@ -48,31 +48,31 @@ from typing import Any
 # requires to be pinned (security_capabilities.py and this module).
 
 MANDATORY_LAYER_FILES: dict[str, str] = {
-    "path_gate": "operator/voice/hooks/path_gate.py",
-    "audit": "operator/bridges/shared/audit.py",
-    "consent_gate": "operator/bridges/shared/consent.py",
-    "data_classification": "operator/bridges/shared/data_classification.py",
-    "egress_gate": "operator/bridges/shared/egress_gate.py",
-    "erasure_orchestrator": "operator/bridges/shared/erasure_orchestrator.py",
-    "self_test": "operator/bridges/shared/self_test.py",
-    "remote_trigger_receiver": "operator/bridges/shared/remote_trigger_receiver.py",
+    "path_gate": "corvin_operator/voice/hooks/path_gate.py",
+    "audit": "corvin_operator/bridges/shared/audit.py",
+    "consent_gate": "corvin_operator/bridges/shared/consent.py",
+    "data_classification": "corvin_operator/bridges/shared/data_classification.py",
+    "egress_gate": "corvin_operator/bridges/shared/egress_gate.py",
+    "erasure_orchestrator": "corvin_operator/bridges/shared/erasure_orchestrator.py",
+    "self_test": "corvin_operator/bridges/shared/self_test.py",
+    "remote_trigger_receiver": "corvin_operator/bridges/shared/remote_trigger_receiver.py",
     # L44 acceptable-use gate (EU AI Act Art. 5) — a mandatory Tier-3 capability
     # (CAP_HOUSE_RULES) that was MISSING here, breaking the documented Tier-1/Tier-3
     # lockstep, so neither the signed manifest nor the attestation hash covered it
     # (security-audit 2026-06-25 #4).
-    "house_rules": "operator/bridges/shared/house_rules.py",
+    "house_rules": "corvin_operator/bridges/shared/house_rules.py",
     # L34/L35/L44 spawn-gate orchestrator (SSOT invoked at every spawn). Pinned so
     # a fork cannot neuter check_l34/l35/l44 into no-ops without tripping the
     # manifest (security-audit 2026-06-25 #5).
-    "spawn_gates": "operator/bridges/shared/spawn_gates.py",
+    "spawn_gates": "corvin_operator/bridges/shared/spawn_gates.py",
     # Integrity substrate — pinned so a fork cannot silently patch the Tier-3
     # registry or this verifier (ADR-0141 residual-risk table).
-    "security_capabilities": "operator/bridges/shared/security_capabilities.py",
-    "layer_integrity": "operator/bridges/shared/layer_integrity.py",
+    "security_capabilities": "corvin_operator/bridges/shared/security_capabilities.py",
+    "layer_integrity": "corvin_operator/bridges/shared/layer_integrity.py",
 }
 
-MANIFEST_REL_PATH = "operator/security/layer-manifest.json"
-PUBKEY_REL_PATH = "operator/license/a2a_network_pubkey.pem"
+MANIFEST_REL_PATH = "corvin_operator/security/layer-manifest.json"
+PUBKEY_REL_PATH = "corvin_operator/license/a2a_network_pubkey.pem"
 MANIFEST_SCHEMA_VERSION = 1
 
 

@@ -45,7 +45,7 @@ def test_env_override_expands_user(monkeypatch):
 
 
 def test_legacy_in_repo_index_wins_over_sibling(tmp_path, monkeypatch):
-    legacy = tmp_path / "operator" / "marketplace" / "index" / "plugins.json"
+    legacy = tmp_path / "corvin_operator" / "marketplace" / "index" / "plugins.json"
     _write_index(legacy, "from-legacy")
     monkeypatch.chdir(tmp_path)
     assert resolve_index_path() == legacy
@@ -63,7 +63,7 @@ def test_falls_back_to_sibling_checkout(tmp_path, monkeypatch):
     else:
         # No sibling checkout on this machine — resolution must still return the
         # legacy path so the caller's FileNotFoundError branch reaches GitHub.
-        assert resolved == tmp_path / "operator" / "marketplace" / "index" / "plugins.json"
+        assert resolved == tmp_path / "corvin_operator" / "marketplace" / "index" / "plugins.json"
 
 
 def test_missing_everything_degrades_to_empty_index(tmp_path, monkeypatch):

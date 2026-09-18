@@ -390,7 +390,7 @@ def list_messenger_chats(
 
     def _settings(channel: str) -> dict[str, Any]:
         for p in [ah / "bridges" / channel / "settings.json",
-                  _REPO / "operator" / "bridges" / channel / "settings.json"]:
+                  _REPO / "corvin_operator" / "bridges" / channel / "settings.json"]:
             if p.exists():
                 try:
                     return json.loads(p.read_text(encoding="utf-8"))
@@ -482,8 +482,8 @@ def list_messenger_chats(
 
     # ── 2. Inbox scan — extract names from past bridge traffic ───────────
     for inbox_dir in [
-        _REPO / "operator" / "bridges" / "shared" / "processed",
-        _REPO / "operator" / "bridges" / "shared" / "inbox",
+        _REPO / "corvin_operator" / "bridges" / "shared" / "processed",
+        _REPO / "corvin_operator" / "bridges" / "shared" / "inbox",
         ah / "bridges" / "shared" / "processed",
     ]:
         if not inbox_dir.exists():
@@ -543,7 +543,7 @@ def list_discord_channels(
     import urllib.error
 
     # Read Discord bot token from bridge settings
-    bridge_settings = _REPO / "operator" / "bridges" / "discord" / "settings.json"
+    bridge_settings = _REPO / "corvin_operator" / "bridges" / "discord" / "settings.json"
     # Also check corvin_home location
     ah = _forge_paths.corvin_home()
     for candidate in [
@@ -624,7 +624,7 @@ def resolve_channel_name(channel_name: str, bridge_channel: str = "discord") -> 
     token = ""
     for candidate in [
         ah / "bridges" / "discord" / "settings.json",
-        _REPO / "operator" / "bridges" / "discord" / "settings.json",
+        _REPO / "corvin_operator" / "bridges" / "discord" / "settings.json",
     ]:
         if candidate.exists():
             try:

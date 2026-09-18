@@ -48,8 +48,8 @@ def expect(cond: bool, label: str, detail: str = "") -> None:
 # a subsystem; the point is to catch a fabricated or renamed tool, not to
 # pin an exact file:line.
 _SUBSYSTEM_ROOTS: dict[str, tuple[str, ...]] = {
-    "forge.": ("operator/forge",),
-    "data.": ("operator/forge", "core/compute"),
+    "forge.": ("corvin_operator/forge",),
+    "data.": ("corvin_operator/forge", "core/compute"),
     # ADR-0190 M6 — compute.delegation_loop's tool (acs_delegate) is
     # registered in core/orchestration, NOT operator/forge or core/compute.
     # Matched correctly regardless of dict order below: _subsystem_source
@@ -57,8 +57,8 @@ _SUBSYSTEM_ROOTS: dict[str, tuple[str, ...]] = {
     # one, so a more-specific entry can never be silently shadowed by a
     # shorter, more general one added later (or reordered by a future edit).
     "compute.delegation_loop": ("core/orchestration",),
-    "compute.": ("operator/forge", "core/compute"),
-    "skill_forge.": ("operator/skill-forge",),
+    "compute.": ("corvin_operator/forge", "core/compute"),
+    "skill_forge.": ("corvin_operator/skill-forge",),
     "delegate.": ("core/delegate",),
     "workflows.": ("core/orchestration", "core/workflows"),
     "a2a.": ("core/orchestration",),
@@ -117,12 +117,12 @@ def _subsystem_source(capability_id: str) -> str | None:
 # published under. A NEW mcp_server.py that isn't in this map fails the
 # check with an explicit "add it here + add a registry entry" message.
 _MCP_SERVER_FILES: dict[str, str] = {
-    "operator/forge/forge/mcp_server.py": "forge",
-    "operator/skill-forge/skill_forge/mcp_server.py": "skill_forge",
+    "corvin_operator/forge/forge/mcp_server.py": "forge",
+    "corvin_operator/skill-forge/skill_forge/mcp_server.py": "skill_forge",
     "core/delegate/corvin_delegate/mcp_server.py": "corvin_delegate",
     "core/orchestration/corvin_orchestration/mcp_server.py": "corvin_orchestration",
     "core/pipe/mcp_server.py": "corvin_pipe",
-    "operator/mcp_manager/servers/imagegen-zero-config/main.py": "imagegen-zero-config",
+    "corvin_operator/mcp_manager/servers/imagegen-zero-config/main.py": "imagegen-zero-config",
 }
 
 # Infra-level tools deliberately NOT user-facing capabilities (never shown

@@ -104,7 +104,7 @@ def _fcntl_shim():
         return fcntl
     except ImportError:
         pass
-    shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     if shared.is_dir() and str(shared) not in sys.path:
         sys.path.append(str(shared))
     try:
@@ -219,7 +219,7 @@ def _tenants_module():
     except ImportError:
         pass
 
-    forge_root = Path(__file__).resolve().parents[3] / "operator" / "forge"
+    forge_root = Path(__file__).resolve().parents[3] / "corvin_operator" / "forge"
     if forge_root.is_dir() and str(forge_root) not in sys.path:
         # append, NOT insert(0): this directory also contains generic top-level
         # names (tests/, templates/) with no __init__.py, so putting it FIRST on

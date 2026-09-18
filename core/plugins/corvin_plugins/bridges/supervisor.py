@@ -166,8 +166,8 @@ def _import_bridge_manager() -> Any | None:
     repo = here.parents[4]
     console_pkg = here.parents[3] / "console" / "corvin_console"
     for cand in (
-        repo / "operator" / "bridges",
-        console_pkg / "_vendor" / "operator" / "bridges",
+        repo / "corvin_operator" / "bridges",
+        console_pkg / "_vendor" / "corvin_operator" / "bridges",
     ):
         if not (cand / "bridge_manager.py").is_file():
             continue

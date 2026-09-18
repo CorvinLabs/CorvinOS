@@ -320,7 +320,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             pass
         _bridges = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                                  "..", "..", "..",
-                                 "operator", "bridges", "shared")
+                                 "corvin_operator", "bridges", "shared")
         _bridges = _os.path.normpath(_bridges)
         if _bridges not in _sys.path and _os.path.isdir(_bridges):
             _sys.path.insert(0, _bridges)
@@ -366,7 +366,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         pass
     _mcp_mgr_root = _os2.path.normpath(_os2.path.join(
         _os2.path.dirname(_os2.path.abspath(__file__)),
-        "..", "..", "..", "operator", "mcp_manager",
+        "..", "..", "..", "corvin_operator", "mcp_manager",
     ))
     if _mcp_mgr_root not in _sys2.path and _os2.path.isdir(_mcp_mgr_root):
         _sys2.path.insert(0, _mcp_mgr_root)
@@ -728,7 +728,7 @@ try:
     import sys as _sys_a2a
     import os as _os_a2a
     from pathlib import Path as _Path_a2a
-    _a2a_shared = _Path_a2a(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    _a2a_shared = _Path_a2a(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     if str(_a2a_shared) not in _sys_a2a.path:
         _sys_a2a.path.insert(0, str(_a2a_shared))
     from remote_trigger_receiver import RemoteTriggerReceiver as _RemoteTriggerReceiver  # type: ignore[import-not-found]

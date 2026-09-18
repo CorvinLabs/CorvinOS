@@ -34,8 +34,8 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SKILL_FORGE = REPO_ROOT / "operator" / "skill-forge"
-FORGE = REPO_ROOT / "operator" / "forge"
+SKILL_FORGE = REPO_ROOT / "corvin_operator" / "skill-forge"
+FORGE = REPO_ROOT / "corvin_operator" / "forge"
 
 # Sandbox the plugin-slot mirror so this test never touches the real
 # operator/skill-forge/skills/dyn/ tree (test_registry.py does the same).

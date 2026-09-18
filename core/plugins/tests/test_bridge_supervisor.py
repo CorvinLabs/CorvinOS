@@ -889,7 +889,7 @@ class TestBridgeManagerProbe(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        bm_dir = _REPO / "operator" / "bridges"
+        bm_dir = _REPO / "corvin_operator" / "bridges"
         if str(bm_dir) not in sys.path:
             sys.path.insert(0, str(bm_dir))
         import bridge_manager  # type: ignore[import-not-found]

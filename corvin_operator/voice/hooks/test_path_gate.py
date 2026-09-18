@@ -95,7 +95,7 @@ def main() -> int:
             "Write to slot-mirror SKILL.md",
             {"tool_name": "Write",
              "tool_input": {
-                 "file_path": str(REPO / "operator/skill-forge/skills/dyn/x/SKILL.md"),
+                 "file_path": str(REPO / "corvin_operator/skill-forge/skills/dyn/x/SKILL.md"),
                  "content": "..."}},
             blocked=True,
         )
@@ -107,26 +107,26 @@ def main() -> int:
         expect(
             "Write to operator/license validator.py",
             {"tool_name": "Write",
-             "tool_input": {"file_path": str(REPO / "operator/license/validator.py"),
+             "tool_input": {"file_path": str(REPO / "corvin_operator/license/validator.py"),
                             "content": "..."}},
             blocked=True,
         )
         expect(
             "Drop native seal binary operator/license/_corvin_seal.so",
             {"tool_name": "Write",
-             "tool_input": {"file_path": str(REPO / "operator/license/_corvin_seal.so"),
+             "tool_input": {"file_path": str(REPO / "corvin_operator/license/_corvin_seal.so"),
                             "content": "..."}},
             blocked=True,
         )
         expect(
             "Overwrite attestation anchor operator/license/a2a_network_pubkey.pem",
             {"tool_name": "Write",
-             "tool_input": {"file_path": str(REPO / "operator/license/a2a_network_pubkey.pem"),
+             "tool_input": {"file_path": str(REPO / "corvin_operator/license/a2a_network_pubkey.pem"),
                             "content": "..."}},
             blocked=True,
         )
     else:
-        t("operator/license trust-tree protection", True, detail="skipped: no repo root")
+        t("corvin_operator/license trust-tree protection", True, detail="skipped: no repo root")
 
     # 4c. R4: authoritative license-token files read by validator._find_token
     # are operator-only — global/license.key and corvin-voice/session.key were
@@ -930,7 +930,7 @@ def main() -> int:
 
         # verify_chain across the file
         try:
-            sys.path.insert(0, str(REPO / "operator/forge"))
+            sys.path.insert(0, str(REPO / "corvin_operator/forge"))
             from forge.security_events import verify_chain  # type: ignore
             ok, problems = verify_chain(audit_jsonl)
             t("verify_chain reports (ok, []) over the deny event",

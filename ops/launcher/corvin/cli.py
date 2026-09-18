@@ -99,7 +99,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
     from pathlib import Path as _Path
 
     # Try the repo source-tree location first (dev / source install).
-    _SHARED = _Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    _SHARED = _Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     if _SHARED.is_dir() and str(_SHARED) not in _sys.path:
         _sys.path.insert(0, str(_SHARED))
 
@@ -175,7 +175,7 @@ def _print_hermes_status() -> None:
         except ImportError:
             import sys as _sys
             from pathlib import Path as _Path
-            _shared = _Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+            _shared = _Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
             if str(_shared) not in _sys.path:
                 _sys.path.insert(0, str(_shared))
             from hermes_bootstrap import (  # noqa: PLC0415

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "orchestration"))
 
 from tde.robust_engine_detector import RobustEngineDetector, DetectionSignals
 from tde.loss_profile_tracker import LossProfileTracker

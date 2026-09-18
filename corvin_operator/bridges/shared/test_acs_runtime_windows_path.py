@@ -21,7 +21,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 _REPO = HERE.parents[2]  # operator/bridges/shared → CorvinOS repo root
-for _p in (HERE, _REPO / "operator" / "forge"):
+for _p in (HERE, _REPO / "corvin_operator" / "forge"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

@@ -30,7 +30,7 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 _CONSOLE = _REPO / "core" / "console"
 _LAUNCHER = _REPO / "ops" / "launcher"
 _BRIDGES_SHARED = _OPERATOR / "bridges" / "shared"

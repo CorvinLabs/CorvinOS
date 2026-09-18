@@ -16,7 +16,7 @@ def test_marketplace_e2e_wiring():
     """E2E: Verify marketplace API endpoints work end-to-end."""
 
     # Load the generated index
-    index_path = Path.cwd() / "operator" / "marketplace" / "index" / "plugins.json"
+    index_path = Path.cwd() / "corvin_operator" / "marketplace" / "index" / "plugins.json"
     with open(index_path) as f:
         index = json.load(f)
 

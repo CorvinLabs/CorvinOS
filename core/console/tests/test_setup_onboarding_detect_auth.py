@@ -43,7 +43,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[3]
 for _p in (
     str(_REPO / "core" / "console"),
-    str(_REPO / "operator" / "bridges" / "shared"),
+    str(_REPO / "corvin_operator" / "bridges" / "shared"),
 ):
     if _p not in sys.path:
         sys.path.insert(0, _p)

@@ -28,10 +28,10 @@ _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]
 for _p in (
     str(_REPO / "core" / "plugins"),
-    str(_REPO / "operator" / "forge"),
+    str(_REPO / "corvin_operator" / "forge"),
     str(_REPO / "core" / "console"),
-    str(_REPO / "operator" / "orchestration"),
-    str(_REPO / "operator" / "bridges" / "shared"),
+    str(_REPO / "corvin_operator" / "orchestration"),
+    str(_REPO / "corvin_operator" / "bridges" / "shared"),
     str(_REPO),
 ):
     if _p not in sys.path:
@@ -65,7 +65,7 @@ def _load_cel_memory():
     """Load the CEL ``memory`` stage module as its real package submodule."""
     if "context_engineering.stages.memory" in sys.modules:
         return sys.modules["context_engineering.stages.memory"]
-    ce = _REPO / "operator" / "context_engineering"
+    ce = _REPO / "corvin_operator" / "context_engineering"
     spec = importlib.util.spec_from_file_location(
         "context_engineering", str(ce / "__init__.py"),
         submodule_search_locations=[str(ce)])
@@ -233,7 +233,7 @@ class TestTDESeam(unittest.TestCase):
         # import state: put corvin_operator/orchestration first and evict the stale
         # initial_analysis / tde modules so they re-import from the correct path.
         import sys as _sys
-        _orch = str(_REPO / "operator" / "orchestration")
+        _orch = str(_REPO / "corvin_operator" / "orchestration")
         if _orch in _sys.path:
             _sys.path.remove(_orch)
         _sys.path.insert(0, _orch)

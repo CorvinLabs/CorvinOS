@@ -53,7 +53,7 @@ try:  # pragma: no cover - import shape
     import os as _pg_os, sys as _pg_sys
     _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
     while _pg_d != _pg_os.path.dirname(_pg_d):
-        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        _pg_c = _pg_os.path.join(_pg_d, "corvin_operator", "bridges", "shared")
         if _pg_os.path.isdir(_pg_c):
             if _pg_c not in _pg_sys.path:
                 _pg_sys.path.insert(0, _pg_c)
@@ -201,13 +201,13 @@ def _resolve_helper_model_args() -> list[str]:
         candidates: list[Path] = []
         if corvin_home:
             candidates.append(
-                Path(corvin_home) / "operator" / "bridges" / "shared"
+                Path(corvin_home) / "corvin_operator" / "bridges" / "shared"
                 / "helper_model.py"
             )
         # Repo-walk from this file: core/delegate/corvin_delegate/
         # → up 3 = repo root → + corvin_operator/bridges/shared/helper_model.py
         candidates.append(
-            Path(__file__).resolve().parents[3] / "operator" / "bridges"
+            Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges"
             / "shared" / "helper_model.py"
         )
         for candidate in candidates:

@@ -48,7 +48,7 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 
 #: Rows this harness owes once the stage that unblocks them lands. Asserted
 #: below, so finishing a stage without extending this file turns the suite red.

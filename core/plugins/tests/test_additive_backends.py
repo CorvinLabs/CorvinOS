@@ -25,7 +25,7 @@ _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]            # CorvinOS repo root
 _PKG = _HERE.parents[1]             # core/plugins (holds the corvin_plugins package)
 _COMPLIANCE = _REPO / "core" / "compliance"
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 for _p in (str(_PKG), str(_COMPLIANCE), str(_SHARED), str(_REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

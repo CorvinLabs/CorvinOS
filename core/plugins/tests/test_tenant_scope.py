@@ -42,8 +42,8 @@ _MOD = __name__
 
 for _p in (
     str(_HERE.parents[1]),
-    str(_REPO / "operator" / "forge"),
-    str(_REPO / "operator" / "bridges" / "shared"),
+    str(_REPO / "corvin_operator" / "forge"),
+    str(_REPO / "corvin_operator" / "bridges" / "shared"),
     str(_REPO),
 ):
     if _p not in sys.path:

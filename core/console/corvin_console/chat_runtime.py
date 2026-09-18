@@ -146,7 +146,7 @@ try:
     # copy under _vendor/corvin_operator/. Resolving only the first left the CEL
     # unimportable on every pip install, and because the load sits in a
     # try/except the feature just reported itself unavailable (fixed 2026-08-11).
-    _cel_dir = _REPO / "operator" / "context_engineering"
+    _cel_dir = _REPO / "corvin_operator" / "context_engineering"
     if not _cel_dir.is_dir():
         from ._operator_bootstrap import vendor_operator_root as _vor  # noqa: PLC0415
         _vroot = _vor()
@@ -197,7 +197,7 @@ try:
             _cel_record_outcome = None
 except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
     _CEL_AVAILABLE = False
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 
@@ -218,7 +218,7 @@ from .language_resolution import (  # noqa: E402  — ADR-0650 Phase 4 turn lang
 # None` guard style: the console must come up even when the bridge tree is
 # absent. write_event() is flock-protected, so the console appending to the
 # same chain as the adapter is safe cross-process.
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 _bridge_audit = None
 try:
     if str(_BRIDGES_SHARED) not in sys.path:
@@ -259,7 +259,7 @@ except Exception:  # noqa: BLE001
 # block" (the prior v1 behaviour) rather than a crash.
 _cowork = None
 try:
-    _cowork_lib = _REPO / "operator" / "cowork" / "lib"
+    _cowork_lib = _REPO / "corvin_operator" / "cowork" / "lib"
     if not (_cowork_lib / "resolver.py").is_file():
         # Wheel layout: corvin_operator/ lives in the vendored copy, not repo-relative.
         try:
@@ -358,7 +358,7 @@ def _resolve_voice_scripts_dir() -> Path:
     vendored copy — else the LERN-ZUGABE / METAPHER voice annotation (summarize.py)
     silently no-ops on a pip install (the 'Konsolen-Learning schlug nicht durch'
     class). Mirrors personas.py / landing.py."""
-    src = _REPO / "operator" / "voice" / "scripts"
+    src = _REPO / "corvin_operator" / "voice" / "scripts"
     if src.is_dir():
         return src
     try:
@@ -1926,7 +1926,7 @@ def _acs_directive_block(task_text: str) -> str:
     if not task_text.strip():
         return ""
     try:
-        _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from acs_classify import heuristic_classify, render_directive_block  # type: ignore  # noqa: PLC0415
@@ -3163,7 +3163,7 @@ def _acs_x_blueprint(prompt: str):
     core/console while acs_classify lives in corvin_operator/bridges/shared.
     """
     try:
-        _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from acs_classify import heuristic_classify  # type: ignore  # noqa: PLC0415
@@ -3386,7 +3386,7 @@ def _tde_available() -> bool:
 
     Import cost is paid once — subsequent calls hit sys.modules."""
     try:
-        _orch = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+        _orch = Path(__file__).resolve().parents[3] / "corvin_operator" / "orchestration"
         if _orch.is_dir() and str(_orch) not in sys.path:
             sys.path.insert(0, str(_orch))
         import tde.analysis_runner  # noqa: F401, PLC0415
@@ -3435,7 +3435,7 @@ def _tde_quota_peek_ok() -> bool:
     False → the ACS branch repeats its own fail-closed check and surfaces the
     canonical 402."""
     try:
-        _op_root = str(Path(__file__).resolve().parents[3] / "operator")
+        _op_root = str(Path(__file__).resolve().parents[3] / "corvin_operator")
         if _op_root not in sys.path:
             sys.path.insert(0, _op_root)
         from license.compute_quota import get_today_count as _peek_count  # type: ignore  # noqa: PLC0415
@@ -4368,7 +4368,7 @@ async def _stream_tde_turn(
                        "Initial-Analyse läuft…\n"}
 
         # orchestration dir → sys.path (repo-relative pattern, bridges/shared)
-        _orch = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+        _orch = Path(__file__).resolve().parents[3] / "corvin_operator" / "orchestration"
         if _orch.is_dir() and str(_orch) not in sys.path:
             sys.path.insert(0, str(_orch))
 
@@ -5162,7 +5162,7 @@ async def stream_turn(
     _debug_engine = False
     _ue_unknown: "str | None" = None
     try:
-        _orch_dir = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+        _orch_dir = Path(__file__).resolve().parents[3] / "corvin_operator" / "orchestration"
         if _orch_dir.is_dir() and str(_orch_dir) not in sys.path:
             sys.path.insert(0, str(_orch_dir))
         from tde.slash_command_parser import SlashCommandParser as _SlashCommandParser  # noqa: PLC0415
@@ -5304,7 +5304,7 @@ async def stream_turn(
     # report_turn_outcome() in _os_emit_completed() below. See
     # corvin_operator/bridges/shared/model_selector_shadow.py for the contract.
     try:
-        _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        _bridge_shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
         if str(_bridge_shared) not in sys.path:
             sys.path.insert(0, str(_bridge_shared))
         import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
@@ -5384,7 +5384,7 @@ async def stream_turn(
         # equivalent call site uses. SHADOW: never influences which model
         # served the turn — classification already happened at turn start.
         try:
-            _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+            _bridge_shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
             if str(_bridge_shared) not in sys.path:
                 sys.path.insert(0, str(_bridge_shared))
             import model_selector_shadow as _mss  # type: ignore  # noqa: PLC0415
@@ -5617,7 +5617,7 @@ async def stream_turn(
 
         _os_audit("os_turn.started", {"model": _os_model_used})
         try:
-            _orch_dir = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+            _orch_dir = Path(__file__).resolve().parents[3] / "corvin_operator" / "orchestration"
             if _orch_dir.is_dir() and str(_orch_dir) not in sys.path:
                 sys.path.insert(0, str(_orch_dir))
             from tde.analysis_runner import run_initial_analysis_sync  # noqa: PLC0415
@@ -5867,7 +5867,7 @@ async def stream_turn(
         try:
             # Ensure corvin_operator/bridges/shared is in path for spawn_gates and other deps
             # Path: core/console/corvin_console/chat_runtime.py → CorvinOS/corvin_operator/bridges/shared
-            _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+            _bridge_shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
             if str(_bridge_shared) not in sys.path:
                 sys.path.insert(0, str(_bridge_shared))
             import acs_runtime as _acs  # type: ignore  # noqa: PLC0415

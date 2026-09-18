@@ -150,7 +150,7 @@ export function Phase3MetricsDashboard({
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{displayMetrics.skills_improved}</div>
-            <p className="text-xs text-muted-foreground mt-1">with high confidence (>70%)</p>
+            <p className="text-xs text-muted-foreground mt-1">with high confidence ({'>'}70%)</p>
             <div className="flex gap-1 mt-2">
               {Array.from({ length: displayMetrics.skills_improved }).map((_, i) => (
                 <div key={i} className="w-2 h-2 bg-green-600 rounded-full" />

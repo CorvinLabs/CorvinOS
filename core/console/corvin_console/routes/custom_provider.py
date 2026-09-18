@@ -26,12 +26,12 @@ from .datasources_http import _UnsafeUrl, _as_ip, _ip_is_blocked
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 from forge import paths as _forge_paths  # noqa: E402
 
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 if str(_OPERATOR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR))
 try:

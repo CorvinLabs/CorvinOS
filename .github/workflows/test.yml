@@ -24,7 +24,7 @@ jobs:
         # ENTIRE console app import; it shipped in a tagged release because
         # the "Run tests" step below was already failing for other reasons
         # and never reached the step that would have imported the broken file.
-        run: python -m compileall -q core operator corvinOS ops
+        run: python -m compileall -q core corvin_operator corvinOS ops
       - name: Install ffmpeg
         # run-all-tests.sh's "corvin-voice doctor (ADR-0185 M5)" suite runs a
         # real, non-mocked TTS round-trip via edge-tts, which shells out to

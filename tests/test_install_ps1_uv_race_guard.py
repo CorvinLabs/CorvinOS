@@ -22,7 +22,7 @@ because it is being used by another process" (os error 32) -- two orphaned
 `adapter.py` processes (`bridge_manager.ensure_adapter_detached()`, spawned
 from the SAME tool env: `<tool-env>\\Scripts\\python.exe ... adapter.py`)
 were still holding files open under
-`corvin_console\\_vendor\\operator\\bridges\\shared\\`. uv's uninstall step
+`corvin_console\\_vendor/corvin_operator\bridges\\shared\\`. uv's uninstall step
 does not roll back on partial failure: corvinos' own files (including the
 `ops` package every entry point imports) were gone while its 73 dependencies
 remained -- `uv tool list -v` then reported "Failed find package 'corvinos'

@@ -64,7 +64,7 @@ def _load_task_progress():
     """
     try:
         root = Path(__file__).resolve().parents[2]
-        shared = root / "operator" / "bridges" / "shared"
+        shared = root / "corvin_operator" / "bridges" / "shared"
         if shared.is_dir() and str(shared) not in sys.path:
             sys.path.insert(0, str(shared))
         import task_progress  # type: ignore

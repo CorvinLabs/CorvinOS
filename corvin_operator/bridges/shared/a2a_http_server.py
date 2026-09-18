@@ -89,13 +89,13 @@ def _default_cowork_dir() -> Path:
         _cc_file = getattr(_cc, "__file__", None)
         if _cc_file:
             _anchor = Path(_cc_file).resolve().parents[3]
-            return _anchor / "operator" / "cowork"
+            return _anchor / "corvin_operator" / "cowork"
     except Exception:
         pass
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-            return parent / "operator" / "cowork"
+            return parent / "corvin_operator" / "cowork"
     return here.parent / "cowork"
 
 

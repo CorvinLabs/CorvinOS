@@ -137,7 +137,7 @@ def _check_a2a_reconnect(home: Path) -> None:
     try:
         import sys as _sys
         from pathlib import Path as _Path
-        _shared = _Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        _shared = _Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
         # Append (never insert at 0): prepending would let corvin_operator/bridges/
         # shared modules shadow same-named stdlib/site-packages modules for
         # the whole process (2026-07-19 hardening).

@@ -66,7 +66,7 @@ def _watched_files(tid: str) -> dict[str, Path]:
         "engines":        _forge_paths.voice_config_dir() / "service.env",
     }
     for ch in _BRIDGES:
-        files[f"bridge.{ch}"] = _REPO / "operator" / "bridges" / ch / "settings.json"
+        files[f"bridge.{ch}"] = _REPO / "corvin_operator" / "bridges" / ch / "settings.json"
     return files
 
 

@@ -293,7 +293,7 @@ def _audit_features_url_override(url: str) -> None:
             event = {
                 "event_type": "license.features_url_override",
                 "url": url,
-                "lom": "operator/license/cli.py::_audit_features_url_override",
+                "lom": "corvin_operator/license/cli.py::_audit_features_url_override",
                 "timestamp": int(time.time()),
             }
             chain.write_event(event)

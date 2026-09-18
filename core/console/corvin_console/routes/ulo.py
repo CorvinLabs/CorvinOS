@@ -34,7 +34,7 @@ from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
 
-_SHARED = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+_SHARED = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 

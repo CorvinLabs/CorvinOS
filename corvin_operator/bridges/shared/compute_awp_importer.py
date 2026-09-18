@@ -39,7 +39,7 @@ _REPO = Path(__file__).resolve().parents[3]
 
 
 def _bootstrap_forge() -> None:
-    forge_pkg = _REPO / "operator" / "forge"
+    forge_pkg = _REPO / "corvin_operator" / "forge"
     if str(forge_pkg) not in sys.path:
         sys.path.insert(0, str(forge_pkg))
 

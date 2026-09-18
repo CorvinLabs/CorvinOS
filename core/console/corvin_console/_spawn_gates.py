@@ -65,8 +65,8 @@ _REPO = _THIS_DIR.parents[3]
 # all live under corvin_operator/bridges/shared; forge.* under corvin_operator/forge. chat_runtime
 # already adds these at import, but make it explicit so a direct import of this
 # module (tests, other callers) resolves the same modules.
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
-_FORGE_PATH = _REPO / "operator" / "forge"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 for _p in (str(_BRIDGES_SHARED), str(_FORGE_PATH)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

@@ -30,8 +30,8 @@ from unittest.mock import patch
 # ---------------------------------------------------------------------------
 
 _REPO = Path(__file__).resolve().parents[3]
-_SHARED = _REPO / "operator" / "bridges" / "shared"
-_FORGE_PKG = _REPO / "operator" / "forge"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
+_FORGE_PKG = _REPO / "corvin_operator" / "forge"
 _COMPUTE_ROOT = _REPO / "core" / "compute"
 
 for _p in (_SHARED, _FORGE_PKG, _COMPUTE_ROOT):

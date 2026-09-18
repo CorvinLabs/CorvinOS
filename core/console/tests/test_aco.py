@@ -922,7 +922,7 @@ class TestIntegrityMonitor(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
-            fake_dir = tmp_path / "operator" / "bridges" / "shared"
+            fake_dir = tmp_path / "corvin_operator" / "bridges" / "shared"
             fake_dir.mkdir(parents=True)
             target = fake_dir / "house_rules.py"
             target.write_text("# original content")

@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # been renamed to `skill_creator`, and appending keeps a future name clash
 # from silently winning against an installed package. (ADR-0405)
 try:
-    _operator_dir = Path(__file__).resolve().parents[4] / "operator"
+    _operator_dir = Path(__file__).resolve().parents[4] / "corvin_operator"
     if _operator_dir.is_dir() and str(_operator_dir) not in sys.path:
         sys.path.append(str(_operator_dir))
 

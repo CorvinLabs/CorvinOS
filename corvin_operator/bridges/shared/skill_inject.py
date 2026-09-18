@@ -95,7 +95,7 @@ _CORE_QUALITY_SKILL_NAMES: tuple[str, ...] = ("adr_gate", "e2e-wiring-proof", "c
 # (.../operator) -> bundle/skills/ldd.
 #
 # Wheel: this file is vendored to
-# corvin_console/_vendor/operator/bridges/shared/skill_inject.py, so
+# corvin_console/_vendor/corvin_operator/bridges/shared/skill_inject.py, so
 # _HERE.parent.parent.parent (.../corvin_console/_vendor, the vendor root)
 # -> operator/bundle/skills/ldd (matches the parents[3]-from-shared/
 # convention hatch_build.py documents for every other vendored resource).
@@ -378,7 +378,7 @@ def _persona_namespace(persona: str | None) -> str | None:
             import json  # noqa: PLC0415
             policy = _HERE.parent.parent / "forge" / "forge" / "policy.json"
             if not policy.is_file():
-                policy = (_HERE.parent.parent.parent / "operator" / "forge"
+                policy = (_HERE.parent.parent.parent / "corvin_operator" / "forge"
                           / "forge" / "policy.json")
             data = json.loads(policy.read_text(encoding="utf-8"))
             ns_map = (data.get("persona_namespaces") or {}) if isinstance(data, dict) else {}

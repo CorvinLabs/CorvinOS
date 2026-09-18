@@ -31,8 +31,8 @@ _log = logging.getLogger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_FORGE_PATH = _REPO / "operator" / "forge"
-_SKILL_FORGE_PATH = _REPO / "operator" / "skill-forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
+_SKILL_FORGE_PATH = _REPO / "corvin_operator" / "skill-forge"
 for _p in (_FORGE_PATH, _SKILL_FORGE_PATH):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

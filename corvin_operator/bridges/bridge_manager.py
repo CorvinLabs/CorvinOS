@@ -1239,7 +1239,7 @@ def ensure_windows_autostart(channel: str) -> dict:
     `_BRIDGE_DIR` always resolves to bridge_manager.py's OWN directory, so
     `_BRIDGE_DIR / "bridge.ps1"` finds the right sibling copy whether this
     is a dev checkout (operator/bridges/) or a vendored wheel install
-    (corvin_console/_vendor/operator/bridges/) -- no separate resolution
+    (corvin_console/_vendor/corvin_operator/bridges/) -- no separate resolution
     needed, no duplicated PowerShell logic to drift out of sync with
     bridge.ps1's own Install-AutostartTask.
 

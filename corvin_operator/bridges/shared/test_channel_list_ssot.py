@@ -95,7 +95,7 @@ class ChannelListSSOT(unittest.TestCase):
         self.assertEqual(
             sorted(SUP), sorted(BRIDGE_CHANNELS),
             "corvin_plugins.bridges.supervisor.BRIDGE_CHANNELS drifted from "
-            "operator/bridges/shared/channels.py",
+            "corvin_operator/bridges/shared/channels.py",
         )
 
     def test_installer_offers_every_channel(self):
@@ -116,9 +116,9 @@ class ChannelListSSOT(unittest.TestCase):
         read by humans as the canonical list. They must not come back."""
         repo = _HERE.parents[2]
         for rel in (
-            "operator/bridges/shared/paths.py",
-            "operator/cowork/lib/paths.py",
-            "operator/forge/forge/paths.py",
+            "corvin_operator/bridges/shared/paths.py",
+            "corvin_operator/cowork/lib/paths.py",
+            "corvin_operator/forge/forge/paths.py",
             "corvinOS/shared/paths.py",
         ):
             text = (repo / rel).read_text(encoding="utf-8")

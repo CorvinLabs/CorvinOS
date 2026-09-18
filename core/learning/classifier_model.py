@@ -49,7 +49,7 @@ def import_context_engineering():
     import importlib.util as _ilu
     from pathlib import Path
 
-    cel_dir = Path(__file__).resolve().parents[2] / "operator" / "context_engineering"
+    cel_dir = Path(__file__).resolve().parents[2] / "corvin_operator" / "context_engineering"
     init = cel_dir / "__init__.py"
     if not init.is_file():
         raise ImportError("context_engineering package not found (corvin_operator/context_engineering)")

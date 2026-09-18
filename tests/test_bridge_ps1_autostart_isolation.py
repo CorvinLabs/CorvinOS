@@ -38,8 +38,8 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
-_BRIDGE_PS1 = _REPO / "operator" / "bridges" / "bridge.ps1"
-_BRIDGE_MANAGER = _REPO / "operator" / "bridges" / "bridge_manager.py"
+_BRIDGE_PS1 = _REPO / "corvin_operator" / "bridges" / "bridge.ps1"
+_BRIDGE_MANAGER = _REPO / "corvin_operator" / "bridges" / "bridge_manager.py"
 
 
 class StaticPresenceTests(unittest.TestCase):

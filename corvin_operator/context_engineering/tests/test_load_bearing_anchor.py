@@ -37,7 +37,7 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[3]
-for _p in (_REPO / "operator", _REPO / "operator" / "forge", _REPO / "core" / "console"):
+for _p in (_REPO / "corvin_operator", _REPO / "corvin_operator" / "forge", _REPO / "core" / "console"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -192,7 +192,7 @@ def test_live_surfaces_carry_the_anchor_path():
     the CEL brief already uses. Both live spawn surfaces call build_brief then
     render_brief_to_text, and build_brief itself invokes the anchor auto-populate —
     so the feature is reachable without a second wiring."""
-    adapter = (_REPO / "operator" / "bridges" / "shared" / "adapter.py").read_text(
+    adapter = (_REPO / "corvin_operator" / "bridges" / "shared" / "adapter.py").read_text(
         encoding="utf-8")
     assert "_cel_build_brief(" in adapter and "_cel_render(" in adapter, (
         "the bridge adapter drives build_brief → render (carries anchor_facts)")
@@ -202,7 +202,7 @@ def test_live_surfaces_carry_the_anchor_path():
     assert "_cel_build_brief(" in chat and "_cel_render(" in chat, (
         "console chat_runtime drives build_brief → render (carries anchor_facts)")
 
-    pipe = (_REPO / "operator" / "context_engineering" / "pipeline.py").read_text(
+    pipe = (_REPO / "corvin_operator" / "context_engineering" / "pipeline.py").read_text(
         encoding="utf-8")
     assert "_maybe_apply_anchor(" in pipe, "build_brief must call the anchor auto-populate"
 

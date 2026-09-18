@@ -319,7 +319,7 @@ def _emit_audit(tool_name: str, classifications: list[dict]) -> None:
                 break
         if repo is None:
             return
-        forge_pkg_parent = repo / "operator" / "forge"
+        forge_pkg_parent = repo / "corvin_operator" / "forge"
         if str(forge_pkg_parent) not in sys.path:
             sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore

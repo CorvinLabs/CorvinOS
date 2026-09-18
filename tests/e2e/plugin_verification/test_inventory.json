@@ -30,8 +30,8 @@
       "requires_api_version": "1.0.0",
       "boot_layer": "bundled",
       "origin": "buildin",
-      "manifest_path": "operator/marketplace/plugins/buildin/marketplace_plugin/manifest.json",
-      "plugin_dir": "operator/marketplace/plugins/buildin/marketplace_plugin",
+      "manifest_path": "corvin_operator/marketplace/plugins/buildin/marketplace_plugin/manifest.json",
+      "plugin_dir": "corvin_operator/marketplace/plugins/buildin/marketplace_plugin",
       "features": ["plugin_discovery", "install", "uninstall", "update_check"],
       "hooks": ["on_load", "on_unload", "on_registry_change"],
       "test_categories": ["init_lifecycle", "features", "hooks", "integration", "cleanup"]
@@ -64,8 +64,8 @@
       "requires_api_version": "1.0.0",
       "boot_layer": "bundled",
       "origin": "vetted",
-      "manifest_path": "operator/marketplace/plugins/contributor/data_plugin/manifest.json",
-      "plugin_dir": "operator/marketplace/plugins/contributor/data_plugin",
+      "manifest_path": "corvin_operator/marketplace/plugins/contributor/data_plugin/manifest.json",
+      "plugin_dir": "corvin_operator/marketplace/plugins/contributor/data_plugin",
       "features": ["data_transform", "format_conversion", "validation"],
       "hooks": ["on_load", "on_unload", "on_data_received"],
       "test_categories": ["init_lifecycle", "features", "hooks", "integration", "cleanup"]

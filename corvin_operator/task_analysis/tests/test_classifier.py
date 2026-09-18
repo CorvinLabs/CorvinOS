@@ -55,7 +55,7 @@ def complex_task():
             "core/delegation",
             "core/forge",
             "core/mcp_manager",
-            "operator/task_engine",
+            "corvin_operator/task_engine",
         ],
         affected_layers=["L29", "L30", "L6", "L22"],
         memory_context=["adr-0200-delegation.md"],
@@ -407,7 +407,7 @@ class TestClassifierIntegration:
             components=[
                 "core/delegation",
                 "core/forge",
-                "operator/task_engine",
+                "corvin_operator/task_engine",
             ],
             affected_layers=["L29", "L30"],
             memory_context=["adr-0200-delegation.md"],

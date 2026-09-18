@@ -102,9 +102,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 def _ensure_sys_path() -> None:
     """Make `forge.*`, `skill_forge.*` and bridge shared modules importable."""
     candidates = (
-        _REPO_ROOT / "operator" / "forge",
-        _REPO_ROOT / "operator" / "skill-forge",
-        _REPO_ROOT / "operator" / "bridges" / "shared",
+        _REPO_ROOT / "corvin_operator" / "forge",
+        _REPO_ROOT / "corvin_operator" / "skill-forge",
+        _REPO_ROOT / "corvin_operator" / "bridges" / "shared",
     )
     for p in candidates:
         sp = str(p)
@@ -251,7 +251,7 @@ def _check_audit_chain(*, quick: bool) -> list[CheckResult]:
 
     # Full verify via voice-audit subprocess — single source of truth for the
     # verification contract; never reimplement here.
-    script = _REPO_ROOT / "operator" / "voice" / "scripts" / "voice_audit.py"
+    script = _REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
     if not script.exists():
         return out + [CheckResult("audit.chain_verified", WARNING, False,
                                   f"voice_audit.py missing at {script}")]
@@ -531,7 +531,7 @@ def _check_mcp_construct() -> list[CheckResult]:
 def _check_third_party_mcps() -> list[CheckResult]:
     """Scan cowork personas for `mcp_servers[*].command`; check `which`."""
     out: list[CheckResult] = []
-    personas_dir = _REPO_ROOT / "operator" / "cowork" / "personas"
+    personas_dir = _REPO_ROOT / "corvin_operator" / "cowork" / "personas"
     if not personas_dir.is_dir():
         return out
 
@@ -632,9 +632,9 @@ def _check_artifacts(*, quick: bool) -> list[CheckResult]:
     # Auto-register hook: INFO if the hook script is present and listed
     # in hooks.json — proves the wiring is complete after a tag bump.
     try:
-        hook = (_REPO_ROOT / "operator" / "voice" / "hooks"
+        hook = (_REPO_ROOT / "corvin_operator" / "voice" / "hooks"
                 / "artifact_register.py")
-        hooks_json = _REPO_ROOT / "operator" / "voice" / "hooks" / "hooks.json"
+        hooks_json = _REPO_ROOT / "corvin_operator" / "voice" / "hooks" / "hooks.json"
         wired = (hook.is_file()
                  and hooks_json.is_file()
                  and "artifact_register.py" in hooks_json.read_text())
@@ -748,7 +748,7 @@ def _check_license(*, quick: bool) -> list[CheckResult]:
     except Exception as e:  # noqa: BLE001
         out.append(CheckResult(
             "license.adr0092", WARNING, False,
-            f"operator/license/ unavailable: {type(e).__name__}: {e}",
+            f"corvin_operator/license/ unavailable: {type(e).__name__}: {e}",
         ))
 
     # B3 (ADR-0138 M4 / ADR-0144 F-04): production installs must use the compiled
@@ -1219,8 +1219,8 @@ def _check_a2a_key_files() -> list[CheckResult]:
     """
     out: list[CheckResult] = []
     dirs = {
-        "a2a.origin_key_mode":   _REPO_ROOT / "operator" / "cowork" / "remote_origins",
-        "a2a.endpoint_key_mode": _REPO_ROOT / "operator" / "cowork" / "remote_endpoints",
+        "a2a.origin_key_mode":   _REPO_ROOT / "corvin_operator" / "cowork" / "remote_origins",
+        "a2a.endpoint_key_mode": _REPO_ROOT / "corvin_operator" / "cowork" / "remote_endpoints",
     }
     any_exists = False
     for check_id, d in dirs.items():
@@ -1315,7 +1315,7 @@ def _check_a2a_network_membership() -> list[CheckResult]:
     _ensure_sys_path()
 
     # 1. Embedded pubkey present and parseable
-    pubkey_path = _REPO_ROOT / "operator" / "license" / "a2a_network_pubkey.pem"
+    pubkey_path = _REPO_ROOT / "corvin_operator" / "license" / "a2a_network_pubkey.pem"
     if not pubkey_path.exists():
         out.append(CheckResult(
             "a2a.network_pubkey", CRITICAL, False,
@@ -1345,7 +1345,7 @@ def _check_a2a_network_membership() -> list[CheckResult]:
     # 2. Manifest check — load cached manifest, check staleness + own revocation
     try:
         import sys as _sys
-        _shared = _REPO_ROOT / "operator" / "bridges" / "shared"
+        _shared = _REPO_ROOT / "corvin_operator" / "bridges" / "shared"
         if str(_shared) not in _sys.path:
             _sys.path.insert(0, str(_shared))
         from a2a_manifest import load_manifest as _lm  # type: ignore
@@ -1665,7 +1665,7 @@ def _check_layer_integrity() -> list[CheckResult]:
     # (ADR-0141 residual-risk table). If either file is absent, the manifest pin
     # can never be evaluated — that is indistinguishable from tampering, so it is
     # CRITICAL, not the WARNING that a generic import error would produce.
-    _shared_dir = _REPO_ROOT / "operator" / "bridges" / "shared"
+    _shared_dir = _REPO_ROOT / "corvin_operator" / "bridges" / "shared"
     _substrate_missing = [
         n for n in ("layer_integrity.py", "security_capabilities.py")
         if not (_shared_dir / n).is_file()
@@ -1783,7 +1783,7 @@ def _check_sandbox_provider() -> list[CheckResult]:
     _ensure_sys_path()
     try:
         import sys as _st_sys
-        _forge_path = str(_REPO_ROOT / "operator" / "forge")
+        _forge_path = str(_REPO_ROOT / "corvin_operator" / "forge")
         if _forge_path not in _st_sys.path:
             _st_sys.path.insert(0, _forge_path)
         from forge.sandbox_provider import detect_sandbox_tier, SandboxTier  # type: ignore

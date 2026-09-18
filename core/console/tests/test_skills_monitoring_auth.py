@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 _CONSOLE = _REPO / "core" / "console"
 for _p in [
     str(_OPERATOR / "bridges" / "shared"),
