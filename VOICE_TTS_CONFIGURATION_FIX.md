@@ -63,11 +63,19 @@ platform.openai.com → Billing. The backoff clears after 60 minutes or on
 adapter logs one content-free line per backoff window:
 `synth OpenAI: quota/credits exhausted (429) — backing off 60 min, using fallback tier`.
 
+## Closed 16:22 — OpenAI speaks on Discord
+
+The operator entered a new key and topped up. The new key had been written to
+`OPENAI_API_KEY` and `CORVIN_STT_OPENAI_KEY` only; `CORVIN_TTS_OPENAI_KEY` still
+held the credit-less key and is the name the resolver checks first. Written via
+`provider_keys.write_key("tts_openai_api_key", …)`, daemons restarted, first
+real Discord turn logged `synth: voice via openai (pin=openai, lang=de)`.
+The STT key is valid again as a side effect (same new key).
+
 ## Still open (out of scope of ADR-0883)
 
-- `CORVIN_STT_OPENAI_KEY` (and the vault entries `openai_api_key` /
-  `stt_openai_api_key`, which hold that same value) return 401 — OpenAI
-  Whisper STT is dead and falls back to local whisper.
+- The vault entries `openai_api_key` / `stt_openai_api_key` still hold the
+  revoked key; nothing reads them today, but they are wrong.
 - `summarize.py` runs degraded (Hermes + CLI timeouts), so voice summaries are
   near-verbatim (~4 000 chars) and occasionally exceed the adapter's 15 s
   OpenAI timeout.
