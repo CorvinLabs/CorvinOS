@@ -1,8 +1,0 @@
-{
-  "id": "mu2o1icu_58aade",
-  "channel": "discord",
-  "from": "1299270034849533983",
-  "chat_id": "1515819896993222867",
-  "ts": 1789476393774,
-  "text": "[engine-trust] Spawn rejected: Trust manifest for 'claude_code' is missing or malformed. Operator must check agents/trust/claude_code.yaml.\n\n— ⚙ native fixe das"
-}

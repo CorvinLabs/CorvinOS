@@ -6,7 +6,7 @@ This module tests the core API contract; transport-layer tests follow.
 from __future__ import annotations
 
 import pytest
-from core.operator.license.capability_api import (
+from corvin_operator.license.capability_api import (
     CapabilityDecision,
     Decision,
     LicenseDenied,
