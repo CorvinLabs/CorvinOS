@@ -2857,6 +2857,45 @@ by hand — one directory ABOVE the canonical chain (the ADR-0650 split). It now
 resolves through `forge.paths.tenant_audit_chain()`. The historical file is
 **read, never merged or deleted** (`_acs_chain_paths()` returns both, deduped).
 
+### The same floor dropped the WORKER span tokens — and an unmeasured worker day read as $0.00 (2026-09-19)
+
+Live finding on the Models console: the "Worker runs" daily facet drew 0.0 for
+2026-09-16, -17 and -18 next to a real $1.79 on the 15th. Four layers, four
+fixes, each with a test that was red first (`core/console/tests/test_worker_series_honesty.py`,
+`corvin_operator/bridges/shared/test_audit_chain_isolation.py`, `web-next/tests/unit/daily-facet.test.ts`):
+
+| Layer | What was wrong | Rule now |
+|---|---|---|
+| status route (`model_cost_optimizer_api.py`) | a date the OS series earned was filled with `0.0` on the worker side (and vice versa); the "unmeasured is absent, never zero" rule was applied to the DATE list only | a series with no priced turn on a date carries **`null`** for `*_actual_usd`/`*_baseline_usd`; the counts say why: `0/0` = nothing recorded, `0/N` = N runs, none with token data |
+| chart (`cost-charts.tsx::DailySource`, encodings in `cost-viz.ts::dailyFacetShape/dailyDomainMax/dayGapNote`) | nulls were typed as numbers; bars-vs-area was decided once per PAGE, so a worker facet with one priced day drew an area (nothing) while the OS facet had four | the form degrades **per facet** (ADR-0761); `connectNulls={false}`; `minPointSize={2}` on the shared domain (a $3 worker bar beside a $113 OS peak is <3 % of the axis and must still be a mark); the facet caption says "priced on 1 of 4 days — the others are gaps, not $0"; the tooltip names the gap reason |
+| reader (`model_selection_learner._read_worker_spans`) | a worker span WITH a `model_id` but WITHOUT tokens was dropped, so a day of such runs read as "no worker runs" | it is an **unpriced** turn: counted in `total_turns`, never priced, never estimated. A span with neither model nor tokens (stub engine, aborted spawn) is still skipped. `span_id` joins the dedupe key — two unpriced spans in one second are two turns |
+| audit floor (`security_events._EVENT_ALLOWLIST["engine.span.end"]`) | the static set predates ADR-0759; the four token fields were registered only through `engine_span._register_allowlists()` (best-effort, import-order dependent) — 25 of 40 worker spans on 2026-09-18 carried `_dropped_fields` naming all four | the static set is the floor and holds every `END_FIELDS`/`START_FIELDS` entry; the union is a convenience. The test checks a FRESH interpreter that never imported `engine_span` — in-process the union has always happened by the time anyone looks |
+
+**Those 40 spans were test noise in the production chain.** Span ids
+`spn-awp-fetch`/`spn-a2a-t1`, engine ids `fake`/`x`/`bidirectional-fake`, two
+pytest instance ids, 13:46–13:47 — `test_awp_walker.py`, `test_a2a_worker.py`,
+`test_a2a_bidirectional.py`. `paths.corvin_home()` falls back to the REPO-LOCAL
+`.corvin` when `CORVIN_HOME` is unset, which on this host IS the services' root
+(`Environment=CORVIN_HOME=<repo>/.corvin`), so a bridge test without a redirect
+appends to the live GDPR Art. 30 chain (append-only: the 2026-09-07 and -18
+records stay). `tests/conftest.py` has redirected every test under `tests/`
+since 2026-07-24; `corvin_operator/bridges/shared/` had no such fixture. Now
+`conftest.py::_isolated_audit_chain` covers pytest runs and the three files that
+provably wrote import `_test_isolation` for script runs (`python test_x.py`
+never loads conftest). **Scope is the CHAIN (`VOICE_AUDIT_PATH`, the writer's
+first-precedence override), not `CORVIN_HOME`:** measured 2026-09-19, a
+wholesale home redirect turns 70 tests of that directory red because they read
+the install's own config (house rules, social federation, spawn gates,
+remote-trigger keys) — a coupling of its own, out of scope. Known limit: a
+writer that composes the path through `tenant_audit_chain()` directly does not
+see the variable. Proof: the walker script run as a script, 74 PASS, live chain
+line count unchanged.
+
+**Still open, by design:** 267 `acs.engine_completed` records (2026-07-09 ..
+2026-09-06) carry only a `tokens_used` total — unpriceable, counted in
+`acs_total_turns` (276) and never in a daily row; the coverage meter shows
+9/276 and the tile says "with token data". Not estimated.
+
 ### Bedrock / Vertex / Foundry are `auth_mode: platform`, not base-url redirects
 
 ADR-0181 models a provider as *base URL + one credential env var* and redirects
@@ -3436,4 +3475,15 @@ request client.
   directory — `page-dir-shadow.test.ts`).
 - **Don't put the redirects before the panel routes** in `App.tsx` for a path
   a mounted panel still owns — the earlier sibling wins and the redirect is dead.
+- **Don't zero-fill a series on a date it did not price.** `null` + the two
+  counts; the chart draws a gap and the tooltip says why. A flat $0.00 line
+  claims delegated runs are free (live, 2026-09-16..18).
+- **Don't decide bars-vs-area once per page.** Each facet degrades on ITS OWN
+  priced-day count (`dailyFacetShape`); one priced worker day under an OS
+  week is bars beside an area.
+- **Don't let a bridge test append to the live chain.** pytest gets the
+  `VOICE_AUDIT_PATH` redirect from `bridges/shared/conftest.py`; a script-style
+  file imports `_test_isolation` first. A stub-engine span in the live chain is
+  permanent and is counted as a delegated run. Don't widen the fixture to
+  `CORVIN_HOME` without first decoupling the 70 install-reading tests.
 

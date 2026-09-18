@@ -306,19 +306,26 @@ async def get_learning_status(
             if (d in os_by_date and os_by_date[d].counted_turns > 0)
             or (d in acs_by_date and acs_by_date[d].counted_turns > 0)
         )
+
+        # ... and that rule holds PER SERIES on a date, not only for the date
+        # list. Until 2026-09-19 a date the OS series earned was filled with
+        # 0.0 on the worker side, and the worker facet drew a flat $0.00 for
+        # 2026-09-16..18 — three days with no delegated run at all — next to a
+        # real $1.79 on the 15th. A series with no priced turn on a date
+        # carries null, and the counts say why: 0/0 = no run recorded,
+        # 0/N = N runs, none with token data. (ADR-0763: fabricate nothing.)
+        def _series(p, prefix: str) -> dict:
+            priced = p is not None and p.counted_turns > 0
+            return {
+                f"{prefix}actual_usd": p.actual_usd if priced else None,
+                f"{prefix}baseline_usd": p.baseline_usd if priced else None,
+                f"{prefix}counted_turns": p.counted_turns if p is not None else 0,
+                f"{prefix}total_turns": p.total_turns if p is not None else 0,
+            }
+
         cost_history = (
             [
-                {
-                    "date": d,
-                    "actual_usd": os_by_date[d].actual_usd if d in os_by_date else 0.0,
-                    "baseline_usd": os_by_date[d].baseline_usd if d in os_by_date else 0.0,
-                    "counted_turns": os_by_date[d].counted_turns if d in os_by_date else 0,
-                    "total_turns": os_by_date[d].total_turns if d in os_by_date else 0,
-                    "acs_actual_usd": acs_by_date[d].actual_usd if d in acs_by_date else 0.0,
-                    "acs_baseline_usd": acs_by_date[d].baseline_usd if d in acs_by_date else 0.0,
-                    "acs_counted_turns": acs_by_date[d].counted_turns if d in acs_by_date else 0,
-                    "acs_total_turns": acs_by_date[d].total_turns if d in acs_by_date else 0,
-                }
+                {"date": d, **_series(os_by_date.get(d), ""), **_series(acs_by_date.get(d), "acs_")}
                 for d in all_dates
             ]
             if (cost_data_available or acs_data_available)

@@ -2174,6 +2174,13 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "span_id", "parent_span_id", "role", "engine_id", "model_id",
         "run_id", "turn_id", "status", "duration_ms", "tokens_used", "tool_call_count",
         "trace_available",  # ADR-0172 M1: signals a worker-trace.jsonl exists
+        # ADR-0759 — the four-way token split (four integers, no text). They
+        # were registered ONLY through engine_span._register_allowlists(), a
+        # best-effort union at import time; a writer process that reached this
+        # floor first dropped all four (`_dropped_fields`) from 25 of 40 worker
+        # spans on 2026-09-18, and an unpriceable span reads as $0.00. The
+        # static set is the floor; the union is a convenience.
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
     }),
     # ADR-0104 ACS core events — explicit allowlists for every emitted event.
     # Metadata only; comment at EVENT_SEVERITY block lists the intent.

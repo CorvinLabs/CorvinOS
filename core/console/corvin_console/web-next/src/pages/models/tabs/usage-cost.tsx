@@ -244,16 +244,16 @@ export function UsageCostTab() {
               <span className="text-xs text-muted-foreground">
                 {d.singleDay
                   ? `${d.dayCount === 0 ? "No day" : "Only one day"} in this window — shown as bars, not as a trend`
-                  : `${d.dayCount} days`} · both axes share one scale
+                  : `${d.dayCount} days`} · both axes share one scale · a day a source did not price is a gap, not $0
               </span>
             </div>
             {d.dayCount > 0 ? (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-3">
-                <DailySource data={status.cost_history} actualKey="actual_usd" baselineKey="baseline_usd"
-                             color="var(--viz-role-os)" title="OS turns" singleDay={d.singleDay} domainMax={d.dailyDomainMax} />
+                <DailySource data={status.cost_history} prefix="" noun="turn"
+                             color="var(--viz-role-os)" title="OS turns" domainMax={d.dailyDomainMax} />
                 {status.acs_data_available ? (
-                  <DailySource data={status.cost_history} actualKey="acs_actual_usd" baselineKey="acs_baseline_usd"
-                               color="var(--viz-role-worker)" title="Worker runs" singleDay={d.singleDay} domainMax={d.dailyDomainMax} />
+                  <DailySource data={status.cost_history} prefix="acs_" noun="run"
+                               color="var(--viz-role-worker)" title="Worker runs" domainMax={d.dailyDomainMax} />
                 ) : (
                   <div className="py-10 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
                     No worker data in this window. Deliberately EMPTY rather than a zero line — a flat zero claims delegated runs are free.

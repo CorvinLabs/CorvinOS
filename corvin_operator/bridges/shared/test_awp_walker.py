@@ -49,6 +49,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import _test_isolation  # noqa: E402,F401 — never the live audit chain (2026-09-19)
 import awp_dag_parser as dp  # type: ignore  # noqa: E402
 import awp_validator as val  # type: ignore  # noqa: E402
 import awp_walker as walker  # type: ignore  # noqa: E402

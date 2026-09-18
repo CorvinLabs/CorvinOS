@@ -246,9 +246,21 @@ def _read_worker_spans(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]
     /v1/tenants/{tid}/runs`` spawns a worker engine and closes the run with an
     engine span. Until ADR-0759 that span carried neither a ``model_id`` nor
     token counts, so this spend could not be priced at all and the dashboard
-    reported the OS turns as if they were the whole bill. Spans that still lack
-    either (anything recorded before that change) are skipped here rather than
-    estimated — same honesty rule as everywhere else in this module.
+    reported the OS turns as if they were the whole bill.
+
+    Three shapes, three outcomes (2026-09-19):
+
+    * model AND tokens → a priced turn;
+    * model, NO tokens → an UNPRICED turn: it is returned with zero counts so
+      the aggregation counts it in ``total_turns`` and the console can say
+      "N runs, none with token data" instead of "no worker runs". Until
+      2026-09-19 it was dropped here, and a day of such runs read as absent
+      — the same "unmeasured is not free" rule the OS series already follows.
+      Live cause: the audit floor dropped the four token fields from 25 of 40
+      worker spans on 2026-09-18 (``_dropped_fields``) — the static allowlist
+      predates ADR-0759 (fixed in the same commit).
+    * neither → not attributable to any model turn (a stub engine, an
+      aborted spawn) — skipped, never estimated.
     """
     if not chain_path.exists():
         return []
@@ -272,16 +284,17 @@ def _read_worker_spans(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]
         if not isinstance(details, dict) or details.get("role") != "worker":
             continue
         model = str(details.get("model_id") or "")
-        if not model:
-            continue
         in_tok = int(details.get("input_tokens") or 0)
         out_tok = int(details.get("output_tokens") or 0)
         cw_tok = int(details.get("cache_write_tokens") or 0)
         cr_tok = int(details.get("cache_read_tokens") or 0)
-        if not (in_tok or out_tok or cw_tok or cr_tok):
+        if not model and not (in_tok or out_tok or cw_tok or cr_tok):
             continue
         out.append({
             "completed_ts": record.get("ts"),
+            # Identity for the dedupe in compute_cost_efficiency: two unpriced
+            # spans in one second share every other key.
+            "span_id": str(details.get("span_id") or ""),
             "model": model,
             "input_tokens": in_tok,
             "output_tokens": out_tok,
@@ -591,7 +604,7 @@ def compute_cost_efficiency(
     acs_completions.extend(_read_worker_spans(_chain_paths[-1], _MAX_SCAN_BYTES))
     _deduped: list[dict[str, Any]] = []
     for _c in acs_completions:
-        _key = (_c.get("completed_ts"), _c.get("model"),
+        _key = (_c.get("completed_ts"), _c.get("model"), _c.get("span_id"),
                 _c.get("input_tokens"), _c.get("output_tokens"),
                 _c.get("cache_creation_input_tokens"), _c.get("cache_read_input_tokens"))
         if _key in _seen_delegated:

@@ -4,7 +4,7 @@
  * the Usage & Cost and Learning tabs share ONE derivation. Every comment on a
  * rule is the original's; the encodings live in panels/cost-viz.ts (ADR-0761).
  */
-import { shortModel, tierOf, toModelRows, sharedDomainMax } from "@/panels/cost-viz";
+import { dailyDomainMax as dailyDomain, shortModel, tierOf, toModelRows, sharedDomainMax } from "@/panels/cost-viz";
 import type { DashboardStatus } from "../components/cost-charts";
 
 export const MIN_SAMPLES_FOR_ADVICE = 25;
@@ -70,16 +70,14 @@ export function deriveCost(status: DashboardStatus) {
   const workerCostRows = toModelRows(status.acs_model_cost);
   // ONE domain for both model facets, 12 % headroom for the direct labels.
   const modelDomainMax = sharedDomainMax([...osCostRows, ...workerCostRows]);
-  // ONE domain for both daily facets, same reason.
-  const dailyDomainMax =
-    Math.max(
-      0.0001,
-      ...status.cost_history.flatMap((p) => [
-        p.actual_usd, p.baseline_usd, p.acs_actual_usd, p.acs_baseline_usd,
-      ]),
-    ) * 1.1;
+  // ONE domain for both daily facets, same reason — over PRICED values; a
+  // null day is a gap and must not pull the floor (2026-09-19).
+  const dailyDomainMax = dailyDomain(status.cost_history, [
+    "actual_usd", "baseline_usd", "acs_actual_usd", "acs_baseline_usd",
+  ]);
 
-  // With ONE day a line or area draws no line at all — bars below 2 days.
+  // Days in the window (either series priced). Each facet decides bars vs.
+  // area from ITS OWN priced days (DailySource); this only drives the heading.
   const dayCount = status.cost_history.length;
   const singleDay = dayCount < 2;
 

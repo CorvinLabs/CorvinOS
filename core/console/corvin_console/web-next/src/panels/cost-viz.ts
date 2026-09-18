@@ -114,3 +114,59 @@ export function sharedDomainMax(rows: ModelCostRow[], headroom = 1.12): number {
   const peak = rows.reduce((m, r) => Math.max(m, r.actual, r.baseline), 0);
   return Math.max(peak, 0.0001) * headroom;
 }
+
+// ── Daily series: per-facet shape and gaps (2026-09-19) ─────────────────
+
+/**
+ * One day of the daily series. A series with no PRICED turn on a date carries
+ * `null` there — the route sends an unmeasured day as absent, never as a zero
+ * (ADR-0763). The two counts say why: 0/0 = no run recorded, 0/N = N runs,
+ * none with token data. Until 2026-09-19 the route filled the worker half
+ * with 0.0 on every OS-day, and the worker facet drew a flat $0.00 for three
+ * days on which no delegated run existed.
+ */
+/** Any row with a date; the series columns are read by key so the pinned
+ *  `CostDayPoint` interface (no index signature) fits without a cast. */
+export type DailyPoint = { date: string };
+
+const col = (p: DailyPoint, key: string): unknown => (p as unknown as Record<string, unknown>)[key];
+
+export type DayMode = 'bars' | 'area';
+
+export interface DailyFacetShape {
+  /** Days on which THIS series has a priced value. */
+  pricedDays: number;
+  totalDays: number;
+  /** ADR-0761: below two points a line or area draws nothing while still
+   *  being titled "Trend" — the form degrades PER FACET, not per page: the OS
+   *  series can span four days while the worker series has one. */
+  mode: DayMode;
+}
+
+const isPriced = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+export function dailyFacetShape(points: DailyPoint[], actualKey: string): DailyFacetShape {
+  const pricedDays = points.filter((p) => isPriced(col(p, actualKey))).length;
+  return { pricedDays, totalDays: points.length, mode: pricedDays < 2 ? 'bars' : 'area' };
+}
+
+/**
+ * ONE domain for both daily facets (same rule as `sharedDomainMax`), over the
+ * PRICED values only — a null is a gap, not a zero, and must not pull the
+ * floor. Headroom so the top mark does not touch the frame.
+ */
+export function dailyDomainMax(points: DailyPoint[], keys: string[], headroom = 1.1): number {
+  let peak = 0;
+  for (const p of points) for (const k of keys) {
+    const v = col(p, k);
+    if (isPriced(v)) peak = Math.max(peak, v);
+  }
+  return Math.max(peak, 0.0001) * headroom;
+}
+
+/** Why a day has no mark in a facet — rendered in its tooltip, never as $0. */
+export function dayGapNote(counted: number, total: number, noun = 'run'): string | null {
+  if (counted > 0) return null;
+  if (total === 0) return `no ${noun} recorded`;
+  return `${total} ${total === 1 ? noun : noun + 's'}, none with token data — not measured`;
+}
