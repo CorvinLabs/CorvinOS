@@ -38,6 +38,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 from core.learning import model_selection_optimizer as MSO  # noqa: E402
 from core.learning.model_selection_learner import model_price_per_1k  # noqa: E402
 
+
+def _as_process_tenant(tenant_id: str):
+    """Patch forge.security_events._current_tenant_id for one tenant."""
+    import corvin_core._bootstrap  # noqa: F401
+    from unittest import mock
+    from forge import security_events  # type: ignore[import-not-found]
+    return mock.patch.object(security_events, "_current_tenant_id", lambda: tenant_id)
+
 # Real ids on the published rate card — positive control below asserts it.
 CHEAP = "claude-haiku-4-5-20251001"
 MID = "claude-sonnet-5"
@@ -140,7 +148,12 @@ class ModelRankingRouteTests(unittest.TestCase):
         self.assertEqual([x["model"] for x in capped], [MID])
 
     def test_tenant_isolation(self) -> None:
-        self._feed("SIMPLE", DEAR, [0.9] * 6, tenant_id="tenant_a")
+        # The chain writer refuses a record whose details.tenant_id is not the
+        # PROCESS tenant, and since ADR-0885 step 0b that refusal fails closed
+        # in the learner — so a non-default tenant is fed with the process
+        # tenant patched to it (see test_learner_audit_first.py).
+        with _as_process_tenant("tenant_a"):
+            self._feed("SIMPLE", DEAR, [0.9] * 6, tenant_id="tenant_a")
         r = self._client("tenant_b").get("/v1/engine/analytics/task-type/SIMPLE")
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["models"], [])

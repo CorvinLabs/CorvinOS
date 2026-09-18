@@ -269,7 +269,10 @@ async def reset_learning(
     tenant_id = rec.tenant_id
 
     try:
-        # Audit the reset action (FIRST, fail-closed)
+        # Attribute the reset action. console_audit is best-effort by design
+        # (audit.py swallows every writer exception except AuditFieldNotAllowed),
+        # so this is attribution, NOT a fail-closed record — the fail-closed
+        # record of learning is the learner's own confidence_updated (ADR-0644).
         console_audit.action_performed(
             tenant_id=tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
@@ -318,6 +321,10 @@ async def export_weights(
             for (task_type, model, tid), stats in optimizer._stats_cache.items():
                 if tid != tenant_id:
                     continue
+                if stats.n_samples == 0:
+                    # The uniform prior _load_stats caches on a miss (also what
+                    # a refused audit-first write leaves behind) — not learned.
+                    continue
 
                 is_converged = optimizer.is_converged(task_type, model, tenant_id)
                 lines.append(
@@ -337,6 +344,10 @@ async def export_weights(
             data = {}
             for (task_type, model, tid), stats in optimizer._stats_cache.items():
                 if tid != tenant_id:
+                    continue
+                if stats.n_samples == 0:
+                    # The uniform prior _load_stats caches on a miss (also what
+                    # a refused audit-first write leaves behind) — not learned.
                     continue
 
                 key = f"{task_type}/{model}"
