@@ -222,6 +222,11 @@ export const OTELTelemetryPage = React.lazy(() =>
   import("@/pages/otel-telemetry").then((m) => ({ default: m.OTELTelemetryPage }))
 );
 
+/** ADR-0885 — the Models console (routing · usage & cost · learning · catalog). */
+export const ModelsPage = React.lazy(() =>
+  import("@/pages/models").then((m) => ({ default: m.ModelsPage }))
+);
+
 export const ModelSelectionPage = React.lazy(() =>
   import("@/pages/model-selection").then((m) => ({ default: m.ModelSelectionPage }))
 );

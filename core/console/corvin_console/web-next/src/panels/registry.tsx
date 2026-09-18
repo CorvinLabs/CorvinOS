@@ -23,7 +23,7 @@ import {
   GitHubPage, SyncMonitorPage, EngineConfigPage,
   ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
-  LicensingAuditPage, OTELTelemetryPage, ModelSelectionPage, VibeEngineeringPage,
+  LicensingAuditPage, OTELTelemetryPage, ModelSelectionPage, VibeEngineeringPage, ModelsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -76,6 +76,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   LicensingAuditPage,
   OTELTelemetryPage,
   ModelSelectionPage,
+  ModelsPage,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -146,6 +147,10 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "observability" } }),
   rc("model-selection", "Model Selection", ModelSelectionPage,
      { nav: { label: "Model Selection", icon: "Brain", group: "intelligence" } }),
+  // ADR-0885 — ONE panel for routing, usage & cost, learning and the catalogue.
+  // Reachable by deep link (and in NAV_EXEMPT) until step 3 replaces the three
+  // panels above with it in the sidebar; no nav.group here yet on purpose.
+  rc("models", "Models", ModelsPage, { nav: { label: "Models", icon: "Brain" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);

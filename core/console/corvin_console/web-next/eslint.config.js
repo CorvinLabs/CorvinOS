@@ -46,6 +46,13 @@ export default [
     },
   })),
   {
+    // ADR-0885: the Models console never calls fetch() itself — every request
+    // goes through lib/api/client.ts::api(), which sets X-CSRF-Token on writes.
+    // (The old cost panel's bare fetch() writes all answered 403 on the live host.)
+    files: ['src/pages/models/**/*.{ts,tsx}'],
+    rules: { 'no-restricted-globals': ['error', 'fetch'] },
+  },
+  {
     files: ['**/*.{jsx,tsx}'],
     plugins: {
       react: reactPlugin,
