@@ -348,6 +348,88 @@ function Invoke-NativeTimed {
     }
 }
 
+# A download that fails once is not a download that fails. On corporate networks
+# (TLS-inspecting proxies) and on CDNs the FIRST handshake gets reset often
+# enough to matter -- ".NET: the underlying connection was closed: an unexpected
+# error occurred on a send" -- while the identical request seconds later
+# succeeds. Both bootstrap downloads (uv, Node.js) therefore retry with a
+# bounded linear backoff.
+#
+# EVERY attempt tries curl.exe AND, if that fails, Invoke-WebRequest -- because
+# the two do not trust the same certificates, and which one works depends on the
+# box rather than on the URL:
+#   * Windows' own curl.exe (System32, 10 1803+) uses Schannel and the machine
+#     certificate store, so an enterprise TLS-interception root installed by
+#     policy is trusted.
+#   * a curl.exe from Git for Windows -- which comes FIRST on PATH on any
+#     developer box and is what Get-Command returns there -- is an OpenSSL build
+#     with its own CA bundle, and it does NOT see that store. Under Zscaler/
+#     equivalent it fails the handshake where .NET succeeds.
+#   * conversely .NET sometimes resets where curl gets through, which is the
+#     original reason curl is tried first.
+# Picking one mechanism per box would trade one class of failure for another;
+# the goal here is that a fresh box installs, so both are tried on every pass.
+#
+# curl is invoked as a native command with an argument array -- NOT by composing
+# a command string for cmd.exe. That distinction is not stylistic: a built
+# "<exe> ... > out 2> err" command line is a dropper shape, and on a managed
+# image an AMSI verdict does not fail the download, it blocks and DELETES this
+# whole script (measured 2026-09-18).
+function Invoke-DownloadWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [int]$MaxAttempts = 4,
+        [int]$TimeoutSeconds = 120
+    )
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+
+    $fetchers = New-Object System.Collections.ArrayList
+    if ($curl) {
+        $null = $fetchers.Add(@{
+            Name   = "curl.exe ($($curl.Source))"
+            Action = {
+                $curlArgs = @("-fsSL", "--max-time", "$TimeoutSeconds", "-o", $OutFile, $Uri)
+                $r = Invoke-NativeTimed -FilePath $curl.Source -Arguments $curlArgs `
+                        -TimeoutSeconds ($TimeoutSeconds + 30)
+                if ($r.TimedOut) { throw "timed out after ${TimeoutSeconds}s" }
+                if ($r.ExitCode -ne 0) { throw "exited $($r.ExitCode)" }
+            }
+        })
+    }
+    $null = $fetchers.Add(@{
+        Name   = "Invoke-WebRequest"
+        Action = {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile `
+                -UseBasicParsing -TimeoutSec $TimeoutSeconds -ErrorAction Stop
+        }
+    })
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $errors = @()
+        foreach ($fetcher in $fetchers) {
+            try {
+                & $fetcher.Action
+                # An empty file is a failed download that reported success.
+                if (-not (Test-Path -LiteralPath $OutFile)) { throw "no file was written" }
+                if ((Get-Item -LiteralPath $OutFile).Length -le 0) { throw "downloaded 0 bytes" }
+                Write-Log -Message "Downloaded $Uri via $($fetcher.Name)" -Level "Debug"
+                return
+            } catch {
+                Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+                $errors += "$($fetcher.Name): $($_.Exception.Message)"
+            }
+        }
+        if ($attempt -ge $MaxAttempts) {
+            throw "download failed after $MaxAttempts attempt(s) -- $($errors -join '; ')"
+        }
+        $backoff = [math]::Min(2 * $attempt, 10)
+        Write-Log -Message "Download attempt $attempt/$MaxAttempts failed ($($errors -join '; ')); retrying in ${backoff}s" -Level "Warn"
+        Start-Sleep -Seconds $backoff
+    }
+}
+
 # -----------------------------------------------------------------------------
 # Console readiness, port ownership, browser launch
 # -----------------------------------------------------------------------------
@@ -835,7 +917,21 @@ try {
 
 Write-Header "Phase 4: Environment Setup"
 
-$CorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else {
+# Mirrors core/paths/tenant.py::corvin_home and the other paths.py copies, in
+# that order: $CORVIN_HOME, else a repo-local .corvin IF IT ALREADY EXISTS (a
+# source checkout's live root), else ~/.corvin. The order is load-bearing, not
+# cosmetic: the installer exports CORVIN_HOME for the console it starts itself,
+# so a divergence here is invisible during the install and shows up later, when
+# the operator runs `corvinos-serve` from a plain shell and Python picks the
+# repo-local root the installer never prepared or verified. Note the asymmetry
+# with the Python side -- a repo-local root is ADOPTED, never created, so a
+# fresh clone still installs into the home directory.
+$RepoLocalCorvinHome = Join-Path $RepoPath ".corvin"
+$CorvinHome = if ($env:CORVIN_HOME) {
+    $env:CORVIN_HOME
+} elseif (Test-Path -LiteralPath $RepoLocalCorvinHome -PathType Container) {
+    $RepoLocalCorvinHome
+} else {
     Join-Path $env:USERPROFILE ".corvin"
 }
 $NodeRoot = Join-Path $CorvinHome "node"
@@ -981,8 +1077,7 @@ if ($uvCmd) {
     $uvInstallerPath = Join-Path $env:TEMP "uv-installer-$UvVersion-$InstallTimestamp.ps1"
     try {
         Write-Log -Message "Downloading uv $UvVersion installer..." -Level "Info"
-        Invoke-WebRequest -Uri $UvInstallerUrl -OutFile $uvInstallerPath `
-            -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+        Invoke-DownloadWithRetry -Uri $UvInstallerUrl -OutFile $uvInstallerPath -TimeoutSeconds 120
 
         # Verify BEFORE executing: this script is about to be run as code.
         $hash = (Get-FileHash -Path $uvInstallerPath -Algorithm SHA256).Hash
@@ -1046,8 +1141,7 @@ if (-not $nodeInstalled) {
         $nodeZip   = Join-Path $env:TEMP "node-v$nodeVersion-win-$nodeArch-$InstallTimestamp.zip"
         try {
             Write-Log -Message "Downloading Node.js v$nodeVersion ($nodeArch)..." -Level "Info"
-            Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeZip `
-                -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+            Invoke-DownloadWithRetry -Uri $nodeUrl -OutFile $nodeZip -TimeoutSeconds 300
 
             Write-Log -Message "Extracting Node.js..." -Level "Info"
             $null = New-Item -ItemType Directory -Path $nodeStage -Force -ErrorAction Stop
