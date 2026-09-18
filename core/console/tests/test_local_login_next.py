@@ -23,7 +23,8 @@ class SafeNextTests(unittest.TestCase):
 
     def test_rejects_everything_else(self) -> None:
         for bad in ("https://evil.example/", "//evil.example/x", "/app/models", "/console", "",
-                    None, "/console/\\evil", "/console/x\r\nSet-Cookie: a=b", "/console/" + "a" * 600):
+                    None, "/console/\\evil", "/console/x\r\nSet-Cookie: a=b", "/console/" + "a" * 600,
+                    "/console/../v1/console/auth/whoami", "/console/../../etc", "/console/./../x"):
             self.assertIsNone(AR._safe_next(bad), repr(bad))
 
 

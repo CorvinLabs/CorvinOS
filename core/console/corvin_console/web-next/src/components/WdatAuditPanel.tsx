@@ -1048,48 +1048,44 @@ function ExecLogPanel({ sid, isActive }: { sid: string; isActive: boolean }) {
 
 // ── ACS empty state — context-aware guidance ──────────────────────────────────
 function AcsEmptyState({ onViewOs }: { onViewOs: () => void }) {
+  // The engine setting carries neither a worker-engine flag nor a delegation
+  // switch (lib/api/engines.ts documents both as "not sent by the current
+  // backend"), so this state used to assert "Configure a Worker Engine…" for
+  // EVERY session with no ACS run and link to a control that does not exist
+  // (ADR-0885 review R2). ONE honest state: what is known, and where the
+  // worker turn pin actually lives.
   const q = useQuery({
     queryKey: ["engine-settings"],
     queryFn: ({ signal }) => getOsEngineSetting(signal),
     staleTime: 30_000,
   });
-
-  const delegationEnabled = q.data?.delegation_enabled ?? false;
-  const workerEngineSet = !!q.data?.default_worker_engine;
+  const workerPin = q.data
+    ? q.data.engine_models?.[q.data.default_engine ?? "claude_code"]?.worker_model ?? null
+    : undefined;
 
   const headline = "No worker-engine (ACS) runs in this session";
-  let detail = "This chat ran on the OS engine only.";
+  const detail = "This chat ran on the OS engine only — no delegated worker run was recorded.";
   let hint: React.ReactNode = null;
 
   if (!q.isPending) {
-    if (!workerEngineSet) {
-      detail = "Configure a Worker Engine in Engine Settings to enable delegation runs.";
-      hint = (
-        <Link
-          to="/app/models?tab=routing"
-          className="mt-1 rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
-        >
-          Open Engine Settings →
-        </Link>
-      );
-    } else if (!delegationEnabled) {
-      detail = "A Worker Engine is configured but delegation is disabled.";
-      hint = (
-        <Link
-          to="/app/models?tab=routing"
-          className="mt-1 rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
-        >
-          Enable delegation in Engine Settings →
-        </Link>
-      );
-    } else {
-      detail = "No delegation runs yet — delegation is enabled.";
-      hint = (
+    hint = (
+      <div className="flex flex-col gap-1">
         <p className="text-xs opacity-50">
           Tip: prefix a message with <span className="font-mono">/delegate</span> to force a worker run.
+          {workerPin === undefined
+            ? ""
+            : workerPin
+              ? ` Worker turn pin: ${workerPin}.`
+              : " Worker turn: engine default (no pin)."}
         </p>
-      );
-    }
+        <Link
+          to="/app/models?tab=routing"
+          className="mt-1 self-start rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+        >
+          See the worker turn pin →
+        </Link>
+      </div>
+    );
   }
 
   return (

@@ -237,7 +237,10 @@ def _iter_lines_backwards(path: Path, block_size: int = 64 * 1024):
             parts = chunk.split(b"\n")
             tail = parts[0]
             # Empty parts are yielded too, so ``max_lines`` counts the same
-            # thing in both directions (the forward reader counts blank lines).
+            # thing in both directions (the forward reader counts blank lines);
+            # the trailing empty after the file's final newline makes the
+            # backwards count one higher, i.e. the effective window is
+            # max_lines - 1 — irrelevant at 500k, noted for honesty.
             for part in reversed(parts[1:]):
                 yield part.decode("utf-8", errors="replace")
         yield tail.decode("utf-8", errors="replace")

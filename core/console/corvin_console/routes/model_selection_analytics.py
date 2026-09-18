@@ -23,6 +23,7 @@ Constraint (ADR-0644):
 
 from __future__ import annotations
 
+import contextlib as _contextlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -291,6 +292,27 @@ def _rated_path(tenant_id: str) -> Path:
     return tenant_home(tenant_id) / "global" / "model_feedback_rated.json"
 
 
+@_contextlib.contextmanager
+def _rated_locked(tenant_id: str):
+    """Serialises check → learn → mark of the rated set. A SEPARATE lock file
+    from the learner's: ``process_feedback`` takes the stats lock itself and
+    ``flock`` is per open-file-description, so nesting the same lock from one
+    thread would deadlock (review R2)."""
+    path = _rated_path(tenant_id).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl  # noqa: PLC0415
+    except ImportError:  # pragma: no cover
+        yield
+        return
+    with open(path, "a+", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 def _load_rated(tenant_id: str) -> set:
     path = _rated_path(tenant_id)
     try:
@@ -373,16 +395,23 @@ async def post_feedback(
     if found is None:
         raise HTTPException(status_code=404, detail="no longer available to rate")
 
-    rated = _load_rated(tenant_id)
-    if body.record_hash in rated:
-        raise HTTPException(status_code=409, detail="already rated")
-
     quality = 1.0 if body.rating == "good" else 0.0
     optimizer = get_optimizer()
     try:
-        confidence, converged = optimizer.process_feedback(
-            found.task_type, found.model, quality, tenant_id,
-        )
+        with _rated_locked(tenant_id):
+            rated = _load_rated(tenant_id)
+            if body.record_hash in rated:
+                raise HTTPException(status_code=409, detail="already rated")
+            confidence, converged = optimizer.process_feedback(
+                found.task_type, found.model, quality, tenant_id,
+            )
+            rated.add(body.record_hash)
+            try:
+                _save_rated(tenant_id, rated)
+            except Exception as e:  # noqa: BLE001 — the sample IS learned and chained; log the guard failure
+                logger.error(f"could not persist the rated-set: {e}")
+    except HTTPException:
+        raise
     except RuntimeError as e:
         logger.error(f"feedback refused by the audit chain: {e}")
         # The chain writer is single-tenant (CORVIN_TENANT_ID): a session on
@@ -401,12 +430,6 @@ async def post_feedback(
     except Exception as e:  # noqa: BLE001 — a persisted-row/schema fault must not read as "unavailable"
         logger.error(f"feedback failed: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="feedback could not be processed")
-
-    rated.add(body.record_hash)
-    try:
-        _save_rated(tenant_id, rated)
-    except Exception as e:  # noqa: BLE001 — the sample IS learned and chained; log the guard failure
-        logger.error(f"could not persist the rated-set: {e}")
 
     try:
         console_audit.action_performed(
@@ -446,6 +469,7 @@ async def get_model_history(
 
     try:
         key = (task_type, model_id, tenant_id)
+        optimizer.get_stats(task_type, model_id, tenant_id)  # read-through: loads the persisted history
         history = optimizer._confidence_history.get(key, [])
 
         # Return recent samples with timestamps (simplified)
@@ -536,9 +560,12 @@ async def export_weights(
             # CSV header
             lines.append("task_type,model,confidence,n_samples,mean_quality,variance,converged")
 
-            for (task_type, model, tid), stats in optimizer._stats_cache.items():
-                if tid != tenant_id:
-                    continue
+            # Enumerate the persisted store, never this process's cache — a
+            # fresh console process (or a direct API client) has an empty
+            # cache while the tenant has learned rows (review R2).
+            from core.learning.confidence_persistence import list_entries  # noqa: PLC0415
+            for task_type, model in list_entries(tenant_id):
+                stats = optimizer.get_stats(task_type, model, tenant_id)
                 if stats.n_samples == 0:
                     # The uniform prior _load_stats caches on a miss (also what
                     # a refused audit-first write leaves behind) — not learned.
@@ -560,9 +587,12 @@ async def export_weights(
 
         else:  # json
             data = {}
-            for (task_type, model, tid), stats in optimizer._stats_cache.items():
-                if tid != tenant_id:
-                    continue
+            # Enumerate the persisted store, never this process's cache — a
+            # fresh console process (or a direct API client) has an empty
+            # cache while the tenant has learned rows (review R2).
+            from core.learning.confidence_persistence import list_entries  # noqa: PLC0415
+            for task_type, model in list_entries(tenant_id):
+                stats = optimizer.get_stats(task_type, model, tenant_id)
                 if stats.n_samples == 0:
                     # The uniform prior _load_stats caches on a miss (also what
                     # a refused audit-first write leaves behind) — not learned.

@@ -149,6 +149,12 @@ def _safe_next(next_: str | None) -> str | None:
         return None
     if "://" in next_ or "\n" in next_ or "\r" in next_:
         return None
+    # "under /console/" must hold after normalisation, not only lexically:
+    # "/console/../v1/…" is same-origin but not the console (review R2).
+    import posixpath  # noqa: PLC0415
+    path_part = next_.split("?", 1)[0].split("#", 1)[0]
+    if not (posixpath.normpath(path_part) + "/").startswith("/console/") or ".." in path_part.split("/"):
+        return None
     return next_
 
 

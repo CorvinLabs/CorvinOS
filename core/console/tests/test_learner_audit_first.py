@@ -192,6 +192,31 @@ class LearnerAuditFirstTests(unittest.TestCase):
         # and the FILE (a fresh store view, no process cache) agrees
         self.assertEqual(CP.PersistentConfidenceStore()[f"model_stats:MEDIUM:{MODEL}:_default"]["n_samples"], 9)
 
+    def test_reset_in_another_process_drops_this_processes_history(self) -> None:
+        """A feeds 60 (converged), B resets, A feeds 1: A's next sample must
+        start from an EMPTY history — not write its stale 50-entry trajectory
+        back to disk and report converged at 5 samples (review R2)."""
+        a = MSO.ConfidenceOptimizer(store=CP.PersistentConfidenceStore(), audit_backend=MSO._SkillAuditBackend())
+        b = MSO.ConfidenceOptimizer(store=CP.PersistentConfidenceStore(), audit_backend=MSO._SkillAuditBackend())
+        for _ in range(60):
+            a.process_feedback("MEDIUM", MODEL, 0.9, "_default")
+        self.assertTrue(a.is_converged("MEDIUM", MODEL))
+        b.reset_learning("_default")
+        self.assertNotIn(f"model_stats:MEDIUM:{MODEL}:_default", self._history_file())
+        for _ in range(5):
+            _, conv = a.process_feedback("MEDIUM", MODEL, 0.9, "_default")
+        self.assertFalse(conv)
+        self.assertEqual(a.get_stats("MEDIUM", MODEL).n_samples, 5)
+        self.assertEqual(len(CP.load_confidence_history(f"model_stats:MEDIUM:{MODEL}:_default")), 5)
+        self.assertFalse(b.is_converged("MEDIUM", MODEL) if b.get_stats("MEDIUM", MODEL) else False)
+
+    def test_history_only_row_reads_as_absent(self) -> None:
+        key = f"model_stats:SIMPLE:{MODEL}:_default"
+        CP._save_file("_default", {key: {"confidence_history": [0.5, 0.6]}})
+        opt = MSO.get_optimizer()
+        self.assertEqual(opt.get_stats("SIMPLE", MODEL).n_samples, 0)
+        self.assertEqual(opt.rank_models("SIMPLE", [MODEL])[0].n_samples, 0)
+
     def test_persisted_row_with_unknown_key_does_not_raise(self) -> None:
         opt = MSO.get_optimizer()
         opt.process_feedback("SIMPLE", MODEL, 0.9, "_default")

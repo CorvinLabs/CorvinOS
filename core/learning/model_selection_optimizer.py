@@ -480,6 +480,13 @@ class ConfidenceOptimizer:
         # write (audit-first) that is exactly the state left behind — so
         # `pop`, never `del` (2026-09-18: `del` raised KeyError here and the
         # console's reset answered 500 right after a 503 rating).
+        lock = getattr(self.store, "locked", None)
+        if callable(lock):
+            with lock(tenant_id):
+                return self._reset_learning_locked(tenant_id)
+        return self._reset_learning_locked(tenant_id)
+
+    def _reset_learning_locked(self, tenant_id: str) -> None:
         keys_to_remove = [k for k in self._stats_cache.keys() if k[2] == tenant_id]
         for key in keys_to_remove:
             self._stats_cache.pop(key, None)
@@ -525,6 +532,15 @@ class ConfidenceOptimizer:
                 # Tolerate schema drift in a persisted row: an unknown key
                 # would make ModelStats(**data) raise TypeError into a route.
                 data = {k: v for k, v in dict(data).items() if k in ModelStats.__dataclass_fields__}
+                required = {"task_type", "model", "tenant_id", "n_samples", "quality_sum",
+                            "quality_squared_sum", "confidence_score"}
+                if not required <= set(data):
+                    # A history-only row (a crash between the two writes) is
+                    # NOT a learned row — treat it as absent, never 500.
+                    data = None
+            else:
+                data = None
+            if data is not None:
                 stats = ModelStats(**data)
                 self._stats_cache[key] = stats
                 # Convergence needs the confidence trajectory too, not just
@@ -540,7 +556,13 @@ class ConfidenceOptimizer:
                     pass
                 return stats
 
-        # Initialize with default stats (uniform prior)
+        # Initialize with default stats (uniform prior). With a persisted store
+        # the store is the ONLY source of truth for the history too: a row that
+        # is absent on disk (reset by another process, or never written) must
+        # not keep this process's stale trajectory — it would be written back
+        # on the next sample and flip is_converged at 5 samples (review R2).
+        if self.store is not None:
+            self._confidence_history.pop(key, None)
         stats = ModelStats(
             task_type=task_type,
             model=model,

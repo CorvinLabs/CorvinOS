@@ -159,6 +159,21 @@ class ModelRankingRouteTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["models"], [])
 
+    def test_export_enumerates_the_store_not_this_processes_cache(self) -> None:
+        self._feed("MEDIUM", MID, [0.8] * 3)
+        MSO._optimizer = None  # a fresh console process: empty cache, same file
+        r = self._client().get("/v1/engine/analytics/export", params={"format": "json"})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        rows = body if isinstance(body, list) else body.get("weights") or body.get("rows") or body.get("data") or []
+        text = r.text
+        self.assertIn(MID, text)
+        self.assertIn("MEDIUM", text)
+
+    def test_non_hex_record_hash_is_422(self) -> None:
+        r = self._client().post("/v1/engine/analytics/feedback", json={"record_hash": "zz", "rating": "good"})
+        self.assertEqual(r.status_code, 422)
+
     def test_cap_rejects_negative(self) -> None:
         r = self._client().get(
             "/v1/engine/analytics/task-type/SIMPLE", params={"max_output_usd_per_1k": -1},
