@@ -59,15 +59,18 @@ export function RoutingTab({
   const [preselectNote, setPreselectNote] = useState<string | null>(null);
 
   const served = pinsOf(settingQ.data);
+  // The registry's own "anthropic" entry IS the native path; normalise on
+  // read so the select, the dirty check and the write compare like with like.
+  const servedProvider = served ? (served.provider === "anthropic" ? NATIVE : (served.provider ?? NATIVE)) : NATIVE;
   // Initialise (and re-sync when not dirty) from what the server serves.
   const isDirty = !!form && !!served && (
     form.os_model !== (served.os_model ?? "") ||
     form.worker_model !== (served.worker_model ?? "") ||
-    form.provider !== (served.provider ?? NATIVE)
+    form.provider !== servedProvider
   );
   useEffect(() => {
     if (served && (form === null || !isDirty)) {
-      const next = { os_model: served.os_model ?? "", worker_model: served.worker_model ?? "", provider: served.provider ?? NATIVE };
+      const next = { os_model: served.os_model ?? "", worker_model: served.worker_model ?? "", provider: servedProvider };
       if (!form || form.os_model !== next.os_model || form.worker_model !== next.worker_model || form.provider !== next.provider) {
         setForm(next);
       }
@@ -86,23 +89,33 @@ export function RoutingTab({
     const base = providerIsNative
       ? (claudeQ.data?.models ?? []).map((m) => ({ id: m.id, label: m.label }))
       : (providerModelsQ.data?.models ?? []);
-    // A saved pin is ALWAYS offerable, even while the list loads or after the
+    // A SAVED pin is ALWAYS offerable, even while the list loads or after the
     // source retired it: a native <select> whose value is not among its options
     // silently shows its first option — a DIFFERENT model than the tenant is
     // configured with (the deleted engine-config page kept the same guard).
+    // Derived from the served pins, not the unsaved form: a merely selected id
+    // the source dropped is "(no longer offered)", not "configured".
     const out = [...base];
-    for (const saved of [form?.os_model, form?.worker_model]) {
+    for (const saved of [served?.os_model, served?.worker_model]) {
       if (saved && !out.some((o) => o.id === saved)) out.push({ id: saved, label: `${saved} (configured)` });
     }
+    for (const chosen of [form?.os_model, form?.worker_model]) {
+      if (chosen && !out.some((o) => o.id === chosen)) out.push({ id: chosen, label: `${chosen} (no longer offered)` });
+    }
     return out;
-  }, [providerIsNative, claudeQ.data, providerModelsQ.data, form?.os_model, form?.worker_model]);
+  }, [providerIsNative, claudeQ.data, providerModelsQ.data, served?.os_model, served?.worker_model, form?.os_model, form?.worker_model]);
   const optionsLoaded = providerIsNative ? !!claudeQ.data : !!providerModelsQ.data;
+  const optionsFailed = providerIsNative ? claudeQ.isError : providerModelsQ.isError;
 
-  // Catalog hand-off: apply once the options are known, validate, clear.
+  // Catalog hand-off: apply once the options are known, validate, clear. A
+  // source that failed also RESOLVES the hand-off (with a note) — otherwise
+  // ?preselect= would wait forever and travel with every tab switch.
   useEffect(() => {
-    if (!preselect || !form || !optionsLoaded) return;
-    const offered = options.some((o) => o.id === preselect);
-    if (offered) {
+    if (!preselect || !form || (!optionsLoaded && !optionsFailed)) return;
+    const offered = optionsLoaded && options.some((o) => o.id === preselect);
+    if (optionsFailed && !optionsLoaded) {
+      setPreselectNote(`${preselect} could not be applied — the model source did not answer.`);
+    } else if (offered) {
       const key = preselectTurn === "worker" ? "worker_model" : "os_model";
       setForm({ ...form, [key]: preselect });
       setPreselectNote(null);
@@ -114,7 +127,7 @@ export function RoutingTab({
     // query and the options query race, and an effect that ran once with no
     // form must run again when the form materialises (review 2026-09-18).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preselect, preselectTurn, optionsLoaded, form === null]);
+  }, [preselect, preselectTurn, optionsLoaded, optionsFailed, form === null]);
 
   const savePins = useMutation({
     mutationFn: () => {
@@ -205,9 +218,10 @@ export function RoutingTab({
                     <ClaudeSourceLine catalog={claudeQ.data} error={claudeQ.error} authLabel={authLabel} />
                   )}
                   {!providerIsNative && providerModelsQ.data && !providerModelsQ.data.reachable && (
-                    <p className="text-xs text-amber-700 dark:text-amber-300 mt-1.5 flex items-start gap-1">
+                    <p className="text-xs text-amber-700 dark:text-amber-300 mt-1.5 flex items-start gap-1"
+                       title={providerModelsQ.data.error ?? undefined}>
                       <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-                      {providerModelsQ.data.error || "Provider unreachable — its model list is the last known one."}
+                      Provider unreachable — its model list is the last known one.
                     </p>
                   )}
                 </div>
@@ -241,7 +255,7 @@ export function RoutingTab({
                 </Button>
                 {isDirty && (
                   <Button size="sm" variant="ghost" onClick={() => served && setForm({
-                    os_model: served.os_model ?? "", worker_model: served.worker_model ?? "", provider: served.provider ?? NATIVE,
+                    os_model: served.os_model ?? "", worker_model: served.worker_model ?? "", provider: servedProvider,
                   })}>
                     Discard
                   </Button>

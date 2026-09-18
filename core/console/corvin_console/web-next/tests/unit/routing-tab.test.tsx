@@ -19,24 +19,27 @@ vi.mock("@/lib/auth", () => ({
 }));
 // The classifier-override cards are the moved TaskTypeCard (covered by the
 // engine-config real-data E2E); stub them so this test is about the pins.
+// Mutable so a test can defer the option list (options arriving AFTER the form).
+const claudeModels = { data: undefined as undefined | { models: { id: string; label: string }[]; sources: never[]; count: number; default_model_id: null }, isError: false };
+const CLAUDE_LIST = { models: [
+  { id: "claude-sonnet-5", label: "Sonnet 5" }, { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+], sources: [] as never[], count: 2, default_model_id: null };
 vi.mock("@/pages/models/components/engine-parts", () => ({
   TaskTypeCard: ({ config }: { config: { task_type: string } }) => <div data-testid={`card-${config.task_type}`} />,
   ClaudeSourceLine: () => null,
   fmtInt: (n: number) => String(n),
   useAuthLabel: () => "",
-  useClaudeModels: () => ({ data: { models: [
-    { id: "claude-sonnet-5", label: "Sonnet 5" }, { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
-  ], sources: [], count: 2, default_model_id: null } }),
+  useClaudeModels: () => claudeModels,
   useProviders: () => ({ data: { anthropic: { label: "Anthropic", kind: "cloud", model_source: "anthropic", credential_env: "", base_url: "" },
                                  ollama_local: { label: "Ollama", kind: "local", model_source: "ollama", credential_env: "", base_url: "" } } }),
 }));
 
 import { RoutingTab } from "@/pages/models/tabs/routing";
 
-const setting = (os: string | null, worker: string | null) => ({
+const setting = (os: string | null, worker: string | null, provider: string | null = null) => ({
   default_engine: "claude_code", valid_engines: ["claude_code"],
   engine_models: {
-    claude_code: { os_model: os, worker_model: worker, provider: null },
+    claude_code: { os_model: os, worker_model: worker, provider },
     other_engine: { os_model: "keep-me", worker_model: null, provider: "ollama_local" },
   },
   compliance_warnings: [],
@@ -44,9 +47,9 @@ const setting = (os: string | null, worker: string | null) => ({
 const config = { tenant_id: "_default", total_samples: 10, total_learned_samples: 0, learning_status: "idle", last_learning_update: null, last_updated: "",
   models: Object.fromEntries(["corvinOS", "SIMPLE", "MEDIUM", "COMPLEX"].map((t) => [t, { task_type: t, selected_model: "claude-sonnet-5", provider: null, alternatives: [], confidence_score: 0.5, run_count: 0, is_converged: false, classified_count: 2 }])) };
 
-function handlers(os: string | null, worker: string | null, onPut: (body: unknown, csrf: string | null) => Response) {
+function handlers(os: string | null, worker: string | null, onPut: (body: unknown, csrf: string | null) => Response, provider: string | null = null) {
   // Like the real route: a successful PUT changes what the next GET serves.
-  let current = setting(os, worker);
+  let current = setting(os, worker, provider);
   return [
     http.get("/v1/console/settings/engine", () => HttpResponse.json(current)),
     http.put("/v1/console/settings/engine", async ({ request }) => {
@@ -70,7 +73,8 @@ function renderTab(props: Partial<React.ComponentProps<typeof RoutingTab>> = {})
   return { ...utils, consumed };
 }
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); claudeModels.data = CLAUDE_LIST; claudeModels.isError = false; });
+claudeModels.data = CLAUDE_LIST;
 
 describe("Routing tab — turn pins", () => {
   it("Save pins sends the FULL map with the changed role and the CSRF header", async () => {
@@ -124,6 +128,39 @@ describe("Routing tab — turn pins", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save pins" }));
     await screen.findByText(/Not saved — a pin names a model/);
     expect(screen.queryByText(/SERVER SENTENCE/)).toBeNull();
+  });
+
+  it("a persisted provider 'anthropic' reads as the native option and is not dirty", async () => {
+    server.use(...handlers("claude-sonnet-5", null, () => HttpResponse.json({}), "anthropic"));
+    renderTab();
+    const source = (await screen.findByLabelText("Model source")) as HTMLSelectElement;
+    await waitFor(() => expect(source.value).toBe("__native__"));
+    expect(screen.getByRole("button", { name: "Save pins" })).toBeDisabled();
+  });
+
+  it("applies a preselect when the options arrive AFTER the form", async () => {
+    claudeModels.data = undefined;
+    server.use(...handlers("claude-sonnet-5", null, () => HttpResponse.json({})));
+    const { consumed, rerender } = renderTab({ preselect: "claude-haiku-4-5-20251001", preselectTurn: "os" });
+    await screen.findByLabelText("OS turn model");
+    expect(consumed).not.toHaveBeenCalled();
+    claudeModels.data = CLAUDE_LIST;
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <RoutingTab active preselect="claude-haiku-4-5-20251001" preselectTurn="os" onPreselectConsumed={consumed} />
+      </QueryClientProvider>,
+    );
+    const os = (await screen.findByLabelText("OS turn model")) as HTMLSelectElement;
+    await waitFor(() => expect(os.value).toBe("claude-haiku-4-5-20251001"));
+    expect(consumed).toHaveBeenCalled();
+  });
+
+  it("resolves a preselect with a note when the model source failed", async () => {
+    claudeModels.data = undefined; claudeModels.isError = true;
+    server.use(...handlers("claude-sonnet-5", null, () => HttpResponse.json({})));
+    const { consumed } = renderTab({ preselect: "claude-haiku-4-5-20251001", preselectTurn: "os" });
+    await screen.findByText(/could not be applied — the model source did not answer/);
+    expect(consumed).toHaveBeenCalledTimes(1);
   });
 
   it("lists the native path once (the registry's anthropic entry is not a second option)", async () => {

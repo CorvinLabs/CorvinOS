@@ -3381,6 +3381,42 @@ the served chunks: the header caption found FIRST, then the deleted h1s
 `tests/e2e/models-redirects.spec.ts` (Playwright, chromium, live host,
 read-only).
 
+**Learner contract since the implementation review (2026-09-18):** `ConfidenceOptimizer`
+reads THROUGH the persisted store on every read (its process cache is
+write-through only), `process_feedback` and `reset_learning` run under a
+per-tenant `fcntl` lock (`<tenant>/global/model_confidence_stats.lock`, see
+`confidence_persistence.locked()`), and a store MISS drops this process's
+in-memory history — three processes (bridge daemon, chat runtime, console
+feedback route) feed one file, and without these a console rating overwrote
+six daemon samples (the chain recorded n_samples 8 → 2) and a console reset
+left the daemon's stale trajectory to flip `is_converged` at five samples. A
+history-only row (a crash between the two writes) reads as absent. **The
+daemon runs the learner in-process: a change to `model_selection_optimizer.py`
+is live only after `corvin-voice-bridge-adapter.service` restarts.**
+
+**Recent-classification scan:** `RECENT_SCAN_LINES = 500_000` — the newest
+50 000 of 186 593 chain lines held ONE classified record (recent traffic is
+`learned_threshold_updated`/`skill.executed`), so the cap is the practical
+chain size; with the substring prefilter a 500k walk is ~0.2 s. The feedback
+round trip (409 check → learn → mark) is serialised by its own lock file
+(`model_feedback_rated.lock`) — never the learner's lock, which
+`process_feedback` takes itself (`flock` is per open-file-description; nesting
+from one thread deadlocks).
+
+**Login keeps the deep link:** `GET /v1/console/auth/local-login?next=…` honours
+a same-origin `/console/…` path (validated lexically AND after `normpath`;
+never a scheme, host, `//`, backslash, CR/LF or `..`), `RequireAuth` forwards
+`pathname + search`, `LoginPage` prefixes the basename. Before this a bounce
+landed every bookmark on `/app/chat`.
+
+**Known, outside this ADR:** `auth.py::_compute_lic_proof` calls
+`validator.reload_from_disk()` per authenticated op and the reload resets the
+feature root to free before re-resolving, so a request that computes its
+session proof inside that window is denied with "session proof mismatch"
+(one 401 in ~40 requests under four parallel Playwright workers). ADR-0154
+territory; the live specs run one worker at a time and log in through the
+request client.
+
 ### What you, as Claude Code, must NOT do (Models console)
 
 - **Don't give a tab its own window.** The header owns reset/clear; tabs only

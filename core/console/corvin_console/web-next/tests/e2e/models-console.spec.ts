@@ -2,7 +2,9 @@
  * ADR-0885 step 4 — the Models console on the LIVE host, exercised in the
  * browser. Every action here is either read-only or reversible and audited:
  *  - "Reset counters to now" then "Show full history" (net: window unchanged);
- *  - "Save pins" with the values already served (net: pins unchanged);
+ *  - the pin form: a real change enables "Save pins", Discard restores the
+ *    served value and writes nothing (the full-map PUT itself is proven in
+ *    tests/unit/routing-tab.test.tsx and core/console/tests/test_engine_setting_pins.py);
  *  - Export (a download, no state);
  *  - the rating form renders real recent classifications with Good/Poor
  *    (nothing is clicked — a rating is a learner sample and is proven over
@@ -31,10 +33,31 @@ test.beforeEach(async ({ page, baseURL }) => {
                     { timeout: 20_000 }).toBe(200);
 });
 
+let windowWasFull: boolean | null = null;
+
+// Cleanup on failure: if the window was full before this file ran and a test
+// died between "reset" and "show full history", restore the full history so
+// the operator's live window is not left narrowed.
+test.afterEach(async ({ page, baseURL }) => {
+  if (windowWasFull !== true) return;
+  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const status = await page.request.get(`${origin}/v1/console/learning/model-cost-optimizer/status`);
+  if (!status.ok()) return;
+  const body = (await status.json()) as { window?: { active?: boolean } };
+  if (!body.window?.active) return;
+  const who = await page.request.get(`${origin}/v1/console/auth/whoami`);
+  const csrf = who.ok() ? ((await who.json()) as { csrf_token?: string }).csrf_token : undefined;
+  if (!csrf) return;
+  await page.request.post(`${origin}/v1/console/learning/model-cost-optimizer/usage-epoch`, {
+    data: { clear: true }, headers: { "x-csrf-token": csrf },
+  });
+});
+
 test("window: reset counters to now, then show full history (reversible)", async ({ page }) => {
   await page.goto("/console/app/models?tab=usage-cost", { waitUntil: "domcontentloaded" });
   await expect(page.getByText(MARKER_HEADER)).toBeVisible({ timeout: 30_000 });
   const wasFull = await page.getByText("Counting window: full history").first().isVisible().catch(() => false);
+  windowWasFull = wasFull;
   await page.getByRole("button", { name: "Reset counters to now" }).click();
   await page.getByRole("button", { name: "Click again to confirm" }).click();
   await expect(page.getByText(/Counting since/).first()).toBeVisible({ timeout: 20_000 });
@@ -46,7 +69,7 @@ test("window: reset counters to now, then show full history (reversible)", async
   }
 });
 
-test("routing: Save pins with the served values writes and audits (no-op change)", async ({ page }) => {
+test("routing: a real change enables Save pins; Discard restores the served value and writes nothing", async ({ page }) => {
   await page.goto("/console/app/models?tab=routing", { waitUntil: "domcontentloaded" });
   await expect(page.getByText(MARKER_HEADER)).toBeVisible({ timeout: 30_000 });
   const os = page.getByLabel("OS turn model");
@@ -81,9 +104,24 @@ test("learning: recent classifications render with Good/Poor; export downloads",
 test("catalog: Use for … hands the model to Routing and clears the hand-off", async ({ page }) => {
   await page.goto("/console/app/models?tab=catalog", { waitUntil: "domcontentloaded" });
   await expect(page.getByText(MARKER_HEADER)).toBeVisible({ timeout: 30_000 });
-  const btn = page.getByRole("button", { name: "Use for OS turn" }).first();
-  await expect(btn).toBeVisible({ timeout: 20_000 });
-  await btn.click();
+  // Pick a row whose id differs from the served OS pin, so the hand-off
+  // makes the form dirty regardless of what is pinned on this host.
+  const pinned = (await page.locator("text=/^OS turn:/").first().locator("..").textContent()) ?? "";
+  // One catalog ROW (the outer card also matches ".rounded-lg.border"; the row has p-3).
+  const rows = page.locator("div.p-3.rounded-lg.border").filter({ has: page.getByRole("button", { name: "Use for OS turn" }) });
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  const n = await rows.count();
+  let clicked = false;
+  for (let i = 0; i < n; i++) {
+    const row = rows.nth(i);
+    const id = (await row.locator("div.text-xs.text-muted-foreground.break-all").first().textContent()) ?? "";
+    if (id && !pinned.includes(id.replace(/^claude-/, "").replace(/-\d{8}$/, ""))) {
+      await row.getByRole("button", { name: "Use for OS turn" }).click();
+      clicked = true;
+      break;
+    }
+  }
+  expect(clicked).toBe(true);
   await expect.poll(() => new URL(page.url()).search, { timeout: 15_000 }).toBe("?tab=routing");
   await expect(page.getByRole("button", { name: "Save pins" })).toBeEnabled({ timeout: 20_000 });
   await page.getByRole("button", { name: "Discard" }).click();

@@ -28,8 +28,9 @@ export function CatalogTab({ onUseFor }: { onUseFor: (id: string, turn: "os" | "
   const note = q.isError
     ? "Model registry request failed."
     : q.data && q.data.available === false
-      ? (q.data.detail ?? "Model registry not available on this build.")
+      ? "Model registry not available on this build."
       : "";
+  const noteTitle = q.data?.detail ?? undefined;
   const shown = models.filter((m) =>
     (!pricedOnly || m.priced) &&
     (!filter || m.id.toLowerCase().includes(filter.toLowerCase()) || m.name.toLowerCase().includes(filter.toLowerCase())));
@@ -66,7 +67,7 @@ export function CatalogTab({ onUseFor }: { onUseFor: (id: string, turn: "os" | "
       {q.isLoading ? (
         <div className="py-8 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
       ) : note ? (
-        <Card className="p-4"><div className="text-sm text-muted-foreground">{note}</div></Card>
+        <Card className="p-4"><div className="text-sm text-muted-foreground" title={noteTitle}>{note}</div></Card>
       ) : (
         <>
           {byCost.length > 1 && (
@@ -115,11 +116,13 @@ export function CatalogTab({ onUseFor }: { onUseFor: (id: string, turn: "os" | "
                         <div>{perMillion(m.input_usd_per_1k)} in</div>
                         <div>{perMillion(m.output_usd_per_1k)} out</div>
                         <div className="text-xs text-muted-foreground">per 1M tokens</div>
+                        {/* Only for the pinned engine: a hand-off to another engine's
+                            model can only end in "not offered". */}
                         <div className="mt-2 flex gap-1 justify-end">
-                          {m.turns.includes("os") && (
+                          {m.turns.includes("os") && m.engines.includes(pins?.default_engine ?? "claude_code") && (
                             <Button size="sm" variant="ghost" onClick={() => onUseFor(m.id, "os")}>Use for OS turn</Button>
                           )}
-                          {m.turns.includes("worker") && (
+                          {m.turns.includes("worker") && m.engines.includes(pins?.default_engine ?? "claude_code") && (
                             <Button size="sm" variant="ghost" onClick={() => onUseFor(m.id, "worker")}>Use for worker turn</Button>
                           )}
                         </div>
