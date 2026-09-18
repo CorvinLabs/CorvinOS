@@ -257,22 +257,19 @@ class ConfidenceOptimizer:
             last_updated=datetime.now(timezone.utc).isoformat(),
         )
 
-        # Track confidence history (persisted — see _load_stats/_check_convergence)
-        history = self._confidence_history[key]
-        history.append(new_confidence)
-        del history[:-self.CONVERGENCE_WINDOW]  # cap growth; only the window matters
-        try:
-            from . import confidence_persistence  # noqa: PLC0415
-            confidence_persistence.save_confidence_history(
-                f"model_stats:{task_type}:{model}:{tenant_id}", history,
-            )
-        except Exception as e:  # noqa: BLE001 — in-memory history still works this process
-            logger.warning(f"Failed to persist confidence history: {e}")
+        # Audit-FIRST, for real (ADR-0644, ADR-0885 step 0b, 2026-09-18). Until
+        # this date the in-memory history was appended, the convergence window
+        # read, and the history FILE written before the audit call — and the
+        # default backend could not fail closed at all (it discarded
+        # emit_skill_audit's False). Now nothing is mutated before the chain
+        # committed: the new history is a LOCAL list, convergence is computed
+        # from it, and only after write_event returned are memory, history
+        # file, cache and store touched. A refused chain leaves every one of
+        # them exactly as they were — the sample never happened.
+        new_history = self._confidence_history.get(key, [])[:] + [new_confidence]
+        del new_history[:-self.CONVERGENCE_WINDOW]  # cap growth; only the window matters
+        is_converged = self._converged(new_stats, new_history)
 
-        # Check convergence
-        is_converged = self._check_convergence(key)
-
-        # Audit log (FIRST, fail-closed)
         if self.audit_backend:
             try:
                 self.audit_backend.write_event(
@@ -289,7 +286,15 @@ class ConfidenceOptimizer:
                 logger.error(f"Failed to write audit event: {e}")
                 raise RuntimeError(f"Audit chain write failed: {e}")
 
-        # Persist (SECOND, safe to fail with log)
+        # Persist (SECOND — only reached when the chain committed)
+        self._confidence_history[key] = new_history
+        try:
+            from . import confidence_persistence  # noqa: PLC0415
+            confidence_persistence.save_confidence_history(
+                f"model_stats:{task_type}:{model}:{tenant_id}", new_history,
+            )
+        except Exception as e:  # noqa: BLE001 — in-memory history still works this process
+            logger.warning(f"Failed to persist confidence history: {e}")
         self._cache_stats(key, new_stats)
         if self.store is not None:
             try:
@@ -457,16 +462,27 @@ class ConfidenceOptimizer:
         WARNING: This deletes all stored confidence scores and sample history.
         Only call from console reset button or explicit operator action.
         """
-        # Clear cache
+        # Clear cache. A cache entry can exist WITHOUT history: _load_stats
+        # caches the uniform prior on a store miss, and after a refused chain
+        # write (audit-first) that is exactly the state left behind — so
+        # `pop`, never `del` (2026-09-18: `del` raised KeyError here and the
+        # console's reset answered 500 right after a 503 rating).
         keys_to_remove = [k for k in self._stats_cache.keys() if k[2] == tenant_id]
         for key in keys_to_remove:
-            del self._stats_cache[key]
-            del self._confidence_history[key]
+            self._stats_cache.pop(key, None)
+            self._confidence_history.pop(key, None)
 
-        # Clear store
+        # Clear store — tenant-EXACT. Store keys are
+        # ``model_stats:<task_type>:<model>:<tenant_id>`` and a model id may
+        # itself contain ":"; the tenant is always the LAST segment (same parse
+        # as confidence_persistence.list_entries). Until 2026-09-18 this was a
+        # substring test (``tenant_id in k``) over a store whose iterator walks
+        # EVERY tenant's file — tenant "a" reset tenant "b"'s
+        # ``…:claude-haiku…:b`` because "a" is in "claude" (ADR-0885 step 0b).
         if self.store is not None:
             try:
-                keys_to_delete = [k for k in self.store.keys() if tenant_id in k]
+                suffix = f":{tenant_id}"
+                keys_to_delete = [k for k in self.store.keys() if k.endswith(suffix)]
                 for k in keys_to_delete:
                     del self.store[k]
             except Exception as e:
@@ -530,18 +546,20 @@ class ConfidenceOptimizer:
         - variance < CONVERGENCE_THRESHOLD over last CONVERGENCE_WINDOW samples
         """
         stats = self._stats_cache.get(key)
-        if not stats or stats.n_samples < self.MIN_SAMPLES:
-            return False
+        return self._converged(stats, self._confidence_history.get(key, []))
 
-        history = self._confidence_history[key]
-        if len(history) < self.CONVERGENCE_WINDOW:
+    @classmethod
+    def _converged(cls, stats: Optional[ModelStats], history: List[float]) -> bool:
+        """Pure convergence rule over explicit inputs, so process_feedback can
+        evaluate the NEW state before anything is committed (audit-first)."""
+        if not stats or stats.n_samples < cls.MIN_SAMPLES:
             return False
-
-        recent = history[-self.CONVERGENCE_WINDOW:]
+        if len(history) < cls.CONVERGENCE_WINDOW:
+            return False
+        recent = history[-cls.CONVERGENCE_WINDOW:]
         mean = sum(recent) / len(recent)
         variance = sum((x - mean) ** 2 for x in recent) / len(recent)
-
-        return variance < self.CONVERGENCE_THRESHOLD
+        return variance < cls.CONVERGENCE_THRESHOLD
 
 
 class _SkillAuditBackend:
@@ -555,10 +573,15 @@ class _SkillAuditBackend:
     _ALLOWLIST_REGISTERED = False
 
     def write_event(self, *, event_type: str, tenant_id: str, **details: Any) -> None:
+        """Raises when the record did NOT reach the chain — that is what makes
+        process_feedback audit-first. ``emit_skill_audit`` itself never raises
+        (it returns False and logs), and until 2026-09-18 that False was
+        discarded here and a missing ``core.skills`` returned silently, so the
+        learner could never fail closed (ADR-0885 step 0b)."""
         try:
             from core.skills.skill_audit import emit_skill_audit  # noqa: PLC0415
-        except Exception:  # noqa: BLE001 — stripped install without core.skills
-            return
+        except Exception as e:  # noqa: BLE001 — stripped install without core.skills
+            raise RuntimeError(f"skill audit unavailable: {e}") from e
         if not self._ALLOWLIST_REGISTERED:
             try:
                 import corvin_core._bootstrap  # noqa: F401
@@ -573,12 +596,16 @@ class _SkillAuditBackend:
                 type(self)._ALLOWLIST_REGISTERED = True
             except Exception:  # noqa: BLE001 — best-effort; emit still tries
                 pass
-        emit_skill_audit(
+        ok = emit_skill_audit(
             tenant_id=tenant_id,
             event_type=event_type,
             tool="os.model_selector",
             details=details,
         )
+        if not ok:
+            raise RuntimeError(
+                f"core chain refused or unreachable for {event_type} (tenant {tenant_id})"
+            )
 
 
 # Singleton instance
