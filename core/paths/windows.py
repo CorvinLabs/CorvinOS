@@ -186,10 +186,20 @@ class PlatformPath:
 
     @property
     def corvin_home(self) -> Path:
-        """CorvinOS runtime root ($CORVIN_HOME or ~/.corvin)."""
+        """CorvinOS runtime root: ``$CORVIN_HOME``, else repo-local ``.corvin``
+        (source checkout), else ``~/.corvin``.
+
+        Mirrors ``core/paths/tenant.py::corvin_home`` — the canonical resolver
+        (see that module's docstring for why the repo-local check matters: a
+        source checkout with its own ``.corvin`` is the live root, and this
+        property used to skip that check, diverging from every other copy).
+        """
         env_override = os.environ.get("CORVIN_HOME")
         if env_override:
             return normalize_path(env_override)
+        repo_local = Path(__file__).resolve().parents[2] / ".corvin"
+        if repo_local.is_dir():
+            return repo_local
         return self.home / ".corvin"
 
     def path(self, *segments: Union[str, Path]) -> Path:

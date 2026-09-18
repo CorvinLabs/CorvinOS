@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # CorvinOS Robust Installation Script for Windows
 # Production-ready with comprehensive error handling, dependency detection, cleanup on failure
 #
@@ -26,7 +26,6 @@ param(
     [string]$Editable = ".",
 
     [switch]$DryRun = $false,
-    [switch]$Verbose = $false,
     [switch]$NoClaudeCode = $false,
     [switch]$Lan = $false
 )
@@ -36,7 +35,10 @@ param(
 # ─────────────────────────────────────────────────────────────────────────────
 
 $ErrorActionPreference = "Stop"
-$VerbosePreference = if ($Verbose) { "Continue" } else { "SilentlyContinue" }
+
+# Force TLS 1.2 (Windows PowerShell 5.1 / .NET Framework defaults can omit it,
+# which breaks HTTPS downloads to modern servers with "underlying connection was closed")
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # Timestamp for all logs
 $InstallTimestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
@@ -59,7 +61,8 @@ $InstallSteps = @(
     "Install corvinos package",
     "Bootstrap components",
     "Configure system services",
-    "Final verification"
+    "Final verification",
+    "Start console & open browser"
 )
 $CurrentStep = 0
 $TotalSteps = $InstallSteps.Count
@@ -116,6 +119,41 @@ function Write-Header {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host $Title -ForegroundColor Cyan
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+}
+
+function Invoke-DownloadWithRetry {
+    # Corporate/CDN networks intermittently reset the TLS handshake on the
+    # first attempt ("underlying connection was closed: unexpected error on
+    # send") even though the URL is reachable and TLS 1.2 is negotiated
+    # correctly — retrying the same request succeeds every time observed.
+    # curl.exe (Schannel) is tried first per attempt since it has proven more
+    # resilient than .NET's Invoke-WebRequest against this failure mode; it
+    # falls back to Invoke-WebRequest if curl is unavailable.
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [int]$MaxAttempts = 5,
+        [int]$TimeoutSec = 30
+    )
+    $useCurl = [bool](Get-Command curl.exe -ErrorAction SilentlyContinue)
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if ($useCurl) {
+                & curl.exe -fsSL --max-time $TimeoutSec -o $OutFile $Uri
+                if ($LASTEXITCODE -ne 0) {
+                    throw "curl.exe exited with code $LASTEXITCODE"
+                }
+            } else {
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+            }
+            return
+        } catch {
+            if ($attempt -ge $MaxAttempts) { throw }
+            $backoffSec = [math]::Min(2 * $attempt, 10)
+            Write-Log -Message "Download attempt $attempt/$MaxAttempts failed ($_); retrying in ${backoffSec}s..." -Level "Warn"
+            Start-Sleep -Seconds $backoffSec
+        }
+    }
 }
 
 function Write-Summary {
@@ -197,7 +235,7 @@ if ($osVersion.Major -lt 10) {
     Write-Summary -Status "FAILED" -ExitCode 2
     exit 2
 }
-Write-Log -Message "Windows version: $osVersion ($($ osInfo.Caption))" -Level "Success"
+Write-Log -Message "Windows version: $osVersion ($($osInfo.Caption))" -Level "Success"
 
 Write-Progress-Step "Checking prerequisites (curl, git)"
 $missingPrereqs = @()
@@ -277,7 +315,6 @@ if (-not $longPathEnabled) {
 
 Write-Progress-Step "Checking network connectivity"
 try {
-    $null = [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
     $testUrl = "https://github.com"
     $response = Invoke-WebRequest -Uri $testUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
     Write-Log -Message "Network connectivity verified" -Level "Success"
@@ -368,7 +405,16 @@ try {
 
 Write-Header "Phase 4: Bootstrap Environment Setup"
 
-$CorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else {
+# Single source of truth (mirrors core/paths/tenant.py::corvin_home and every
+# other paths.py copy across the codebase, and install.sh's Python-side
+# resolution): $CORVIN_HOME env var, else a repo-local .corvin next to the
+# source checkout, else the platform home directory's .corvin.
+$RepoLocalCorvinHome = Join-Path $EditablePath ".corvin"
+$CorvinHome = if ($env:CORVIN_HOME) {
+    $env:CORVIN_HOME
+} elseif (Test-Path -Path $RepoLocalCorvinHome -PathType Container) {
+    $RepoLocalCorvinHome
+} else {
     Join-Path $env:USERPROFILE ".corvin"
 }
 
@@ -408,8 +454,7 @@ if ($DryRun) {
 } else {
     try {
         Write-Log -Message "Downloading uv installer (version $UvVersion)..." -Level "Info"
-        Invoke-WebRequest -Uri $UvInstallerUrl -OutFile $UvInstallerPath `
-            -ErrorAction Stop -TimeoutSec 30 -UseBasicParsing
+        Invoke-DownloadWithRetry -Uri $UvInstallerUrl -OutFile $UvInstallerPath -TimeoutSec 30
 
         # Verify SHA256
         $hash = (Get-FileHash -Path $UvInstallerPath -Algorithm SHA256).Hash
@@ -465,8 +510,7 @@ if ($DryRun) {
 } else {
     try {
         Write-Log -Message "Downloading Node.js v$NodeVersion..." -Level "Info"
-        Invoke-WebRequest -Uri $NodeUrl -OutFile $NodeZipPath `
-            -ErrorAction Stop -TimeoutSec 60 -UseBasicParsing
+        Invoke-DownloadWithRetry -Uri $NodeUrl -OutFile $NodeZipPath -TimeoutSec 60
 
         Write-Log -Message "Extracting Node.js..." -Level "Info"
         Expand-Archive -Path $NodeZipPath -DestinationPath $env:TEMP -Force -ErrorAction Stop
@@ -494,14 +538,34 @@ if ($DryRun) {
 Write-Header "Phase 7: Install CorvinOS Package"
 
 Write-Progress-Step "Installing corvinos via uv"
+# Mirrors install.sh Phase 2: an editable path installs the LOCAL checkout
+# (with the [browser] extra), never the published PyPI package. install.ps1
+# used to ignore -Editable here entirely and always pull "corvinos>=2.0.0"
+# from PyPI, which is why an editable/dev install failed dependency
+# resolution against a package that was never meant to be fetched remotely.
+$uvArgs = @("tool", "install", "--force", "--editable", "$EditablePath[browser]")
 if ($DryRun) {
-    Write-Log -Message "[DRY RUN] Would run: uv tool install corvinos>=2.0.0" -Level "Info"
+    Write-Log -Message "[DRY RUN] Would run: uv $($uvArgs -join ' ')" -Level "Info"
 } else {
     try {
-        Write-Log -Message "Installing corvinos package..." -Level "Info"
-        $uvCmd = "uv tool install --force corvinos>=2.0.0"
-        Invoke-Expression $uvCmd 2>&1 | Tee-Object -FilePath $MainLogFile -Append | ForEach-Object {
-            Write-Log -Message $_ -Level "Debug"
+        Write-Log -Message "Installing corvinos package (editable from $EditablePath)..." -Level "Info"
+        # Local override: with the script-wide "Stop" preference, each stderr
+        # line uv writes gets promoted to a terminating error mid-pipeline,
+        # so only the FIRST diagnostic line ever reached the log (that is why
+        # a genuine "no solution found" resolver error looked like a
+        # one-line, unactionable message). Capture everything, then decide
+        # success/failure from the real exit code.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & uv @uvArgs 2>&1 | Tee-Object -FilePath $MainLogFile -Append | ForEach-Object {
+                Write-Log -Message $_ -Level "Debug"
+            }
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "uv exited with code $LASTEXITCODE"
         }
         Write-Log -Message "corvinos installation completed" -Level "Success"
     } catch {
@@ -627,6 +691,66 @@ if (-not $allChecksPassed) {
 Write-Progress-Step "Installation complete"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 11: Start Console Server & Launch Browser
+# ─────────────────────────────────────────────────────────────────────────────
+# Mirrors install.sh Phase 4: on Unix the installer starts corvinos-serve,
+# health-checks it, and opens the console in the default browser. install.ps1
+# used to stop short and just print "run corvinos serve yourself" — a real
+# Windows/Unix behavior gap, not just a cosmetic one.
+
+Write-Header "Phase 11: Start Console Server"
+
+$ConsoleUrl = "http://127.0.0.1:8765/console/"
+$HealthzUrl = "http://127.0.0.1:8765/v1/console/healthz"
+$ServerReady = $false
+
+if ($DryRun) {
+    Write-Progress-Step "Starting console server"
+    Write-Log -Message "[DRY RUN] Would start corvinos-serve and open $ConsoleUrl" -Level "Info"
+} else {
+    Write-Progress-Step "Starting console server"
+    try {
+        Invoke-WebRequest -Uri $HealthzUrl -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop | Out-Null
+        Write-Log -Message "Console server already running" -Level "Info"
+        $ServerReady = $true
+    } catch {
+        try {
+            Start-Process -FilePath "corvinos-serve" -WindowStyle Hidden -ErrorAction Stop
+            Write-Log -Message "Launched corvinos-serve" -Level "Info"
+        } catch {
+            Write-Log -Message "Failed to launch corvinos-serve: $_" -Level "Warn"
+        }
+    }
+
+    if (-not $ServerReady) {
+        Write-Log -Message "Waiting for console server to become healthy..." -Level "Info"
+        $BackoffSec = 1
+        for ($i = 0; $i -lt 30; $i++) {
+            try {
+                Invoke-WebRequest -Uri $HealthzUrl -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop | Out-Null
+                $ServerReady = $true
+                break
+            } catch {
+                Start-Sleep -Seconds $BackoffSec
+                if ($BackoffSec -lt 8) { $BackoffSec *= 2 }
+            }
+        }
+    }
+
+    if ($ServerReady) {
+        Write-Log -Message "Console server is healthy" -Level "Success"
+        try {
+            Start-Process $ConsoleUrl -ErrorAction Stop
+            Write-Log -Message "Opened $ConsoleUrl in default browser" -Level "Success"
+        } catch {
+            Write-Log -Message "Could not auto-open browser: $_ (open $ConsoleUrl manually)" -Level "Warn"
+        }
+    } else {
+        Write-Log -Message "Console server did not become healthy in time — start manually: corvinos serve" -Level "Warn"
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Summary & Exit
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -638,10 +762,14 @@ Write-Host "   CORVIN_HOME: $CorvinHome" -ForegroundColor White
 Write-Host "   Repository: $EditablePath" -ForegroundColor White
 Write-Host "   Logs: $LogDir" -ForegroundColor White
 Write-Host ""
-Write-Host "🚀 Next Steps:" -ForegroundColor Green
-Write-Host "   1. Test console: corvinos serve" -ForegroundColor White
-Write-Host "   2. Open browser: http://127.0.0.1:8765/console" -ForegroundColor White
-Write-Host "   3. Ask a question and verify voice summary" -ForegroundColor White
+if ($ServerReady) {
+    Write-Host "✅ Console is running: $ConsoleUrl" -ForegroundColor Green
+} else {
+    Write-Host "🚀 Next Steps:" -ForegroundColor Green
+    Write-Host "   1. Test console: corvinos serve" -ForegroundColor White
+    Write-Host "   2. Open browser: $ConsoleUrl" -ForegroundColor White
+    Write-Host "   3. Ask a question and verify voice summary" -ForegroundColor White
+}
 Write-Host ""
 Write-Host "ℹ️  For troubleshooting:" -ForegroundColor Green
 Write-Host "   See logs in: $LogDir" -ForegroundColor White
