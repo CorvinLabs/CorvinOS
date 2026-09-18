@@ -20,10 +20,10 @@ import {
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage, MarketplaceHubPage,
-  GitHubPage, SyncMonitorPage, EngineConfigPage,
-  ModelCostOptimizerPage, QualityGatesPage, VideoProducerPage,
+  GitHubPage, SyncMonitorPage,
+  QualityGatesPage, VideoProducerPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
-  LicensingAuditPage, OTELTelemetryPage, ModelSelectionPage, VibeEngineeringPage, ModelsPage,
+  LicensingAuditPage, OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -39,7 +39,6 @@ import { SkillInspector } from "@/components/SkillInspector";
 const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   DashboardPage,
   SettingsPage,
-  EngineConfigPage,
   ComputePage,
   BridgesPage,
   VoicePage,
@@ -68,14 +67,12 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   MarketplaceHubPage,
   GitHubPage,
   SyncMonitorPage,
-  ModelCostOptimizerPage,
   QualityGatesPage,
   VideoProducerPage,
   DataHubUnifiedPage,
   SkillForgeGeneratorPage,
   LicensingAuditPage,
   OTELTelemetryPage,
-  ModelSelectionPage,
   ModelsPage,
 };
 
@@ -94,7 +91,6 @@ export const PANELS: ConsolePanel[] = [
   rc("vibe-engineering", "Learnings", VibeEngineeringPage as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain", group: "primary" } }),
   rc("dashboard", "Dashboard", DashboardPage, { nav: { label: "Dashboard", icon: "LayoutDashboard", group: "primary" } }),
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
-  rc("engine-config", "Engine Config", EngineConfigPage, { nav: { label: "Engine Config", icon: "Settings", group: "intelligence" } }),
   rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),
   rc("bridges", "Bridges", BridgesPage, { nav: { label: "Channels", icon: "Network", group: "messaging" } }),
   rc("voice", "Voice", VoicePage, { nav: { label: "Profile", icon: "AudioLines", group: "messaging" } }),
@@ -135,8 +131,6 @@ export const PANELS: ConsolePanel[] = [
   // REMOVED: webhooks, audit, releases — backend routes 404 (not implemented)
   // Use compliance.tsx for audit needs; GitHub integration works via settings/github
   // REMOVED 2026-09-15 (operator request): learning-dashboard panel.
-  rc("model-cost-optimizer", "Model Cost Optimizer", ModelCostOptimizerPage,
-     { nav: { label: "Model Cost Optimizer", icon: "Zap", group: "observability" } }),
   rc("datahub-unified", "DataHub", DataHubUnifiedPage,
      { nav: { label: "DataHub", icon: "Database", group: "knowledge" } }),
   rc("skill-forge-generator", "Skill Forge", SkillForgeGeneratorPage,
@@ -145,12 +139,10 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Licensing Audit", icon: "Lock", group: "system" } }),
   rc("otel-telemetry", "OTEL Telemetry", OTELTelemetryPage,
      { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "observability" } }),
-  rc("model-selection", "Model Selection", ModelSelectionPage,
-     { nav: { label: "Model Selection", icon: "Brain", group: "intelligence" } }),
   // ADR-0885 — ONE panel for routing, usage & cost, learning and the catalogue.
-  // Reachable by deep link (and in NAV_EXEMPT) until step 3 replaces the three
-  // panels above with it in the sidebar; no nav.group here yet on purpose.
-  rc("models", "Models", ModelsPage, { nav: { label: "Models", icon: "Brain" } }),
+  // Replaced engine-config, model-cost-optimizer and model-selection on
+  // 2026-09-18; App.tsx redirects the three old paths to its tabs.
+  rc("models", "Models", ModelsPage, { nav: { label: "Models", icon: "Brain", group: "intelligence" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);

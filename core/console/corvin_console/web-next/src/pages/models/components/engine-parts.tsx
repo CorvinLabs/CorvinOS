@@ -2,8 +2,8 @@
  * Engine-configuration building blocks — moved VERBATIM from
  * pages/engine-config.tsx on 2026-09-18 (ADR-0885 step 2): the query hooks,
  * the task-type card + external-provider modal, the Claude Code auth status
- * card and the audit-chain Model Usage panel. The old page imports them from
- * here until step 3 deletes it, so every rendered string (including the
+ * card and the audit-chain Model Usage panel. The old page was deleted the same
+ * day (step 3), so every rendered string (including the
  * "Reading the audit chain" marker the chunk-crawl E2E looks for) has ONE
  * source. Design notes and provenance comments are the originals.
  */
@@ -832,7 +832,7 @@ export function ModelUsagePanel() {
               tenant's hash-chained audit chain (engine spans + OS turns), across
               every provider. No separate counter, no estimate.
             </p>
-            {/* ADR-0760 — the SAME window the Model Cost Optimizer applies, from
+            {/* ADR-0760 — the SAME window the Usage & Cost tab applies, from
                 the same stored epoch. Two panels quoting turn counts over
                 different periods is the specific confusion this label prevents. */}
             {data?.window?.active && (
@@ -841,7 +841,7 @@ export function ModelUsagePanel() {
                 Counting since{' '}
                 {new Date(data.window.since_iso as string).toLocaleString('en-US')} — older
                 turns are still in the audit trail but are not counted here.
-                Reset or clear the window in Model Cost Optimizer.
+                Reset or clear the window in the page header above.
               </p>
             )}
           </div>

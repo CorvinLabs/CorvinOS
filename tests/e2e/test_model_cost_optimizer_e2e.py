@@ -13,8 +13,8 @@ Tests:
 
 from __future__ import annotations
 
-import json
 import pytest
+from pathlib import Path
 from fastapi.testclient import TestClient
 
 from core.learning.learned_threshold_store import (
@@ -22,6 +22,20 @@ from core.learning.learned_threshold_store import (
     reset_store,
     StoredThreshold,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_corvin_home(tmp_path, monkeypatch):
+    """Never touch the operator's real store or chain (ADR-0885 step 3).
+
+    These tests reset and override the learned-threshold store; until the auth
+    fixture was fixed they answered 401 before reaching it, and the first run
+    that got through mutated the REAL tenant store. Both the store and every
+    chain reader resolve through CORVIN_HOME."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    reset_store("_default")
+    yield
+    reset_store("_default")
 
 
 @pytest.fixture
@@ -38,6 +52,37 @@ def test_client():
     # gateway mount and 404'd the browser).
     app = FastAPI()
     app.include_router(console_router, prefix="/v1/console")
+
+    # ADR-0885 step 3: require_session validates a COOKIE, so the old
+    # X-Session-ID headers never authenticated anything and 13 of these tests
+    # answered 401. Override the two auth dependencies with a fake owner
+    # record (the pattern core/console/tests/test_model_ranking_route.py uses).
+    import dataclasses
+    from core.console.corvin_console import auth as session_auth
+    from core.console.corvin_console import deps as console_deps
+
+    def _fake_record(tenant_id: str = "_default"):
+        now = 1_000_000.0
+        values = {}
+        for f in dataclasses.fields(session_auth.SessionRecord):
+            if f.default is not dataclasses.MISSING:
+                continue
+            ann = str(f.type)
+            if "float" in ann:
+                values[f.name] = now + (3600 if f.name == "expires_at" else 0)
+            elif "bool" in ann:
+                values[f.name] = False
+            elif f.name == "tier":
+                tier = getattr(session_auth, "Tier", None)
+                values[f.name] = next(iter(tier)) if tier else "owner"
+            elif f.name == "tenant_id":
+                values[f.name] = tenant_id
+            else:
+                values[f.name] = f"test-{f.name}"
+        return session_auth.SessionRecord(**values)
+
+    app.dependency_overrides[console_deps.require_session] = lambda: _fake_record()
+    app.dependency_overrides[console_deps.require_csrf] = lambda: _fake_record()
 
     return TestClient(app)
 
@@ -158,23 +203,25 @@ class TestAPIEndpoints:
 
 
 class TestDashboardPanel:
-    """Test dashboard panel rendering."""
+    """The panel is registered — read from the registry SOURCE (a TSX file is
+    not a Python module; the previous version of this class imported it as one
+    and could never pass). ADR-0885: the cost panel is the Usage & Cost tab of
+    the Models console, and /app/model-cost-optimizer redirects there."""
 
-    def test_panel_imports_without_error(self):
-        """Dashboard panel imports without error."""
-        from core.console.corvin_console.web_next.src.panels.ModelCostOptimizer import (
-            ModelCostOptimizer,
-        )
+    _WEB = Path(__file__).resolve().parents[2] / "core/console/corvin_console/web-next/src"
 
-        assert ModelCostOptimizer is not None
+    def test_models_panel_in_registry(self):
+        registry = (self._WEB / "panels/registry.tsx").read_text(encoding="utf-8")
+        assert 'rc("models", "Models", ModelsPage' in registry
+        assert 'rc("model-cost-optimizer"' not in registry
 
-    def test_panel_in_registry(self):
-        """Panel is registered in PANELS."""
-        from core.console.corvin_console.web_next.src.panels.registry import PANELS
+    def test_old_route_redirects_to_the_usage_cost_tab(self):
+        app_tsx = (self._WEB / "App.tsx").read_text(encoding="utf-8")
+        assert 'path="model-cost-optimizer"' in app_tsx
+        assert 'to="/app/models?tab=usage-cost"' in app_tsx
 
-        panel = next((p for p in PANELS if p.id == "model-cost-optimizer"), None)
-        assert panel is not None
-        assert panel.nav["label"] == "Model Cost Optimizer"
+    def test_usage_cost_tab_exists(self):
+        assert (self._WEB / "pages/models/tabs/usage-cost.tsx").exists()
 
 
 class TestOperatorControls:
@@ -317,14 +364,15 @@ class TestTenantIsolation:
 class TestErrorHandling:
     """Test error handling in API."""
 
-    def test_missing_auth_headers(self, test_client):
-        """Missing auth headers returns error."""
-        response = test_client.get(
-            "/v1/console/learning/model-cost-optimizer/status",
-        )
-
-        # Should fail without auth headers
-        assert response.status_code != 200
+    def test_missing_session_is_rejected(self):
+        """Without a session cookie the route answers 401 (the auth dependency is
+        the real one here — no override)."""
+        from core.console.corvin_console.app import router as console_router
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(console_router, prefix="/v1/console")
+        response = TestClient(app).get("/v1/console/learning/model-cost-optimizer/status")
+        assert response.status_code == 401
 
     def test_api_graceful_on_missing_store(self, test_client, auth_headers):
         """API handles missing store gracefully."""

@@ -30,10 +30,6 @@ const layoutSrc = readFileSync(
 /** Panels intentionally absent from the sidebar (reached from another panel,
  *  or a detail route). Add here WITH a reason rather than deleting the test. */
 const NAV_EXEMPT = new Set<string>([
-  // ADR-0885 step 1: the Models console is staged behind a deep link
-  // (/app/models) until step 3 removes engine-config, model-cost-optimizer and
-  // model-selection and links it from the sidebar in their place.
-  "models",
   // Reached from the Settings page (settings.tsx navigates to it), not the sidebar.
   "settings/github",
   // Backend routes are absent — /api/console/audit/* and /api/console/releases/*

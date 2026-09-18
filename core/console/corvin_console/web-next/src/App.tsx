@@ -166,10 +166,17 @@ export default function App() {
             <Route path="workflows/:wid" element={<WorkflowEditorPage />} />
             <Route path="workflows/:wid/runs" element={<WorkflowRunsPage />} />
             <Route path="workflows/:wid/runs/:rid" element={<WorkflowRunDetailPage />} />
-            {/* /app/engines (AI Engine page) removed 2026-09-10 — Engine Config
-                is its replacement. Both deprecated deep links now redirect there. */}
-            <Route path="engine-control" element={<Navigate to="/app/engine-config" replace />} />
-            <Route path="engines" element={<Navigate to="/app/engine-config" replace />} />
+            {/* ADR-0885 (2026-09-18): Engine Config, Model Cost Optimizer and Model
+                Selection were folded into the Models console. The three old paths
+                (and the two older /app/engines aliases) redirect to its tabs. These
+                sit AFTER the panel routes on purpose: react-router matches the
+                earlier sibling, so a redirect for a path that a mounted panel still
+                owns would be dead — the panels were removed in the same commit. */}
+            <Route path="engine-config" element={<Navigate to="/app/models?tab=routing" replace />} />
+            <Route path="model-cost-optimizer" element={<Navigate to="/app/models?tab=usage-cost" replace />} />
+            <Route path="model-selection" element={<Navigate to="/app/models?tab=catalog" replace />} />
+            <Route path="engine-control" element={<Navigate to="/app/models?tab=routing" replace />} />
+            <Route path="engines" element={<Navigate to="/app/models?tab=routing" replace />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>

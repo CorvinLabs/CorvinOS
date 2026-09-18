@@ -186,18 +186,10 @@ export const SyncMonitorPage = React.lazy(() =>
 // REMOVED: WebhooksPage, AuditPage, ReleasesPage — backend routes return 404
 // These are not implemented and should not be referenced
 
-export const EngineConfigPage = React.lazy(() =>
-  import("@/pages/engine-config").then((m) => ({ default: m.EngineConfigPage }))
-);
-
 // ADR-0760/0761 panel — its endpoints (/v1/console/learning/model-cost-optimizer/*)
 // are live. 95ecc2b6 pointed this at pages/model-cost-optimizer.tsx, which fetched
 // nine /api/v1/engine/* routes that exist nowhere in this console and crashed on
 // the 404 body; restored 2026-09-17.
-export const ModelCostOptimizerPage = React.lazy(() =>
-  import("@/panels/ModelCostOptimizer").then((m) => ({ default: m.ModelCostOptimizer }))
-);
-
 export const QualityGatesPage = React.lazy(() =>
   import("@/pages/quality").then((m) => ({ default: m.default }))
 );
@@ -225,10 +217,6 @@ export const OTELTelemetryPage = React.lazy(() =>
 /** ADR-0885 — the Models console (routing · usage & cost · learning · catalog). */
 export const ModelsPage = React.lazy(() =>
   import("@/pages/models").then((m) => ({ default: m.ModelsPage }))
-);
-
-export const ModelSelectionPage = React.lazy(() =>
-  import("@/pages/model-selection").then((m) => ({ default: m.ModelSelectionPage }))
 );
 
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)

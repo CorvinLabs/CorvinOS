@@ -25,7 +25,7 @@ const BREAKPOINTS = [
 
 const CRITICAL_PANELS = [
   '/console/app/chat',
-  '/console/app/engine-config',
+  '/console/app/models?tab=routing',
   '/console/app/marketplace',
   '/console/app/settings',
 ];
@@ -230,7 +230,7 @@ test.describe('Console Responsive Layouts — All Breakpoints', () => {
 
     test(`engine-config panel is responsive at ${bp.name} (${bp.width}×${bp.height})`, async ({ page }) => {
       await page.setViewportSize({ width: bp.width, height: bp.height });
-      await page.goto('/console/app/engine-config', { waitUntil: 'networkidle' });
+      await page.goto('/console/app/models?tab=routing', { waitUntil: 'networkidle' });
 
       const isResponsive = await verifyResponsiveLayout(page, bp);
       expect(isResponsive).toBe(true);
@@ -265,7 +265,7 @@ test.describe('Console Performance — Panel Load Times', () => {
   });
 
   test('engine-config panel loads in < 500ms', async ({ page }) => {
-    const loadTime = await measurePanelLoadTime(page, '/console/app/engine-config');
+    const loadTime = await measurePanelLoadTime(page, '/console/app/models?tab=routing');
     expect(loadTime).toBeLessThan(500);
   });
 

@@ -189,9 +189,18 @@ class TestOneChain:
 class TestLabelledDenominators:
     """The numbers that are NOT equal must be visibly not-the-same-thing."""
 
+    # ADR-0885 (2026-09-18): pages/engine-config.tsx was folded into the Models
+    # console; the task-type card and the Model Usage panel that carry these
+    # labels live in pages/models/components/engine-parts.tsx now.
+    _MODELS = _REPO / "core/console/corvin_console/web-next/src/pages/models"
+
     def _panel(self) -> str:
-        return (_REPO / "core/console/corvin_console/web-next/src/pages/engine-config.tsx"
-                ).read_text(encoding="utf-8")
+        return (self._MODELS / "components/engine-parts.tsx").read_text(encoding="utf-8")
+
+    def _models_tree(self) -> str:
+        return "\n".join(
+            f.read_text(encoding="utf-8") for f in sorted(self._MODELS.rglob("*.ts*"))
+        )
 
     def test_the_lifetime_sample_count_says_it_is_lifetime(self):
         panel = self._panel()
@@ -213,8 +222,8 @@ class TestLabelledDenominators:
         decimal — the same glyphs, a 1000x different value."""
         import re
 
-        panel = self._panel()
-        assert "toLocaleString('en-US')" in panel
+        panel = self._models_tree()  # every file of the Models console
+        assert "toLocaleString('en-US')" in panel or 'toLocaleString("en-US")' in panel
         # Match the CALL (leading dot, empty parens), not the phrase — the first
         # revision of this assertion matched the word inside the doc comment
         # explaining the rule and failed on a file that already followed it.

@@ -172,7 +172,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle missing required fields in response', async ({ page }) => {
-      await page.goto('/console/app/engine-config');
+      await page.goto('/console/app/models?tab=routing');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 

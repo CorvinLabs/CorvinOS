@@ -95,7 +95,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Engine & Compute Flow (Dependencies: Engines → Compute Jobs → Monitoring)', () => {
     test('Complete workflow: Engines → Compute Jobs → Monitoring', async ({ page }) => {
       // Step 1: Engines
-      await page.goto('/console/app/engine-config');
+      await page.goto('/console/app/models?tab=routing');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -320,7 +320,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
         '/app/tasks',
         '/app/settings',
         '/app/compliance',
-        '/app/engine-config',
+        '/app/models?tab=routing',
         '/app/api-keys'
       ];
 
@@ -400,7 +400,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
         '/app/tasks',
         '/app/api-keys',
         '/app/bridges',
-        '/app/engine-config',
+        '/app/models?tab=routing',
         '/app/settings'
       ];
 

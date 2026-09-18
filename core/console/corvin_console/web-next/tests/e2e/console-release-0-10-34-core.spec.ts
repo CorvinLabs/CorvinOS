@@ -20,7 +20,7 @@ const BREAKPOINTS = [
 
 const CRITICAL_PANELS = [
   '/console/app/chat',
-  '/console/app/engine-config',
+  '/console/app/models?tab=routing',
   '/console/app/settings',
 ];
 
@@ -139,7 +139,7 @@ test.describe('0.10.34 Performance', () => {
 
   test('engine-config panel loads < 500ms', async ({ page }) => {
     const start = Date.now();
-    await page.goto('/console/app/engine-config', { waitUntil: 'networkidle' });
+    await page.goto('/console/app/models?tab=routing', { waitUntil: 'networkidle' });
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(500);
   });

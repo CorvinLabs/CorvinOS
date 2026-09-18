@@ -5,6 +5,7 @@ import {
   AudioLines,
   BookOpen,
   Boxes,
+  Brain,
   CheckCircle,
   TrendingUp,
   ChevronDown,
@@ -79,7 +80,7 @@ function EngineChip() {
 
   return (
     <Link
-      to="/app/engine-config"
+      to="/app/models?tab=routing"
       title="Active AI engine — click to change"
       className={cn(
         "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors no-underline",
@@ -125,7 +126,7 @@ interface NavGroup {
 // Icon mapping for dynamic nav generation (ADR-0353 P1)
 // Matches icon names from ConsolePanel.nav.icon to lucide-react components
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-  Brain: TrendingUp,      // vibe-engineering, model-selection
+  Brain,                  // vibe-engineering, models (ADR-0885)
   CheckCircle,            // quality gates
   Settings,               // engine-config, settings
   Network,                // bridges
@@ -212,10 +213,11 @@ const NAV_GROUPS: NavGroup[] = [
     id: "intelligence",
     label: "Assistant",
     items: [
-      { to: "/app/engine-config",  label: "Engine Config", icon: Settings },
+      // ADR-0885: routing, usage & cost, learning and the catalogue in ONE panel
+      // (replaced Engine Config + Model Cost Optimizer + Model Selection, 2026-09-18).
+      { to: "/app/models",   label: "Models",    icon: Brain },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },
-      { to: "/app/model-cost-optimizer", label: "Model Cost Optimizer", icon: TrendingUp },
     ],
   },
   {
