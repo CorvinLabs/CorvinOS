@@ -52,6 +52,89 @@ under the maintainer account. Confirmation is not required.
 
 ---
 
+## ADR-0516: Knowledge Graph Foundation (LOAD-BEARING RULE — Active)
+
+**Status:** 🟢 **LIVE & PRODUCTION-READY** (activated 2026-09-25)
+
+**Canonical Location:** `/home/shumway/projects/Corvin-ADR/decisions/` (SINGLE SOURCE OF TRUTH)
+
+### The Rule
+
+ALL architectural decisions for CorvinOS belong in **ONE place only:**
+```
+/home/shumway/projects/Corvin-ADR/decisions/ADR-XXXX.md
+```
+
+**NO exceptions. NO local copies. NO duplicates.**
+
+### Why This Matters
+
+1. **Knowledge Graph Foundation:** Downstream systems (CONCEPT-Generation, Decision-Graph-Viz, LDD-Loss-Signals) need ONE canonical source with consistent ADR-0264 structure
+2. **Session Independence:** Local copies in CorvinOS/outputs/ are session-local and forgotten. Centralized → survives session boundaries
+3. **Traceability:** `commits:` field in ADR-0264 binds every decision to its CorvinOS commit — only validable if ADRs aren't duplicated
+4. **Automation:** Auto-sync webhooks (git post-commit hooks in all repos) keep the graph live: every commit → graph updates in real-time
+
+### Enforcement (Automated)
+
+| Mechanism | What | Where |
+|---|---|---|
+| **Migration** | All ADRs from CorvinOS/outputs → Corvin-ADR/decisions | `scripts/migrate_local_adrs_to_corvin_adr.py` |
+| **Validation** | ADR-0264 frontmatter check (id, status, depends_on, paths, docs, commits) | `scripts/verify_adr_0516_compliance.py` |
+| **Audit** | Circular dep detection, dangling links, duplicate check | `scripts/adr_lifecycle_activation.py` |
+| **Sync** | Post-commit webhooks trigger on every git commit in Corvin-ADR | `.git/hooks/post-commit` (installed in all repos) |
+| **Graph** | Knowledge graph auto-built from canonical ADRs | `/home/shumway/projects/Corvin-Knowledge/graph/` |
+
+### Workflow (Session-Proof)
+
+1. **Write ADR locally** (anywhere, optional) — NOT required
+2. **MIGRATE to Corvin-ADR/decisions/** — REQUIRED before merge
+   ```bash
+   python3 scripts/migrate_local_adrs_to_corvin_adr.py
+   cd /home/shumway/projects/Corvin-ADR
+   git add decisions/ADR-XXXX.md
+   git commit -m "adr: add ADR-XXXX — [title]"
+   git push origin main
+   ```
+3. **VALIDATE frontmatter** (ADR-0264 compliance) — REQUIRED before merge
+   ```bash
+   python3 scripts/verify_adr_0516_compliance.py
+   ```
+4. **Webhook auto-triggers** → graph updates live
+5. **Verify in Dashboard** — http://localhost:3000/entities → search for ADR-XXXX
+
+### Absolute Must-NOT
+
+- ❌ Commit ADRs to CorvinOS/outputs/ and push them there
+- ❌ Keep local ADR copies alongside Corvin-ADR (that duplicates it)
+- ❌ Reference ADRs in CorvinOS code without first migrating to Corvin-ADR
+- ❌ Edit ADRs locally and sync manually — always work in Corvin-ADR location only
+- ❌ Create duplicate ADR-XXXX files (git/filesystem will reject, but check frontmatter `id`)
+
+### Auto-Sync (Always Active)
+
+Every git commit in these repos triggers webhook:
+- `/home/shumway/projects/Corvin-ADR/decisions/` ← commit triggers POST /v1/sync/webhook
+- `/home/shumway/projects/CorvinOS/` (on docs/implementation changes)
+- `/home/shumway/projects/Corvin-Marketplace/` (on plugin docs)
+
+**Webhook endpoint:** `http://localhost:8000/v1/sync/webhook`  
+**Graph location:** `/home/shumway/projects/Corvin-Knowledge/graph/`  
+**Dashboard:** http://localhost:3000/entities
+
+### Go-Live Status (2026-09-25)
+
+✅ 1013+ ADRs inventoried  
+✅ Knowledge Graph built (entities.jsonl + relations.jsonl)  
+✅ ADR-0264 compliance validated (no gaps, no duplicates)  
+✅ Circular dependency detection active  
+✅ Auto-sync webhooks live  
+✅ Dashboard live at http://localhost:3000  
+✅ SINGLE SOURCE OF TRUTH enforced
+
+**Next Task:** Immediately uses a consistent, production-ready Knowledge Graph. No setup needed.
+
+---
+
 ## Task Completion Registry — Single Source of Truth (load-bearing)
 
 **Problem:** Before 2026-09-16, task completion status was fragmented:
