@@ -31,7 +31,7 @@ import pytest
 from core.skills.skill_manager import SkillManager
 
 _REPO = Path(__file__).resolve().parents[2]
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 _CONSOLE = _REPO / "core" / "console"
 for _p in [
     str(_OPERATOR / "bridges" / "shared"),

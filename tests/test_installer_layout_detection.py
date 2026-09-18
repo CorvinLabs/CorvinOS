@@ -31,7 +31,7 @@ def _checkout(root: Path, *, pyproject: str | None = _CORVINOS_PYPROJECT, core: 
     if core:
         (root / "core").mkdir()
     if operator:
-        (root / "operator").mkdir()
+        (root / "corvin_operator").mkdir()
     (root / "corvinOS" / "installer").mkdir(parents=True)
     return root
 

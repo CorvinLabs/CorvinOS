@@ -182,7 +182,7 @@ def emit_declaration_audit(result: DeclarationCheckResult) -> None:
         from pathlib import Path as _Path
 
         repo = _Path(__file__).resolve().parents[3]
-        forge = repo / "operator" / "forge"
+        forge = repo / "corvin_operator" / "forge"
         if forge.is_dir() and str(forge) not in sys.path:
             sys.path.insert(0, str(forge))
         from forge import security_events as _se  # type: ignore

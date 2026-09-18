@@ -35,7 +35,7 @@ import logging
 _log = logging.getLogger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
-_SHARED = _THIS_DIR.parents[3] / "operator" / "bridges" / "shared"
+_SHARED = _THIS_DIR.parents[3] / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 

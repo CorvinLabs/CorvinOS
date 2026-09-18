@@ -89,7 +89,7 @@ def test_core_root_resolves_site_packages_in_wheel_layout(tmp_path, monkeypatch)
     core/ lives two levels up (site-packages)."""
     site = tmp_path / "site-packages"
     vendor = site / "corvin_console" / "_vendor"
-    (vendor / "operator").mkdir(parents=True)
+    (vendor / "corvin_operator").mkdir(parents=True)
     (site / "core" / "orchestration").mkdir(parents=True)
 
     monkeypatch.setattr(resolver, "REPO_ROOT", vendor)
@@ -112,6 +112,6 @@ def test_forge_entry_script_is_vendored_in_wheel_map():
     finally:
         sys.path.remove(str(repo_root))
     srcs = [src for src, _ in hatch_build._VENDOR_MAP]
-    assert "operator/forge/forge.py" in srcs
+    assert "corvin_operator/forge/forge.py" in srcs
     for src, dest in hatch_build._VENDOR_MAP:
         assert (repo_root / src).exists(), f"vendor map source missing: {src}"

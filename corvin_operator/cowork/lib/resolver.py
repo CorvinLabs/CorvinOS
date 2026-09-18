@@ -116,7 +116,7 @@ def _ldd_module():
     if cached != "unset":
         return cached
     mod = None
-    candidate = REPO_ROOT / "operator" / "bridges" / "shared"
+    candidate = REPO_ROOT / "corvin_operator" / "bridges" / "shared"
     if candidate.is_dir():
         try:
             if str(candidate) not in sys.path:
@@ -270,7 +270,7 @@ def _bundle_policy_data() -> dict:
     cached = getattr(_bundle_policy_data, "_cache", None)
     if cached is not None:
         return cached
-    bundle = REPO_ROOT / "operator" / "forge" / "forge" / "policy.json"
+    bundle = REPO_ROOT / "corvin_operator" / "forge" / "forge" / "policy.json"
     try:
         data = json.loads(bundle.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -919,7 +919,7 @@ def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
             # REPO_ROOT/operator/mcp_manager exists in BOTH layouts (repo
             # checkout, and _vendor/operator/mcp_manager in a wheel where
             # REPO_ROOT == _vendor).
-            _mm_root = REPO_ROOT / "operator" / "mcp_manager"
+            _mm_root = REPO_ROOT / "corvin_operator" / "mcp_manager"
             if str(_mm_root) not in sys.path and _mm_root.is_dir():
                 sys.path.insert(0, str(_mm_root))
             import mcp_manager.activate as _mcp_activate  # type: ignore

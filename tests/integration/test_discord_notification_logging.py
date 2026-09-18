@@ -15,7 +15,7 @@ import pytest
 
 def test_routing_lookup_missing_logs_warning(caplog):
     """Verify that _routing_for() logs WARNING when no completion_notify record exists."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"))
 
     import task_progress
 
@@ -42,7 +42,7 @@ def test_routing_lookup_missing_logs_warning(caplog):
 
 def test_routing_lookup_import_error_logs_error(caplog):
     """Verify that _routing_for() logs ERROR when completion_notify import fails."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"))
 
     import task_progress
 
@@ -100,7 +100,7 @@ def test_notification_router_import_failure_logged():
 @pytest.mark.integration
 def test_emit_with_missing_routing_fails_silently_but_logs():
     """Integration test: emit() fails to queue when routing is missing, but logs the reason."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"))
 
     import task_progress
 

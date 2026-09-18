@@ -18,7 +18,7 @@ def _shared_profile_module():
     lang_cli.py / adapter.py do — `operator.bridges.shared.profile` is never
     importable as a dotted path (no `corvin_operator/__init__.py`, name collides
     with stdlib `operator`). Same helper as tests/test_installer_piper.py."""
-    shared_dir = Path(__file__).resolve().parent.parent / "operator" / "bridges" / "shared"
+    shared_dir = Path(__file__).resolve().parent.parent / "corvin_operator" / "bridges" / "shared"
     if str(shared_dir) not in sys.path:
         sys.path.insert(0, str(shared_dir))
     import profile as _profile_mod  # type: ignore  # noqa: PLC0415

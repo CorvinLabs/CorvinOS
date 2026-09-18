@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Lazy import of security_events (same pattern as metrics_recorders.py)
 _security_events = None
 _REPO = Path(__file__).resolve().parents[3]
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_BRIDGES_SHARED) not in sys.path:
     sys.path.insert(0, str(_BRIDGES_SHARED))
 

@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 import pytest
 
 _REPO = Path(__file__).resolve().parents[3]
-_OPERATOR_DIR = _REPO / "operator"
+_OPERATOR_DIR = _REPO / "corvin_operator"
 if str(_OPERATOR_DIR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR_DIR))
 

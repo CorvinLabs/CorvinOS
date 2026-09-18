@@ -110,7 +110,7 @@ def _load_migration_modules():
     """Ensure forge module is on sys.path and return migrate function."""
     # Repo root: ops/launcher/corvin/migrate_cmd.py -> parents[3]
     _REPO = Path(__file__).resolve().parents[3]
-    forge_dir = _REPO / "operator" / "forge"
+    forge_dir = _REPO / "corvin_operator" / "forge"
     if forge_dir.is_dir() and str(forge_dir) not in sys.path:
         sys.path.insert(0, str(forge_dir))
     from forge.tenant_migrate import migrate_to_default_tenant_if_needed  # noqa: PLC0415

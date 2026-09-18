@@ -17,8 +17,8 @@ from pathlib import Path
 
 # Ensure forge is on path
 _REPO = Path(__file__).resolve().parents[3]
-_FORGE = str(_REPO / "operator" / "forge")
-_SHARED = str(_REPO / "operator" / "bridges" / "shared")
+_FORGE = str(_REPO / "corvin_operator" / "forge")
+_SHARED = str(_REPO / "corvin_operator" / "bridges" / "shared")
 for _p in (_FORGE, _SHARED):
     if _p not in sys.path:
         sys.path.insert(0, _p)

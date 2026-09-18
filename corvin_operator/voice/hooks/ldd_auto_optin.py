@@ -32,7 +32,7 @@ def main() -> None:
     try:
         # Resolve forge.paths for the canonical corvin_home() if available.
         _repo = Path(__file__).resolve().parents[4]
-        _forge = _repo / "operator" / "forge"
+        _forge = _repo / "corvin_operator" / "forge"
         if str(_forge) not in sys.path:
             sys.path.insert(0, str(_forge))
         from forge.paths import corvin_home  # type: ignore[import]

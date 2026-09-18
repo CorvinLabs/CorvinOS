@@ -29,11 +29,11 @@ _REPO = _THIS_DIR.parents[3]
 # corvin_console/_vendor/corvin_operator/* (and _REPO points outside site-packages where
 # no corvin_operator/ exists), so the persona gallery was empty on a wheel install.
 # Resolve to whichever layout actually has the files (path-audit 2026-06-25 #MED6).
-_VENDOR_OPERATOR = _THIS_DIR.parent / "_vendor" / "operator"
+_VENDOR_OPERATOR = _THIS_DIR.parent / "_vendor" / "corvin_operator"
 
 
 def _resolve_bundle_dir() -> Path:
-    repo = _REPO / "operator" / "cowork" / "personas"
+    repo = _REPO / "corvin_operator" / "cowork" / "personas"
     if repo.is_dir():
         return repo
     vendored = _VENDOR_OPERATOR / "cowork" / "personas"

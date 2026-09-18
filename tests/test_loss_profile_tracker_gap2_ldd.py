@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 # Add operator package to path
-_op_root = Path(__file__).parent.parent / "operator" / "orchestration"  # `tde` is a top-level package there (no corvin_operator/orchestration/__init__.py)
+_op_root = Path(__file__).parent.parent / "corvin_operator" / "orchestration"  # `tde` is a top-level package there (no corvin_operator/orchestration/__init__.py)
 if str(_op_root) not in sys.path:
     sys.path.insert(0, str(_op_root))
 

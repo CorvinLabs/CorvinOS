@@ -118,7 +118,7 @@ def _emit(event_type: str, details: dict[str, Any], *, severity: str = "INFO") -
     """Best-effort audit emit.  Never raises.  Only allow-listed keys."""
     try:
         repo = Path(__file__).resolve().parents[3]
-        forge_path = repo / "operator" / "forge"
+        forge_path = repo / "corvin_operator" / "forge"
         if forge_path.is_dir() and str(forge_path) not in sys.path:
             sys.path.insert(0, str(forge_path))
         from forge import security_events as _se  # type: ignore

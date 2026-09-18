@@ -52,7 +52,7 @@ def _provider_default_model() -> "str | None":
     # Repo layout: <root>/corvinOS/installer/steps/ → <root>/corvin_operator/voice/scripts
     scripts = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "..", "..", "operator", "voice", "scripts",
+        "..", "..", "..", "corvin_operator", "voice", "scripts",
     ))
     if os.path.isdir(scripts) and scripts not in sys.path:
         sys.path.insert(0, scripts)

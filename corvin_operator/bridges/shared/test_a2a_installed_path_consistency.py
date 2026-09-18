@@ -68,7 +68,7 @@ class TestInstalledLayoutConsistency:
         venv_root = tmp_path / "corvinos-venv"
         _install_fake_corvin_console(monkeypatch, venv_root)
 
-        expected_operator_root = venv_root / "operator"
+        expected_operator_root = venv_root / "corvin_operator"
 
         receiver_origins = _rtr._default_repo_relative("cowork", "remote_origins")
         sender_endpoints = _rts._default_endpoints_dir()
@@ -102,7 +102,7 @@ class TestInstalledLayoutConsistency:
         # Sanity check against the ACTUAL dev checkout (no mocking) — the
         # fix must not regress the common case.
         result = _rts._default_endpoints_dir()
-        assert result.parts[-3:] == ("operator", "cowork", "remote_endpoints")
+        assert result.parts[-3:] == ("corvin_operator", "cowork", "remote_endpoints")
         repo_root = result.parents[2]
         assert (repo_root / ".corvin_repo").exists() or (repo_root / "plugins").is_dir()
 

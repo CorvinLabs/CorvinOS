@@ -26,7 +26,7 @@ from ..deps import require_session
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
 
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_BRIDGES_SHARED) not in sys.path:
     sys.path.insert(0, str(_BRIDGES_SHARED))
 

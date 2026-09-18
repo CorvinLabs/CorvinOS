@@ -105,7 +105,7 @@ def _hermes_reachable() -> bool:
         # hermes_bootstrap's actual reachability logic. Fixed via the
         # repo's working sys.path + bare-import pattern.
         from pathlib import Path
-        _shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        _shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
         if _shared.is_dir() and str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from hermes_bootstrap import is_ollama_reachable
@@ -153,7 +153,7 @@ def _try_start_ollama() -> bool:
     try:
         # ADR-0215 F5: same fix as _hermes_reachable() above.
         from pathlib import Path
-        _shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        _shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
         if _shared.is_dir() and str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from hermes_bootstrap import ensure_ollama_running

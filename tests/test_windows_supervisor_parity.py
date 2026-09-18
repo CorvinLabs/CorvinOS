@@ -21,11 +21,11 @@ import re
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
-_SUPERVISOR = _REPO / "operator" / "bridges" / "shared" / "corvin-supervisor.ps1"
+_SUPERVISOR = _REPO / "corvin_operator" / "bridges" / "shared" / "corvin-supervisor.ps1"
 _INSTALL_PS1 = _REPO / "install.ps1"
 _INSTALL_SH = _REPO / "install.sh"
-_BRIDGE_PS1 = _REPO / "operator" / "bridges" / "bridge.ps1"
-_BRIDGE_MANAGER = _REPO / "operator" / "bridges" / "bridge_manager.py"
+_BRIDGE_PS1 = _REPO / "corvin_operator" / "bridges" / "bridge.ps1"
+_BRIDGE_MANAGER = _REPO / "corvin_operator" / "bridges" / "bridge_manager.py"
 
 
 def _generated_supervisor_block() -> str:

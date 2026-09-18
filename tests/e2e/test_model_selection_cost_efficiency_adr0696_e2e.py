@@ -360,7 +360,7 @@ class TestAcsWorkerCostSurvivesTheRealAuditWriter:
     @staticmethod
     def _write_event():
         repo = Path(__file__).resolve().parents[2]
-        forge_path = str(repo / "operator" / "forge")
+        forge_path = str(repo / "corvin_operator" / "forge")
         if forge_path not in sys.path:
             sys.path.insert(0, forge_path)
         from forge import security_events  # noqa: PLC0415

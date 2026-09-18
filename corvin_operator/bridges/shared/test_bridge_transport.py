@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[3]
-_SHARED = str(_REPO / "operator" / "bridges" / "shared")
-_HELPERS = str(_REPO / "operator" / "forge" / "forge" / "sandbox_helpers")
+_SHARED = str(_REPO / "corvin_operator" / "bridges" / "shared")
+_HELPERS = str(_REPO / "corvin_operator" / "forge" / "forge" / "sandbox_helpers")
 for _p in (_SHARED,):
     if _p not in sys.path:
         sys.path.insert(0, _p)

@@ -5,7 +5,7 @@ Tests plugin registration, signature validation, and CLS-tier gating.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "orchestration"))
 
 from tde.detector_plugin_registry import (
     DetectorPluginRegistry,

@@ -34,9 +34,9 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 for _p in (
     _REPO,
-    _REPO / "operator",
-    _REPO / "operator" / "bridges",
-    _REPO / "operator" / "bridges" / "shared",
+    _REPO / "corvin_operator",
+    _REPO / "corvin_operator" / "bridges",
+    _REPO / "corvin_operator" / "bridges" / "shared",
 ):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

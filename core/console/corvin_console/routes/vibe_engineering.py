@@ -40,7 +40,7 @@ try:
     # Source tree → <repo>/corvin_operator/context_engineering; wheel → the vendored
     # copy. Without the fallback the editor + inspector degraded to "unavailable"
     # on every pip install (fixed 2026-08-11 alongside the missing vendor entry).
-    _ce_dir = Path(__file__).resolve().parents[4] / "operator" / "context_engineering"
+    _ce_dir = Path(__file__).resolve().parents[4] / "corvin_operator" / "context_engineering"
     if not _ce_dir.is_dir():
         from .._operator_bootstrap import vendor_operator_root as _vor  # noqa: PLC0415
         _vroot = _vor()

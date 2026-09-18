@@ -589,7 +589,7 @@ class AnthropicBatchEngine:
             # Forward-compatible: if the guard module isn't on path, best-effort pass.
             try:
                 import sys
-                _shared = Path(__file__).resolve().parents[5] / "operator" / "bridges" / "shared"
+                _shared = Path(__file__).resolve().parents[5] / "corvin_operator" / "bridges" / "shared"
                 if str(_shared) not in sys.path:
                     sys.path.insert(0, str(_shared))
                 from data_classification import (  # type: ignore

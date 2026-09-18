@@ -36,7 +36,7 @@ def _fresh_skip_live_resolver():
     """Re-import the test_engines_e2e module fresh and return its
     _resolve_skip_live function so each test starts with a clean
     process state for the deprecation-print path."""
-    mod_path = REPO / "operator" / "bridges" / "shared" / "agents"
+    mod_path = REPO / "corvin_operator" / "bridges" / "shared" / "agents"
     sys.path.insert(0, str(mod_path.parent))
     sys.path.insert(0, str(mod_path))
     for mod in ("test_engines_e2e", "agents", "agents.claude_code",

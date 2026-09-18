@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[3]
-for _p in (_REPO / "operator" / "forge", _REPO / "operator" / "bridges" / "shared",
+for _p in (_REPO / "corvin_operator" / "forge", _REPO / "corvin_operator" / "bridges" / "shared",
            _REPO / "core" / "compliance"):
     if str(_p) not in sys.path:
         sys.path.append(str(_p))

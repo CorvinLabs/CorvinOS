@@ -23,7 +23,7 @@ import pytest
 import yaml
 
 # Make sure we can import from the shared adapter directory
-_SHARED = Path(__file__).resolve().parents[1] / "operator" / "bridges" / "shared"
+_SHARED = Path(__file__).resolve().parents[1] / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 

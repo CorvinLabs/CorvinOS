@@ -63,7 +63,7 @@ from urllib.parse import urlparse
 # Forge path so we can audit + reuse path helpers.
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 
@@ -84,7 +84,7 @@ from .runs import RunRecord
 # add ``core/console`` + ``corvin_operator/bridges/shared`` to the path (the gateway
 # already mounts the console in-process, so the import is available) and import
 # the resolver + the L35 EgressGate engine spawns use.
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 _CONSOLE_PKG = _REPO / "core" / "console"
 for _p in (_BRIDGES_SHARED, _CONSOLE_PKG):
     if str(_p) not in sys.path:

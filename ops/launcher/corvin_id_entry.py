@@ -13,12 +13,12 @@ def main() -> None:
     _scripts = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..",
-        "operator", "voice", "scripts",
+        "corvin_operator", "voice", "scripts",
     ))
     _shared = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..",
-        "operator", "bridges", "shared",
+        "corvin_operator", "bridges", "shared",
     ))
     _op = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),

@@ -90,7 +90,7 @@ def _forge_spec(persona: str, repo_root: Path) -> McpServerSpec:
         name=SERVER_FORGE,
         command=sys.executable,
         args=[
-            str(repo_root / "operator" / "forge" / "forge.py"),
+            str(repo_root / "corvin_operator" / "forge" / "forge.py"),
             "mcp",
             "--permission-mode",
             "yes",
@@ -106,7 +106,7 @@ def _forge_spec(persona: str, repo_root: Path) -> McpServerSpec:
             "CORVIN_CALLER_PERSONA": persona,
             # PYTHONPATH so the spawned forge.py can import its own
             # package modules.
-            "PYTHONPATH": str(repo_root / "operator" / "forge"),
+            "PYTHONPATH": str(repo_root / "corvin_operator" / "forge"),
         },
     )
 

@@ -42,7 +42,7 @@ def _ensure_bridge_shared_on_path() -> None:
     __init__.py that would shadow another package if placed first on the path."""
     import sys as _sys
     repo_root = Path(__file__).resolve().parents[3]  # ops/launcher/corvin → repo root
-    shared = repo_root / "operator" / "bridges" / "shared"
+    shared = repo_root / "corvin_operator" / "bridges" / "shared"
     if shared.is_dir() and str(shared) not in _sys.path:
         _sys.path.append(str(shared))
 

@@ -133,7 +133,7 @@ class TestInRepoResolutionUnchanged(unittest.TestCase):
         repo_root = _HERE.parent.parent.parent  # shared -> bridges -> operator -> repo root
         self.assertEqual(
             rts._REMOTE_ENDPOINTS_DEFAULT,
-            repo_root / "operator" / "cowork" / "remote_endpoints",
+            repo_root / "corvin_operator" / "cowork" / "remote_endpoints",
         )
 
     def test_receiver_defaults_match_pre_fix_paths(self):
@@ -141,15 +141,15 @@ class TestInRepoResolutionUnchanged(unittest.TestCase):
         repo_root = _HERE.parent.parent.parent
         self.assertEqual(
             rtr._REMOTE_ORIGINS_DEFAULT,
-            repo_root / "operator" / "cowork" / "remote_origins",
+            repo_root / "corvin_operator" / "cowork" / "remote_origins",
         )
         self.assertEqual(
             rtr._REMOTE_ENDPOINTS_DEFAULT,
-            repo_root / "operator" / "cowork" / "remote_endpoints",
+            repo_root / "corvin_operator" / "cowork" / "remote_endpoints",
         )
         self.assertEqual(
             rtr._A2A_NETWORK_PUBKEY_PATH,
-            repo_root / "operator" / "license" / "a2a_network_pubkey.pem",
+            repo_root / "corvin_operator" / "license" / "a2a_network_pubkey.pem",
         )
 
     def test_http_server_default_matches_pre_fix_path(self):
@@ -157,7 +157,7 @@ class TestInRepoResolutionUnchanged(unittest.TestCase):
         repo_root = _HERE.parent.parent.parent
         self.assertEqual(
             a2ahs._DEFAULT_COWORK_DIR,
-            repo_root / "operator" / "cowork",
+            repo_root / "corvin_operator" / "cowork",
         )
 
 

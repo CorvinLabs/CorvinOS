@@ -86,14 +86,14 @@ from ..utils import read_json_or_none as _read_json
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 
 from forge import paths as _forge_paths  # noqa: E402
 from forge import security_events as _forge_security_events  # noqa: E402
 
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 if str(_OPERATOR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR))
 try:
@@ -2090,7 +2090,7 @@ tr.baseline td{{background:#faf5eb}}
 def _load_awp_exporter() -> type:
     """Lazy-import PipelineAWPExporter from the shared bridge module."""
     import sys as _sys
-    _shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+    _shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
     if str(_shared) not in _sys.path:
         _sys.path.insert(0, str(_shared))
     from compute_awp_exporter import PipelineAWPExporter  # type: ignore[import]
@@ -2716,7 +2716,7 @@ def compute_run_narrative(
     if not run_dir.exists():
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"run {run_id!r} not found")
 
-    _shared = _REPO / "operator" / "bridges" / "shared"
+    _shared = _REPO / "corvin_operator" / "bridges" / "shared"
     if str(_shared) not in sys.path:
         sys.path.insert(0, str(_shared))
     try:
@@ -2759,7 +2759,7 @@ def compute_run_narrative(
 
 def _get_narrate_run():
     """Return the narrate_run callable, adding shared dir to sys.path if needed."""
-    _shared = _REPO / "operator" / "bridges" / "shared"
+    _shared = _REPO / "corvin_operator" / "bridges" / "shared"
     if str(_shared) not in sys.path:
         sys.path.insert(0, str(_shared))
     try:
@@ -2810,7 +2810,7 @@ def compute_run_voice(
         text = narrative.get("text", "")
         lang = narrative.get("lang", "en")
 
-        say_script = _REPO / "operator" / "voice" / "scripts" / "say.py"
+        say_script = _REPO / "corvin_operator" / "voice" / "scripts" / "say.py"
         if not say_script.exists():
             # Wheel install: corvin_operator/ is vendored under _vendor/operator.
             try:
@@ -2857,7 +2857,7 @@ def compute_run_voice(
 # Engine selection is spec-driven: a workflow with
 # ``orchestration.engine: delegation_loop`` dispatches here.
 
-_ACS_SHARED = _REPO / "operator" / "bridges" / "shared"
+_ACS_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_ACS_SHARED) not in sys.path:
     sys.path.insert(0, str(_ACS_SHARED))
 
@@ -3830,7 +3830,7 @@ def compute_acs_run_graph(
 # WITHOUT a tenant stamp (pre-fix runs, standalone bench runs) are never
 # served to any tenant.
 
-_TDE_AUDIT_SHARED = _REPO / "operator" / "bridges" / "shared"
+_TDE_AUDIT_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_TDE_AUDIT_SHARED) not in sys.path:
     sys.path.insert(0, str(_TDE_AUDIT_SHARED))
 try:

@@ -72,7 +72,7 @@ class BridgeManager:
         if requirements_path is None:
             # Try repo-relative path
             repo_root = Path(__file__).resolve().parent.parent.parent
-            requirements_path = repo_root / "operator" / "bridges" / channel / "requirements.txt"
+            requirements_path = repo_root / "corvin_operator" / "bridges" / channel / "requirements.txt"
 
         if not requirements_path.exists():
             print(f"No requirements.txt found for {channel}, skipping pip install")
@@ -96,7 +96,7 @@ class BridgeManager:
         """Install Node.js dependencies for a bridge."""
         if package_json_path is None:
             repo_root = Path(__file__).resolve().parent.parent.parent
-            package_json_path = repo_root / "operator" / "bridges" / channel / "package.json"
+            package_json_path = repo_root / "corvin_operator" / "bridges" / channel / "package.json"
 
         if not package_json_path.exists():
             print(f"No package.json found for {channel}, skipping npm install")

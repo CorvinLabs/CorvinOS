@@ -65,7 +65,7 @@ def _bridge_status(channel: str) -> dict[str, Any]:
     """
     home = _forge_paths.corvin_home() if _forge_paths is not None else None
     canonical = (home / "bridges" / channel / "settings.json") if home else None
-    legacy    = _REPO / "operator" / "bridges" / channel / "settings.json"
+    legacy    = _REPO / "corvin_operator" / "bridges" / channel / "settings.json"
 
     found_path: Any = None
     if canonical is not None and canonical.exists():

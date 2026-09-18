@@ -18,15 +18,15 @@ _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[2]  # corvin_console/ → console/ → core/ → repo root
 
 _OPERATOR_PATHS: tuple[Path, ...] = (
-    _REPO / "operator" / "forge",
-    _REPO / "operator" / "bridges" / "shared",
-    _REPO / "operator" / "bridges",
-    _REPO / "operator",
-    _REPO / "operator" / "voice" / "scripts",
-    _REPO / "operator" / "mcp_manager",
-    _REPO / "operator" / "skill-forge",
-    _REPO / "operator" / "license",
-    _REPO / "operator" / "cowork",
+    _REPO / "corvin_operator" / "forge",
+    _REPO / "corvin_operator" / "bridges" / "shared",
+    _REPO / "corvin_operator" / "bridges",
+    _REPO / "corvin_operator",
+    _REPO / "corvin_operator" / "voice" / "scripts",
+    _REPO / "corvin_operator" / "mcp_manager",
+    _REPO / "corvin_operator" / "skill-forge",
+    _REPO / "corvin_operator" / "license",
+    _REPO / "corvin_operator" / "cowork",
 )
 
 

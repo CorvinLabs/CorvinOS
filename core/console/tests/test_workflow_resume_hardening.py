@@ -22,7 +22,7 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 _CONSOLE = _REPO / "core" / "console"
 _WORKFLOWS = _REPO / "core" / "workflows"
 

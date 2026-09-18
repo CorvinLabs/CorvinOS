@@ -230,7 +230,7 @@ def _audit(*, channel: str, chat_key: str, uid: str,
                 repo = parent
                 break
         if repo is not None:
-            forge_pkg = repo / "operator" / "forge"
+            forge_pkg = repo / "corvin_operator" / "forge"
             if str(forge_pkg) not in sys.path:
                 sys.path.insert(0, str(forge_pkg))
         from forge.security_events import write_event  # type: ignore

@@ -356,7 +356,7 @@ def _write_outbox(channel: str, chat_id: str, text: str, *, extra: dict[str, Any
 
     _here = _Path(__file__).resolve()
     _repo = _here.parents[3]  # workflows/corvin_workflows/ → core/ → repo root
-    _bridges_shared = _repo / "operator" / "bridges" / "shared"
+    _bridges_shared = _repo / "corvin_operator" / "bridges" / "shared"
     # Honour the same ADAPTER_OUTBOX override adapter.py uses. Without it this
     # path was hardcoded to the live repo outbox, so every test run of a
     # deliver/ask_human/answer node queued a real envelope for the real

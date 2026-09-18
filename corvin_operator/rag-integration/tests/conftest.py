@@ -13,8 +13,8 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
 for _p in (
-    str(_REPO / "operator" / "bridges"),   # enables `import shared` (the package)
-    str(_REPO / "operator" / "forge"),     # forge.paths / security_events
+    str(_REPO / "corvin_operator" / "bridges"),   # enables `import shared` (the package)
+    str(_REPO / "corvin_operator" / "forge"),     # forge.paths / security_events
     str(_REPO),
 ):
     if _p not in sys.path:

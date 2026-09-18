@@ -12,7 +12,7 @@ from pathlib import Path
 # Setup paths — repo root relative to this file
 repo_root = Path(__file__).resolve().parents[3]
 core_root = repo_root / "core"
-operator_root = repo_root / "operator"
+operator_root = repo_root / "corvin_operator"
 
 # Add core AND operator to path FIRST
 sys.path.insert(0, str(core_root))

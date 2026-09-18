@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
 
 from remote_trigger_sender import (
     RemoteTriggerSender, SendResult, ErrorCategory, TransportError, ResponseVerificationError

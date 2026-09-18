@@ -24,8 +24,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 ADAPTER = ROOT / "adapter.py"
 REPO = ROOT.parent.parent.parent  # operator/bridges/shared/ -> repo (ADR-0035)
-SKILL_FORGE_PKG = REPO / "operator" / "skill-forge"
-FORGE_PKG = REPO / "operator" / "forge"
+SKILL_FORGE_PKG = REPO / "corvin_operator" / "skill-forge"
+FORGE_PKG = REPO / "corvin_operator" / "forge"
 
 TEST_CHANNEL = "skillinject"
 # Isolate the channel-settings dir under a private tmp bridges root (passed to

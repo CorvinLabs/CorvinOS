@@ -45,8 +45,8 @@ def agent_event(
     # Make bridge shared/ importable.
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
-        if (parent / "operator").is_dir():
-            shared = parent / "operator" / "bridges" / "shared"
+        if (parent / "corvin_operator").is_dir():
+            shared = parent / "corvin_operator" / "bridges" / "shared"
             if str(shared) not in sys.path:
                 sys.path.insert(0, str(shared))
             break

@@ -15,7 +15,7 @@ sys.path.insert(0, project_root)
 
 # Force operator submodule to be registered as a package
 import corvin_operator as stdlib_operator
-_task_analysis_path = os.path.join(project_root, "operator", "task_analysis")
+_task_analysis_path = os.path.join(project_root, "corvin_operator", "task_analysis")
 if not hasattr(stdlib_operator, 'task_analysis'):
     import importlib.util
     spec = importlib.util.spec_from_file_location(

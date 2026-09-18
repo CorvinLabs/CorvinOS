@@ -332,11 +332,11 @@ class TestAuthenticatedFeaturesRequest(_TempIBCHomeMixin, unittest.TestCase):
         here = Path(__file__).resolve()
         lic_dir = None
         for parent in here.parents:
-            candidate = parent / "operator" / "license"
+            candidate = parent / "corvin_operator" / "license"
             if candidate.is_dir():
                 lic_dir = candidate
                 break
-        assert lic_dir is not None, "operator/license not found relative to test file"
+        assert lic_dir is not None, "corvin_operator/license not found relative to test file"
         if str(lic_dir) not in sys.path:
             sys.path.insert(0, str(lic_dir))
         import session_refresh as _sr  # type: ignore[import-not-found]

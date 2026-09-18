@@ -127,7 +127,7 @@ class TestQuotaGateWiring:
         _ensure_operator_on_path()
 
         # Verify corvin_operator/ is now on sys.path
-        operator_root = Path(__file__).resolve().parents[3] / "operator"
+        operator_root = Path(__file__).resolve().parents[3] / "corvin_operator"
         assert str(operator_root) in sys.path or not operator_root.is_dir(), (
             "corvin_operator/ should be on sys.path after _ensure_operator_on_path()"
         )

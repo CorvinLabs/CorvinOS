@@ -19,7 +19,7 @@ from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
-_SHARED = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+_SHARED = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
 sys.path.insert(0, str(_SHARED))
 # The sibling harness ``test_worker`` is imported top-level. Under a direct
 # ``python core/compute/tests/test_compute_notify.py`` run the script's own dir

@@ -322,7 +322,7 @@ def load_tier_a_skills(
         # identifies the CorvinOS project root (same heuristic as paths.py).
         _candidate = _HERE
         for _ in range(6):
-            if (_candidate / "operator").is_dir() or (_candidate / ".corvin").is_dir():
+            if (_candidate / "corvin_operator").is_dir() or (_candidate / ".corvin").is_dir():
                 _project_root = _candidate
                 break
             _candidate = _candidate.parent

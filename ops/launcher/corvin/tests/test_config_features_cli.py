@@ -30,7 +30,7 @@ import pytest
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[3]
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 _CONSOLE = _REPO / "core" / "console"
 _LAUNCHER = _REPO / "ops" / "launcher"
 

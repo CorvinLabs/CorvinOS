@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 # Setup
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "corvin_operator" / "bridges" / "shared"))
 os.environ.pop("CORVIN_HOME", None)  # Reset for clean test
 
 def test_session_dir_tenant_aware():

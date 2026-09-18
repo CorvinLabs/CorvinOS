@@ -136,7 +136,7 @@ def _replier_from_channel_id(channel_id: str) -> str:
 # ---------------------------------------------------------------------------
 _WF_FREE_TIER_FALLBACK: dict = {"workflows_concurrent": 1}
 try:
-    _operator_root = Path(__file__).resolve().parents[3] / "operator"
+    _operator_root = Path(__file__).resolve().parents[3] / "corvin_operator"
     if not _operator_root.is_dir() and _FORGE_AVAILABLE:
         # Wheel install: this file lives at site-packages/core/orchestration/
         # corvin_orchestration/, where parents[3]/operator does not exist —

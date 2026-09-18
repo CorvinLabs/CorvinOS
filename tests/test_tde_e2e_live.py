@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "orchestration"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
 
 # Opt-in (repo convention, see test_adr0213_context_sync_live.py):
 # CLAUDE_LIVE_E2E=1 enables; additionally the claude CLI must exist.
@@ -120,7 +120,7 @@ def test_live_tde_delegation_with_audit(audit_sandbox):
     assert "add_item" not in blob
     assert "find_max" not in blob
 
-    sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "forge"))
+    sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "forge"))
     from forge import security_events
     ok, errors = security_events.verify_chain(audit_file)
     assert ok, f"audit chain broken: {errors}"

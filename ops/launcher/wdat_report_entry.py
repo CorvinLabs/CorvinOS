@@ -20,7 +20,7 @@ def main() -> None:
     _shared = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),  # ops/launcher/
         "..", "..",                                   # project root
-        "operator", "bridges", "shared",
+        "corvin_operator", "bridges", "shared",
     )
     if _shared not in sys.path:
         sys.path.insert(0, os.path.normpath(_shared))

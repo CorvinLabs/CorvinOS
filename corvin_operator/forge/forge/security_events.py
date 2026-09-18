@@ -3547,7 +3547,7 @@ def write_event(
                         # other module having already done it) makes the
                         # bare import actually reliable instead of luck.
                         import sys as _sys
-                        _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+                        _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
                         if _shared.is_dir() and str(_shared) not in _sys.path:
                             _sys.path.insert(0, str(_shared))
                         import instance_identity as _iid  # type: ignore[import]
@@ -3965,7 +3965,7 @@ def verify_chain(path: Path, *, initial_prev: str = "",
                     # self-contained sys.path insert instead of relying on
                     # another module to have already done it.
                     import sys as _sys
-                    _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+                    _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
                     if _shared.is_dir() and str(_shared) not in _sys.path:
                         _sys.path.insert(0, str(_shared))
                     import instance_identity as _iid  # type: ignore[import]

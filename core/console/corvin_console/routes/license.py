@@ -40,7 +40,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
 
 # ADR-0092: corvin_operator/license/ module (new, primary)
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 if str(_OPERATOR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR))
 

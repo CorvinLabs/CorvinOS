@@ -20,12 +20,12 @@ def main() -> None:
     _shared = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..",
-        "operator", "bridges", "shared",
+        "corvin_operator", "bridges", "shared",
     ))
     _forge = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..",
-        "operator", "forge",
+        "corvin_operator", "forge",
     ))
     _op = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),

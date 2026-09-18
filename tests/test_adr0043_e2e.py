@@ -21,8 +21,8 @@ from unittest import mock
 import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
-_SHARED = _REPO / "operator" / "bridges" / "shared"
-for _p in (_REPO, _REPO / "operator", _REPO / "operator" / "bridges", _SHARED):
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
+for _p in (_REPO, _REPO / "corvin_operator", _REPO / "corvin_operator" / "bridges", _SHARED):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

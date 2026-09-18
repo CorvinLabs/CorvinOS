@@ -202,7 +202,7 @@ class TestComponentExtraction(unittest.TestCase):
         components = self.normalizer._extract_components(task)
 
         self.assertIn("core/compliance/tripwire.py", components)
-        self.assertIn("operator/bridges/adapter.py", components)
+        self.assertIn("corvin_operator/bridges/adapter.py", components)
 
     def test_extract_module_paths(self):
         """Test extraction of module paths (not just files)."""
@@ -630,12 +630,12 @@ class TestIncidentLinking(unittest.TestCase):
             memory_dir = Path(tmpdir)
 
             (memory_dir / "incident-1.md").write_text("core/voice crash\n")
-            (memory_dir / "incident-2.md").write_text("operator/bridge failure\n")
+            (memory_dir / "incident-2.md").write_text("corvin_operator/bridge failure\n")
 
             normalizer = TaskNormalizer(memory_dir=memory_dir)
 
             incidents = normalizer._find_related_incidents(
-                ["core/voice/renderer.py", "operator/bridges/adapter.py"], []
+                ["core/voice/renderer.py", "corvin_operator/bridges/adapter.py"], []
             )
 
             self.assertIn("incident-1.md", incidents)

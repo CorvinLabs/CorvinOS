@@ -41,7 +41,7 @@ def _bridges_shared_dir() -> Path:
     throughout corvin_operator/orchestration/tde/ (e.g. tde_audit.py) is to put the
     leaf directory on sys.path and import the bare module name instead.
     """
-    return Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+    return Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
 
 
 def _ensure_bridges_on_path() -> None:
@@ -676,8 +676,8 @@ def _load_wiring_manifests() -> list[dict]:
         return []
     repo_root = Path(__file__).resolve().parents[4]
     manifest_paths = [
-        repo_root / "operator" / "orchestration" / "WIRING.yaml",
-        repo_root / "operator" / "orchestration" / "tde" / "WIRING.yaml",
+        repo_root / "corvin_operator" / "orchestration" / "WIRING.yaml",
+        repo_root / "corvin_operator" / "orchestration" / "tde" / "WIRING.yaml",
     ]
     components: list[dict] = []
     for mpath in manifest_paths:
@@ -743,7 +743,7 @@ class WiringIntegrityFiber(NerveFiber):
         broken: list[dict] = []
 
         repo_root = Path(__file__).resolve().parents[4]
-        orch_dir = repo_root / "operator" / "orchestration"
+        orch_dir = repo_root / "corvin_operator" / "orchestration"
         for entry in live:
             entry_point = entry.get("entry_point")
             name = entry.get("name", "?")

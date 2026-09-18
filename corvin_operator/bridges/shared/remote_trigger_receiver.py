@@ -151,13 +151,13 @@ def _default_repo_relative(*parts: str) -> Path:
         _cc_file = getattr(_cc, "__file__", None)
         if _cc_file:
             _anchor = Path(_cc_file).resolve().parents[3]
-            return _anchor / "operator" / Path(*parts)
+            return _anchor / "corvin_operator" / Path(*parts)
     except Exception:
         pass
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-            return parent / "operator" / Path(*parts)
+            return parent / "corvin_operator" / Path(*parts)
     return here.parent / Path(*parts)
 
 
@@ -1591,7 +1591,7 @@ class RemoteTriggerReceiver:
         # (handles worktree layouts where __file__ is not at the shared/ level).
         here = Path(__file__).resolve()
         for parent in here.parents:
-            candidate = parent / "operator" / "license" / "a2a_network_pubkey.pem"
+            candidate = parent / "corvin_operator" / "license" / "a2a_network_pubkey.pem"
             if candidate.exists():
                 return candidate.read_text()
         # Last resort: operator-supplied env var (test / air-gapped deployments).

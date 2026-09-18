@@ -20,7 +20,7 @@ from fastapi import HTTPException
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 _FORGE = _OPERATOR / "forge"
 for _p in (_FORGE, _OPERATOR):
     if str(_p) not in sys.path:

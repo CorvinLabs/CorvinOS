@@ -38,8 +38,8 @@ fi
 # 2. Remove marketplace folder (entirely in Marketplace repo now)
 echo ""
 echo "2️⃣ Removing operator/marketplace folder..."
-if [ -d "operator/marketplace" ]; then
-    rm -rf "operator/marketplace"
+if [ -d "corvin_operator/marketplace" ]; then
+    rm -rf "corvin_operator/marketplace"
     echo "   ✅ Removed operator/marketplace (584 KB, 41 files)"
 fi
 

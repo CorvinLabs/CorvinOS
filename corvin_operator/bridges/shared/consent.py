@@ -197,7 +197,7 @@ def _import_clag():
     _forge_inner = None
     for _parent in _here.parents:
         if (_parent / ".corvin_repo").exists() or (_parent / "plugins").is_dir():
-            _forge_pkg_parent = _parent / "operator" / "forge"
+            _forge_pkg_parent = _parent / "corvin_operator" / "forge"
             _forge_inner = _forge_pkg_parent / "forge"
             break
     try:
@@ -229,7 +229,7 @@ def _clag_gate(layer_id: str) -> None:
         _here = Path(__file__).resolve()
         for _parent in _here.parents:
             if (_parent / ".corvin_repo").exists() or (_parent / "plugins").is_dir():
-                _forge_inner = _parent / "operator" / "forge" / "forge"
+                _forge_inner = _parent / "corvin_operator" / "forge" / "forge"
                 break
         _gate = _import_clag().gate
     except ImportError as _imp_exc:
@@ -285,7 +285,7 @@ def _audit(event_type: str, *, channel: str, chat_key: str, uid: str,
                 repo = parent
                 break
         if repo is not None:
-            forge_pkg = repo / "operator" / "forge"
+            forge_pkg = repo / "corvin_operator" / "forge"
             if str(forge_pkg) not in sys.path:
                 sys.path.insert(0, str(forge_pkg))
         from forge.security_events import write_event  # type: ignore

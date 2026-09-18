@@ -54,10 +54,10 @@ def _resolve_bridges_dir() -> Path:
     # corvin_console/_vendor/corvin_operator/* and _REPO points outside site-packages, so
     # bridge.sh / package.json / per-channel dirs were unreachable on a wheel
     # install. Resolve to whichever layout has the files (path-audit #MED9).
-    repo = _REPO / "operator" / "bridges"
+    repo = _REPO / "corvin_operator" / "bridges"
     if repo.is_dir():
         return repo
-    vendored = _THIS_DIR.parent / "_vendor" / "operator" / "bridges"
+    vendored = _THIS_DIR.parent / "_vendor" / "corvin_operator" / "bridges"
     return vendored if vendored.is_dir() else repo
 
 
@@ -317,8 +317,8 @@ def _import_bridge_manager():
         return bridge_manager
     except ImportError:
         pass
-    for cand in (_REPO / "operator" / "bridges",
-                 _THIS_DIR.parent / "_vendor" / "operator" / "bridges"):
+    for cand in (_REPO / "corvin_operator" / "bridges",
+                 _THIS_DIR.parent / "_vendor" / "corvin_operator" / "bridges"):
         if (cand / "bridge_manager.py").is_file():
             if str(cand) not in sys.path:
                 sys.path.insert(0, str(cand))

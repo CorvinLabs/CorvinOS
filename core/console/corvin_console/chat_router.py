@@ -236,7 +236,7 @@ def _execute_erasure(tenant_id: str, subject_id: str):
     """Build the L36 orchestrator for *tenant_id* (real handler chain + stub
     backfill, exactly like ``corvin-erasure run``) and execute one request."""
     import sys as _sys
-    _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     if _shared.is_dir() and str(_shared) not in _sys.path:
         _sys.path.append(str(_shared))
     from erasure_orchestrator import (  # type: ignore[import-not-found]

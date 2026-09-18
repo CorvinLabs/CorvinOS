@@ -35,7 +35,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 _REPO = HERE.parents[2]
-for _p in (_REPO / "core" / "console", _REPO / "operator" / "forge"):
+for _p in (_REPO / "core" / "console", _REPO / "corvin_operator" / "forge"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

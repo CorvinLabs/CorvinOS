@@ -24,7 +24,7 @@ def _run_claude(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     # 'operator.bridges'; 'operator' is not a package" (2026-09-14 live
     # report). Put corvin_operator/bridges/shared on sys.path and import bare,
     # matching every other _win_shim call site in this codebase.
-    _shared_dir = str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared")
+    _shared_dir = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared")
     if _shared_dir not in sys.path:
         sys.path.insert(0, _shared_dir)
     from agents._win_shim import windows_shim_command  # noqa: PLC0415

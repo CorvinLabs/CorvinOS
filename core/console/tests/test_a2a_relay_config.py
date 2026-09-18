@@ -26,7 +26,7 @@ _CONSOLE_PARENT = _HERE.parent  # core/console
 if str(_CONSOLE_PARENT) not in sys.path:
     sys.path.insert(0, str(_CONSOLE_PARENT))
 _REPO = _HERE.parents[2]
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_BRIDGES_SHARED) not in sys.path:
     sys.path.insert(0, str(_BRIDGES_SHARED))
 
