@@ -682,7 +682,7 @@ export const ExternalProviderModal: React.FC<ExternalProviderModalProps> = ({
                 : <AlertTriangle className="w-4 h-4" />}
               {testMut.data.is_connected
                 ? `Reachable — ${testMut.data.model_count} model(s), ${testMut.data.latency_ms?.toFixed(0)}ms`
-                : testMut.data.error_message ?? 'Not reachable'}
+                : <span title={testMut.data.error_message ?? undefined}>Not reachable — the provider did not answer.</span>}
             </p>
           )}
         </div>

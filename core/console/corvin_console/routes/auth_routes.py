@@ -158,7 +158,9 @@ def _safe_next(next_: str | None) -> str | None:
     path_part = unquote(next_.split("?", 1)[0].split("#", 1)[0])
     if "\\" in path_part or "\n" in path_part or "\r" in path_part or "://" in path_part:
         return None
-    segments = path_part.split("/")
+    # ONE trailing slash is a legitimate bookmark shape ("/console/app/models/"),
+    # not an empty segment (review R4); everything else empty is "//".
+    segments = path_part[:-1].split("/") if path_part.endswith("/") and len(path_part) > 1 else path_part.split("/")
     if ".." in segments or "." in segments[1:] or "" in segments[1:]:
         return None  # dot segments and empty segments ("//" anywhere) — encoded or not
     if not (posixpath.normpath(path_part) + "/").startswith("/console/"):

@@ -20,13 +20,15 @@ class SafeNextTests(unittest.TestCase):
     def test_accepts_console_deep_links(self) -> None:
         self.assertEqual(AR._safe_next("/console/app/models?tab=routing"), "/console/app/models?tab=routing")
         self.assertEqual(AR._safe_next("/console/app/engine-config"), "/console/app/engine-config")
+        self.assertEqual(AR._safe_next("/console/app/models/"), "/console/app/models/")  # one trailing slash is a bookmark
+        self.assertEqual(AR._safe_next("/console/app/models/?tab=routing"), "/console/app/models/?tab=routing")
 
     def test_rejects_everything_else(self) -> None:
         for bad in ("https://evil.example/", "//evil.example/x", "/app/models", "/console", "",
                     None, "/console/\\evil", "/console/x\r\nSet-Cookie: a=b", "/console/" + "a" * 600,
                     "/console/../v1/console/auth/whoami", "/console/../../etc", "/console/./../x",
                     "/console/%2e%2e/x", "/console/.%2E/x", "/console/%2E%2E/v1/console/auth/whoami",
-                    "/console/%2F%2Fevil.example/x", "/console/x%0d%0aSet-Cookie:a=b"):
+                    "/console/%2F%2Fevil.example/x", "/console/x%0d%0aSet-Cookie:a=b", "/console/app//x", "/console/app/models//"):
             self.assertIsNone(AR._safe_next(bad), repr(bad))
 
 

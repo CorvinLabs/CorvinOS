@@ -27,5 +27,5 @@ export function useUsageWindow(csrf: string) {
     mutationFn: () => postUsageEpoch({ clear: true }, csrf),
     onSuccess: invalidate,
   });
-  return { window: q.data?.window, loading: q.isLoading, reset, clear };
+  return { window: q.data?.window, loading: q.isLoading, error: q.isError, reset, clear };
 }
