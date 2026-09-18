@@ -11,7 +11,7 @@ from pathlib import Path
 from io import StringIO
 import sys
 
-from core.operator.license.cli import (
+from corvin_operator.license.cli import (
     main,
     cmd_activate_request,
     cmd_activate_redeem,
