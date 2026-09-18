@@ -752,6 +752,27 @@ class SkillRegistry:
 
         self._namespace_gate(name, operation="update" if overwrite else "create")
 
+        # ADR-0701: License gate (G2) — require_capability("forge.create")
+        try:
+            from corvin_operator.license.capability_api import (
+                require_capability, LicenseDenied
+            )
+            # Default to "_default" tenant for Skill-Forge (registry doesn't have session context)
+            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+            decision = require_capability(
+                "forge.create",
+                requested=1,
+                tenant_id=tenant_id,
+                entry_point="skill-forge:create"
+            )
+            if not decision.allowed:
+                raise LicenseDenied(f"forge.create denied: {decision.reason or 'member-only feature'}")
+        except ImportError:
+            # Licensing unavailable (e.g. in tests) — default to allow
+            pass
+        except LicenseDenied as e:
+            raise ValueError(f"license_required: {e}") from e
+
         # Linter — fail-closed: violations block the write
         result = lint(body_md)
         if not result.ok:
