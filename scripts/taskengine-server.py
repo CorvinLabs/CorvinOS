@@ -2,7 +2,7 @@
 """TaskEngine server launcher (standalone).
 
 Workaround: Python's stdlib 'operator' module shadows 'operator.task_analysis' namespace.
-Use this script instead of 'python -m operator.task_analysis.server'.
+Use this script instead of 'python -m corvin_operator.task_analysis.server'.
 """
 
 import sys

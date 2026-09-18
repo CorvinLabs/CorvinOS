@@ -95,7 +95,7 @@ _CORE_QUALITY_SKILL_NAMES: tuple[str, ...] = ("adr_gate", "e2e-wiring-proof", "c
 # (.../operator) -> bundle/skills/ldd.
 #
 # Wheel: this file is vendored to
-# corvin_console/_vendor/operator/bridges/shared/skill_inject.py, so
+# corvin_console/_vendor/corvin_operator/bridges/shared/skill_inject.py, so
 # _HERE.parent.parent.parent (.../corvin_console/_vendor, the vendor root)
 # -> operator/bundle/skills/ldd (matches the parents[3]-from-shared/
 # convention hatch_build.py documents for every other vendored resource).

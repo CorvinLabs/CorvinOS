@@ -126,7 +126,7 @@ def _default_repo_relative(*parts: str) -> Path:
        when importable. ``corvin_console`` always sits at the same fixed
        depth under the interpreter's site-packages/venv root regardless of
        how deeply *this* file (vendored under
-       ``corvin_console/_vendor/operator/bridges/shared/``) ends up nested
+       ``corvin_console/_vendor/corvin_operator/bridges/shared/``) ends up nested
        — so anchoring off it, not off ``__file__``, is what actually
        guarantees agreement with ``a2a_pair.py``'s own
        ``Path(__file__).resolve().parents[3]`` (identical nesting depth

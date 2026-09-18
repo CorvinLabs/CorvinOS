@@ -9,7 +9,7 @@ In a repo checkout they all happen to land on the same directory. In an
 INSTALLED (uv-tool / pip / wheel) deployment they do not: the four
 bridges/shared modules walk up from their OWN ``__file__`` looking for a
 ``.corvin_repo``/``plugins`` marker, which does not exist inside a vendored
-``corvin_console/_vendor/operator/bridges/shared/`` tree, so they silently
+``corvin_console/_vendor/corvin_operator/bridges/shared/`` tree, so they silently
 fell back to "a directory next to this file" — a bogus location distinct
 from the Console's own ``parents[3]`` answer.
 

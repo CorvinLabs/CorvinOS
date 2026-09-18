@@ -2812,7 +2812,7 @@ def compute_run_voice(
 
         say_script = _REPO / "corvin_operator" / "voice" / "scripts" / "say.py"
         if not say_script.exists():
-            # Wheel install: corvin_operator/ is vendored under _vendor/operator.
+            # Wheel install: corvin_operator/ is vendored under _vendor/corvin_operator.
             try:
                 from .._operator_bootstrap import vendor_operator_root  # noqa: PLC0415
                 _vr = vendor_operator_root()

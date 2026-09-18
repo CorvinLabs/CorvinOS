@@ -510,7 +510,7 @@ class CorvinInstaller:
         adapter_cmd = self._get_adapter_command()
         if not adapter_cmd:
             # INST-7: wheel install with no runnable adapter source — skip
-            # rather than register a `-m operator...` command that collides with
+            # rather than register a `-m corvin_operator...` command that collides with
             # the stdlib `operator` module and can never start.
             print("  ℹ Adapter source not found (wheel install) — skipping "
                   "adapter service registration")
@@ -1523,7 +1523,7 @@ class CorvinInstaller:
             return f'"{sys.executable}" "{adapter}"'
         # Wheel install: `operator` is NOT importable as a package (it shadows
         # the stdlib `operator` module), so the old fallback
-        # `-m operator.bridges.shared.adapter` could never start (INST-7). The
+        # `-m corvin_operator.bridges.shared.adapter` could never start (INST-7). The
         # build hook (hatch_build.py) vendors the subtree into
         # corvin_console/_vendor/corvin_operator/…; resolve that real file instead.
         try:
