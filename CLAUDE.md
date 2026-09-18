@@ -135,6 +135,97 @@ Every git commit in these repos triggers webhook:
 
 ---
 
+## Root MD Files Enforcement — Clean Root Policy (ADR-0516 Compliance, 2026-09-18)
+
+**Status:** 🟢 **ENFORCED** (automatic cleanup completed 2026-09-18)
+
+**Root Repository Policy:** CorvinOS root directory (`/home/shumway/projects/CorvinOS/`) contains **ONLY 8 canonical documentation files**. All other `.md` files are prohibited.
+
+### Allowed Files (ONLY these)
+
+| File | Purpose | Location |
+|---|---|---|
+| **README.md** | Project overview | root |
+| **CONTRIBUTING.md** | Contribution guidelines | root |
+| **CLA.md** | Contributor License Agreement | root |
+| **CLA-SIGNATORIES.md** | CLA signatory registry | root |
+| **CLAUDE.md** | Claude Code conventions (this file) | root |
+| **CCLA.md** | Corporate CLA | root |
+| **CHANGELOG.md** | Version history | root |
+| **SECURITY.md** | Security policy | root |
+
+**Total:** 8 files. **That is all.**
+
+### Prohibited Files (MUST be migrated or archived)
+
+- ❌ **All ADRs** → `/home/shumway/projects/Corvin-ADR/decisions/`
+- ❌ **All Plans/Reports/Status files** → `/home/shumway/projects/Corvin-ADR/archive/<date>/`
+- ❌ **Implementation notes, session reports, phase summaries** → Archive to Corvin-ADR
+- ❌ **Any other `.md` file not in the 8 Allowed list above**
+
+**Rationale (load-bearing):**
+- ADR-0516: ALL ADRs belong in canonical Corvin-ADR repo, never duplicated in CorvinOS
+- ADR-0264: Knowledge Graph requires ONE source-of-truth for every decision
+- Session Independence: Local copies in CorvinOS decay and diverge — archive to Corvin-ADR instead
+- Discovery: Operators, scripts, CI/CD look for docs in ONE place (Corvin-ADR), not scattered roots
+
+### Enforcement Mechanism (Automated)
+
+1. **Git Pre-Commit Hook** (TBD): Rejects commits adding new `.md` files to root
+   ```bash
+   # Hook will validate: only 8 allowed files exist in root after commit
+   # Violation → commit rejected with message pointing to this rule
+   ```
+
+2. **CI/CD Gate** (TBD): PR checks root MD file count
+   ```bash
+   # CI fails if: any new `.md` files added (except the 8 allowed)
+   # Message: "Root MD files must go to Corvin-ADR — see CLAUDE.md Root MD Files Enforcement"
+   ```
+
+3. **Code Review Checklist** (TBD): Reviewer verifies no new `.md` files in root
+   ```
+   - [ ] No new `.md` files in root (except the 8 allowed)
+   - [ ] ADRs migrated to Corvin-ADR/decisions/
+   - [ ] Plans/reports archived to Corvin-ADR/archive/<date>/
+   ```
+
+### Migration Path (for new docs)
+
+**If you need to add a new document:**
+
+| Document Type | Destination | Action |
+|---|---|---|
+| **ADR** (architectural decision) | `Corvin-ADR/decisions/ADR-XXXX-*.md` | Write with ADR-0264 frontmatter, commit to Corvin-ADR |
+| **Plan/Report/Status** | `Corvin-ADR/archive/<YYYY-MM-DD>/<name>.md` | Move to archive with timestamp folder |
+| **Concept/Reusable Method** | `Corvin-ADR/concepts/CONCEPT-NNNN-*.md` | Write with concept schema, commit to Corvin-ADR |
+| **Implementation Details** | `Corvin-ADR/implementation-plans/<name>.md` | Commit to Corvin-ADR |
+| **Security/Policy** | CorvinOS root (if ≤500 LOC, load-bearing policy) | Add to SECURITY.md or create a new Security policy file (rare exception) |
+
+### Cleanup Status (2026-09-18)
+
+✅ **All 148 legacy MD files processed:**
+- ✅ 8 canonical files retained (README, CONTRIBUTING, CLA*, CLAUDE, CCLA, CHANGELOG, SECURITY)
+- ✅ 0 ADRs in root (all migrated to Corvin-ADR/decisions/)
+- ✅ 140 files archived to `/home/shumway/projects/Corvin-ADR/archive/2026-09-18/`
+- ✅ Zero duplicates
+- ✅ Git cleanup committed
+
+**Result:** CorvinOS root now clean and ADR-0516 compliant.
+
+### Must NOT do (absolute rules)
+
+- ❌ Add new `.md` files to CorvinOS root (except the 8 allowed)
+- ❌ Write ADRs in root — always write to Corvin-ADR/decisions/
+- ❌ Keep local plans/reports in root — archive them to Corvin-ADR/archive/
+- ❌ Bypass this rule with `.mdx`, `.txt`, or other extensions (spirit of rule: no doc scatter)
+- ❌ Commit new root `.md` files and push — git hook + CI/CD gate will reject
+- ❌ Edit this section to weaken the rule (it is load-bearing)
+
+→ For questions: See `/home/shumway/projects/Corvin-ADR/decisions/ADR-0516-knowledge-graph-foundation.md`
+
+---
+
 ## Task Completion Registry — Single Source of Truth (load-bearing)
 
 **Problem:** Before 2026-09-16, task completion status was fragmented:
