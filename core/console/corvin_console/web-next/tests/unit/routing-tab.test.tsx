@@ -70,7 +70,7 @@ function renderTab(props: Partial<React.ComponentProps<typeof RoutingTab>> = {})
       <RoutingTab active preselect={null} preselectTurn={null} onPreselectConsumed={consumed} {...props} />
     </QueryClientProvider>,
   );
-  return { ...utils, consumed };
+  return { ...utils, consumed, qc };
 }
 
 afterEach(() => { cleanup(); claudeModels.data = CLAUDE_LIST; claudeModels.isError = false; });
@@ -141,18 +141,22 @@ describe("Routing tab — turn pins", () => {
   it("applies a preselect when the options arrive AFTER the form", async () => {
     claudeModels.data = undefined;
     server.use(...handlers("claude-sonnet-5", null, () => HttpResponse.json({})));
-    const { consumed, rerender } = renderTab({ preselect: "claude-haiku-4-5-20251001", preselectTurn: "os" });
-    await screen.findByLabelText("OS turn model");
+    const { consumed, rerender, qc } = renderTab({ preselect: "claude-haiku-4-5-20251001", preselectTurn: "os" });
+    const worker = (await screen.findByLabelText("Worker turn model")) as HTMLSelectElement;
     expect(consumed).not.toHaveBeenCalled();
+    // Dirty the OTHER role first: it must SURVIVE the options flip — proof that
+    // the same instance's effect re-ran rather than a fresh mount applying it.
+    fireEvent.change(worker, { target: { value: "claude-sonnet-5" } });
     claudeModels.data = CLAUDE_LIST;
     rerender(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <QueryClientProvider client={qc}>
         <RoutingTab active preselect="claude-haiku-4-5-20251001" preselectTurn="os" onPreselectConsumed={consumed} />
       </QueryClientProvider>,
     );
     const os = (await screen.findByLabelText("OS turn model")) as HTMLSelectElement;
     await waitFor(() => expect(os.value).toBe("claude-haiku-4-5-20251001"));
-    expect(consumed).toHaveBeenCalled();
+    expect((screen.getByLabelText("Worker turn model") as HTMLSelectElement).value).toBe("claude-sonnet-5");
+    expect(consumed).toHaveBeenCalledTimes(1);
   });
 
   it("resolves a preselect with a note when the model source failed", async () => {
@@ -160,6 +164,18 @@ describe("Routing tab — turn pins", () => {
     server.use(...handlers("claude-sonnet-5", null, () => HttpResponse.json({})));
     const { consumed } = renderTab({ preselect: "claude-haiku-4-5-20251001", preselectTurn: "os" });
     await screen.findByText(/could not be applied — the model source did not answer/);
+    expect(consumed).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a preselect with a note when the engine settings failed", async () => {
+    server.use(
+      http.get("/v1/console/settings/engine", () => HttpResponse.json({ detail: "down" }, { status: 503 })),
+      http.get("/v1/console/v1/engine/config", () => HttpResponse.json(config)),
+      http.get("/v1/console/learning/model-cost-optimizer/status", () => HttpResponse.json({ window: { active: false } })),
+    );
+    const { consumed } = renderTab({ preselect: "claude-haiku-4-5-20251001", preselectTurn: "os" });
+    await screen.findByText(/could not be applied — the engine settings did not load/);
+    await screen.findByText("The engine settings could not be loaded.");
     expect(consumed).toHaveBeenCalledTimes(1);
   });
 

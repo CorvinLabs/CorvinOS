@@ -10,6 +10,7 @@
  */
 import * as React from "react";
 import { Link } from "react-router-dom";
+import { ENGINE_SETTING_KEY } from "@/pages/models/hooks/use-pins";
 import { useQuery } from "@tanstack/react-query";
 import ReactFlow, {
   Background,
@@ -1047,6 +1048,9 @@ function ExecLogPanel({ sid, isActive }: { sid: string; isActive: boolean }) {
 }
 
 // ── ACS empty state — context-aware guidance ──────────────────────────────────
+/** Exported for tests/unit/acs-empty-state.test.tsx only. */
+export function AcsEmptyStateForTest(props: { onViewOs: () => void }) { return <AcsEmptyState {...props} />; }
+
 function AcsEmptyState({ onViewOs }: { onViewOs: () => void }) {
   // The engine setting carries neither a worker-engine flag nor a delegation
   // switch (lib/api/engines.ts documents both as "not sent by the current
@@ -1055,7 +1059,7 @@ function AcsEmptyState({ onViewOs }: { onViewOs: () => void }) {
   // (ADR-0885 review R2). ONE honest state: what is known, and where the
   // worker turn pin actually lives.
   const q = useQuery({
-    queryKey: ["engine-settings"],
+    queryKey: [...ENGINE_SETTING_KEY], // ONE key with the Models console, so a "Save pins" invalidates this too
     queryFn: ({ signal }) => getOsEngineSetting(signal),
     staleTime: 30_000,
   });

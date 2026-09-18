@@ -3338,7 +3338,7 @@ tabs (`?tab=routing|usage-cost|catalog`); `/app/engines` and
 
 | Tab | Backed by | Writes |
 |---|---|---|
-| Routing | block 1 **Turn pins** — `GET/PUT /v1/console/settings/engine` (what actually serves, ADR-0759; PUT REPLACES the map, the form sends the full map) · block 2 **Classifier overrides**, labelled *advisory* — `GET/PUT /v1/engine/config` (shadow classifier) · block 3 providers | "Save pins", "Save overrides" — two buttons, because the two routes validate and fail differently |
+| Routing | block 1 **Turn pins** — `GET/PUT /v1/console/settings/engine` (what actually serves, ADR-0759; PUT REPLACES the map, the form sends the full map) · block 2 **Classifier overrides**, labelled *advisory* — `GET/PUT /v1/engine/config` (shadow classifier) · block 3 providers | "Save pins" (block 1) and the per-card Save of each override card (block 2) — separate, because the two routes validate and fail differently |
 | Usage & Cost | `…/model-cost-optimizer/status`, `/v1/engine/model-usage` — rules of ADR-0760/0761/0763/0764 unchanged; routed-to keeps its role dimension; Model Usage keeps its own named denominators | nothing |
 | Learning | `/v1/engine/analytics/*` (`task-type/{tt}` ranking from `rank_models`, `recent`, `feedback`, `reset`), `…/model-cost-optimizer/{reset,export,import}` | ONE reset (confidence store, then thresholds — sequential, per-store failure copy, retry of the failed half), export/import, ratings |
 | Catalog | `/v1/console/v1/models/available` — the one rate card | nothing; "Use for OS/worker turn" hands a model to Routing via `?preselect=&turn=` |
@@ -3391,8 +3391,10 @@ feedback route) feed one file, and without these a console rating overwrote
 six daemon samples (the chain recorded n_samples 8 → 2) and a console reset
 left the daemon's stale trajectory to flip `is_converged` at five samples. A
 history-only row (a crash between the two writes) reads as absent. **The
-daemon runs the learner in-process: a change to `model_selection_optimizer.py`
-is live only after `corvin-voice-bridge-adapter.service` restarts.**
+learner runs in-process in the bridge daemon AND the console: a change to
+`model_selection_optimizer.py` or the analytics routes is live only after
+`corvin-voice-bridge-adapter.service` and `corvin-webui.service` both
+restart.**
 
 **Recent-classification scan:** `RECENT_SCAN_LINES = 500_000` — the newest
 50 000 of 186 593 chain lines held ONE classified record (recent traffic is
@@ -3404,8 +3406,9 @@ round trip (409 check → learn → mark) is serialised by its own lock file
 from one thread deadlocks).
 
 **Login keeps the deep link:** `GET /v1/console/auth/local-login?next=…` honours
-a same-origin `/console/…` path (validated lexically AND after `normpath`;
-never a scheme, host, `//`, backslash, CR/LF or `..`), `RequireAuth` forwards
+a same-origin `/console/…` path (validated after percent-decoding and
+`normpath`; never a scheme, host, `//`, backslash, CR/LF, `.` or `..`
+segments — encoded or not), `RequireAuth` forwards
 `pathname + search`, `LoginPage` prefixes the basename. Before this a bounce
 landed every bookmark on `/app/chat`.
 

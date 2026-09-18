@@ -201,11 +201,11 @@ test.describe("Worker-Engine ACS Workflow Graph", () => {
       let hasGuidance = false;
       for (let i = 0; i < 15; i++) {
         const visibles = [
-          page.getByText(/delegation is enabled/i),
-          page.getByText(/Configure a Worker Engine/i),
-          page.getByText(/delegation disabled/i),
+          // ADR-0885: the empty state names what is known and links to the
+          // worker turn pin; the old "Configure a Worker Engine" / "Engine
+          // Settings" copy was fabricated guidance and must NOT reappear.
           page.getByText(/\/delegate/i),
-          page.getByRole("link", { name: /engine settings/i }),
+          page.getByRole("link", { name: /worker turn pin/i }),
         ];
         for (const loc of visibles) {
           if (await loc.isVisible().catch(() => false)) { hasGuidance = true; break; }

@@ -12,7 +12,11 @@
  *  - "Reset learning" and Import are DESTRUCTIVE on the tenant's learned
  *    state and are NOT clicked on the live host (tests/unit/learning-tab.test.tsx
  *    proves them against MSW).
- * Run: npx playwright test tests/e2e/models-console.spec.ts --project=chromium
+ * Run: npx playwright test tests/e2e/models-console.spec.ts --project=chromium --workers=1
+ * Precondition for the window case: the tenant's counting window is NOT
+ * narrowed (status.window.active === false); otherwise that case is skipped —
+ * the epoch API cannot restore a prior epoch_ts, so resetting a deliberately
+ * narrowed window would not be reversible.
  */
 import { expect, test } from "@playwright/test";
 
@@ -34,12 +38,14 @@ test.beforeEach(async ({ page, baseURL }) => {
 });
 
 let windowWasFull: boolean | null = null;
+const WINDOW_CASE = "window: reset counters to now, then show full history (reversible)";
 
-// Cleanup on failure: if the window was full before this file ran and a test
-// died between "reset" and "show full history", restore the full history so
-// the operator's live window is not left narrowed.
-test.afterEach(async ({ page, baseURL }) => {
-  if (windowWasFull !== true) return;
+// Cleanup on failure — ONLY for the window case: if the window was full before
+// it ran and it died between "reset" and "show full history", restore the full
+// history so the operator's live window is not left narrowed.
+test.afterEach(async ({ page, baseURL }, testInfo) => {
+  if (testInfo.title !== WINDOW_CASE || windowWasFull !== true) return;
+  windowWasFull = null;
   const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
   const status = await page.request.get(`${origin}/v1/console/learning/model-cost-optimizer/status`);
   if (!status.ok()) return;
@@ -53,10 +59,19 @@ test.afterEach(async ({ page, baseURL }) => {
   });
 });
 
-test("window: reset counters to now, then show full history (reversible)", async ({ page }) => {
+test(WINDOW_CASE, async ({ page, baseURL }) => {
+  // Precondition from the API, not from a paint: a narrowed window cannot be
+  // restored to its prior epoch, so the case is skipped rather than destructive.
+  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  const st = await page.request.get(`${origin}/v1/console/learning/model-cost-optimizer/status`);
+  expect(st.ok()).toBe(true);
+  const before = (await st.json()) as { window?: { active?: boolean } };
+  test.skip(before.window?.active === true, "tenant's counting window is narrowed on purpose — not touching it");
   await page.goto("/console/app/models?tab=usage-cost", { waitUntil: "domcontentloaded" });
   await expect(page.getByText(MARKER_HEADER)).toBeVisible({ timeout: 30_000 });
-  const wasFull = await page.getByText("Counting window: full history").first().isVisible().catch(() => false);
+  // Wait for the REAL caption (the header shows "—" until the status answered).
+  await expect(page.getByText(/Counting window: full history|Counting since/).first()).toBeVisible({ timeout: 20_000 });
+  const wasFull = true;
   windowWasFull = wasFull;
   await page.getByRole("button", { name: "Reset counters to now" }).click();
   await page.getByRole("button", { name: "Click again to confirm" }).click();

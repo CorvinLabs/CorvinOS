@@ -80,7 +80,9 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
           </div>
           <div className="flex items-center gap-2">
             <Clock size={15} className="text-muted-foreground shrink-0" />
-            {w?.active ? (
+            {win.loading || w === undefined ? (
+              <span className="text-muted-foreground">Counting window: —</span>
+            ) : w.active ? (
               <span>
                 Counting since{" "}
                 <span className="font-medium">
@@ -93,7 +95,7 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
             <Button
               size="sm"
               variant={confirm ? "destructive" : "outline"}
-              disabled={win.reset.isPending}
+              disabled={win.reset.isPending || w === undefined}
               onClick={() => {
                 if (!confirm) { setConfirm(true); return; }
                 win.reset.mutate(undefined, { onSettled: () => setConfirm(false) });
@@ -106,7 +108,7 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
                 Cancel
               </Button>
             )}
-            {w?.active && !confirm && (
+            {w?.active === true && !confirm && (
               <Button size="sm" variant="ghost" disabled={win.clear.isPending}
                       onClick={() => win.clear.mutate()}>
                 Show full history

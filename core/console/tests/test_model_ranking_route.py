@@ -170,6 +170,16 @@ class ModelRankingRouteTests(unittest.TestCase):
         self.assertIn(MID, text)
         self.assertIn("MEDIUM", text)
 
+    def test_reset_makes_a_rated_record_rateable_again(self) -> None:
+        _seed_classified("_default", "medium", MID, 0.7)
+        client = self._client()
+        h = client.get("/v1/engine/analytics/recent").json()["items"][0]["record_hash"]
+        self.assertEqual(client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "good"}).status_code, 200)
+        self.assertEqual(client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "good"}).status_code, 409)
+        self.assertEqual(client.post("/v1/engine/analytics/reset").status_code, 200)
+        self.assertEqual(client.get("/v1/engine/analytics/task-type/MEDIUM").json()["models"], [])
+        self.assertEqual(client.post("/v1/engine/analytics/feedback", json={"record_hash": h, "rating": "poor"}).status_code, 200)
+
     def test_non_hex_record_hash_is_422(self) -> None:
         r = self._client().post("/v1/engine/analytics/feedback", json={"record_hash": "zz", "rating": "good"})
         self.assertEqual(r.status_code, 422)

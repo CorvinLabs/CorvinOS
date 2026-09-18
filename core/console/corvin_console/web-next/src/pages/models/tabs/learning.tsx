@@ -8,7 +8,7 @@
  * both learning stores and says so. The learned threshold stays in a collapsed
  * block, labelled as the descriptive statistic it is.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, Download, Info, Loader2, RotateCcw, ThumbsDown, ThumbsUp, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -97,6 +97,7 @@ export function LearningTab() {
 
   // ── export / import ──
   const [exporting, setExporting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [ioNote, setIoNote] = useState<string | null>(null);
   const handleExport = async () => {
     setExporting(true); setIoNote(null);
@@ -245,10 +246,12 @@ export function LearningTab() {
                     ) : (
                       <>
                         <Button size="sm" variant="outline" disabled={feedback.isPending}
+                                aria-label={`Good — ${c.task_type} ${c.record_hash}`}
                                 onClick={() => feedback.mutate({ hash: c.record_hash, rating: "good" })}>
                           <ThumbsUp className="w-3.5 h-3.5 mr-1" /> Good
                         </Button>
                         <Button size="sm" variant="outline" disabled={feedback.isPending}
+                                aria-label={`Poor — ${c.task_type} ${c.record_hash}`}
                                 onClick={() => feedback.mutate({ hash: c.record_hash, rating: "poor" })}>
                           <ThumbsDown className="w-3.5 h-3.5 mr-1" /> Poor
                         </Button>
@@ -291,10 +294,10 @@ export function LearningTab() {
             <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
               <Download size={16} className="mr-1.5" /> {exporting ? "Exporting…" : "Export learned state"}
             </Button>
-            <Button variant="outline" size="sm" asChild>
-              <label className="cursor-pointer">
-                <Upload size={16} className="mr-1.5" /> Import
-                <input type="file" accept=".json" hidden onChange={(e) => {
+            <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
+              <Upload size={16} className="mr-1.5" /> Import
+            </Button>
+            <input ref={fileInput} type="file" accept=".json" hidden aria-label="Import learned thresholds" onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
                   const reader = new FileReader();
@@ -303,9 +306,8 @@ export function LearningTab() {
                     catch { setIoNote("Import failed — the file is not valid JSON."); }
                   };
                   reader.readAsText(file);
+                  e.target.value = "";
                 }} />
-              </label>
-            </Button>
             {resetStep === "idle" || resetStep === "done" ? (
               <Button size="sm" variant="outline" onClick={() => setResetStep("confirm")}>
                 <RotateCcw size={16} className="mr-1.5" /> Reset learning
