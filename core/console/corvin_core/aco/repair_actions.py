@@ -925,7 +925,23 @@ class VoiceTtsPinnedProviderReset(RepairAction):
     def _provider_usable(self, provider: str) -> bool:
         """Quick, offline check: is the given provider likely to work?"""
         if provider == "openai":
-            return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+            # Resolve through the canonical resolver (process env →
+            # secrets.enc → service.env, dedicated CORVIN_TTS_OPENAI_KEY
+            # first). Reading only OPENAI_API_KEY from THIS process's env
+            # was wrong twice over: the console unit does not carry the
+            # bridge's service.env, and the dedicated TTS key name was never
+            # consulted — so a perfectly valid pin was cleared every healer
+            # cycle on any install that keeps its key in service.env
+            # (ADR-0883). Fail-open on import trouble: keep the pin.
+            try:
+                import provider_keys as _pk  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                return bool(os.environ.get("CORVIN_TTS_OPENAI_KEY", "").strip()
+                            or os.environ.get("OPENAI_API_KEY", "").strip())
+            try:
+                return bool((_pk.resolve_key("tts_openai_api_key") or "").strip())
+            except Exception:  # noqa: BLE001
+                return True
         if provider == "edge":
             try:
                 import importlib

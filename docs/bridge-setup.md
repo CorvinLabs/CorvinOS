@@ -297,6 +297,32 @@ No action needed — if `OPENAI_API_KEY` is absent, `edge-tts` is used. It is a 
 dependency and the installer's TTS step (`ensure_edge_tts`) reinstalls it explicitly,
 so the middle tier stays available even when the bridge runs on a separate/pre-existing
 Python interpreter that only had `openai`.
+### Pinning the TTS provider (ADR-0883)
+The pin is honoured by every TTS caller — `say.py`, the console and, since
+2026-09-18, the bridge adapter behind Discord/WhatsApp/Email voice summaries
+(before that the bridge ignored it and ran the auto-chain unconditionally).
+Precedence: `CORVIN_TTS_PROVIDER` in `service.env` (operator) beats
+`tts_provider` in `~/.config/corvin-voice/profile.json` (console Settings);
+`auto` in either place means "no pin".
+
+| Pin | Bridge attempt order |
+|---|---|
+| none / `auto` | OpenAI → edge-tts → Piper → text-only |
+| `openai` | OpenAI → Piper → text-only (**edge-tts is never attempted**) |
+| `edge` | edge-tts → Piper → text-only |
+| `piper` | Piper → text-only |
+
+A pinned cloud provider falls back to the LOCAL tier only, never to the other
+cloud — a pin is a data-flow decision ("my summaries go to OpenAI, or stay on
+this machine"), not a preference. When the pinned tier and Piper both fail the
+reply carries a notice naming the pin. **A change to `service.env` reaches a
+bridge daemon only after `systemctl --user restart corvin-voice-bridge-adapter`
+(and `…-discord` / `…-email`)** — the unit loads the file into the process
+environment at start, and the process environment outranks the file in
+`provider_keys.resolve_key`, so an edited file is invisible to a running daemon.
+The ACO repair `VoiceTtsPinnedProviderReset` clears a pin only when the
+resolver (not the console's own env) finds no key for it.
+
 To force fully offline TTS: `CORVIN_TTS_PROVIDER=piper` in `service.env`
 (requires a Piper voice model — downloaded automatically as part of a normal
 `corvin-install` run since ADR-0185 M2/M3; no separate flag needed. Re-run
