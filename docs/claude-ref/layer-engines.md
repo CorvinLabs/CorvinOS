@@ -3378,8 +3378,10 @@ via MSW); `tests/e2e/test_models_console_bundle_e2e.py` (transitive crawl of
 the served chunks: the header caption found FIRST, then the deleted h1s
 `Engine Configuration` / `Model Cost Optimizer` absent — helper in
 `tests/e2e/_console_chunks.py`, shared with the engine-config real-data test);
-`tests/e2e/models-redirects.spec.ts` (Playwright, chromium, live host,
-read-only).
+`tests/e2e/models-redirects.spec.ts` and `tests/e2e/models-console.spec.ts`
+(Playwright, chromium, live host, `--workers=1`; the console spec clicks only
+reversible actions and skips its window case when the tenant's window is
+narrowed).
 
 **Learner contract since the implementation review (2026-09-18):** `ConfidenceOptimizer`
 reads THROUGH the persisted store on every read (its process cache is

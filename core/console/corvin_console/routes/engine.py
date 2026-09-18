@@ -470,9 +470,12 @@ def _assess_model_compliance(engine_models: "dict[str, EngineModelConfig]", tena
             try:
                 gate.validate_or_raise(host)
             except Exception as e:  # noqa: BLE001 — explicit denial
+                # The policy reason is a closed set; the exception text repeats
+                # the sentence, so it is logged, not rendered.
+                _log.info("L35 advisory for %s/%s: %s", eid, host, str(e)[:200])
                 warnings.append(
                     f"{eid}: egress to '{host}' is blocked by the L35 policy — "
-                    f"add it to allowed_hosts. ({str(e)[:120]})"
+                    f"add it to allowed_hosts."
                 )
         if getattr(spec, "is_platform", False):
             # No API key exists for a platform provider — the credential is a

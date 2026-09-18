@@ -498,7 +498,7 @@ async def get_model_history(
 
 
 @router.post("/reset", response_model=ResetResponse)
-async def reset_learning(
+def reset_learning(  # sync on purpose: two file locks off the event loop
     rec: session_auth.SessionRecord = Depends(require_session),
     csrf_token: Annotated[str, Depends(require_csrf)] = "",
 ) -> Dict[str, Any]:
@@ -531,15 +531,20 @@ async def reset_learning(
     optimizer = get_optimizer()
     try:
         optimizer.reset_learning(tenant_id=tenant_id)
-        # The replay guard exists to bound the learner to one operator sample
-        # per record; once the learner forgot everything, a record is rateable
-        # again (review R3 — "already rated" after a reset was a lie).
-        with _rated_locked(tenant_id):
-            _save_rated(tenant_id, set())
-        logger.info(f"Learning reset for tenant {tenant_id}")
     except Exception as e:
         logger.error(f"Failed to reset learning: {e}")
         raise HTTPException(status_code=500, detail="Failed to reset learning")
+    # The replay guard exists to bound the learner to one operator sample per
+    # record; once the learner forgot everything, a record is rateable again
+    # (review R3 — "already rated" after a reset was a lie). Its own failure
+    # is reported as what it is: the learner IS reset, the guard is not.
+    try:
+        with _rated_locked(tenant_id):
+            _save_rated(tenant_id, set())
+    except Exception as e:
+        logger.error(f"Learning reset, but the rated-set could not be cleared: {e}")
+        raise HTTPException(status_code=500, detail="Learning was reset, but the rated-set could not be cleared")
+    logger.info(f"Learning reset for tenant {tenant_id}")
 
     return {
         "status": "success",

@@ -80,7 +80,9 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
           </div>
           <div className="flex items-center gap-2">
             <Clock size={15} className="text-muted-foreground shrink-0" />
-            {win.loading || w === undefined ? (
+            {win.error ? (
+              <span className="text-destructive">Counting window: unavailable</span>
+            ) : win.loading || w === undefined ? (
               <span className="text-muted-foreground">Counting window: —</span>
             ) : w.active ? (
               <span>
@@ -117,6 +119,9 @@ export function ModelsHeader({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
           </div>
           {pinsError && (
             <p className="w-full text-xs text-destructive">The engine settings could not be loaded — the pins above are unknown, not empty.</p>
+          )}
+          {win.error && (
+            <p className="w-full text-xs text-destructive">The cost status could not be loaded — the counting window is unknown, and it cannot be changed until it is.</p>
           )}
           <p className="w-full text-xs text-muted-foreground">
             This only moves the counting window every tab counts over. The audit trail is

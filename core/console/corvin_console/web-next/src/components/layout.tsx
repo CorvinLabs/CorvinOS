@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { ENGINE_SETTING_KEY } from "@/pages/models/hooks/use-pins";
 import {
   Activity,
   AudioLines,
@@ -67,7 +68,7 @@ const ENGINE_LABELS: Record<string, string> = {
 
 function EngineChip() {
   const q = useQuery({
-    queryKey: ["os-engine-setting"],
+    queryKey: [...ENGINE_SETTING_KEY], // shared with the Models console (use-pins.ts)
     queryFn: ({ signal }) => getOsEngineSetting(signal),
     refetchInterval: 60_000,
     staleTime: 30_000,
