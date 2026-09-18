@@ -71,7 +71,7 @@ def _audit_module():
         pass
 
     repo_root = Path(__file__).resolve().parents[3]
-    shared = repo_root / "operator" / "bridges" / "shared"
+    shared = repo_root / "corvin_operator" / "bridges" / "shared"
     if shared.is_dir() and str(shared) not in sys.path:
         # append, NOT insert(0): this directory also contains generic top-level
         # names (tests/, templates/) with no __init__.py, so putting it FIRST on
@@ -599,7 +599,7 @@ def _shared_module(name: str):
     except ImportError:
         pass
     repo_root = Path(__file__).resolve().parents[3]
-    shared = repo_root / "operator" / "bridges" / "shared"
+    shared = repo_root / "corvin_operator" / "bridges" / "shared"
     if shared.is_dir() and str(shared) not in sys.path:
         sys.path.append(str(shared))
     return __import__(name)

@@ -7,7 +7,7 @@ with full spec coverage.
 Rules that can only be checked at runtime are marked ``[RUNTIME]`` in their
 docstrings and return ``INFO``-severity issues to document what will be checked.
 
-CLI:  python -m operator.bridges.shared.acs_validator validate <path.yaml>
+CLI:  python -m corvin_operator.bridges.shared.acs_validator validate <path.yaml>
       (M7 wires this as ``corvin-workflow validate``)
 
 MUST NOT import anthropic — CI AST lint enforces.

@@ -1921,7 +1921,7 @@ def _persona_has_namespace_gate(persona_name: str | None) -> bool:
     if cache is None:
         # bridges/shared/adapter.py → bridges → operator → repo-root
         repo_root = Path(__file__).resolve().parents[3]
-        bundle = repo_root / "operator" / "forge" / "forge" / "policy.json"
+        bundle = repo_root / "corvin_operator" / "forge" / "forge" / "policy.json"
         try:
             data = json.loads(bundle.read_text(encoding="utf-8"))
             ns = (data.get("persona_namespaces") or {}) if isinstance(data, dict) else {}
@@ -2927,7 +2927,7 @@ def _load_persona_engine_cfg(persona_name: str, tenant_id: str = "_default") -> 
                 return cfg
         bundle_path = (
             Path(__file__).resolve().parents[3]
-            / "operator" / "cowork" / "personas"
+            / "corvin_operator" / "cowork" / "personas"
             / f"{persona_name}.json"
         )
         if bundle_path.exists():

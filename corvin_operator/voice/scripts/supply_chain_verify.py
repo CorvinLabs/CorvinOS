@@ -400,7 +400,7 @@ def _validate_audit_details(event_type: str, details: dict[str, Any]) -> None:
 def _emit(event_type: str, details: dict[str, Any]) -> None:
     _validate_audit_details(event_type, details)
     repo = Path(__file__).resolve().parents[3]
-    forge_path = repo / "operator" / "forge"
+    forge_path = repo / "corvin_operator" / "forge"
     if str(forge_path) not in sys.path:
         sys.path.insert(0, str(forge_path))
     from forge import security_events as _se  # noqa: WPS433

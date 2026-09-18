@@ -319,7 +319,7 @@ def _load_session_reset():
     """
     import sys
     from pathlib import Path
-    shared = Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared"
+    shared = Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"
     if str(shared) not in sys.path:
         sys.path.insert(0, str(shared))
     import session_reset

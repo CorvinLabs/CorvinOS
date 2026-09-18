@@ -53,7 +53,7 @@ def _resolve_core_audit():
     try:
         import audit as _audit  # type: ignore[import-not-found]
     except ImportError:
-        shared = Path(__file__).resolve().parents[2] / "operator" / "bridges" / "shared"
+        shared = Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"
         if shared.is_dir() and str(shared) not in sys.path:
             sys.path.insert(0, str(shared))
         try:

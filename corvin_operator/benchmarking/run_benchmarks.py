@@ -18,7 +18,7 @@ async def main():
     print("\nThis suite SIMULATES token usage from a deterministic model of")
     print("assumed per-category savings ratios — it executes no TDE code and")
     print("measures no real LLM usage (see harness.py honesty note; use")
-    print("operator/orchestration/tde/bench.py for measured runs).\n")
+    print("corvin_operator/orchestration/tde/bench.py for measured runs).\n")
 
     output_dir = Path(__file__).parent.parent.parent / "benchmark" / "results"
     run_id, results = await run_benchmark_suite(output_dir=output_dir)

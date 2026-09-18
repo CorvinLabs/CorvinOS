@@ -22,7 +22,7 @@ def main() -> None:
     # validator and the CLI reports tier=free on a paid install — masking the
     # very tier this diagnostic exists to surface (review MEDIUM). Mirrors
     # shard_verifier._shared_on_path (here.parents[1] == corvin_operator/).
-    _operator = os.path.normpath(os.path.join(base, "..", "..", "operator"))
+    _operator = os.path.normpath(os.path.join(base, "..", "..", "corvin_operator"))
     _license = os.path.join(_operator, "license")
     _shared = os.path.join(_operator, "bridges", "shared")
     _forge = os.path.join(_operator, "forge", "forge")

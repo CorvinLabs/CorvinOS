@@ -16,7 +16,7 @@ import pytest
 _THIS = Path(__file__).resolve().parent
 _PLUGIN = _THIS.parent
 _REPO = _PLUGIN.parent.parent
-_FORGE = _REPO / "operator" / "forge"
+_FORGE = _REPO / "corvin_operator" / "forge"
 
 # Make the plugin + forge importable without bootstrap.
 for p in (_PLUGIN, _FORGE):

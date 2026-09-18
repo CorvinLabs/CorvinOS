@@ -29,7 +29,7 @@ import sys as _sys
 import types as _types
 from pathlib import Path as _Path
 
-_OPERATOR_ROOT = _Path(__file__).resolve().parent / "operator"
+_OPERATOR_ROOT = _Path(__file__).resolve().parent / "corvin_operator"
 
 
 def load_operator_module(relative_path: str, module_name: str | None = None):

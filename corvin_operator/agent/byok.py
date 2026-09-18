@@ -146,8 +146,8 @@ def _vault_set(key_name: str, value: str, *, vault_dir: Path | None = None) -> N
     # Default path: use vault.py.
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
-        if (parent / "operator").is_dir():
-            shared = parent / "operator" / "bridges" / "shared"
+        if (parent / "corvin_operator").is_dir():
+            shared = parent / "corvin_operator" / "bridges" / "shared"
             if str(shared) not in sys.path:
                 sys.path.insert(0, str(shared))
             break
@@ -183,8 +183,8 @@ def _write_service_env(
     """
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
-        if (parent / "operator").is_dir():
-            shared = parent / "operator" / "bridges" / "shared"
+        if (parent / "corvin_operator").is_dir():
+            shared = parent / "corvin_operator" / "bridges" / "shared"
             if str(shared) not in sys.path:
                 sys.path.insert(0, str(shared))
             break

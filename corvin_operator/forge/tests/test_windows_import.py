@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-_FORGE = _REPO / "operator" / "forge"
+_FORGE = _REPO / "corvin_operator" / "forge"
 
 _SIM_WINDOWS = r"""
 import sys, importlib.abc
@@ -66,7 +66,7 @@ import mcp_manager.catalog           # noqa: F401  bare fcntl → guarded fallba
 import awpkg.audit                   # noqa: F401  bare fcntl → guarded fallback
 print("SIBLINGS_IMPORT_OK")
 """.replace("{paths}", ", ".join(repr(str(_REPO / p)) for p in (
-    "operator/skill-forge", "operator/mcp_manager", "core/awpkg")))
+    "corvin_operator/skill-forge", "corvin_operator/mcp_manager", "core/awpkg")))
 
 
 def test_forge_imports_under_simulated_windows():
@@ -97,7 +97,7 @@ def test_no_os_environ_home_subscript():
     os.environ.get("HOME"). Keep this class at zero across the repo."""
     import re as _re
     bad = []
-    roots = [_REPO / "operator", _REPO / "core", _REPO / "ops", _REPO / "corvinOS"]
+    roots = [_REPO / "corvin_operator", _REPO / "core", _REPO / "ops", _REPO / "corvinOS"]
     pat = _re.compile(r"""os\.environ\[\s*['"]HOME['"]\s*\]""")
     for root in roots:
         if not root.is_dir():

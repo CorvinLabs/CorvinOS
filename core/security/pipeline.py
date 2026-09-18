@@ -32,7 +32,7 @@ def _ensure_operator_on_path() -> None:
         ensure_operator_on_path()
     except ImportError:
         pass
-    operator_root = Path(__file__).resolve().parents[2] / "operator"
+    operator_root = Path(__file__).resolve().parents[2] / "corvin_operator"
     if operator_root.is_dir() and str(operator_root) not in sys.path:
         sys.path.insert(0, str(operator_root))
 

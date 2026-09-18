@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-for _p in (_REPO / "core" / "console", _REPO / "operator" / "forge",
-           _REPO / "operator" / "bridges" / "shared"):
+for _p in (_REPO / "core" / "console", _REPO / "corvin_operator" / "forge",
+           _REPO / "corvin_operator" / "bridges" / "shared"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

@@ -59,7 +59,14 @@ from core.skills.os_skills.model_selector_variants import (
     VariantCSelector,
     VariantDSelector,
 )
-from core.compliance.corvin_compliance import emit_audit_event
+
+# Audit event emission (optional, fail-soft on import)
+try:
+    from core.gateway.corvin_gateway.plugin_cmd import emit_audit_event
+except ImportError:
+    def emit_audit_event(event_type: str, plugin_id: str = None, details: dict = None) -> None:
+        """Fallback audit event emission (no-op if audit backend unavailable)."""
+        logger.debug(f"Audit event: {event_type} (backend unavailable)")
 
 logger = logging.getLogger(__name__)
 

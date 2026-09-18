@@ -274,9 +274,9 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     if repo is None:
         return None
     # Try new operator/bridges layout first, fall back to legacy plugins/ location
-    channel_dir = repo / "operator" / "bridges" / channel
+    channel_dir = repo / "corvin_operator" / "bridges" / channel
     if not channel_dir.exists():
-        channel_dir = repo / "operator" / "bridges" / channel
+        channel_dir = repo / "corvin_operator" / "bridges" / channel
     if kind in ("settings", "root"):
         return channel_dir
     return channel_dir / kind

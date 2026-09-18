@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "orchestration"))
 
 from tde.worker_ipc import ProcHolder, run_one_shot
 
@@ -90,7 +90,7 @@ class TestAnalysisRunnerForwardsHolder:
         # helper_model must resolve for _run_lm_call to reach run_one_shot
         monkeypatch.setattr(
             analysis_runner, "_bridges_shared_dir",
-            lambda: Path(__file__).parent.parent / "operator" / "bridges" / "shared",
+            lambda: Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared",
         )
 
         holder = object()  # any sentinel — _run_lm_call just forwards it

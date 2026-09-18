@@ -28,7 +28,7 @@ _PKG_ROOT = _HERE.parent
 sys.path.insert(0, str(_PKG_ROOT))
 # Forge's sandbox primitives live under corvin_operator/forge — make it importable so
 # the code-node tests can patch forge.sandbox.have_bwrap directly.
-_FORGE_ROOT = _PKG_ROOT.parents[1] / "operator" / "forge"
+_FORGE_ROOT = _PKG_ROOT.parents[1] / "corvin_operator" / "forge"
 sys.path.insert(0, str(_FORGE_ROOT))
 
 from corvin_workflows import DAGRunner, StubEngine, WorkflowDoc, validate  # noqa: E402

@@ -60,7 +60,7 @@ def _register_chain_allowlists() -> None:
         # the forge package is reached by its directory, as the writer itself does.
         import sys  # noqa: PLC0415
 
-        forge_dir = Path(__file__).resolve().parents[3] / "operator" / "forge"
+        forge_dir = Path(__file__).resolve().parents[3] / "corvin_operator" / "forge"
         if not forge_dir.is_dir():
             return
         if str(forge_dir) not in sys.path:

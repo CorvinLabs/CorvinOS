@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "orchestration"))
 
 from tde.adaptive_delegation_executor import AdaptiveDelegationExecutor, StepResult
 from tde.engine_registry import EngineRegistry, get_registry

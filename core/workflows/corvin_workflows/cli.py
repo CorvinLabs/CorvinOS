@@ -27,7 +27,7 @@ from .validator import WorkflowInvalid, validate
 
 # ACS engine — optional; absent on lightweight installs.
 try:
-    _ACS_SHARED = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    _ACS_SHARED = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     if str(_ACS_SHARED) not in sys.path:
         sys.path.insert(0, str(_ACS_SHARED))
     from acs_engine_adapter import run_acs_workflow, list_acs_runs, get_acs_run  # type: ignore

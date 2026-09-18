@@ -85,7 +85,7 @@ def _find_repo_root() -> Path:
     In a pip-wheel install: corvinOS/ lives inside site-packages; the "repo root"
     concept does not apply for build artefacts, but we still need a writable
     location for runtime data.  Fall back to the user's home directory so that
-    paths like _REPO_ROOT / "operator" / ... are at least predictable
+    paths like _REPO_ROOT / "corvin_operator" / ... are at least predictable
     (they won't exist, but the code gracefully handles missing paths).
     """
     candidate = Path(__file__).resolve().parent.parent.parent
@@ -149,7 +149,7 @@ def _is_source_checkout(root: Path) -> bool:
     pyproject = root / "pyproject.toml"
     if not pyproject.is_file():
         return False
-    if not (root / "core").is_dir() or not (root / "operator").is_dir():
+    if not (root / "core").is_dir() or not (root / "corvin_operator").is_dir():
         return False
     return _pyproject_project_name(pyproject) == "corvinos"
 
@@ -510,7 +510,7 @@ class CorvinInstaller:
         adapter_cmd = self._get_adapter_command()
         if not adapter_cmd:
             # INST-7: wheel install with no runnable adapter source — skip
-            # rather than register a `-m operator...` command that collides with
+            # rather than register a `-m corvin_operator...` command that collides with
             # the stdlib `operator` module and can never start.
             print("  ℹ Adapter source not found (wheel install) — skipping "
                   "adapter service registration")
@@ -626,7 +626,7 @@ class CorvinInstaller:
         failure here is best-effort and reported, matching the
         try/except-per-service shape of the non-Windows branch; a failure
         must never abort the rest of the install."""
-        bridges_dir = self.repo_root / "operator" / "bridges"
+        bridges_dir = self.repo_root / "corvin_operator" / "bridges"
         bridges_dir_str = str(bridges_dir)
         if bridges_dir_str not in sys.path:
             sys.path.insert(0, bridges_dir_str)
@@ -1516,14 +1516,14 @@ class CorvinInstaller:
 
     def _get_adapter_command(self) -> "str | None":
         # Source-tree install: adapter.py lives in the repo checkout.
-        adapter = self.repo_root / "operator" / "bridges" / "shared" / "adapter.py"
+        adapter = self.repo_root / "corvin_operator" / "bridges" / "shared" / "adapter.py"
         if adapter.exists():
             # M1: quote both path components so a spaced install/repo path
             # (e.g. C:\Users\John Doe\...) survives re-tokenization intact.
             return f'"{sys.executable}" "{adapter}"'
         # Wheel install: `operator` is NOT importable as a package (it shadows
         # the stdlib `operator` module), so the old fallback
-        # `-m operator.bridges.shared.adapter` could never start (INST-7). The
+        # `-m corvin_operator.bridges.shared.adapter` could never start (INST-7). The
         # build hook (hatch_build.py) vendors the subtree into
         # corvin_console/_vendor/corvin_operator/…; resolve that real file instead.
         try:
@@ -1531,7 +1531,7 @@ class CorvinInstaller:
             spec = _ilu.find_spec("corvin_console")
             if spec and spec.origin:
                 vendored = (
-                    Path(spec.origin).parent / "_vendor" / "operator"
+                    Path(spec.origin).parent / "_vendor" / "corvin_operator"
                     / "bridges" / "shared" / "adapter.py"
                 )
                 if vendored.exists():
@@ -1543,7 +1543,7 @@ class CorvinInstaller:
         return None
 
     def _get_bridge_command(self, bridge: str) -> str:
-        daemon = self.repo_root / "operator" / "bridges" / bridge / "daemon.js"
+        daemon = self.repo_root / "corvin_operator" / "bridges" / bridge / "daemon.js"
         if daemon.exists():
             node = shutil.which("node")
             if node:

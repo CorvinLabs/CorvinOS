@@ -600,10 +600,10 @@ class A2AKeyFileCheckTests(unittest.TestCase):
     """_check_a2a_key_files: mode-0600 enforcement for A2A credentials."""
 
     def _origins_dir(self) -> Path:
-        return st._REPO_ROOT / "operator" / "cowork" / "remote_origins"
+        return st._REPO_ROOT / "corvin_operator" / "cowork" / "remote_origins"
 
     def _endpoints_dir(self) -> Path:
-        return st._REPO_ROOT / "operator" / "cowork" / "remote_endpoints"
+        return st._REPO_ROOT / "corvin_operator" / "cowork" / "remote_endpoints"
 
     def test_info_when_no_directories_exist(self) -> None:
         """No A2A dirs → INFO (not yet provisioned)."""

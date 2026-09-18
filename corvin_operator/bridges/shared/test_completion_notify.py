@@ -29,7 +29,7 @@ sys.path.insert(0, str(HERE))
 # below can resolve the REAL proactive_communication flag + write the REAL audit
 # chain the migrated deliver_ready path routes through.
 _REPO = HERE.parents[2]
-for _p in (_REPO / "core" / "console", _REPO / "operator" / "forge"):
+for _p in (_REPO / "core" / "console", _REPO / "corvin_operator" / "forge"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

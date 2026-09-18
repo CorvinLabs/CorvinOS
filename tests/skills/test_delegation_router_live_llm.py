@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-_SHARED = REPO / "operator" / "bridges" / "shared"
+_SHARED = REPO / "corvin_operator" / "bridges" / "shared"
 
 live = pytest.mark.skipif(
     os.environ.get("CLAUDE_LIVE_E2E", "") != "1" or shutil.which("claude") is None,
@@ -43,7 +43,7 @@ live = pytest.mark.skipif(
 
 
 def _load_delegation_policy():
-    for p in (str(_SHARED), str(REPO / "operator" / "forge"), str(REPO / "core" / "plugins")):
+    for p in (str(_SHARED), str(REPO / "corvin_operator" / "forge"), str(REPO / "core" / "plugins")):
         if p not in sys.path:
             sys.path.insert(0, p)
     spec = importlib.util.spec_from_file_location("delegation_policy", _SHARED / "delegation_policy.py")

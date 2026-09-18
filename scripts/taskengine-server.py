@@ -2,7 +2,7 @@
 """TaskEngine server launcher (standalone).
 
 Workaround: Python's stdlib 'operator' module shadows 'operator.task_analysis' namespace.
-Use this script instead of 'python -m operator.task_analysis.server'.
+Use this script instead of 'python -m corvin_operator.task_analysis.server'.
 """
 
 import sys
@@ -15,7 +15,7 @@ sys.path.insert(0, project_root)
 
 # Force operator submodule to be registered as a package
 import corvin_operator as stdlib_operator
-_task_analysis_path = os.path.join(project_root, "operator", "task_analysis")
+_task_analysis_path = os.path.join(project_root, "corvin_operator", "task_analysis")
 if not hasattr(stdlib_operator, 'task_analysis'):
     import importlib.util
     spec = importlib.util.spec_from_file_location(

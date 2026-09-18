@@ -150,7 +150,7 @@ def test_materialize_per_persona_root():
       "FORGE_ROOT" not in env)
     args = cfg["mcpServers"]["forge"]["args"]
     t("args[0] resolved to absolute path",
-      args[0].startswith("/") and args[0].endswith("operator/forge/forge.py"))
+      args[0].startswith("/") and args[0].endswith("corvin_operator/forge/forge.py"))
 
 
 def test_idempotency_resolve_twice():

@@ -639,8 +639,8 @@ class HermesHealthRepair(RepairAction):
         """
         here = Path(__file__).resolve()
         return [
-            here.parents[4] / "operator" / "bridges" / "shared",
-            here.parents[1] / "_vendor" / "operator" / "bridges" / "shared",
+            here.parents[4] / "corvin_operator" / "bridges" / "shared",
+            here.parents[1] / "_vendor" / "corvin_operator" / "bridges" / "shared",
         ]
 
     def _import_hermes_healing(self, ctx: RepairContext | None = None):
@@ -911,8 +911,8 @@ class VoiceTtsPinnedProviderReset(RepairAction):
         """Return the profile module, resolving both source-tree and wheel layouts."""
         import sys as _sys
         for candidate in (
-            ctx.corvin_home.parent.parent.parent / "operator" / "bridges" / "shared",
-            ctx.corvin_home.parent / "_vendor" / "operator" / "bridges" / "shared",
+            ctx.corvin_home.parent.parent.parent / "corvin_operator" / "bridges" / "shared",
+            ctx.corvin_home.parent / "_vendor" / "corvin_operator" / "bridges" / "shared",
         ):
             if candidate.is_dir() and str(candidate) not in _sys.path:
                 _sys.path.insert(0, str(candidate))

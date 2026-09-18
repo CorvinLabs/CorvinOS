@@ -21,8 +21,8 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_FORGE_DIR = _REPO_ROOT / "operator" / "forge"
-_SHARED_DIR = _REPO_ROOT / "operator" / "bridges" / "shared"
+_FORGE_DIR = _REPO_ROOT / "corvin_operator" / "forge"
+_SHARED_DIR = _REPO_ROOT / "corvin_operator" / "bridges" / "shared"
 _COMPLIANCE_DIR = _REPO_ROOT / "core" / "compliance"
 for _p in (_FORGE_DIR, _SHARED_DIR, _COMPLIANCE_DIR):
     if str(_p) not in sys.path:

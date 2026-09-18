@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 

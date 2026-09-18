@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLI = REPO_ROOT / "operator" / "voice" / "scripts" / "voice_audit.py"
+CLI = REPO_ROOT / "corvin_operator" / "voice" / "scripts" / "voice_audit.py"
 
 
 PASS = 0

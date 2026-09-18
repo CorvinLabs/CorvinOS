@@ -23,14 +23,14 @@ def _agent_dir(tenant_id: str | None = None) -> Path:
     here = Path(__file__).resolve()
     # Walk up to find repo root (contains .corvin_repo marker or operator/)
     for parent in [here, *here.parents]:
-        if (parent / ".corvin_repo").exists() or (parent / "operator").is_dir():
+        if (parent / ".corvin_repo").exists() or (parent / "corvin_operator").is_dir():
             repo = parent
             break
     else:
         repo = Path.home()
 
     # Prefer forge's tenant resolver; fall back to simple env-var lookup.
-    forge_path = repo / "operator" / "forge"
+    forge_path = repo / "corvin_operator" / "forge"
     if str(forge_path) not in sys.path:
         sys.path.insert(0, str(forge_path))
     try:

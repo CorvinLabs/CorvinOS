@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"))
 
 from corvin_console import chat_runtime as cr  # noqa: E402
 from acs_classify import heuristic_classify as _hc  # noqa: E402
@@ -367,7 +367,7 @@ def test_delegation_spec_is_valid_awp() -> None:
 
 
 def test_delegation_spec_passes_acs_validator() -> None:
-    shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     sys.path.insert(0, str(shared))
     try:
         from acs_validator import validate_workflow_dict  # type: ignore
@@ -411,7 +411,7 @@ def test_acs1_budget_defaults_are_sane() -> None:
 def test_acs1_inflated_budget_would_be_rejected_by_validator() -> None:
     """Backstop: had the inflated siblings NOT been reverted, the acs_validator
     R35/R36 ceilings would now reject the spec loudly."""
-    shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     sys.path.insert(0, str(shared))
     try:
         from acs_validator import validate_workflow_dict  # type: ignore
@@ -441,7 +441,7 @@ def test_acs1_inflated_budget_would_be_rejected_by_validator() -> None:
 def test_delegation_spec_e2e_worker_receives_real_task_not_placeholder(
     tmp_path: Path, monkeypatch
 ) -> None:
-    shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     if str(shared) not in sys.path:
         sys.path.insert(0, str(shared))
     try:

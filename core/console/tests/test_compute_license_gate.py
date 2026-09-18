@@ -131,7 +131,7 @@ def test_chat_turns_is_a_separate_axis_from_compute():
     """ADR-0150: chat_turns_per_day must use its OWN counter file and limit key,
     so conversational turns do not consume the 1/day compute-workload budget."""
     import sys as _s
-    _s.path.insert(0, str(_CONSOLE.parents[1] / "operator"))
+    _s.path.insert(0, str(_CONSOLE.parents[1] / "corvin_operator"))
     import importlib, tempfile
     cq = importlib.import_module("license.compute_quota")
     import license.validator as _v
@@ -325,7 +325,7 @@ def test_enforce_compute_quota_leaks_across_tenants_cross_tenant_dos(monkeypatch
     updated together with the fix.
     """
     import sys as _s
-    _s.path.insert(0, str(_CONSOLE.parents[1] / "operator"))
+    _s.path.insert(0, str(_CONSOLE.parents[1] / "corvin_operator"))
     import license.validator as _v
 
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
@@ -375,7 +375,7 @@ def test_enforce_chat_turns_leaks_across_tenants_cross_tenant_dos(monkeypatch, t
     monkeypatch.setattr(G, "_lic_get_limit", lambda feature: 1 if feature == "chat_turns_per_day" else None)
 
     import sys as _s
-    _s.path.insert(0, str(_CONSOLE.parents[1] / "operator"))
+    _s.path.insert(0, str(_CONSOLE.parents[1] / "corvin_operator"))
     import license.validator as _v
     _v._set_active_license(None)
     # compute_quota._do_increment_and_check calls `.validator.get_limit` directly

@@ -35,7 +35,7 @@ def test_orchestration_in_operator_subtrees():
 def test_vendored_orchestration_lands_on_syspath(tmp_path, monkeypatch):
     ob = _load_bootstrap()
     root = tmp_path / "corvin_console"
-    orch = root / "_vendor" / "operator" / "orchestration"
+    orch = root / "_vendor" / "corvin_operator" / "orchestration"
     (orch / "tde").mkdir(parents=True)
     (orch / "__init__.py").write_text("")
     (orch / "tde" / "__init__.py").write_text("MARK = 42\n")

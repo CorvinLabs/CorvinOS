@@ -264,7 +264,7 @@ class AuditChainIntegrityTests(_ProposalTestBase):
         for parent in HERE.parents:
             if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
                 repo = parent; break
-        forge_pkg = repo / "operator" / "forge"
+        forge_pkg = repo / "corvin_operator" / "forge"
         sys.path.insert(0, str(forge_pkg))
         from forge.security_events import verify_chain  # type: ignore
         ok, problems = verify_chain(path)

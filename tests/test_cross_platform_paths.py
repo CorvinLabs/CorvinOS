@@ -16,7 +16,7 @@ import pytest
 # ── Path setup: load the canonical path resolvers ────────────────────────
 
 _REPO = Path(__file__).resolve().parents[1]
-_FORGE = _REPO / "operator" / "forge"
+_FORGE = _REPO / "corvin_operator" / "forge"
 _CORVIN_SHARED = _REPO / "corvinOS" / "shared"
 
 for _p in [str(_FORGE), str(_CORVIN_SHARED)]:

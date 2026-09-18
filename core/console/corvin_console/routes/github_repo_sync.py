@@ -182,7 +182,7 @@ class GitHubRepoSync:
             write_event = _bootstrap.security_events.write_event
         except Exception:  # noqa: BLE001 — fall back to the repo layout
             import sys as _sys
-            _forge = Path(__file__).resolve().parents[4] / "operator" / "forge"
+            _forge = Path(__file__).resolve().parents[4] / "corvin_operator" / "forge"
             if str(_forge) not in _sys.path:
                 _sys.path.append(str(_forge))
             from forge.security_events import write_event  # type: ignore

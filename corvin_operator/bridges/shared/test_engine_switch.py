@@ -45,8 +45,8 @@ class _Sandbox:
         # heuristic the production engine_switch._audit uses.
         here = Path(__file__).resolve()
         for parent in here.parents:
-            if (parent / "operator" / "forge").is_dir():
-                fp = str(parent / "operator" / "forge")
+            if (parent / "corvin_operator" / "forge").is_dir():
+                fp = str(parent / "corvin_operator" / "forge")
                 if fp not in sys.path:
                     sys.path.insert(0, fp)
                 break

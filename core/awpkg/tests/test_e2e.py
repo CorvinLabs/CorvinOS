@@ -712,7 +712,7 @@ class TestPathGateIntegration:
         """is_protected_path must return True for paths under packages/."""
         import sys as _sys
         # test_e2e.py parents: [0]=tests, [1]=awpkg, [2]=core, [3]=repo
-        hook_path = Path(__file__).parents[3] / "operator" / "voice" / "hooks"
+        hook_path = Path(__file__).parents[3] / "corvin_operator" / "voice" / "hooks"
         if str(hook_path.parent) not in _sys.path:
             _sys.path.insert(0, str(hook_path.parent))
         import importlib.util

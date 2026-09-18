@@ -50,11 +50,11 @@ _REPO = _THIS_DIR.parents[3]
 # corvin_console/_vendor/corvin_operator/* (hatch_build.py) and _REPO points at
 # site-packages/.. where no corvin_operator/ exists — so say.py was "not found" and TTS
 # failed on every pip install. Resolve to whichever layout actually has the files.
-_VENDOR_OPERATOR = _THIS_DIR.parent / "_vendor" / "operator"
+_VENDOR_OPERATOR = _THIS_DIR.parent / "_vendor" / "corvin_operator"
 
 
 def _resolve_operator_dir(*parts: str) -> Path:
-    repo = _REPO.joinpath("operator", *parts)
+    repo = _REPO.joinpath("corvin_operator", *parts)
     if repo.is_dir():
         return repo
     vendored = _VENDOR_OPERATOR.joinpath(*parts)

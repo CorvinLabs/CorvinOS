@@ -16,7 +16,7 @@ from unittest.mock import Mock, MagicMock
 import pytest
 
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
 
 from remote_trigger_sender import (
     RemoteTriggerSender, PingResult, ErrorCategory, TransportError,
@@ -299,7 +299,7 @@ class TestADR0199ReceiverPingHandler:
         import urllib.request
         import threading
 
-        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
         from a2a_http_server import build_server, serve_in_thread
 
         origins = tmp_path / "origins"
@@ -340,7 +340,7 @@ class TestADR0199ReceiverPingHandler:
         import urllib.request
         import hashlib
 
-        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
         from a2a_http_server import build_server, serve_in_thread
 
         origins = tmp_path / "origins"
@@ -391,7 +391,7 @@ class TestADR0199ReceiverPingHandler:
         import json
         import urllib.request
 
-        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
         from a2a_http_server import build_server, serve_in_thread
 
         origins = tmp_path / "origins"
@@ -432,7 +432,7 @@ class TestADR0199ReceiverPingHandler:
         import urllib.request
         import hashlib
 
-        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
         from a2a_http_server import build_server, serve_in_thread
 
         origins = tmp_path / "origins"
@@ -502,7 +502,7 @@ class TestADR0199ReceiverPingHandler:
         import urllib.request
         import hashlib
 
-        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
         from a2a_http_server import build_server, serve_in_thread
         from a2a_friendship import get_endpoint_last_heartbeat, _endpoint_heartbeat_cache
 
@@ -564,7 +564,7 @@ class TestADR0199ReceiverBackendParity:
     """Verify ping route exists in both receiver backends with same behavior."""
 
     def test_stdlib_receiver_has_ping_route(self):
-        server_file = Path(__file__).parent.parent / "operator" / "bridges" / "shared" / "a2a_http_server.py"
+        server_file = Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared" / "a2a_http_server.py"
         assert server_file.exists(), "a2a_http_server.py must exist"
         content = server_file.read_text()
         assert "/v1/a2a/ping" in content, \

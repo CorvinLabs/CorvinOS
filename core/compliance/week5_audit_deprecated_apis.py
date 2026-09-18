@@ -161,7 +161,7 @@ class DeprecatedAPIAuditor:
                 self._check_file(filepath, api_name, api_info, pattern, "core_code")
 
             # Scan bridges
-            bridge_root = self.repo_root / "operator" / "bridges"
+            bridge_root = self.repo_root / "corvin_operator" / "bridges"
             if bridge_root.exists():
                 bridge_files = list(bridge_root.glob("**/*.py"))
                 for filepath in bridge_files:

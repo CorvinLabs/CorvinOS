@@ -34,7 +34,7 @@ from ..deps import require_csrf, require_session
 try:  # pragma: no cover - import shape, exercised by the spawn-site test
     _agents_dir = os.path.abspath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "..", "..", "..", "operator", "bridges", "shared",
+        "..", "..", "..", "..", "corvin_operator", "bridges", "shared",
     ))
     if _agents_dir not in sys.path:
         sys.path.insert(0, _agents_dir)

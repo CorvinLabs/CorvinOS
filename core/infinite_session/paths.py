@@ -102,7 +102,7 @@ def _register_allowlists() -> None:
         return
     import sys  # noqa: PLC0415
 
-    forge_dir = Path(__file__).resolve().parents[2] / "operator" / "forge"
+    forge_dir = Path(__file__).resolve().parents[2] / "corvin_operator" / "forge"
     if forge_dir.is_dir() and str(forge_dir) not in sys.path:
         sys.path.insert(0, str(forge_dir))
     from forge import security_events  # noqa: PLC0415  # type: ignore[import-not-found]

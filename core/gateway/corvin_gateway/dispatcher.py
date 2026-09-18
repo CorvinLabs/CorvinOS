@@ -50,7 +50,7 @@ from typing import Any, Callable, Iterator, Protocol, runtime_checkable
 # use for the forge package.
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_BRIDGES_SHARED) not in sys.path:
     sys.path.insert(0, str(_BRIDGES_SHARED))
 
@@ -710,7 +710,7 @@ class RunDispatcher:
         # Charge fail-CLOSED here, before the spawn. License-module-absent is
         # fail-open (boot self_test B1 covers genuine absence).
         try:
-            _gw_op = Path(__file__).resolve().parents[3] / "operator"
+            _gw_op = Path(__file__).resolve().parents[3] / "corvin_operator"
             for _gw_p in (str(_gw_op / "forge"), str(_gw_op)):
                 if _gw_p not in sys.path:
                     sys.path.insert(0, _gw_p)

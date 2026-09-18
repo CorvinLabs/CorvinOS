@@ -21,9 +21,9 @@ from unittest.mock import MagicMock
 _REPO = Path(__file__).resolve().parents[3]
 for _p in (
     _REPO / "core" / "console",
-    _REPO / "operator" / "bridges" / "shared",
+    _REPO / "corvin_operator" / "bridges" / "shared",
     _REPO / "core" / "plugins",
-    _REPO / "operator" / "forge",
+    _REPO / "corvin_operator" / "forge",
 ):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

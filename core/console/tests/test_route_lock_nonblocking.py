@@ -41,7 +41,7 @@ import pytest
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
-_OPERATOR = _REPO / "operator"
+_OPERATOR = _REPO / "corvin_operator"
 _CONSOLE = _REPO / "core" / "console"
 
 for _p in [str(_OPERATOR), str(_OPERATOR / "license"), str(_OPERATOR / "forge"), str(_CONSOLE)]:

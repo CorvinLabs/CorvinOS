@@ -169,7 +169,7 @@ def _audit(event_type: str, *, channel: str, chat_key: str, uid: str,
         here = Path(__file__).resolve()
         for parent in here.parents:
             if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-                forge_pkg = parent / "operator" / "forge"
+                forge_pkg = parent / "corvin_operator" / "forge"
                 if str(forge_pkg) not in sys.path:
                     sys.path.insert(0, str(forge_pkg))
                 break

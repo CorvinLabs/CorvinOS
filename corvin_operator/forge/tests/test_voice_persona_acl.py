@@ -223,7 +223,7 @@ def test_resolver_injects_allowed_forged_tools_via_template_var():
       env.get("FORGE_ALLOWED_TOOLS") == "csv.*,stats.median")
     t("REPO_ROOT in args[0] expanded to absolute path",
       server["args"][0].startswith("/")
-      and server["args"][0].endswith("operator/forge/forge.py"))
+      and server["args"][0].endswith("corvin_operator/forge/forge.py"))
 
 
 def test_resolver_empty_allowlist_yields_empty_env_value():

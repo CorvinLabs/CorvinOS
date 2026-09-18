@@ -135,7 +135,7 @@ def pdf_info_dict(pdf: Path) -> str:
 _HERE = Path(__file__).resolve().parent
 _PLUGIN_ROOT = _HERE.parent          # core/compliance/
 _REPO = _PLUGIN_ROOT.parent.parent
-_FORGE = _REPO / "operator" / "forge"
+_FORGE = _REPO / "corvin_operator" / "forge"
 
 
 def run_cli(*args: str, home: Path) -> subprocess.CompletedProcess:

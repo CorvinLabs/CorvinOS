@@ -170,7 +170,7 @@ def plugin_slot_dir() -> Path:
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-            return parent / "operator" / "skill-forge" / "skills" / "dyn"
+            return parent / "corvin_operator" / "skill-forge" / "skills" / "dyn"
     return Path.home() / ".corvin" / "plugin-slot"
 
 

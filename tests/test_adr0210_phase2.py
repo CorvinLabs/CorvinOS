@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "orchestration"))
 
 from initial_analysis import InitialAnalysisRequest, Classification, Entities, GlobalPlan, Step
 from decision_cache import DecisionCache

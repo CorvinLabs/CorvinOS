@@ -25,7 +25,7 @@ import pytest
 _HERE = Path(__file__).resolve()
 _SKILL_FORGE = _HERE.parents[1]
 _REPO = _HERE.parents[3]
-for _p in (str(_SKILL_FORGE), str(_REPO / "operator" / "forge"), str(_REPO)):
+for _p in (str(_SKILL_FORGE), str(_REPO / "corvin_operator" / "forge"), str(_REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

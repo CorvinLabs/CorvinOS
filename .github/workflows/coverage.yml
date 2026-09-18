@@ -24,7 +24,7 @@ jobs:
         # for unrelated reasons and never reached the step that would have
         # imported the broken file. This runs first, needs no deps, and fails
         # fast on any syntax error anywhere in the checked-in Python tree.
-        run: python -m compileall -q core operator corvinOS ops
+        run: python -m compileall -q core corvin_operator corvinOS ops
 
       - name: Install dependencies
         # CI-10 (see test.yml): install the package with its real base deps +
@@ -98,7 +98,7 @@ jobs:
             ops/launcher/tests/ \
             ops/launcher/corvin/tests/ \
             --import-mode=importlib \
-            --cov=operator \
+            --cov=corvin_operator \
             --cov=core \
             --cov-report=term-missing:skip-covered \
             --cov-report=html \
@@ -152,7 +152,7 @@ jobs:
             --ignore=core/console/tests/test_browser_internal_auth.py \
             --deselect core/console/tests/test_aco.py::TestEngineHealer::test_heal_cycle_with_engine_healer_does_not_raise \
             --import-mode=importlib \
-            --cov=operator --cov=core --cov-append -q
+            --cov=corvin_operator --cov=core --cov-append -q
 
       - name: Run the suites that need their own pytest session
         run: |
@@ -186,7 +186,7 @@ jobs:
           for d in core/awpkg/tests core/delegate/tests core/license/tests \
                    core/workflows/tests; do
             pytest "$d" --import-mode=importlib \
-              --cov=operator --cov=core --cov-append -q
+              --cov=corvin_operator --cov=core --cov-append -q
           done
 
           # --import-mode=PREPEND for everything under operator/, and that word
@@ -202,7 +202,7 @@ jobs:
                    corvin_operator/skill-forge/tests corvin_operator/mcp_manager/tests \
                    corvin_operator/forge/tests corvin_operator/voice/tests; do
             pytest "$d" --import-mode=prepend \
-              --cov=operator --cov=core --cov-append -q
+              --cov=corvin_operator --cov=core --cov-append -q
           done
 
       # KNOWINGLY NOT RUN HERE — stated rather than silently omitted, because a

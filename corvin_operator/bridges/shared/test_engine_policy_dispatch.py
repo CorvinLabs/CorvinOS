@@ -88,7 +88,7 @@ def _patch_repo_walk(tmp_dir: Path):
     Path(__file__).resolve() — we make __file__ appear to be
     inside the fake tmp_dir/plugins tree.
     """
-    fake_adapter = tmp_dir / "operator" / "bridges" / "shared"
+    fake_adapter = tmp_dir / "corvin_operator" / "bridges" / "shared"
     fake_adapter.mkdir(parents=True, exist_ok=True)
     fake_file = fake_adapter / "adapter.py"
     fake_file.touch()

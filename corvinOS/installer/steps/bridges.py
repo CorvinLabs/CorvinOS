@@ -28,7 +28,7 @@ def configure_bridges(
 ) -> list[BridgeSetup]:
     """Configure all selected bridges — reads existing settings, prompts only for missing values."""
     results: list[BridgeSetup] = []
-    bridges_dir = repo_root / "operator" / "bridges"
+    bridges_dir = repo_root / "corvin_operator" / "bridges"
 
     for bridge in selected:
         print(f"\n[Bridge: {bridge}]")
@@ -52,7 +52,7 @@ def configure_bridges(
 
 def whatsapp_qr_pair(repo_root: Path) -> None:
     """Run the WhatsApp QR-code pairing flow."""
-    script = repo_root / "operator" / "voice" / "scripts" / "whatsapp_cli.sh"
+    script = repo_root / "corvin_operator" / "voice" / "scripts" / "whatsapp_cli.sh"
     if not script.exists():
         print(f"⚠ QR pair script not found at {script}")
         return
@@ -84,7 +84,7 @@ def _configure_whatsapp(bridges_dir: Path, interactive: bool) -> BridgeSetup:
         if interactive:
             answer = input("  Pair via QR code now? [Y/n]: ").strip().lower() or "y"
             if not answer.startswith("n"):
-                script = bridges_dir.parent.parent / "operator" / "voice" / "scripts" / "whatsapp_cli.sh"
+                script = bridges_dir.parent.parent / "corvin_operator" / "voice" / "scripts" / "whatsapp_cli.sh"
                 if script.exists():
                     subprocess.run(["bash", str(script), "pair"], check=False)
                 else:

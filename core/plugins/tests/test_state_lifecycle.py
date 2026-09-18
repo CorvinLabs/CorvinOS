@@ -12,8 +12,8 @@ from pathlib import Path
 _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]
 _PKG = _HERE.parents[1]
-_FORGE = _REPO / "operator" / "forge"
-_SHARED = _REPO / "operator" / "bridges" / "shared"
+_FORGE = _REPO / "corvin_operator" / "forge"
+_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 for _p in (str(_PKG), str(_FORGE), str(_SHARED), str(_REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

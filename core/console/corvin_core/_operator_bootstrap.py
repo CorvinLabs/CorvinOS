@@ -26,7 +26,7 @@ its own ``__file__`` and prepends the mirrored subtree directories onto
 
 Source-tree no-op contract (load-bearing)
 -----------------------------------------
-In a source-tree checkout the ``_vendor/operator`` directory does NOT
+In a source-tree checkout the ``_vendor/corvin_operator`` directory does NOT
 exist, so :func:`ensure_operator_on_path` returns immediately without
 touching ``sys.path``.  Behaviour is therefore byte-for-byte identical to
 before this module existed — the per-module repo-relative injection keeps
@@ -107,7 +107,7 @@ _VENDOR_DIRNAME = "_vendor"
 def vendor_operator_root() -> Path | None:
     """Return the vendored ``operator`` root if present, else ``None``.
 
-    Wheel mode → ``<corvin_console>/_vendor/operator`` (exists).
+    Wheel mode → ``<corvin_console>/_vendor/corvin_operator`` (exists).
     Source-tree mode → ``None`` (the directory is not shipped).
     """
     root = Path(__file__).resolve().parent / _VENDOR_DIRNAME / "corvin_operator"

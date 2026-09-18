@@ -45,7 +45,7 @@ import sys as _sys
 # Shared label sanitizer (A4 defense-in-depth, 2026-07-20): labels stored
 # BEFORE the ingestion sanitizer existed (raw peer-token labels) must not
 # reach the UI with ANSI escapes / bidi overrides — sanitize read-side too.
-_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+_BRIDGES_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_BRIDGES_SHARED) not in _sys.path:
     _sys.path.insert(0, str(_BRIDGES_SHARED))
 try:
@@ -63,8 +63,8 @@ def _label_out(cfg: dict) -> str | None:
         return None
     return _sanitize_label(raw, max_len=80) or None
 
-_COWORK_ORIGINS_DEFAULT = _REPO / "operator" / "cowork" / "remote_origins"
-_COWORK_ENDPOINTS_DEFAULT = _REPO / "operator" / "cowork" / "remote_endpoints"
+_COWORK_ORIGINS_DEFAULT = _REPO / "corvin_operator" / "cowork" / "remote_origins"
+_COWORK_ENDPOINTS_DEFAULT = _REPO / "corvin_operator" / "cowork" / "remote_endpoints"
 
 
 def _origins_dir() -> Path:

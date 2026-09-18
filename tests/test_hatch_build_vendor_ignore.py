@@ -116,7 +116,7 @@ def test_voice_i18n_bundle_dir_is_vendored():
 def test_voice_i18n_bundle_files_present_on_disk_for_the_vendored_source():
     """The vendor map entry alone doesn't prove the files exist -- confirm
     the real de/en/zh-Hans bundles are actually there to be copied."""
-    i18n_dir = _REPO / "operator" / "voice" / "i18n"
+    i18n_dir = _REPO / "corvin_operator" / "voice" / "i18n"
     names = {p.name for p in i18n_dir.glob("*.json")}
     assert {"de.json", "en.json", "zh-Hans.json"}.issubset(names), names
 

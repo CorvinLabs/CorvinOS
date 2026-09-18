@@ -34,7 +34,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-SHARED = REPO / "operator" / "bridges" / "shared"
+SHARED = REPO / "corvin_operator" / "bridges" / "shared"
 
 
 def _import_shared(mod_name: str):
@@ -42,7 +42,7 @@ def _import_shared(mod_name: str):
     if str(SHARED) not in sys.path:
         sys.path.insert(0, str(SHARED))
     # forge package must be importable for dialectic/ldd fallbacks
-    forge_path = REPO / "operator" / "forge"
+    forge_path = REPO / "corvin_operator" / "forge"
     if str(forge_path) not in sys.path:
         sys.path.insert(0, str(forge_path))
     sys.modules.pop(mod_name, None)

@@ -30,7 +30,7 @@ _log = logging.getLogger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[2]
-_FORGE_PATH = _REPO / "operator" / "forge"
+_FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 
@@ -38,7 +38,7 @@ from forge import paths as _forge_paths  # noqa: E402
 
 # ADR-0154 M3 (SDLP): the license dir is added lazily so the console can derive
 # a session license-proof. corvin_operator/ on path enables `license.feature_lattice`.
-_OPERATOR_PATH = _REPO / "operator"
+_OPERATOR_PATH = _REPO / "corvin_operator"
 if str(_OPERATOR_PATH) not in sys.path:
     sys.path.insert(0, str(_OPERATOR_PATH))
 

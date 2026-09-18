@@ -266,7 +266,7 @@ def _write_audit_event(tenant_id: str, event_type: str, details: dict[str, Any])
                 repo = parent
                 break
         if repo is not None:
-            forge_pkg = repo / "operator" / "forge"
+            forge_pkg = repo / "corvin_operator" / "forge"
             if str(forge_pkg) not in sys.path:
                 sys.path.insert(0, str(forge_pkg))
         from forge.security_events import write_event  # type: ignore

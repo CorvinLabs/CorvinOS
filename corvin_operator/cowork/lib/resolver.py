@@ -40,7 +40,7 @@ def _compute_core_root() -> Path:
     """Root directory holding the ``core/`` package tree, for {{CORE_ROOT}}.
 
     Source checkout: same as REPO_ROOT (core/ sits next to operator/).
-    Wheel install: this module lives under corvin_console/_vendor/operator/
+    Wheel install: this module lives under corvin_console/_vendor/corvin_operator/
     cowork/lib, so REPO_ROOT resolves to .../_vendor — which contains the
     vendored operator/ subtrees but NOT core/ (core ships as a top-level
     package tree directly in site-packages). Pointing PYTHONPATH at
@@ -116,7 +116,7 @@ def _ldd_module():
     if cached != "unset":
         return cached
     mod = None
-    candidate = REPO_ROOT / "operator" / "bridges" / "shared"
+    candidate = REPO_ROOT / "corvin_operator" / "bridges" / "shared"
     if candidate.is_dir():
         try:
             if str(candidate) not in sys.path:
@@ -270,7 +270,7 @@ def _bundle_policy_data() -> dict:
     cached = getattr(_bundle_policy_data, "_cache", None)
     if cached is not None:
         return cached
-    bundle = REPO_ROOT / "operator" / "forge" / "forge" / "policy.json"
+    bundle = REPO_ROOT / "corvin_operator" / "forge" / "forge" / "policy.json"
     try:
         data = json.loads(bundle.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -917,9 +917,9 @@ def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
             import mcp_manager.activate as _mcp_activate  # type: ignore
         except ImportError:
             # REPO_ROOT/operator/mcp_manager exists in BOTH layouts (repo
-            # checkout, and _vendor/operator/mcp_manager in a wheel where
+            # checkout, and _vendor/corvin_operator/mcp_manager in a wheel where
             # REPO_ROOT == _vendor).
-            _mm_root = REPO_ROOT / "operator" / "mcp_manager"
+            _mm_root = REPO_ROOT / "corvin_operator" / "mcp_manager"
             if str(_mm_root) not in sys.path and _mm_root.is_dir():
                 sys.path.insert(0, str(_mm_root))
             import mcp_manager.activate as _mcp_activate  # type: ignore

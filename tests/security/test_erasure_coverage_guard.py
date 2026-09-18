@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-for _p in (_REPO / "operator" / "bridges" / "shared", _REPO / "operator" / "forge",
+for _p in (_REPO / "corvin_operator" / "bridges" / "shared", _REPO / "corvin_operator" / "forge",
            _REPO / "core" / "console"):
     if str(_p) not in sys.path:
         sys.path.append(str(_p))
@@ -274,8 +274,8 @@ def _boot_real_writers(home: Path) -> None:
     """
     import sys as _sys
     _repo = Path(__file__).resolve().parents[2]
-    for _p in (_repo, _repo / "core" / "console", _repo / "operator" / "forge",
-               _repo / "operator" / "bridges" / "shared"):
+    for _p in (_repo, _repo / "core" / "console", _repo / "corvin_operator" / "forge",
+               _repo / "corvin_operator" / "bridges" / "shared"):
         if str(_p) not in _sys.path:
             _sys.path.append(str(_p))
 
@@ -322,8 +322,8 @@ def _boot_real_writers(home: Path) -> None:
     #    store that held the operator's verbatim conversation text through a
     #    "completed" erasure; it was invisible to the round-2 guard because
     #    nothing imported it.
-    if str(_repo / "operator") not in _sys.path:
-        _sys.path.append(str(_repo / "operator"))
+    if str(_repo / "corvin_operator") not in _sys.path:
+        _sys.path.append(str(_repo / "corvin_operator"))
     from context_engineering import anchor as _anchor  # type: ignore
     _anchor.add_fact("_default", SUBJECT, "constraint", "synthetic guard fact")
 
@@ -714,7 +714,7 @@ def test_live_llm_reply_captured_by_cel_anchor_is_erased(home):
     import subprocess
     from types import SimpleNamespace
 
-    sys.path.append(str(_REPO / "operator"))
+    sys.path.append(str(_REPO / "corvin_operator"))
     from corvin_console import chat_router
     from context_engineering import pipeline
     from entity_extract import EntityPlan  # type: ignore

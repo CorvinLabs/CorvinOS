@@ -953,7 +953,7 @@ def cancel_session_task(
 # ── WDAT Audit Trail (ADR-0109) ───────────────────────────────────────────────
 
 _THIS_DIR_CHAT = Path(__file__).resolve().parent
-_SHARED_PATH = _THIS_DIR_CHAT.parents[3] / "operator" / "bridges" / "shared"
+_SHARED_PATH = _THIS_DIR_CHAT.parents[3] / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED_PATH) not in sys.path:
     sys.path.insert(0, str(_SHARED_PATH))
 

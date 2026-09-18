@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "orchestration"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "corvin_operator" / "bridges" / "shared"))
 
 live = pytest.mark.skipif(
     os.environ.get("CLAUDE_LIVE_E2E", "") != "1"
@@ -87,7 +87,7 @@ def test_live_bench_snapshot_reaches_the_real_audit_chain():
     test_tde_bench.py already covers)."""
     import json as _json
 
-    audit_shared = Path(__file__).resolve().parent.parent / "operator" / "bridges" / "shared"
+    audit_shared = Path(__file__).resolve().parent.parent / "corvin_operator" / "bridges" / "shared"
     if str(audit_shared) not in sys.path:
         sys.path.insert(0, str(audit_shared))
     import audit as _audit_mod  # type: ignore

@@ -464,8 +464,8 @@ def create_app() -> FastAPI:
         try:
             import sys as _sys
             _repo = Path(__file__).resolve().parents[3]
-            for _cand in (_repo / "operator" / "bridges",
-                          Path(__file__).resolve().parent / "_vendor" / "operator" / "bridges"):
+            for _cand in (_repo / "corvin_operator" / "bridges",
+                          Path(__file__).resolve().parent / "_vendor" / "corvin_operator" / "bridges"):
                 if (_cand / "bridge_manager.py").is_file():
                     if str(_cand) not in _sys.path:
                         _sys.path.insert(0, str(_cand))

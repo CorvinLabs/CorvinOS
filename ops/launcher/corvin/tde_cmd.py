@@ -67,7 +67,7 @@ def _load_tde_modules():
 
     Returns (MeasurementRecorder, evaluate_tde_verdict) or raises ImportError
     with a clear message on a wheel install without the orchestration tree."""
-    orch = _REPO / "operator" / "orchestration"
+    orch = _REPO / "corvin_operator" / "orchestration"
     if orch.is_dir() and str(orch) not in sys.path:
         sys.path.insert(0, str(orch))
     from tde.tde_measurement import MeasurementRecorder  # noqa: PLC0415

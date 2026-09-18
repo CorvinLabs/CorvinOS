@@ -248,7 +248,7 @@ async def _heal_cycle() -> None:
     # single scan since inception. Fixed via the repo's working pattern:
     # repo-relative sys.path insert + bare import of the leaf package.
     try:
-        _voice_scripts = Path(__file__).resolve().parents[4] / "operator" / "voice" / "scripts"
+        _voice_scripts = Path(__file__).resolve().parents[4] / "corvin_operator" / "voice" / "scripts"
         if _voice_scripts.is_dir() and str(_voice_scripts) not in sys.path:
             sys.path.insert(0, str(_voice_scripts))
         from stt import resolver as _stt_res  # noqa: PLC0415
