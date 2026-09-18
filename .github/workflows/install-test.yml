@@ -69,10 +69,42 @@ jobs:
           sudo apt-get install -y powershell
       - name: Validate install.ps1 structure
         run: |
-          pwsh -NoProfile -Command "
-            Test-Path -Path './install.ps1' -PathType Leaf
-            Select-String -Path './install.ps1' -Pattern '#Requires -Version 5.1'
-          "
+          pwsh -NoProfile -Command '
+            $ErrorActionPreference = "Stop"
+            if (-not (Test-Path -Path "./install.ps1" -PathType Leaf)) { throw "install.ps1 is missing" }
+            if (-not (Select-String -Path "./install.ps1" -Pattern "#Requires -Version 5.1" -Quiet)) {
+              throw "install.ps1 is missing the #Requires -Version 5.1 directive"
+            }
+            Write-Host "install.ps1 structure OK"
+          '
+      # Windows PowerShell 5.1 decodes a BOM-less script as ANSI (cp1252). The UTF-8
+      # bytes of characters like U+2713 or U+2551 then decode to cp1252 smart quotes,
+      # which PowerShell honours as string delimiters -- unbalancing every following
+      # string and killing the script with a parse error before line 1 runs. Shipped
+      # once already; ASCII-only is the fence.
+      - name: Verify install.ps1 is ASCII-only
+        run: |
+          if LC_ALL=C grep -nP '[^\x00-\x7F]' install.ps1; then
+            echo "::error file=install.ps1::non-ASCII bytes found (see lines above)."
+            echo "Windows PowerShell 5.1 reads a BOM-less script as cp1252, turning these"
+            echo "bytes into smart quotes that act as string delimiters -> parse error."
+            exit 1
+          fi
+          echo "install.ps1 is ASCII-only"
+      - name: Verify install.ps1 parses (AST)
+        run: |
+          pwsh -NoProfile -Command '
+            $errors = $null
+            $path = (Resolve-Path "./install.ps1").Path
+            [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errors)
+            if ($errors) {
+              $errors | ForEach-Object {
+                Write-Host ("::error file=install.ps1,line={0}::{1}" -f $_.Extent.StartLineNumber, $_.Message)
+              }
+              throw "install.ps1 has $($errors.Count) parse error(s)"
+            }
+            Write-Host "install.ps1 parses cleanly"
+          '
       - name: Verify no Ollama in install.ps1
         run: |
           ! grep -i "ollama\|hermes\|qwen3" install.ps1 || exit 1
