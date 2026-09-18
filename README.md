@@ -25,8 +25,8 @@ git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
 bash install.sh --editable .
 
-# or on Windows:
-.\install.ps1 -Editable .\
+# or on Windows (PowerShell):
+powershell -ExecutionPolicy Bypass -File install.ps1 -Editable .\
 ```
 
 **What happens:**
