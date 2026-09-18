@@ -22,6 +22,7 @@ fine at this call volume (once per real turn's outcome, not a hot loop).
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import os
 from collections.abc import MutableMapping
 from pathlib import Path
@@ -60,6 +61,32 @@ def _load_file(tenant_id: str) -> dict[str, Any]:
         return json.loads(path.read_text("utf-8"))
     except Exception:  # noqa: BLE001 — corrupt/partial file → start fresh, never crash
         return {}
+
+
+@contextmanager
+def locked(tenant_id: str):
+    """Exclusive per-tenant lock around a read-modify-write of the stats file.
+
+    Three processes feed one file (the bridge daemon's shadow outcomes, the
+    console chat runtime, and — since ADR-0885 — the console feedback route).
+    Without this, two writers that loaded the same snapshot overwrite each
+    other's samples; the chain then records n_samples 8 → 2 (review 2026-09-18).
+    fcntl is POSIX-only; on a platform without it the lock is a no-op and the
+    single-writer assumption is stated, not silently broken."""
+    path = _stats_path(tenant_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(".lock")
+    try:
+        import fcntl  # noqa: PLC0415
+    except ImportError:  # pragma: no cover — Windows
+        yield
+        return
+    with open(lock_path, "a+", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def _save_file(tenant_id: str, data: dict[str, Any]) -> None:
@@ -111,6 +138,14 @@ def save_confidence_history(stat_key: str, history: list[float]) -> None:
 
 
 class PersistentConfidenceStore(MutableMapping):
+    """Dict-like view over the per-tenant stats files (see module docstring)."""
+
+    @staticmethod
+    def locked(tenant_id: str):
+        """See :func:`locked` — exposed on the store so the optimizer can lock
+        a tenant's file without knowing the store's layout."""
+        return locked(tenant_id)
+
     """Dict-like ``store`` for :class:`ConfidenceOptimizer` — every
     read/write goes straight through to the per-tenant JSON file, so any
     process calling :func:`get_optimizer` sees the same, durable state."""

@@ -30,7 +30,7 @@ from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from core.learning.model_selection_optimizer import ConfidenceOptimizer, get_optimizer
@@ -219,7 +219,14 @@ async def get_task_type_analytics(
 # ADR-0885 step 2b — recent shadow classifications + operator feedback
 # ─────────────────────────────────────────────────────────────────
 
-RECENT_SCAN_LINES = 50_000   # bounds the backwards chain walk (0.44 % density → ~220 hits)
+# Bounds the backwards chain walk. The classified share of the chain is NOT
+# uniform: recent traffic is dominated by learned_threshold_updated and
+# skill.executed records, and on 2026-09-18 the newest 50 000 of 186 593 lines
+# held ONE classified event (the whole chain: 598) — a 50k cap showed an empty
+# rating form on a tenant with hundreds of rateable records. With the
+# substring prefilter the walk costs ~0.02 s per 50k lines, so the cap is the
+# whole practical chain rather than a density guess.
+RECENT_SCAN_LINES = 500_000
 
 
 class RecentClassification(BaseModel):
@@ -245,7 +252,7 @@ class FeedbackRequest(BaseModel):
     server derives task_type and model from it — never from the client.
     No free text is accepted (ADR-0613)."""
     model_config = {"extra": "forbid"}
-    record_hash: str
+    record_hash: str = Field(pattern=r"^[0-9a-f]{16}$")  # the chain's 16-hex record hash
     rating: str  # "good" | "poor"
 
 
@@ -279,8 +286,9 @@ def _project_classified(rec: Dict[str, Any]) -> Optional[RecentClassification]:
 
 
 def _rated_path(tenant_id: str) -> Path:
-    from core.learning import confidence_persistence as CP  # noqa: PLC0415
-    return CP._corvin_home() / "tenants" / tenant_id / "global" / "model_feedback_rated.json"
+    """Canonical tenant root (validates the id), never a hand-composed path."""
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+    return tenant_home(tenant_id) / "global" / "model_feedback_rated.json"
 
 
 def _load_rated(tenant_id: str) -> set:
@@ -377,7 +385,22 @@ async def post_feedback(
         )
     except RuntimeError as e:
         logger.error(f"feedback refused by the audit chain: {e}")
-        raise HTTPException(status_code=503, detail="audit chain unavailable — not recorded")
+        # The chain writer is single-tenant (CORVIN_TENANT_ID): a session on
+        # another tenant is refused although the chain itself is fine — say so
+        # rather than send the operator debugging the chain (ADR-0644 amendment).
+        detail = "audit chain unavailable — not recorded"
+        try:
+            from core.skills.skill_audit import _ensure_operator_on_path  # noqa: PLC0415
+            _ensure_operator_on_path()
+            from forge import security_events  # type: ignore[import-not-found]  # noqa: PLC0415
+            if security_events._current_tenant_id() != tenant_id:
+                detail = "learner audit is single-tenant on this build — not recorded"
+        except Exception:  # noqa: BLE001
+            pass
+        raise HTTPException(status_code=503, detail=detail)
+    except Exception as e:  # noqa: BLE001 — a persisted-row/schema fault must not read as "unavailable"
+        logger.error(f"feedback failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="feedback could not be processed")
 
     rated.add(body.record_hash)
     try:

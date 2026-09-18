@@ -30,8 +30,13 @@ export function getThresholdExport(signal?: AbortSignal): Promise<unknown> {
   return api<unknown>("/learning/model-cost-optimizer/export", { signal });
 }
 
-export function postThresholdImport(data: unknown, csrf: string): Promise<unknown> {
-  return api("/learning/model-cost-optimizer/import", { method: "POST", body: { data }, csrf });
+export interface ImportResult { status?: string; imported_count?: number; message?: string }
+
+/** The route takes the EXPORT DOCUMENT as the whole body (FastAPI single
+ *  un-embedded dict param) — not `{data}`; wrapping it answered 400
+ *  "Unsupported export version: None" (review 2026-09-18). */
+export function postThresholdImport(data: unknown, csrf: string): Promise<ImportResult> {
+  return api<ImportResult>("/learning/model-cost-optimizer/import", { method: "POST", body: data, csrf });
 }
 
 // ── Confidence learner analytics (ADR-0644/0885) ────────────────────────

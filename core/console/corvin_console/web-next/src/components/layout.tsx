@@ -128,7 +128,7 @@ interface NavGroup {
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Brain,                  // vibe-engineering, models (ADR-0885)
   CheckCircle,            // quality gates
-  Settings,               // engine-config, settings
+  Settings,               // settings
   Network,                // bridges
   AudioLines,             // voice
   Hammer,                 // forge
@@ -146,7 +146,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Gauge,                  // otel-telemetry, compute
   Sparkles,               // skill-forge-generator
   Workflow,               // workflows
-  TrendingUp: TrendingUp, // model-cost-optimizer
+  TrendingUp: TrendingUp, // (unused since ADR-0885; kept for manifest icons)
   Blocks,                 // plugin-center (marketplace)
   Activity,               // sync-monitor
 };

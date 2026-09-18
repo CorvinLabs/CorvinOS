@@ -83,9 +83,19 @@ export function RoutingTab({
     staleTime: 60_000,
   });
   const options = useMemo(() => {
-    if (providerIsNative) return (claudeQ.data?.models ?? []).map((m) => ({ id: m.id, label: m.label }));
-    return providerModelsQ.data?.models ?? [];
-  }, [providerIsNative, claudeQ.data, providerModelsQ.data]);
+    const base = providerIsNative
+      ? (claudeQ.data?.models ?? []).map((m) => ({ id: m.id, label: m.label }))
+      : (providerModelsQ.data?.models ?? []);
+    // A saved pin is ALWAYS offerable, even while the list loads or after the
+    // source retired it: a native <select> whose value is not among its options
+    // silently shows its first option — a DIFFERENT model than the tenant is
+    // configured with (the deleted engine-config page kept the same guard).
+    const out = [...base];
+    for (const saved of [form?.os_model, form?.worker_model]) {
+      if (saved && !out.some((o) => o.id === saved)) out.push({ id: saved, label: `${saved} (configured)` });
+    }
+    return out;
+  }, [providerIsNative, claudeQ.data, providerModelsQ.data, form?.os_model, form?.worker_model]);
   const optionsLoaded = providerIsNative ? !!claudeQ.data : !!providerModelsQ.data;
 
   // Catalog hand-off: apply once the options are known, validate, clear.
@@ -100,8 +110,11 @@ export function RoutingTab({
       setPreselectNote(`${preselect} is not offered by the pinned engine's model source.`);
     }
     onPreselectConsumed();
+    // `form === null` is a dependency on purpose: on a deep link the settings
+    // query and the options query race, and an effect that ran once with no
+    // form must run again when the form materialises (review 2026-09-18).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preselect, preselectTurn, optionsLoaded]);
+  }, [preselect, preselectTurn, optionsLoaded, form === null]);
 
   const savePins = useMutation({
     mutationFn: () => {
@@ -166,19 +179,25 @@ export function RoutingTab({
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {settingQ.isLoading || !form ? (
+          {settingQ.isError ? (
+            <p className="text-sm text-destructive flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" /> The engine settings could not be loaded.
+            </p>
+          ) : settingQ.isLoading || !form ? (
             <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
           ) : (
             <>
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">Model source</Label>
+                  <Label htmlFor="pin-source" className="text-sm font-medium mb-2 block">Model source</Label>
                   <Select
+                    id="pin-source"
                     value={form.provider}
                     onChange={(e) => setForm({ ...form, provider: e.target.value, os_model: "", worker_model: "" })}
                   >
                     <option value={NATIVE}>Claude (native)</option>
-                    {Object.entries(providers).map(([id, p]) => (
+                    {/* the registry's own "anthropic" entry IS the native path — one option, not two */}
+                    {Object.entries(providers).filter(([id]) => id !== "anthropic").map(([id, p]) => (
                       <option key={id} value={id}>{p.label}</option>
                     ))}
                   </Select>
@@ -193,16 +212,16 @@ export function RoutingTab({
                   )}
                 </div>
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">OS turn model</Label>
-                  <Select value={form.os_model} onChange={(e) => setForm({ ...form, os_model: e.target.value })}>
+                  <Label htmlFor="pin-os-model" className="text-sm font-medium mb-2 block">OS turn model</Label>
+                  <Select id="pin-os-model" value={form.os_model} onChange={(e) => setForm({ ...form, os_model: e.target.value })}>
                     <option value="">Engine default (adaptive)</option>
                     {options.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">Worker turn model</Label>
-                  <Select value={form.worker_model} onChange={(e) => setForm({ ...form, worker_model: e.target.value })}>
-                    <option value="">Engine default</option>
+                  <Label htmlFor="pin-worker-model" className="text-sm font-medium mb-2 block">Worker turn model</Label>
+                  <Select id="pin-worker-model" value={form.worker_model} onChange={(e) => setForm({ ...form, worker_model: e.target.value })}>
+                    <option value="">Engine default (worker)</option>
                     {options.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </Select>
                 </div>
@@ -235,7 +254,7 @@ export function RoutingTab({
                     {savePins.error instanceof ApiError && savePins.error.status === 503
                       ? "The engine model registry could not be loaded — the pins were not saved."
                       : savePins.error instanceof ApiError && savePins.error.status === 422
-                        ? `Not saved: ${savePins.error.message}`
+                        ? "Not saved — a pin names a model that the curated registry and every provider's last live list do not offer."
                         : "The pins could not be saved."}
                   </span>
                 )}
@@ -308,7 +327,9 @@ export function RoutingTab({
             </div>
             {saveOverride.isError && (
               <p className="text-xs text-destructive">
-                {saveOverride.error instanceof ApiError ? `Not saved: ${saveOverride.error.message}` : "The override could not be saved."}
+                {saveOverride.error instanceof ApiError && saveOverride.error.status === 503
+                  ? "The engine model registry could not be loaded — the override was not saved."
+                  : "Not saved — the override names a model or provider the registry does not offer."}
               </p>
             )}
           </div>

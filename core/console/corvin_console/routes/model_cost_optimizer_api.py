@@ -245,7 +245,11 @@ async def get_learning_status(
 
         thresholds = store.get_all()
         converged = sum(1 for t in thresholds if t.converged)
-        total = len(thresholds) or 1  # Avoid division by zero
+        # ``total_count`` is the REAL number of tracked task types — an empty
+        # store reports 0, not 1 (the "0 / 1" the Learning tab showed with
+        # nothing tracked, review 2026-09-18). Divisors below guard zero
+        # themselves.
+        total = len(thresholds)
 
         # Real cost-efficiency: actual token usage x published per-model
         # pricing, from real os_turn.completed events (ADR-0696). A turn

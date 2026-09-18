@@ -229,9 +229,12 @@ class TestOperatorControls:
 
     def test_manual_override_workflow(self, test_client, auth_headers, store):
         """Operator can manually override a threshold."""
+        # The override route writes the (task_type, "default") row; seeding a
+        # different subsystem left thresholds[0] as the untouched seed and the
+        # assertion below compared the wrong row (review 2026-09-18).
         st = StoredThreshold(
             task_type="code_gen",
-            subsystem="analyzer",
+            subsystem="default",
             tenant_id="_default",
             learned_threshold=0.42,
             sample_count=25,

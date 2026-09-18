@@ -9,6 +9,7 @@
  * Clicking a node opens a detail panel; clicking the canvas deselects.
  */
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import ReactFlow, {
   Background,
@@ -1064,22 +1065,22 @@ function AcsEmptyState({ onViewOs }: { onViewOs: () => void }) {
     if (!workerEngineSet) {
       detail = "Configure a Worker Engine in Engine Settings to enable delegation runs.";
       hint = (
-        <a
-          href="/console/app/models?tab=routing"
+        <Link
+          to="/app/models?tab=routing"
           className="mt-1 rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
         >
           Open Engine Settings →
-        </a>
+        </Link>
       );
     } else if (!delegationEnabled) {
       detail = "A Worker Engine is configured but delegation is disabled.";
       hint = (
-        <a
-          href="/console/app/models?tab=routing"
+        <Link
+          to="/app/models?tab=routing"
           className="mt-1 rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
         >
           Enable delegation in Engine Settings →
-        </a>
+        </Link>
       );
     } else {
       detail = "No delegation runs yet — delegation is enabled.";

@@ -29,7 +29,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     );
   }
   if (status !== "authenticated") {
-    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+    // Keep the WHOLE deep link (path + query): a bounce through local-login
+    // used to land on /console/ and every old bookmark lost its ?tab= (ADR-0885).
+    return <Navigate to="/login" state={{ from: location.pathname + location.search }} replace />;
   }
   return <>{children}</>;
 }

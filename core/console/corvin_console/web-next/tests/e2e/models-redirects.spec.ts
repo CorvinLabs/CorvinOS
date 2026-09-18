@@ -36,7 +36,16 @@ test.beforeEach(async ({ page, baseURL }) => {
   // Log in explicitly (loopback-only, credential-less GET) so the SPA's
   // whoami answers 200 on the very first navigation of each test.
   const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
-  await page.goto(`${origin}/v1/console/auth/local-login`, { waitUntil: "domcontentloaded" });
+  // Log in through the context's request client (shares the cookie jar) — a
+  // page.goto here would 302 to /console/ and that SPA boot races the next
+  // navigation ("interrupted by another navigation", seen 2026-09-18).
+  const login = await page.request.get(`${origin}/v1/console/auth/local-login`, { maxRedirects: 0 });
+  expect([302, 200]).toContain(login.status());
+  // The session-derived license proof can mismatch for a moment right after
+  // a session is created (auth.py::load_session, "transient license-reload
+  // window"); a whoami that answers 401 then bounces the SPA. Wait for 200.
+  await expect.poll(async () => (await page.request.get(`${origin}/v1/console/auth/whoami`)).status(),
+                    { timeout: 20_000 }).toBe(200);
   await page.goto("/console/app/models", { waitUntil: "domcontentloaded" });
   await expect(page.getByText(MARKER_HEADER)).toBeVisible({ timeout: 30_000 });
 });
@@ -59,15 +68,32 @@ test("a bogus tab is rewritten to routing and the four tabs exist", async ({ pag
   }
 });
 
-test("the window caption is identical on Usage & Cost and Learning", async ({ page }) => {
+test("the Usage & Cost caption names the same window as the header", async ({ page }) => {
   await page.goto("/console/app/models?tab=usage-cost", { waitUntil: "domcontentloaded" });
   const header = page.locator("text=/Counting (since|window)/").first();
   await expect(header).toBeVisible();
-  const captionA = await header.textContent();
-  await page.getByRole("tab", { name: "Learning" }).click();
-  await expect.poll(() => new URL(page.url()).search).toBe("?tab=learning");
-  const captionB = await page.locator("text=/Counting (since|window)/").first().textContent();
-  expect(captionB).toBe(captionA);
+  const headerText = (await header.textContent()) ?? "";
+  // The tab's own caption lives INSIDE the visible tab panel (not the header).
+  const panelCaption = page.locator('[role="tabpanel"]:not([hidden])').getByText(/Counting window:/);
+  await expect(panelCaption).toBeVisible();
+  const panelText = (await panelCaption.textContent()) ?? "";
+  const window = headerText.includes("full history") ? "full history" : (headerText.match(/since (.+)$/)?.[1] ?? "");
+  expect(window).not.toBe("");
+  expect(panelText).toContain(window);
+});
+
+test("a deep link with NO session survives the login bounce", async ({ browser, baseURL }) => {
+  // A fresh context, no cookies, straight to an OLD path: RequireAuth → /login →
+  // local-login?next=… → back to the deep link → the router's redirect.
+  const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const page = await ctx.newPage();
+  const origin = new URL(baseURL ?? "http://127.0.0.1:8765/console").origin;
+  await page.goto(`${origin}/console/app/model-cost-optimizer`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByText(MARKER_HEADER)).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(() => new URL(page.url()).pathname + new URL(page.url()).search, { timeout: 15_000 })
+    .toBe("/console/app/models?tab=usage-cost");
+  await ctx.close();
 });
 
 test("the sidebar has one Models entry and no old entries", async ({ page }) => {

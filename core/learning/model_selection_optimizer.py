@@ -216,8 +216,20 @@ class ConfidenceOptimizer:
 
         key = (task_type, model, tenant_id)
 
-        # Load or initialize stats
-        stats = self._load_stats(key)
+        # Serialise the read-modify-write per tenant file: three processes feed
+        # it (ADR-0885 review, 2026-09-18 — a console rating overwrote six
+        # daemon samples and the chain recorded n_samples 8 -> 2).
+        lock = getattr(self.store, "locked", None)
+        if callable(lock):
+            with lock(tenant_id):
+                return self._process_feedback_locked(key, quality_score)
+        return self._process_feedback_locked(key, quality_score)
+
+    def _process_feedback_locked(self, key: Tuple[str, str, str], quality_score: float) -> Tuple[float, bool]:
+        task_type, model, tenant_id = key
+        # Load the CURRENT stats — through the store, never the process cache:
+        # another process may have written since this one last looked.
+        stats = self._load_stats(key, refresh=True)
         old_confidence = stats.confidence_score
 
         # Bayesian update
@@ -322,7 +334,7 @@ class ConfidenceOptimizer:
             confidence [0.0, 1.0], or 0.5 if no data
         """
         key = (task_type, model, tenant_id)
-        stats = self._load_stats(key)
+        stats = self._load_stats(key, refresh=True)
         return stats.confidence_score
 
     def get_stats(
@@ -331,9 +343,10 @@ class ConfidenceOptimizer:
         model: str,
         tenant_id: str = "_default",
     ) -> ModelStats:
-        """Get full statistics for (task_type, model, tenant)."""
+        """Get full statistics for (task_type, model, tenant) — read through the
+        store when one is present, so a reader sees other processes' samples."""
         key = (task_type, model, tenant_id)
-        return self._load_stats(key)
+        return self._load_stats(key, refresh=True)
 
     def is_converged(
         self,
@@ -414,7 +427,7 @@ class ConfidenceOptimizer:
                 out_rate is None or out_rate > max_output_usd_per_1k
             ):
                 continue
-            stats = self._load_stats((task_type, model, tenant_id))
+            stats = self._load_stats((task_type, model, tenant_id), refresh=True)
             denom = stats.alpha + stats.beta
             ranked.append(RankedModel(
                 model=model,
@@ -492,9 +505,14 @@ class ConfidenceOptimizer:
 
     # ── Private helpers ────────────────────────────────────────────────────
 
-    def _load_stats(self, key: Tuple[str, str, str]) -> ModelStats:
-        """Load stats from cache or initialize."""
-        if key in self._stats_cache:
+    def _load_stats(self, key: Tuple[str, str, str], *, refresh: bool = False) -> ModelStats:
+        """Load stats from cache or initialize.
+
+        ``refresh`` bypasses the process cache when a store is present: the
+        cache is write-through for THIS process only, while a persisted store
+        is shared by the bridge daemon, the console runtime and the console
+        feedback route (ADR-0885 review, 2026-09-18)."""
+        if key in self._stats_cache and not (refresh and self.store is not None):
             return self._stats_cache[key]
 
         task_type, model, tenant_id = key
@@ -504,6 +522,9 @@ class ConfidenceOptimizer:
             store_key = f"model_stats:{task_type}:{model}:{tenant_id}"
             if store_key in self.store:
                 data = self.store[store_key]
+                # Tolerate schema drift in a persisted row: an unknown key
+                # would make ModelStats(**data) raise TypeError into a route.
+                data = {k: v for k, v in dict(data).items() if k in ModelStats.__dataclass_fields__}
                 stats = ModelStats(**data)
                 self._stats_cache[key] = stats
                 # Convergence needs the confidence trajectory too, not just

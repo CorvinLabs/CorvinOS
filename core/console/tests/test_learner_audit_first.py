@@ -173,6 +173,34 @@ class LearnerAuditFirstTests(unittest.TestCase):
         self.assertEqual(opt.get_stats("SIMPLE", MODEL, "tenant_x").n_samples, 0)
         self.assertNotIn(f"model_stats:SIMPLE:{MODEL}:tenant_x", self._history_file("tenant_x"))
 
+    # ── three processes, one file: no lost update ──
+
+    def test_second_instance_sees_and_extends_the_first_instances_samples(self) -> None:
+        """The bridge daemon, the console runtime and the feedback route each
+        hold their own ConfidenceOptimizer over ONE stats file. Until
+        2026-09-18 the cache-first read made the second writer overwrite the
+        first's samples (chain recorded n_samples 8 -> 2)."""
+        daemon = MSO.ConfidenceOptimizer(store=CP.PersistentConfidenceStore(), audit_backend=MSO._SkillAuditBackend())
+        console = MSO.ConfidenceOptimizer(store=CP.PersistentConfidenceStore(), audit_backend=MSO._SkillAuditBackend())
+        console.get_stats("MEDIUM", MODEL)  # console looked first (caches the prior)
+        for _ in range(8):
+            daemon.process_feedback("MEDIUM", MODEL, 0.9, "_default")
+        self.assertEqual(console.get_stats("MEDIUM", MODEL).n_samples, 8)  # read-through
+        console.process_feedback("MEDIUM", MODEL, 0.1, "_default")
+        self.assertEqual(daemon.get_stats("MEDIUM", MODEL).n_samples, 9)
+        self.assertEqual(console.get_stats("MEDIUM", MODEL).n_samples, 9)
+        # and the FILE (a fresh store view, no process cache) agrees
+        self.assertEqual(CP.PersistentConfidenceStore()[f"model_stats:MEDIUM:{MODEL}:_default"]["n_samples"], 9)
+
+    def test_persisted_row_with_unknown_key_does_not_raise(self) -> None:
+        opt = MSO.get_optimizer()
+        opt.process_feedback("SIMPLE", MODEL, 0.9, "_default")
+        key = f"model_stats:SIMPLE:{MODEL}:_default"
+        data = self._history_file(); data[key]["future_field"] = 1
+        CP._save_file("_default", data)
+        MSO._optimizer = None
+        self.assertEqual(MSO.get_optimizer().get_stats("SIMPLE", MODEL).n_samples, 1)
+
     # ── convergence is evaluated on the NEW state ──
 
     def test_convergence_uses_new_state(self) -> None:

@@ -112,7 +112,11 @@ export function LearningTab() {
   };
   const importMut = useMutation({
     mutationFn: (data: unknown) => postThresholdImport(data, csrf),
-    onSuccess: () => { setIoNote("Imported."); invalidateLearning(); },
+    onSuccess: (res) => {
+      const n = typeof res?.imported_count === "number" ? res.imported_count : null;
+      setIoNote(n === null ? "Imported." : `Imported ${n} threshold${n === 1 ? "" : "s"}.`);
+      invalidateLearning();
+    },
     onError: () => setIoNote("Import failed — the threshold store is unchanged."),
   });
 
@@ -130,7 +134,7 @@ export function LearningTab() {
           <p className="text-xs text-muted-foreground mt-2">Every real turn is classified in shadow mode and recorded in the audit chain; counted over the window in the header.</p>
         </CardContent></Card>
         <Card><CardContent className="p-6">
-          <p className="text-sm text-muted-foreground">Outcome samples — all time</p>
+          <p className="text-sm text-muted-foreground">Outcome samples — lifetime</p>
           <p className="text-3xl font-bold tabular-nums">{analyticsQ.data ? fmtInt(analyticsQ.data.total_samples) : "—"}</p>
           <p className="text-xs text-muted-foreground mt-2">
             {analyticsQ.data && analyticsQ.data.total_samples === 0
@@ -141,7 +145,7 @@ export function LearningTab() {
         <Card><CardContent className="p-6">
           <p className="text-sm text-muted-foreground">Converged tiers</p>
           <p className="text-3xl font-bold tabular-nums">{converged}</p>
-          <p className="text-xs text-muted-foreground mt-2">Threshold learner: variance below 5 % over the last 50 samples.</p>
+          <p className="text-xs text-muted-foreground mt-2">Cost-variance learner: at least 10 samples and a spread below $0.01 over the last 50.</p>
         </CardContent></Card>
       </div>
 
@@ -182,7 +186,7 @@ export function LearningTab() {
                             <div className="h-full rounded-full bg-accent/70" style={{ width: `${Math.round(r.confidence * 100)}%` }} />
                           </div>
                           <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-2">
-                            <span className="tabular-nums">n={r.n_samples} (all time)</span>
+                            <span className="tabular-nums">n={r.n_samples} (lifetime)</span>
                             {r.posterior_mean !== null && <span className="tabular-nums">posterior {(r.posterior_mean * 100).toFixed(0)}%</span>}
                             {r.is_converged && <Badge variant="ok" className="font-normal">converged</Badge>}
                             <span className="tabular-nums">{perMillion(r.input_usd_per_1k)} in · {perMillion(r.output_usd_per_1k)} out / 1M</span>
@@ -316,7 +320,10 @@ export function LearningTab() {
             ) : resetStep === "running" ? (
               <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
             ) : (
-              <Button size="sm" variant="destructive" onClick={() => void runReset(true)}>Retry threshold reset</Button>
+              <>
+                <Button size="sm" variant="destructive" onClick={() => void runReset(true)}>Retry threshold reset</Button>
+                <Button size="sm" variant="ghost" onClick={() => { setResetStep("idle"); setResetError(null); }}>Cancel</Button>
+              </>
             )}
             {resetStep === "done" && <span className="text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-1"><Check className="w-3.5 h-3.5" /> Both stores cleared.</span>}
           </div>

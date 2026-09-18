@@ -107,6 +107,16 @@ class EngineSettingPinTests(unittest.TestCase):
         })
         self.assertEqual(r.status_code, 422, r.text)
 
+    def test_put_rejects_unknown_model_for_provider_anthropic_too(self) -> None:
+        """The registry's own "anthropic" provider IS the Claude-native path; the
+        first validator skipped it because its model_source is not "static"
+        (review 2026-09-18)."""
+        r = self._client().put("/v1/console/settings/engine", json={
+            "default_engine": "claude_code",
+            "engine_models": {"claude_code": {"os_model": "claude-nonexistent-99", "worker_model": None, "provider": "anthropic"}},
+        })
+        self.assertEqual(r.status_code, 422, r.text)
+
     def test_put_accepts_catalogue_model_and_replaces_the_map(self) -> None:
         self._write_yaml('    claude_code:\n      os_model: "%s"\n      worker_model: "%s"\n      provider: null\n' % (MID, MID))
         client = self._client()
@@ -166,6 +176,18 @@ class RegistryLoadStatusTests(unittest.TestCase):
             engine_models.load_registry(force_reload=True)
             self.assertEqual(engine_models.registry_load_status(), (True, None))
             self.assertEqual(engine_models._registry_cache, good)
+
+    def test_claude_catalog_or_503_loads_before_it_reads_the_status(self) -> None:
+        """A process that never loaded the registry reports (True, None) until a
+        load is attempted; the helper must trigger the load FIRST."""
+        engine_models._registry_cache = None
+        engine_models._providers_cache = None
+        engine_models._load_error = None
+        with mock.patch.object(engine_models, "_REGISTRY_FILE", Path("/nonexistent/registry.yaml")), \
+             mock.patch.object(EA, "_claude_provider_ids", lambda: []):
+            with self.assertRaises(HTTPException) as ctx:
+                EA.claude_catalog_or_503()
+            self.assertEqual(ctx.exception.status_code, 503)
 
     def test_claude_catalog_or_503_raises_only_on_real_failure(self) -> None:
         with mock.patch.object(engine_models, "registry_load_status", lambda: (False, "x")), \
