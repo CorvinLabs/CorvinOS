@@ -25,14 +25,14 @@ export const PANEL_CONFIG = {
     onInstall: async () => {
       console.log('📦 Corvin-Knowledge plugin installed');
       // Initialize default settings
-      await fetch('/api/v1/console/plugins/corvin-knowledge/init', {
+      await fetch('/v1/console/plugins/corvin-knowledge/init', {
         method: 'POST',
       });
     },
     onUninstall: async () => {
       console.log('🗑️  Corvin-Knowledge plugin uninstalled');
       // Cleanup on uninstall
-      await fetch('/api/v1/console/plugins/corvin-knowledge/cleanup', {
+      await fetch('/v1/console/plugins/corvin-knowledge/cleanup', {
         method: 'POST',
       });
     },
@@ -41,11 +41,11 @@ export const PANEL_CONFIG = {
   // API endpoints this panel requires
   api: {
     endpoints: [
-      '/api/v1/console/plugins/corvin-knowledge/config',
-      '/api/v1/console/plugins/corvin-knowledge/graph',
-      '/api/v1/console/plugins/corvin-knowledge/sync',
-      '/api/v1/console/plugins/corvin-knowledge/init',
-      '/api/v1/console/plugins/corvin-knowledge/cleanup',
+      '/v1/console/plugins/corvin-knowledge/config',
+      '/v1/console/plugins/corvin-knowledge/graph',
+      '/v1/console/plugins/corvin-knowledge/sync',
+      '/v1/console/plugins/corvin-knowledge/init',
+      '/v1/console/plugins/corvin-knowledge/cleanup',
     ],
     methods: ['GET', 'POST'],
   },

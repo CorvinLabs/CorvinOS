@@ -38,7 +38,7 @@ export const GraphPanel: React.FC = () => {
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        const response = await fetch('/api/v1/console/plugins/corvin-knowledge/config');
+        const response = await fetch('/v1/console/plugins/corvin-knowledge/config');
         if (response.ok) {
           const data = await response.json();
           setConfig(data);
@@ -56,7 +56,7 @@ export const GraphPanel: React.FC = () => {
     const loadGraphData = async () => {
       setState((prev) => ({ ...prev, isLoading: true, error: null }));
       try {
-        const response = await fetch('/api/v1/console/plugins/corvin-knowledge/graph');
+        const response = await fetch('/v1/console/plugins/corvin-knowledge/graph');
         if (response.ok) {
           const data = await response.json();
           setGraphData(data);
@@ -80,7 +80,7 @@ export const GraphPanel: React.FC = () => {
 
   const handleSaveConfig = useCallback(async (newConfig) => {
     try {
-      const response = await fetch('/api/v1/console/plugins/corvin-knowledge/config', {
+      const response = await fetch('/v1/console/plugins/corvin-knowledge/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newConfig),
@@ -102,14 +102,14 @@ export const GraphPanel: React.FC = () => {
   const handleSync = useCallback(async (syncType: 'pull' | 'push' | 'both') => {
     setState((prev) => ({ ...prev, syncStatus: 'syncing' }));
     try {
-      const response = await fetch('/api/v1/console/plugins/corvin-knowledge/sync', {
+      const response = await fetch('/v1/console/plugins/corvin-knowledge/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sync_type: syncType }),
       });
       if (response.ok) {
         // Reload graph data after sync
-        const graphResponse = await fetch('/api/v1/console/plugins/corvin-knowledge/graph');
+        const graphResponse = await fetch('/v1/console/plugins/corvin-knowledge/graph');
         if (graphResponse.ok) {
           const data = await graphResponse.json();
           setGraphData(data);

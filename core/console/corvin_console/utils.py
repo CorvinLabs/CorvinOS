@@ -3,9 +3,24 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+
+def is_file_private(path: Path) -> bool:
+    """Check if file permissions are private (0o600), Windows-safe.
+
+    Windows doesn't support Unix permissions — returns True (skip check).
+    POSIX: returns True iff (st_mode & 0o777) == 0o600.
+    """
+    if sys.platform == 'win32':
+        return True  # Windows: ACL-governed, not Unix bits
+    try:
+        return (path.stat().st_mode & 0o777) == 0o600
+    except OSError:
+        return False
 
 
 def atomic_write_json(
@@ -25,7 +40,8 @@ def atomic_write_json(
     raw = (data if isinstance(data, str) else json.dumps(data, indent=2, ensure_ascii=False)) + "\n"
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
     try:
-        os.chmod(tmp, mode)
+        if sys.platform != 'win32':  # POSIX only
+            os.chmod(tmp, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(raw)
             fh.flush()

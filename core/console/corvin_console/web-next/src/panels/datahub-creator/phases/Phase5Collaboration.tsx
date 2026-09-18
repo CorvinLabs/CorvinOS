@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, AlertDescription } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 
 export function Phase5Collaboration({ projectId }: { projectId: string }) {

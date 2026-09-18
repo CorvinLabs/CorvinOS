@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, CheckCircle2, Download } from "lucide-react";
 
 export function Phase6Export({ projectId }: { projectId: string }) {
