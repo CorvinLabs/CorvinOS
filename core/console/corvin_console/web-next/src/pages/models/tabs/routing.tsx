@@ -78,7 +78,7 @@ export function RoutingTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingQ.data]);
 
-  const providerIsNative = !form || form.provider === NATIVE || form.provider === "anthropic";
+  const providerIsNative = !form || form.provider === NATIVE; // "anthropic" is normalised to NATIVE on read
   const providerModelsQ = useQuery({
     queryKey: ["provider-models", form?.provider],
     queryFn: ({ signal }) => getProviderModels(form!.provider, signal),
@@ -111,7 +111,14 @@ export function RoutingTab({
   // source that failed also RESOLVES the hand-off (with a note) — otherwise
   // ?preselect= would wait forever and travel with every tab switch.
   useEffect(() => {
-    if (!preselect || !form || (!optionsLoaded && !optionsFailed)) return;
+    if (!preselect) return;
+    if (settingQ.isError) {
+      // No form will ever materialise: resolve the hand-off with a note.
+      setPreselectNote(`${preselect} could not be applied — the engine settings did not load.`);
+      onPreselectConsumed();
+      return;
+    }
+    if (!form || (!optionsLoaded && !optionsFailed)) return;
     const offered = optionsLoaded && options.some((o) => o.id === preselect);
     if (optionsFailed && !optionsLoaded) {
       setPreselectNote(`${preselect} could not be applied — the model source did not answer.`);
@@ -127,7 +134,7 @@ export function RoutingTab({
     // query and the options query race, and an effect that ran once with no
     // form must run again when the form materialises (review 2026-09-18).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preselect, preselectTurn, optionsLoaded, optionsFailed, form === null]);
+  }, [preselect, preselectTurn, optionsLoaded, optionsFailed, settingQ.isError, form === null]);
 
   const savePins = useMutation({
     mutationFn: () => {
@@ -192,6 +199,9 @@ export function RoutingTab({
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
+          {preselectNote && (
+            <p className="text-xs text-amber-700 dark:text-amber-300">{preselectNote}</p>
+          )}
           {settingQ.isError ? (
             <p className="text-sm text-destructive flex items-center gap-2">
               <AlertTriangle className="w-4 h-4" /> The engine settings could not be loaded.
@@ -217,6 +227,12 @@ export function RoutingTab({
                   {providerIsNative && (
                     <ClaudeSourceLine catalog={claudeQ.data} error={claudeQ.error} authLabel={authLabel} />
                   )}
+                  {!providerIsNative && providerModelsQ.isError && (
+                    <p className="text-xs text-destructive mt-1.5 flex items-start gap-1">
+                      <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                      The provider's model list could not be fetched — only the configured pins are offered.
+                    </p>
+                  )}
                   {!providerIsNative && providerModelsQ.data && !providerModelsQ.data.reachable && (
                     <p className="text-xs text-amber-700 dark:text-amber-300 mt-1.5 flex items-start gap-1"
                        title={providerModelsQ.data.error ?? undefined}>
@@ -240,9 +256,8 @@ export function RoutingTab({
                   </Select>
                 </div>
               </div>
-              {preselectNote && (
-                <p className="text-xs text-amber-700 dark:text-amber-300">{preselectNote}</p>
-              )}
+              {/* Curated advisories composed by the registry (ADR-0181/0759) —
+                  operator-facing by design, not exception text; kept visible. */}
               {(settingQ.data?.compliance_warnings ?? []).map((w) => (
                 <p key={w} className="text-xs text-amber-700 dark:text-amber-300 flex items-start gap-1">
                   <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{w}

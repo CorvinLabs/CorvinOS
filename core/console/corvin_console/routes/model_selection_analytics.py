@@ -367,7 +367,8 @@ async def get_recent_classifications(
 
 
 @router.post("/feedback", response_model=FeedbackResponse)
-async def post_feedback(
+def post_feedback(  # sync on purpose: two file locks + a chain write run in the threadpool, not on the event loop
+
     body: FeedbackRequest,
     rec: session_auth.SessionRecord = Depends(require_session),
     csrf_token: Annotated[str, Depends(require_csrf)] = "",
@@ -530,6 +531,11 @@ async def reset_learning(
     optimizer = get_optimizer()
     try:
         optimizer.reset_learning(tenant_id=tenant_id)
+        # The replay guard exists to bound the learner to one operator sample
+        # per record; once the learner forgot everything, a record is rateable
+        # again (review R3 — "already rated" after a reset was a lie).
+        with _rated_locked(tenant_id):
+            _save_rated(tenant_id, set())
         logger.info(f"Learning reset for tenant {tenant_id}")
     except Exception as e:
         logger.error(f"Failed to reset learning: {e}")

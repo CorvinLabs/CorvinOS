@@ -180,9 +180,10 @@ def _iter_classified(
     analytics ``recent`` list and the ``feedback`` resolver. ``since_ts`` is the
     ADR-0760 epoch filter (0 = no filter). ``newest_first`` walks the file from
     its end; with ``max_lines`` the walk stops after that many lines were
-    SCANNED (classified or not), which bounds the cost on a long chain —
-    measured density on the service chain is 0.44 % classified, so 50 000
-    lines hold ~220 classified records. An unreadable or absent chain yields
+    SCANNED (classified or not), which bounds the cost on a long chain. The
+    classified share is 0.44 % on AVERAGE but the tail is not uniform (the
+    newest 50 000 lines held one classified record on 2026-09-18), hence the
+    500k cap in the analytics routes. An unreadable or absent chain yields
     nothing and never raises.
     """
     path = _classified_chain_path(tenant_id)

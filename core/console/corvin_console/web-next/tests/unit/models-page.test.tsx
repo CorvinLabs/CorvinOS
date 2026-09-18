@@ -127,6 +127,7 @@ describe("Models console — tab ↔ URL", () => {
   it("sends X-CSRF-Token on the window reset (two-click confirm)", async () => {
     renderAt("/app/models?tab=routing");
     const btn = await screen.findByRole("button", { name: "Reset counters to now" });
+    await waitFor(() => expect(btn).toBeEnabled()); // disabled until the status answered (window unknown)
     fireEvent.click(btn);
     fireEvent.click(screen.getByRole("button", { name: "Click again to confirm" }));
     await waitFor(() => expect(csrfSeen.length).toBe(1));

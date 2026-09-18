@@ -149,11 +149,19 @@ def _safe_next(next_: str | None) -> str | None:
         return None
     if "://" in next_ or "\n" in next_ or "\r" in next_:
         return None
-    # "under /console/" must hold after normalisation, not only lexically:
-    # "/console/../v1/…" is same-origin but not the console (review R2).
+    # "under /console/" must hold after percent-DECODING and normalisation, not
+    # only lexically: "/console/../v1/…" (review R2) and its encoded twin
+    # "/console/%2e%2e/x" (review R3 — browsers resolve %2e%2e as a dot-dot
+    # segment) are same-origin but not the console.
     import posixpath  # noqa: PLC0415
-    path_part = next_.split("?", 1)[0].split("#", 1)[0]
-    if not (posixpath.normpath(path_part) + "/").startswith("/console/") or ".." in path_part.split("/"):
+    from urllib.parse import unquote  # noqa: PLC0415
+    path_part = unquote(next_.split("?", 1)[0].split("#", 1)[0])
+    if "\\" in path_part or "\n" in path_part or "\r" in path_part or "://" in path_part:
+        return None
+    segments = path_part.split("/")
+    if ".." in segments or "." in segments[1:] or "" in segments[1:]:
+        return None  # dot segments and empty segments ("//" anywhere) — encoded or not
+    if not (posixpath.normpath(path_part) + "/").startswith("/console/"):
         return None
     return next_
 

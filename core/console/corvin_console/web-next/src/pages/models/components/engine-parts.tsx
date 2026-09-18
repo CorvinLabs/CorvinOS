@@ -182,7 +182,7 @@ export function ClaudeSourceLine({
     return (
       <p className="text-xs text-destructive mt-1.5 flex items-start gap-1">
         <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-        Model sources could not be queried: {String((error as Error)?.message ?? error)}
+        <span title={String((error as Error)?.message ?? error)}>Model sources could not be queried.</span>
       </p>
     );
   }
@@ -654,7 +654,7 @@ export const ExternalProviderModal: React.FC<ExternalProviderModalProps> = ({
             )}
             {modelsQ.data?.error && (
               <p className="text-xs text-amber-700 dark:text-amber-300 mt-1 flex items-start gap-1">
-                <Info className="w-3 h-3 mt-0.5 shrink-0" /> {modelsQ.data.error}
+                <Info className="w-3 h-3 mt-0.5 shrink-0" /> <span title={modelsQ.data.error ?? undefined}>The provider did not answer with a model list.</span>
               </p>
             )}
           </div>
@@ -766,7 +766,7 @@ export function ClaudeCodeAuthStatus() {
             {probe.rate_limit_tier}
           </Badge>
         )}
-        {probe.detail && <span className="text-xs text-muted-foreground truncate">— {probe.detail}</span>}
+        {/* probe.detail carried a filesystem path (the credentials file) — not rendered (ADR-0763). */}
       </CardContent>
     </Card>
   );
@@ -862,7 +862,7 @@ export function ModelUsagePanel() {
         ) : usageQ.error ? (
           <p className="text-sm text-destructive flex items-start gap-1.5">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            Usage could not be read: {String((usageQ.error as Error)?.message ?? usageQ.error)}
+            <span title={String((usageQ.error as Error)?.message ?? usageQ.error)}>Usage could not be read.</span>
           </p>
         ) : !data ? null : !data.chain_readable ? (
           // Three different real states, told apart instead of collapsed into

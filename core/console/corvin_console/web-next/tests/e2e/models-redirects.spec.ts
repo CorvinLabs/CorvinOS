@@ -3,7 +3,7 @@
  * console tabs, and the console is READ-ONLY under this spec: it never seeds
  * a record or changes a pin on the live host.
  *
- * Run: npx playwright test tests/e2e/models-redirects.spec.ts --project=chromium
+ * Run: npx playwright test tests/e2e/models-redirects.spec.ts --project=chromium --workers=1
  */
 import { expect, test } from "@playwright/test";
 
@@ -70,8 +70,9 @@ test("a bogus tab is rewritten to routing and the four tabs exist", async ({ pag
 
 test("the Usage & Cost caption names the same window as the header", async ({ page }) => {
   await page.goto("/console/app/models?tab=usage-cost", { waitUntil: "domcontentloaded" });
-  const header = page.locator("text=/Counting (since|window)/").first();
-  await expect(header).toBeVisible();
+  // The header shows "Counting window: —" until the status answered; wait for the REAL caption.
+  const header = page.locator("text=/Counting window: full history|Counting since/").first();
+  await expect(header).toBeVisible({ timeout: 20_000 });
   const headerText = (await header.textContent()) ?? "";
   // The tab's own caption lives INSIDE the visible tab panel (not the header).
   const panelCaption = page.locator('[role="tabpanel"]:not([hidden])').getByText(/Counting window:/);
