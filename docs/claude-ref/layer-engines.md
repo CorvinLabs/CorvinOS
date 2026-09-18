@@ -3268,3 +3268,57 @@ inline with its reason, and every source stays individually in the hover text.
 - **Don't report "entries scanned" as a model count.**
 - **Don't list a credential-absent source as a failure on a host that has no key
   to add** — and don't hide a source that genuinely failed.
+
+---
+
+## One learner, one ranking, one rate card (ADR-0885 step 0, 2026-09-18)
+
+The Models console (ADR-0885: Engine Config + Model Cost Optimizer + Model
+Selection folded into one tabbed panel) starts at the backend, because the
+"new" T3.1 capabilities it was meant to surface had no production caller.
+Verified 2026-09-18:
+
+| Module | State found | What happened |
+|---|---|---|
+| `core/skills/os_skills/model_selector_learning_enhancement.py` | in-memory, unpersisted, unaudited second Beta learner; own model-id table (two of four ids on no rate card), own price table; zero callers | **deleted** — its one real idea (rank candidates by learned confidence under a budget) moved onto the persisted learner as `ConfidenceOptimizer.rank_models()` |
+| `core/skills/os_skills/model_selection_skill_full.py` | 13-line stub, no tenant, no audit, no caller — yet ADR-0856 called it "full wiring" | **deleted**; ADR-0856 superseded by ADR-0885 |
+| `tests/e2e/test_model_selection_t3_1_complete_e2e.py` | did not parse (a commit trailer sat after the last line), so its "24 tests" never ran | rebuilt against the real learner |
+| `core/learning/token_savings_tracker.py` + `routes/billing_savings.py` | router never mounted; route hard-codes `user_id="demo_user"` with no session, so no tenant binding; tracker fed by nothing | **left in place, still unmounted** (the licensing track owns it); ADR-0668 amended — the console's savings figure is the cost optimizer's window total, not this tracker |
+
+### `ConfidenceOptimizer.rank_models(task_type, candidates, tenant_id, *, max_output_usd_per_1k, price_of)`
+
+- **Candidates default to what the tenant learned** (`confidence_persistence.list_entries`);
+  pass the registry's ids to rank a fixed catalogue. There is no model list in
+  the learner.
+- **Prices come from `model_selection_learner.model_price_per_1k`**, the one rate
+  card the cost panels bill against; `price_of` is injectable for tests only.
+- **A budget binds the OUTPUT rate** (the larger of the two on every current
+  model, and what a long generation is dominated by). Under a cap an unpriced
+  model is dropped — never treated as free (ADR-0763).
+- **Order:** learned confidence desc → samples desc → cheaper output rate → id.
+  Stable.
+- **Pure read.** No store write, no audit event: a ranking is a view over learned
+  state. The decision made with it is what gets audited
+  (`skill.model_selector.classified`, `engine.config.updated`).
+- **`select_model()` returns `None` when nothing survives.** No hard-coded
+  fallback model — the caller's pin (`spec.engine_models`,
+  `model_selection_config`) is the fallback, and only the caller knows it.
+
+**Production caller:** `GET /v1/engine/analytics/task-type/{task_type}` now ranks
+through it and carries `posterior_mean`, `input_usd_per_1k`, `output_usd_per_1k`,
+`priced` per row, plus an optional `?max_output_usd_per_1k=` cap (422 below 0).
+`core/console/tests/test_model_ranking_route.py` drives that route over HTTP
+against the real persistent optimizer under a temp `CORVIN_HOME`.
+
+### What you, as Claude Code, must NOT do (ADR-0885 step 0)
+
+- **Don't add a second learner.** Not in `os_skills/`, not in a plugin — the
+  Beta posterior, EMA, convergence and audit live once, in `ConfidenceOptimizer`.
+- **Don't carry a model-id or price table next to a selector.** Ids come from
+  the engine registry, prices from `model_price_per_1k`; a model that is on
+  neither is `None`/unpriced, never a guess.
+- **Don't let a budget filter treat an unpriced model as $0.**
+- **Don't give `select_model` a fallback model.** `None` is the answer; the pin
+  is the caller's.
+- **Don't mount `billing_savings` as it stands** (no session, `demo_user`).
+- **Don't call ADR-0856 "wired".** It is superseded.
