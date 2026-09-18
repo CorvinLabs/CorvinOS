@@ -1690,6 +1690,34 @@ class MCPServer:
     # -- meta-tool: forge_tool --------------------------------------------
 
     def _call_forge_tool(self, msgid: Any, args: dict) -> None:
+        # ADR-0701: License gate (G1) — require_capability("forge.create")
+        from corvin_operator.license.capability_api import (
+            require_capability, LicenseDenied
+        )
+        tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+        try:
+            decision = require_capability(
+                "forge.create",
+                requested=1,
+                tenant_id=tenant_id,
+                entry_point="mcp:forge_tool"
+            )
+            if not decision.allowed:
+                self._tool_error(
+                    msgid,
+                    f"license_required: Forge is a member-only feature (upgrade at https://corvin-labs.com/upgrade)"
+                )
+                return
+        except (ImportError, LicenseDenied, Exception) as e:
+            # Fail-closed: deny on any enforcement error
+            self._log_security_event(
+                "license.enforcement_unavailable",
+                tool="forge_tool",
+                details={"reason": str(e)},
+            )
+            self._tool_error(msgid, f"license_enforcement_unavailable: {e}")
+            return
+
         # Policy gate #1: tool name (forbidden globs + namespace allowlist)
         name = args.get("name", "")
         if isinstance(name, str):
@@ -1812,6 +1840,30 @@ class MCPServer:
         self._notify("notifications/tools/list_changed")
 
     def _call_forge_promote(self, msgid: Any, args: dict) -> None:
+        # ADR-0701: License gate (G1) — require_capability("forge.create")
+        from corvin_operator.license.capability_api import (
+            require_capability, LicenseDenied
+        )
+        tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+        try:
+            decision = require_capability(
+                "forge.create",
+                requested=1,
+                tenant_id=tenant_id,
+                entry_point="mcp:forge_promote"
+            )
+            if not decision.allowed:
+                self._tool_error(msgid, "license_required: Forge is a member-only feature")
+                return
+        except (ImportError, LicenseDenied, Exception) as e:
+            self._log_security_event(
+                "license.enforcement_unavailable",
+                tool="forge_promote",
+                details={"reason": str(e)},
+            )
+            self._tool_error(msgid, f"license_enforcement_unavailable: {e}")
+            return
+
         name = args.get("name")
         if not isinstance(name, str):
             self._tool_error(msgid, "missing 'name'")
