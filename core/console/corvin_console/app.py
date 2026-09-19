@@ -201,6 +201,8 @@ from .routes import (
     skill_forge_distribution_routes as skill_forge_distribution_route,
     # TRACK I — DataHub Creator (6-phase project workspace + learning visualization)
     datahub_creator_routes as datahub_creator_route,
+    # DataHub Phase 3 — Console UI + HTTP Wiring (ADR-0510)
+    datahub_api as datahub_route,
     # Corvin-Knowledge Marketplace Plugin API
     plugins_corvin_knowledge_api as plugins_corvin_knowledge_api_route,
 )
@@ -402,6 +404,8 @@ router.include_router(capabilities_route.router, tags=["console-capabilities"])
 router.include_router(panels_route.router, tags=["console-panels"])
 # ADR-0275/0277 — Multi-Instance Cross-Device Learning Dashboard
 router.include_router(multi_instance_route.router, tags=["console-multi-instance"])
+# DataHub Phase 3 — Console UI + HTTP Wiring (Artifact creation + CRUD)
+router.include_router(datahub_route.router, tags=["console-datahub"])
 
 
 @router.get("/version")
