@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from .. import audit as _audit
 from .. import auth as session_auth
 from ..deps import require_session, require_csrf
+from .license_gates import require_forge_capability
 
 try:
     from forge import paths as _forge_paths  # type: ignore
@@ -131,6 +132,7 @@ async def list_panels(
 async def create_panel(
     body: PanelCreate,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
 ) -> dict:
     """Install a panel directly (corvin_operator/API path). The chat worker uses the
     post-turn workdir scan (chat_runtime) instead, but this endpoint is the SSOT
