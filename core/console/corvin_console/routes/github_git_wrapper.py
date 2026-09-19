@@ -207,8 +207,12 @@ class GitHubGitWrapper:
         if returncode != 0:
             return {"success": False, "error": f"Failed to commit: {stderr}"}
 
-        # Extract commit hash
-        commit_hash = stdout.split()[2] if len(stdout.split()) > 2 else "unknown"
+        # The commit hash, from git itself. Parsing the third token of the
+        # commit's stdout ("[main abc1234] [Corvin Sync] ...") yielded the
+        # literal "[Corvin" — which is what every sync state recorded until
+        # 2026-09-20.
+        rc_hash, head, _ = self._run_git("rev-parse", "--short", "HEAD")
+        commit_hash = head.strip() if rc_hash == 0 and head.strip() else "unknown"
 
         # Push to remote
         returncode, _, stderr = self._run_git("push", "-u", "origin", branch)
