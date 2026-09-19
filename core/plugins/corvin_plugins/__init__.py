@@ -31,6 +31,7 @@ from .manifest import (
     ValidationError,
     plan_settings_migration,
 )
+from .bootstrap import bootstrap_global
 from .protocol import (
     KNOWN_PLUGIN_TYPES,
     CorvinPlugin,
@@ -57,6 +58,8 @@ from .registry import (
 )
 
 __all__ = [
+    # bootstrap — global plugin initialization (ADR-0243)
+    "bootstrap_global",
     # protocol — the lifecycle contract (ADR-0030)
     "CorvinPlugin",
     "HealthStatus",
