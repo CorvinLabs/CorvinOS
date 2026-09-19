@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from .. import auth as session_auth
 from .. import audit as console_audit
 from ..deps import require_csrf, verify_reauth
+from .license_gates import require_forge_capability
 
 import logging
 _log = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ def tool_promote(
     name: str,
     body: PromoteRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
 ) -> dict[str, Any]:
     if not verify_reauth(rec, body.re_auth_token):
         _audit_fail(rec, action="tool.promote", kind="forge_tool",
@@ -115,6 +117,7 @@ def skill_promote(
     name: str,
     body: PromoteRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
 ) -> dict[str, Any]:
     if not verify_reauth(rec, body.re_auth_token):
         _audit_fail(rec, action="skill.promote", kind="skill",
