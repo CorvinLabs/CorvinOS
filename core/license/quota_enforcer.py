@@ -20,7 +20,7 @@ from uuid import uuid4
 from decimal import Decimal
 
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
-from core.license.models.billing import BillingSchema, ModelTier
+from core.licensing.billing import BillingSchema, ModelTier
 
 
 @dataclass

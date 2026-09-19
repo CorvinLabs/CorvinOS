@@ -9,7 +9,7 @@ from typing import Dict, List
 from uuid import uuid4
 
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
-from core.license.models.billing import ModelTier
+from core.licensing.billing import ModelTier
 
 
 @dataclass

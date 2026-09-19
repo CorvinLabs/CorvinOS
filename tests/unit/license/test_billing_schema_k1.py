@@ -2,7 +2,7 @@
 
 import pytest
 from decimal import Decimal
-from core.license.models.billing import (
+from core.licensing.billing import (
     ModelTier, ModelPricingModel, ModelPricing, BillingSchema,
     create_default_billing_schema
 )

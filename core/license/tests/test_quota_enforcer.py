@@ -18,7 +18,7 @@ from decimal import Decimal
 import pytest
 
 from core.license.quota_enforcer import QuotaEnforcer, QuotaUsage
-from core.license.models.billing import (
+from core.licensing.billing import (
     BillingSchema,
     ModelTier,
     create_default_billing_schema,
