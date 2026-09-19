@@ -1,0 +1,13 @@
+[Unit]
+Description=CorvinOS Session Cleanup Timer
+Documentation=file:///home/shumway/projects/CorvinOS/core/console/SESSION_PERSISTENCE.md
+
+[Timer]
+# Run cleanup daily at 2 AM
+OnCalendar=daily
+OnCalendar=*-*-* 02:00:00
+Persistent=yes
+Unit=corvin-session-cleanup.service
+
+[Install]
+WantedBy=timers.target

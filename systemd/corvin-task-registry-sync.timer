@@ -1,0 +1,13 @@
+[Unit]
+Description=CorvinOS Task Registry Daily Sync Timer
+Documentation=https://github.com/CorvinLabs/CorvinOS/blob/main/scripts/task_completion_registry.py
+
+[Timer]
+# Run at 03:00 UTC every day
+OnCalendar=daily
+OnCalendar=*-*-* 03:00:00
+# Run immediately if the system was off at the scheduled time
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,25 @@
+[Unit]
+Description=CorvinOS Task Registry Sync — Daily Update
+After=network.target
+Documentation=https://github.com/CorvinLabs/CorvinOS/blob/main/scripts/task_completion_registry.py
+
+[Service]
+Type=oneshot
+# The repo's venv interpreter, explicitly: the script has no executable bit
+# in git, so a bare ExecStart on the file is status=203/EXEC.
+ExecStart=/home/shumway/projects/CorvinOS/.venv/bin/python /home/shumway/projects/CorvinOS/scripts/task_completion_registry.py
+WorkingDirectory=/home/shumway/projects/CorvinOS
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-task-registry
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+Environment="CORVIN_HOME=%h/.corvin"
+
+# No User=/Group= here: this is a USER unit (systemctl --user). systemd 255
+# refuses User= in the user manager with status=216/GROUP — every daily run
+# since the unit was installed failed before ExecStart (2026-09-20).
+
+[Install]
+WantedBy=default.target

@@ -215,3 +215,42 @@ def get_worker(tenant_id: str = "_default") -> GitHubSyncWorker:
             worker = GitHubSyncWorker(tenant_id)
             _workers[tenant_id] = worker
         return worker
+
+
+def resume_auto_sync(corvin_home: Path | str) -> int:
+    """Start the sync worker of every tenant whose ``github-config.json`` has
+    ``auto_sync`` on. Returns how many were started.
+
+    The worker is a plain in-memory thread with no persistence of its own, so
+    "automatic" sync only stays automatic if boot re-derives running state
+    from the one thing that IS persisted: each tenant's config file. Until
+    2026-09-20 this lived only in ``corvin_console.app``'s lifespan — which the
+    live host (``corvin_gateway.app``, service ``corvin-webui``) never runs: it
+    includes the console's router and static files, not its lifespan. Every
+    gateway restart therefore killed the worker for good while the page kept
+    promising "resumes on its own after a server restart". Both hosts now
+    call this function.
+    """
+    tenants_root = Path(corvin_home) / "tenants"
+    started = 0
+    if not tenants_root.is_dir():
+        return 0
+    for tenant_dir in sorted(tenants_root.iterdir()):
+        if not tenant_dir.is_dir():
+            continue
+        config_file = tenant_dir / "github-config.json"
+        if not config_file.exists():
+            continue
+        try:
+            config = json.loads(config_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not (isinstance(config, dict) and config.get("auto_sync")):
+            continue
+        result = get_worker(tenant_dir.name).start()
+        if result.get("success"):
+            started += 1
+    if started:
+        logger.info("Resumed GitHub auto-sync for %d tenant(s)", started)
+    return started
+
