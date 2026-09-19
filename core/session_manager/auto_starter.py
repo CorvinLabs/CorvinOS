@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class TaskStateLock:
     """Per-task synchronization to prevent race conditions (CRITICAL-003 fix)."""
-    def __init__(self):
+    def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
 
@@ -242,7 +242,7 @@ class SessionAutoStarter:
     async def _auto_start_session(
         self,
         task_id: str,
-        checkpoint,
+        checkpoint: "Checkpoint",
     ) -> Optional[str]:
         """Auto-start a new session with checkpoint injection.
 
@@ -493,11 +493,21 @@ class SessionAutoStarter:
                     )
 
             # Restore context essentials (Tier 0)
+            # Only use attributes that exist on the Checkpoint class
+            context_essentials = {}
+            learning_state = {}
+
+            # Try to access optional attributes if they exist
+            if hasattr(checkpoint, 'context_essentials'):
+                context_essentials = checkpoint.context_essentials or {}
+            if hasattr(checkpoint, 'learning_state'):
+                learning_state = checkpoint.learning_state or {}
+
             session_state = {
                 "goal": checkpoint.goal,
                 "phase": checkpoint.phase or "execution",
-                "context_essentials": checkpoint.context_essentials or {},
-                "learning_state": checkpoint.learning_state or {},
+                "context_essentials": context_essentials,
+                "learning_state": learning_state,
                 "checkpoint_hash": checkpoint.checkpoint_hash,
                 "audit_trail_hash": checkpoint.audit_trail_hash,
                 "restored_at": datetime.now().isoformat(),
@@ -506,7 +516,7 @@ class SessionAutoStarter:
             logger.info(
                 f"[SessionAutoStarter] Checkpoint state injected: "
                 f"session={session_id} phase={checkpoint.phase} "
-                f"context_size={len(str(checkpoint.context_essentials or {}))}"
+                f"context_size={len(str(context_essentials))}"
             )
 
             return session_state
