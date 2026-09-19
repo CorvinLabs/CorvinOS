@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from core.concurrency.locks import RWLock
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,65 +66,83 @@ class HookRegistry:
             "on_artifact": [],
         }
         self._loaded_functions: dict[str, Callable] = {}
+        # F-C4 Fix: RWLock for thread-safe registry access
+        # Optimized for read-heavy workloads (many get_hooks, few register_hook)
+        self._lock = RWLock(timeout=5.0)
 
     def register_hook(self, hook_def: HookDefinition) -> None:
-        """Register a hook with the registry."""
+        """Register a hook with the registry (write lock protected)."""
         trigger = hook_def.trigger
         if trigger not in self._hooks:
             raise ValueError(f"Unknown hook trigger: {trigger}")
 
-        self._hooks[trigger].append(hook_def)
-        self._hooks[trigger].sort()
-        logger.info(
-            f"Registered hook {hook_def.id} (trigger={trigger}, priority={hook_def.priority})"
-        )
+        # F-C4: Acquire write lock for thread-safe modification
+        with self._lock.write_lock():
+            self._hooks[trigger].append(hook_def)
+            self._hooks[trigger].sort()
+            logger.info(
+                f"Registered hook {hook_def.id} (trigger={trigger}, priority={hook_def.priority})"
+            )
 
     def unregister_hook(self, hook_id: str) -> None:
-        """Unregister a hook from all triggers."""
-        for trigger in self._hooks.values():
-            trigger[:] = [h for h in trigger if h.id != hook_id]
-        if hook_id in self._loaded_functions:
-            del self._loaded_functions[hook_id]
+        """Unregister a hook from all triggers (write lock protected)."""
+        # F-C4: Acquire write lock for thread-safe modification
+        with self._lock.write_lock():
+            for trigger in self._hooks.values():
+                trigger[:] = [h for h in trigger if h.id != hook_id]
+            if hook_id in self._loaded_functions:
+                del self._loaded_functions[hook_id]
 
     def load_hook_function(self, hook_def: HookDefinition) -> Callable:
         """
-        Load a hook function from a file.
+        Load a hook function from a file (read/write lock protected).
 
         Returns the callable or raises on import error.
         """
-        if hook_def.id in self._loaded_functions:
-            return self._loaded_functions[hook_def.id]
-
-        hook_file = Path(hook_def.file)
-        if not hook_file.exists():
-            raise FileNotFoundError(f"Hook file not found: {hook_def.file}")
-
+        # F-C4: First, try read lock for cache check
         try:
-            spec = importlib.util.spec_from_file_location(f"hook_{hook_def.id}", hook_file)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Could not load spec for {hook_def.file}")
+            with self._lock.read_lock():
+                if hook_def.id in self._loaded_functions:
+                    return self._loaded_functions[hook_def.id]
+        except TimeoutError:
+            logger.warning(f"Read lock timeout for hook {hook_def.id}, retrying with write lock")
 
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+        # Not in cache; acquire write lock to load + cache
+        with self._lock.write_lock():
+            # Double-check pattern (might have been loaded by another thread)
+            if hook_def.id in self._loaded_functions:
+                return self._loaded_functions[hook_def.id]
 
-            func = getattr(module, hook_def.function, None)
-            if func is None:
-                raise AttributeError(
-                    f"Function {hook_def.function} not found in {hook_def.file}"
-                )
+            hook_file = Path(hook_def.file)
+            if not hook_file.exists():
+                raise FileNotFoundError(f"Hook file not found: {hook_def.file}")
 
-            self._loaded_functions[hook_def.id] = func
-            return func
+            try:
+                spec = importlib.util.spec_from_file_location(f"hook_{hook_def.id}", hook_file)
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"Could not load spec for {hook_def.file}")
 
-        except Exception as e:
-            logger.error(f"Failed to load hook {hook_def.id}: {e}")
-            raise
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+
+                func = getattr(module, hook_def.function, None)
+                if func is None:
+                    raise AttributeError(
+                        f"Function {hook_def.function} not found in {hook_def.file}"
+                    )
+
+                self._loaded_functions[hook_def.id] = func
+                return func
+
+            except Exception as e:
+                logger.error(f"Failed to load hook {hook_def.id}: {e}")
+                raise
 
     async def run_pipeline(
         self, ctx: PreprocessContext, trigger: str = "preprocessing"
     ) -> PreprocessContext:
         """
-        Run preprocessing pipeline for a given trigger.
+        Run preprocessing pipeline for a given trigger (read lock protected).
 
         Executes all hooks for the trigger in priority order.
         Fails closed — hook errors don't crash the pipeline.
@@ -134,13 +154,17 @@ class HookRegistry:
         Returns:
             Modified context (ctx is modified in-place)
         """
-        if trigger not in self._hooks:
-            return ctx
+        # F-C4: Acquire read lock to safely get hooks snapshot
+        with self._lock.read_lock():
+            if trigger not in self._hooks:
+                return ctx
 
-        hooks = self._hooks[trigger]
-        if not hooks:
-            return ctx
+            # Copy hooks list to avoid holding lock during execution
+            hooks = list(self._hooks[trigger])
+            if not hooks:
+                return ctx
 
+        # Execute hooks outside lock (avoid holding lock during hook execution)
         for hook_def in hooks:
             if not hook_def.enabled:
                 continue
@@ -178,13 +202,17 @@ class HookRegistry:
         return ctx
 
     def get_hooks(self, trigger: str) -> list[HookDefinition]:
-        """Get all hooks for a trigger, sorted by priority."""
-        return sorted(self._hooks.get(trigger, []))
+        """Get all hooks for a trigger, sorted by priority (read lock protected)."""
+        # F-C4: Acquire read lock for thread-safe read
+        with self._lock.read_lock():
+            return sorted(self._hooks.get(trigger, []))
 
     def get_hook(self, hook_id: str) -> Optional[HookDefinition]:
-        """Get a specific hook definition."""
-        for hooks in self._hooks.values():
-            for hook in hooks:
-                if hook.id == hook_id:
-                    return hook
-        return None
+        """Get a specific hook definition (read lock protected)."""
+        # F-C4: Acquire read lock for thread-safe read
+        with self._lock.read_lock():
+            for hooks in self._hooks.values():
+                for hook in hooks:
+                    if hook.id == hook_id:
+                        return hook
+            return None
