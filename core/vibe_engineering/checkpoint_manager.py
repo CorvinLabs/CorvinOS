@@ -47,6 +47,8 @@ import tempfile
 import os
 import hmac
 import secrets
+import threading
+from contextlib import contextmanager
 
 from core.paths.tenant import tenant_home
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
@@ -324,6 +326,9 @@ class CheckpointManager:
       could read every tenant's checkpoints from one directory.
     - Integrity-Bound (ADR-0XXX): every checkpoint includes merkle_root hash
       and tenant_signature; restore_checkpoint() verifies both; fail-closed on mismatch
+    - Thread-Safe (ADR-0875): all critical sections protected by threading.Lock;
+      concurrent writes are serialized at checkpoint state-modification level
+      while file operations remain atomic (POSIX rename(2) for inter-process safety)
     """
 
     def __init__(self, checkpoint_dir: Optional[Path] = None, *, tenant_id: str, audit_writer: Optional[AuditChainWriter] = None):
@@ -346,6 +351,12 @@ class CheckpointManager:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+        # ADR-0875: Thread-safe synchronization for concurrent checkpoint operations
+        # Per-task locks to allow concurrent writes to different tasks while preventing
+        # data corruption for the same task (fine-grained locking for performance)
+        self._task_locks: Dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()  # Protects the _task_locks dict itself
+
         logger.info(
             f"CheckpointManager initialized at {self.checkpoint_dir} (tenant={self.tenant_id})"
         )
@@ -361,6 +372,118 @@ class CheckpointManager:
                 f"Tenant mismatch: manager is bound to {self.tenant_id!r}, got {tenant_id!r}"
             )
         return tenant_id
+
+    def _get_task_lock(self, task_id: str) -> threading.Lock:
+        """
+        Get or create a lock for a specific task (ADR-0875).
+
+        Fine-grained locking allows concurrent writes to different tasks
+        while preventing data corruption for the same task.
+
+        Args:
+            task_id: Task identifier
+
+        Returns:
+            threading.Lock for this task
+        """
+        with self._locks_lock:
+            if task_id not in self._task_locks:
+                self._task_locks[task_id] = threading.Lock()
+            return self._task_locks[task_id]
+
+    @contextmanager
+    def _acquire_task_lock(self, task_id: str, timeout: float = 10.0):
+        """
+        Context manager for acquiring a task-level lock with timeout.
+
+        Args:
+            task_id: Task identifier
+            timeout: Max seconds to wait for lock (fail-closed on timeout)
+
+        Yields:
+            True if lock acquired, False if timeout occurred
+
+        Raises:
+            RuntimeError if lock acquisition times out
+        """
+        lock = self._get_task_lock(task_id)
+        acquired = lock.acquire(timeout=timeout)
+        if not acquired:
+            raise RuntimeError(
+                f"Failed to acquire lock for task {task_id!r} within {timeout}s "
+                f"(possible deadlock or extreme contention); fail-closed"
+            )
+        try:
+            yield True
+        finally:
+            lock.release()
+
+    def _emit_checkpoint_acquired_event(self, task_id: str, checkpoint_id: str) -> None:
+        """Emit audit event when checkpoint lock is acquired (ADR-0875)."""
+        if self.audit_writer is None:
+            return
+        try:
+            event = AuditEvent(
+                event_id=str(uuid4()),
+                event_type="checkpoint_acquired",
+                tenant_id=self.tenant_id,
+                user_id=None,
+                timestamp=datetime.now().isoformat(),
+                details={
+                    "task_id": task_id,
+                    "checkpoint_id": checkpoint_id,
+                    "operation": "lock_acquired"
+                },
+                severity="info"
+            )
+            self.audit_writer.write_event(event)
+        except Exception as e:
+            logger.warning(f"Failed to emit checkpoint_acquired event: {e}")
+
+    def _emit_checkpoint_released_event(self, task_id: str, checkpoint_id: str) -> None:
+        """Emit audit event when checkpoint lock is released (ADR-0875)."""
+        if self.audit_writer is None:
+            return
+        try:
+            event = AuditEvent(
+                event_id=str(uuid4()),
+                event_type="checkpoint_released",
+                tenant_id=self.tenant_id,
+                user_id=None,
+                timestamp=datetime.now().isoformat(),
+                details={
+                    "task_id": task_id,
+                    "checkpoint_id": checkpoint_id,
+                    "operation": "lock_released"
+                },
+                severity="info"
+            )
+            self.audit_writer.write_event(event)
+        except Exception as e:
+            logger.warning(f"Failed to emit checkpoint_released event: {e}")
+
+    def _emit_checkpoint_written_event(self, filepath: Path, checkpoint_id: str, task_id: str) -> None:
+        """Emit audit event when checkpoint is successfully written to disk (ADR-0875)."""
+        if self.audit_writer is None:
+            return
+        try:
+            event = AuditEvent(
+                event_id=str(uuid4()),
+                event_type="checkpoint_written",
+                tenant_id=self.tenant_id,
+                user_id=None,
+                timestamp=datetime.now().isoformat(),
+                details={
+                    "checkpoint_path": str(filepath),
+                    "checkpoint_id": checkpoint_id,
+                    "task_id": task_id,
+                    "operation": "write_persisted"
+                },
+                severity="info"
+            )
+            self.audit_writer.write_event(event)
+        except Exception as e:
+            logger.warning(f"Failed to emit checkpoint_written event: {e}")
 
     def create_checkpoint(
         self,
@@ -491,86 +614,92 @@ class CheckpointManager:
 
     def save(self, checkpoint: CheckpointState) -> Path:
         """
-        Persist checkpoint to filesystem (atomic write with file locking).
+        Persist checkpoint to filesystem (atomic write with thread-safe locking).
 
         File naming: {task_id}_{checkpoint_id}_{iter_num}.json
 
         Guarantees:
         - Atomic write (temp file + fsync + rename) — a reader never observes a
           partial file, and a crash never leaves a renamed-but-empty one
-        - Safe under concurrency WITHOUT a lock (see the note in the body)
+        - Thread-safe under concurrency (ADR-0875): per-task threading.Lock prevents
+          data corruption in concurrent scenarios; file-level atomic operations
+          (POSIX rename(2)) ensure inter-process safety
         - Idempotent: overwrites on retry
 
         Returns:
             Path where checkpoint was saved.
+
+        Raises:
+            RuntimeError: if lock acquisition times out (fail-closed)
         """
         # A checkpoint of another tenant must never land in this tenant's dir.
         self._bind(checkpoint.tenant_id)
         _validate_task_id(checkpoint.task_id)
 
-        # Recompute the integrity binding from the checkpoint's OWN content,
-        # unconditionally — never trust a caller-supplied merkle_root /
-        # tenant_signature. `create_checkpoint()` already stamps the correct
-        # values, but a checkpoint built by hand (bypassing it — as any
-        # caller legally can, `CheckpointState` has no private constructor)
-        # could otherwise carry a stale, placeholder, or simply absent
-        # binding straight to disk, where `_verify_checkpoint_integrity`
-        # would (before this fix) treat "absent" as "legacy, skip
-        # verification" — silently disarming the whole mechanism. save() is
-        # the one place with access to the real tenant key, so it is the
-        # only place this can be made authoritative.
-        merkle_root = _compute_merkle_root(_checkpoint_signing_dict(checkpoint))
-        tenant_signature = _compute_tenant_signature(merkle_root, checkpoint.tenant_id)
-        checkpoint = replace(checkpoint, merkle_root=merkle_root, tenant_signature=tenant_signature)
+        # ADR-0875: Acquire task-level lock to serialize concurrent writes to the same task.
+        # This prevents data corruption under high concurrency while maintaining
+        # per-task granularity to allow concurrent writes to different tasks.
+        with self._acquire_task_lock(checkpoint.task_id, timeout=10.0):
+            self._emit_checkpoint_acquired_event(checkpoint.task_id, checkpoint.checkpoint_id)
 
-        filename = f"{checkpoint.task_id}_{checkpoint.checkpoint_id}_{checkpoint.iteration_num:03d}.json"
-        filepath = self.checkpoint_dir / filename
+            try:
+                # Recompute the integrity binding from the checkpoint's OWN content,
+                # unconditionally — never trust a caller-supplied merkle_root /
+                # tenant_signature. `create_checkpoint()` already stamps the correct
+                # values, but a checkpoint built by hand (bypassing it — as any
+                # caller legally can, `CheckpointState` has no private constructor)
+                # could otherwise carry a stale, placeholder, or simply absent
+                # binding straight to disk, where `_verify_checkpoint_integrity`
+                # would (before this fix) treat "absent" as "legacy, skip
+                # verification" — silently disarming the whole mechanism. save() is
+                # the one place with access to the real tenant key, so it is the
+                # only place this can be made authoritative.
+                merkle_root = _compute_merkle_root(_checkpoint_signing_dict(checkpoint))
+                tenant_signature = _compute_tenant_signature(merkle_root, checkpoint.tenant_id)
+                checkpoint = replace(checkpoint, merkle_root=merkle_root, tenant_signature=tenant_signature)
 
-        json_str = self.serialize(checkpoint)
+                filename = f"{checkpoint.task_id}_{checkpoint.checkpoint_id}_{checkpoint.iteration_num:03d}.json"
+                filepath = self.checkpoint_dir / filename
 
-        # Lock-free by design. The previous implementation took a per-TASK
-        # `flock(LOCK_EX | LOCK_NB)` around the rename and LOST checkpoints
-        # under concurrency: a non-blocking lock fails immediately on
-        # contention, the handler unlinked the temp file, and the outer
-        # `except` then tried to rename that already-deleted file — so a
-        # contended save raised FileNotFoundError and the checkpoint was gone
-        # (measured: 3 of 10 concurrent saves lost). Losing checkpoints is
-        # precisely what makes a long autonomous run unresumable.
-        #
-        # The lock was never needed. Each checkpoint has its own filename, and
-        # `Path.replace` is atomic — POSIX rename(2), and MoveFileEx with
-        # REPLACE_EXISTING on Windows. Concurrent writers to DIFFERENT names
-        # cannot interfere; two writers of the SAME name are idempotent
-        # retries where last-writer-wins is the correct outcome. A reader
-        # therefore never observes a partial file, with or without a lock.
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode='w',
-                dir=self.checkpoint_dir,
-                delete=False,
-                suffix='.tmp',
-                encoding='utf-8',
-            ) as tmp:
-                tmp.write(json_str)
-                tmp.flush()
-                # fsync before the rename: without it a crash can leave a
-                # renamed-but-empty file, i.e. a checkpoint that exists and
-                # cannot be loaded — worse than one that is simply absent.
-                os.fsync(tmp.fileno())
-                tmp_path = Path(tmp.name)
+                json_str = self.serialize(checkpoint)
 
-            tmp_path.replace(filepath)
-            logger.info(f"Checkpoint saved: {filepath}")
-            return filepath
-        except Exception as e:
-            if tmp_path is not None:
+                # File-level atomic operations remain unchanged. Each checkpoint has its own filename, and
+                # `Path.replace` is atomic — POSIX rename(2), and MoveFileEx with
+                # REPLACE_EXISTING on Windows. Concurrent writers to DIFFERENT names
+                # cannot interfere; two writers of the SAME name are idempotent
+                # retries where last-writer-wins is the correct outcome. A reader
+                # therefore never observes a partial file.
+                tmp_path = None
                 try:
-                    tmp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-            logger.error(f"Failed to save checkpoint: {e}")
-            raise
+                    with tempfile.NamedTemporaryFile(
+                        mode='w',
+                        dir=self.checkpoint_dir,
+                        delete=False,
+                        suffix='.tmp',
+                        encoding='utf-8',
+                    ) as tmp:
+                        tmp.write(json_str)
+                        tmp.flush()
+                        # fsync before the rename: without it a crash can leave a
+                        # renamed-but-empty file, i.e. a checkpoint that exists and
+                        # cannot be loaded — worse than one that is simply absent.
+                        os.fsync(tmp.fileno())
+                        tmp_path = Path(tmp.name)
+
+                    tmp_path.replace(filepath)
+                    logger.info(f"Checkpoint saved: {filepath}")
+                    self._emit_checkpoint_written_event(filepath, checkpoint.checkpoint_id, checkpoint.task_id)
+                    return filepath
+                except Exception as e:
+                    if tmp_path is not None:
+                        try:
+                            tmp_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    logger.error(f"Failed to save checkpoint: {e}")
+                    raise
+            finally:
+                self._emit_checkpoint_released_event(checkpoint.task_id, checkpoint.checkpoint_id)
 
     def load(self, filepath: Path) -> CheckpointState:
         """
