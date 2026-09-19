@@ -132,7 +132,15 @@ export function CorvinKnowledgePage() {
   });
 
   const cfg = draft ?? config.data ?? null;
-  const counts = STATUS_ORDER.map((s) => [s, entities.filter((e) => e.status === s).length] as const);
+  // Every status the data carries — the four canonical ones first, then any
+  // other the repository uses (the maintainer checkout has 200 entities
+  // outside proposed/accepted/verified/superseded; hiding them would misstate
+  // the total).
+  const statuses = useMemo(() => {
+    const seen = Array.from(new Set(entities.map((e) => e.status)));
+    return [...STATUS_ORDER.filter((s) => seen.includes(s)), ...seen.filter((s) => !(STATUS_ORDER as readonly string[]).includes(s)).sort()];
+  }, [entities]);
+  const counts = statuses.map((s) => [s, entities.filter((e) => e.status === s).length] as const);
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6" data-testid="corvin-knowledge-panel">
@@ -183,7 +191,7 @@ export function CorvinKnowledgePage() {
             </label>
             <label className="text-xs text-muted-foreground flex flex-col gap-1">Status
               <select className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
-                <option value="">all</option>{STATUS_ORDER.map((s) => <option key={s} value={s}>{s}</option>)}
+                <option value="">all</option>{statuses.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </label>
             <span className="text-xs text-muted-foreground" data-testid="knowledge-summary">{filtered.entities.length} of {entities.length} entities shown</span>
