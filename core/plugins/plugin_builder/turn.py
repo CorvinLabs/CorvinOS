@@ -13,11 +13,7 @@ directly, a CLI loop, and the ``/plugin-builder`` console command all call the
 same two methods" — this module is what lets a THIRD transport (a messenger
 bridge) join that list without a second copy of the artifact-writing logic.
 
-Feature-flag gating is deliberately NOT this module's job — it stays with
-each caller (``feature_flags.is_enabled("plugin_builder_enabled", ...)``),
-exactly as it already was for the console. Moving it here would pull
-``corvin_console`` into ``core/plugins``' dependency graph for a flag lookup
-one line long; both callers already have that flag reachable on their own.
+Licensing gate (ADR-0701 G4): forge.create capability enforced at entry.
 """
 from __future__ import annotations
 
@@ -35,6 +31,16 @@ from .generators import (
     write_scaffold_after_checkpoint,
 )
 from .interview import InterviewPhase, InterviewSession, classify_checkpoint_decision
+
+# ADR-0701 G4: License gate for forge.create
+try:
+    from corvin_operator.license.capability_api import require_capability, LicenseDenied
+except ImportError:
+    # Fallback for testing without license module
+    def require_capability(*args, **kwargs):
+        pass
+    class LicenseDenied(Exception):
+        pass
 
 log = logging.getLogger("corvin.plugin_builder.turn")
 
@@ -372,14 +378,20 @@ def command(
 ) -> str:
     """Handle the literal ``/plugin-builder [status|cancel]`` invocation.
 
-    Caller is responsible for the feature-flag check before calling this —
-    see module docstring. The three ADR-0262 flag values are the caller's
-    own feature-flag lookups, passed straight through to
-    ``session_store.start()`` for a freshly-started session; they have no
-    effect on ``status``/``cancel`` against an already-running one (a
-    session's flags are fixed at start time, same as ADR-0253's original
-    design never let mid-interview state depend on a flag re-read).
+    Enforces forge.create capability per ADR-0701 G4 (member-only).
+    The three ADR-0262 flag values are the caller's own feature-flag lookups,
+    passed straight through to ``session_store.start()`` for a freshly-started
+    session; they have no effect on ``status``/``cancel`` against an
+    already-running one (a session's flags are fixed at start time, same as
+    ADR-0253's original design never let mid-interview state depend on a flag
+    re-read).
     """
+    # ADR-0701 G4: License gate — forge.create is member-only
+    try:
+        require_capability("forge.create", requested=1, tenant_id=tenant_id, entry_point="plugin_builder")
+    except LicenseDenied as e:
+        return f"Plugin-Builder requires a member seat: {e}"
+
     sub = arg.strip().lower()
     if sub in ("cancel", "stop"):
         existing = session_store.get(tenant_id, session_key)

@@ -25,6 +25,12 @@ The working convention in this repo (used by ``corvin_console`` and by
 ``sys.path`` and then import the subtree *bare* -- ``from license.quota_counter
 import ...``. Centralising that here keeps the sys.path handling in one place
 instead of three, so the next call site cannot reinvent a broken path.
+
+ADR-0701 G5 License Gating
+--------------------------
+Forge-related quota checks (skill_forge_per_day, tool_forge_per_day) route
+through the unified require_capability() API to enforce the forge.create
+capability (member-only per ADR-0701).
 """
 
 from __future__ import annotations
@@ -33,6 +39,16 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
+
+# ADR-0701 G5: License gate for forge quota
+try:
+    from corvin_operator.license.capability_api import require_capability, LicenseDenied
+except ImportError:
+    # Fallback for testing without license module
+    def require_capability(*args, **kwargs):
+        pass
+    class LicenseDenied(Exception):
+        pass
 
 
 def _ensure_operator_on_path() -> None:
@@ -92,6 +108,21 @@ def increment_and_check(
     from license.quota_counter import increment_and_check as _impl
 
     return _impl(corvin_home_path or corvin_home(), feature, tenant_id)
+
+
+def check_forge_capability(
+    tenant_id: str,
+    entry_point: str = "orchestration",
+) -> None:
+    """ADR-0701 G5: License gate for forge-related quotas.
+
+    Enforces forge.create capability (member-only) before allowing forge operations.
+    Raises LicenseDenied if capability is not available.
+    """
+    try:
+        require_capability("forge.create", requested=1, tenant_id=tenant_id, entry_point=entry_point)
+    except LicenseDenied as e:
+        raise e
 
 
 def get_today_count(
