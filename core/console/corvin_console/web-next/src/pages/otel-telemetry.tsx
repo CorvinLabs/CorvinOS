@@ -158,7 +158,7 @@ function ChannelCard({ c }: { c: Channel }) {
           <StatusBadge s={c.status} />
           {c.enabled === false && c.status !== "disabled" && c.status !== "not_wired" && <Badge variant="secondary">off</Badge>}
           <span className="ml-auto text-xs text-muted-foreground" data-testid={`last-${c.id}`}>
-            {c.status === "not_wired" || c.status === "disabled" ? "" : `last sent ${fmtAgo(lastSent)}`}
+            {c.status === "not_wired" || c.status === "disabled" ? "" : c.carried_by ? `rides on ${c.carried_by.join(" and ")}` : `last sent ${fmtAgo(lastSent)}`}
           </span>
         </div>
         {c.purpose && <CardDescription>{c.purpose}</CardDescription>}
