@@ -36,8 +36,8 @@ const INDEX = {
       tier: "buildin", category: "memory", description: "Recall backend.", registry_id: "recall", installable: true, install_blocker: null,
       installed: false, enabled: false, runtime_loaded: false },
     { id: "plugin:contributor-integration-slack", type: "plugin", name: "Slack Notifier", version: "1.0.0", author: "x", license: "MIT",
-      tier: "contributor", category: "integration", description: "Slack.", registry_id: null, installable: false,
-      install_blocker: "only builtin plugins install locally", installed: false, enabled: false, runtime_loaded: false },
+      tier: "contributor", category: "integration", description: "Slack.", registry_id: "slack_notifier", installable: true,
+      install_blocker: null, installed: false, enabled: false, runtime_loaded: false },
     { id: "plugin:buildin-observability-otel", type: "plugin", name: "OTEL", version: "2.0.0", author: "CorvinLabs", license: "Apache-2.0",
       tier: "buildin", category: "observability", description: "OTEL.", registry_id: "otel", installable: true, install_blocker: null,
       installed: true, enabled: true, runtime_loaded: true },
@@ -52,6 +52,7 @@ const plugin = (id: string, enabled: boolean) => ({
 
 interface Seen { method: string; path: string; csrf: string | null; body: unknown }
 const seen: Seen[] = [];
+let polls = 0;
 const record = async (request: Request) => {
   let body: unknown = null;
   try { body = await request.clone().json(); } catch { /* multipart or empty */ }
@@ -63,9 +64,18 @@ function baseHandlers(over: Partial<{ toolsStatus: number; installed: ReturnType
   return [
     http.get("/v1/console/api/v1/marketplace/stats", () => HttpResponse.json({ total_plugins: 3, by_category: {}, by_tier: {}, generated_at: "2026-09-07T16:14:31Z" })),
     http.get("/v1/console/api/v1/marketplace/plugins", () => HttpResponse.json(INDEX)),
+    // The install is a JOB: the POST answers the first phase, the progress
+    // endpoint walks the phases the backend reached (here: two polls).
     http.post("/v1/console/api/v1/marketplace/plugins/:id/install", async ({ request, params }) => {
       await record(request);
-      return HttpResponse.json({ status: "completed", job_id: "install_1", plugin_id: params.id, registry_id: "recall", version: "1.0.0" });
+      return HttpResponse.json({ job_id: "install_1", plugin_id: params.id, tenant_id: "_default", status: "installing",
+        progress: 10, message: "Checking the marketplace index", created_at: "", updated_at: "", error: null });
+    }),
+    http.get("/v1/console/api/v1/marketplace/install/:job/progress", () => {
+      polls += 1;
+      return HttpResponse.json(polls < 2
+        ? { job_id: "install_1", plugin_id: "plugin:buildin-memory-recall", tenant_id: "_default", status: "installing", progress: 45, message: "Validating the manifest (ADR-0247 gate)", created_at: "", updated_at: "", error: null }
+        : { job_id: "install_1", plugin_id: "plugin:buildin-memory-recall", tenant_id: "_default", status: "completed", progress: 100, message: "Installation completed", created_at: "", updated_at: "", error: null });
     }),
     http.get("/v1/console/plugins", () => HttpResponse.json({ plugins: installed, total: installed.length, lifecycle_enabled: true })),
     http.get("/v1/console/plugins/health", () => HttpResponse.json({ monitoring_enabled: false, breakers: {} })),
@@ -102,7 +112,7 @@ function renderAt(path: string) {
   );
 }
 
-afterEach(() => { cleanup(); seen.length = 0; });
+afterEach(() => { cleanup(); seen.length = 0; polls = 0; });
 
 describe("Marketplace — tab ↔ URL", () => {
   it("renders the marker and opens the tab named in the URL", async () => {
@@ -121,19 +131,66 @@ describe("Marketplace — tab ↔ URL", () => {
 });
 
 describe("Browse", () => {
-  it("installs an installable entry with CSRF and renders the outcome; a blocked entry has no button", async () => {
+  it("shows the two tiers, installs through the job with CSRF, renders the real phases, then offers Enable now", async () => {
     server.use(...baseHandlers());
     renderAt("/app/marketplace?tab=browse");
     const recall = await screen.findByTestId("index-card-plugin:buildin-memory-recall");
-    fireEvent.click(recall.querySelector("button.w-full") as HTMLButtonElement);
-    await screen.findByText(/Installed — disabled until you enable it on the Installed tab/);
-    expect(seen[0]).toMatchObject({ method: "POST", path: "/v1/console/api/v1/marketplace/plugins/plugin:buildin-memory-recall/install", csrf: "csrf-test", body: { version: "1.0.0" } });
+    // two tiers, the contributor one explained as community + consent
+    expect(screen.getByTestId("tier-buildin-summary").textContent).toMatch(/2 of 2 shown · 1 installed/);
+    expect(screen.getByTestId("tier-contributor-summary").textContent).toMatch(/1 of 1 shown · 0 installed/);
+    expect(screen.getByTestId("tier-contributor").textContent).toMatch(/enabling records your explicit consent/);
+    // a contributor entry with a real local source is installable
     const slack = screen.getByTestId("index-card-plugin:contributor-integration-slack");
-    expect(slack.textContent).toMatch(/Not installable on this build: only builtin plugins install locally/);
-    expect(slack.querySelector("button.w-full")).toBeNull();
-    const otel = screen.getByTestId("index-card-plugin:buildin-observability-otel");
-    expect(otel.textContent).toMatch(/Manage on the Installed tab/);
-    expect(screen.getByTestId("browse-summary").textContent).toMatch(/3 of 3 entries shown · 2 installable on this build · 1 not installable/);
+    expect(Array.from(slack.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Install")).toBe(true);
+    expect(screen.getByTestId("index-card-plugin:buildin-observability-otel").textContent).toMatch(/Manage on the Installed tab/);
+
+    fireEvent.click(Array.from(recall.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Install") as HTMLButtonElement);
+    await waitFor(() => expect(seen[0]).toMatchObject({ method: "POST", path: "/v1/console/api/v1/marketplace/plugins/plugin:buildin-memory-recall/install", csrf: "csrf-test", body: { version: "1.0.0", wait: false } }));
+    // the phase the backend reached is what the bar shows
+    await screen.findByText(/Validating the manifest \(ADR-0247 gate\) · 45%/);
+    expect(screen.getByTestId("install-progress-plugin:buildin-memory-recall").querySelector('[role="progressbar"]')).toHaveAttribute("aria-valuenow", "45");
+    await screen.findByText(/Installed — disabled until you enable it/);
+    // the card now offers the second step; the (builtin) enable needs no consent flag
+    fireEvent.click(await screen.findByTestId("enable-now-plugin:buildin-memory-recall"));
+    await screen.findByText(/Enabled — audited\. A panel this plugin declares is now in the sidebar/);
+    await waitFor(() => expect(seen.length).toBe(2));
+    expect(seen[1]).toMatchObject({ method: "POST", path: "/v1/console/plugins/recall/enable", csrf: "csrf-test", body: { consent_granted: false } });
+  });
+
+  it("a blocked entry shows its blocker and no button", async () => {
+    const blocked = { ...INDEX, plugins: [{ ...INDEX.plugins[1], installable: false, install_blocker: "no local builtin source", registry_id: null }] };
+    // MSW: the FIRST matching handler wins, so the override goes before the base set.
+    server.use(http.get("/v1/console/api/v1/marketplace/plugins", () => HttpResponse.json(blocked)), ...baseHandlers());
+    renderAt("/app/marketplace?tab=browse");
+    const slack = await screen.findByTestId("index-card-plugin:contributor-integration-slack");
+    expect(slack.textContent).toMatch(/Not installable on this build: no local builtin source/);
+    expect(Array.from(slack.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Install")).toBe(false);
+    expect(screen.getByTestId("browse-summary").textContent).toMatch(/1 of 1 entries shown · 0 installable on this build · 1 not installable/);
+  });
+});
+
+describe("Installed — settings form", () => {
+  it("renders typed controls from the schema and posts the merged object with CSRF", async () => {
+    const withSchema = plugin("otel", false);
+    withSchema.settings_schema = { type: "object", properties: {
+      tts_engine: { type: "string", enum: ["openai", "piper"], default: "openai" },
+      max_len: { type: "integer", default: 60, minimum: 1 },
+      learn: { type: "boolean", default: true },
+    } };
+    withSchema.settings = { tts_engine: "openai", max_len: 60, learn: true, legacy_key: "kept" };
+    server.use(...baseHandlers({ installed: [withSchema] }),
+      http.post("/v1/console/plugins/:id/settings", async ({ request }) => { await record(request); return HttpResponse.json(withSchema); }));
+    renderAt("/app/marketplace?tab=installed");
+    const row = await screen.findByTestId("installed-row-otel");
+    fireEvent.click(Array.from(row.querySelectorAll("button")).find((b) => b.textContent === "Settings") as HTMLButtonElement);
+    const engine = screen.getByLabelText("tts_engine") as HTMLSelectElement;
+    fireEvent.change(engine, { target: { value: "piper" } });
+    fireEvent.change(screen.getByLabelText("max_len"), { target: { value: "5" } });
+    fireEvent.click(screen.getByLabelText("learn"));
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    await screen.findByText("Settings saved — audited.");
+    expect(seen[0]).toMatchObject({ method: "POST", path: "/v1/console/plugins/otel/settings", csrf: "csrf-test",
+      body: { settings: { tts_engine: "piper", max_len: 5, learn: false, legacy_key: "kept" } } });
   });
 });
 

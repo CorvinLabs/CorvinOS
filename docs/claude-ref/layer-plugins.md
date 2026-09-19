@@ -933,6 +933,40 @@ Playwright specs that drove them.
 skill root for anyone who could reach the port. Reads now take
 `require_session`, writes `require_csrf`.
 
+**Contributor tier (amendment 2026-09-20).** `plugins/contributor/<category>/<name>/`
+of the checkout installs exactly like the buildin tree — the resolver accepts
+both tiers under the trusted marketplace root — with the origin
+LOCATION-derived as `community` (`bootstrap.origin_for_plugin_dir`,
+`_marketplace_contributor_root()`), which `PluginRecord.consent_required()`
+turns into an explicit consent on enable. Browse shows the two tiers as two
+sections with their own counts and an explanation of what installing means in
+each. Every contributor dir now carries the `plugin.yaml` + `provider.py` the
+loader needs (the three community samples and `media/video_producer`); the
+generator composes the ADR-0511 index id from the directory when a manifest
+carries the short `<category>/<name>` id the 2026-09-10 sweep wrote, skips a
+`plugin.json` that is not an ADR-0511 manifest (`contributor/video-producer-orchestrator`,
+a Week-1 package descriptor with the same display name — deliberately NOT
+indexed), and knows the `media` category. `record_from_manifest` now carries
+`console_panel` and the schema's defaults into the record; until then no
+marketplace-installed plugin could put a panel in the sidebar. The manifest
+lists a plugin panel only while the tenant registry has that plugin installed
+AND enabled (`capabilities._plugin_is_enabled`) — a stale
+`panel_registry.json` entry no longer puts "Video Producer" in the sidebar
+with nothing behind it — and `get_panel_registry` re-creates its cached
+instance when the tenant home moves.
+
+**The install is a job with real phases** (`marketplace_install._PHASES`:
+index check → source resolution → manifest gate → licence → record →
+registration). `wait: false` returns the job in its first phase and a worker
+thread advances it; `GET /install/{job}/progress` reports the phase reached.
+The Browse card polls that and draws the bar from it — never from a timer.
+After a completed install the card offers "Enable now" ("… with consent" for
+community origin), and every lifecycle change invalidates the sidebar's
+manifest queries so a declared panel appears or leaves without a reload.
+Settings render as a schema-driven form (`components/settings-form.tsx`:
+boolean → checkbox, enum → select, integer → number input; unknown keys kept
+verbatim; no schema → JSON), validated by the backend's `SettingsValidator`.
+
 **Skills are not fabricated into the marketplace.** The Corvin-Marketplace
 repository ships no skill index (`extensions/skills/` holds a README); a skill
 arrives as a package (Packages tab) or is promoted on the Skills page. When the

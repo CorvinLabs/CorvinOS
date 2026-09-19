@@ -56,7 +56,7 @@ test("the sidebar has exactly one Marketplace entry and no Packages entry", asyn
   await expect(nav.locator('a[href*="marketplace-hub"]')).toHaveCount(0);
 });
 
-test("Browse lists the real index with local state; a blocked entry has no Install button", async ({ page }) => {
+test("Browse shows both tiers from the real index; a contributor entry is installable", async ({ page }) => {
   await page.goto("/console/app/marketplace?tab=browse", { waitUntil: "domcontentloaded" });
   const summary = page.getByTestId("browse-summary");
   await expect(summary).toBeVisible({ timeout: 30_000 });
@@ -64,14 +64,16 @@ test("Browse lists the real index with local state; a blocked entry has no Insta
   const m = text.match(/(\d+) of (\d+) entries shown · (\d+) installable/);
   expect(m, text).not.toBeNull();
   expect(Number(m![2])).toBeGreaterThan(0);
-  // The index's contributor entries never resolved locally: blocker, no button.
-  await page.getByLabel("Tier").selectOption("contributor");
-  const blocked = page.locator('[data-testid^="index-card-plugin:contributor-"]').first();
-  if (await blocked.count()) {
-    await expect(blocked.getByText(/Not installable on this build/)).toBeVisible();
-    await expect(blocked.getByRole("button", { name: "Install" })).toHaveCount(0);
-  }
-  await page.getByLabel("Tier").selectOption("");
+  // Two tiers, each with its own count line and explanation (ADR-0892 amendment).
+  await expect(page.getByTestId("tier-buildin-summary")).toContainText(/\d+ of \d+ shown/);
+  await expect(page.getByTestId("tier-contributor-summary")).toContainText(/\d+ of \d+ shown/);
+  await expect(page.getByTestId("tier-contributor")).toContainText("enabling records your explicit consent");
+  // The Video Producer is a contributor entry and installable from the checkout
+  // (or already installed — either way it is a real button, never a blocker).
+  const video = page.getByTestId("index-card-plugin:contributor-media-video_producer");
+  await expect(video).toBeVisible();
+  await expect(video.getByText(/Not installable on this build/)).toHaveCount(0);
+  await expect(video.getByRole("button", { name: /^Install$|Manage on the Installed tab|Enable now/ })).toHaveCount(1);
   // An installed entry hands off to the Installed tab rather than offering Install again.
   const installedCard = page.locator('[data-testid^="index-card-"]').filter({ hasText: "Manage on the Installed tab" }).first();
   if (await installedCard.count()) {

@@ -14,10 +14,11 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
+import { SettingsForm } from "../components/settings-form";
 import { ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
 import { KEY_INDEX, KEY_INSTALLED } from "../header";
+import { KEY_CAPABILITIES, KEY_MANIFEST } from "./browse";
 import {
   disablePlugin, enablePlugin, getPluginHealth, listInstalledPlugins, uninstallPlugin,
   updatePluginSettings, type PluginSummary,
@@ -39,10 +40,14 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [settingsText, setSettingsText] = useState(() => JSON.stringify(p.settings ?? {}, null, 2));
+  // A plugin that declares a console panel puts it in the sidebar on enable and
+  // takes it out on disable/uninstall (state.PluginLifecycle._sync_console_panel)
+  // — the sidebar reads the manifest, so both manifest queries are refreshed.
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: [...KEY_INSTALLED] });
     qc.invalidateQueries({ queryKey: [...KEY_INDEX] });
+    qc.invalidateQueries({ queryKey: [...KEY_MANIFEST] });
+    qc.invalidateQueries({ queryKey: [...KEY_CAPABILITIES] });
   };
   const enable = useMutation({
     mutationFn: () => enablePlugin(p.plugin_id, csrf, p.requires_consent),
@@ -60,9 +65,9 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
     onError: (e) => setMsg(actionError(e, "Not uninstalled.")),
   });
   const save = useMutation({
-    mutationFn: () => updatePluginSettings(p.plugin_id, JSON.parse(settingsText) as Record<string, unknown>, csrf),
+    mutationFn: (settings: Record<string, unknown>) => updatePluginSettings(p.plugin_id, settings, csrf),
     onSuccess: () => { setMsg("Settings saved — audited."); setEditing(false); invalidate(); },
-    onError: (e) => setMsg(e instanceof SyntaxError ? "Not saved — the settings are not valid JSON." : actionError(e, "Not saved — the plugin rejected these settings.")),
+    onError: (e) => setMsg(actionError(e, "Not saved — a value does not match the plugin's settings schema.")),
   });
   const busy = enable.isPending || disable.isPending || uninstall.isPending || save.isPending;
   const canMutate = lifecycleEnabled && !!csrf && !busy;
@@ -121,12 +126,8 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
         </div>
 
         {editing && (
-          <div className="space-y-2">
-            <label className="text-xs text-muted-foreground" htmlFor={`settings-${p.plugin_id}`}>Settings (JSON, validated against the plugin's schema on save)</label>
-            <Textarea id={`settings-${p.plugin_id}`} className="font-mono text-xs min-h-[120px]" value={settingsText}
-                      onChange={(e) => setSettingsText(e.target.value)} />
-            <Button size="sm" variant="accent" disabled={!canMutate} onClick={() => save.mutate()}>Save settings</Button>
-          </div>
+          <SettingsForm id={p.plugin_id} schema={p.settings_schema} value={p.settings ?? {}}
+                        saving={!canMutate} onSave={(settings) => save.mutate(settings)} />
         )}
 
         {msg && <p className="text-xs text-muted-foreground" data-testid={`installed-msg-${p.plugin_id}`}>{msg}</p>}

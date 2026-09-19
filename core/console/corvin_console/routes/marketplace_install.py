@@ -171,16 +171,10 @@ def _is_utility_plugin(plugin_id: str) -> bool:
     Plugin ID format: "plugin:buildin-<category>-<name>"
     Categories that require forge.create: "generator", "forge", "skillforge", "plugin-builder"
     """
-    if not plugin_id.startswith("plugin:buildin-"):
+    parsed = _resolve.parse_index_id(plugin_id)
+    if parsed is None:
         return False
-
-    # Extract category from plugin_id
-    # Format: plugin:buildin-<category>-<name>
-    parts = plugin_id.split("-", 2)  # Split on first two dashes
-    if len(parts) < 3:
-        return False
-
-    category = parts[1]
+    _tier, category, _name = parsed
 
     # List of categories that require forge.create (member-only)
     member_only_categories = [
@@ -206,36 +200,36 @@ def _index_has(plugin_id: str) -> bool:
     return plugin_id in (index.get("by_id") or {})
 
 
-@router.post("/plugins/{plugin_id}/install")
-async def install_plugin(
-    plugin_id: str,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-    body: Optional[Dict[str, Any]] = Body(None),
-) -> Dict[str, Any]:
-    """Install a builtin plugin from the marketplace into ``registry.yaml``.
+#: The install's phases, each a REAL step with its own failure mode, recorded on
+#: the job as it is reached (progress = the phase's share). The SPA renders the
+#: bar from these — it never advances a bar on its own (ADR-0763: no progress
+#: theatre). Percentages are the share of wall-clock a phase takes on a cold
+#: cache, rounded to what an operator can read.
+_PHASES: tuple[tuple[str, int], ...] = (
+    ("Checking the marketplace index", 10),
+    ("Resolving the local source", 25),
+    ("Validating the manifest (ADR-0247 gate)", 45),
+    ("Checking the licence", 60),
+    ("Projecting the record", 70),
+    ("Registering with the tenant", 90),
+)
 
-    Request: ``{"version": "1.0.0"}`` (a ``tenant_id`` in the body is ignored —
-    the tenant is the authenticated session's).
 
-    The install runs synchronously; the returned job already carries its final
-    status. Response: ``{"status": "completed"|"failed", "job_id", "plugin_id", ...}``.
-    """
-    plugin_id = _validate_plugin_id(plugin_id)
-    body = body or {}
-    version = str(body.get("version", "1.0.0"))[:64]
+class _LicenseRefused(Exception):
+    def __init__(self, detail: Dict[str, Any]) -> None:
+        super().__init__("license_required")
+        self.detail = detail
 
-    job_id = f"install_{uuid.uuid4().hex[:12]}"
-    now = _now()
-    job = InstallJob(
-        job_id=job_id,
-        plugin_id=plugin_id,
-        tenant_id=rec.tenant_id,
-        status=JobStatus.INSTALLING,
-        progress=50,
-        message="Installing plugin...",
-        created_at=now,
-        updated_at=now,
-    )
+
+def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: str, version: str) -> Dict[str, Any]:
+    """Perform the install, advancing ``job`` phase by phase. Returns the
+    response document; raises :class:`_LicenseRefused` for the 403 path."""
+
+    def _phase(i: int) -> None:
+        job.status = JobStatus.INSTALLING
+        job.message, job.progress = _PHASES[i]
+        job.updated_at = _now()
+        _remember(job)
 
     def _fail(reason: str) -> Dict[str, Any]:
         job.status = JobStatus.FAILED
@@ -245,28 +239,36 @@ async def install_plugin(
         job.updated_at = _now()
         _remember(job)
         _audit(rec, "marketplace.install_failed", plugin_id)
-        return {
-            "status": "failed",
-            "job_id": job_id,
-            "plugin_id": plugin_id,
-            "error": reason,
-        }
+        return {"status": "failed", "job_id": job.job_id, "plugin_id": plugin_id, "error": reason}
+
+    def _done(message: str, extra: Dict[str, Any]) -> Dict[str, Any]:
+        job.status = JobStatus.COMPLETED
+        job.progress = 100
+        job.message = message
+        job.updated_at = _now()
+        _remember(job)
+        _audit(rec, "marketplace.install", plugin_id)
+        return {"status": "completed", "job_id": job.job_id, "plugin_id": plugin_id, **extra}
 
     if not _LIFECYCLE_AVAILABLE or not _resolve.available():
         return _fail("plugin subsystem unavailable in this installation")
 
     # 1. The index is the install allowlist: an id it does not know is not
     #    installable here (no arbitrary local paths).
+    _phase(0)
     if not _index_has(plugin_id):
         return _fail(f"{plugin_id} is not in the marketplace index")
 
-    # 2. Resolve to a local builtin source dir + manifest (builtin scope only).
+    # 2. Resolve to a local source dir + manifest under a trusted root
+    #    (buildin → vetted, contributor → community; ADR-0892).
+    _phase(1)
     try:
         plugin_dir, manifest = _resolve.load_manifest(plugin_id)
     except _resolve.MarketplaceResolveError as exc:
         return _fail(str(exc))
 
     # 3. ADR-0247 manifest gate — NOT bypassed.
+    _phase(2)
     report = _resolve.validate_builtin_manifest(plugin_dir)
     if not report.ok:
         return _fail(
@@ -274,11 +276,11 @@ async def install_plugin(
             + "; ".join(f.message for f in report.errors[:3])
         )
 
-    # 3.5. LICENSING GATE (ADR-0700, ADR-0701, ADR-0703) — Check if user can install this plugin
-    # Some plugins require forge.create capability (only member tier).
+    # 3.5. LICENSING GATE (ADR-0700, ADR-0701, ADR-0703) — some plugins require
+    # forge.create (member tier).
+    _phase(3)
     if _LICENSING_AVAILABLE:
         try:
-            # Check forge.create capability for plugins that require it
             if not _is_utility_plugin(plugin_id):
                 require_capability(
                     "forge.create",
@@ -287,25 +289,29 @@ async def install_plugin(
                     entry_point="http"
                 )
         except LicenseDenied as exc:
+            job.status = JobStatus.FAILED
+            job.progress = 100
+            job.message = "Installation refused by the licence"
+            job.error = "license_required"
+            job.updated_at = _now()
+            _remember(job)
             _audit(rec, "marketplace.install_denied_license", plugin_id)
-            # Return HTTP 403 Forbidden with license denial details
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "license_required",
-                    "capability": exc.capability,
-                    "tier": exc.tier,
-                    "reason": exc.reason,
-                    "upgrade_url": exc.upgrade_url
-                }
-            )
+            raise _LicenseRefused({
+                "error": "license_required",
+                "capability": exc.capability,
+                "tier": exc.tier,
+                "reason": exc.reason,
+                "upgrade_url": exc.upgrade_url
+            })
 
-    # 4. Project onto a record (origin=builtin is location-derived) and install.
+    # 4. Project onto a record (origin is location-derived) and install.
+    _phase(4)
     try:
         record = _resolve.record_from_manifest(manifest, plugin_dir=plugin_dir)
     except Exception as exc:  # noqa: BLE001 - malformed manifest values
         return _fail(f"invalid manifest: {type(exc).__name__}: {exc}")
 
+    _phase(5)
     try:
         _lifecycle(rec.tenant_id).install(record, installed_by="console")
     except LifecycleDisabled:
@@ -316,37 +322,77 @@ async def install_plugin(
     except PluginError as exc:
         # "already installed" is idempotent success, not a failure.
         if "already installed" in str(exc):
-            job.status = JobStatus.COMPLETED
-            job.progress = 100
-            job.message = "Already installed"
-            job.updated_at = _now()
-            _remember(job)
-            _audit(rec, "marketplace.install", plugin_id)
-            return {
-                "status": "completed",
-                "job_id": job_id,
-                "plugin_id": plugin_id,
-                "registry_id": record.plugin_id,
-                "already_installed": True,
-            }
+            return _done("Already installed", {"registry_id": record.plugin_id, "already_installed": True})
         return _fail(str(exc))
     except Exception as exc:  # noqa: BLE001 - mapped to a failed job
         return _fail(f"install failed: {type(exc).__name__}")
 
-    job.status = JobStatus.COMPLETED
-    job.progress = 100
-    job.message = "Installation completed"
-    job.updated_at = _now()
-    _remember(job)
-    _audit(rec, "marketplace.install", plugin_id)
-    return {
-        "status": "completed",
-        "job_id": job_id,
-        "plugin_id": plugin_id,
+    return _done("Installation completed", {
         "registry_id": record.plugin_id,
         "version": version,
         "tenant_id": rec.tenant_id,
-    }
+        "origin": record.origin.value,
+        "requires_consent": record.consent_required(),
+    })
+
+
+@router.post("/plugins/{plugin_id}/install")
+async def install_plugin(
+    plugin_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    body: Optional[Dict[str, Any]] = Body(None),
+) -> Dict[str, Any]:
+    """Install a marketplace plugin into the tenant's ``registry.yaml``.
+
+    Request: ``{"version": "1.0.0", "wait": true}`` (a ``tenant_id`` in the body
+    is ignored — the tenant is the authenticated session's).
+
+    ``wait`` (default true): the install runs to completion and the response
+    carries the job's FINAL status. ``wait: false`` (the SPA's progress bar):
+    the response is the job in its first phase and the install continues on a
+    worker thread; ``GET /install/{job_id}/progress`` reports each phase as it
+    is reached — real steps, not a timer.
+    """
+    plugin_id = _validate_plugin_id(plugin_id)
+    body = body or {}
+    version = str(body.get("version", "1.0.0"))[:64]
+    wait = bool(body.get("wait", True))
+
+    job_id = f"install_{uuid.uuid4().hex[:12]}"
+    now = _now()
+    job = InstallJob(
+        job_id=job_id,
+        plugin_id=plugin_id,
+        tenant_id=rec.tenant_id,
+        status=JobStatus.PENDING,
+        progress=0,
+        message="Queued",
+        created_at=now,
+        updated_at=now,
+    )
+    _remember(job)
+
+    if wait:
+        try:
+            return _run_install(job, rec, plugin_id, version)
+        except _LicenseRefused as exc:
+            raise HTTPException(status_code=403, detail=exc.detail)
+
+    def _worker() -> None:
+        try:
+            _run_install(job, rec, plugin_id, version)
+        except _LicenseRefused:
+            pass  # the job already carries error=license_required
+        except Exception as exc:  # noqa: BLE001 — the job must never stay "installing"
+            job.status = JobStatus.FAILED
+            job.progress = 100
+            job.message = "Installation failed"
+            job.error = f"install failed: {type(exc).__name__}"
+            job.updated_at = _now()
+            _remember(job)
+
+    threading.Thread(target=_worker, name=f"marketplace-install-{job_id}", daemon=True).start()
+    return job.to_dict()
 
 
 @router.get("/install/{job_id}/progress")
@@ -356,8 +402,9 @@ async def get_install_progress(
 ) -> Dict[str, Any]:
     """Poll installation progress (tenant-bound: another tenant's job is 404).
 
-    Install is synchronous, so the job already carries its final status — this
-    reads it back, it does not advance a fake progress bar.
+    Reports the phase the install has REACHED (``_PHASES``) — a worker thread
+    advances it for a ``wait: false`` install; a synchronous install already
+    carries its final status. Never a timer-driven bar.
     """
     with _jobs_lock:
         job = _install_jobs.get(job_id)

@@ -87,6 +87,9 @@ export interface InstallResult {
   version?: string;
   already_installed?: boolean;
   error?: string;
+  /** Provenance of the installed record (`community` needs consent on enable). */
+  origin?: string;
+  requires_consent?: boolean;
 }
 
 export function installIndexPlugin(indexId: string, version: string, csrf: string): Promise<InstallResult> {
@@ -95,6 +98,34 @@ export function installIndexPlugin(indexId: string, version: string, csrf: strin
     csrf,
     body: { version },
   });
+}
+
+/** The install as a JOB (ADR-0892 amendment): the backend advances it phase by
+ *  phase on a worker thread — index check, source resolution, manifest gate,
+ *  licence, record, registration — and `getInstallProgress` reads the phase
+ *  it has REACHED. The bar the SPA draws is those phases, never a timer. */
+export interface InstallJob {
+  job_id: string;
+  plugin_id: string;
+  tenant_id: string;
+  status: "pending" | "downloading" | "installing" | "completed" | "failed";
+  progress: number;
+  message: string;
+  created_at: string;
+  updated_at: string;
+  error: string | null;
+}
+
+export function startInstallJob(indexId: string, version: string, csrf: string): Promise<InstallJob> {
+  return api<InstallJob>(`/api/v1/marketplace/plugins/${encodeURIComponent(indexId)}/install`, {
+    method: "POST",
+    csrf,
+    body: { version, wait: false },
+  });
+}
+
+export function getInstallProgress(jobId: string, signal?: AbortSignal): Promise<InstallJob> {
+  return api<InstallJob>(`/api/v1/marketplace/install/${encodeURIComponent(jobId)}/progress`, { signal });
 }
 
 // ── Skill packages (ADR-0268) ────────────────────────────────────────────
