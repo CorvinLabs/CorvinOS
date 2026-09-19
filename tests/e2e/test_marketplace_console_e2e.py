@@ -371,3 +371,26 @@ def test_progress_of_another_tenants_job_is_404(client):
     now = mi._now()
     mi._remember(mi.InstallJob("install_foreign", "p", "other_tenant", mi.JobStatus.PENDING, 0, "", now, now))
     assert client.get("/v1/console/api/v1/marketplace/install/install_foreign/progress").status_code == 404
+
+
+# ── 9. the Knowledge Graph (contributor/knowledge_management/corvin_knowledge) ──
+
+_KNOWLEDGE = "plugin:contributor-knowledge_management-corvin_knowledge"
+
+
+def test_knowledge_graph_plugin_installs_and_its_panel_follows_enable(client, home):
+    entry = next(e for e in _index_entries(client) if e["id"] == _KNOWLEDGE)
+    assert entry["tier"] == "contributor" and entry["installable"], entry.get("install_blocker")
+    body = _install(client, _KNOWLEDGE)
+    assert body["status"] == "completed" and body["registry_id"] == "corvin_knowledge" and body["origin"] == "community"
+    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["corvin_knowledge"]
+    assert rec["settings"]["repo_path"] == "~/.corvin-knowledge/" and rec["settings"]["consistency_level"] == "warn"
+    assert "corvin-knowledge" not in _manifest_panel_routes(client)
+    assert client.post("/v1/console/plugins/corvin_knowledge/enable", json={"consent_granted": True}).status_code == 200
+    panel = next(p for p in client.get("/v1/console/capabilities/manifest").json()["panels"] if p["route"] == "corvin-knowledge")
+    assert panel["id"] == "plugin-corvin_knowledge" and panel["nav_group"] == "marketplace"
+    assert panel["element"] == {"kind": "react-component", "component": "CorvinKnowledgePage"}
+    assert client.delete("/v1/console/plugins/corvin_knowledge").status_code in (409,)  # enabled → refused
+    assert client.post("/v1/console/plugins/corvin_knowledge/disable").status_code == 200
+    assert client.delete("/v1/console/plugins/corvin_knowledge").status_code == 200
+    assert "corvin-knowledge" not in _manifest_panel_routes(client)

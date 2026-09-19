@@ -74,6 +74,10 @@ test("Browse shows both tiers from the real index; a contributor entry is instal
   await expect(video).toBeVisible();
   await expect(video.getByText(/Not installable on this build/)).toHaveCount(0);
   await expect(video.getByRole("button", { name: /^Install$|Manage on the Installed tab|Enable now/ })).toHaveCount(1);
+  // The Knowledge Graph (contributor/knowledge_management) is listed and installable too.
+  const knowledge = page.getByTestId("index-card-plugin:contributor-knowledge_management-corvin_knowledge");
+  await expect(knowledge).toBeVisible();
+  await expect(knowledge.getByText(/Not installable on this build/)).toHaveCount(0);
   // An installed entry hands off to the Installed tab rather than offering Install again.
   const installedCard = page.locator('[data-testid^="index-card-"]').filter({ hasText: "Manage on the Installed tab" }).first();
   if (await installedCard.count()) {

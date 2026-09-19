@@ -955,6 +955,23 @@ AND enabled (`capabilities._plugin_is_enabled`) — a stale
 with nothing behind it — and `get_panel_registry` re-creates its cached
 instance when the tenant home moves.
 
+**Knowledge Graph (contributor/knowledge_management/corvin_knowledge, 2026-09-20).**
+The Corvin-Knowledge plugin (branch `add/corvin-knowledge-marketplace-v1.0.0`,
+already merged into the marketplace's `main`) lived at
+`plugins/knowledge-management/corvin-knowledge` with a non-ADR-0511 `plugin.json`
+and was never indexed. It now sits under the contributor tree with an ADR-0511
+manifest, a `plugin.yaml` (origin community, `console_panel` → route
+`corvin-knowledge`, component `CorvinKnowledgePage`, settings `repo_path` /
+`remote_url` / `auto_sync_on_query` / `consistency_level`) and a provider. The
+console ships the panel (`web-next/src/pages/corvin-knowledge/`, a port of the
+plugin's shipped web-next sources onto the console's tokens and `api()`;
+vis-network draws the graph) and the routes it uses
+(`routes/plugins_corvin_knowledge_api.py`: graph from the configured checkout's
+`graph/*.jsonl`, config, git sync). **One settings store, two doors:** the
+routes read the plugin's registry settings over the file defaults when the
+plugin is installed, and a save from the panel writes the registry through the
+lifecycle (`plugin.config_changed`) as well as the CLI's file.
+
 **The install is a job with real phases** (`marketplace_install._PHASES`:
 index check → source resolution → manifest gate → licence → record →
 registration). `wait: false` returns the job in its first phase and a worker
