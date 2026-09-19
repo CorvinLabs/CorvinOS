@@ -20,7 +20,7 @@ from uuid import uuid4
 from enum import Enum
 
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
-from core.license.models.billing import ModelTier, BillingSchema
+from core.licensing.billing import ModelTier, BillingSchema
 
 
 class UserTier(str, Enum):

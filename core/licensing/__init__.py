@@ -1,10 +1,15 @@
-"""Licensing Module - A2A Delegation Access Control
+"""Licensing Module - A2A Delegation Access Control & Model Billing
 
-ADR-0704: Licensing Phase 2 - A2A RSA Gate
-- Member credentials with RSA keypairs
-- Signed task verification (fail-closed)
-- Revocation list management
-- Audit-integrated credential lifecycle
+Consolidates two licensing subsystems:
+1. A2A Delegation (ADR-0704)
+   - Member credentials with RSA keypairs
+   - Signed task verification (fail-closed)
+   - Revocation list management
+
+2. Model Billing (ADR-0700)
+   - ModelTier access control (COMMUNITY / MEMBER)
+   - BillingSchema with pricing and quotas
+   - Per-model pricing configuration
 
 License: Apache-2.0
 """
@@ -25,8 +30,16 @@ from core.licensing.authority_server import (
     AuthorityServer,
     IssuanceResult,
 )
+from core.licensing.billing import (
+    ModelTier,
+    ModelPricing,
+    ModelPricingModel,
+    BillingSchema,
+    create_default_billing_schema,
+)
 
 __all__ = [
+    # A2A Delegation
     "MemberCredential",
     "SignedTask",
     "RSAKeyPair",
@@ -37,4 +50,10 @@ __all__ = [
     "RevocationList",
     "AuthorityServer",
     "IssuanceResult",
+    # Model Billing
+    "ModelTier",
+    "ModelPricing",
+    "ModelPricingModel",
+    "BillingSchema",
+    "create_default_billing_schema",
 ]
