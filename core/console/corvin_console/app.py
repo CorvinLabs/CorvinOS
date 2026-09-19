@@ -94,6 +94,7 @@ from .routes import (
     ldd as ldd_route,
     quality_layers as quality_layers_route,
     quality_gates as quality_gates_route,
+    telemetry_overview as telemetry_overview_route,
     skill_creator_api as skill_creator_route,
     chat as chat_route,
     voice as voice_route,
@@ -298,6 +299,8 @@ router.include_router(ldd_route.router, tags=["console-ldd"])
 router.include_router(quality_layers_route.router, tags=["console-quality-layers"])
 # Quality Gates System (Phase 2.1, ADR-0688) — API endpoints for gate status, execution, history.
 router.include_router(quality_gates_route.router, tags=["console-quality-gates"])
+# Telemetry transparency — what this install collects and sends (compliance-baseline § Mechanisms).
+router.include_router(telemetry_overview_route.router, tags=["console-telemetry"])
 # Skill-Creator (autonomous 6-phase skill builder) — main quality subsystem.
 router.include_router(skill_creator_route.router, tags=["console-skill-creator"])
 # ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI + orchestration)
