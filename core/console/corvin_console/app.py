@@ -765,6 +765,17 @@ def create_app() -> FastAPI:
     from .middleware.routing_disclosure_headers import RoutingDisclosureHeadersMiddleware
     _app.add_middleware(RoutingDisclosureHeadersMiddleware)
 
+    # Phase 5.1.3: Marketplace SLO monitoring (p99 <500ms, error <0.1%, circuit breaker)
+    # Tracks latency + errors for /api/v1/marketplace/* endpoints
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from .marketplace_slo_monitoring import marketplace_slo_middleware
+
+    class MarketplaceSLOMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            return await marketplace_slo_middleware(request, call_next)
+
+    _app.add_middleware(MarketplaceSLOMiddleware)
+
     _app.include_router(router)  # All API routes (includes /vibe-engineering/*)
     mount_static(_app, url_prefix="/console")  # SPA at /console/
     return _app

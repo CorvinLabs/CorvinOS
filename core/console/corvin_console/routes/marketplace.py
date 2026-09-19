@@ -403,6 +403,43 @@ async def reload_index(
     }
 
 
+# Phase 5.1.3: SLO Status Endpoint (ADR-0892 amendment)
+@router.get("/slo-status")
+async def marketplace_slo_status(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
+    """
+    Get current marketplace SLO monitoring status.
+
+    Returns:
+    {
+      "status": "GREEN" | "RED",
+      "p99_latency_ms": float,
+      "error_rate_pct": float,
+      "sample_count": int,
+      "circuit_breaker_open": bool,
+      "timestamp": "2026-09-20T..."
+    }
+
+    Used by marketplace monitoring panel + operator dashboards.
+    Audited as marketplace.slo_check event.
+    """
+    from .. import marketplace_slo_monitoring as _slo
+
+    monitor = _slo.get_slo_monitor()
+    status = monitor.check_slos()
+    status["circuit_breaker_open"] = monitor.is_circuit_breaker_open()
+
+    # Audit the status check
+    console_audit.action_performed(
+        "marketplace.slo_check",
+        rec=rec,
+        details=status,
+    )
+
+    return status
+
+
 # Phase 3 Installation API (imported from marketplace_install.py)
 # Routes: POST /install, /uninstall, PATCH /enable, /disable, GET /progress
 # See marketplace_install.py for full implementation
