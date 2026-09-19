@@ -410,7 +410,7 @@ def gate_4_final_validation(video_file: Path) -> bool:
     # Use ffprobe to verify codec, resolution, duration
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-print_json", str(video_file)],
+            ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(video_file)],
             capture_output=True,
             text=True,
             timeout=10
@@ -592,7 +592,7 @@ def main():
                 "-i", str(test_audio),
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-crf", "20",  # Better quality = larger file
+                "-crf", "15",  # High quality = larger file (lower CRF = better quality)
                 "-c:a", "aac",
                 "-b:a", "192k",
                 "-pix_fmt", "yuv420p",

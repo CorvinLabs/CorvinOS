@@ -94,6 +94,7 @@ from .routes import (
     ldd as ldd_route,
     quality_layers as quality_layers_route,
     quality_gates as quality_gates_route,
+    quality_health_monitor as quality_health_monitor_route,
     telemetry_overview as telemetry_overview_route,
     skill_creator_api as skill_creator_route,
     chat as chat_route,
@@ -299,6 +300,8 @@ router.include_router(ldd_route.router, tags=["console-ldd"])
 router.include_router(quality_layers_route.router, tags=["console-quality-layers"])
 # Quality Gates System (Phase 2.1, ADR-0688) — API endpoints for gate status, execution, history.
 router.include_router(quality_gates_route.router, tags=["console-quality-gates"])
+# Phase C: Real-time Health Monitoring (ADR-0231/0232) — latency, throughput, error rate, resources.
+router.include_router(quality_health_monitor_route.router, tags=["console-quality-health"])
 # Telemetry transparency — what this install collects and sends (compliance-baseline § Mechanisms).
 router.include_router(telemetry_overview_route.router, tags=["console-telemetry"])
 # Skill-Creator (autonomous 6-phase skill builder) — main quality subsystem.
