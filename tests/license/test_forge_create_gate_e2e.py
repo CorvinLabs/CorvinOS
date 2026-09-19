@@ -23,7 +23,7 @@ from corvin_operator.license import (
     LicenseDenied,
     LicenseInvalid,
 )
-from operator.license.keyring import KeyRing, VerificationError
+from corvin_operator.license.keyring import KeyRing, VerificationError
 
 
 class TestForgeCreateGate:
