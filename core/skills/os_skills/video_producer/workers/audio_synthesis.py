@@ -109,11 +109,52 @@ class AudioSynthesisWorker(WorkerSkillBase):
         logger.debug(f"Saved audio to {output_file}")
 
     async def _synthesize_with_piper(self, narration: str, output_file: str) -> None:
-        """Use piper for offline TTS (fallback)."""
-        # Stub: piper is complex to install; for now, create dummy MP3
-        # In production, would invoke: piper --model <model> --output-file <file>
-        Path(output_file).touch()
-        logger.debug(f"Piper fallback: created stub audio at {output_file}")
+        """Use espeak-ng for offline TTS (fallback, local + no API keys needed)."""
+        try:
+            # Generate WAV using espeak-ng (local, offline, works on Linux/macOS)
+            wav_output = Path(output_file).with_suffix('.wav')
+
+            cmd = [
+                "espeak-ng",
+                "-w", str(wav_output),  # Output WAV file
+                "-s", "150",             # Speed (words per minute)
+                "-p", "50",              # Pitch
+                narration
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+            if result.returncode != 0:
+                logger.error(f"espeak-ng failed: {result.stderr}")
+                raise RuntimeError(f"espeak-ng synthesis failed: {result.stderr}")
+
+            # Convert WAV to MP3 using ffmpeg
+            cmd_convert = [
+                "ffmpeg",
+                "-i", str(wav_output),
+                "-q:a", "9",      # Quality (1=best, 9=worst but small)
+                "-y",              # Overwrite
+                output_file
+            ]
+
+            result = subprocess.run(cmd_convert, capture_output=True, text=True, timeout=30)
+
+            if result.returncode != 0:
+                logger.error(f"ffmpeg conversion failed: {result.stderr}")
+                raise RuntimeError(f"WAV→MP3 conversion failed: {result.stderr}")
+
+            # Clean up temporary WAV
+            if wav_output.exists():
+                wav_output.unlink()
+
+            logger.debug(f"espeak-ng fallback: synthesized audio at {output_file}")
+
+        except FileNotFoundError as e:
+            logger.error(f"Required tool missing: {e}. Install with: apt-get install espeak-ng ffmpeg")
+            raise RuntimeError(f"espeak-ng or ffmpeg not installed: {e}")
+        except Exception as e:
+            logger.error(f"Audio synthesis fallback failed: {e}")
+            raise RuntimeError(f"Piper fallback failed: {e}")
 
     def _estimate_duration(self, narration: str) -> float:
         """Estimate audio duration from text length (chars/rate)."""
