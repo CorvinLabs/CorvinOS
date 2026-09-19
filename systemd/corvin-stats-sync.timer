@@ -1,0 +1,11 @@
+[Unit]
+Description=CorvinOS Live Stats GitHub Pages Sync
+Documentation=man:systemd.timer(5)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

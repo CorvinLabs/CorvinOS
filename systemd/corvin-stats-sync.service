@@ -1,0 +1,18 @@
+[Unit]
+Description=CorvinOS Live Stats GitHub Pages Sync Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/shumway/projects/CorvinOS/scripts/github_pages_stats_sync.sh
+WorkingDirectory=/home/shumway/projects/CorvinOS
+StandardOutput=journal
+StandardError=journal
+# No User=/Group= here: this is a USER unit (systemctl --user). systemd 255
+# refuses User= in the user manager with status=216/GROUP ("Failed to
+# determine supplementary groups: Operation not permitted") — every run
+# since the unit was installed failed before ExecStart (2026-09-20).
+
+[Install]
+WantedBy=default.target

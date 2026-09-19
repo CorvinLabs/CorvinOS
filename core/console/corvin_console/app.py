@@ -727,35 +727,13 @@ def create_app() -> FastAPI:
             logger.warning("A2A Licensing Gate initialization failed: %s", exc)
 
         # Resume GitHub auto-sync for every tenant that had it enabled before
-        # the last restart. The worker is a plain in-memory thread (no
-        # persistence of its own — see routes/github_sync.py), so "automatic"
-        # sync only stays automatic if boot re-derives running state from the
-        # one thing that IS persisted: each tenant's github-config.json.
+        # the last restart (routes/github_sync.py::resume_auto_sync — shared
+        # with corvin_gateway.app, the host that actually serves the console).
         try:
-            import json
-            import logging
             from . import _bootstrap
-            from .routes.github_sync import get_worker
+            from .routes.github_sync import resume_auto_sync
 
-            logger = logging.getLogger(__name__)
-            tenants_root = Path(_bootstrap.forge_paths.corvin_home()) / "tenants"
-            started = 0
-            if tenants_root.is_dir():
-                for tenant_dir in tenants_root.iterdir():
-                    if not tenant_dir.is_dir():
-                        continue
-                    config_file = tenant_dir / "github-config.json"
-                    if not config_file.exists():
-                        continue
-                    try:
-                        config = json.loads(config_file.read_text(encoding="utf-8"))
-                    except (OSError, ValueError):
-                        continue
-                    if config.get("auto_sync"):
-                        get_worker(tenant_dir.name).start()
-                        started += 1
-            if started:
-                logger.info("🔄 Resumed GitHub auto-sync for %d tenant(s)", started)
+            resume_auto_sync(_bootstrap.forge_paths.corvin_home())
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("GitHub auto-sync boot resume failed: %s", exc)

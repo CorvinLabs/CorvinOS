@@ -347,6 +347,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         pass  # best-effort — never blocks startup
 
+    # GitHub auto-sync — resume the per-tenant worker threads from each
+    # tenant's github-config.json. This host includes the console's ROUTER,
+    # not its lifespan, so the console's own resume never ran here and every
+    # restart of corvin-webui silently stopped the sync (2026-09-20).
+    try:
+        import corvin_console  # noqa: F401 — sys.path bootstrap side effect
+        from corvin_console.routes.github_sync import resume_auto_sync as _resume_gh
+        import forge.paths as _fp2
+        _resume_gh(_fp2.corvin_home())
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("GitHub auto-sync boot resume failed: %s", exc)
+
     # ADR-0191/ADR-0193 — idempotently seed the built-in zero-config tools
     # (image-generation, native browser) into the mcp_manager catalog on
     # every boot, so a genuinely fresh install has them active with no

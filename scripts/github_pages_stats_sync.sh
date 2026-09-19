@@ -3,20 +3,45 @@
 
 set -e
 
-GITHUB_PAGES_DIR="${1:-.../docs/stats}"
-STATS_API="${2:-http://localhost:8765/v1/stats}"
+# Defaults, fixed 2026-09-20: the previous default dir was the literal
+# ".../docs/stats" (a typo that created a directory named "..." under $HOME),
+# and the API base lacked the console prefix (every fetch was a 404 whose
+# body would have been written into the JSON files).
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GITHUB_PAGES_DIR="${1:-$REPO_DIR/docs/stats}"
+STATS_API="${2:-http://127.0.0.1:8765/v1/console/v1/stats}"
 REPO_URL="${3:-https://github.com/CorvinLabs/CorvinOS}"
 
 echo "[$(date)] Starting GitHub Pages stats sync..."
 
+# The source must answer before anything is written: a 404 body is not a
+# stats file. routes/stats_live.py is not mounted by any host on this build,
+# so this is expected to skip until it is — say so, once, and exit 0 (a
+# oneshot with nothing to do is not a failure; a fabricated file would be).
+probe_code="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$STATS_API/live/health" || echo 000)"
+if [ "$probe_code" != "200" ]; then
+    echo "SKIPPED: $STATS_API/live/health answered HTTP $probe_code — the live-stats API is not available on this build (routes/stats_live.py is not mounted); nothing written to $GITHUB_PAGES_DIR"
+    exit 0
+fi
+
 mkdir -p "$GITHUB_PAGES_DIR"
+
+fetch() {  # fetch <path> <file> — refuses to write a non-200 body
+    local tmp; tmp="$(mktemp)"
+    local code; code="$(curl -s -m 30 -o "$tmp" -w '%{http_code}' "$STATS_API$1" || echo 000)"
+    if [ "$code" != "200" ]; then
+        echo "ERROR: $STATS_API$1 answered HTTP $code — $2 left untouched" >&2
+        rm -f "$tmp"; return 1
+    fi
+    mv "$tmp" "$GITHUB_PAGES_DIR/$2"
+}
 
 # Fetch live stats
 echo "Fetching live stats from $STATS_API..."
-curl -s "$STATS_API/live?include_geo=true&include_models=true" > "$GITHUB_PAGES_DIR/stats-live.json"
-curl -s "$STATS_API/live/geographic" > "$GITHUB_PAGES_DIR/stats-geographic.json"
-curl -s "$STATS_API/live/models" > "$GITHUB_PAGES_DIR/stats-models.json"
-curl -s "$STATS_API/live/health" > "$GITHUB_PAGES_DIR/stats-health.json"
+fetch "/live?include_geo=true&include_models=true" stats-live.json
+fetch "/live/geographic" stats-geographic.json
+fetch "/live/models" stats-models.json
+fetch "/live/health" stats-health.json
 
 echo "✅ Stats JSON files updated"
 
@@ -238,7 +263,10 @@ HTML
 echo "✅ HTML dashboard generated"
 
 # Git commit and push (if in repo)
-if [ -d "$GITHUB_PAGES_DIR/.git" ] || git rev-parse --git-dir > /dev/null 2>&1; then
+# Push only from a DEDICATED pages checkout ($GITHUB_PAGES_DIR/.git). The
+# previous "or any enclosing git dir" clause would have committed to the
+# CorvinOS worktree's main every 10 minutes.
+if [ -d "$GITHUB_PAGES_DIR/.git" ]; then
     cd "$GITHUB_PAGES_DIR"
     git add .
     git commit -m "docs(stats): update live stats dashboard [automated]" || true

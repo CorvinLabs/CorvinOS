@@ -1,0 +1,17 @@
+[Unit]
+Description=CorvinOS Session Cleanup Service
+Documentation=file:///home/shumway/projects/CorvinOS/core/console/SESSION_PERSISTENCE.md
+After=network.target
+
+[Service]
+Type=oneshot
+Environment="PATH=/home/shumway/.local/bin:/home/shumway/projects/CorvinOS/.venv/bin:/usr/local/bin:/usr/bin"
+Environment="CORVIN_HOME=%h/.corvin"
+ExecStart=/home/shumway/projects/CorvinOS/scripts/run-session-cleanup.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-session-cleanup
+
+# No User= here: USER unit; systemd 255 answers User= with status=216/GROUP.
+[Install]
+WantedBy=default.target
