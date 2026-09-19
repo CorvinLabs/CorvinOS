@@ -80,7 +80,8 @@ class TestTenantIsolationAttack:
             tenant_id="tenant-b",
         )
         # Manually insert as different tenant (logger would validate)
-        now_ts = ?
+        import time
+        now_ts = int(time.time())
         graph.conn.execute(
             "INSERT INTO gate_events (tenant_id, gate_name, artifact_id, verdict, confidence, reason, event_hash, timestamp) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
