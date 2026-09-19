@@ -288,15 +288,27 @@ def bootstrap_pipeline(
     logger.info("Instantiating DualGatePipeline...")
     instantiate_pipeline(app_state, tenant_id=tenant_id)
 
-    # PHASE 1: Initialize rotation daemon (ADR-0869 + ADR-0891)
+    # PHASE 1: Initialize rotation daemon (ADR-0869)
     # Non-blocking: failures logged, boot continues (fail-open for daemon)
     logger.info("Bootstrapping credential rotation daemon (Phase 1)...")
     try:
-        from core.security.secret_rotation import bootstrap_rotation_daemon
-        rotation_daemon = bootstrap_rotation_daemon(
-            tenant_id=tenant_id,
-            audit_backend=app_state.pipeline.audit_chain if app_state.pipeline else None,
-        )
+        # Try new modular daemon first (Phase 1 refactored)
+        try:
+            from core.security.credential_rotation_daemon import bootstrap_rotation_daemon_phase1
+            rotation_daemon = bootstrap_rotation_daemon_phase1(
+                tenant_id=tenant_id,
+                audit_backend=app_state.pipeline.audit_chain if app_state.pipeline else None,
+            )
+            logger.info("Using credential_rotation_daemon (Phase 1 modular)")
+        except ImportError:
+            # Fallback to legacy implementation
+            from core.security.secret_rotation import bootstrap_rotation_daemon
+            rotation_daemon = bootstrap_rotation_daemon(
+                tenant_id=tenant_id,
+                audit_backend=app_state.pipeline.audit_chain if app_state.pipeline else None,
+            )
+            logger.info("Using secret_rotation daemon (legacy)")
+
         app_state.rotation_daemon = rotation_daemon
         logger.info(f"Rotation daemon initialized for tenant {tenant_id}")
     except Exception as e:
