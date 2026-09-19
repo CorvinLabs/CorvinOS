@@ -22,6 +22,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+# ADR-0701 G1: License gate for forge.create
+try:
+    from corvin_operator.license.capability_api import require_capability, LicenseDenied
+except ImportError:
+    # Fallback for testing without license module
+    def require_capability(*args, **kwargs):
+        pass
+    class LicenseDenied(Exception):
+        pass
+
 
 @dataclass
 class ToolSpec:
@@ -130,6 +140,12 @@ class Registry:
         overwrite: bool = False,
         meta: dict[str, Any] | None = None,
     ) -> ToolSpec:
+        # ADR-0701 G1: License gate — forge.create is member-only
+        try:
+            require_capability("forge.create", requested=1, tenant_id="", entry_point="forge_mcp")
+        except LicenseDenied as e:
+            raise PermissionError(f"forge.create denied: {e}") from e
+
         # Allow alphanumerics plus _ and . (the dot enables AWP-style
         # namespacing like "csv.count" / "stats.median"). Reject path
         # traversal sequences and edge tokens that could collide with
@@ -258,6 +274,12 @@ class Registry:
         Mirrors Claude Code's skill layout: ``skills/<name>/SKILL.md`` plus
         the implementation alongside. Idempotent.
         """
+        # ADR-0701 G1: License gate — forge.create is member-only
+        try:
+            require_capability("forge.create", requested=1, tenant_id="", entry_point="forge_mcp")
+        except LicenseDenied as e:
+            raise PermissionError(f"forge.create denied: {e}") from e
+
         with self._locked():
             spec = self.get(name)
             if not spec:

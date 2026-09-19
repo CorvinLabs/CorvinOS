@@ -566,11 +566,15 @@ class SkillForgeSubsystem(Subsystem):
         """
         start_time = time.time()
         try:
-            # ADR-0365: Enforce skill_forge_per_day quota
+            # ADR-0701 G5 + ADR-0365: Enforce forge.create capability + quota
             from pathlib import Path
-            from core.orchestration.quota_gate import increment_and_check
+            from core.orchestration.quota_gate import increment_and_check, check_forge_capability
             # Use _default tenant if not available from context
             tenant_id = getattr(self, 'tenant_id', '_default')
+
+            # ADR-0701 G5: License gate — forge.create is member-only
+            check_forge_capability(tenant_id, entry_point="skill_forge_mcp")
+
             # corvin_home resolved by the gate (honours CORVIN_HOME); hard-coding
             # Path.home() counted quota in a root the install may never read.
             increment_and_check(None, "skill_forge_per_day", tenant_id)
