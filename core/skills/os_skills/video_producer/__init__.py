@@ -5,10 +5,7 @@ from .worker_base import WorkerSkillBase, WorkerManifest, WorkerRegistry, Worker
 from .workers.audio_synthesis import AudioSynthesisWorker
 from .workers.screenshot_capture import ScreenshotCaptureWorker
 from .workers.video_assembler import VideoAssemblerWorker
-
-# LDD k=2 E2E Wiring Proof (Video Producer 2.0 Enhanced)
-from .orchestrator_v2_enhanced import VideoProducerOrchestratorV2
-from .types import VideoGenerationRequest, VideoGenerationResult, PhaseResult
+from .types import Scene, Storyboard, AssetAnalysisResult, FactualClaim, Contradiction
 
 __all__ = [
     "VideoProducerMaestro",
@@ -19,8 +16,9 @@ __all__ = [
     "AudioSynthesisWorker",
     "ScreenshotCaptureWorker",
     "VideoAssemblerWorker",
-    "VideoProducerOrchestratorV2",
-    "VideoGenerationRequest",
-    "VideoGenerationResult",
-    "PhaseResult",
+    "Scene",
+    "Storyboard",
+    "AssetAnalysisResult",
+    "FactualClaim",
+    "Contradiction",
 ]
