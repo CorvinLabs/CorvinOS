@@ -256,14 +256,16 @@ def bootstrap_pipeline(
     tenant_id: str = "_default",
 ) -> None:
     """
-    Complete bootstrap sequence: tripwire + instantiate.
+    Complete bootstrap sequence: tripwire + pipeline + rotation daemon.
 
     This is the entry point called from FastAPI lifespan startup.
     Runs in this order:
       1. Boot tripwire (verify audit chain integrity)
       2. Instantiate DualGatePipeline
+      3. Initialize rotation daemon (Phase 1: inventory + baseline audit event)
 
-    Both are fail-closed: any failure aborts the application boot.
+    Order: tripwire and pipeline are fail-closed (abort boot on error).
+    Rotation daemon is non-blocking (failures don't crash boot, logged only).
 
     Args:
         app_state: FastAPI app.state object
@@ -285,5 +287,23 @@ def bootstrap_pipeline(
     # CRITICAL-2: Instantiate pipeline
     logger.info("Instantiating DualGatePipeline...")
     instantiate_pipeline(app_state, tenant_id=tenant_id)
+
+    # PHASE 1: Initialize rotation daemon (ADR-0869 + ADR-0891)
+    # Non-blocking: failures logged, boot continues (fail-open for daemon)
+    logger.info("Bootstrapping credential rotation daemon (Phase 1)...")
+    try:
+        from core.security.secret_rotation import bootstrap_rotation_daemon
+        rotation_daemon = bootstrap_rotation_daemon(
+            tenant_id=tenant_id,
+            audit_backend=app_state.pipeline.audit_chain if app_state.pipeline else None,
+        )
+        app_state.rotation_daemon = rotation_daemon
+        logger.info(f"Rotation daemon initialized for tenant {tenant_id}")
+    except Exception as e:
+        logger.warning(
+            f"Rotation daemon bootstrap failed: {e}. "
+            "Credential rotation monitoring disabled (non-blocking)."
+        )
+        app_state.rotation_daemon = None
 
     logger.info(f"Pipeline bootstrap complete (tenant={tenant_id})")
