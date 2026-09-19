@@ -873,7 +873,7 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
     # single safe path segment.
     if not isinstance(tenant_id, str) or not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,62}", tenant_id):
         try:
-            from forge.tenants import validate_tenant_id as _vti  # type: ignore
+            from corvin_operator.forge.forge.tenants import validate_tenant_id as _vti  # type: ignore
             tenant_id = _vti(tenant_id)
         except Exception:  # noqa: BLE001 — invalid id → no guard (don't traverse)
             return None
@@ -884,7 +884,7 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
             home = Path(os.path.expanduser(os.path.expandvars(env)))
         else:
             try:
-                from forge.paths import corvin_home as _ch  # type: ignore
+                from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore
                 home = _ch()
             except Exception:  # noqa: BLE001
                 home = Path.home() / ".corvin"

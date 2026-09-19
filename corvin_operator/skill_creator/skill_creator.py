@@ -43,7 +43,7 @@ def _default_registry_root(tenant_id: str | None = None) -> Path:
     fallback exists for CLI and test use, where there is no session.
     """
     try:
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         return Path(tenant_home(tenant_id)) / "skill-forge"
     except Exception:  # noqa: BLE001 — degrade to the documented tenant tree
         home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))

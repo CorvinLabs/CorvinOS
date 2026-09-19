@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
-from operator.license import (
+from corvin_operator.license import (
     CapabilityGate,
     Capability,
     Tier,

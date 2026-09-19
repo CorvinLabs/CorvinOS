@@ -351,7 +351,7 @@ if not _IS_TEST_SANDBOX:
         _forge_root = ROOT.parent.parent / "forge"
         if str(_forge_root) not in sys.path:
             sys.path.insert(0, str(_forge_root))
-        from forge.paths import corvin_home as _corvin_home_resolver  # type: ignore
+        from corvin_operator.forge.forge.paths import corvin_home as _corvin_home_resolver  # type: ignore
         from forge.tenant_migrate import (  # type: ignore
             migrate_to_default_tenant_if_needed as _migrate_tenant,
         )
@@ -7505,7 +7505,7 @@ def call_claude_streaming(
         from corvin_core.aco.htrace_uploader import (  # noqa: PLC0415
             record_active_engine as _record_active_engine,
         )
-        from forge.paths import corvin_home as _rae_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _rae_home  # noqa: PLC0415
         _record_active_engine(_rae_home(), _eff_engine)
     except Exception:  # noqa: BLE001 — telemetry attribution is best-effort
         pass
@@ -7524,7 +7524,7 @@ def call_claude_streaming(
         try:
             from license.compute_quota import increment_and_check as _ct_inc2  # type: ignore
             from license.limits import LicenseLimitError as _ct_err2  # type: ignore
-            from forge.paths import corvin_home as _ct_home2  # type: ignore
+            from corvin_operator.forge.forge.paths import corvin_home as _ct_home2  # type: ignore
         except ImportError:
             return "⚠ Chat-turn quota enforcement unavailable — refusing turn (fail-closed)."
         try:
@@ -12504,7 +12504,7 @@ def _start_telemetry_threads() -> None:
             start_ping_thread as _start_ping,
             start_upload_thread as _start_upload,
         )
-        from forge.paths import corvin_home as _telemetry_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _telemetry_home  # noqa: PLC0415
         _home = _telemetry_home()
         _start_ping(_home)
         _start_upload(_home)
@@ -12520,7 +12520,7 @@ def _start_telemetry_threads() -> None:
         from corvin_core.aco.heartbeat import (  # noqa: PLC0415
             start_heartbeat_thread as _start_heartbeat,
         )
-        from forge.paths import corvin_home as _hb_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _hb_home  # noqa: PLC0415
         _start_heartbeat(_hb_home())
         log("telemetry: presence heartbeat thread started (daemon)")
     except Exception as _hb_e:  # noqa: BLE001
@@ -12773,7 +12773,7 @@ def main() -> int:
             _boot_ch = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
             _boot_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
             try:
-                from forge.tenants import current_tenant as _boot_ct  # type: ignore[import]
+                from corvin_operator.forge.forge.tenants import current_tenant as _boot_ct  # type: ignore[import]
                 _boot_tid = _boot_ct()
             except Exception:  # noqa: BLE001
                 pass
@@ -12863,7 +12863,7 @@ def main() -> int:
             from custom_layer_registry import check_boot_limit as _cl_boot  # type: ignore
         _cl_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
         try:
-            from forge.tenants import current_tenant as _cl_ct  # type: ignore[import]
+            from corvin_operator.forge.forge.tenants import current_tenant as _cl_ct  # type: ignore[import]
             _cl_tid = _cl_ct()
         except Exception:  # noqa: BLE001
             pass
@@ -12937,7 +12937,7 @@ def main() -> int:
         _m2_corvin_home = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
         _m2_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
         try:
-            from forge.tenants import current_tenant as _m2_ct  # type: ignore[import]
+            from corvin_operator.forge.forge.tenants import current_tenant as _m2_ct  # type: ignore[import]
             _m2_tid = _m2_ct()
         except Exception:  # noqa: BLE001
             pass

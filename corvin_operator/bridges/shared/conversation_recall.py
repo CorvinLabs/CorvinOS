@@ -60,7 +60,7 @@ try:
     from paths import tenant_global_dir as _tenant_global_dir  # type: ignore
 except Exception:
     try:
-        from forge.paths import tenant_global_dir as _tenant_global_dir  # type: ignore  # noqa: E402
+        from corvin_operator.forge.forge.paths import tenant_global_dir as _tenant_global_dir  # type: ignore  # noqa: E402
     except Exception:
         _tenant_global_dir = None
 

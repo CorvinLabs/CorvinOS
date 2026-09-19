@@ -43,7 +43,7 @@ _PROMOTING_GRADERS = {"operator"}
 
 
 def _store_path(tenant_id: str) -> Path:
-    from forge.paths import tenant_global_dir  # noqa: PLC0415
+    from corvin_operator.forge.forge.paths import tenant_global_dir  # noqa: PLC0415
     return Path(tenant_global_dir(tenant_id)) / "ce_stage_grades.json"
 
 

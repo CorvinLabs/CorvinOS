@@ -165,7 +165,7 @@ def _corvin_home() -> Path:
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env)))
     try:
-        from forge.paths import corvin_home  # type: ignore[import]
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import]
         return corvin_home()
     except Exception:  # noqa: BLE001
         return Path.home() / ".corvin"
@@ -270,7 +270,7 @@ def _http_get_jsonl(url: str) -> list[dict]:
 def _emit(event: str, *, job_id: str, tenant_id: str, **details: Any) -> None:
     try:
         from .. import audit as _compute_audit
-        from forge.paths import corvin_home  # type: ignore[import]
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import]
         from forge.security_events import write_event  # type: ignore[import]
         audit_path = corvin_home() / "global" / "forge" / "audit.jsonl"
         audit_path.parent.mkdir(parents=True, exist_ok=True)

@@ -25,9 +25,9 @@ import sys
 import time
 from pathlib import Path
 
-# Add operator/forge to sys.path so 'from forge.paths import corvin_home' works
+# Add operator/forge to sys.path so 'from corvin_operator.forge.forge.paths import corvin_home' works
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from forge.paths import corvin_home  # noqa: E402
+from corvin_operator.forge.forge.paths import corvin_home  # noqa: E402
 
 
 _TASK_ROOTS = (

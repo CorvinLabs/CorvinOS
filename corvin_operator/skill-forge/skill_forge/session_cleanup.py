@@ -19,7 +19,7 @@ def purge_session_skills(channel: str, chat_key: str) -> None:
         channel: Bridge channel ID (e.g., "discord", "whatsapp")
         chat_key: Chat identifier within the channel
     """
-    from forge.paths import corvin_home  # Import lazily to avoid circular deps
+    from corvin_operator.forge.forge.paths import corvin_home  # Import lazily to avoid circular deps
 
     session_name = f"{channel}:{chat_key}"
     skill_forge_dir = corvin_home() / "sessions" / session_name / "skill-forge"

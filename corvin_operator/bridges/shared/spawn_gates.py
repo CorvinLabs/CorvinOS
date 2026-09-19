@@ -54,7 +54,7 @@ def _resolve_corvin_home(corvin_home: Path | None) -> Path:
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env)))
     try:
-        from forge.paths import corvin_home as _ch  # type: ignore
+        from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore
         return _ch()
     except Exception:  # noqa: BLE001
         return Path.home() / ".corvin"

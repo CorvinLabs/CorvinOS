@@ -68,8 +68,8 @@ try:
     from paths import tenant_sessions_dir as _tenant_sessions_dir  # type: ignore
 except Exception:  # noqa: BLE001
     try:
-        from forge.paths import tenant_global_dir as _tenant_global_dir  # type: ignore
-        from forge.paths import tenant_sessions_dir as _tenant_sessions_dir  # type: ignore
+        from corvin_operator.forge.forge.paths import tenant_global_dir as _tenant_global_dir  # type: ignore
+        from corvin_operator.forge.forge.paths import tenant_sessions_dir as _tenant_sessions_dir  # type: ignore
     except Exception:  # noqa: BLE001
         pass
 

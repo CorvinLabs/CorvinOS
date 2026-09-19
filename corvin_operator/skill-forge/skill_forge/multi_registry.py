@@ -94,7 +94,7 @@ class MultiSkillRegistry:
 
     def audit_path(self) -> Path:
         """``<tenant_home>/global/forge/audit.jsonl`` — the tenant core chain."""
-        from forge.paths import tenant_global_dir  # forge on sys.path via _import_forge_scope
+        from corvin_operator.forge.forge.paths import tenant_global_dir  # forge on sys.path via _import_forge_scope
         return tenant_global_dir(self.tenant_id) / "forge" / "audit.jsonl"
 
     def _registry(self, scope: str) -> SkillRegistry:

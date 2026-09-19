@@ -330,7 +330,7 @@ def _emit(event_type: str, *, severity: str, details: dict) -> None:
     """Append one event to the unified hash chain. Never raises."""
     try:
         from forge.security_events import write_event  # type: ignore
-        from forge.paths import tenant_global_dir  # type: ignore
+        from corvin_operator.forge.forge.paths import tenant_global_dir  # type: ignore
 
         audit = tenant_global_dir() / "forge" / "audit.jsonl"
         audit.parent.mkdir(parents=True, exist_ok=True)
@@ -362,8 +362,8 @@ def _do_register(*, source: Path, session_root: Path | None,
         # tree at a synthetic ``adhoc:<pid>`` key. This is rare; usually
         # the adapter sets CORVIN_SESSION_KEY before the engine spawns.
         try:
-            from forge.tenants import current_tenant  # type: ignore
-            from forge.paths import tenant_sessions_dir  # type: ignore
+            from corvin_operator.forge.forge.tenants import current_tenant  # type: ignore
+            from corvin_operator.forge.forge.paths import tenant_sessions_dir  # type: ignore
             session_root = (tenant_sessions_dir(current_tenant())
                             / f"adhoc:{os.getpid()}" / "artifacts")
         except Exception:

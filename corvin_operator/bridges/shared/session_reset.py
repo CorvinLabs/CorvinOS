@@ -83,7 +83,7 @@ sys.path.insert(0, str(HERE))
 
 # Optional dependencies — silent fallback when forge / skill-forge missing.
 try:
-    from forge.paths import corvin_home as _corvin_home  # type: ignore
+    from corvin_operator.forge.forge.paths import corvin_home as _corvin_home  # type: ignore
 except Exception:  # noqa: BLE001
     _corvin_home = None  # type: ignore[assignment]
 

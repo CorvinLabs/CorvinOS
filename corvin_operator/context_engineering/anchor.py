@@ -128,7 +128,7 @@ def _safe_key(session_key: str) -> str:
 def _store_path(tenant_id: str, session_key: str) -> Path:
     # tenant_id is ALWAYS explicit → forge.paths.tenant_home never falls back to
     # the CORVIN_TENANT_ID env var here (CLAUDE.md § Multi-tenant Axis).
-    from forge.paths import tenant_home  # noqa: PLC0415
+    from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
     return (Path(tenant_home(tenant_id)) / "cel_anchors"
             / f"{_safe_key(session_key)}.jsonl")
 

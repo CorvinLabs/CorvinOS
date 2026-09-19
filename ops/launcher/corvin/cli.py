@@ -81,7 +81,7 @@ def _onboarding_complete() -> bool:
     # XDG) rather than hardcoding ~/.corvin — otherwise a pinned or in-repo
     # home makes onboarding always look incomplete and re-opens the wizard.
     try:
-        from forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
         base = _corvin_home()
     except Exception:
         base = _Path.home() / ".corvin"
@@ -521,7 +521,7 @@ def _set_telemetry_config(key: str, value: str) -> int:
         # user who wanted out could not get out (GDPR Art. 21). Second time this
         # opt-out has been broken; the docstring above records the first.
         from corvin_console.aco.htrace_consent import _tenant_cfg_path  # noqa: PLC0415
-        from forge.paths import corvin_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home  # noqa: PLC0415
     except ImportError as exc:
         print(f"  telemetry config requires the console extras: {exc}")
         return 1
@@ -605,7 +605,7 @@ def _set_feature_flag_config(key: str, value: str) -> int:
         # below resolves on a wheel install. Same ordering hazard as
         # _set_telemetry_config; see its docstring for the incident.
         from corvin_console import feature_flags  # noqa: PLC0415
-        from forge.tenants import current_tenant  # noqa: PLC0415
+        from corvin_operator.forge.forge.tenants import current_tenant  # noqa: PLC0415
     except ImportError as exc:
         print(f"  feature config requires the console extras: {exc}")
         return 1

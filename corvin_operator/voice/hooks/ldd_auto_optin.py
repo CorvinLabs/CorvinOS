@@ -35,7 +35,7 @@ def main() -> None:
         _forge = _repo / "corvin_operator" / "forge"
         if str(_forge) not in sys.path:
             sys.path.insert(0, str(_forge))
-        from forge.paths import corvin_home  # type: ignore[import]
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import]
         base = Path(corvin_home())
     except Exception:
         base = _corvin_home()

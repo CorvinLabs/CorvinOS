@@ -311,8 +311,8 @@ class TestQuotaCounterIntegration:
         ADR-0703 §2.1: quotas are local, per-tenant, date-partitioned.
         """
         try:
-            from forge.paths import corvin_home, tenant_audit_chain
-            from forge.tenants import current_tenant
+            from corvin_operator.forge.forge.paths import corvin_home, tenant_audit_chain
+            from corvin_operator.forge.forge.tenants import current_tenant
         except ImportError:
             pytest.skip("forge.paths or tenants not available")
 

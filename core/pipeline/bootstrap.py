@@ -49,7 +49,7 @@ def verify_audit_durability(tenant_id: str = "_default") -> tuple[bool, str]:
         SystemExit: if chain is corrupted (fail-closed)
     """
     try:
-        from forge.paths import tenant_home as get_tenant_home  # type: ignore
+        from corvin_operator.forge.forge.paths import tenant_home as get_tenant_home  # type: ignore
 
         tenant_dir = Path(get_tenant_home(tenant_id))
         audit_file = tenant_dir / "audit.jsonl"
@@ -176,7 +176,7 @@ def instantiate_pipeline(
         # Step 2: Initialize AuditChain (ADR-0299)
         try:
             from core.audit import AuditChain
-            from forge.paths import tenant_home as get_tenant_home  # type: ignore
+            from corvin_operator.forge.forge.paths import tenant_home as get_tenant_home  # type: ignore
 
             tenant_dir = Path(get_tenant_home(tenant_id))
             audit_file = tenant_dir / "audit.jsonl"

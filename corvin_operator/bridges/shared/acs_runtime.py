@@ -504,7 +504,7 @@ def _audit_path(tenant_id: str) -> Path:
     """
     try:
         sys.path.insert(0, _FORGE_PATH) if _FORGE_PATH not in sys.path else None
-        from forge.paths import tenant_audit_chain  # type: ignore[import]  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_audit_chain  # type: ignore[import]  # noqa: PLC0415
         return tenant_audit_chain(tenant_id)
     except Exception:  # noqa: BLE001
         # Fail to the CANONICAL layout, not to the legacy one: a resolver that

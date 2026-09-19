@@ -501,7 +501,7 @@ class TenantRegistry:
 
 def _default_corvin_home() -> Path:
     """The corvin_home the tenant resolver would use when none was injected."""
-    from forge.paths import corvin_home  # type: ignore[import-not-found]
+    from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import-not-found]
 
     return corvin_home()
 

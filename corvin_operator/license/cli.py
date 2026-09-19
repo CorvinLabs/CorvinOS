@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Optional
 import time
 
-from forge.paths import corvin_home, validate_tenant_id
-from forge.tenants import current_tenant
+from corvin_operator.forge.forge.paths import corvin_home, validate_tenant_id
+from corvin_operator.forge.forge.tenants import current_tenant
 
 from .capability_api import active_credential, Credential, Tier
 from .keyring import RING

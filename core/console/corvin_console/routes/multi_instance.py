@@ -24,7 +24,7 @@ def tenant_learning_dir(tenant_id: str) -> Path:
     """The tenant's learnable-state directory (grades, learning-event JSONL, …).
     Tenant-isolated — no hardcoded 'shumway-corvin' (G5, ADR-0369)."""
     try:
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         return Path(tenant_home(tenant_id)) / "learning"
     except Exception:  # noqa: BLE001
         return Path.home() / ".corvin" / "tenants" / tenant_id / "learning"
@@ -34,7 +34,7 @@ def _configured_remote(tenant_id: str) -> "str | None":
     """Resolve spec.cross_device.sync_remote — a git URL (https:// or file://). Returns
     None when unconfigured; no hardcoded path/repo (G5, ADR-0369)."""
     try:
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         cfg = Path(tenant_home(tenant_id)) / "tenant.corvin.yaml"
         if not cfg.is_file():
             return None
@@ -50,7 +50,7 @@ def _configured_remote(tenant_id: str) -> "str | None":
 def _sync_cache_dir(tenant_id: str) -> Path:
     """Per-tenant working cache for the git clone + decrypted remote state."""
     try:
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         return Path(tenant_home(tenant_id)) / "cross_device" / "cache"
     except Exception:  # noqa: BLE001
         return Path.home() / ".corvin" / "tenants" / tenant_id / "cross_device" / "cache"

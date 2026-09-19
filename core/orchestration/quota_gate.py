@@ -68,7 +68,7 @@ def corvin_home() -> Path:
     # Canonical resolver first (honours CORVIN_HOME AND the repo-local .corvin
     # the console actually reads); the env/home fallback only without forge.
     try:
-        from forge.paths import corvin_home as _canonical  # type: ignore[import-not-found]
+        from corvin_operator.forge.forge.paths import corvin_home as _canonical  # type: ignore[import-not-found]
 
         return Path(_canonical())
     except Exception:  # noqa: BLE001 — stripped layout without forge

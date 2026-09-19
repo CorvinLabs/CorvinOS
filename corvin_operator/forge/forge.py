@@ -42,7 +42,7 @@ def _default_root() -> Path:
     if env:
         return Path(env).expanduser()
     from forge.scope import detect_scope, scope_root
-    from forge.paths import _resolve_tenant_id
+    from corvin_operator.forge.forge.paths import _resolve_tenant_id
     tenant_id = _resolve_tenant_id(os.environ.get("CORVIN_TENANT_ID"))
     return scope_root(detect_scope(), tenant_id=tenant_id)
 

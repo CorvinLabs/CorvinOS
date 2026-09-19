@@ -179,7 +179,7 @@ class UnmockedForgeWrites(unittest.TestCase):
         self.home.__enter__()
         self.ce = _load()
         self.stages = sys.modules["context_engineering.stages"]
-        from forge.paths import tenant_home
+        from corvin_operator.forge.forge.paths import tenant_home
         self.th = Path(tenant_home("_default"))
 
     def tearDown(self):
@@ -336,7 +336,7 @@ class LivePipelineE2E(unittest.TestCase):
         self.home = _TempHome()
         self.home.__enter__()
         self.ce = _load()
-        from forge.paths import tenant_home
+        from corvin_operator.forge.forge.paths import tenant_home
         self.th = Path(tenant_home("_default"))
 
     def tearDown(self):

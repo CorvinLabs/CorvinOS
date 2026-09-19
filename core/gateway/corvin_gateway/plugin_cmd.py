@@ -92,7 +92,7 @@ def _get_corvin_home() -> Path:
     resolver pointed elsewhere (tests patch this name).
     """
     try:
-        from forge.paths import corvin_home  # type: ignore[import-not-found]
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import-not-found]
 
         return Path(corvin_home())
     except Exception:  # noqa: BLE001 — forge absent (stripped layout)

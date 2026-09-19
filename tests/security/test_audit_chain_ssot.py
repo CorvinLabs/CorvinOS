@@ -83,7 +83,7 @@ def test_three_paths_modules_agree_on_the_chain(home: Path):
     """
     out = _run("""
         from core.paths import tenant_audit_chain as core_chain
-        from forge.paths import tenant_audit_chain as forge_chain
+        from corvin_operator.forge.forge.paths import tenant_audit_chain as forge_chain
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "_bp", R / "corvin_operator" / "bridges" / "shared" / "paths.py")
@@ -102,7 +102,7 @@ def test_two_real_writers_land_in_one_chain(home: Path):
     out = _run("""
         import audit as bridge_audit
         from forge.registry import Registry
-        from forge.paths import tenant_audit_chain, all_audit_chains
+        from corvin_operator.forge.forge.paths import tenant_audit_chain, all_audit_chains
 
         bridge_audit.audit_event("bridge.message_received", channel="test", chat_key="k")
         reg = Registry(Path(sys.argv[0]).parent if False else None) if False else None
@@ -145,7 +145,7 @@ def test_source_checkout_branch_with_corvin_home_unset(home: Path):
         R = Path({str(REPO)!r})
         sys.path.insert(0, str(R)); sys.path.insert(0, str(R / "corvin_operator" / "forge"))
         from core.paths import tenant_audit_chain as c
-        from forge.paths import tenant_audit_chain as f
+        from corvin_operator.forge.forge.paths import tenant_audit_chain as f
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "_bp", R / "corvin_operator" / "bridges" / "shared" / "paths.py")
@@ -169,7 +169,7 @@ def test_skillforge_writes_the_tenant_chain_not_a_sibling(home: Path):
     out = _run("""
         import os
         from skill_forge.registry import SkillRegistry
-        from forge.paths import tenant_audit_chain
+        from corvin_operator.forge.forge.paths import tenant_audit_chain
         home = Path(os.environ["CORVIN_HOME"])
         reg = SkillRegistry(home / "tenants" / "_default" / "skill-forge")
         OUT["resolved"] = str(reg.audit_path())
@@ -186,7 +186,7 @@ def test_a_workspace_outside_corvin_home_keeps_its_sibling_chain(tmp_path: Path)
     sandbox = tmp_path / "elsewhere" / "skill-forge"
     out = _run(f"""
         from skill_forge.registry import SkillRegistry
-        from forge.paths import tenant_audit_chain
+        from corvin_operator.forge.forge.paths import tenant_audit_chain
         reg = SkillRegistry(Path({str(sandbox)!r}))
         OUT["resolved"] = str(reg.audit_path())
         OUT["canonical"] = str(tenant_audit_chain("_default"))

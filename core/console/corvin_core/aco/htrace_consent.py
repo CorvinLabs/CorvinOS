@@ -160,7 +160,7 @@ def _tenant_cfg_path(home: Path) -> Path:
     ``home`` so the same helper works under a test tmp-home.
     """
     try:
-        from forge.paths import _resolve_tenant_id  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import _resolve_tenant_id  # noqa: PLC0415
         tid = _resolve_tenant_id(None)
     except Exception:  # noqa: BLE001
         tid = "_default"

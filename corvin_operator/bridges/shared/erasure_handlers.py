@@ -547,7 +547,7 @@ class WebChatHandler:
         sessions = _tenant_sessions(self.tenant_id)
         names = {subject_id, subject_id.replace(":", "_")}
         try:
-            from forge.paths import safe_session_subdir  # noqa: PLC0415
+            from corvin_operator.forge.forge.paths import safe_session_subdir  # noqa: PLC0415
             names.add(safe_session_subdir(sessions, subject_id).name)
         except Exception:  # noqa: BLE001 — forge may not be importable here
             pass

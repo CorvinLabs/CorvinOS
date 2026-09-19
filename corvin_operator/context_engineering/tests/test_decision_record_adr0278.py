@@ -106,7 +106,7 @@ class DecisionRecordTests(unittest.TestCase):
     def test_layer_a_is_content_free_and_hash_chained(self):
         self.dr.emit(_TRACE, _BRIEF, turn_id="turn-1", tenant_id="_default",
                      workdir=self.workdir, session_id="sess")
-        from forge.paths import tenant_global_dir
+        from corvin_operator.forge.forge.paths import tenant_global_dir
         chain = Path(tenant_global_dir("_default")) / "forge" / "audit.jsonl"
         self.assertTrue(chain.exists(), "Layer A written to the hash-chained log")
         events = [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]

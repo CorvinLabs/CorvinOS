@@ -78,7 +78,7 @@ def _corvin_home(*, corvin_home: Path | None = None) -> Path:
     if env:
         return Path(env)
     try:
-        from forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
         return Path(corvin_home())
     except Exception:  # noqa: BLE001
         return Path.home() / ".corvin"

@@ -939,7 +939,7 @@ class SkillRegistry:
             _fd = str(_P(__file__).resolve().parents[3] / "forge")
             if _fd not in _sys.path:
                 _sys.path.append(_fd)
-            from forge.paths import audit_chain_for_workspace  # noqa: PLC0415
+            from corvin_operator.forge.forge.paths import audit_chain_for_workspace  # noqa: PLC0415
             return audit_chain_for_workspace(self.root, fallback=fallback)
         except Exception:  # noqa: BLE001 — never lose a record over path resolution
             return fallback
