@@ -125,6 +125,9 @@ dependencies = [
     # OTLP exporter for gRPC (ProtoBuf format, production-grade).
     # Proto version matches SDK version to avoid schema mismatches.
     "opentelemetry-exporter-otlp-proto-grpc >= 1.20.0",
+    # OTLP/HTTP (protobuf) exporter — what the Corvin-Features metrics intake
+    # speaks and what an https:// endpoint gets (aco/otel_bridge.py, 2026-09-20).
+    "opentelemetry-exporter-otlp-proto-http >= 1.20.0",
 ]
 
 [project.optional-dependencies]

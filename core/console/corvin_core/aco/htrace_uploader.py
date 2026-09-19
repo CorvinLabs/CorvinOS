@@ -600,6 +600,12 @@ def ping_loop(home: Path) -> None:
     while True:
         try:
             ping_if_due(home)
+            try:  # ADR-0179 error-signature batch, hourly, own opt-out (2026-09-20)
+                from .telemetry import submit_if_due as _submit_errors  # noqa: PLC0415
+
+                _submit_errors(home)
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:  # noqa: BLE001
             pass
         time.sleep(_PING_LOOP_INTERVAL_S)
@@ -1040,6 +1046,14 @@ class HealingTraceUploaderFiber(NerveFiber):
         # healing_traces gate so fresh installs without a ConsentAct are
         # still counted in the active-instance stats.
         ping_if_due(home)
+        # ADR-0179 error signatures — batched, hourly, own opt-out
+        # (consent_granted). Until 2026-09-20 nothing ever submitted the outbox.
+        try:
+            from .telemetry import submit_if_due as _submit_errors  # noqa: PLC0415
+
+            _submit_errors(home)
+        except Exception:  # noqa: BLE001 — never blocks the healing-trace upload
+            pass
 
         if not healing_traces_enabled(home):
             return []

@@ -347,6 +347,28 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         pass  # best-effort — never blocks startup
 
+    # Hourly ping + nightly healing-trace upload + hourly error-signature
+    # batch: the loops that ops/launcher starts. This host is served by
+    # systemd running uvicorn directly, so until 2026-09-20 nothing on it
+    # drove them except an operator opening the ACO page.
+    try:
+        from corvin_core.aco.htrace_uploader import start_ping_thread as _start_ping, start_upload_thread as _start_upload
+        import forge.paths as _fp4
+        _start_ping(_fp4.corvin_home())
+        _start_upload(_fp4.corvin_home())
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("telemetry loops not started: %s", exc)
+
+    # ADR-0288 feature-stability digest — hourly, first one five minutes after
+    # boot, to the Corvin-Features intake; opt-out is ping_enabled. Until
+    # 2026-09-20 no host initialised the daemon and nothing fed its counters.
+    try:
+        from corvin_core.aco.stability_sender import start_stability_daemon as _start_stab
+        import forge.paths as _fp3
+        _start_stab(_fp3.corvin_home())
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("stability digest daemon not started: %s", exc)
+
     # GitHub auto-sync — resume the per-tenant worker threads from each
     # tenant's github-config.json. This host includes the console's ROUTER,
     # not its lifespan, so the console's own resume never ran here and every
