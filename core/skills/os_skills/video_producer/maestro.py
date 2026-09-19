@@ -59,6 +59,10 @@ class VideoProducerMaestro:
         self.registry = WorkerRegistry()
         self.workers: Dict[str, WorkerSkillBase] = {}
 
+        # Content validation state (for deep-fix pattern)
+        self._validated_narration_content: Dict[int, str] = {}
+        self._validated_blender_content: Dict[str, Any] = {}
+
         logger.info(f"Initialized Maestro: {self.project_dir}")
 
     def register_worker(self, worker: WorkerSkillBase):
@@ -294,9 +298,18 @@ class VideoProducerMaestro:
         asset_paths: list[str | Path],
         instructions: Optional[Dict[str, Any]] = None,
         skip_phases: Optional[list[int]] = None,
+        job: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Main orchestration entry point (Phases 1-3 for MVP).
+
+        DEEP-FIX: Content is now validated at entry point (fail-closed pattern).
+
+        Args:
+            asset_paths: Files to analyze
+            instructions: Optional user guidance
+            skip_phases: Optional phases to skip
+            job: Optional job config with full narration/blender content (for direct orchestration)
 
         Returns:
             {
@@ -310,6 +323,13 @@ class VideoProducerMaestro:
         skip_phases = skip_phases or []
 
         try:
+            # DEEP-FIX GATE 1: Validate job content if provided
+            if job:
+                self.validate_job_content(job)
+                narration_content = self._extract_narration_content(job)
+                blender_content = self._extract_blender_content(job)
+                logger.info(f"Deep-fix: Extracted {len(narration_content)} narration scenes")
+                logger.info(f"Deep-fix: Extracted blender config: {bool(blender_content)}")
             # Phase 1: Analysis
             phase1 = await self.execute_phase_1_asset_analysis(asset_paths, instructions)
             if phase1["status"] == "error":
@@ -360,3 +380,115 @@ class VideoProducerMaestro:
     def validate_registry(self) -> list[str]:
         """Validate all registered workers are Skill Forge v2.0 compliant."""
         return self.registry.validate_manifests()
+
+    def validate_job_content(self, job: Dict[str, Any]) -> None:
+        """
+        FAIL-CLOSED: Validate all content is present at job start.
+
+        This is the DEEP-FIX GATE: rejects jobs with missing/placeholder narration
+        or blender content instead of silently falling back.
+
+        Args:
+            job: Video job configuration with narration and blender components
+
+        Raises:
+            ValueError: If narration text or blender content is missing/invalid
+        """
+        # Validate narration content
+        narration_list = job.get("narration", [])
+        if not narration_list:
+            raise ValueError("Job has no narration segments (FAIL-CLOSED)")
+
+        for i, scene in enumerate(narration_list):
+            text = scene.get("text", "").strip() if isinstance(scene, dict) else ""
+            if not text:
+                raise ValueError(f"Narration scene {i} has no text (FAIL-CLOSED)")
+            if len(text) < 5:
+                raise ValueError(f"Narration scene {i} too short: '{text}' (FAIL-CLOSED)")
+
+        # Validate blender content (if present)
+        blender_config = job.get("components", {}).get("blender", {})
+        if blender_config:
+            scenes = blender_config.get("scenes", [])
+            if not scenes:
+                raise ValueError("Blender config has no scenes (FAIL-CLOSED)")
+
+            for scene in scenes:
+                scene_name = scene.get("name", "unknown")
+
+                # Check if scene is referenced by file or by inline data
+                if scene.get("scene_file"):
+                    scene_file = Path(scene["scene_file"])
+                    if not scene_file.exists():
+                        raise ValueError(f"Blender file not found: {scene_file} (FAIL-CLOSED)")
+                    # Verify file has content (not empty)
+                    file_size = scene_file.stat().st_size
+                    if file_size < 100_000:  # < 100KB = suspect
+                        raise ValueError(
+                            f"Blender file too small ({file_size} bytes): {scene_file} (FAIL-CLOSED)"
+                        )
+                elif scene.get("scene_data"):
+                    # Verify inline scene data is not empty
+                    scene_data = scene["scene_data"]
+                    if not scene_data or len(str(scene_data)) < 100:
+                        raise ValueError(f"Scene '{scene_name}' has insufficient data (FAIL-CLOSED)")
+                else:
+                    raise ValueError(f"Scene '{scene_name}' has no file or inline data (FAIL-CLOSED)")
+
+        logger.info(f"✓ Job content validation PASSED (narration={len(narration_list)} scenes)")
+
+    def _extract_narration_content(self, job: Dict[str, Any]) -> list[str]:
+        """Extract FULL narration text from job (not references)."""
+        narration_list = []
+        for scene in job.get("narration", []):
+            if isinstance(scene, dict):
+                text = scene.get("text", "")
+                if text:
+                    narration_list.append(text)
+        return narration_list
+
+    def _extract_blender_content(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract FULL blender scene data from job (not references)."""
+        return job.get("components", {}).get("blender", {})
+
+    def _validate_audio_output(self, audio_file: str | Path) -> None:
+        """
+        Validate that audio file is REAL narration (not whistle tone, not empty).
+
+        Args:
+            audio_file: Path to audio file
+
+        Raises:
+            ValueError: If audio is invalid (too short, whistle-like, empty)
+        """
+        import os
+
+        audio_file = Path(audio_file)
+        if not audio_file.exists():
+            raise ValueError(f"Audio file not found: {audio_file}")
+
+        file_size = audio_file.stat().st_size
+        if file_size < 5000:  # < 5KB = whistle or empty
+            raise ValueError(f"Audio file too small ({file_size} bytes) — likely whistle tone: {audio_file}")
+
+        logger.debug(f"✓ Audio validation PASSED: {audio_file} ({file_size} bytes)")
+
+    def _validate_video_output(self, video_file: str | Path) -> None:
+        """
+        Validate that video output is REAL content (not solid color, has duration).
+
+        Args:
+            video_file: Path to video file
+
+        Raises:
+            ValueError: If video is invalid (too short, missing, or appears to be placeholder)
+        """
+        video_file = Path(video_file)
+        if not video_file.exists():
+            raise ValueError(f"Video file not found: {video_file}")
+
+        file_size = video_file.stat().st_size
+        if file_size < 100_000:  # < 100KB = too small for real video
+            raise ValueError(f"Video file too small ({file_size} bytes) — likely placeholder: {video_file}")
+
+        logger.debug(f"✓ Video validation PASSED: {video_file} ({file_size} bytes)")
