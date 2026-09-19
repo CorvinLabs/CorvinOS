@@ -338,3 +338,219 @@ def ingest_inbox(inbox_dir: str | Path) -> list[dict]:
             if isinstance(s, dict) and s.get("signature"):
                 out.append({**s, "instance": inst})
     return out
+
+
+# ── batched submission to the maintainer intake (2026-09-20) ───────────────────
+#
+# ``submit`` posts one HTTP request per outbox file and only when
+# ``CORVIN_TELEMETRY_URL`` is set — nothing in production ever set it or called
+# it, so 10 164 reports (one per boot since 2026-07-26, all the same
+# signature) piled up on the maintainer host. ``submit_batch`` folds the whole
+# outbox into ONE content-free payload — the signatures with summed counts,
+# how many reports were merged and the span they cover — and posts it to the
+# Corvin-Features intake ``/v1/telemetry/error-signatures`` with the same HMAC
+# token pair as the healing traces. What was merged is kept as one file under
+# ``sent/`` and the consumed reports are removed; ``error_reports_state.json``
+# records the outcome for the console.
+
+_BATCH_MAX_SIGNATURES = 500
+_SUBMIT_INTERVAL_S = 3600
+_LAST_SUBMIT_FILENAME = ".last_error_submit"
+_STATE_FILENAME = "error_reports_state.json"
+
+
+def intake_url() -> str:
+    """``CORVIN_TELEMETRY_URL`` if set, else the Corvin-Features intake."""
+    url = os.environ.get("CORVIN_TELEMETRY_URL", "").strip()
+    if url:
+        return url
+    from .htrace_uploader import _TELEMETRY_BASE  # noqa: PLC0415 — sibling module, no cycle at import time
+
+    return f"{_TELEMETRY_BASE}/v1/telemetry/error-signatures"
+
+
+def state_path(home: str | Path) -> Path:
+    return _tele_root(Path(home)) / _STATE_FILENAME
+
+
+def read_state(home: str | Path) -> dict:
+    try:
+        data = json.loads(state_path(home).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_state(home: Path, **fields: Any) -> None:
+    try:
+        st = read_state(home)
+        st.update(fields)
+        p = state_path(home)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(st, sort_keys=True), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:  # noqa: BLE001 — state must never break the send
+        pass
+
+
+def _stamp_iso(stamp: int) -> str:
+    import datetime as _dt  # noqa: PLC0415
+
+    return _dt.datetime.fromtimestamp(stamp, tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def build_batch(home: str | Path) -> tuple[Optional[dict], list[Path]]:
+    """Fold every outbox report into one payload. ``(payload, consumed_files)``;
+    ``(None, [])`` when the outbox is empty. Every merged report is re-checked
+    with ``_assert_safe`` and a report that fails it is skipped, not merged."""
+    home = Path(home)
+    outbox = _tele_root(home) / "outbox"
+    files = sorted(outbox.glob("report-*.json")) if outbox.is_dir() else []
+    merged: dict[str, dict] = {}
+    consumed: list[Path] = []
+    stamps: list[int] = []
+    version = _corvin_version()
+    for fp in files:
+        try:
+            rep = json.loads(fp.read_text(encoding="utf-8"))
+            _assert_safe(rep)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        for sig in rep.get("signatures") or []:
+            if not isinstance(sig, dict) or not sig.get("signature"):
+                continue
+            slot = merged.setdefault(str(sig["signature"]), {
+                "signature": str(sig["signature"]), "exc_type": str(sig.get("exc_type", "")),
+                "top_repo_file": str(sig.get("top_repo_file", "")), "func": str(sig.get("func", "")),
+                "frames": list(sig.get("frames") or [])[:16], "count": 0,
+            })
+            slot["count"] += int(sig.get("count") or 1)
+        if rep.get("corvin_version") and rep["corvin_version"] != "unknown":
+            version = str(rep["corvin_version"])
+        consumed.append(fp)
+        try:
+            stamps.append(int(fp.stem.split("-", 1)[1]))
+        except (IndexError, ValueError):
+            pass
+    if not merged:
+        return None, []
+    top = sorted(merged.values(), key=lambda s: -s["count"])[:_BATCH_MAX_SIGNATURES]
+    payload: dict[str, Any] = {
+        "schema": _SCHEMA, "instance": _pseudonym(home), "corvin_version": version,
+        "signatures": top, "reports_merged": len(consumed),
+    }
+    if stamps:
+        payload["span"] = {"from": _stamp_iso(min(stamps)), "to": _stamp_iso(max(stamps))}
+    _assert_safe(payload)
+    return payload, consumed
+
+
+def _auth_http() -> Callable[[str, dict], tuple[bool, str]]:
+    """HTTPS POST with the instance's HMAC token pair (the healing-trace
+    credentials), redirects refused, 15 s timeout. ``(ok, "http <status>")``."""
+
+    def _post(url: str, payload: dict) -> tuple[bool, str]:
+        import urllib.error  # noqa: PLC0415
+        import urllib.request  # noqa: PLC0415
+
+        from .htrace_consent import _open_no_redirect, load_or_create_instance_id  # noqa: PLC0415
+        from .htrace_uploader import _load_instance_token, _load_telemetry_token, _telemetry_user_agent  # noqa: PLC0415
+
+        home = _home_for_tokens()
+        if home is None:
+            return (False, "no corvin home")
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST", headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_load_telemetry_token(home)}",
+            "X-HTTrace-Instance-Token": _load_instance_token(home),
+            "X-HTrace-Instance-Id": load_or_create_instance_id(home),
+            "User-Agent": _telemetry_user_agent("ErrorSignatures"),
+        })
+        try:
+            with _open_no_redirect(req, 15) as resp:
+                status = int(resp.getcode())
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+        except Exception as exc:  # noqa: BLE001
+            return (False, type(exc).__name__)
+        return (200 <= status < 300, f"http {status}")
+
+    return _post
+
+
+def _home_for_tokens() -> Optional[Path]:
+    try:
+        from forge import paths as _p  # type: ignore[import]  # noqa: PLC0415
+
+        return Path(_p.corvin_home())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def submit_batch(home: str | Path, *, url: Optional[str] = None,
+                 http: Optional[Callable[[str, dict], tuple[bool, str]]] = None) -> dict:
+    """Fold the outbox into one payload and post it. On success the merged
+    payload is kept as ``sent/batch-<stamp>.json`` and the consumed reports
+    are deleted; on failure nothing moves. Never raises."""
+    home = Path(home)
+    now = _stamp_iso(int(__import__("time").time()))
+    if not consent_granted(home):
+        return {"sent": 0, "reason": "no consent"}
+    payload, consumed = build_batch(home)
+    if payload is None:
+        _write_state(home, last_attempt=now, last_detail="outbox empty", outbox_empty=True)
+        return {"sent": 0, "reason": "outbox empty"}
+    url = url or intake_url()
+    http = http or _auth_http()
+    ok, detail = http(url, payload)
+    _write_state(home, last_attempt=now, last_detail=detail[:64], url=url,
+                 attempts=int(read_state(home).get("attempts") or 0) + 1)
+    if not ok:
+        _write_state(home, consecutive_failures=int(read_state(home).get("consecutive_failures") or 0) + 1)
+        return {"sent": 0, "failed": len(consumed), "reason": detail, "url": url}
+    sent_dir = _tele_root(home) / "sent"
+    sent_dir.mkdir(parents=True, exist_ok=True)
+    stamp = int(__import__("time").time())
+    (sent_dir / f"batch-{stamp}.json").write_text(json.dumps(
+        {"sent_at": now, "url": url, "reports_merged": len(consumed), "payload": payload}, ensure_ascii=False,
+    ), encoding="utf-8")
+    for fp in consumed:
+        try:
+            fp.unlink()
+        except OSError:
+            pass
+    _write_state(home, last_success=now, consecutive_failures=0,
+                 batches=int(read_state(home).get("batches") or 0) + 1,
+                 reports_sent=int(read_state(home).get("reports_sent") or 0) + len(consumed),
+                 last_batch={"reports_merged": len(consumed), "signatures": len(payload["signatures"])})
+    return {"sent": len(consumed), "signatures": len(payload["signatures"]), "url": url}
+
+
+def submit_if_due(home: str | Path) -> bool:
+    """Hourly, from the ACO ``htrace.uploader`` fiber. Returns True when a
+    batch was posted (or nothing was due)."""
+    home = Path(home)
+    try:
+        if not consent_granted(home):
+            return False
+        stamp = _tele_root(home) / _LAST_SUBMIT_FILENAME
+        try:
+            if stamp.exists():
+                import time as _t  # noqa: PLC0415
+
+                age = _t.time() - stamp.stat().st_mtime
+                if 0 <= age < _SUBMIT_INTERVAL_S:
+                    return True
+        except OSError:
+            pass
+        result = submit_batch(home)
+        if result.get("sent") or result.get("reason") == "outbox empty":
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(str(int(__import__("time").time())), encoding="utf-8")
+            return True
+        return False
+    except Exception:  # noqa: BLE001 — fail-soft, like the ping
+        return False
+

@@ -150,13 +150,17 @@ def test_seeded_install_reports_each_channel_from_its_own_state(client, home):
     assert "heal_outcome" in htr["payload_fields"]
 
     er = ch["error_reports"]
-    assert er["status"] == "collected_never_sent" and er["intake_configured"] is False
+    assert er["status"] == "collected_never_sent" and er["intake_configured"] is True
+    assert er["endpoint_host"] == "corvin-features-production.up.railway.app"
     assert er["outbox"]["reports"] == 3 and er["sent_reports"] == 0
     assert er["top_signatures"][0] == {"exc_type": "RuntimeError", "top_repo_file": "core/gateway/corvin_gateway/app.py", "func": "_lifespan", "count": 6}
-    assert "no intake URL" in er["note"]
+    assert "first hourly batch" in er["note"]
 
     assert ch["geo"]["effective_tier"] in (1, 2, 3) and ch["geo"]["carried_by"] == ["ping", "heartbeat"]
-    assert ch["otlp_export"]["status"] == "not_wired" and ch["stability"]["status"] == "not_wired"
+    # no state yet in a seeded install: wired, nothing pushed yet — never "not wired"
+    assert ch["otlp_export"]["status"] == "unknown" and ch["otlp_export"]["wired"] is True
+    assert ch["otlp_export"]["endpoint_host"] == "corvin-features-production.up.railway.app"
+    assert ch["stability"]["status"] == "not_wired" and ch["stability"]["endpoint_host"] == "corvin-features-production.up.railway.app"
 
     # secrets never travel: the tokens are only reported as present/absent
     text = r.text
@@ -173,6 +177,7 @@ def test_opt_outs_in_tenant_yaml_disable_the_channels(client, home):
     assert ch["heartbeat"]["status"] == "disabled"
     assert ch["healing_traces"]["status"] == "disabled"
     assert ch["error_reports"]["status"] == "disabled"
+    assert ch["otlp_export"]["status"] == "disabled" and ch["stability"]["status"] == "disabled"
     assert ch["geo"]["effective_tier"] == 1 and "Nothing extra" in ch["geo"]["what_leaves"]
 
 
@@ -182,6 +187,7 @@ def test_empty_install_says_never_and_unknown_not_zero_sends(client, home):
     assert ch["heartbeat"]["status"] == "unknown" and ch["heartbeat"]["attempts"] == 0 and ch["heartbeat"]["note"]
     assert ch["healing_traces"]["status"] == "never" and ch["healing_traces"]["pending"] == []
     assert ch["error_reports"]["status"] == "never" and ch["error_reports"]["outbox"]["reports"] == 0
+    assert ch["otlp_export"]["status"] == "unknown" and ch["stability"]["status"] == "not_wired"
 
 
 def test_heartbeat_records_its_outcome_in_the_state_file(home, monkeypatch):

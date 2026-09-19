@@ -293,15 +293,28 @@ def _error_reports_channel(home: Path) -> Dict[str, Any]:
             if isinstance(sig, dict):
                 top[(str(sig.get("exc_type")), str(sig.get("top_repo_file")), str(sig.get("func")))] += int(sig.get("count") or 1)
     sent_count = sum(1 for p in sent_dir.glob("report-*.json")) if sent_dir.is_dir() else 0
-    intake = os.environ.get("CORVIN_TELEMETRY_URL", "").strip()
+    batches = sorted(sent_dir.glob("batch-*.json"), key=lambda p: p.stat().st_mtime, reverse=True) if sent_dir.is_dir() else []
+    st = tel.read_state(home)
+    intake = tel.intake_url()
+    last_success = st.get("last_success")
     if not enabled:
         status = "disabled"
-    elif sent_count:
+    elif last_success or sent_count:
         status = "sent"
+    elif st.get("attempts") and st.get("consecutive_failures"):
+        status = "failing"
     elif names:
         status = "collected_never_sent"
     else:
         status = "never"
+    sent_batches = []
+    for b in batches[:10]:
+        try:
+            data = json.loads(b.read_text(encoding="utf-8"))
+            sent_batches.append({"file": b.name, "sent_at": data.get("sent_at"), "reports_merged": data.get("reports_merged"),
+                                 "signatures": len((data.get("payload") or {}).get("signatures") or [])})
+        except (OSError, ValueError):
+            continue
     return {
         "id": "error_reports",
         "title": "Error signatures",
@@ -309,10 +322,10 @@ def _error_reports_channel(home: Path) -> Dict[str, Any]:
         "enabled": enabled,
         "opt_out": "CORVIN_TELEMETRY_OPTIN=false, or spec.telemetry.error_traces: false, or consent.json opted_in: false",
         "legal_basis": "GDPR Art. 6(1)(f) legitimate interest",
-        "cadence": "written by the boot healer at every boot; submitted only by an explicit submit() call",
-        "endpoint": intake or None,
-        "endpoint_host": _host(intake) if intake else None,
-        "intake_configured": bool(intake),
+        "cadence": "written by the boot healer at every boot; folded into ONE batch and posted hourly by the htrace.uploader fiber",
+        "endpoint": intake,
+        "endpoint_host": _host(intake),
+        "intake_configured": True,
         "transport": "HTTPS POST JSON, redirects refused, 15 s timeout",
         "payload_fields": _ERROR_REPORT_FIELDS,
         "outbox": {
@@ -326,12 +339,20 @@ def _error_reports_channel(home: Path) -> Dict[str, Any]:
             {"exc_type": k[0], "top_repo_file": k[1], "func": k[2], "count": v} for k, v in top.most_common(10)
         ],
         "signatures_sampled_from_newest": sampled,
-        "sent_reports": sent_count,
+        "sent_reports": int(st.get("reports_sent") or 0) + sent_count,
+        "sent_batches": sent_batches,
+        "last_sent": last_success,
+        "last_attempt": st.get("last_attempt"),
+        "last_detail": st.get("last_detail"),
+        "attempts": int(st.get("attempts") or 0),
+        "successes": int(st.get("batches") or 0),
+        "consecutive_failures": int(st.get("consecutive_failures") or 0),
+        "last_batch": st.get("last_batch"),
+        "state_file": str(tel.state_path(home).relative_to(home)) if tel.state_path(home).exists() else None,
         "status": status,
         "note": (
             None if status != "collected_never_sent" else
-            "Reports accumulate in the outbox but nothing submits them: no intake URL is configured "
-            "(CORVIN_TELEMETRY_URL) and no scheduler on this build calls submit()."
+            "Reports are waiting in the outbox; the first hourly batch has not run since this build."
         ),
     }
 
@@ -364,42 +385,137 @@ def _geo_channel(home: Path) -> Dict[str, Any]:
     }
 
 
-def _otlp_channel() -> Dict[str, Any]:
+def _otlp_channel(home: Path) -> Dict[str, Any]:
+    from corvin_core.aco import htrace_consent as hc
+    from corvin_core.aco import otel_bridge as ob
+
     try:
         from core.observability.otel_exporter import exporter as ex
 
-        sdk = bool(getattr(ex, "OTEL_AVAILABLE", False))
+        sdk = bool(getattr(ex, "OTEL_AVAILABLE", False)) and getattr(ex, "_HttpMetricExporter", None) is not None
     except Exception:  # noqa: BLE001
         sdk = False
+    enabled = hc.ping_enabled(home)
+    st = ob.read_state(home)
+    endpoint = st.get("endpoint") or ob.resolve_endpoint(home)
+    fb = ob.fallback_dir(home)
+    fallback_files = sorted(fb.glob("*.jsonl")) if fb.is_dir() else []
+    fallback_records = 0
+    for f in fallback_files:
+        try:
+            fallback_records += sum(1 for ln in f.open("r", encoding="utf-8") if ln.strip())
+        except OSError:
+            pass
+    last_success = st.get("last_success")
+    if not enabled:
+        status = "disabled"
+    elif not sdk:
+        status = "not_wired"
+    elif last_success:
+        status = "sent"
+    elif st.get("attempts"):
+        status = "failing"
+    else:
+        status = "unknown"
     return {
         "id": "otlp_export",
         "title": "OTLP export",
-        "purpose": "OpenTelemetry metrics export (heartbeat gauge, geo resource attributes).",
-        "enabled": False,
+        "purpose": "The presence signal as OpenTelemetry gauges — pushed after every heartbeat, JSON fallback locally when the push fails.",
+        "enabled": enabled,
+        "opt_out": "spec.telemetry.ping_enabled: false (the same flag as the heartbeat)",
+        "legal_basis": "GDPR Art. 6(1)(f) legitimate interest",
+        "cadence": "after every heartbeat (every 5 min ± 30 s)",
+        "endpoint": endpoint,
+        "endpoint_host": _host(endpoint),
+        "transport": f"OTLP/HTTP protobuf ({st.get('transport') or 'otlp/http'}), 10 s timeout" if endpoint.startswith("http") else "OTLP/gRPC",
+        "headers": ["Authorization: Bearer <telemetry token>", "X-HTTrace-Instance-Token", "X-HTrace-Instance-Id", "User-Agent"],
+        "payload_fields": list(ob.METRIC_NAMES),
+        "feature_fields": list(ob.ATTRIBUTE_KEYS),
         "sdk_installed": sdk,
-        "wired": False,
-        "status": "not_wired",
-        "note": "OTELExporter has no production caller on this build; nothing is exported over OTLP.",
+        "sdk_version": st.get("sdk_version"),
+        "wired": True,
+        "last_attempt": st.get("last_attempt"),
+        "last_success": last_success,
+        "last_sent": last_success,
+        "last_detail": st.get("last_detail"),
+        "attempts": int(st.get("attempts") or 0),
+        "successes": int(st.get("successes") or 0),
+        "consecutive_failures": int(st.get("consecutive_failures") or 0),
+        "fallback_records": fallback_records,
+        "fallback_dir": str(fb.relative_to(home)),
+        "state_file": str(ob.state_path(home).relative_to(home)) if ob.state_path(home).exists() else None,
+        "status": status,
+        "note": (
+            "The OpenTelemetry SDK or its OTLP/HTTP exporter is not installed in this host's environment; nothing is exported." if not sdk
+            else None if st else "No push recorded yet — the first one follows the first heartbeat after this build."
+        ),
     }
 
 
-def _stability_channel() -> Dict[str, Any]:
+def _stability_channel(home: Path) -> Dict[str, Any]:
+    from corvin_core.aco import htrace_consent as hc
+    from corvin_core.aco import stability_sender as ss
+
+    enabled = hc.ping_enabled(home)
+    st = ss.read_state(home)
     running = False
     try:
         from core.telemetry import telemetry_daemon as td
 
         d = td.get_daemon()
-        running = bool(d and getattr(d, "enabled", False) and getattr(d, "_task", None))
+        running = bool(d and getattr(d, "enabled", False) and getattr(d, "_task", None) is not None)
     except Exception:  # noqa: BLE001
         pass
+    flags_now: List[Dict[str, Any]] = []
+    try:
+        from core.telemetry.stability_metrics import compute_digest
+
+        flags_now = compute_digest(**ss.digest_kwargs(home)).to_dict().get("flags_enabled") or []
+    except Exception:  # noqa: BLE001
+        pass
+    last_success = st.get("last_success")
+    if not enabled:
+        status = "disabled"
+    elif last_success:
+        status = "sent"
+    elif st.get("attempts"):
+        status = "failing"
+    elif running or st.get("started_at"):
+        status = "unknown"
+    else:
+        status = "not_wired"
     return {
         "id": "stability",
         "title": "Feature-stability digest",
-        "purpose": "Hourly digest of feature-flag stability.",
-        "enabled": running,
-        "wired": running,
-        "status": "sent" if running else "not_wired",
-        "note": None if running else "The stability daemon is never initialised by the console host; nothing is sent.",
+        "purpose": "How often each feature flag was evaluated and how often it errored over 24 h — one digest an hour.",
+        "enabled": enabled,
+        "opt_out": "spec.telemetry.ping_enabled: false (the same flag as the ping)",
+        "legal_basis": "GDPR Art. 6(1)(f) legitimate interest",
+        "cadence": f"every {int(st.get('interval_seconds') or 3600) // 60} min, the first {int(st.get('first_delay_seconds') or 300) // 60} min after boot",
+        "endpoint": ss.endpoint(),
+        "endpoint_host": _host(ss.endpoint()),
+        "transport": "HTTPS POST JSON, redirects refused, 15 s timeout",
+        "headers": ["Authorization: Bearer <telemetry token>", "X-HTTrace-Instance-Token", "X-HTrace-Instance-Id", "User-Agent"],
+        "payload_fields": ["event_type", "timestamp", "tenant_id", "instance_id", "flags_enabled[].flag_id", "flags_enabled[].release_tier",
+                           "flags_enabled[].enabled_by", "flags_enabled[].invocation_count_24h", "flags_enabled[].error_count_24h",
+                           "flags_enabled[].error_rate_24h", "flags_enabled[].days_since_last_error", "flags_enabled[].status"],
+        "payload": {"flags_enabled": flags_now[:20], "flags_total": len(flags_now)},
+        "thread_running_in_this_process": running,
+        "wired": True,
+        "last_attempt": st.get("last_attempt"),
+        "last_success": last_success,
+        "last_sent": last_success,
+        "last_detail": f"http {st['last_status']}" if st.get("last_status") is not None else None,
+        "attempts": int(st.get("attempts") or 0),
+        "successes": int(st.get("successes") or 0),
+        "consecutive_failures": int(st.get("consecutive_failures") or 0),
+        "started_at": st.get("started_at"),
+        "state_file": str(ss.state_path(home).relative_to(home)) if ss.state_path(home).exists() else None,
+        "status": status,
+        "note": None if (last_success or st.get("attempts")) else (
+            "The daemon is running; the first digest goes out five minutes after boot." if (running or st.get("started_at"))
+            else "The stability daemon has not been started by this host."
+        ),
     }
 
 
@@ -417,8 +533,8 @@ async def get_channels(
         ("healing_traces", lambda: _healing_channel(home)),
         ("error_reports", lambda: _error_reports_channel(home)),
         ("geo", lambda: _geo_channel(home)),
-        ("otlp_export", _otlp_channel),
-        ("stability", _stability_channel),
+        ("otlp_export", lambda: _otlp_channel(home)),
+        ("stability", lambda: _stability_channel(home)),
     ):
         try:
             channels.append(fn())

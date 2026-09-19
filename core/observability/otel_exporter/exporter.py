@@ -8,6 +8,7 @@ on export failure (zero telemetry loss, fail-closed semantics).
 """
 
 import json
+import os
 import logging
 import time
 from dataclasses import asdict, dataclass
@@ -17,13 +18,28 @@ from typing import Any, Dict, Optional, Tuple
 
 try:
     from opentelemetry import metrics
-    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
     from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.metrics.export import MetricExportResult, PeriodicExportingMetricReader
     from opentelemetry.sdk.resources import Resource
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
+
+# Transports. OTLP/HTTP (protobuf) is the one the Corvin-Features intake speaks
+# and the one an https:// endpoint gets; gRPC stays available for a collector
+# on a plain host:port. Either may be absent.
+try:
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+        OTLPMetricExporter as _HttpMetricExporter,
+    )
+except ImportError:
+    _HttpMetricExporter = None  # type: ignore[assignment]
+try:
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+        OTLPMetricExporter as _GrpcMetricExporter,
+    )
+except ImportError:
+    _GrpcMetricExporter = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +99,7 @@ class OTELExporter:
         json_fallback_dir: Optional[Path] = None,
         otel_collector_url: Optional[str] = None,
         audit_logger: Optional[logging.Logger] = None,
+        headers: Optional[Dict[str, str]] = None,
     ):
         """Initialize OTELExporter.
 
@@ -101,8 +118,14 @@ class OTELExporter:
         self.instance_id = instance_id
         self.geo_granularity = geo_granularity
         self.json_fallback_dir = json_fallback_dir or Path.home() / ".corvin" / "telemetry"
-        self.otel_collector_url = otel_collector_url or "http://localhost:4318"
+        self.otel_collector_url = otel_collector_url or "http://localhost:4318/v1/metrics"
         self.audit_logger = audit_logger or logging.getLogger("audit")
+        self.headers = dict(headers or {})
+        # Outcome of the most recent push, for callers that report it
+        # (aco/otel_bridge.py → console telemetry panel).
+        self.last_export_detail: Optional[str] = None
+        self.transport: str = "none"
+        self.sdk_version: Optional[str] = None
 
         # Phase 2+: Initialize OTEL SDK (batch exporter, OTLP gRPC)
         self._initialize_otel_sdk()
@@ -189,28 +212,64 @@ class OTELExporter:
                 "service.version": "2.0.0",  # TODO: load from CORVIN_VERSION env var
             })
 
-            # Initialize OTLP exporter (gRPC endpoint)
-            # timeout_millis: 10s per export attempt
-            # insecure: True for local development; override with env var for production
-            exporter = OTLPMetricExporter(
-                endpoint=self.otel_collector_url,
-                timeout=10,  # seconds
-                insecure=True,  # TODO: Set via env var OTEL_EXPORTER_OTLP_INSECURE
-            )
+            # Transport by endpoint shape: a URL → OTLP/HTTP protobuf (the
+            # Corvin-Features intake); a bare host:port → gRPC collector.
+            url = self.otel_collector_url
+            if url.startswith(("http://", "https://")):
+                if _HttpMetricExporter is None:
+                    raise OTELExportError("opentelemetry-exporter-otlp-proto-http is not installed")
+                base_cls, self.transport = _HttpMetricExporter, "otlp/http"
+                kwargs: Dict[str, Any] = {"endpoint": url, "timeout": 10, "headers": self.headers or None}
+            else:
+                if _GrpcMetricExporter is None:
+                    raise OTELExportError("opentelemetry-exporter-otlp-proto-grpc is not installed")
+                base_cls, self.transport = _GrpcMetricExporter, "otlp/grpc"
+                kwargs = {"endpoint": url, "timeout": 10,
+                          "insecure": os.environ.get("OTEL_EXPORTER_OTLP_INSECURE", "true").lower() in ("1", "true", "yes"),
+                          "headers": tuple(self.headers.items()) or None}
 
-            # Create periodic reader (exports every 60 seconds)
+            owner = self
+
+            class _RecordingExporter(base_cls):  # type: ignore[misc,valid-type]
+                """The SDK swallows the export result inside the reader; this
+                subclass keeps it so ``export_heartbeat`` can report truthfully."""
+
+                def export(self, metrics_data, timeout_millis=10_000, **kw):  # noqa: D401
+                    try:
+                        result = super().export(metrics_data, timeout_millis=timeout_millis, **kw)
+                    except Exception as exc:  # noqa: BLE001
+                        owner._last_result = (False, f"{type(exc).__name__}: {str(exc)[:80]}")
+                        raise
+                    ok = result == MetricExportResult.SUCCESS
+                    owner._last_result = (ok, "exported" if ok else "exporter reported failure")
+                    return result
+
+            exporter = _RecordingExporter(**kwargs)
+
+            # One reader; pushes happen on force_flush() after each heartbeat,
+            # never on a timer of their own (a long interval keeps the SDK's
+            # background thread idle between heartbeats).
             reader = PeriodicExportingMetricReader(
                 exporter,
-                interval_millis=60000,  # 60 seconds
+                export_interval_millis=24 * 3600 * 1000,
+                export_timeout_millis=15_000,
             )
+            self._reader = reader
+            try:
+                from opentelemetry.sdk.version import __version__ as _sdkv  # noqa: PLC0415
+
+                self.sdk_version = _sdkv
+            except Exception:  # noqa: BLE001
+                self.sdk_version = None
 
             # Create and set MeterProvider
             meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
-            metrics.set_meter_provider(meter_provider)
-
-            # Get meter for this module
-            self._meter = metrics.get_meter(__name__, version="1.0.0")
+            # A private provider: the SDK accepts set_meter_provider() once per
+            # process, and a second exporter (endpoint change, tests) must not
+            # be silently ignored.
+            self._meter = meter_provider.get_meter(__name__, version="1.0.0")
             self._meter_provider = meter_provider
+            self._last_result: Tuple[bool, str] = (False, "not exported yet")
             self._otel_initialized = True
 
             logger.info(f"OTEL SDK initialized: collector={self.otel_collector_url}, tenant={self.tenant_id}")
@@ -264,12 +323,13 @@ class OTELExporter:
         last_error = None
         for attempt in range(max_retries):
             try:
-                # Record Gauge metrics
+                # Set the gauges (the SDK's synchronous Gauge API is set(), not
+        # record() — the original code never ran against a real SDK).
                 self._meter.create_gauge(
                     name="corvin.instance.online",
                     unit="1",
                     description="Is this instance currently alive (0=no, 1=yes)?",
-                ).record(
+                ).set(
                     1 if signal.is_alive else 0,
                     attributes=base_attributes,
                 )
@@ -278,7 +338,7 @@ class OTELExporter:
                     name="corvin.instance.uptime",
                     unit="s",
                     description="Uptime since boot in seconds",
-                ).record(
+                ).set(
                     signal.uptime_seconds,
                     attributes=base_attributes,
                 )
@@ -287,7 +347,7 @@ class OTELExporter:
                     name="corvin.instance.plugin_count",
                     unit="1",
                     description="Number of loaded plugins",
-                ).record(
+                ).set(
                     signal.plugin_count,
                     attributes=base_attributes,
                 )
@@ -296,12 +356,19 @@ class OTELExporter:
                     name="corvin.instance.memory_usage",
                     unit="By",  # OpenTelemetry unit for bytes
                     description="Process memory usage in bytes",
-                ).record(
+                ).set(
                     signal.memory_usage_bytes,
                     attributes=base_attributes,
                 )
 
-                # Success - return without raising
+                # Push NOW — a recorded gauge is not an exported one until the
+                # reader flushed it and the exporter answered.
+                self._last_result = (False, "flush did not run")
+                flushed = self._meter_provider.force_flush(timeout_millis=15_000)
+                ok, detail = self._last_result
+                self.last_export_detail = detail
+                if not flushed or not ok:
+                    raise OTELExportError(detail if not ok else "force_flush timed out")
                 logger.debug(f"OTEL export succeeded on attempt {attempt + 1}/{max_retries}")
                 return
 

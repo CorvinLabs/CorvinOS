@@ -116,6 +116,15 @@ def send_heartbeat(home: Path) -> bool:
         _record_state(home, ok=ok, detail=f"http {status}")
         if not ok:
             logger.debug("heartbeat: returned %d", status)
+        # ADR-0680/0681: the same presence signal as OTLP gauges, pushed to
+        # the metrics intake right after the heartbeat (aco/otel_bridge.py).
+        # Same opt-out (the loop checks ping_enabled before calling us).
+        try:
+            from .otel_bridge import export_heartbeat_metrics  # noqa: PLC0415
+
+            export_heartbeat_metrics(home, is_alive=True)
+        except Exception:  # noqa: BLE001 — never affects the heartbeat outcome
+            pass
         return ok
     except Exception as e:  # noqa: BLE001
         logger.debug("heartbeat: failed (non-fatal): %s", e)

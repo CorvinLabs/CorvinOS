@@ -70,7 +70,13 @@ export interface Channel {
   what_leaves?: string;
   carried_by?: string[];
   sdk_installed?: boolean;
+  sdk_version?: string | null;
   wired?: boolean;
+  fallback_records?: number;
+  fallback_dir?: string;
+  last_batch?: { reports_merged: number; signatures: number } | null;
+  sent_batches?: Array<{ file: string; sent_at: string | null; reports_merged: number | null; signatures: number }>;
+  started_at?: string | null;
   state_file?: string | null;
   note?: string | null;
 }
@@ -192,9 +198,19 @@ function ChannelCard({ c }: { c: Channel }) {
           )}
           {c.id === "error_reports" && c.outbox && (
             <>
-              <Row k="Collected">{fmtInt(c.outbox.reports)} reports · {fmtBytes(c.outbox.bytes)} · {c.outbox.oldest ? `${fmtWhen(c.outbox.oldest)} → ${fmtWhen(c.outbox.newest)}` : "empty"} · <span className="font-mono text-xs">{c.outbox.dir}</span></Row>
-              <Row k="Sent">{fmtInt(c.sent_reports ?? 0)} reports</Row>
+              <Row k="Waiting">{fmtInt(c.outbox.reports)} reports · {fmtBytes(c.outbox.bytes)} · {c.outbox.oldest ? `${fmtWhen(c.outbox.oldest)} → ${fmtWhen(c.outbox.newest)}` : "empty"} · <span className="font-mono text-xs">{c.outbox.dir}</span></Row>
+              <Row k="Sent">{fmtInt(c.sent_reports ?? 0)} reports in {fmtInt(c.successes ?? 0)} batch{(c.successes ?? 0) === 1 ? "" : "es"}{c.last_batch ? ` · last batch merged ${fmtInt(c.last_batch.reports_merged)} reports into ${c.last_batch.signatures} signature${c.last_batch.signatures === 1 ? "" : "s"}` : ""}{c.last_detail ? ` · last ${c.last_detail} at ${fmtWhen(c.last_attempt)}` : ""}</Row>
             </>
+          )}
+          {(c.id === "otlp_export" || c.id === "stability") && (
+            <Row k="Outcomes">
+              {c.attempts ? (
+                <>{fmtInt(c.successes ?? 0)} of {fmtInt(c.attempts)} pushes succeeded · last {c.last_detail ?? "—"} at {fmtWhen(c.last_attempt)}
+                  {c.consecutive_failures ? <span className="text-destructive"> · {c.consecutive_failures} consecutive failures</span> : null}</>
+              ) : <span className="text-muted-foreground">none recorded</span>}
+              {c.id === "otlp_export" && (c.fallback_records ?? 0) > 0 && <span> · {fmtInt(c.fallback_records ?? 0)} records kept locally in <span className="font-mono text-xs">{c.fallback_dir}</span> after failed pushes</span>}
+              {c.id === "stability" && c.thread_running_in_this_process === false && <span className="text-muted-foreground"> · daemon not running in the console process</span>}
+            </Row>
           )}
           {c.id === "geo" && (
             <>
@@ -244,7 +260,14 @@ function ChannelCard({ c }: { c: Channel }) {
             {c.carried_by && <Row k="Carried by">{c.carried_by.join(", ")}</Row>}
             {c.legal_basis && <Row k="Legal basis">{c.legal_basis}</Row>}
             {c.state_file && <Row k="State file"><span className="font-mono text-xs">{c.state_file}</span></Row>}
-            {c.sdk_installed !== undefined && <Row k="SDK">{c.sdk_installed ? "opentelemetry installed" : "opentelemetry not installed"}</Row>}
+            {c.sdk_installed !== undefined && <Row k="SDK">{c.sdk_installed ? `opentelemetry-sdk ${c.sdk_version ?? ""} with the OTLP/HTTP exporter` : "opentelemetry SDK or OTLP/HTTP exporter not installed"}</Row>}
+            {c.sent_batches && c.sent_batches.length > 0 && (
+              <Row k="Sent batches">
+                <table className="text-xs w-full"><tbody>
+                  {c.sent_batches.map((b) => <tr key={b.file} className="border-b border-border/60 last:border-b-0"><td className="py-0.5 pr-2 font-mono">{b.file}</td><td className="py-0.5 pr-2 tabular-nums">{fmtInt(b.reports_merged ?? 0)} reports → {b.signatures} signature{b.signatures === 1 ? "" : "s"}</td><td className="py-0.5 text-right">{fmtWhen(b.sent_at)}</td></tr>)}
+                </tbody></table>
+              </Row>
+            )}
           </div>
         )}
       </CardContent>

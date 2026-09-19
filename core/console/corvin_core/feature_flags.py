@@ -1301,6 +1301,27 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         released_date="2026-09-20",
         promoted_by="shumway",
     ),
+    FeatureFlag(
+        id="video_producer_enabled",
+        label="Video Producer — Quality Metrics Panel",
+        description=(
+            "Gate for the Video Producer surface in the Console. The panel "
+            "/app/video-quality-metrics declares this flag as its requiredFlag; "
+            "a requiredFlag that is absent from GATED_FLAGS resolves to false and "
+            "hides its panel forever, which is how the panel shipped unreachable. "
+            "On: the Video Quality panel renders under Observability and reads "
+            "/v1/console/video/* . Off (default): the route stays mounted for deep "
+            "links, but the sidebar entry is hidden. Listed in the "
+            "tenant.corvin.yaml features_whitelist template, so a fresh local "
+            "install shows it; toggle from Console -> Settings -> Features."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("video", "console", "observability"),
+        release_tier="beta",
+        released_date="2026-09-20",
+        promoted_by="shumway",
+    ),
 )
 
 
@@ -1463,6 +1484,17 @@ def is_enabled(flag_id: str, tenant_id: str = "_default") -> bool:
     entry = _BY_ID.get(flag_id)
     if entry is None:
         return False
+
+    # ADR-0288 stability digest: count the evaluation. Until 2026-09-20 nothing
+    # fed core.telemetry.stability_metrics, so the hourly digest (had it ever
+    # been sent) would have carried zero flags. A counter increment, never a
+    # value; fail-soft.
+    try:
+        from core.telemetry.stability_metrics import mark_invocation as _mark  # noqa: PLC0415
+
+        _mark(flag_id)
+    except Exception:  # noqa: BLE001
+        pass
 
     spec = _tenant_spec(tenant_id)
     whitelist = spec.get("features_whitelist")

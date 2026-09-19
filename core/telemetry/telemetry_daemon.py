@@ -27,6 +27,9 @@ class TelemetryDaemon:
         send_fn: Callable[[dict], int] | None = None,
         interval_seconds: int = 3600,
         enabled: bool = True,
+        first_delay_seconds: int | None = None,
+        digest_kwargs: Callable[[], dict] | None = None,
+        on_result: Callable[[int, dict], None] | None = None,
     ):
         """Initialize daemon.
 
@@ -38,6 +41,17 @@ class TelemetryDaemon:
         self.send_fn = send_fn
         self.interval_seconds = interval_seconds
         self.enabled = enabled
+        # First digest soon after boot (the flags evaluated during startup are
+        # a real sample), then hourly. Default: five minutes.
+        self.first_delay_seconds = 300 if first_delay_seconds is None else first_delay_seconds
+        # Caller-supplied identity for compute_digest (instance_id, enabled_by)
+        # — the daemon must not invent them (see the accuracy note in
+        # stability_metrics.compute_digest).
+        self.digest_kwargs = digest_kwargs
+        self.on_result = on_result
+        self.last_status: int | None = None
+        self.last_sent_at: str | None = None
+        self.sends: int = 0
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -50,9 +64,11 @@ class TelemetryDaemon:
         self._running = True
         logger.info(f"Telemetry daemon started (interval: {self.interval_seconds}s)")
 
+        delay = self.first_delay_seconds
         while self._running:
             try:
-                await asyncio.sleep(self.interval_seconds)
+                await asyncio.sleep(delay)
+                delay = self.interval_seconds
                 await self.send_digest()
             except asyncio.CancelledError:
                 logger.info("Telemetry daemon cancelled")
@@ -67,19 +83,24 @@ class TelemetryDaemon:
 
         try:
             # Compute digest
-            digest = compute_digest(
-                tenant_id="_default",  # TODO: get from context
-                instance_id="unknown",  # TODO: get from config
-            )
+            kwargs = dict(self.digest_kwargs()) if self.digest_kwargs else {}
+            digest = compute_digest(**kwargs)
 
             # Send
             payload = digest.to_dict()
             status = await self._send_async(payload)
-
+            self.last_status = status
+            self.sends += 1
             if 200 <= status < 300:
+                self.last_sent_at = datetime.utcnow().isoformat() + "Z"
                 logger.info(f"Telemetry sent (status {status})")
             else:
                 logger.warning(f"Telemetry send failed (status {status})")
+            if self.on_result:
+                try:
+                    self.on_result(status, payload)
+                except Exception:  # noqa: BLE001 — a reporting hook never breaks the loop
+                    pass
 
         except Exception as e:
             logger.error(f"Error sending telemetry: {e}", exc_info=True)
@@ -108,10 +129,11 @@ _DAEMON: TelemetryDaemon | None = None
 def initialize_daemon(
     send_fn: Callable[[dict], int] | None = None,
     enabled: bool = True,
+    **kwargs,
 ) -> TelemetryDaemon:
     """Initialize the global telemetry daemon."""
     global _DAEMON
-    _DAEMON = TelemetryDaemon(send_fn=send_fn, enabled=enabled)
+    _DAEMON = TelemetryDaemon(send_fn=send_fn, enabled=enabled, **kwargs)
     return _DAEMON
 
 
