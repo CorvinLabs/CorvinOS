@@ -169,6 +169,14 @@ export const QualityGatesPage = React.lazy(() =>
   import("@/pages/quality").then((m) => ({ default: m.default }))
 );
 
+// Knowledge Graph — the console panel of the contributor plugin
+// plugins/contributor/knowledge_management/corvin_knowledge (ADR-0892). Not a
+// static panel: it mounts only while the plugin is installed AND enabled
+// (capability manifest → manifestPanelRoutes), like VideoProducerPage.
+export const CorvinKnowledgePage = React.lazy(() =>
+  import("@/pages/corvin-knowledge").then((m) => ({ default: m.CorvinKnowledgePage }))
+);
+
 export const VideoProducerPage = React.lazy(() =>
   import("@/pages/video-producer")
 );

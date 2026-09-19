@@ -21,7 +21,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
-  QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage,
+  QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
   LicensingAuditPage, OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
 } from "@/lazy-pages";
@@ -64,6 +64,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   SyncMonitorPage,
   QualityGatesPage,
   VideoProducerPage,
+  CorvinKnowledgePage,
   VideoQualityMetricsPage,
   DataHubUnifiedPage,
   SkillForgeGeneratorPage,
