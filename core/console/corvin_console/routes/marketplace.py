@@ -173,13 +173,93 @@ async def list_plugins(
     # Apply limit
     plugins = plugins[:limit]
 
+    # ADR-0892 — every listing carries its LOCAL state, so the console never
+    # has to guess: `installable` + `install_blocker` (can this build install
+    # it at all — only builtin-tier ids with a plugin.yaml under a trusted root
+    # resolve; the index's 3 contributor entries never did, and the old panel
+    # offered an Install button that always failed), `registry_id` (the
+    # manifest's plugin_id, which is what registry.yaml and /plugins key on —
+    # the index id is `plugin:<tier>-<cat>-<name>`), `installed`/`enabled`
+    # from the tenant registry, `runtime_loaded` from THIS process.
+    installed = _tenant_install_state(rec.tenant_id)
+    enriched = [dict(p, **_local_state(p, installed)) for p in plugins]
+
     return {
-        "plugins": plugins,
-        "count": len(plugins),
+        "plugins": enriched,
+        "count": len(enriched),
         "filtered_by": {
             "category": category,
             "tier": tier,
         },
+    }
+
+
+# ── Local state join (ADR-0892) ───────────────────────────────────────────
+
+#: index_id -> (registry_id | None, blocker | None); keyed on the index the ids
+#: came from so a reload of plugins.json invalidates it.
+_RESOLVE_CACHE: Dict[str, tuple[Optional[str], Optional[str]]] = {}
+_RESOLVE_CACHE_KEY: Optional[str] = None
+
+
+def _resolve_index_id(index_id: str) -> tuple[Optional[str], Optional[str]]:
+    """``(registry_id, blocker)`` — exactly the resolution the install route
+    performs (marketplace_resolve), so "installable" here and "installed" there
+    cannot disagree."""
+    global _RESOLVE_CACHE_KEY
+    from . import marketplace_resolve as _resolve
+
+    key = str((_index_manager.get_index().get("generated_at")) or "")
+    if key != _RESOLVE_CACHE_KEY:
+        _RESOLVE_CACHE.clear()
+        _RESOLVE_CACHE_KEY = key
+    hit = _RESOLVE_CACHE.get(index_id)
+    if hit is not None:
+        return hit
+    if not _resolve.available():
+        out: tuple[Optional[str], Optional[str]] = (None, "plugin subsystem unavailable in this installation")
+    else:
+        try:
+            out = (_resolve.manifest_plugin_id(index_id), None)
+        except _resolve.MarketplaceResolveError as exc:
+            out = (None, str(exc))
+        except Exception as exc:  # noqa: BLE001 — a broken manifest is a blocker, not a 500
+            out = (None, f"manifest unreadable: {type(exc).__name__}")
+    _RESOLVE_CACHE[index_id] = out
+    return out
+
+
+def _tenant_install_state(tenant_id: str) -> Dict[str, Dict[str, Any]]:
+    """registry_id -> {enabled, runtime_loaded} for this tenant. Empty when the
+    plugin subsystem is absent; a corrupt registry is reported by /plugins,
+    not hidden here."""
+    try:
+        from . import plugins as _plugins
+
+        if not _plugins._PLUGINS_AVAILABLE:
+            return {}
+        registry = _plugins._load(tenant_id)
+    except HTTPException:
+        return {}
+    except Exception:  # noqa: BLE001
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for pid, rec in registry.records.items():
+        loaded, _why = _plugins._runtime_state(pid)
+        out[pid] = {"enabled": bool(getattr(rec, "enabled", False)), "runtime_loaded": bool(loaded)}
+    return out
+
+
+def _local_state(entry: Dict[str, Any], installed: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    registry_id, blocker = _resolve_index_id(str(entry.get("id") or ""))
+    state = installed.get(registry_id) if registry_id else None
+    return {
+        "registry_id": registry_id,
+        "installable": blocker is None,
+        "install_blocker": blocker,
+        "installed": state is not None,
+        "enabled": bool(state and state["enabled"]),
+        "runtime_loaded": bool(state and state["runtime_loaded"]),
     }
 
 

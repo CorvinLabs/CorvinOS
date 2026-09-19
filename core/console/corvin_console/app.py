@@ -95,7 +95,6 @@ from .routes import (
     quality_layers as quality_layers_route,
     quality_gates as quality_gates_route,
     skill_creator_api as skill_creator_route,
-    skill_manager_routes as skill_manager_route,
     chat as chat_route,
     voice as voice_route,
     workflows as workflows_route,
@@ -126,7 +125,6 @@ from .routes import (
     plugins as plugins_route,
     marketplace as marketplace_route,
     marketplace_custom_repos as marketplace_custom_repos_route,
-    marketplace_hub_routes as marketplace_hub_route,
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
@@ -228,14 +226,12 @@ router.include_router(task_audit_route.router, tags=["console-task-audit"])
 router.include_router(skills_manual_route.router, tags=["console-skills-manual"])
 router.include_router(tools_manual_route.router, tags=["console-tools-manual"])
 router.include_router(tools.router, tags=["console-tools"])
-# ADR-0681 — Skill Forge v2.0 Phase 5: Console UI (Skill Manager).
-# MUST be registered BEFORE skills.router for the same reason the manual
-# routes above are: skills.py owns the wildcard GET /skills/{name}, and
-# FastAPI matches in registration order. Registered after it, this router's
-# literal GET /skills/installed and GET /skills/generate/{job_id} were both
-# swallowed by that wildcard and answered 404 "skill 'installed' not found"
-# — the Skill Manager panel's list and its generation-status poll.
-router.include_router(skill_manager_route.router, tags=["console-skill-manager"])
+# ADR-0892 (2026-09-19): skill_manager_routes (every handler a stub — install
+# started nothing, enable/disable/delete echoed success without touching disk,
+# tenant taken from a request header) and marketplace_hub_routes (a synthetic
+# index of six hardcoded items, no auth) were DELETED, not consolidated. The
+# real skill package routes are packages.py; the real plugin routes are
+# marketplace.py (+ marketplace_install.py) and plugins.py.
 # ADR-0677 — Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
 router.include_router(skill_forge_distribution_route.router, tags=["console-skill-forge-distribution"])
 router.include_router(skills.router, tags=["console-skills"])
@@ -244,7 +240,6 @@ router.include_router(forge_unified_route.router, prefix="/forge", tags=["consol
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
-router.include_router(marketplace_hub_route.router, tags=["console-marketplace"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
 # TRACK I — DataHub Creator (6-phase project workspace with skill metrics + learning visualization)
 router.include_router(datahub_creator_route.router, tags=["console-datahub-creator"])
@@ -724,16 +719,6 @@ def create_app() -> FastAPI:
             logger.info("✅ A2A Licensing Gate services initialized")
         except Exception as exc:
             logger.warning("A2A Licensing Gate initialization failed: %s", exc)
-
-        # Initialize Marketplace Hub service (ADR-0678)
-        try:
-            from . import _bootstrap
-            from .routes import marketplace_hub_routes
-            corvin_home = _bootstrap.forge_paths.corvin_home()
-            marketplace_hub_routes.init_service(corvin_home)
-            logger.info("✅ Marketplace Hub service initialized")
-        except Exception as exc:
-            logger.warning("Marketplace Hub initialization failed: %s", exc)
 
         # Resume GitHub auto-sync for every tenant that had it enabled before
         # the last restart. The worker is a plain in-memory thread (no

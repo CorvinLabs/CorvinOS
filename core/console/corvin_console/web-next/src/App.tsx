@@ -179,6 +179,15 @@ export default function App() {
             <Route path="model-selection" element={<Navigate to="/app/models?tab=catalog" replace />} />
             <Route path="engine-control" element={<Navigate to="/app/models?tab=routing" replace />} />
             <Route path="engines" element={<Navigate to="/app/models?tab=routing" replace />} />
+            {/* ADR-0892 — ONE marketplace. The old hub, the manifest's plugin-center
+                (a deleted component that rendered the 404 page), the packages page
+                and the three panels folded on 2026-09-16 all land on its tabs. */}
+            <Route path="marketplace-hub" element={<Navigate to="/app/marketplace?tab=browse" replace />} />
+            <Route path="plugin-center" element={<Navigate to="/app/marketplace?tab=installed" replace />} />
+            <Route path="plugins" element={<Navigate to="/app/marketplace?tab=installed" replace />} />
+            <Route path="extensions" element={<Navigate to="/app/marketplace?tab=installed" replace />} />
+            <Route path="mcp-plugins" element={<Navigate to="/app/marketplace?tab=tools" replace />} />
+            <Route path="packages" element={<Navigate to="/app/marketplace?tab=packages" replace />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>

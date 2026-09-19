@@ -16,11 +16,6 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
 
-from core.skills.marketplace_hub import (
-    MarketplaceHub,
-    DiscoveryItem,
-    fuzzy_score,
-)
 from core.licensing.member_credential import (
     MemberCredential,
     SignedTask,
@@ -42,135 +37,10 @@ from core.licensing.authority_server import (
 # Stream A: Marketplace Hub Tests
 # ============================================================================
 
-class TestMarketplaceHubFuzzySearch:
-    """Test fuzzy search scoring."""
+# ADR-0892 (2026-09-19): the Marketplace Hub classes that lived here tested
+# core.skills.marketplace_hub — a synthetic index of six hardcoded items — which
+# was deleted with the hub. The licensing tests below are unchanged.
 
-    def test_exact_match(self):
-        """Exact match should score 1.0."""
-        assert fuzzy_score("router", "router") == 1.0
-
-    def test_substring_match(self):
-        """Substring match should score high."""
-        score = fuzzy_score("route", "delegation_router")
-        assert 0.6 < score < 1.0
-
-    def test_partial_match(self):
-        """Character matching should work."""
-        score = fuzzy_score("rtr", "router")
-        assert score > 0.0
-
-    def test_no_match(self):
-        """No match should score 0."""
-        assert fuzzy_score("xyz", "abc") == 0.0
-
-    def test_case_insensitive(self):
-        """Matching should be case-insensitive."""
-        assert fuzzy_score("Router", "router") == 1.0
-
-
-class TestMarketplaceHubCore:
-    """Test marketplace hub core functionality."""
-
-    def setup_method(self):
-        """Set up test hub instance."""
-        self.tmpdir = tempfile.mkdtemp()
-        self.hub = MarketplaceHub(self.tmpdir)
-
-    def test_get_index(self):
-        """Test loading full index."""
-        index = self.hub.get_index()
-        assert index is not None
-        assert len(index.skills) > 0
-        assert len(index.plugins) > 0
-        assert len(index.tools) > 0
-        assert len(index.connectors) > 0
-        assert len(index.layers) > 0
-        assert index.total_count > 0
-
-    def test_search_basic(self):
-        """Test basic search."""
-        result = self.hub.search(query="router", per_page=10)
-        assert result.total >= 0
-        assert len(result.items) <= 10
-        assert result.page == 1
-
-    def test_search_with_categories(self):
-        """Test search filtered by categories."""
-        result = self.hub.search(
-            query="",
-            categories=["skills", "plugins"],
-            per_page=100
-        )
-        # Should only return skills and plugins
-        for item in result.items:
-            assert item.category in ("skills", "plugins")
-
-    def test_search_with_filters(self):
-        """Test search with filters."""
-        result = self.hub.search(
-            query="",
-            filters={"tier": "core"},
-            per_page=100
-        )
-        # All returned items should have tier="core"
-        for item in result.items:
-            if item.tier:
-                assert item.tier == "core"
-
-    def test_search_pagination(self):
-        """Test pagination."""
-        result1 = self.hub.search(query="", page=1, per_page=5)
-        result2 = self.hub.search(query="", page=2, per_page=5)
-
-        # Different pages should have different items
-        ids1 = {item.id for item in result1.items}
-        ids2 = {item.id for item in result2.items}
-        assert len(ids1.intersection(ids2)) == 0 or result2.total <= 5
-
-    def test_trending(self):
-        """Test trending items."""
-        items = self.hub.trending(limit=10)
-        assert len(items) <= 10
-        assert all(hasattr(item, 'rating') for item in items)
-
-    def test_newest(self):
-        """Test newest items."""
-        items = self.hub.newest(limit=10)
-        assert len(items) <= 10
-        # Should be sorted by created_at descending
-        if len(items) > 1:
-            for i in range(len(items) - 1):
-                assert items[i].created_at >= items[i+1].created_at
-
-    def test_get_detail(self):
-        """Test getting item detail."""
-        index = self.hub.get_index()
-        if index.skills:
-            skill = index.skills[0]
-            detail = self.hub.get_detail(skill.id, "skills")
-            assert detail is not None
-            assert detail.id == skill.id
-
-    def test_cache_ttl(self):
-        """Test cache expiry."""
-        import time
-        index1 = self.hub.get_index()
-        time1 = index1.timestamp
-
-        # Immediate reload should use cache
-        index2 = self.hub.get_index()
-        time2 = index2.timestamp
-        assert time1 == time2
-
-        # Force refresh should update
-        index3 = self.hub.get_index(force_refresh=True)
-        time3 = index3.timestamp
-        # May or may not be different depending on test speed
-
-
-# ============================================================================
-# Stream B: Licensing Core Tests
-# ============================================================================
 
 class TestRSAKeyManagement:
     """Test RSA keypair generation and operations."""

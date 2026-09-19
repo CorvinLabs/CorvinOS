@@ -19,6 +19,11 @@ export interface PluginSummary {
   /** Provenance, NOT a capability tier: builtin | vetted | community. */
   origin: string;
   pii_risk: string;
+  /** ADR-0124 Inv. 3 declarations — WHERE the plugin runs and WHAT it talks
+   *  to, shown before an operator enables it (PluginOut, plugins.py). */
+  locality: string;
+  network_egress: string;
+  egress_hosts: string[];
   enabled: boolean;
   /** Registered in the server process right now — can differ from `enabled` when
    *  self-healing contained or unloaded the plugin without rewriting the config. */

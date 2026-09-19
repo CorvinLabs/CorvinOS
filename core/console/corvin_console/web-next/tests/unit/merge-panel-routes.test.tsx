@@ -47,7 +47,9 @@ describe("mergePanelRoutes", () => {
   });
 
   it("dedupes by path even when the manifest id differs from the registry id", () => {
-    const m = [panel("plugins", { kind: "react-component", component: "ExtensionsPage" }, "plugin-center")];
-    expect(paths(mergePanelRoutes(m)).filter((x) => x === "plugin-center")).toHaveLength(1);
+    // The backend manifest declares the marketplace as panel id "plugins" at
+    // route "marketplace" (ADR-0892); the registry mounts it as "marketplace".
+    const m = [panel("plugins", { kind: "react-component", component: "MarketplacePage" }, "marketplace")];
+    expect(paths(mergePanelRoutes(m)).filter((x) => x === "marketplace")).toHaveLength(1);
   });
 });

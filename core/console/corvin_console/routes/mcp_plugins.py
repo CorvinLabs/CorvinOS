@@ -37,14 +37,43 @@ _MCP_ROOT = _REPO / "corvin_operator" / "mcp_manager"
 if str(_MCP_ROOT) not in sys.path:
     sys.path.insert(0, str(_MCP_ROOT))
 
+# The bare name ``mcp_manager`` is AMBIGUOUS in the live process: with the
+# ``corvin_operator`` root on sys.path (other routes put it there) it resolves
+# to the OUTER ``corvin_operator/mcp_manager/`` package, which has no
+# ``catalog`` — so this import failed and every MCP route answered 503 "not
+# available on this installation" on an install where the manager is present
+# (2026-09-19). The fully qualified package path cannot be shadowed; the bare
+# name stays as the fallback for a layout without the ``corvin_operator``
+# package (the standalone console).
+_MCP_IMPORT_ERROR: str | None = None
 try:
-    from mcp_manager import catalog as _cat  # type: ignore[import-not-found]
-    from mcp_manager import activate as _act  # type: ignore[import-not-found]
-    from mcp_manager import installer as _ins  # type: ignore[import-not-found]
-    from mcp_manager.compliance import ComplianceError  # type: ignore[import-not-found]
+    try:
+        from corvin_operator.mcp_manager.mcp_manager import catalog as _cat  # type: ignore[import-not-found]
+        from corvin_operator.mcp_manager.mcp_manager import activate as _act  # type: ignore[import-not-found]
+        from corvin_operator.mcp_manager.mcp_manager import installer as _ins  # type: ignore[import-not-found]
+        from corvin_operator.mcp_manager.mcp_manager.compliance import ComplianceError  # type: ignore[import-not-found]
+        # ONE module identity. chat_runtime (and the CLI) import the manager by
+        # its bare name (``import mcp_manager.activate``); if that name is not
+        # yet in sys.modules it resolves through sys.path, where the
+        # ``corvin_operator`` root can come first and yields the OUTER package
+        # (no ``activate``) — the chat spawn then silently drops every catalog
+        # MCP server. Bind the bare name to the package imported above so both
+        # spellings share state (catalog caches, activation files).
+        import importlib as _il
+        _pkg = _il.import_module("corvin_operator.mcp_manager.mcp_manager")
+        sys.modules.setdefault("mcp_manager", _pkg)
+        for _sub in ("catalog", "activate", "installer", "compliance"):
+            sys.modules.setdefault(f"mcp_manager.{_sub}", getattr(_pkg, _sub))
+    except ImportError:
+        from mcp_manager import catalog as _cat  # type: ignore[import-not-found,no-redef]
+        from mcp_manager import activate as _act  # type: ignore[import-not-found,no-redef]
+        from mcp_manager import installer as _ins  # type: ignore[import-not-found,no-redef]
+        from mcp_manager.compliance import ComplianceError  # type: ignore[import-not-found,no-redef]
     _MCP_OK = True
-except Exception:
+except Exception as _exc:  # noqa: BLE001
     _MCP_OK = False
+    _MCP_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
+    _log.warning("MCP manager not importable — /mcp-plugins answers 503: %s", _MCP_IMPORT_ERROR)
     _cat = None  # type: ignore[assignment]
     _act = None  # type: ignore[assignment]
     _ins = None  # type: ignore[assignment]

@@ -43,9 +43,6 @@ export const SkillsPage = React.lazy(() =>
   import("@/pages/skills").then((m) => ({ default: m.SkillsPage }))
 );
 
-export const PackagesPage = React.lazy(() =>
-  import("@/pages/packages").then((m) => ({ default: m.PackagesPage }))
-);
 
 export const LddPage = React.lazy(() =>
   import("@/pages/ldd").then((m) => ({ default: m.LddPage }))
@@ -135,9 +132,13 @@ export const MemoryPage = React.lazy(() =>
 // These three panels were consolidated into MarketplaceHubPage (ADR-0561 P2, 2026-09-16).
 // The corresponding files /src/pages/{extensions,mcp-plugins,plugins}.tsx have been deleted.
 
-// Marketplace Hub — the unified discovery + install experience for plugins, extensions, and MCP servers
-export const MarketplaceHubPage = React.lazy(() =>
-  import("@/pages/marketplace-hub").then((m) => ({ default: m.MarketplaceHub }))
+// ONE marketplace (ADR-0892): plugin index + install, installed plugins,
+// skill packages, MCP tools. Replaced pages/marketplace-hub.tsx (a synthetic
+// index fetching a 404) and pages/packages.tsx on 2026-09-19. Resolves to
+// src/pages/marketplace/index.tsx — never add a sibling pages/marketplace.tsx
+// (file beats directory; tests/unit/page-dir-shadow.test.ts).
+export const MarketplacePage = React.lazy(() =>
+  import("@/pages/marketplace").then((m) => ({ default: m.MarketplacePage }))
 );
 
 

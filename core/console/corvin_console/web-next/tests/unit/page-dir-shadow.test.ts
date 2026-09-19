@@ -21,10 +21,9 @@ const PAGES = resolve(__dirname, "../../src/pages");
 // panel-nav-wiring.test.ts). Add here only when neither side is imported by
 // any route — a wired route must never be on this list.
 const SHADOW_EXEMPT: Record<string, string> = {
-  marketplace:
-    "pages/marketplace.tsx (ADR-0682 skill discovery) and pages/marketplace/ " +
-    "(plugin list) are BOTH unreferenced — lazy-pages.ts routes /app/marketplace-hub " +
-    "to pages/marketplace-hub.tsx. Dead pair since 2026-09-16; resolve when one is wired.",
+  // (empty — the pages/marketplace.tsx + pages/marketplace/ dead pair listed here
+  // until 2026-09-19 is resolved: pages/marketplace/ IS the Marketplace panel
+  // (ADR-0892) and no sibling file may exist beside it.)
 };
 
 describe("src/pages: no file shadows a page directory", () => {

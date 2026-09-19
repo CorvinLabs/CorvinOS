@@ -15,11 +15,11 @@ import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import {
   DashboardPage, SettingsPage,
-  ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
+  ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
-  MarketplaceHubPage,
+  MarketplacePage,
   GitHubPage, SyncMonitorPage,
   QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
@@ -44,7 +44,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   VoicePage,
   ForgePage,
   SkillsPage,
-  PackagesPage,
   LddPage,
   CompliancePage,
   FilesPage,
@@ -60,7 +59,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   CustomProviderPage,
   DataSourcesPage,
   FlowsPage,
-  MarketplaceHubPage,
+  MarketplacePage,
   GitHubPage,
   SyncMonitorPage,
   QualityGatesPage,
@@ -93,7 +92,6 @@ export const PANELS: ConsolePanel[] = [
   rc("voice", "Voice", VoicePage, { nav: { label: "Profile", icon: "AudioLines", group: "messaging" } }),
   rc("forge", "Forge", ForgePage, { nav: { label: "Forge", icon: "Hammer", group: "build" } }),
   rc("skills", "Skills", SkillsPage, { nav: { label: "Skills", icon: "BookOpen", group: "build" } }),
-  rc("packages", "Packages", PackagesPage, { nav: { label: "Packages", icon: "Package", group: "build" } }),
   rc("ldd", "LDD", LddPage, { nav: { label: "Quality", icon: "Boxes", group: "system" } }),
   rc("compliance", "Compliance", CompliancePage, { nav: { label: "Audit & Compliance", icon: "ShieldCheck", group: "system" } }),
   rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle", group: "observability" } }),
@@ -114,13 +112,13 @@ export const PANELS: ConsolePanel[] = [
   rc("data-sources", "Data Sources", DataSourcesPage, { nav: { label: "Data Sources", icon: "Server", group: "knowledge" } }),
   rc("flows", "Flows", FlowsPage, { nav: { label: "Flows", icon: "Workflow", group: "knowledge" } }),
   // REMOVED 2026-09-15: "agents" panel (superseded by agent-hub, duplication)
-  // Unified "Marketplace" hub (renamed from "Plugins & Extensions", 2026-09-12) —
-  // the ONE sidebar entry for the three extend-CorvinOS subsystems (roadmap
-  // de-dup of the plugin triple). New MarketplaceHubPage (2026-09-16) replaces
-  // the old PluginCenterPage with improved UX, trending/newest, and search.
-  // REMOVED (2026-09-19): extensions, mcp-plugins, plugins panels — consolidated
-  // into marketplace-hub. Unused page files deleted; this is now the only entry.
-  rc("marketplace-hub", "Marketplace", MarketplaceHubPage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
+  // ONE marketplace (ADR-0892, 2026-09-19): browse the plugin index and install,
+  // manage installed plugins, skill packages and MCP tools — every action on a
+  // real route. Replaced marketplace-hub (synthetic index, 404 fetches), the
+  // manifest's plugin-center (deleted component → 404 page) and packages.
+  // The backend manifest declares the same route/component, so the sidebar
+  // dedupes to ONE entry (mergeManifestNav keys on the path).
+  rc("marketplace", "Marketplace", MarketplacePage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "system" } }),

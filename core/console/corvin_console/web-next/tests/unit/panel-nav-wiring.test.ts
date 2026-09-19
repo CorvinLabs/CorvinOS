@@ -39,12 +39,8 @@ const NAV_EXEMPT = new Set<string>([
   // once the routes exist.
   "audit",
   "releases",
-  // Folded into the unified "Plugins & Extensions" hub (/app/plugin-center),
-  // which renders these three as tabs. The standalone routes stay mounted for
-  // deep-link stability but are intentionally no longer in the sidebar.
-  "extensions",
-  "mcp-plugins",
-  "plugins",
+  // "extensions", "mcp-plugins", "plugins" and "packages" are no longer panels:
+  // App.tsx redirects them into /app/marketplace (ADR-0892, 2026-09-19).
   // Folded into the unified GitHub Integration panel (/app/settings/github,
   // itself reached from Settings, not the sidebar — see the "settings/github"
   // exemption above). Both routes now just redirect to that panel; "webhooks"

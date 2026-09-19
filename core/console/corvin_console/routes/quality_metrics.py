@@ -85,7 +85,7 @@ async def get_quality_metrics(task_id: str):
 @router.post("/metrics/export")
 async def export_metrics(
     task_id: str = Query(...),
-    format: str = Query("csv", regex="^(csv|json)$"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
     include_audit: bool = Query(True),
     include_spec_history: bool = Query(True),
 ):

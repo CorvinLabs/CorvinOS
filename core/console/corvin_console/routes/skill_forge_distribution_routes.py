@@ -10,7 +10,7 @@ ADR-0674: Skill Package & ZIP Distribution
 License: Apache-2.0
 """
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Dict, Optional
@@ -22,6 +22,14 @@ import re
 from core.skills.skill_packager import SkillPackager, ChecksumVerificationError
 from core.skills.skill_installer import SkillInstaller, InstallationError
 from core.skills.phase1_manifest_v2 import SkillManifestV2
+from typing import Annotated, Any
+
+# ADR-0892 — every route on this router carried NO session dependency
+# (2026-09-19 finding): ``POST /install`` accepted a ``url`` or an absolute
+# ``zip_path`` and unpacked it into the operator's skill root for anyone who
+# could reach the port. Reads require a session, writes a CSRF-signed one —
+# the same doors as every other console route (deps.py).
+from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +38,7 @@ router = APIRouter(prefix="/v1/skill-forge", tags=["skill-forge-v2"])
 
 @router.post("/package")
 async def package_skill(
+    rec: Annotated[Any, Depends(require_csrf)],
     skill_id: str = Query(..., description="ID of Skill to package"),
     skill_path: Optional[str] = Query(None, description="Custom path to Skill folder"),
 ) -> Dict:
@@ -105,7 +114,7 @@ async def package_skill(
 
 
 @router.get("/packages")
-async def list_packages() -> Dict:
+async def list_packages(rec: Annotated[Any, Depends(require_session)]) -> Dict:
     """
     List all packaged Skills.
 
@@ -147,7 +156,7 @@ async def list_packages() -> Dict:
 
 
 @router.get("/download/{filename}")
-async def download_package(filename: str, request: Request = None):
+async def download_package(filename: str, rec: Annotated[Any, Depends(require_session)], request: Request = None):
     """
     Download a packaged Skill ZIP file.
 
@@ -199,6 +208,7 @@ async def download_package(filename: str, request: Request = None):
 
 @router.post("/install")
 async def install_skill(
+    rec: Annotated[Any, Depends(require_csrf)],
     zip_path: Optional[str] = Query(None, description="Path to ZIP file"),
     url: Optional[str] = Query(None, description="URL to download ZIP from"),
     verify_checksum: bool = Query(True, description="Verify checksums before installation")
@@ -283,7 +293,7 @@ async def install_skill(
 
 
 @router.get("/installed")
-async def list_installed_skills() -> Dict:
+async def list_installed_skills(rec: Annotated[Any, Depends(require_session)]) -> Dict:
     """
     List all installed Skills.
 
@@ -329,7 +339,7 @@ async def list_installed_skills() -> Dict:
 
 
 @router.get("/packages/{skill_id}/{version}/metadata")
-async def get_package_metadata(skill_id: str, version: str) -> Dict:
+async def get_package_metadata(skill_id: str, version: str, rec: Annotated[Any, Depends(require_session)]) -> Dict:
     """
     Retrieve metadata for a specific packaged Skill.
 

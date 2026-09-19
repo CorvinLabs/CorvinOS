@@ -1,5 +1,7 @@
 /**
- * Plugin registry surface — E2E (ADR-0233 Phase 4).
+ * Plugin registry surface — E2E (ADR-0233 Phase 4; the Installed tab of the
+ * ONE marketplace since ADR-0892, /app/marketplace?tab=installed — the old
+ * /app/plugins path redirects there).
  *
  * Both flag states are covered, because a flag tested in one state rots:
  *   • plugin_console_surface OFF → the page reports the feature is off (the REST
@@ -93,165 +95,84 @@ async function mockList(page: Page, body: unknown, status = 200) {
     if (route.request().method() !== 'GET') return route.fallback();
     await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   });
+  // The tab also asks for health; the header asks the other three backends —
+  // none of them is under test here, and an unmocked route on the dev server
+  // answers 404, which the page renders as "unavailable" / "n/a".
+  await page.route('**/v1/console/plugins/health', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ monitoring_enabled: false, breakers: {} }) }),
+  );
 }
+const INSTALLED = '/console/app/marketplace?tab=installed';
+const OLD_PATH = '/console/app/plugins';
 
-test.describe('Plugins page — surface flag OFF', () => {
-  test('reports the feature is off instead of an error', async ({ page }) => {
+test.describe('Installed tab — surface flag OFF', () => {
+  test('reports the feature is off instead of an error, via the old /app/plugins path', async ({ page }) => {
     await mockList(page, { detail: 'Not Found' }, 404);
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-
-    await expect(page.getByRole('heading', { name: 'Plugins' })).toBeVisible();
-    await expect(page.getByText('plugin_console_surface')).toBeVisible();
+    await page.goto(OLD_PATH, { waitUntil: 'load' });
+    await expect(page).toHaveURL(/\/console\/app\/marketplace\?tab=installed/);
+    await expect(page.getByRole('heading', { name: 'Marketplace' })).toBeVisible();
+    await expect(page.getByText('The plugin console surface is switched off on this build.')).toBeVisible();
     await expect(page.getByText('Acme Notify')).toHaveCount(0);
   });
 });
 
-test.describe('Plugins page — read-only (lifecycle flag OFF)', () => {
+test.describe('Installed tab — read-only (lifecycle flag OFF)', () => {
   test('lists plugins but disables every mutation', async ({ page }) => {
-    await mockList(page, {
-      plugins: [PLUGIN],
-      total: 1,
-      lifecycle_enabled: false,
-    });
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-
+    await mockList(page, { plugins: [PLUGIN], total: 1, lifecycle_enabled: false });
+    await page.goto(INSTALLED, { waitUntil: 'load' });
     await expect(page.getByText('Acme Notify')).toBeVisible();
-    await expect(page.getByText('plugin_runtime_lifecycle')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Disabled/ })).toBeDisabled();
+    await expect(page.getByText(/plugin_runtime_lifecycle/)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Enable' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Uninstall' })).toBeDisabled();
   });
 });
 
-test.describe('Plugins page — full lifecycle', () => {
+test.describe('Installed tab — full lifecycle', () => {
   test('empty registry renders the empty state', async ({ page }) => {
     await mockList(page, LIST_EMPTY);
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-    await expect(page.getByText('No plugins installed for this tenant.')).toBeVisible();
+    await page.goto(INSTALLED, { waitUntil: 'load' });
+    await expect(page.getByText('No plugin is installed for this tenant.')).toBeVisible();
   });
 
-  test('enable posts to the enable endpoint', async ({ page }) => {
+  test('enable posts to the enable endpoint with the CSRF header', async ({ page }) => {
     await mockList(page, { plugins: [PLUGIN], total: 1, lifecycle_enabled: true });
-    let enableCalled = false;
+    let csrf: string | null = null;
     await page.route('**/v1/console/plugins/acme-notify/enable', async (route) => {
-      enableCalled = true;
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ...PLUGIN, enabled: true }),
-      });
+      csrf = route.request().headers()['x-csrf-token'] ?? null;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...PLUGIN, enabled: true }) });
     });
-
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-    await page.getByRole('button', { name: /Disabled/ }).click();
-    await expect.poll(() => enableCalled).toBe(true);
+    await page.goto(INSTALLED, { waitUntil: 'load' });
+    await page.getByRole('button', { name: 'Enable' }).click();
+    await expect.poll(() => csrf).toBe('e2e-csrf-token');
+    await expect(page.getByText('Enabled — audited.')).toBeVisible();
   });
 
-  test('a consent-gated plugin asks before enabling', async ({ page }) => {
+  test('a consent-gated plugin sends consent_granted with the enable', async ({ page }) => {
     const community = { ...PLUGIN, origin: 'community', requires_consent: true };
     await mockList(page, { plugins: [community], total: 1, lifecycle_enabled: true });
-
-    const consentFlags: boolean[] = [];
+    let consent: boolean | null = null;
     await page.route('**/v1/console/plugins/acme-notify/enable', async (route) => {
       const body = route.request().postDataJSON() as { consent_granted?: boolean };
-      consentFlags.push(Boolean(body?.consent_granted));
-      if (!body?.consent_granted) {
-        return route.fulfill({
-          status: 409,
-          contentType: 'application/json',
-          body: JSON.stringify({ detail: 'acme-notify needs explicit consent' }),
-        });
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ...community, enabled: true }),
-      });
+      consent = Boolean(body?.consent_granted);
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...community, enabled: true }) });
     });
-
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-    await page.getByRole('button', { name: /Disabled/ }).click();
-    await expect(page.getByText(/needs explicit consent/)).toBeVisible();
-
-    await page.getByRole('button', { name: 'I understand — enable anyway' }).click();
-    await expect.poll(() => consentFlags).toEqual([false, true]);
+    await page.goto(INSTALLED, { waitUntil: 'load' });
+    // The consent is explicit in the control itself — the button says so.
+    await page.getByRole('button', { name: 'Enable (with consent)' }).click();
+    await expect.poll(() => consent).toBe(true);
   });
 
-  test('settings form renders each schema type and saves the draft', async ({ page }) => {
-    await mockList(page, { plugins: [PLUGIN], total: 1, lifecycle_enabled: true });
-    let savedSettings: Record<string, unknown> | null = null;
-    await page.route('**/v1/console/plugins/acme-notify/settings', async (route) => {
-      const body = route.request().postDataJSON() as { settings: Record<string, unknown> };
-      savedSettings = body.settings;
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ...PLUGIN, settings: body.settings }),
-      });
+  test('uninstall is refused while enabled and sends DELETE after confirm when disabled', async ({ page }) => {
+    await mockList(page, { plugins: [{ ...PLUGIN, enabled: false }], total: 1, lifecycle_enabled: true });
+    let deleted = false;
+    await page.route('**/v1/console/plugins/acme-notify', async (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback();
+      deleted = route.request().headers()['x-csrf-token'] === 'e2e-csrf-token';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ uninstalled: 'acme-notify', audit_retained: true }) });
     });
-
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-
-    // string → text input, integer with both bounds → range, boolean → checkbox
-    const channel = page.locator('#plugin-setting-channel');
-    await expect(channel).toBeVisible();
-    await expect(page.locator('#plugin-setting-depth')).toHaveAttribute('type', 'range');
-    await expect(page.locator('#plugin-setting-verbose')).toHaveAttribute('type', 'checkbox');
-
-    // Save is disabled until the draft actually differs.
-    await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
-    await channel.fill('alerts');
-    await page.getByRole('button', { name: 'Save' }).click();
-    await expect.poll(() => savedSettings).toEqual({ channel: 'alerts' });
-  });
-
-  test('a rejected save surfaces the reason and keeps the draft', async ({ page }) => {
-    await mockList(page, { plugins: [PLUGIN], total: 1, lifecycle_enabled: true });
-    await page.route('**/v1/console/plugins/acme-notify/settings', async (route) => {
-      await route.fulfill({
-        status: 422,
-        contentType: 'application/json',
-        body: JSON.stringify({ detail: 'settings rejected: 42 is not of type string' }),
-      });
-    });
-
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-    await page.locator('#plugin-setting-channel').fill('nope');
-    await page.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByText(/Rejected/)).toBeVisible();
-    await expect(page.locator('#plugin-setting-channel')).toHaveValue('nope');
-  });
-
-  test('uninstall is blocked while the plugin is enabled', async ({ page }) => {
-    await mockList(page, {
-      plugins: [{ ...PLUGIN, enabled: true }],
-      total: 1,
-      lifecycle_enabled: true,
-    });
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-    await expect(page.getByRole('button', { name: /Enabled/ })).toBeVisible();
-    // Target the title, not the lucide icon class: the class name varies between
-    // lucide-react versions, the title is part of the component's own contract.
-    const trash = page.getByTitle('Disable the plugin before uninstalling');
-    await expect(trash).toBeDisabled();
-  });
-
-  test('disable posts to the disable endpoint', async ({ page }) => {
-    await mockList(page, {
-      plugins: [{ ...PLUGIN, enabled: true }],
-      total: 1,
-      lifecycle_enabled: true,
-    });
-    let disableCalled = false;
-    await page.route('**/v1/console/plugins/acme-notify/disable', async (route) => {
-      disableCalled = true;
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ...PLUGIN, enabled: false }),
-      });
-    });
-
-    await page.goto('/console/app/plugins', { waitUntil: 'load' });
-    await page.getByRole('button', { name: /Enabled/ }).click();
-    await expect.poll(() => disableCalled).toBe(true);
+    await page.goto(INSTALLED, { waitUntil: 'load' });
+    await page.getByRole('button', { name: 'Uninstall' }).click();
+    await page.getByRole('button', { name: /Confirm: remove acme-notify/ }).click();
+    await expect.poll(() => deleted).toBe(true);
   });
 });

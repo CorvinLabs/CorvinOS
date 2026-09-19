@@ -877,6 +877,80 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `health.py` | `HealthCollector` (interval polling, flag-gated) + `render_prometheus()` |
 | `healing.py` | `HealingOrchestrator` — Stage 3, **ships dark** behind `plugin_self_healing` |
 
+### Marketplace console — ONE panel, real lifecycle (ADR-0892, 2026-09-19)
+
+`/app/marketplace` (`web-next/src/pages/marketplace/`) is the one surface for
+installing, managing and removing what extends CorvinOS. It replaced two
+surfaces that fabricated: `/app/marketplace-hub` (a synthetic six-item index
+fetched from a path that 404ed, whose only action navigated to a 404) and the
+manifest's `/app/plugin-center` (a component deleted from the SPA — the 404
+page, as a second "Marketplace" sidebar entry). `/app/packages`, `/app/plugins`,
+`/app/extensions` and `/app/mcp-plugins` redirect into its tabs.
+
+| Tab | Backend | Actions (every one CSRF-signed, every one audited) |
+|---|---|---|
+| Browse | `GET /api/v1/marketplace/plugins` (index/plugins.json of the Corvin-Marketplace checkout, ADR-0511) — each entry now carries `registry_id`, `installable`, `install_blocker`, `installed`, `enabled`, `runtime_loaded`, computed by the SAME resolution the install route runs (`marketplace_resolve.manifest_plugin_id`) and the same tenant registry `/plugins` reads | Install (`POST …/plugins/{index_id}/install`, synchronous job; the response's final status is rendered, never a progress bar). A contributor-tier entry shows its blocker and no button — only builtin ids with a `plugin.yaml` under a trusted root install (ADR-0643) |
+| Installed | `GET /plugins` (tenant `registry.yaml` + what runs in this process) | enable (with consent for non-builtin origin), disable, settings (JSON, schema-validated), uninstall (refused while enabled — the backend's rule, mirrored as a disabled button) |
+| Packages | `packages.py` (ADR-0268 skill package ZIPs) | upload (multipart — the one call not through `api()`, same base and CSRF header), details, uninstall |
+| MCP tools | `mcp_plugins.py` (ADR-0096) | install from `npm:`/`pip:`/`github:` (SHA-256 pinned), activate/deactivate for the console's two scopes (user, tenant), remove. A 503 renders "not available on this build", never an empty catalogue |
+
+**What "install" is.** For a marketplace plugin: a `PluginRecord` written to
+`<CORVIN_HOME>/tenants/<tid>/plugins/registry.yaml` (mode 0600, `enabled: false`)
+plus an instance dir — the source runs IN PLACE from the marketplace checkout
+(operator rule: plugin source lives only there); enable hot-loads it and rolls
+the file back if `on_load()` fails; uninstall removes the record and the
+instance dir, never the source. For a package: validated, audited, then moved
+atomically into `<home>/packages/<tenant>/installed/`. For an MCP tool: a
+catalogue entry (+ pinned tarball for github).
+
+**What was deleted rather than consolidated** (a mock button wired to a real
+route is still a lie about the item): `marketplace_hub_routes.py` +
+`core/skills/marketplace_hub.py` (synthetic index, no auth, service initialised
+only in the standalone lifespan — never under the gateway host);
+`skill_manager_routes.py` (every handler a stub: install started nothing,
+enable/disable/delete echoed success, tenant from a request header);
+`marketplace_routes.py` (a `sleep`-based fake install, unmounted);
+`core/marketplace/installer.py` (an explicit mock); the dead SPA components
+(`panels/marketplace.tsx`, `MarketplaceTab`, `InstalledTab`,
+`components/marketplace/*`, `CustomRepositories*`, `PackageMarketplace`) and the
+Playwright specs that drove them.
+
+**Two defects found on the way, both fixed in the same commit:**
+
+- `mcp_plugins.py` imported the bare name `mcp_manager`; with the
+  `corvin_operator` root on sys.path that resolved to the OUTER package (no
+  `catalog`) and every MCP route answered 503 on an install that ships the
+  manager. The fully qualified `corvin_operator.mcp_manager.mcp_manager` is
+  tried first; the bare name stays as the standalone fallback.
+- `TenantRegistry.load` read `plugins:` at the top level only; the maintainer
+  install's `registry.yaml` carried its records under `spec:` (another YAML
+  round-trip), so an installed plugin (`vibe_session_history`) read as "not
+  installed" in the console. The loader accepts the nested mapping; `save()`
+  writes the canonical shape back.
+
+**`skill_forge_distribution_routes` had no session on any route** —
+`POST /v1/skill-forge/install?url=…` unpacked a remote ZIP into the operator's
+skill root for anyone who could reach the port. Reads now take
+`require_session`, writes `require_csrf`.
+
+**Skills are not fabricated into the marketplace.** The Corvin-Marketplace
+repository ships no skill index (`extensions/skills/` holds a README); a skill
+arrives as a package (Packages tab) or is promoted on the Skills page. When the
+repository ships skill packages with an index, Browse gains a second source.
+
+Proof: `tests/e2e/test_marketplace_console_e2e.py` (HTTP, temp `CORVIN_HOME`,
+a REAL builtin from the checkout: install → listed → index says installed →
+uninstall → gone; nested-`spec:` registry read; 401 on the skill-forge routes;
+MCP 200; manifest route), `web-next/tests/unit/marketplace-page.test.tsx`,
+`console-deploy.sh --marker`, the live Playwright spec.
+
+**Must NOT do:** re-add a marketplace surface whose items are not backed by a
+real index and a real install route · zero-fill "installable" (an entry the
+build cannot install shows WHY) · call `fetch` under `pages/marketplace/` except
+the multipart upload · mount a skill/plugin install route without
+`require_csrf` · list a plugin as installed from any file but the tenant
+registry the lifecycle writes.
+
 ### Vocabulary — `boot_layer` vs `tier` vs `origin` (ADR-0233 D7, ADR-0243)
 
 Three orthogonal axes. They answer three different questions and none of them is
