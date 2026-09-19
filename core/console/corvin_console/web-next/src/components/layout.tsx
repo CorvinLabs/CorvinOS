@@ -8,7 +8,6 @@ import {
   Boxes,
   Brain,
   CheckCircle,
-  TrendingUp,
   ChevronDown,
   Cloud,
   Cpu,
@@ -32,6 +31,7 @@ import {
   ShieldCheck,
   Sparkles,
   Menu,
+  TrendingUp,
   Video,
   Workflow,
   X,
@@ -147,8 +147,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Gauge,                  // otel-telemetry, compute
   Sparkles,               // skill-forge-generator
   Workflow,               // workflows
-  TrendingUp: TrendingUp, // (unused since ADR-0885; kept for manifest icons)
-  Blocks,                 // plugin-center (marketplace)
+  Blocks,                 // marketplace-hub
   Activity,               // sync-monitor
 };
 
@@ -159,36 +158,25 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "primary",
     items: [
-      { to: "/app/chat",      label: "Chat",      icon: MessagesSquare },
       { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      // Renamed from "Vibe Dashboard" to match the PANELS registry title
-      // (registry.tsx rc("vibe-engineering", "Learnings", ...), eb260d8f) and
-      // moved out of the now-single-item "vibe" group into top-level nav, per
-      // that commit's stated intent. A panel needs BOTH registrations —
-      // panelRoutes() mounts /app/<route> from PANELS, this list makes it
-      // reachable. tests/unit/panel-nav-wiring.test.ts fails if the two drift
-      // apart on ROUTE, but not on label — hence this label went stale.
-      // Ungated (2026-09-15, operator request): the maturity panel now serves
-      // real on-demand data across all tabs, so it shows directly under
-      // Dashboard in this section-less primary group — no `vibe_engineering`
-      // flag gate (that legacy default-off UI flag kept it hidden; per the
-      // "all features always on" policy such flags are obsolete).
-      { to: "/app/vibe-engineering", label: "Learnings", icon: TrendingUp },
+      // Vibe Engineering dashboard (ADR-0400): unified 3-column learnings view.
+      // A panel needs BOTH registrations: panelRoutes() mounts /app/<route> from PANELS,
+      // this list makes it reachable. tests/unit/panel-nav-wiring.test.ts verifies
+      // the two stay in sync (Audit 2026-09-19: Chat page removed as it's not in PANELS).
+      { to: "/app/vibe-engineering", label: "Learnings", icon: Brain },
     ],
   },
-  // Renamed from "Plugins & Extensions" (2026-09-12, operator request) and
-  // promoted to its own top-level section right under Learnings. This group's
-  // id is also the id the backend manifest's "marketplace" nav group merges
-  // into (see mergeManifestNav + capabilities.py::_get_nav_groups) — every
-  // installed plugin's Console panel is appended here automatically, and
-  // removed automatically on disable/uninstall, with no frontend redeploy.
+  // Marketplace Hub (ADR-0561): unified discovery + install for plugins, extensions, and MCP.
+  // The marketplace-hub panel consolidates three separate tabs (replaced PluginCenterPage, 2026-09-16).
+  // This group's id also merges with backend manifest's "marketplace" nav group (mergeManifestNav),
+  // so installed plugins' Console panels append here automatically, and remove on disable/uninstall.
   {
     id: "marketplace",
     label: "Marketplace",
     collapsible: true,
     defaultOpen: true,
     items: [
-      { to: "/app/plugin-center", label: "Marketplace", icon: Blocks },
+      { to: "/app/marketplace-hub", label: "Marketplace", icon: Blocks },
     ],
   },
   {
@@ -197,9 +185,9 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     defaultOpen: true,
     items: [
-      // Group shipped empty (so it rendered as a header with nothing under it)
-      // while the panel below was mounted by PANELS and unreachable.
       { to: "/app/quality", label: "Quality Gates", icon: CheckCircle },
+      { to: "/app/sync-monitor", label: "Sync Monitor", icon: Activity },
+      { to: "/app/otel-telemetry", label: "OTEL Telemetry", icon: Gauge },
     ],
   },
   {
@@ -227,7 +215,6 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     defaultOpen: true,
     items: [
-      { to: "/app/workflows",  label: "Workflows",       icon: Workflow },
       { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
       { to: "/app/forge",      label: "Forge",           icon: Hammer },
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
@@ -266,6 +253,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/api-keys",       label: "API Keys",           icon: KeyRound },
       { to: "/app/license",        label: "License",            icon: Lock },
+      { to: "/app/licensing-audit", label: "Licensing Audit",   icon: Lock },
       { to: "/app/compliance",     label: "Audit & Compliance", icon: ShieldCheck },
       { to: "/app/ldd",            label: "Quality",            icon: Boxes },
       { to: "/app/settings",       label: "Settings",           icon: Settings },
@@ -460,9 +448,24 @@ export function mergeManifestNav(groups: NavGroup[], manifest: ConsoleManifest |
 
 /** Icon names a backend manifest may carry → the lucide icons this bundle already ships. */
 const MANIFEST_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  MessagesSquare, LayoutDashboard, Layers: Boxes, Cpu, BookOpen, Blocks, Settings,
-  Zap: Sparkles, Shield: ShieldCheck, ShieldCheck, Sparkles, Plug, Package, Globe, Network, Workflow,
-  TrendingUp, Video,
+  MessagesSquare,
+  LayoutDashboard,
+  Layers: Boxes,
+  Cpu,
+  BookOpen,
+  Blocks,
+  Settings,
+  Zap: Sparkles,
+  Shield: ShieldCheck,
+  ShieldCheck,
+  Sparkles,
+  Plug,
+  Package,
+  Globe,
+  Network,
+  Workflow,
+  TrendingUp,
+  Video,
 };
 
 export function AppLayout() {

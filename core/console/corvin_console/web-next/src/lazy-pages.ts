@@ -79,10 +79,6 @@ export const FilesPage = React.lazy(() =>
   import("@/pages/files").then((m) => ({ default: m.FilesPage }))
 );
 
-export const SpacePage = React.lazy(() =>
-  import("@/pages/space").then((m) => ({ default: m.SpacePage }))
-);
-
 export const AgentHubPage = React.lazy(() =>
   import("@/pages/agent-hub").then((m) => ({ default: m.AgentHubPage }))
 );
@@ -135,10 +131,6 @@ export const MemoryPage = React.lazy(() =>
   import("@/pages/memory").then((m) => ({ default: m.MemoryPage }))
 );
 
-export const AgentsPage = React.lazy(() =>
-  import("@/pages/agents").then((m) => ({ default: m.AgentsPage }))
-);
-
 export const ExtensionsPage = React.lazy(() =>
   import("@/pages/extensions").then((m) => ({ default: m.ExtensionsPage }))
 );
@@ -151,13 +143,7 @@ export const PluginsPage = React.lazy(() =>
   import("@/pages/plugins").then((m) => ({ default: m.PluginsPage }))
 );
 
-// Unified Plugins & Extensions hub — one sidebar entry, three tabs wrapping the
-// three page components above (ExtensionsPage / McpPluginsPage / PluginsPage).
-export const PluginCenterPage = React.lazy(() =>
-  import("@/pages/plugin-center").then((m) => ({ default: m.PluginCenterPage }))
-);
-
-// New Marketplace Hub (replaces plugin-center as the unified discovery + install experience)
+// Marketplace Hub — the unified discovery + install experience for plugins, extensions, and MCP servers
 export const MarketplaceHubPage = React.lazy(() =>
   import("@/pages/marketplace-hub").then((m) => ({ default: m.MarketplaceHub }))
 );
