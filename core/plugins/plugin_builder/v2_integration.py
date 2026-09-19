@@ -306,7 +306,7 @@ class PluginDeveloper:
                     event_type="development_completed",
                     success=result.success,
                     development_id=result.development_id,
-                    result=result.to_dict(),
+                    data=result.to_dict(),
                 )
 
         return result
