@@ -2270,6 +2270,7 @@ def _spawn_detached_bg_worker(
                 "engine_chat_key": _engine_chat_key,
                 "profile": _bg_profile, "msg_id": f"{msg_id}_selfdel",
                 "want_voice": bool(want_voice),
+                "outbox_dir": str(OUTBOX),
             }
             import tempfile as _tf
             _fd, _spec_file = _tf.mkstemp(prefix="bgspec_", suffix=".json")
