@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import subprocess
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 from dataclasses import dataclass
@@ -72,8 +73,33 @@ class AudioSynthesisWorker(WorkerSkillBase):
                 method = "piper"
                 logger.info(f"Audio synthesized with piper (fallback): {output_file}")
 
-            # Get file duration (stub: assume 60s for now)
-            duration_s = self._estimate_duration(narration)
+            # FIX #2: Audio Duration Validation (FAIL-CLOSED)
+            # Validate that audio is REAL narration (not whistle tone, not empty)
+            try:
+                audio_duration = self._ffprobe_duration(str(output_file))
+                if audio_duration < 0.5:
+                    raise ValueError(
+                        f"Audio too short ({audio_duration:.2f}s, need >=0.5s) — whistle tone detected (FAIL-CLOSED)"
+                    )
+                logger.debug(f"✓ Audio duration validated: {audio_duration:.2f}s")
+            except ValueError as e:
+                raise ValueError(str(e))
+
+            # FIX #2: Validate audio file size (not a placeholder)
+            file_size = output_file.stat().st_size
+            if file_size < 5000:
+                raise ValueError(
+                    f"Audio file too small ({file_size} bytes, need >=5000) — TTS likely failed (FAIL-CLOSED)"
+                )
+            logger.debug(f"✓ Audio file size validated: {file_size} bytes")
+
+            # Get file duration (use actual duration from ffprobe if available)
+            try:
+                duration_s = self._ffprobe_duration(str(output_file))
+            except ValueError:
+                # Fallback to estimation if ffprobe fails
+                duration_s = self._estimate_duration(narration)
+                logger.warning(f"Using estimated duration: {duration_s:.2f}s")
 
             return WorkerResult(
                 worker_id=self.manifest.id,
@@ -160,6 +186,45 @@ class AudioSynthesisWorker(WorkerSkillBase):
         """Estimate audio duration from text length (chars/rate)."""
         # Average speaking rate: ~150 words/minute = ~4.5 chars/second
         return len(narration) / 4.5
+
+    def _ffprobe_duration(self, audio_file: str | Path) -> float:
+        """
+        Get actual audio duration using ffprobe (FAIL-CLOSED).
+
+        Args:
+            audio_file: Path to audio file
+
+        Returns:
+            Duration in seconds
+
+        Raises:
+            ValueError: If ffprobe fails or file is invalid
+        """
+        try:
+            audio_file = str(audio_file)
+
+            # Use ffprobe to query duration
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                audio_file
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+            if result.returncode != 0:
+                raise ValueError(f"ffprobe failed: {result.stderr}")
+
+            data = json.loads(result.stdout)
+            duration = float(data.get("format", {}).get("duration", 0))
+            return duration
+
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            raise ValueError(f"ffprobe unavailable: {e}")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ValueError(f"Failed to parse audio duration: {e}")
 
 
 __all__ = ["AudioSynthesisWorker"]

@@ -394,17 +394,18 @@ class VideoProducerMaestro:
         Raises:
             ValueError: If narration text or blender content is missing/invalid
         """
-        # Validate narration content
+        # FIX #1: Strict Narration Content Validation
         narration_list = job.get("narration", [])
         if not narration_list:
             raise ValueError("Job has no narration segments (FAIL-CLOSED)")
 
         for i, scene in enumerate(narration_list):
             text = scene.get("text", "").strip() if isinstance(scene, dict) else ""
+            # FIX #1: Stricter validation - require at least 10 characters
             if not text:
-                raise ValueError(f"Narration scene {i} has no text (FAIL-CLOSED)")
-            if len(text) < 5:
-                raise ValueError(f"Narration scene {i} too short: '{text}' (FAIL-CLOSED)")
+                raise ValueError(f"Narration scene {i} has empty text (FAIL-CLOSED)")
+            if len(text) < 10:
+                raise ValueError(f"Narration scene {i} too short ({len(text)} chars, need >=10): '{text}' (FAIL-CLOSED)")
 
         # Validate blender content (if present)
         blender_config = job.get("components", {}).get("blender", {})
