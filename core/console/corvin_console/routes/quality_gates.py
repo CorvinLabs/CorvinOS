@@ -18,8 +18,10 @@ Mutations (POST) additionally require CSRF token (``require_csrf``).
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Annotated, Any, Dict, List, Optional
@@ -29,8 +31,9 @@ from fastapi.responses import JSONResponse
 
 from core.quality_gates.graph import KnowledgeGraph
 from core.quality_gates.audit import QualityGateAuditLogger
-from core.quality_gates.config import list_gates, load_gate_config
-from core.quality_gates.models import VerdictType, KGNodeType
+from core.quality_gates.artifacts import KINDS, load_artifacts, resolve_adr_root
+from core.quality_gates.config import get_validator_class, list_gates, load_gate_config
+from core.quality_gates.models import KGNode, VerdictType, KGNodeType
 
 from .. import _bootstrap
 from .. import auth as session_auth
@@ -41,8 +44,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/quality", tags=["quality-gates"])
 
-# In-memory run cache (in production, would be persisted)
+# In-memory run cache (bounded; a run is an operator action, not a record —
+# the record is the hash-chained gate_events table it writes).
 _run_cache: Dict[str, Dict[str, Any]] = {}
+_runs_lock = threading.Lock()
+_MAX_RUNS = 64
 
 
 def _get_graph(tenant_id: str) -> KnowledgeGraph:
@@ -58,9 +64,18 @@ def _get_audit_logger(tenant_id: str) -> QualityGateAuditLogger:
     return QualityGateAuditLogger(graph.conn)
 
 
+def _iso(dt: datetime) -> str:
+    """UTC, ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` — the same shape the audit logger
+    writes, so the string comparisons in the SQL windows are exact. Until
+    2026-09-20 this appended ``Z`` to an offset-aware isoformat (``+00:00Z``),
+    which ``_parse_timestamp`` rejected — every event a run wrote was then
+    skipped by the status window and the page counted zero."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _now() -> str:
     """Return current timestamp in ISO 8601 format."""
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return _iso(datetime.now(timezone.utc))
 
 
 def _parse_timestamp(ts_str: Optional[str]) -> Optional[datetime]:
@@ -69,8 +84,11 @@ def _parse_timestamp(ts_str: Optional[str]) -> Optional[datetime]:
         return None
     try:
         if ts_str.endswith("Z"):
-            ts_str = ts_str[:-1] + "+00:00"
-        return datetime.fromisoformat(ts_str)
+            ts_str = ts_str[:-1]
+            if not ts_str.endswith("+00:00"):
+                ts_str += "+00:00"
+        parsed = datetime.fromisoformat(ts_str)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (ValueError, AttributeError):
         return None
 
@@ -90,19 +108,29 @@ async def get_gates_status(
     tenant_id = rec.tenant_id
     try:
         graph = _get_graph(tenant_id)
-        audit_logger = _get_audit_logger(tenant_id)
-
-        # Query gate events from audit trail
-        query = (
-            "SELECT gate_name, verdict, timestamp FROM gate_events "
-            "WHERE tenant_id = ? ORDER BY timestamp DESC LIMIT 1000"
-        )
-        rows = graph.conn.execute(query, [tenant_id]).fetchall()
-
-        # Parse results and compute summaries
+        # Aggregate in SQL — one run over the checkout writes ~1 100 events, and
+        # the previous "last 1000 rows" window silently cut the gates that ran
+        # first (2026-09-20: IdeaGate and ConceptGate read "not run" on the
+        # page right after a completed run). Timestamps are the audit logger's
+        # ``...Z`` shape, so the string comparison is exact.
         now = datetime.now(timezone.utc)
-        day_ago = now - timedelta(hours=24)
-        week_ago = now - timedelta(days=7)
+        day_ago = _iso(now - timedelta(hours=24))
+        week_ago = _iso(now - timedelta(days=7))
+        agg_rows = graph.conn.execute(
+            "SELECT gate_name, lower(verdict), "
+            "SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) "
+            "FROM gate_events WHERE tenant_id = ? GROUP BY gate_name, lower(verdict)",
+            [day_ago, week_ago, tenant_id],
+        ).fetchall()
+        last_rows = graph.conn.execute(
+            "SELECT gate_name, lower(verdict), timestamp FROM gate_events e WHERE tenant_id = ? "
+            "AND timestamp = (SELECT max(timestamp) FROM gate_events WHERE tenant_id = e.tenant_id AND gate_name = e.gate_name)",
+            [tenant_id],
+        ).fetchall()
+        events_total = int(graph.conn.execute(
+            "SELECT COUNT(*) FROM gate_events WHERE tenant_id = ?", [tenant_id]
+        ).fetchall()[0][0])
 
         gate_summaries = {}
         for gate_name in list_gates():
@@ -112,39 +140,117 @@ async def get_gates_status(
                 "last_verdict": None,
                 "last_timestamp": None,
             }
-
-        for gate_name, verdict_str, timestamp_str in rows:
-            parsed_ts = _parse_timestamp(timestamp_str)
-            if not parsed_ts:
+        for gate_name, verdict, n_24h, n_7d in agg_rows:
+            if gate_name not in gate_summaries or verdict not in ("pass", "warn", "fail"):
                 continue
-
-            if gate_name not in gate_summaries:
-                continue
-
-            verdict = verdict_str.lower()  # "pass", "warn", or "fail"
-            if parsed_ts >= day_ago:
-                gate_summaries[gate_name]["last_24h"][verdict] = (
-                    gate_summaries[gate_name]["last_24h"].get(verdict, 0) + 1
-                )
-            if parsed_ts >= week_ago:
-                gate_summaries[gate_name]["last_7d"][verdict] = (
-                    gate_summaries[gate_name]["last_7d"].get(verdict, 0) + 1
-                )
-
-            # Update last verdict if this is the most recent for this gate
-            if gate_summaries[gate_name]["last_timestamp"] is None:
+            gate_summaries[gate_name]["last_24h"][verdict] += int(n_24h or 0)
+            gate_summaries[gate_name]["last_7d"][verdict] += int(n_7d or 0)
+        for gate_name, verdict, ts in last_rows:
+            if gate_name in gate_summaries:
                 gate_summaries[gate_name]["last_verdict"] = verdict
-                gate_summaries[gate_name]["last_timestamp"] = timestamp_str
+                gate_summaries[gate_name]["last_timestamp"] = ts
 
+        # ADR-0688 amendment (2026-09-20): the page renders what is here — a
+        # gate's 24h pass share over the artifacts it actually judged, and the
+        # totals. A gate with no event in the window has pass_percentage null,
+        # never 0.
+        events_24h = 0
+        for gs in gate_summaries.values():
+            for window in ("last_24h", "last_7d"):
+                w = gs[window]
+                judged = w["pass"] + w["warn"] + w["fail"]
+                w["total"] = judged
+                w["pass_percentage"] = round(w["pass"] / judged * 100, 1) if judged else None
+            events_24h += gs["last_24h"]["total"]
+        last_run = None
+        with _runs_lock:
+            for run in _run_cache.values():
+                if run["tenant_id"] == tenant_id and (last_run is None or run["started_at"] > last_run["started_at"]):
+                    last_run = {k: run.get(k) for k in ("run_id", "status", "started_at", "completed_at", "artifacts_total", "artifacts_done", "error")}
         return {
             "tenant_id": tenant_id,
             "timestamp": _now(),
             "summary": gate_summaries,
             "gates_total": len(list_gates()),
+            "events_24h": events_24h,
+            "events_total": events_total,
+            "source_root": str(resolve_adr_root() or ""),
+            "last_run": last_run,
         }
     except Exception as exc:  # noqa: BLE001
         logger.error(f"Failed to get gates status: {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to get status: {type(exc).__name__}")
+
+
+# ============================================================================
+# Trend + failures — what the page draws (2026-09-20)
+# ============================================================================
+
+@router.get("/gates/trend", summary="Per-day pass share over the last N days")
+async def get_gates_trend(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    days: Annotated[int, Query(ge=1, le=90)] = 7,
+) -> Dict[str, Any]:
+    """One point per day that HAS gate events (never a zero for a day nobody
+    ran anything — that is a gap, not a 0 % pass rate)."""
+    tenant_id = rec.tenant_id
+    try:
+        graph = _get_graph(tenant_id)
+        since = _iso(datetime.now(timezone.utc) - timedelta(days=days))
+        rows = graph.conn.execute(
+            "SELECT timestamp, verdict FROM gate_events WHERE tenant_id = ? AND timestamp >= ? ORDER BY timestamp",
+            [tenant_id, since],
+        ).fetchall()
+        by_day: Dict[str, Dict[str, int]] = {}
+        for ts, verdict in rows:
+            parsed = _parse_timestamp(ts)
+            if not parsed:
+                continue
+            day = parsed.date().isoformat()
+            d = by_day.setdefault(day, {"pass": 0, "warn": 0, "fail": 0})
+            d[str(verdict).lower()] = d.get(str(verdict).lower(), 0) + 1
+        points = []
+        for day in sorted(by_day):
+            d = by_day[day]
+            total = d["pass"] + d["warn"] + d["fail"]
+            points.append({"date": day, **d, "total": total,
+                           "pass_percentage": round(d["pass"] / total * 100, 1) if total else None})
+        return {"tenant_id": tenant_id, "days": days, "points": points, "timestamp": _now()}
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Failed to get gates trend: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to get trend: {type(exc).__name__}")
+
+
+@router.get("/gates/failures", summary="Recent fail/warn verdicts with their reason")
+async def get_gates_failures(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    hours: Annotated[int, Query(ge=1, le=24 * 30)] = 24,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> Dict[str, Any]:
+    tenant_id = rec.tenant_id
+    try:
+        graph = _get_graph(tenant_id)
+        since = _iso(datetime.now(timezone.utc) - timedelta(hours=hours))
+        rows = graph.conn.execute(
+            "SELECT gate_name, artifact_id, verdict, confidence, reason, timestamp, findings_count "
+            "FROM gate_events WHERE tenant_id = ? AND timestamp >= ? AND verdict IN ('fail', 'warn') "
+            "ORDER BY timestamp DESC LIMIT ?",
+            [tenant_id, since, limit],
+        ).fetchall()
+        total = graph.conn.execute(
+            "SELECT COUNT(*) FROM gate_events WHERE tenant_id = ? AND timestamp >= ? AND verdict IN ('fail', 'warn')",
+            [tenant_id, since],
+        ).fetchall()[0][0]
+        failures = [
+            {"gate_name": g, "artifact_id": a, "verdict": v, "confidence": float(c or 0.0),
+             "reason": r or "", "timestamp": ts, "findings_count": int(fc or 0),
+             "artifact_type": KINDS.get(g, {}).get("node_type", "")}
+            for g, a, v, c, r, ts, fc in rows
+        ]
+        return {"tenant_id": tenant_id, "hours": hours, "failures": failures, "total": int(total), "timestamp": _now()}
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Failed to get gates failures: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to get failures: {type(exc).__name__}")
 
 
 # ============================================================================
@@ -279,60 +385,94 @@ async def get_artifact_history(
 async def run_all_gates(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> Dict[str, Any]:
-    """Trigger execution of all gate validators for the tenant.
+    """Run every gate validator over the REAL artifacts of the Corvin-ADR
+    checkout (``core.quality_gates.artifacts``) and record each verdict as a
+    hash-chained ``gate_events`` row plus a knowledge-graph node.
 
-    Returns a run_id that can be used to poll results via GET /api/quality/gates/results/<run_id>.
+    Until 2026-09-20 this wrote one hard-coded ``pass`` per gate ("validated
+    successfully", confidence 0.95) and touched no artifact — a fabricated
+    result on a page titled "Quality Gates". The run is a JOB on a worker
+    thread; ``GET /api/quality/gates/results/{run_id}`` reports its progress
+    (artifacts judged so far) and, once completed, the per-gate counts.
     """
     tenant_id = rec.tenant_id
     run_id = str(uuid.uuid4())[:8]
+    root = resolve_adr_root()
+    run: Dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "run_id": run_id,
+        "status": "running",
+        "started_at": _now(),
+        "completed_at": None,
+        "gates_total": len(list_gates()),
+        "gates_completed": 0,
+        "artifacts_total": 0,
+        "artifacts_done": 0,
+        "source_root": str(root) if root else None,
+        "results": {},
+        "error": None,
+    }
+    with _runs_lock:
+        _run_cache[run_id] = run
+        while len(_run_cache) > _MAX_RUNS:
+            _run_cache.pop(next(iter(_run_cache)))
+    if root is None:
+        run["status"] = "failed"
+        run["error"] = "no Corvin-ADR checkout found (CORVIN_ADR_ROOT, ../Corvin-ADR or corvin_decisions/)"
+        run["completed_at"] = _now()
+        return {"tenant_id": tenant_id, "run_id": run_id, "status": "failed", "error": run["error"],
+                "results_url": f"/v1/console/api/quality/gates/results/{run_id}", "timestamp": _now()}
 
-    try:
-        # Create run entry in cache
-        _run_cache[run_id] = {
-            "tenant_id": tenant_id,
-            "run_id": run_id,
-            "status": "running",
-            "started_at": _now(),
-            "gates_total": len(list_gates()),
-            "gates_completed": 0,
-            "results": {},
-        }
+    def _worker() -> None:
+        graph = None
+        try:
+            graph = _get_graph(tenant_id)
+            audit_logger = QualityGateAuditLogger(graph.conn)
+            per_gate = {g: load_artifacts(root, g) for g in list_gates()}
+            run["artifacts_total"] = sum(len(v) for v in per_gate.values())
+            for gate_name in list_gates():
+                counts = {"pass": 0, "warn": 0, "fail": 0}
+                validator = get_validator_class(gate_name)(graph, tenant_id)
+                node_type = KGNodeType(KINDS[gate_name]["node_type"])
+                for artifact in per_gate[gate_name]:
+                    result = validator.validate(artifact)
+                    if not result.timestamp:
+                        result = dataclasses.replace(result, timestamp=_now())
+                    audit_logger.write_gate_event(result)
+                    try:
+                        graph.write_node(KGNode(
+                            id=str(artifact.get("id") or result.artifact_id), node_type=node_type, tenant_id=tenant_id,
+                            data={"path": artifact.get("path"), "last_verdict": result.verdict.value,
+                                  "last_gate_run": run_id},
+                        ))
+                    except Exception as exc:  # noqa: BLE001 — the event is the record; the node is a projection
+                        logger.warning("kg node write failed for %s: %s", result.artifact_id, type(exc).__name__)
+                    counts[result.verdict.value] = counts.get(result.verdict.value, 0) + 1
+                    run["artifacts_done"] += 1
+                run["results"][gate_name] = {"gate_name": gate_name, "artifacts": len(per_gate[gate_name]), **counts}
+                run["gates_completed"] += 1
+            run["status"] = "completed"
+        except Exception as exc:  # noqa: BLE001 — the run must never stay "running"
+            logger.error("gate run %s failed: %s", run_id, exc)
+            run["status"] = "failed"
+            run["error"] = f"{type(exc).__name__}"
+        finally:
+            run["completed_at"] = _now()
+            if graph is not None:
+                try:
+                    graph.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
-        # Simulate running validators (in real implementation, would invoke actual validators)
-        for gate_name in list_gates():
-            try:
-                config = load_gate_config(gate_name)
-                # Placeholder: real implementation would invoke the validator class
-                _run_cache[run_id]["results"][gate_name] = {
-                    "gate_name": gate_name,
-                    "verdict": "pass",
-                    "confidence": 0.95,
-                    "reason": f"Gate {gate_name} validated successfully",
-                }
-                _run_cache[run_id]["gates_completed"] += 1
-            except Exception as exc:
-                logger.warning(f"Failed to run {gate_name}: {exc}")
-                _run_cache[run_id]["results"][gate_name] = {
-                    "gate_name": gate_name,
-                    "verdict": "fail",
-                    "confidence": 0.0,
-                    "reason": f"Validator error: {type(exc).__name__}",
-                }
-                _run_cache[run_id]["gates_completed"] += 1
-
-        _run_cache[run_id]["status"] = "completed"
-        _run_cache[run_id]["completed_at"] = _now()
-
-        return {
-            "tenant_id": tenant_id,
-            "run_id": run_id,
-            "status": "running",
-            "results_url": f"/v1/console/api/quality/gates/results/{run_id}",
-            "timestamp": _now(),
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.error(f"Failed to run all gates: {exc}")
-        raise HTTPException(status_code=500, detail=f"Failed to run gates: {type(exc).__name__}")
+    threading.Thread(target=_worker, name=f"quality-gates-run-{run_id}", daemon=True).start()
+    return {
+        "tenant_id": tenant_id,
+        "run_id": run_id,
+        "status": "running",
+        "artifacts_total": run["artifacts_total"],
+        "results_url": f"/v1/console/api/quality/gates/results/{run_id}",
+        "timestamp": _now(),
+    }
 
 
 # ============================================================================
@@ -347,25 +487,17 @@ async def get_run_results(
     """Get detailed results of a specific gate run."""
     tenant_id = rec.tenant_id
 
-    if run_id not in _run_cache:
+    with _runs_lock:
+        run = _run_cache.get(run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
-
-    run = _run_cache[run_id]
 
     # Verify tenant isolation
     if run["tenant_id"] != tenant_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Format results
-    gates_results = []
-    for gate_name, result in run.get("results", {}).items():
-        gates_results.append({
-            "gate_name": result.get("gate_name", gate_name),
-            "verdict": result.get("verdict", "unknown"),
-            "confidence": result.get("confidence", 0.0),
-            "reason": result.get("reason", ""),
-        })
-
+    total = run.get("artifacts_total") or 0
+    done = run.get("artifacts_done") or 0
     return {
         "tenant_id": tenant_id,
         "run_id": run_id,
@@ -374,7 +506,12 @@ async def get_run_results(
         "completed_at": run.get("completed_at"),
         "gates_total": run["gates_total"],
         "gates_completed": run["gates_completed"],
-        "gates_results": gates_results,
+        "artifacts_total": total,
+        "artifacts_done": done,
+        "progress": 100 if run["status"] in ("completed", "failed") else (round(done / total * 100) if total else 0),
+        "source_root": run.get("source_root"),
+        "error": run.get("error"),
+        "gates_results": list(run.get("results", {}).values()),
         "timestamp": _now(),
     }
 
