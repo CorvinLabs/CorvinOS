@@ -114,6 +114,9 @@ class VideoAssemblerWorker(WorkerSkillBase):
                 # If codec check fails, log warning but don't fail
                 logger.warning(f"Could not validate codec: {e}")
 
+            # Calculate size in MB
+            size_mb = video_size / (1024 * 1024)
+
             return WorkerResult(
                 worker_id=self.manifest.id,
                 status="success",
@@ -121,7 +124,7 @@ class VideoAssemblerWorker(WorkerSkillBase):
                     "output_file": str(output_file),
                     "duration_s": duration_s,
                     "size_mb": size_mb,
-                    "codec": "h264",
+                    "codec": codec,
                     "container": "mp4",
                 },
                 latency_ms=(time.time() - start_time) * 1000,

@@ -73,9 +73,14 @@ class PluginScaffoldConfig:
         Returns:
             (is_valid, error_message)
         """
-        # Validate plugin_id format
-        if not re.match(r'^[a-z0-9._-]+$', self.plugin_id):
-            return False, f"Invalid plugin_id: {self.plugin_id}. Must match [a-z0-9._-]+"
+        # ADV-003: Validate plugin_id format (whitelist only safe chars, no path traversal)
+        # Only alphanumeric, underscore, and dot allowed (no hyphen to prevent traversal attacks)
+        if not re.match(r'^[a-z0-9_.]+$', self.plugin_id):
+            return False, f"Invalid plugin_id: {self.plugin_id}. Must contain only letters, numbers, underscores, and dots"
+
+        # Reject path traversal patterns
+        if '..' in self.plugin_id or '/' in self.plugin_id or '\\' in self.plugin_id:
+            return False, f"Invalid plugin_id: {self.plugin_id}. Cannot contain path traversal patterns (../ or \\)"
 
         # Validate plugin_type
         valid_types = [
