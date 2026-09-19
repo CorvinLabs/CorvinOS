@@ -225,6 +225,10 @@ class PluginDeveloper:
         Raises:
             ValueError: If tenant_id is invalid
         """
+        # ADV-002: Validate tenant_id is not None (fail-closed gate)
+        if plan.tenant_id is None:
+            raise ValueError("tenant_id cannot be None (fail-closed gate)")
+
         start_time = time.time()
         result = DevelopmentResult()
         result.tenant_id = plan.tenant_id
@@ -337,13 +341,14 @@ class PluginDeveloper:
         """Emit an audit event for this development workflow.
 
         Events are hash-chained and immutable (GDPR Art. 30, 32).
+        ADV-004: Audit events MUST be written to tenant audit chain.
 
         Args:
             result: Development result to update with event
             event_type: Type of event (development_started, phase_scaffold_started, etc.)
             **event_data: Additional event data (plan, phase, error, etc.)
         """
-        if not self._audit_writer:
+        if not self._audit_writer or not tenant_paths:
             return
 
         try:
@@ -356,7 +361,32 @@ class PluginDeveloper:
                 **event_data,
             }
 
-            self._audit_writer.write(event)
+            # ADV-004: Write to tenant audit chain (GDPR Art. 30, 32)
+            audit_chain_path = tenant_paths.tenant_audit_chain(result.tenant_id)
+            audit_chain_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Read previous hash for chain integrity
+            prev_hash = ""
+            if audit_chain_path.exists():
+                try:
+                    with open(audit_chain_path, 'r') as f:
+                        lines = f.readlines()
+                        if lines:
+                            last_event = json.loads(lines[-1])
+                            prev_hash = last_event.get('hash', '')
+                except Exception:
+                    pass  # Best-effort previous hash
+
+            # Add chain link
+            event["prev_hash"] = prev_hash
+            event["hash"] = hashlib.sha256(
+                json.dumps(event, sort_keys=True, default=str).encode()
+            ).hexdigest()
+
+            # Write to audit chain (append-only, GDPR Art. 30 compliant)
+            with open(audit_chain_path, 'a') as f:
+                f.write(json.dumps(event) + '\n')
+
             result.audit_events.append(event)
 
         except Exception as e:
