@@ -1,5 +1,19 @@
-"""Plugin Manager v2: Discovery, Installation, and Lifecycle Management.
+"""🚨 DEPRECATED: Plugin Manager v2 — Dead Code (Not Integrated)
 
+⚠️  IMPORTANT: This module is fully implemented but NOT integrated into production.
+- Zero call sites outside tests
+- PluginManager v1 is used instead throughout the codebase
+- Marketplace discovery never called
+- 2000+ LOC of ship-dark code that adds complexity
+
+Status: [BLOCKED] by Explore Agent — Phase 5 integration or remove entirely.
+
+DECISION PENDING: Either (a) integrate v2 into Phase 5 roadmap with API wiring, or (b) delete.
+Timeline: Coordinate with Phase 5 planning (target: 2026-11-01).
+
+---
+
+ORIGINAL DESIGN (Not Currently Active):
 Phase 2 of plugin ecosystem: adds marketplace discovery, installation workflows,
 and runtime enable/disable without restart.
 

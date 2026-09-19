@@ -1,5 +1,19 @@
-"""Phase 5.2: Workflow Optimizer Skill (ADR-0532 Phase 2).
+"""🚨 DEPRECATED: Phase 5.2 Workflow Optimizer Skill (ADR-0532 Phase 2) — Dead Code
 
+⚠️  IMPORTANT: This module is NOT wired into production. It is dead code.
+- Zero call sites outside tests
+- Manifest exists but is never loaded
+- E2E tests are unit tests (direct Python imports, no API transport)
+- Learning loop disconnected (_emit_learning_event never executes)
+
+Status: [BLOCKED] by E2E Wiring Proof — Phase 2 fix or remove entirely.
+
+DECISION PENDING: Either (a) implement full API wiring + SkillManager registration, or (b) delete.
+Timeline: Coordinate with ADR-0532 Phase roadmap (target: 2026-10-15).
+
+---
+
+ORIGINAL DESIGN:
 Analyzes multi-task execution patterns to optimize orchestration decisions:
 - Identifies parallelizable tasks from execution history
 - Detects critical path and bottleneck stages

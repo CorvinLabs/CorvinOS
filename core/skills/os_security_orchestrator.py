@@ -1,6 +1,19 @@
-"""os.security_orchestrator — Threat Detection + Policy Advisory Skill (Phase 5.3, ADR-0532 Phase 3).
+"""🚨 DEPRECATED: os.security_orchestrator — Dead Code (ADR-0532 Phase 3)
 
-DESIGN (Dialectical Reasoning Complete):
+⚠️  IMPORTANT: This module is NOT wired into production. It is registered but never called.
+- Zero call sites outside tests
+- E2E tests are unit tests (direct Python imports, no API transport)
+- Audit events defined but never emitted
+- Manifest exists but skill is never loaded
+
+Status: [BLOCKED] by E2E Wiring Proof — Phase 2 fix or remove entirely.
+
+DECISION PENDING: Either (a) implement full API wiring + console routes, or (b) delete this module.
+Timeline: Coordinate with ADR-0532 Phase roadmap (target: 2026-10-15).
+
+---
+
+ORIGINAL DESIGN (Dialectical Reasoning Complete):
 - Pattern detection (burst, creep, concentration, context_shift)
 - Operator feedback loop (threat confirmed / false alarm)
 - House-rules suggestions (advisory only, operator manually applies)
