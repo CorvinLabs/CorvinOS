@@ -95,6 +95,15 @@ def _plugins_roots() -> list[Path]:
     return roots
 
 
+#: Tiers whose source lives in the Corvin-Marketplace checkout and may be
+#: installed from it. ``buildin`` resolves to origin ``vetted``, ``contributor``
+#: to ``community`` (bootstrap.origin_for_plugin_dir — location-derived, the
+#: manifest's own ``origin:`` line is never believed). Until 2026-09-20 only
+#: ``buildin`` resolved and the index's contributor entries could never be
+#: installed (ADR-0892 amendment; ADR-0643 scoped local install to builtin).
+_LOCAL_TIERS = frozenset({"buildin", "contributor"})
+
+
 def resolve_builtin_dir(index_id: str) -> Path:
     """Return the local directory for a ``buildin``-tier index-id.
 
@@ -107,10 +116,10 @@ def resolve_builtin_dir(index_id: str) -> Path:
     if parsed is None:
         raise MarketplaceResolveError(f"{index_id!r} is not a marketplace plugin id")
     tier, category, name = parsed
-    if tier != "buildin":
+    if tier not in _LOCAL_TIERS:
         raise MarketplaceResolveError(
-            f"{index_id!r} is tier {tier!r}; only builtin plugins install locally "
-            f"(remote download of community plugins is out of scope)"
+            f"{index_id!r} is tier {tier!r}; only {sorted(_LOCAL_TIERS)} install from "
+            f"the marketplace checkout (remote download is out of scope)"
         )
     for root in _plugins_roots():
         resolved_root = root.resolve(strict=False)
@@ -185,6 +194,23 @@ def record_from_manifest(manifest: dict, *, plugin_dir: Path) -> "PluginRecord":
         network_egress=NetworkEgress(str(manifest.get("network_egress", "external"))),
         egress_hosts=list(manifest.get("egress_hosts") or []),
         dependencies=list(manifest.get("dependencies") or []),
+        settings=_settings_defaults(manifest.get("settings_schema") or {}),
         settings_schema=dict(manifest.get("settings_schema") or {}),
         class_path=manifest.get("class_path"),
+        # The plugin's console panel (label/route/icon/group/element) — the
+        # lifecycle registers it on enable, hides it on disable and removes it
+        # on uninstall (state.PluginLifecycle._sync_console_panel). Was dropped
+        # by this projection until 2026-09-20, so no marketplace-installed
+        # plugin could ever put a panel in the sidebar.
+        console_panel=dict(manifest["console_panel"]) if isinstance(manifest.get("console_panel"), dict) else None,
     )
+
+
+def _settings_defaults(schema: dict) -> dict:
+    """Initial ``settings`` from the schema's per-property ``default`` values,
+    so a freshly installed plugin's settings form starts from what the author
+    declared instead of an empty object."""
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return {}
+    return {k: v["default"] for k, v in props.items() if isinstance(v, dict) and "default" in v}

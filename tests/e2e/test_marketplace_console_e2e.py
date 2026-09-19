@@ -124,7 +124,7 @@ def _index_entries(client):
 # ── 1. browse carries local state ────────────────────────────────────
 
 
-def test_index_entries_carry_installability_and_a_blocker_for_contributor_tier(client):
+def test_index_entries_carry_installability_and_local_state(client):
     entries = _index_entries(client)
     for e in entries:
         for k in ("registry_id", "installable", "install_blocker", "installed", "enabled", "runtime_loaded"):
@@ -132,12 +132,14 @@ def test_index_entries_carry_installability_and_a_blocker_for_contributor_tier(c
     contributor = [e for e in entries if e["tier"] == "contributor"]
     builtin = [e for e in entries if e["tier"] == "buildin"]
     assert builtin, "the index has no builtin entry"
-    for e in contributor:
-        assert e["installable"] is False and e["install_blocker"], e["id"]
-        assert e["registry_id"] is None
-    installable = [e for e in builtin if e["installable"]]
-    assert installable, "no builtin entry resolves under the marketplace checkout"
-    assert all(e["registry_id"] for e in installable)
+    assert contributor, "the index has no contributor entry"
+    # Since 2026-09-20 every entry of the checkout carries a plugin.yaml and
+    # resolves locally — builtin as vetted, contributor as community. A blocker
+    # is still what an entry WITHOUT a local source would show (see the
+    # unknown-id case below), never a button that always fails.
+    blocked = [(e["id"], e["install_blocker"]) for e in entries if not e["installable"]]
+    assert not blocked, blocked
+    assert all(e["registry_id"] for e in entries)
     assert not any(e["installed"] for e in entries), "temp home: nothing is installed yet"
 
 
@@ -188,11 +190,9 @@ def test_install_of_an_unknown_or_contributor_id_is_a_named_failure_not_a_500(cl
     r = client.post("/v1/console/api/v1/marketplace/plugins/plugin:buildin-memory-does_not_exist/install", json={})
     assert r.status_code == 200 and r.json()["status"] == "failed"
     assert "not in the marketplace index" in r.json()["error"]
-    contributor = next((e for e in _index_entries(client) if e["tier"] == "contributor"), None)
-    if contributor:
-        r = client.post(f"/v1/console/api/v1/marketplace/plugins/{contributor['id']}/install", json={})
-        assert r.status_code == 200 and r.json()["status"] == "failed"
-        assert r.json()["error"] == contributor["install_blocker"]
+    # a well-formed id whose tier is not one the checkout serves
+    r = client.post("/v1/console/api/v1/marketplace/plugins/plugin:remote-memory-x/install", json={})
+    assert r.status_code == 200 and r.json()["status"] == "failed"
 
 
 # ── 3. the loader accepts records nested under spec: ─────────────────
@@ -249,3 +249,125 @@ def test_manifest_declares_the_marketplace_panel_at_the_mounted_route(client):
     assert panel["route"] == "marketplace"
     assert panel["element"] == {"kind": "react-component", "component": "MarketplacePage"}
     assert not any(p["route"] == "plugin-center" for p in body["panels"])
+
+
+# ── 7. contributor tier: install from the checkout, consent on enable, panel ──
+#
+# ADR-0892 amendment (2026-09-20): plugins under plugins/contributor/ of the
+# marketplace checkout resolve with origin=community. Enabling one without
+# consent is refused; with consent the plugin's declared console panel is
+# registered and the capability manifest lists it (sidebar entry under
+# "Marketplace"); disable hides it, uninstall removes it.
+
+_VIDEO = "plugin:contributor-media-video_producer"
+
+
+def _install(client, index_id: str, **body) -> dict:
+    r = client.post(f"/v1/console/api/v1/marketplace/plugins/{index_id}/install", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _manifest_panel_routes(client) -> set[str]:
+    body = client.get("/v1/console/capabilities/manifest").json()
+    return {p["route"] for p in body["panels"] if p.get("kind") == "plugin"}
+
+
+def test_contributor_entries_are_installable_with_community_origin(client):
+    entries = {e["id"]: e for e in _index_entries(client)}
+    assert _VIDEO in entries, "the regenerated index lists the Video Producer"
+    contributor = [e for e in entries.values() if e["tier"] == "contributor"]
+    assert contributor and all(e["installable"] for e in contributor), [
+        (e["id"], e["install_blocker"]) for e in contributor if not e["installable"]]
+    body = _install(client, _VIDEO)
+    assert body["status"] == "completed", body
+    assert body["registry_id"] == "video_producer"
+    assert body["origin"] == "community" and body["requires_consent"] is True
+    listed = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}
+    rec = listed["video_producer"]
+    assert rec["origin"] == "community" and rec["requires_consent"] is True and rec["enabled"] is False
+    # settings start from the manifest's declared defaults, never empty
+    assert rec["settings"]["tts_engine"] == "openai" and rec["settings"]["max_video_length_minutes"] == 60
+    assert rec["settings_schema"]["properties"]["tts_engine"]["enum"] == ["openai", "piper"]
+
+
+def test_video_producer_panel_follows_enable_disable_uninstall(client, home):
+    _install(client, _VIDEO)
+    assert "video-producer" not in _manifest_panel_routes(client), "not enabled yet → no sidebar entry"
+
+    # enable WITHOUT consent → refused (community origin)
+    r = client.post("/v1/console/plugins/video_producer/enable", json={"consent_granted": False})
+    assert r.status_code in (403, 409), r.text
+    assert "video-producer" not in _manifest_panel_routes(client)
+
+    # enable WITH consent → panel registered, listed by the manifest
+    r = client.post("/v1/console/plugins/video_producer/enable", json={"consent_granted": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["enabled"] is True
+    assert "video-producer" in _manifest_panel_routes(client)
+    panel = next(p for p in client.get("/v1/console/capabilities/manifest").json()["panels"] if p["route"] == "video-producer")
+    assert panel["id"] == "plugin-video_producer" and panel["nav_group"] == "marketplace"
+    assert panel["element"] == {"kind": "react-component", "component": "VideoProducerPage"}
+    reg = home / "tenants" / "_default" / "plugins" / "panel_registry.json"
+    assert reg.is_file() and "plugin-video_producer" in reg.read_text()
+
+    # settings are validated against the schema and persisted
+    r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "piper", "max_video_length_minutes": 5}})
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["tts_engine"] == "piper"
+    r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "not-an-engine"}})
+    assert r.status_code in (400, 409, 422), r.text
+
+    # disable → panel hidden; uninstall → gone
+    assert client.post("/v1/console/plugins/video_producer/disable").status_code == 200
+    assert "video-producer" not in _manifest_panel_routes(client)
+    assert client.delete("/v1/console/plugins/video_producer").status_code == 200
+    assert "video-producer" not in _manifest_panel_routes(client)
+    assert "plugin-video_producer" not in reg.read_text()
+
+
+def test_a_stale_panel_entry_without_an_installed_plugin_is_not_listed(client, home):
+    """The maintainer install carried a panel registered on 2026-09-09 for a
+    plugin that was never installed — it put "Video Producer" in the sidebar
+    with nothing behind it. The manifest lists a plugin panel only while the
+    tenant registry has that plugin installed AND enabled."""
+    from core.plugins.plugin_panel_registry import get_panel_registry
+
+    get_panel_registry("_default").register_panel("ghost", {
+        "id": "plugin-ghost", "label": "Ghost", "route": "ghost", "icon": "Video", "group": "marketplace",
+        "element_kind": "react-component", "component": "VideoProducerPage"})
+    assert "ghost" not in _manifest_panel_routes(client)
+
+
+# ── 8. the progress bar is real: phases, on a worker thread ──────────
+
+
+def test_async_install_reports_real_phases_then_completes(client):
+    import time
+
+    entry = _pick_installable(client)
+    r = client.post(f"/v1/console/api/v1/marketplace/plugins/{entry['id']}/install", json={"wait": False})
+    assert r.status_code == 200, r.text
+    job = r.json()
+    assert job["status"] in ("pending", "installing") and 0 <= job["progress"] < 100
+    seen: list[tuple[int, str]] = []
+    for _ in range(200):
+        p = client.get(f"/v1/console/api/v1/marketplace/install/{job['job_id']}/progress").json()
+        seen.append((p["progress"], p["message"]))
+        if p["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.01)
+    assert p["status"] == "completed", p
+    assert p["progress"] == 100
+    # monotone, and the phases are the install's own steps — not a timer
+    progresses = [s[0] for s in seen]
+    assert progresses == sorted(progresses)
+    assert entry["registry_id"] in {x["plugin_id"] for x in client.get("/v1/console/plugins").json()["plugins"]}
+
+
+def test_progress_of_another_tenants_job_is_404(client):
+    from core.console.corvin_console.routes import marketplace_install as mi
+
+    now = mi._now()
+    mi._remember(mi.InstallJob("install_foreign", "p", "other_tenant", mi.JobStatus.PENDING, 0, "", now, now))
+    assert client.get("/v1/console/api/v1/marketplace/install/install_foreign/progress").status_code == 404

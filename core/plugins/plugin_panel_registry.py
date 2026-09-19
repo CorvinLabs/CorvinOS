@@ -319,10 +319,19 @@ _registry_lock = threading.Lock()
 
 
 def get_panel_registry(tenant_id: str = "_default") -> PluginPanelRegistry:
-    """Get or create the panel registry singleton for one tenant."""
+    """One registry per tenant — re-created when the tenant home moved.
+
+    The cache used to be keyed on the tenant id alone, so a process whose
+    ``CORVIN_HOME`` changed after the first call (every test after the first
+    in a pytest session; a console whose home is re-pointed at runtime) kept
+    writing the FIRST home's ``panel_registry.json`` — the manifest then listed
+    a panel whose file lived elsewhere (2026-09-20)."""
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+    expected = Path(str(tenant_home(tenant_id) / "plugins" / "panel_registry.json")).expanduser()
     with _registry_lock:
         instance = _panel_registry_instances.get(tenant_id)
-        if instance is None:
+        if instance is None or instance.path != expected:
             instance = PluginPanelRegistry(tenant_id=tenant_id)
             _panel_registry_instances[tenant_id] = instance
         return instance

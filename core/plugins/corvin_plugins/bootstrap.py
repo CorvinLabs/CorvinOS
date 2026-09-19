@@ -794,7 +794,19 @@ def origin_for_plugin_dir(plugin_dir: Path) -> tuple[str, str]:
     rel = _under(_marketplace_root())
     if rel is not None:
         return "vetted", f"marketplace_root:{rel}"
+    # ADR-0892 (2026-09-20): the checkout's ``plugins/contributor`` tree is
+    # community-authored source the operator installs locally — provenance
+    # ``community``, which ``PluginRecord.consent_required()`` turns into an
+    # explicit consent on enable. Never ``vetted``: nobody reviewed it.
+    rel = _under(_marketplace_contributor_root())
+    if rel is not None:
+        return "community", f"marketplace_contributor:{rel}"
     return "vetted", f"explicit_root:{resolved.name}"
+
+
+def _marketplace_contributor_root() -> Path:
+    """``plugins/contributor`` beside :func:`_marketplace_root`'s ``plugins/buildin``."""
+    return _marketplace_root().parent / "contributor"
 
 
 def _builtin_plugin_dirs(root: Path) -> list[Path]:

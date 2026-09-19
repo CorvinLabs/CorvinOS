@@ -226,6 +226,20 @@ def _plugin_panel_element(p: dict) -> dict:
     return {"kind": "plugin-inspector", "plugin_id": p["plugin_id"]}
 
 
+def _plugin_is_enabled(tenant_id: str, plugin_id: str) -> bool:
+    """True iff the tenant registry has ``plugin_id`` installed and enabled.
+    Fail-closed: an unreadable registry lists no plugin panels."""
+    try:
+        from .plugins import _PLUGINS_AVAILABLE, _load
+
+        if not _PLUGINS_AVAILABLE:
+            return False
+        record = _load(tenant_id).records.get(plugin_id)
+        return bool(record is not None and getattr(record, "enabled", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _get_plugin_panels(tenant_id: str = "_default") -> list[dict]:
     """Get all auto-registered plugin panels (Phase 3 Integration).
 
@@ -239,6 +253,12 @@ def _get_plugin_panels(tenant_id: str = "_default") -> list[dict]:
         from core.plugins.plugin_panel_registry import get_panel_registry
         registry = get_panel_registry(tenant_id)
         panels = registry.get_all_enabled_panels()
+        # ADR-0892: the panel registry is a cache of what plugins declared; the
+        # tenant plugin registry is the truth about what is installed and
+        # enabled. A stale entry (a plugin uninstalled by another tool, or a
+        # panel registered by a script on 2026-09-09 for a plugin that was never
+        # installed) put "Video Producer" in the sidebar with nothing behind it.
+        panels = [p for p in panels if _plugin_is_enabled(tenant_id, p.get("plugin_id", ""))]
         return [
             {
                 "id": f"plugin-{p['plugin_id']}",
