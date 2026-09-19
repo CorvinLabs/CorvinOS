@@ -19,7 +19,7 @@ import {
   LddPage, CompliancePage, FilesPage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
-  ExtensionsPage, McpPluginsPage, PluginsPage, MarketplaceHubPage,
+  MarketplaceHubPage,
   GitHubPage, SyncMonitorPage,
   QualityGatesPage, VideoProducerPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
@@ -60,9 +60,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   CustomProviderPage,
   DataSourcesPage,
   FlowsPage,
-  ExtensionsPage,
-  McpPluginsPage,
-  PluginsPage,
   MarketplaceHubPage,
   GitHubPage,
   SyncMonitorPage,
@@ -118,10 +115,9 @@ export const PANELS: ConsolePanel[] = [
   // the ONE sidebar entry for the three extend-CorvinOS subsystems (roadmap
   // de-dup of the plugin triple). New MarketplaceHubPage (2026-09-16) replaces
   // the old PluginCenterPage with improved UX, trending/newest, and search.
+  // REMOVED (2026-09-19): extensions, mcp-plugins, plugins panels — consolidated
+  // into marketplace-hub. Unused page files deleted; this is now the only entry.
   rc("marketplace-hub", "Marketplace", MarketplaceHubPage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
-  rc("extensions", "Extensions", ExtensionsPage, { nav: { label: "Extensions", icon: "" } }), // hidden (marketplace renders as tab)
-  rc("mcp-plugins", "MCP Plugins", McpPluginsPage, { nav: { label: "MCP Plugins", icon: "" } }), // hidden (marketplace renders as tab)
-  rc("plugins", "Plugins", PluginsPage, { nav: { label: "Plugins", icon: "" } }), // hidden (marketplace renders as tab)
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "system" } }),

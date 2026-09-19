@@ -131,17 +131,9 @@ export const MemoryPage = React.lazy(() =>
   import("@/pages/memory").then((m) => ({ default: m.MemoryPage }))
 );
 
-export const ExtensionsPage = React.lazy(() =>
-  import("@/pages/extensions").then((m) => ({ default: m.ExtensionsPage }))
-);
-
-export const McpPluginsPage = React.lazy(() =>
-  import("@/pages/mcp-plugins").then((m) => ({ default: m.default }))
-);
-
-export const PluginsPage = React.lazy(() =>
-  import("@/pages/plugins").then((m) => ({ default: m.PluginsPage }))
-);
+// REMOVED (2026-09-19): ExtensionsPage, McpPluginsPage, PluginsPage
+// These three panels were consolidated into MarketplaceHubPage (ADR-0561 P2, 2026-09-16).
+// The corresponding files /src/pages/{extensions,mcp-plugins,plugins}.tsx have been deleted.
 
 // Marketplace Hub — the unified discovery + install experience for plugins, extensions, and MCP servers
 export const MarketplaceHubPage = React.lazy(() =>
