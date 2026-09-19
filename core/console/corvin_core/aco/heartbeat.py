@@ -17,6 +17,7 @@ import logging
 import random
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -106,15 +107,68 @@ def send_heartbeat(home: Path) -> bool:
         )
         # https-only + no-redirect opener (F8): never forward the Authorization /
         # instance-token headers over plaintext or across a cross-host 3xx.
-        with _open_no_redirect(req, _HEARTBEAT_TIMEOUT_S) as resp:
-            status = resp.getcode()
-            if 200 <= status < 300:
-                return True
+        try:
+            with _open_no_redirect(req, _HEARTBEAT_TIMEOUT_S) as resp:
+                status = resp.getcode()
+        except urllib.error.HTTPError as http_err:
+            status = int(http_err.code)
+        ok = 200 <= status < 300
+        _record_state(home, ok=ok, detail=f"http {status}")
+        if not ok:
             logger.debug("heartbeat: returned %d", status)
-            return False
+        return ok
     except Exception as e:  # noqa: BLE001
         logger.debug("heartbeat: failed (non-fatal): %s", e)
+        _record_state(home, ok=False, detail=type(e).__name__)
         return False
+
+
+# ── Local send state (console transparency panel, 2026-09-20) ────────────────
+#
+# The heartbeat used to leave no trace on disk: the operator could not tell
+# whether the 5-minute presence signal was reaching corvin-labs.com at all.
+# This file records ONLY outcomes — timestamps, an HTTP status or exception
+# class name, counters. Never the payload, never a token. It lives next to the
+# other channel stamps (aco/telemetry/last_ping, healing-traces/.last_upload)
+# and is what /v1/console/telemetry/channels renders.
+
+_STATE_FILENAME = "heartbeat_state.json"
+
+
+def state_path(home: Path) -> Path:
+    return Path(home) / "aco" / "telemetry" / _STATE_FILENAME
+
+
+def read_state(home: Path) -> dict:
+    """The recorded outcomes, or ``{}`` when nothing was ever attempted."""
+    try:
+        data = json.loads(state_path(home).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_state(home: Path, *, ok: bool, detail: str) -> None:
+    try:
+        p = state_path(home)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        st = read_state(home)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        st["last_attempt"] = now
+        st["last_detail"] = detail[:64]
+        st["attempts"] = int(st.get("attempts") or 0) + 1
+        if ok:
+            st["last_success"] = now
+            st["successes"] = int(st.get("successes") or 0) + 1
+            st["consecutive_failures"] = 0
+        else:
+            st["consecutive_failures"] = int(st.get("consecutive_failures") or 0) + 1
+        st["url"] = _HEARTBEAT_URL
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(st, sort_keys=True), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:  # noqa: BLE001 — the state file must never break the send
+        pass
 
 
 def _check_a2a_reconnect(home: Path) -> None:
