@@ -21,7 +21,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplaceHubPage,
   GitHubPage, SyncMonitorPage,
-  QualityGatesPage, VideoProducerPage,
+  QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
   LicensingAuditPage, OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
 } from "@/lazy-pages";
@@ -65,6 +65,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   SyncMonitorPage,
   QualityGatesPage,
   VideoProducerPage,
+  VideoQualityMetricsPage,
   DataHubUnifiedPage,
   SkillForgeGeneratorPage,
   LicensingAuditPage,
@@ -96,6 +97,8 @@ export const PANELS: ConsolePanel[] = [
   rc("ldd", "LDD", LddPage, { nav: { label: "Quality", icon: "Boxes", group: "system" } }),
   rc("compliance", "Compliance", CompliancePage, { nav: { label: "Audit & Compliance", icon: "ShieldCheck", group: "system" } }),
   rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle", group: "observability" } }),
+  // ADR-0695 Phase 2 — Video Quality Metrics Dashboard
+  rc("video-quality-metrics", "Video Quality", VideoQualityMetricsPage, { nav: { label: "Video Quality", icon: "Gauge", group: "observability" }, requiredFlag: "video_producer_enabled" }),
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),

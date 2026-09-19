@@ -172,6 +172,10 @@ export const VideoProducerPage = React.lazy(() =>
   import("@/pages/video-producer")
 );
 
+export const VideoQualityMetricsPage = React.lazy(() =>
+  import("@/panels/video-quality-metrics").then((m) => ({ default: m.VideoQualityMetricsPanel }))
+);
+
 export const DataHubUnifiedPage = React.lazy(() =>
   import("@/pages/datahub-unified").then((m) => ({ default: m.default }))
 );
