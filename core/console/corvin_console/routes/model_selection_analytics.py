@@ -556,7 +556,7 @@ def reset_learning(  # sync on purpose: two file locks off the event loop
 @router.get("/export")
 async def export_weights(
     rec: session_auth.SessionRecord = Depends(require_session),
-    format: str = Query("csv", regex="^(csv|json)$"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
 ) -> Dict[str, Any]:
     """Export confidence weights as CSV or JSON.
 

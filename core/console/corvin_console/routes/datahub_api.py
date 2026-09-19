@@ -45,7 +45,7 @@ class ArtifactCreateRequest(BaseModel):
     data_source: str = Field(..., description="json, csv, sql, api, or parquet")
     data_path: str = Field(..., min_length=1)
     sample_rows: int = Field(100, ge=1, le=10000)
-    complexity: str = Field("medium", regex="^(low|medium|high)$")
+    complexity: str = Field("medium", pattern="^(low|medium|high)$")
 
 
 class ArtifactMetadata(BaseModel):

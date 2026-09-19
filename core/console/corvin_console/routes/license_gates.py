@@ -7,7 +7,13 @@ All routes that create or promote artifacts must use these gates.
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from corvin_console.middleware.auth import SessionRecord, get_session
+# ``corvin_console.middleware.auth`` does not exist (commit eaf3a2a1 imported it;
+# a fresh ``import corvin_console.app`` then failed at routes/promote.py, which
+# means the NEXT restart of corvin-webui would have booted WITHOUT the console —
+# ADR-0015 mounts it through ``try: import corvin_console``). The session
+# record and the dependency that produces it live in auth.py / deps.py.
+from ..auth import SessionRecord
+from ..deps import require_session as get_session
 
 try:
     from corvin_operator.license.capability_api import (

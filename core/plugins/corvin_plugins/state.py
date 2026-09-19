@@ -435,6 +435,18 @@ class TenantRegistry:
         # fall through to a save() that overwrites the file (2026-07-30 finding
         # P1; the fix stays fail-closed per the refutation's warning).
         plugins_raw = raw.get("plugins") or {}
+        # A registry.yaml on the maintainer install (2026-09-19) carried its
+        # records as ``spec: {schema_version, plugins: {...}}`` — the mapping
+        # this writer produces, nested one level down by another YAML
+        # round-trip. ``raw["plugins"]`` was then absent, the loader returned an
+        # EMPTY registry and the console reported an installed plugin as
+        # "not installed" while its instance dir and record existed. Read the
+        # nested mapping when the top-level key is missing; save() writes the
+        # canonical shape back.
+        if not plugins_raw:
+            spec = raw.get("spec")
+            if isinstance(spec, dict) and isinstance(spec.get("plugins"), dict):
+                plugins_raw = spec["plugins"]
         if not isinstance(plugins_raw, dict):
             raise RegistryCorrupt(
                 f"{path}: 'plugins' is a {type(plugins_raw).__name__}, not a mapping "

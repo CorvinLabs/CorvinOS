@@ -406,16 +406,21 @@ def _get_builtin_panels() -> list[dict]:
             "tenant_scoped": True,
         },
         {
+            # ONE marketplace (ADR-0892). Until 2026-09-19 this declared route
+            # "plugin-center" → component "PluginCenterPage", which the SPA had
+            # deleted: the sidebar showed a second "Marketplace" entry that opened
+            # the 404 page. The route and component now match the static panel,
+            # so mergeManifestNav dedupes it by path instead of doubling it.
             "id": "plugins",
             "title": "Marketplace",
-            "route": "plugin-center",
+            "route": "marketplace",
             "icon": "Blocks",
             "kind": "feature",
             "source": "builtin",
             "nav_group": "marketplace",
             "requiredFlag": None,
             "requiredCapability": None,
-            "element": {"kind": "react-component", "component": "PluginCenterPage"},
+            "element": {"kind": "react-component", "component": "MarketplacePage"},
             "version": "1.0.0",
             "audit_events": ["console_panel_opened"],
             "tenant_scoped": True,

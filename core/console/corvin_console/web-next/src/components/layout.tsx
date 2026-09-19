@@ -134,7 +134,6 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   AudioLines,             // voice
   Hammer,                 // forge
   BookOpen,               // skills, memory
-  Package,                // packages
   Boxes,                  // ldd
   ShieldCheck,            // compliance
   FolderOpen,             // files
@@ -166,17 +165,17 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/vibe-engineering", label: "Learnings", icon: Brain },
     ],
   },
-  // Marketplace Hub (ADR-0561): unified discovery + install for plugins, extensions, and MCP.
-  // The marketplace-hub panel consolidates three separate tabs (replaced PluginCenterPage, 2026-09-16).
-  // This group's id also merges with backend manifest's "marketplace" nav group (mergeManifestNav),
-  // so installed plugins' Console panels append here automatically, and remove on disable/uninstall.
+  // ONE marketplace (ADR-0892): plugins (browse + install + manage), skill
+  // packages and MCP tools in one panel with tabs. This group's id also merges
+  // with the backend manifest's "marketplace" nav group (mergeManifestNav), so
+  // installed plugins' console panels append here and leave on uninstall.
   {
     id: "marketplace",
     label: "Marketplace",
     collapsible: true,
     defaultOpen: true,
     items: [
-      { to: "/app/marketplace-hub", label: "Marketplace", icon: Blocks },
+      { to: "/app/marketplace", label: "Marketplace", icon: Blocks },
     ],
   },
   {
@@ -218,7 +217,6 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
       { to: "/app/forge",      label: "Forge",           icon: Hammer },
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
-      { to: "/app/packages",   label: "Packages",        icon: Package },
       { to: "/app/skill-forge-generator", label: "Skill Forge", icon: Sparkles },
     ],
   },
