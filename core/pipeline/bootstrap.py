@@ -158,7 +158,7 @@ def instantiate_pipeline(
         # load) MUST be a quiet no-op, never a boot error. "Off must be a quiet
         # path, never an error" (Feature-Flags baseline). The pipeline stays
         # None; the dual-gate middleware degrades to a transparent pass-through.
-        if not feature_flags.get("dual_gate_pipeline_enabled", False):
+        if not feature_flags.get("dual_gate_pipeline_enabled", True):
             logger.info(
                 "DualGatePipeline disabled (dual_gate_pipeline_enabled=off) — "
                 "skipping instantiation (ship-dark quiet path)."
