@@ -115,6 +115,16 @@ dependencies = [
     # optional `compute` extra, so a base (non-`compute`) install crashed the
     # console at import time on every boot (2026-09-14 fresh-install finding).
     "duckdb >= 0.9",
+    # OpenTelemetry (ADR-0680): unified observability framework for CorvinOS
+    # Phase 1 dual-write (JSON + OTEL) telemetry migration. OTEL SDK provides
+    # MeterProvider, Tracer, and standardized export to OTLP (gRPC).
+    # Core API layer (no dependencies on exporters).
+    "opentelemetry-api >= 1.20.0",
+    # SDK layer (MeterProvider, SpanProcessor, Resource Attributes).
+    "opentelemetry-sdk >= 1.20.0",
+    # OTLP exporter for gRPC (ProtoBuf format, production-grade).
+    # Proto version matches SDK version to avoid schema mismatches.
+    "opentelemetry-exporter-otlp-proto-grpc >= 1.20.0",
 ]
 
 [project.optional-dependencies]
