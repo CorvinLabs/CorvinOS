@@ -1,0 +1,170 @@
+{
+  "id": "os.workflow_optimizer",
+  "name": "Workflow Optimizer",
+  "version": "0.1.0",
+  "description": "Learn optimal task orchestration from execution patterns; detect parallelization opportunities and generate DAG reordering suggestions",
+  "author": "corvin-os-team",
+  "status": "active",
+  "boot_layer": "bundled",
+  "origin": "builtin",
+  "tier": "core",
+  "tags": ["orchestration", "workflow", "learning", "os-core"],
+  "dependencies": {
+    "soft": ["os.delegation_router"],
+    "hard": []
+  },
+  "learning_enabled": true,
+  "learning_signals": {
+    "feedback_types": ["outcome", "preference", "metric"],
+    "optimization_targets": ["parallelization_confidence", "speedup_estimate"],
+    "feedback_window_runs": 50
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "task_type": {
+        "type": "string",
+        "description": "Task classification (code_review, analysis, documentation, etc.)",
+        "examples": ["code_review", "analysis", "batch_processing"]
+      },
+      "execution_history": {
+        "type": "array",
+        "description": "Past task execution traces with latencies",
+        "items": {
+          "type": "object",
+          "properties": {
+            "task_id": {"type": "string"},
+            "task_type": {"type": "string"},
+            "subtasks": {"type": "array", "items": {"type": "string"}},
+            "total_latency_ms": {"type": "number"},
+            "per_task_latency_ms": {"type": "object"},
+            "parallelizable_groups": {"type": "array"},
+            "confidence_score": {"type": "number"}
+          }
+        },
+        "minItems": 2
+      },
+      "current_shape": {
+        "type": "string",
+        "enum": ["serial", "parallel", "parallel_grouped"],
+        "description": "Current orchestration shape"
+      },
+      "tenant_id": {
+        "type": "string",
+        "description": "Tenant identifier (optional, default: _default)"
+      }
+    },
+    "required": ["task_type", "execution_history", "current_shape"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "suggestion": {
+        "type": "string",
+        "description": "Suggested workflow shape (serial|parallel_grouped|insufficient_data|parse_error)",
+        "enum": ["serial", "parallel_grouped", "insufficient_data", "parse_error"]
+      },
+      "estimated_speedup": {
+        "type": "number",
+        "description": "Estimated performance improvement (1.0 = no change, 2.0 = 2x faster)",
+        "minimum": 1.0,
+        "maximum": 2.0
+      },
+      "confidence": {
+        "type": "number",
+        "description": "Confidence score (0.0-1.0)",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "reasoning": {
+        "type": "string",
+        "description": "Human-readable explanation of the suggestion"
+      },
+      "learning_event_id": {
+        "type": "string",
+        "description": "UUID for tracking feedback on this suggestion"
+      },
+      "parallelizable_groups": {
+        "type": "array",
+        "description": "Groups of tasks that can run in parallel",
+        "items": {"type": "array", "items": {"type": "string"}}
+      },
+      "critical_path": {
+        "type": "array",
+        "description": "Longest dependency chain (bottleneck stages)",
+        "items": {"type": "string"}
+      },
+      "current_shape": {
+        "type": "string",
+        "description": "Echo of input current_shape"
+      }
+    }
+  },
+  "phases": {
+    "0": "Intake: validate inputs (execution_history, current_shape)",
+    "1": "Context: load tenant-scoped learning config",
+    "2": "Clarify: detect task type classification",
+    "3": "Plan: dialektical check of parallelization strategy",
+    "4": "Execute: parse execution traces",
+    "5": "Execute: detect parallelizable stages",
+    "6": "Execute: generate suggestions",
+    "7": "Feedback: emit learning events",
+    "8": "Validate: anomaly detection on suggestions",
+    "9": "Output: format result",
+    "10": "Return: send to caller",
+    "11": "Grading: async feedback integration"
+  },
+  "timeouts_ms": {
+    "intake": 100,
+    "context": 500,
+    "clarify": 2000,
+    "plan": 3000,
+    "execution": 5000,
+    "feedback": 500,
+    "validation": 1000,
+    "output": 200,
+    "total": 15000
+  },
+  "audit_events": [
+    {
+      "event_type": "skill.executed",
+      "payload": {
+        "skill_id": "os.workflow_optimizer",
+        "status": "success|timeout|error",
+        "decision": {
+          "suggestion": "serial|parallel_grouped|insufficient_data",
+          "estimated_speedup": 1.0,
+          "confidence": 0.85,
+          "parallelizable_count": 2
+        },
+        "execution_time_ms": 150,
+        "lom": "core/skills/workflow_optimizer.py:WorkflowOptimizerSkill.execute",
+        "lom_hash": "<sha256>"
+      }
+    }
+  ],
+  "compliance": {
+    "gdpr_articles": ["30", "32", "5"],
+    "eu_ai_act_articles": ["50"],
+    "adr_references": ["ADR-0532", "ADR-0314", "ADR-0613"]
+  },
+  "caching_strategy": "per_tenant_per_epoch",
+  "rollout_plan": {
+    "enabled_by_default": true,
+    "canary_percentage": 0,
+    "rollout_stages": [
+      {
+        "stage": "shadow",
+        "percentage": 100,
+        "duration_days": 3,
+        "success_criterion": "0 errors, confidence >= 0.7"
+      },
+      {
+        "stage": "production",
+        "percentage": 100,
+        "duration_days": 7,
+        "success_criterion": "95th percentile latency < 500ms, mean speedup > 1.1x"
+      }
+    ]
+  }
+}
