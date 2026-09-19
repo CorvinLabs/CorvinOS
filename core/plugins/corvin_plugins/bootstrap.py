@@ -1877,8 +1877,8 @@ def boot_platform() -> list[str]:
     _tid = "_default"
     try:
         from corvin_core import feature_flags as _flags  # noqa: PLC0415
-        from forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
-        from forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415
 
         _tid = _current_tenant()
         # BOTH load paths: the declarative spec.plugins.installed (ADR-0030
@@ -1995,8 +1995,8 @@ def start_health_monitoring(plugin_ids: Iterable[str]) -> Any | None:
 
     try:
         from core.skills.skill_registry_phase1 import get_registry as _get_registry  # noqa: PLC0415
-        from forge.paths import corvin_home as _hc_home  # noqa: PLC0415
-        from forge.tenants import current_tenant as _hc_tenant  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _hc_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.tenants import current_tenant as _hc_tenant  # noqa: PLC0415
 
         from .healing import HealingOrchestrator  # noqa: PLC0415
         from .health import HealthCollector  # noqa: PLC0415
@@ -2159,7 +2159,7 @@ def _boot_skills_registry() -> list[str]:
         )
         return []
     try:
-        from forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415
+        from corvin_operator.forge.forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415
 
         tenant_id = _current_tenant()
     except Exception:  # noqa: BLE001

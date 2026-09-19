@@ -187,7 +187,7 @@ def _l35_egress_permitted(tenant_id: str) -> bool:
         # finding B3) — hand-rolling CORVIN_HOME/tenants/<tid>/global could diverge
         # from the real layout (the runtime-vs-maintenance split) and read a
         # non-existent file → permissive default → egress allowed despite a deny.
-        from forge.paths import tenant_global_dir  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_global_dir  # noqa: PLC0415
         cfg = _Path(tenant_global_dir(tenant_id or "_default")) / "tenant.corvin.yaml"
         doc = {}
         if cfg.is_file():

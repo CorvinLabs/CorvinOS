@@ -125,7 +125,7 @@ def _store_dir(*, corvin_home: Path | None = None) -> Path:
     if env:
         return Path(env) / "global" / "user_style"
     try:
-        from forge.paths import corvin_home as _ch  # type: ignore  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore  # noqa: PLC0415
         return Path(_ch()) / "global" / "user_style"
     except Exception:  # noqa: BLE001
         return Path.home() / ".corvin" / "global" / "user_style"
@@ -139,7 +139,7 @@ def _audit_path(*, corvin_home: Path | None = None) -> Path:
     if env:
         return Path(env) / "global" / "forge" / "audit.jsonl"
     try:
-        from forge.paths import corvin_home as _ch  # type: ignore  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore  # noqa: PLC0415
         return Path(_ch()) / "global" / "forge" / "audit.jsonl"
     except Exception:  # noqa: BLE001
         return Path.home() / ".corvin" / "global" / "forge" / "audit.jsonl"

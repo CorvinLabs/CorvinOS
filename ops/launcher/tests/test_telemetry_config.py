@@ -40,7 +40,7 @@ class TelemetryConfigSetTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def test_ping_enabled_false_actually_reaches_the_gate_ping_enabled_reads(self) -> None:
-        from forge.paths import corvin_home
+        from corvin_operator.forge.forge.paths import corvin_home
         from corvin_console.aco.htrace_consent import ping_enabled
 
         home = corvin_home()
@@ -56,7 +56,7 @@ class TelemetryConfigSetTests(unittest.TestCase):
         )
 
     def test_re_enabling_flips_back_to_true(self) -> None:
-        from forge.paths import corvin_home
+        from corvin_operator.forge.forge.paths import corvin_home
         from corvin_console.aco.htrace_consent import ping_enabled
 
         home = corvin_home()
@@ -66,7 +66,7 @@ class TelemetryConfigSetTests(unittest.TestCase):
         self.assertTrue(ping_enabled(home))
 
     def test_writes_to_tenant_corvin_yaml_not_launcher_config_json(self) -> None:
-        from forge.paths import corvin_home
+        from corvin_operator.forge.forge.paths import corvin_home
         from corvin_console.aco.htrace_consent import _tenant_cfg_path
 
         cli.cmd_config_set(argparse.Namespace(key="telemetry.ping_enabled", value="false"))
@@ -79,7 +79,7 @@ class TelemetryConfigSetTests(unittest.TestCase):
             self.assertNotIn("telemetry", launcher_config.read_text())
 
     def test_accepts_various_falsy_string_forms(self) -> None:
-        from forge.paths import corvin_home
+        from corvin_operator.forge.forge.paths import corvin_home
         from corvin_console.aco.htrace_consent import ping_enabled
 
         home = corvin_home()
@@ -97,7 +97,7 @@ class TelemetryConfigSetTests(unittest.TestCase):
         error (exit code 2) BEFORE cmd_config_set ever ran, because the `key`
         argument had `choices=["ollama-url", "model", "bridge", "image"]`.
         This test goes through the real parser to close that gap."""
-        from forge.paths import corvin_home
+        from corvin_operator.forge.forge.paths import corvin_home
         from corvin_console.aco.htrace_consent import ping_enabled
 
         parser = cli._build_parser()

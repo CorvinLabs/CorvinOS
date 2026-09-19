@@ -181,7 +181,7 @@ def audit(event: str, name: str, *, source: str = "?", ok: bool = True,
     # only — the secret value is never passed here and must never be.
     try:
         from forge.security_events import write_event as _swe  # type: ignore
-        from forge.paths import corvin_home as _ch  # type: ignore
+        from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore
         _swe(
             _ch() / "global" / "forge" / "audit.jsonl",
             f"vault.{event}",

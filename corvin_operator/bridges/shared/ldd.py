@@ -164,7 +164,7 @@ def _config_path(*, tenant_id: str | None = None) -> Path:
     """
     middle = ("tenants", tenant_id, "global") if tenant_id else ("global",)
     try:
-        from forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
         return Path(corvin_home()).joinpath(*middle, "ldd.json")
     except Exception:  # noqa: BLE001
         env = os.environ.get("CORVIN_HOME")

@@ -210,7 +210,7 @@ def assert_content_free(record: dict) -> None:
 
 
 def _layer_a_path(tenant_id: str):
-    from forge.paths import tenant_global_dir  # noqa: PLC0415
+    from corvin_operator.forge.forge.paths import tenant_global_dir  # noqa: PLC0415
     return Path(tenant_global_dir(tenant_id)) / "forge" / "audit.jsonl"
 
 

@@ -56,10 +56,10 @@ _WID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 # crashing the whole server on import.
 # ---------------------------------------------------------------------------
 try:
-    from forge.paths import corvin_home as _corvin_home  # type: ignore[import]
+    from corvin_operator.forge.forge.paths import corvin_home as _corvin_home  # type: ignore[import]
     from forge.security_events import write_event as _write_event  # type: ignore[import]
-    from forge.tenants import current_tenant as _current_tenant  # type: ignore[import]
-    from forge.tenants import tenant_home as _tenant_home  # type: ignore[import]
+    from corvin_operator.forge.forge.tenants import current_tenant as _current_tenant  # type: ignore[import]
+    from corvin_operator.forge.forge.tenants import tenant_home as _tenant_home  # type: ignore[import]
     _FORGE_AVAILABLE = True
 except ImportError:
     _FORGE_AVAILABLE = False

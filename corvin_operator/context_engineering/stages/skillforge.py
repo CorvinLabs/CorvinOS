@@ -33,7 +33,7 @@ def _skill_registry(tenant_id: str):
     _sf_dir = str(Path(__file__).resolve().parents[2] / "skill-forge")
     if _sf_dir not in sys.path:
         sys.path.insert(0, _sf_dir)
-    from forge.paths import tenant_home  # noqa: PLC0415
+    from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
     from skill_forge.registry import SkillRegistry  # noqa: PLC0415
     root = Path(tenant_home(tenant_id)) / "skill-forge"
     root.mkdir(parents=True, exist_ok=True)

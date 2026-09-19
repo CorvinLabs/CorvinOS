@@ -1180,7 +1180,7 @@ def _write_wdat_run_for_delegation(
         try:
             if _FORGE_PATH_FOR_WDAT not in sys.path:
                 sys.path.insert(0, _FORGE_PATH_FOR_WDAT)
-            from forge.paths import corvin_home as _ch_fn  # type: ignore
+            from corvin_operator.forge.forge.paths import corvin_home as _ch_fn  # type: ignore
             corvin_home = Path(str(_ch_fn()))
         except Exception:  # noqa: BLE001
             return

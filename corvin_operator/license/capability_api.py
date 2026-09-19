@@ -19,8 +19,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal, Optional
 
-from forge.paths import corvin_home, validate_tenant_id
-from forge.tenants import current_tenant
+from corvin_operator.forge.forge.paths import corvin_home, validate_tenant_id
+from corvin_operator.forge.forge.tenants import current_tenant
 
 try:
     from .keyring import RING

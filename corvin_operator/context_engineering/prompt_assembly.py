@@ -101,7 +101,7 @@ def read_tool_code(tenant_id: str, name: str) -> "dict | None":
     """Resolve a forged tool name to its code + metadata from the Forge registry.
     Returns {name, description, code, deterministic} or None. Read-only."""
     try:
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         from forge.registry import Registry  # noqa: PLC0415
         reg = Registry(Path(tenant_home(tenant_id)) / "forge")
         spec = reg.get(name)
@@ -135,7 +135,7 @@ def read_skill_body(tenant_id: str, name: str) -> "dict | None":
         if _sf not in sys.path:      # not on the console/bridge path by default
             sys.path.insert(0, _sf)
         from skill_forge.registry import SkillRegistry  # noqa: PLC0415
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         reg = SkillRegistry(Path(tenant_home(tenant_id)) / "skill-forge")
         body = reg.get_body(name)
         if body is None:

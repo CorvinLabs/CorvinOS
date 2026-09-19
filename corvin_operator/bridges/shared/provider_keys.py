@@ -43,7 +43,7 @@ if _FORGE_TOP.is_dir() and str(_FORGE_TOP) not in sys.path:
     sys.path.insert(0, str(_FORGE_TOP))
 
 try:
-    from forge.paths import voice_config_dir as _forge_voice_config_dir  # type: ignore
+    from corvin_operator.forge.forge.paths import voice_config_dir as _forge_voice_config_dir  # type: ignore
 except Exception:  # noqa: BLE001
     _forge_voice_config_dir = None  # type: ignore[assignment]
 
@@ -363,7 +363,7 @@ class SecretsStore:
             )
 
         try:
-            from forge.paths import tenant_home, _resolve_tenant_id
+            from corvin_operator.forge.forge.paths import tenant_home, _resolve_tenant_id
         except ImportError:
             # Fallback for portable use (e.g., in standalone scripts)
             from pathlib import Path

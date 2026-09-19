@@ -418,7 +418,7 @@ def create_app() -> FastAPI:
             # Get tenant paths
             _tenant_id = "_default"
             try:
-                from forge.paths import tenant_home  # type: ignore[import-not-found]
+                from corvin_operator.forge.forge.paths import tenant_home  # type: ignore[import-not-found]
                 _tenant_dir = tenant_home(_tenant_id)
             except ImportError:
                 # Fallback for testing environments

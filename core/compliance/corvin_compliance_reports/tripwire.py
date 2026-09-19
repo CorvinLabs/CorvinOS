@@ -125,8 +125,8 @@ def _check_audit_unification() -> TripwireResult:
             return TripwireResult(name, True, "unification check skipped: audit module not importable")
         active_path = Path(audit.audit_path())
         try:
-            from forge.paths import all_audit_chains as _all_chains  # type: ignore[import-not-found]
-            from forge.tenants import current_tenant as _current_tenant  # type: ignore[import-not-found]
+            from corvin_operator.forge.forge.paths import all_audit_chains as _all_chains  # type: ignore[import-not-found]
+            from corvin_operator.forge.forge.tenants import current_tenant as _current_tenant  # type: ignore[import-not-found]
 
             chains = _all_chains(_current_tenant())
         except Exception:  # noqa: BLE001 - stripped layout: nothing to compare

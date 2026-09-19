@@ -105,7 +105,7 @@ class VoiceConfigManager:
         self.tenant_id = tenant_id
         if self.tenant_id is None:
             try:
-                from forge.tenants import current_tenant
+                from corvin_operator.forge.forge.tenants import current_tenant
                 self.tenant_id = current_tenant()
             except (ImportError, RuntimeError):
                 self.tenant_id = "_default"
@@ -113,7 +113,7 @@ class VoiceConfigManager:
     def _tenant_home(self) -> Path:
         """Get the tenant's home directory."""
         try:
-            from forge.paths import tenant_home
+            from corvin_operator.forge.forge.paths import tenant_home
             return tenant_home(self.tenant_id)
         except ImportError:
             # Fallback when forge is not available (test environment)
@@ -126,7 +126,7 @@ class VoiceConfigManager:
         this cannot drift from the resolver ``_tenant_home()`` actually uses.
         """
         try:
-            from forge.paths import corvin_home
+            from corvin_operator.forge.forge.paths import corvin_home
             return corvin_home()
         except ImportError:
             env = os.environ.get("CORVIN_HOME", "").strip()
@@ -143,7 +143,7 @@ class VoiceConfigManager:
         home the AMBIENT ``~/.config/corvin-voice`` may be migrated into.
         """
         try:
-            from forge.paths import _repo_root  # type: ignore[attr-defined]
+            from corvin_operator.forge.forge.paths import _repo_root  # type: ignore[attr-defined]
             repo = _repo_root()
             if repo is not None:
                 return Path(repo) / ".corvin"
@@ -424,7 +424,7 @@ def get_voice_config_manager(tenant_id: Optional[str] = None) -> VoiceConfigMana
     """
     if tenant_id is None:
         try:
-            from forge.tenants import current_tenant
+            from corvin_operator.forge.forge.tenants import current_tenant
             tenant_id = current_tenant()
         except (ImportError, RuntimeError):
             tenant_id = "_default"

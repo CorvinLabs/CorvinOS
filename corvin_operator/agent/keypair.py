@@ -34,7 +34,7 @@ def _agent_dir(tenant_id: str | None = None) -> Path:
     if str(forge_path) not in sys.path:
         sys.path.insert(0, str(forge_path))
     try:
-        from forge.paths import tenant_home as _tenant_home  # type: ignore
+        from corvin_operator.forge.forge.paths import tenant_home as _tenant_home  # type: ignore
         base = _tenant_home(tenant_id)
     except Exception:
         corvin = (

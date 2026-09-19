@@ -155,7 +155,7 @@ def _classified_chain_path(tenant_id: str) -> Path | None:
     try:
         from core.skills.skill_audit import _ensure_operator_on_path  # noqa: PLC0415
         _ensure_operator_on_path()
-        from forge.paths import (
+        from corvin_operator.forge.forge.paths import (
             tenant_audit_chain,  # type: ignore[import-not-found]  # noqa: PLC0415
         )
         return tenant_audit_chain(tenant_id)

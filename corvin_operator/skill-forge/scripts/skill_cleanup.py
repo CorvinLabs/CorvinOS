@@ -34,7 +34,7 @@ PLUGINS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGINS / "forge"))
 sys.path.insert(0, str(PLUGINS / "skill-forge"))
 
-from forge.paths import corvin_home  # noqa: E402
+from corvin_operator.forge.forge.paths import corvin_home  # noqa: E402
 from skill_forge.registry import SkillRegistry  # noqa: E402
 
 

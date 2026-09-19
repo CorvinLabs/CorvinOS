@@ -102,7 +102,7 @@ def ast_allowlist_ok(impl: str) -> "tuple[bool, str]":
 def _forge_create(tenant_id: str, name: str, description: str,
                   input_schema: dict, impl: str) -> None:
     """Register a tool in the tenant's Forge registry, in-process. Best-effort."""
-    from forge.paths import tenant_home  # noqa: PLC0415
+    from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
     from forge.registry import Registry  # noqa: PLC0415
     root = Path(tenant_home(tenant_id)) / "forge"
     Registry(root).create(name, description or "forged by CEL",
@@ -115,7 +115,7 @@ def _tool_exists(tenant_id: str, name: str) -> bool:
     """Does the tenant's Forge registry already carry this tool? Errors read as
     "no" (the create path is best-effort; a probe failure must not skip forging)."""
     try:
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         from forge.registry import Registry  # noqa: PLC0415
         return Registry(Path(tenant_home(tenant_id)) / "forge").get(name) is not None
     except Exception:  # noqa: BLE001
@@ -127,7 +127,7 @@ def uncreate_tools(tenant_id: str, names) -> None:
     R3 / review R2 finding A4). Best-effort — a failed delete never breaks the turn;
     the un-bound tool is at worst an orphaned session artifact, not a live grant."""
     try:
-        from forge.paths import tenant_home  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
         from forge.registry import Registry  # noqa: PLC0415
         reg = Registry(Path(tenant_home(tenant_id)) / "forge")
     except Exception:  # noqa: BLE001

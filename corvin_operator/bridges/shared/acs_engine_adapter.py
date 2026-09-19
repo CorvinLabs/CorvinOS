@@ -282,7 +282,7 @@ def run_acs_quota_fallback(
     _default_rid = f"acs-fb-{int(t0)}-{uuid.uuid4().hex[:8]}"
     rid = run_id or _default_rid
     try:
-        from forge.paths import fs_safe_component as _fs_safe  # type: ignore
+        from corvin_operator.forge.forge.paths import fs_safe_component as _fs_safe  # type: ignore
         rid = _fs_safe(rid) or _default_rid
     except Exception:  # noqa: BLE001 — never let sanitizer import break the fallback
         # Last-resort inline guard: reject traversal/separators outright.

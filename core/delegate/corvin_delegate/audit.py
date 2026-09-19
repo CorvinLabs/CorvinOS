@@ -110,7 +110,7 @@ def _resolve_audit_path() -> Path | None:
     # Fall back to the canonical path resolver.
     try:
         _ensure_forge_on_path()
-        from forge.paths import corvin_home  # type: ignore
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore
         return Path(corvin_home()) / "global" / "forge" / "audit.jsonl"
     except Exception:  # noqa: BLE001
         pass

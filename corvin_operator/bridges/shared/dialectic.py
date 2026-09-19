@@ -197,7 +197,7 @@ def _config_path(*, tenant_id: str | None = None) -> Path:
     """
     middle = ("tenants", tenant_id, "global") if tenant_id else ("global",)
     try:
-        from forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
         return Path(corvin_home()).joinpath(*middle, "dialectic.json")
     except Exception:  # noqa: BLE001
         # Bridge environment without forge — fall back to repo-relative.
@@ -731,7 +731,7 @@ def _audit_chain_path() -> Path | None:
     """Resolve the unified audit chain path. Returns None when forge.paths
     is unimportable — caller treats that as "no audit available, skip"."""
     try:
-        from forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
         return Path(corvin_home()) / "global" / "forge" / "audit.jsonl"
     except Exception:  # noqa: BLE001
         env = os.environ.get("CORVIN_HOME") or os.environ.get("CORVIN_HOME")

@@ -202,7 +202,7 @@ def _autoinit_token_hook() -> Optional[TokenMeasurementHook]:
 
         tenant_id = "_default"
         try:
-            from forge.paths import tenant_home  # noqa: PLC0415
+            from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
             tenant_dir = tenant_home(tenant_id)
         except Exception:  # noqa: BLE001
             from core.paths.tenant import tenant_home as _core_tenant_home  # noqa: PLC0415

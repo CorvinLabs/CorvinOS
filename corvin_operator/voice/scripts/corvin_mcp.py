@@ -42,11 +42,11 @@ def _tid() -> str:
 
 def _audit_path() -> Path | None:
     try:
-        from forge.paths import corvin_home  # type: ignore[import-not-found]
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import-not-found]
         _forge = _HERE.parents[2] / "forge"
         if str(_forge) not in sys.path:
             sys.path.insert(0, str(_forge))
-        from forge.paths import corvin_home  # noqa: F811  # type: ignore
+        from corvin_operator.forge.forge.paths import corvin_home  # noqa: F811  # type: ignore
         home = Path(corvin_home())
         return home / "tenants" / _tid() / "global" / "audit.jsonl"
     except Exception:

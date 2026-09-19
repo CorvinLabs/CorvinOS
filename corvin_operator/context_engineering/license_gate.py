@@ -33,7 +33,7 @@ def _corvin_home() -> Path:
     try:
         if _OPERATOR not in sys.path:
             sys.path.insert(0, _OPERATOR)
-        from forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
         return Path(corvin_home())
     except Exception:  # noqa: BLE001
         return Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))

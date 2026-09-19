@@ -54,7 +54,7 @@ def _store(tenant_id: str) -> dict:
     """Read the CEL stage-grade store (the self-earned confidence source). Empty on any
     error — the tree then shows the neutral 0.5 prior, never crashes."""
     try:
-        from forge.paths import tenant_global_dir  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import tenant_global_dir  # noqa: PLC0415
         p = Path(tenant_global_dir(tenant_id)) / "ce_stage_grades.json"
         data = json.loads(p.read_text("utf-8")) if p.is_file() else {}
         return data if isinstance(data, dict) else {}  # non-dict store → neutral (L1)
