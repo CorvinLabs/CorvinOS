@@ -304,3 +304,55 @@ Gates are enforcement-only; no opt-out flags. ImplementationGate is blocking and
 - **ADR-0321:** Storage backend (Tier 1/2/3 architecture)
 - **ADR-0322:** Quality gates (lineage enforcement, upstream validation)
 - **ADR-0323:** Knowledge graph lineage (Phase 3, future work)
+
+---
+
+## Quality Gates console — `core/quality_gates/` (ADR-0688)
+
+A **separate module** from `core.quality.gates` above: four validators
+(`IdeaGate`, `ConceptGate`, `ADRGate`, `ImplementationPlanGate`) that judge the
+markdown artifacts of the Corvin-ADR checkout and write every verdict as a
+hash-chained `gate_events` row in `<tenant>/global/quality_gates.db` (DuckDB).
+The console page `/console/app/quality` renders those rows and nothing else.
+
+**What produces events.** The git hooks the ADR describes are not installed;
+the only producer is the console's **Run all gates** (`POST
+/v1/console/api/quality/gates/run/all`). Since 2026-09-20 that is a real job on
+a daemon thread: `core/quality_gates/artifacts.py` resolves the checkout
+(`CORVIN_ADR_ROOT` → `../Corvin-ADR` → `corvin_decisions/`), projects each file
+of `decisions/`, `concepts/`, `implementation-plans/`, `ideas/` onto the dict
+its gate checks, runs the real validator, writes the gate event and a
+`kg_nodes` projection, and reports `artifacts_done / artifacts_total` on
+`GET .../results/{run_id}` (the page's progress bar). Before that date the run
+wrote one hard-coded `pass` per gate, and the page fetched
+`/v1/console/quality/...` (no `/api`), so every call 404ed and the page showed
+zeros, "Average: NaN%" and "Trend: Up" over no data.
+
+**Artifact identity is the file stem**, never the declared frontmatter `id`:
+77 live decisions declare the placeholder `ADR-0000` and seven declare
+`ADR-0469`, so a verdict keyed on the declared id could not be traced to a
+file. The declared id travels as `declared_id`.
+
+**Endpoints** (router prefix `/api/quality`, all tenant-scoped):
+
+| Route | Renders as |
+|---|---|
+| `GET gates/status` | per-gate 24 h / 7 d verdict counts aggregated in SQL (never a row limit — the old "last 1000 rows" cut the gates that ran first), `pass_percentage` **null** when a gate has no event in the window, `events_24h`, `events_total`, `source_root`, `last_run` |
+| `GET gates/trend?days=` | one point per **UTC day that has events**; a day without a run is a gap, not 0 % |
+| `GET gates/failures?hours=&limit=` | fail/warn rows with the validator's own `reason`, `findings_count`, `artifact_type` |
+| `POST gates/run/all` → `GET gates/results/{id}` | the job above; a checkout that cannot be found is a `failed` run that says so |
+
+**Page rules (ADR-0761/0763).** Tiles and the table say "Verdicts", because a
+second run judges every artifact again. Below two trend points the chart is a
+bar and the caption says it is not a trend. A 404 build says "not available
+on this build" instead of zeros. Deploy marker: the page caption string in
+`src/pages/quality.tsx` (`MARKER_QUALITY`).
+
+**Timestamps** are the audit logger's `YYYY-MM-DDTHH:MM:SS.ffffffZ` shape
+(`_iso()` in the route); the SQL windows compare strings, so every writer must
+keep that shape.
+
+**Proof.** `tests/e2e/test_quality_gates_console_e2e.py` (HTTP, temp
+`CORVIN_HOME`, temp ADR root with known verdicts, chain verifies) and
+`web-next/tests/unit/quality-page.test.tsx` (MSW).
+
