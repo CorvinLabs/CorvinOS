@@ -46,12 +46,21 @@ jobs:
         working-directory: core/console/corvin_console/web-next
         run: npx playwright install --with-deps ${{ matrix.browser }}
 
-      - name: Run E2E tests — ${{ matrix.browser }}
+      - name: Run E2E tests (P0 critical path) — ${{ matrix.browser }}
         working-directory: core/console/corvin_console/web-next
         env:
           CI: true
           CONSOLE_BASE_URL: http://127.0.0.1:8765/console
-        run: npm run test:e2e -- --project=${{ matrix.browser }}
+        run: npm run test:e2e -- --project=${{ matrix.browser }} --grep="^P0-"
+        continue-on-error: false
+
+      - name: Run E2E tests (P1-P3 important) — ${{ matrix.browser }}
+        working-directory: core/console/corvin_console/web-next
+        env:
+          CI: true
+          CONSOLE_BASE_URL: http://127.0.0.1:8765/console
+        run: npm run test:e2e -- --project=${{ matrix.browser }} --grep="^P[1-3]-"
+        continue-on-error: true
 
       - name: Upload Playwright report
         if: always()

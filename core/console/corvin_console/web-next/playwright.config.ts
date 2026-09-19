@@ -7,6 +7,8 @@ const _dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
+  grep: process.env.PLAYWRIGHT_GREP ? new RegExp(process.env.PLAYWRIGHT_GREP) : undefined,
+  grepInvert: process.env.PLAYWRIGHT_GREP_INVERT ? new RegExp(process.env.PLAYWRIGHT_GREP_INVERT) : undefined,
   // MEASURED, do not "fix" this to false without re-measuring. These are integration
   // tests against one live console, and adr-0124-extensibility does pass 1/1 standalone
   // while contributing 12 failures to a parallel run — so contention is real. But
