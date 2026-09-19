@@ -4,8 +4,10 @@ import pytest
 import sys
 from pathlib import Path
 
-# Add video_producer to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core/skills/video_producer"))
+# Setup paths for all video producer modules
+repo_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(repo_root / "core/skills/video_producer_skill_2_0"))  # For Phase 5 modules
+sys.path.insert(0, str(repo_root / "core/skills/video_producer"))  # For Phase 1-4 modules
 
 try:
     from maestro import MaestroOrchestrator, VideoJob, VideoJobPhase
