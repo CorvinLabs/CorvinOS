@@ -203,3 +203,46 @@ export function setHealingConfig(
 ): Promise<HealingConfigResponse> {
   return api("/healing-config", { method: "PATCH", csrf, body: patch });
 }
+
+// ── Feature Whitelist Management (ADR-0386) ────────────────────────────
+
+export interface WhitelistResponse {
+  whitelist: string[];
+  mode: "whitelist" | "legacy";
+  total_features: number;
+}
+
+export interface ToggleFeatureRequest {
+  feature_id: string;
+  enabled: boolean;
+}
+
+export interface ToggleFeatureResponse {
+  status: "success";
+  feature_id: string;
+  enabled: boolean;
+  whitelist: string[];
+}
+
+/**
+ * Fetch the current feature whitelist (ADR-0386).
+ * Only whitelisted features are ON; all others are OFF (deny-all-else).
+ */
+export function getFeatureWhitelist(signal?: AbortSignal): Promise<WhitelistResponse> {
+  return api("/features/whitelist", { signal });
+}
+
+/**
+ * Add or remove a feature from the whitelist (ADR-0386).
+ * Mutations require CSRF token and are audit-logged.
+ */
+export function toggleFeature(
+  request: ToggleFeatureRequest,
+  csrf: string,
+): Promise<ToggleFeatureResponse> {
+  return api("/features/toggle", {
+    method: "POST",
+    csrf,
+    body: request,
+  });
+}

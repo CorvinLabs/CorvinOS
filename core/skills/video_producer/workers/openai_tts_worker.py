@@ -151,6 +151,21 @@ class OpenAITTSWorker:
         if audio_files:
             self._normalize_loudness(audio_files)
 
+        # ======== GATE 2: Audio-Duration Check (Fail-Closed) ========
+        # Must pass BEFORE returning result
+        try:
+            self._validate_audio_duration(total_duration)
+        except ValueError as e:
+            print(f"  ✗ {e}")
+            return VoiceResult(
+                audio_files=[],
+                total_duration_seconds=0,
+                loudness_lufs=0,
+                confidence=0,
+                provider="openai",
+                success=False
+            )
+
         return VoiceResult(
             audio_files=audio_files,
             total_duration_seconds=total_duration,
@@ -180,6 +195,21 @@ class OpenAITTSWorker:
         # Normalize loudness
         if audio_files:
             self._normalize_loudness(audio_files)
+
+        # ======== GATE 2: Audio-Duration Check (Fail-Closed) ========
+        # Must pass BEFORE returning result
+        try:
+            self._validate_audio_duration(total_duration)
+        except ValueError as e:
+            print(f"  ✗ {e}")
+            return VoiceResult(
+                audio_files=[],
+                total_duration_seconds=0,
+                loudness_lufs=0,
+                confidence=0,
+                provider="espeak-ng",
+                success=False
+            )
 
         return VoiceResult(
             audio_files=audio_files,
@@ -262,3 +292,30 @@ class OpenAITTSWorker:
 
             if result.returncode == 0:
                 os.replace(f"{audio_file}.norm.mp3", audio_file)
+
+    def _validate_audio_duration(self, total_duration: float, min_duration: float = 1.0) -> None:
+        """GATE 2: Audio-Duration Check — Fail-Closed Validation (ADR-0720)
+
+        Rejects audio outputs that are too short (whistle tones, empty audio).
+        This is a fail-closed gate: if audio is inadequate, raise immediately.
+
+        Args:
+            total_duration: Total audio duration in seconds
+            min_duration: Minimum acceptable duration (default 1.0s)
+
+        Raises:
+            ValueError: If audio is too short or invalid
+        """
+        if total_duration < min_duration:
+            raise ValueError(
+                f"Audio-Duration Gate FAILED: Total audio duration {total_duration:.2f}s "
+                f"is below minimum {min_duration:.1f}s. "
+                "This may indicate whistle tones, silence, or synthesis failure. "
+                "Video production rejected."
+            )
+
+        if total_duration <= 0:
+            raise ValueError(
+                f"Audio-Duration Gate FAILED: Total audio duration is {total_duration}s. "
+                "Audio must have positive duration for valid video production."
+            )
