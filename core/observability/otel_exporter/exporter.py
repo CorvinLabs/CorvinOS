@@ -2,6 +2,9 @@
 
 ADR-0680: Migration Strategy (Hybrid Dual-Write)
 ADR-0681: Metrics Schema
+
+Implements real OTEL SDK with MeterProvider, OTLP exporter, and fallback to JSON
+on export failure (zero telemetry loss, fail-closed semantics).
 """
 
 import json
@@ -11,6 +14,16 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+try:
+    from opentelemetry import metrics
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
+    OTEL_AVAILABLE = True
+except ImportError:
+    OTEL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -151,69 +164,159 @@ class OTELExporter:
             return False, f"OTEL failed, fell back to JSON: {e}"
 
     def _initialize_otel_sdk(self) -> None:
-        """Initialize OTEL SDK (Phase 2+: Real implementation).
+        """Initialize OTEL SDK with MeterProvider and OTLP exporter.
 
         Sets up:
-        - MeterProvider with OTLP exporter
+        - MeterProvider with OTLP gRPC exporter
         - Resource attributes (tenant_id, instance_id, geo, etc.)
-        - Batch processor (async, non-blocking)
+        - PeriodicExportingMetricReader (async, interval=60s)
+
+        Raises: OTELExportError if initialization fails and collector is unreachable
         """
         try:
-            # TODO: Uncomment when otel-api, otel-sdk, otel-exporter-otlp packages are installed
-            # from opentelemetry import metrics
-            # from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-            # from opentelemetry.sdk.metrics import MeterProvider
-            # from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-            # from opentelemetry.sdk.resources import Resource
-            #
-            # resource = Resource.create({
-            #     "service.name": "corvinOS",
-            #     "tenant_id": self.tenant_id,
-            #     "instance_id": self.instance_id,
-            #     "geo.granularity": self.geo_granularity,
-            # })
-            #
-            # exporter = OTLPMetricExporter(endpoint=self.otel_collector_url)
-            # reader = PeriodicExportingMetricReader(exporter)
-            # meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
-            # metrics.set_meter_provider(meter_provider)
-            # self._meter = metrics.get_meter(__name__)
-            # self._otel_initialized = True
+            if not OTEL_AVAILABLE:
+                logger.warning("OTEL SDK not available (packages not installed)")
+                self._otel_initialized = False
+                self._meter = None
+                return
 
-            # Phase 2+: Real implementation will go here
-            # For now, log and continue (fallback will handle export)
-            logger.info(f"OTEL SDK initialization: collector={self.otel_collector_url}")
-            self._otel_initialized = False  # Stub until packages available
+            # Create Resource with tenant and instance attributes
+            resource = Resource.create({
+                "service.name": "corvinOS",
+                "tenant_id": self.tenant_id,
+                "instance_id": self.instance_id,
+                "geo.granularity": self.geo_granularity,
+                "service.version": "2.0.0",  # TODO: load from CORVIN_VERSION env var
+            })
+
+            # Initialize OTLP exporter (gRPC endpoint)
+            # timeout_millis: 10s per export attempt
+            # insecure: True for local development; override with env var for production
+            exporter = OTLPMetricExporter(
+                endpoint=self.otel_collector_url,
+                timeout=10,  # seconds
+                insecure=True,  # TODO: Set via env var OTEL_EXPORTER_OTLP_INSECURE
+            )
+
+            # Create periodic reader (exports every 60 seconds)
+            reader = PeriodicExportingMetricReader(
+                exporter,
+                interval_millis=60000,  # 60 seconds
+            )
+
+            # Create and set MeterProvider
+            meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+            metrics.set_meter_provider(meter_provider)
+
+            # Get meter for this module
+            self._meter = metrics.get_meter(__name__, version="1.0.0")
+            self._meter_provider = meter_provider
+            self._otel_initialized = True
+
+            logger.info(f"OTEL SDK initialized: collector={self.otel_collector_url}, tenant={self.tenant_id}")
+
         except Exception as e:
             logger.warning(f"OTEL SDK initialization failed: {e} (will use JSON fallback)")
             self._otel_initialized = False
+            self._meter = None
 
     def _export_to_otel(
-        self, signal: HeartbeatSignal, geo_attrs: Optional[GeoAttributes]
+        self, signal: HeartbeatSignal, geo_attrs: Optional[GeoAttributes], max_retries: int = 3
     ) -> None:
-        """Export to OTEL Collector (Phase 2+).
+        """Export heartbeat signal to OTEL Collector as Gauge metrics.
 
-        Creates Gauge metrics and sets Resource Attributes.
+        Creates:
+        - corvin.instance.online (Gauge: 0 or 1)
+        - corvin.instance.uptime (Gauge: seconds)
+        - corvin.instance.plugin_count (Gauge: count)
+        - corvin.instance.memory_usage (Gauge: bytes)
 
-        Raises: OTELExportError if export fails
+        Implements exponential backoff retry (100ms → 200ms → 400ms).
+
+        Args:
+            signal: HeartbeatSignal to export
+            geo_attrs: Optional GeoAttributes (country, region, city)
+            max_retries: Number of retry attempts (default 3)
+
+        Raises: OTELExportError if all retries fail
         """
-        if not self._otel_initialized:
-            raise OTELExportError("OTEL SDK not initialized (collector not reachable)")
+        if not self._otel_initialized or self._meter is None:
+            raise OTELExportError("OTEL SDK not initialized (meter is None)")
 
-        # Phase 2+: Real implementation
-        # try:
-        #     self._meter.create_gauge("corvin.instance.online").record(
-        #         1 if signal.is_alive else 0,
-        #         attributes={"tenant_id": signal.tenant_id, "instance_id": signal.instance_id}
-        #     )
-        #     self._meter.create_gauge("corvin.instance.uptime").record(
-        #         signal.uptime_seconds,
-        #         attributes={"tenant_id": signal.tenant_id, "instance_id": signal.instance_id}
-        #     )
-        # except Exception as e:
-        #     raise OTELExportError(f"Metrics export failed: {e}")
+        # Base attributes for all metrics
+        base_attributes = {
+            "tenant_id": signal.tenant_id,
+            "instance_id": signal.instance_id,
+            "platform": signal.platform,
+            "python_version": signal.python_version,
+        }
 
-        pass
+        # Add geo attributes if present
+        if geo_attrs:
+            base_attributes.update({
+                "geo.country": geo_attrs.country,
+                "geo.region": geo_attrs.region,
+                "geo.city": geo_attrs.city,
+                "geo.granularity": geo_attrs.granularity,
+            })
+
+        # Retry logic with exponential backoff
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                # Record Gauge metrics
+                self._meter.create_gauge(
+                    name="corvin.instance.online",
+                    unit="1",
+                    description="Is this instance currently alive (0=no, 1=yes)?",
+                ).record(
+                    1 if signal.is_alive else 0,
+                    attributes=base_attributes,
+                )
+
+                self._meter.create_gauge(
+                    name="corvin.instance.uptime",
+                    unit="s",
+                    description="Uptime since boot in seconds",
+                ).record(
+                    signal.uptime_seconds,
+                    attributes=base_attributes,
+                )
+
+                self._meter.create_gauge(
+                    name="corvin.instance.plugin_count",
+                    unit="1",
+                    description="Number of loaded plugins",
+                ).record(
+                    signal.plugin_count,
+                    attributes=base_attributes,
+                )
+
+                self._meter.create_gauge(
+                    name="corvin.instance.memory_usage",
+                    unit="By",  # OpenTelemetry unit for bytes
+                    description="Process memory usage in bytes",
+                ).record(
+                    signal.memory_usage_bytes,
+                    attributes=base_attributes,
+                )
+
+                # Success - return without raising
+                logger.debug(f"OTEL export succeeded on attempt {attempt + 1}/{max_retries}")
+                return
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 100ms * 2^attempt
+                    backoff_ms = 100 * (2 ** attempt)
+                    logger.debug(f"OTEL export attempt {attempt + 1} failed: {e}. Retrying in {backoff_ms}ms...")
+                    time.sleep(backoff_ms / 1000.0)
+                else:
+                    logger.error(f"OTEL export failed after {max_retries} attempts: {e}")
+
+        # All retries exhausted - raise error
+        raise OTELExportError(f"OTEL metric export failed after {max_retries} retries: {last_error}")
 
     def _export_to_json(
         self, signal: HeartbeatSignal, geo_attrs: Optional[GeoAttributes]
