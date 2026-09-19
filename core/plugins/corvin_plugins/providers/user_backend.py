@@ -17,7 +17,7 @@ Usage (plugin on_load):
     ctx.user_registry.set_active(self)
 
 Usage (caller):
-    from corvin_plugins.providers import user_backend
+    from core.plugins.corvin_plugins.providers import user_backend
     result = await user_backend.authenticate(creds)      # None => deny
     if result is None and not user_backend.is_installed():
         ...fall through to core auth...
@@ -29,10 +29,10 @@ import logging
 import threading
 from typing import TYPE_CHECKING
 
-from corvin_plugins import circuit_breaker as _breakers
+from .. import circuit_breaker as _breakers
 
 if TYPE_CHECKING:
-    from corvin_plugins.protocol import UserBackend as _UBProto
+    from ..protocol import UserBackend as _UBProto
 
 _log = logging.getLogger("corvin.auth.backend")
 

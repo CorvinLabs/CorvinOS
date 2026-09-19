@@ -27,10 +27,10 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from corvin_plugins import circuit_breaker as _breakers
+from .. import circuit_breaker as _breakers
 
 if TYPE_CHECKING:
-    from corvin_plugins.protocol import AuditBackend as _ABProto
+    from ..protocol import AuditBackend as _ABProto
 
 _log = logging.getLogger("corvin.audit.fanout")
 
