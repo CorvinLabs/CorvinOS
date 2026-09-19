@@ -1,9 +1,15 @@
-"""Role 3: ContextEngineer — context selection via CEL."""
+"""Role 3: ContextEngineer — context selection via CEL (ADR-0532 L10 wiring)."""
 
 import logging
 from ..context import GateName, GateResult, SecurityContext
 
 logger = logging.getLogger(__name__)
+
+# Phase 2 Blocker 2 Fix: Import os.context_adapter Skill (ADR-0555)
+try:
+    from ...skills.os_skills.context_adapter import ContextAdapterSkill
+except ImportError:
+    ContextAdapterSkill = None
 
 
 class ContextEngineerImpl:
@@ -31,18 +37,30 @@ class ContextEngineerImpl:
                     details={},
                 )
 
-            # Call CEL (would integrate ADR-0269 here)
-            cel_input = {
-                "actor": context.actor,
-                "action": context.action,
-                "input_data": context.input_data,
-            }
-            # Simplified: no actual CEL call in Phase 1
-            context.context_brief = {
-                "sources": [],
-                "confidence": "medium",
-                "tokens": 0,
-            }
+            # Phase 2 Blocker 2 Fix: Wire os.context_adapter Skill (ADR-0555 + ADR-0532)
+            if ContextAdapterSkill is not None:
+                skill = ContextAdapterSkill()
+                adapter_input = {
+                    "actor": context.actor,
+                    "action": context.action,
+                    "input_data": context.input_data,
+                    "tenant_id": getattr(context, 'tenant_id', '_default'),
+                }
+                context_output = await skill.execute(adapter_input)
+                context.context_brief = context_output.get("context_brief", {
+                    "sources": [],
+                    "confidence": "medium",
+                    "tokens": 0,
+                })
+                logger.debug(f"[ContextEngineer] os.context_adapter wired and executed (sources={len(context.context_brief.get('sources', []))})")
+            else:
+                # Fallback: empty context (non-blocking fail-open per ADR-0300)
+                context.context_brief = {
+                    "sources": [],
+                    "confidence": "medium",
+                    "tokens": 0,
+                }
+                logger.warning("[ContextEngineer] os.context_adapter Skill unavailable; using empty context (fail-open)")
 
             logger.debug("[ContextEngineer] Context built successfully")
             return GateResult(
