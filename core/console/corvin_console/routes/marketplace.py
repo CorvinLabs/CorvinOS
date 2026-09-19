@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import audit as console_audit
 from .. import auth as session_auth
+from .. import feature_flags as _feature_flags
 from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
@@ -158,11 +159,50 @@ async def list_plugins(
     {
       "plugins": [...],
       "count": int,
-      "filtered_by": {"category": str, "tier": str}
+      "filtered_by": {"category": str, "tier": str},
+      "marketplace_rollout": {"is_enabled": bool, "is_canary": bool, "percentage": int}
     }
+
+    **Phase 5.1 Marketplace Rollout (ADR-0892 amendment):**
+    - Community plugins (contributor tier) are only visible when:
+      (1) marketplace_rollout_pct flag is enabled AND
+      (2) this tenant is in the canary group (via canary_percentage_routing)
+    - Otherwise, only buildin tier plugins are returned.
+    - Non-canary tenants see a 200 response with only buildin plugins (no error).
     """
     index = _index_manager.get_index()
     plugins = index.get("plugins", [])
+
+    # Phase 5.1: Community Plugin Discovery with staged rollout
+    rollout_enabled = _feature_flags.is_enabled("marketplace_rollout_pct", rec.tenant_id)
+    rollout_pct = 0
+    if rollout_enabled:
+        # Get the percentage from spec.features or default to 10 (canary)
+        spec = _get_tenant_spec(rec.tenant_id)
+        rollout_pct = spec.get("marketplace_rollout_pct", 10)
+
+    is_canary = (
+        rollout_enabled
+        and _feature_flags.canary_percentage_routing(
+            rec.tenant_id, "marketplace_rollout_pct", rollout_pct
+        )
+    )
+
+    # Audit the rollout decision
+    console_audit.action_performed(
+        "marketplace.discover",
+        rec=rec,
+        details={
+            "rollout_enabled": rollout_enabled,
+            "rollout_pct": rollout_pct,
+            "is_canary": is_canary,
+            "visible_tiers": ["buildin", "contributor"] if is_canary else ["buildin"],
+        },
+    )
+
+    # Apply feature-flag gating: hide community plugins if not in canary
+    if not is_canary:
+        plugins = [p for p in plugins if p.get("tier") != "contributor"]
 
     # Apply filters
     if category:
@@ -190,6 +230,11 @@ async def list_plugins(
         "filtered_by": {
             "category": category,
             "tier": tier,
+        },
+        "marketplace_rollout": {
+            "is_enabled": rollout_enabled,
+            "is_canary": is_canary,
+            "percentage": rollout_pct,
         },
     }
 
@@ -248,6 +293,21 @@ def _tenant_install_state(tenant_id: str) -> Dict[str, Dict[str, Any]]:
         loaded, _why = _plugins._runtime_state(pid)
         out[pid] = {"enabled": bool(getattr(rec, "enabled", False)), "runtime_loaded": bool(loaded)}
     return out
+
+
+def _get_tenant_spec(tenant_id: str) -> Dict[str, Any]:
+    """Load tenant.corvin.yaml::spec; return empty dict on any error."""
+    try:
+        from forge import paths as _paths
+        spec_file = _paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
+        if not spec_file.is_file():
+            return {}
+        import yaml
+        with open(spec_file) as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("spec", {})
+    except Exception:
+        return {}
 
 
 def _local_state(entry: Dict[str, Any], installed: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:

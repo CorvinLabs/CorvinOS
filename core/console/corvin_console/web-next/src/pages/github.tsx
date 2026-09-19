@@ -430,7 +430,7 @@ export default function GitHubIntegrationPanel() {
               <div>
                 <h3 className="font-semibold text-foreground">Automatic Sync</h3>
                 <p className="text-sm text-muted-foreground">
-                  Uploads your tenant's skills to the repository every {worker ? Math.round(worker.interval_seconds / 60) : 5} minutes.
+                  Publishes your tenant's Skill-Forge skills (each SKILL.md with its meta.json, under skills/) to the repository every {worker ? Math.round(worker.interval_seconds / 60) : 5} minutes; an unchanged set commits nothing.
                   Resumes on its own after a server restart.
                 </p>
               </div>

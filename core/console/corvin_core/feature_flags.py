@@ -1282,6 +1282,25 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         released_date="2026-09-17",
         promoted_by="shumway",
     ),
+    FeatureFlag(
+        id="marketplace_rollout_pct",
+        label="Marketplace Staged Rollout (Community Plugin Discovery)",
+        description=(
+            "Phase 5.1 Marketplace activation: enable community plugin discovery for staged rollout. "
+            "Off (default): marketplace discovery hidden (builtin plugins only in /app/marketplace). "
+            "On: community plugins visible, routed via canary_percentage_routing() using this flag ID. "
+            "Use percentage flag (0-100) to control rollout: 10% canary → 50% beta → 100% GA. "
+            "SLO gates (ADR-0892 amendment): p99 latency <500ms, error rate <0.1%. Circuit breaker "
+            "engages on breach; auto-recovery after 60s of healthy metrics. Requires E2E monitoring "
+            "and SLO alert integration (Slack, email, or PagerDuty)."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("marketplace", "plugins", "rollout", "phase-5"),
+        release_tier="alpha",
+        released_date="2026-09-20",
+        promoted_by="shumway",
+    ),
 )
 
 

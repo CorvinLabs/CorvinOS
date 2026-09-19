@@ -10,6 +10,7 @@ Handles:
 
 import subprocess
 import json
+import hashlib
 import tempfile
 import shutil
 from pathlib import Path
@@ -292,14 +293,62 @@ class GitHubGitWrapper:
             return []
 
 
+def collect_skills(skills_dir: Path) -> List[Dict[str, Any]]:
+    """The skills to publish, in a deterministic order.
+
+    Skill-Forge layout (the real one since ADR-0420): ``<skills_dir>/<name>/``
+    holding ``SKILL.md`` and ``meta.json``. Until 2026-09-20 the sync read
+    ``<tenant>/skills/*.md`` flat — a directory that holds three config files
+    and not one skill — so every run published an empty manifest
+    (``skills_synced: 0``) while 629 skills sat in ``skill-forge/skills/``.
+    Flat ``*.md`` files directly under ``skills_dir`` are still accepted for
+    an older layout.
+
+    Each entry: ``name``, ``files`` (``[(repo_relative_path, bytes)]``),
+    ``size`` (sum), ``sha256`` (over the concatenated file bytes — the
+    manifest carries it so an unchanged skill set produces no commit).
+    """
+    out: List[Dict[str, Any]] = []
+    if not skills_dir.is_dir():
+        return out
+    for entry in sorted(skills_dir.iterdir(), key=lambda e: e.name):
+        files: List[Tuple[str, bytes]] = []
+        if entry.is_dir() and (entry / "SKILL.md").is_file():
+            for fname in ("SKILL.md", "meta.json"):
+                fp = entry / fname
+                if fp.is_file():
+                    files.append((f"skills/{entry.name}/{fname}", fp.read_bytes()))
+        elif entry.is_file() and entry.suffix == ".md":
+            files.append((f"skills/{entry.name}", entry.read_bytes()))
+        else:
+            continue
+        digest = hashlib.sha256()
+        for rel, data in files:
+            digest.update(rel.encode("utf-8"))
+            digest.update(data)
+        out.append({
+            "name": entry.stem if entry.is_file() else entry.name,
+            "files": files,
+            "size": sum(len(d) for _r, d in files),
+            "sha256": digest.hexdigest(),
+        })
+    return out
+
+
 def sync_skills_to_github_real(
     repo_url: str,
     skills_dir: Path,
     tenant_id: str = "_default"
 ) -> Dict[str, Any]:
-    """Execute real GitHub sync: clone → commit → push → tag.
+    """Execute real GitHub sync: clone → replace ``skills/`` → commit → push → tag.
 
     Pushes all changes directly to 'main' branch to avoid branch accumulation.
+    The ``skills/`` tree in the repository is REPLACED by the local set on
+    every run, so a skill deleted locally disappears from the repository.
+    The manifest carries no timestamp: an unchanged skill set yields
+    "No changes to commit" and NO release tag (until 2026-09-20 every
+    5-minute run committed a new ``synced_at`` and pushed a tag — 288 tags a
+    day for nothing).
     """
 
     branch_name = "main"  # Always push to main, no branch accumulation
@@ -322,65 +371,65 @@ def sync_skills_to_github_real(
             # Step 3: Prepare skills
             if not skills_dir.exists():
                 logger.warning(f"Skills directory not found: {skills_dir}")
-                skills_list = []
-            else:
-                skills_list = []
-                for skill_file in skills_dir.glob("*.md"):
-                    skills_list.append({
-                        "name": skill_file.stem,
-                        "size": skill_file.stat().st_size
-                    })
+            skills_list = collect_skills(skills_dir)
 
-            # Step 4: Write manifest
+            # Step 4: Replace the repository's skills/ tree — deletions propagate.
+            if git.work_dir is not None:
+                shutil.rmtree(git.work_dir / "skills", ignore_errors=True)
+
+            # Step 5: Write manifest (deterministic — no clock in it)
             manifest = {
                 "tenant_id": tenant_id,
-                "synced_at": datetime.utcnow().isoformat() + "Z",
+                "source": "skill-forge",
                 "skills_count": len(skills_list),
-                "skills": skills_list,
+                "skills": [
+                    {"name": sk["name"], "size": sk["size"], "sha256": sk["sha256"],
+                     "files": [rel for rel, _d in sk["files"]]}
+                    for sk in skills_list
+                ],
                 "branch": branch_name
             }
 
             manifest_result = git.write_file(
                 "skills/manifest.json",
-                json.dumps(manifest, indent=2)
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n"
             )
             if not manifest_result["success"]:
                 return manifest_result
 
-            # Step 5: Copy skill files
+            # Step 6: Copy skill files
             files_written = [manifest_result["file"]]
-            if skills_dir.exists():
-                for skill_file in skills_dir.glob("*.md"):
-                    content = skill_file.read_text()
-                    result = git.write_file(
-                        f"skills/{skill_file.name}",
-                        content
-                    )
+            for sk in skills_list:
+                for rel, data in sk["files"]:
+                    result = git.write_file(rel, data.decode("utf-8", errors="replace"))
                     if result["success"]:
                         files_written.append(result["file"])
 
-            # Step 6: Commit and push
+            # Step 7: Commit and push
             commit_result = git.commit_and_push(
                 branch_name,
-                f"[Corvin Sync] Tenant {tenant_id}: {len(files_written)} files updated"
+                f"[Corvin Sync] Tenant {tenant_id}: {len(skills_list)} skills, {len(files_written)} files"
             )
             if not commit_result["success"]:
                 return commit_result
 
-            # Step 7: Create release tag
-            tag_result = git.create_tag(
-                f"release-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
-                f"Tenant {tenant_id} synchronization\n\n"
-                f"Skills: {len(skills_list)}\n"
-                f"Files: {len(files_written)}\n"
-                f"Branch: {branch_name}"
-            )
+            # Step 8: Release tag — only when something was actually committed
+            tag_result: Dict[str, Any] = {"success": False}
+            if commit_result.get("commit_hash"):
+                tag_result = git.create_tag(
+                    f"release-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
+                    f"Tenant {tenant_id} synchronization\n\n"
+                    f"Skills: {len(skills_list)}\n"
+                    f"Files: {len(files_written)}\n"
+                    f"Branch: {branch_name}"
+                )
 
             return {
                 "success": True,
                 "repo_url": repo_url,
                 "branch": branch_name,
                 "commit": commit_result.get("commit_hash"),
+                "changed": bool(commit_result.get("commit_hash")),
                 "tag": tag_result.get("tag") if tag_result.get("success") else None,
                 "files_written": files_written,
                 "skills_synced": len(skills_list),

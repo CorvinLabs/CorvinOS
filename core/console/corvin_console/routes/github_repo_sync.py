@@ -64,8 +64,10 @@ class GitHubRepoSync:
                 "method": "git_cli"
             })
 
-            # Collect skills directory
-            skills_dir = self.tenant_path / 'skills'
+            # The Skill-Forge tree (<tenant>/skill-forge/skills/<name>/SKILL.md +
+            # meta.json). <tenant>/skills/ holds config files, not skills — it
+            # was the source until 2026-09-20 and produced 0 skills per run.
+            skills_dir = self.tenant_path / 'skill-forge' / 'skills'
 
             # Run real sync
             sync_result = sync_skills_to_github_real(
