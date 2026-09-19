@@ -114,6 +114,10 @@ class MaestroOrchestrator:
             ValueError: If narration is unsourced or invalid
         """
 
+        # ======== GATE 1: Content-Presence (Fail-Closed) ========
+        # Must pass BEFORE job creation
+        self.validate_content_presence(narration)
+
         job = VideoJob(
             job_id=job_id or f"video_{uuid.uuid4().hex[:12]}",
             topic=topic,
@@ -324,6 +328,49 @@ class MaestroOrchestrator:
                     return False
 
         return True
+
+    def validate_content_presence(self, narration: List[str]) -> None:
+        """GATE 1: Content-Presence Gate — Fail-Closed Validation (ADR-0720)
+
+        Rejects jobs with empty or insufficient narration BEFORE any worker dispatch.
+        This is a fail-closed gate: if content is inadequate, raise immediately.
+
+        Args:
+            narration: List of narration texts for all scenes
+
+        Raises:
+            ValueError: If narration is empty, None, or all blank
+        """
+        # Check 1: Narration must exist
+        if not narration:
+            raise ValueError(
+                "Content-Presence Gate FAILED: Narration is empty. "
+                "At least one non-empty scene is required."
+            )
+
+        # Check 2: All scenes must have content
+        non_empty_scenes = [scene.strip() for scene in narration if scene.strip()]
+        if len(non_empty_scenes) != len(narration):
+            raise ValueError(
+                f"Content-Presence Gate FAILED: {len(narration) - len(non_empty_scenes)} "
+                f"scene(s) are empty out of {len(narration)} total. "
+                "All scenes must have non-empty narration."
+            )
+
+        # Check 3: Total content length must be meaningful (at least 20 chars)
+        total_content_length = sum(len(scene.strip()) for scene in narration)
+        if total_content_length < 20:
+            raise ValueError(
+                f"Content-Presence Gate FAILED: Total narration too short ({total_content_length} chars). "
+                "Minimum 20 characters required for meaningful content."
+            )
+
+        # Emit audit event: content validation passed
+        self._audit("content_presence_validated", "pre-job-creation", {
+            "num_scenes": len(narration),
+            "total_length_chars": total_content_length,
+            "status": "passed",
+        })
 
     def _validate_analysis_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Analysis phase"""

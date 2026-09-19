@@ -15,6 +15,12 @@ import asyncio
 import os
 from pathlib import Path
 
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 
 @dataclass
 class ScreenshotResult:
@@ -66,6 +72,20 @@ class ScreenshotCapturerWorker:
             screenshots = captured
         finally:
             loop.close()
+
+        # ======== GATE 3: Visual-Content-Spec (Fail-Closed) ========
+        # Must pass BEFORE returning result
+        try:
+            self._validate_screenshot_content(screenshots)
+        except ValueError as e:
+            print(f"  ✗ {e}")
+            return ScreenshotResult(
+                screenshots=[],
+                total_duration_seconds=0,
+                num_captured=0,
+                confidence=0,
+                success=False
+            )
 
         return ScreenshotResult(
             screenshots=screenshots,
@@ -241,3 +261,99 @@ class ScreenshotCapturerWorker:
             json.dump(metadata, f)
 
         return output_path
+
+    def _validate_screenshot_content(
+        self,
+        screenshot_paths: List[str],
+        min_unique_colors: int = 10,
+        max_solid_color_threshold: float = 0.95,
+    ) -> None:
+        """GATE 3: Visual-Content-Spec — Fail-Closed Validation (ADR-0720)
+
+        Rejects screenshots that are placeholder/solid-color images.
+        This is a fail-closed gate: if visual content is inadequate, raise immediately.
+
+        Args:
+            screenshot_paths: List of screenshot file paths
+            min_unique_colors: Minimum number of unique colors for real content
+            max_solid_color_threshold: Max percentage of pixels in dominant color (>95% = reject)
+
+        Raises:
+            ValueError: If screenshots are placeholders or have insufficient content
+        """
+        if not screenshot_paths:
+            raise ValueError(
+                "Visual-Content-Spec Gate FAILED: No screenshots captured. "
+                "Video requires visual content."
+            )
+
+        # If PIL not available, do basic validation (file exists and non-zero size)
+        if not HAS_PIL:
+            print("  ℹ PIL not available, skipping advanced color analysis")
+            for path in screenshot_paths:
+                if not os.path.exists(path):
+                    raise ValueError(
+                        f"Visual-Content-Spec Gate FAILED: Screenshot not found: {path}"
+                    )
+                file_size = os.path.getsize(path)
+                if file_size < 1000:  # Less than 1KB = placeholder
+                    raise ValueError(
+                        f"Visual-Content-Spec Gate FAILED: Screenshot suspiciously small "
+                        f"({file_size} bytes). Likely a placeholder image."
+                    )
+            return
+
+        # PIL available: do advanced analysis
+        invalid_screenshots = []
+
+        for i, screenshot_path in enumerate(screenshot_paths):
+            if not os.path.exists(screenshot_path):
+                invalid_screenshots.append(f"Screenshot {i}: File not found")
+                continue
+
+            try:
+                img = Image.open(screenshot_path)
+
+                # Check 1: Image must have reasonable dimensions
+                width, height = img.size
+                if width < 100 or height < 100:
+                    invalid_screenshots.append(
+                        f"Screenshot {i}: Too small ({width}x{height}px, minimum 100x100px)"
+                    )
+                    continue
+
+                # Check 2: Analyze color diversity
+                pixels = list(img.getdata())
+                unique_colors = len(set(pixels))
+
+                if unique_colors < min_unique_colors:
+                    invalid_screenshots.append(
+                        f"Screenshot {i}: Insufficient color diversity "
+                        f"({unique_colors} colors < {min_unique_colors} minimum). "
+                        f"Likely solid-color placeholder."
+                    )
+                    continue
+
+                # Check 3: Detect if one color dominates (>95% same color = placeholder)
+                if len(pixels) > 0:
+                    color_counts = {}
+                    for pixel in pixels:
+                        color_counts[pixel] = color_counts.get(pixel, 0) + 1
+
+                    dominant_color_ratio = max(color_counts.values()) / len(pixels)
+
+                    if dominant_color_ratio > max_solid_color_threshold:
+                        invalid_screenshots.append(
+                            f"Screenshot {i}: Dominant color covers {dominant_color_ratio*100:.1f}% "
+                            f"(threshold {max_solid_color_threshold*100:.0f}%). "
+                            f"Likely solid-color placeholder."
+                        )
+
+            except Exception as e:
+                invalid_screenshots.append(f"Screenshot {i}: Analysis error - {e}")
+
+        if invalid_screenshots:
+            raise ValueError(
+                f"Visual-Content-Spec Gate FAILED: Screenshots contain placeholders or insufficient content:\n  - "
+                + "\n  - ".join(invalid_screenshots)
+            )

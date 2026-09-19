@@ -361,7 +361,10 @@ class VideoAssemblerWorker:
         duration_seconds: float,
         codec: str,
     ):
-        """QUALITY GATE: Validate video meets minimum broadcast standards (fail-closed)
+        """GATE 4: Final Validation — Comprehensive Fail-Closed Quality Gate (ADR-0720)
+
+        Validates video meets broadcast standards BEFORE output is written.
+        This is a fail-closed gate: if any check fails, video is rejected.
 
         Args:
             output_path: Path to video file
@@ -370,33 +373,55 @@ class VideoAssemblerWorker:
             codec: Video codec
 
         Raises:
-            ValueError: If video fails quality checks
+            ValueError: If video fails any quality check
         """
-        # Minimum bitrate: 100 kbps (streaming minimum)
-        if bitrate_kbps < 100:
-            raise ValueError(
-                f"Video bitrate too low: {bitrate_kbps} kbps "
-                f"(minimum: 100 kbps). Video rejected."
-            )
-
-        # Validate codec
-        valid_codecs = ["h264", "h.264", "vp9", "av1"]
-        if codec.lower() not in valid_codecs:
-            raise ValueError(
-                f"Invalid codec: {codec}. "
-                f"Must be one of {valid_codecs}"
-            )
-
-        # Validate file exists
+        # Check 1: Video file must exist
         if not os.path.exists(output_path):
-            raise ValueError(f"Video file not created: {output_path}")
+            raise ValueError(
+                f"Final-Validation Gate FAILED: Video file not created: {output_path}. "
+                "No video output to validate."
+            )
 
-        # Validate file size (at least 100KB)
+        # Check 2: Minimum file size (at least 100KB = real content)
         file_size = os.path.getsize(output_path)
         if file_size < 100 * 1024:  # 100KB minimum
             raise ValueError(
-                f"Video file too small: {file_size} bytes "
-                f"(minimum: 102400 bytes). Possible encoding failure."
+                f"Final-Validation Gate FAILED: Video file too small ({file_size} bytes, "
+                f"minimum: 102400 bytes). Likely encoding failure or insufficient content."
+            )
+
+        # Check 3: Minimum bitrate (100 kbps = streaming minimum)
+        if bitrate_kbps < 100:
+            raise ValueError(
+                f"Final-Validation Gate FAILED: Video bitrate too low ({bitrate_kbps} kbps, "
+                f"minimum: 100 kbps). Video quality inadequate."
+            )
+
+        # Check 4: Valid codec
+        valid_codecs = ["h264", "h.264", "vp9", "av1"]
+        if codec.lower() not in valid_codecs:
+            raise ValueError(
+                f"Final-Validation Gate FAILED: Invalid codec {codec}. "
+                f"Must be one of {valid_codecs}."
+            )
+
+        # Check 5: Duration must be positive and reasonable (5s–600s)
+        if duration_seconds <= 0:
+            raise ValueError(
+                f"Final-Validation Gate FAILED: Video duration is {duration_seconds}s. "
+                "Duration must be positive."
+            )
+
+        if duration_seconds < 5:
+            raise ValueError(
+                f"Final-Validation Gate FAILED: Video duration {duration_seconds}s is too short "
+                f"(minimum 5 seconds). Insufficient content."
+            )
+
+        if duration_seconds > 3600:  # 1 hour max
+            raise ValueError(
+                f"Final-Validation Gate FAILED: Video duration {duration_seconds}s is too long "
+                f"(maximum 3600 seconds). Unreasonable duration."
             )
 
     def _get_video_bitrate(self, video_path: str) -> int:
