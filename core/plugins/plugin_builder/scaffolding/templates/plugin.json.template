@@ -1,0 +1,24 @@
+{
+  "$schema": "https://corvinOS.io/schemas/plugin-scaffold-v1.json",
+  "id": "{{ plugin_id }}",
+  "name": "{{ plugin_name }}",
+  "version": "{{ version }}",
+  "type": "{{ plugin_type }}",
+  "description": "{{ description }}",
+  "author": "{{ author }}",
+  "requires_auth": {{ requires_auth|lower }},
+  "requires_network_egress": {{ requires_network_egress|lower }},
+  "egress_hosts": {{ egress_hosts|tojson }},
+  "external_dependencies": {{ external_dependencies|tojson }},
+  "lifecycle_hooks": {{ lifecycle_hooks|tojson }},
+  "permissions": [
+    "storage.read",
+    "audit.read"
+  ],
+  "boot_layer": "installed",
+  "metadata": {
+    "created_at": "{{ created_at }}",
+    "generated_by": "Plugin-Builder v2",
+    "adr": "ADR-0262"
+  }
+}

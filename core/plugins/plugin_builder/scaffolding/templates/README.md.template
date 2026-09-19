@@ -1,0 +1,198 @@
+# {{ plugin_name }}
+
+**Plugin ID:** `{{ plugin_id }}`
+**Type:** `{{ plugin_type }}`
+**Version:** `{{ version }}`
+**Author:** {{ author }}
+
+## Description
+
+{{ description }}
+
+## Features
+
+- Lifecycle hooks: {{ lifecycle_hooks|join(', ') }}
+{% if requires_auth %}
+- Requires authentication
+{% endif %}
+{% if requires_network_egress %}
+- Requires network access to: {{ egress_hosts|join(', ') }}
+{% endif %}
+
+## Installation
+
+```bash
+pip install corvin-{{ plugin_id|replace('.', '-') }}
+```
+
+## Development Setup
+
+### Prerequisites
+
+- Python 3.10+
+- pip or poetry
+{% if external_dependencies %}
+- External dependencies: {{ external_dependencies|join(', ') }}
+{% endif %}
+
+### Setup
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install in development mode
+pip install -e ".[dev]"
+```
+
+### Running Tests
+
+```bash
+pytest tests/ -v
+```
+
+### Running Coverage
+
+```bash
+pytest --cov=. tests/
+```
+
+## Lifecycle
+
+This plugin implements the CorvinOS plugin lifecycle (ADR-0233):
+
+### Hooks Implemented
+
+{% if 'on_load' in lifecycle_hooks %}
+#### `on_load(context)`
+
+Called when the plugin is loaded into the runtime. Use this to:
+- Initialize resources
+- Validate configuration
+- Perform startup checks
+
+```python
+def on_load(self, context: PluginContext) -> None:
+    """Initialize the plugin."""
+    self.logger.info(f"Loading {self.plugin_id}")
+    # Your initialization code here
+```
+{% endif %}
+
+{% if 'on_execute' in lifecycle_hooks %}
+#### `on_execute(input_data, context)`
+
+Called to execute the plugin's primary function.
+
+```python
+def on_execute(self, input_data: Any, context: PluginContext) -> Any:
+    """Execute the plugin's primary function."""
+    # Your business logic here
+    return output_data
+```
+{% endif %}
+
+{% if 'on_unload' in lifecycle_hooks %}
+#### `on_unload(context)`
+
+Called when the plugin is unloaded. Use this to:
+- Clean up resources
+- Close connections
+- Save state
+
+```python
+def on_unload(self, context: PluginContext) -> None:
+    """Clean up when plugin is unloaded."""
+    self.logger.info(f"Unloading {self.plugin_id}")
+    # Your cleanup code here
+```
+{% endif %}
+
+{% if 'on_error' in lifecycle_hooks %}
+#### `on_error(error, context)`
+
+Called when an error occurs during execution.
+
+```python
+def on_error(self, error: Exception, context: PluginContext) -> None:
+    """Handle plugin errors."""
+    self.logger.error(f"Error in {self.plugin_id}: {error}")
+    # Your error handling code here
+```
+{% endif %}
+
+## Audit Trail
+
+All plugin execution is recorded in the audit trail for compliance purposes (GDPR Art. 30, 32).
+
+Events emitted:
+- `plugin_loaded` - When the plugin is loaded
+- `plugin_executed` - When the plugin executes
+- `plugin_error` - When an error occurs
+- `plugin_unloaded` - When the plugin is unloaded
+
+## Configuration
+
+### plugin.json
+
+The plugin configuration is stored in `plugin.json`:
+
+```json
+{
+  "id": "{{ plugin_id }}",
+  "name": "{{ plugin_name }}",
+  "version": "{{ version }}",
+  "type": "{{ plugin_type }}"
+}
+```
+
+See `plugin.json` for all configuration options.
+
+## Permissions
+
+This plugin requires the following permissions (ADR-0233):
+
+{% if permissions %}
+{% for perm in permissions %}
+- `{{ perm }}`
+{% endfor %}
+{% else %}
+- `storage.read` (default)
+- `audit.read` (default)
+{% endif %}
+
+## Troubleshooting
+
+### Plugin fails to load
+
+1. Check `plugin.json` is valid JSON
+2. Verify all required fields are present
+3. Check Python version compatibility (3.10+)
+4. Review audit trail for error events
+
+### Plugin execution hangs
+
+1. Check for infinite loops in `on_execute()`
+2. Add timeouts for network operations
+3. Check resource limits
+
+## Contributing
+
+Please follow these guidelines when contributing:
+
+1. Write tests for new features
+2. Ensure tests pass: `pytest tests/`
+3. Follow PEP 8 style guide
+4. Document all public methods
+5. Update this README with new features
+
+## License
+
+See LICENSE file for details.
+
+## References
+
+- [CorvinOS Plugin System (ADR-0233)](https://github.com/CorvinLabs/CorvinOS/blob/main/corvin_decisions/decisions/ADR-0233.md)
+- [Plugin-Builder V2 (ADR-0262)](https://github.com/CorvinLabs/CorvinOS/blob/main/corvin_decisions/decisions/ADR-0262.md)
+- [CorvinOS Documentation](https://corvinOS.io/docs)

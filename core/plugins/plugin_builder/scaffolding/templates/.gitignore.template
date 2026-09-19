@@ -1,0 +1,118 @@
+# Build artifacts
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.sublime-project
+.sublime-workspace
+*.code-workspace
+
+# Secrets and credentials (NEVER commit these!)
+# GDPR Art. 5 - Data minimization: no credentials in repo
+.env
+.env.local
+.env.*.local
+.env.*.vault
+secrets.json
+secrets.yaml
+secrets.yml
+credentials.json
+credentials.yaml
+api_key.txt
+apikey
+token.txt
+.aws/
+.config/
+~/.ssh/
+config.yaml
+config.local.yaml
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.jks
+.credentials
+.credentials.*
+
+# Test artifacts and coverage reports
+.coverage
+htmlcov/
+.coverage.*
+.pytest_cache/
+.tox/
+*.prof
+.hypothesis/
+
+# Logs and temporary files
+*.log
+logs/
+*.tmp
+.temp/
+tmp/
+temp/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+.svn/
+
+# Tenant-specific and user data (GDPR Art. 5)
+# Never commit tenant data, user data, or personal information
+tenant_data/
+user_data/
+personal_data/
+.corvin/
+.corvin_*
+
+# Audit trails and compliance logs (GDPR Art. 30)
+# NEVER commit audit logs - they are immutable records
+audit.jsonl
+*.audit
+audit_*.log
+compliance_*.log
+.audit_*
+
+# Python packaging
+setup.py.bak
+MANIFEST
+*.egg-info
+
+# IDE caches
+.pylint.d/
+.pytype/
+.dmypy.json
+dmypy.json
+
+# Environment variable files (for any naming pattern)
+.env*
+!.env.example
+!.env.template
+
+# Local development overrides
+local_settings.py
+local_config.yaml
