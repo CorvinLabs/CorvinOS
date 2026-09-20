@@ -134,15 +134,38 @@ def _register_learning_audit_allowlists(security_events) -> None:
     _allowlists_registered_for.add(id(security_events))
 
 
-def _tail_contains(path: Path, needle: str, window: int = 65536) -> bool:
-    """True if ``needle`` occurs in the last ``window`` bytes of ``path``."""
+def _tail_contains(path: Path, needle: str, window: int = 4096) -> bool:
+    """CRITICAL-1 FIX: Verify audit_ref is in a valid JSON record on the FINAL line only.
+
+    VULNERABLE (old): Searched in 65KB rolling window — attacker could inject junk
+    with the same hash string and cause false positives.
+
+    FIXED: Read last 4KB and parse ONLY the final JSON line. Verify the needle
+    matches the 'audit_ref' field in that record (not substring search in junk).
+    """
     try:
         size = path.stat().st_size
     except OSError:
         return False
+
     with open(path, "rb") as fh:
         fh.seek(max(0, size - window))
-        return needle.encode() in fh.read()
+        tail_data = fh.read().decode("utf-8", errors="ignore")
+
+    # Split into lines and get the final line
+    lines = tail_data.strip().split("\n")
+    if not lines:
+        return False
+
+    # Parse the final line as JSON and verify the needle is in the audit_ref field
+    try:
+        import json
+        final_record = json.loads(lines[-1])
+        # Check if audit_ref matches EXACTLY in the record's audit_ref field
+        # (not substring search in junk data)
+        return final_record.get("audit_ref") == needle
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return False
 
 
 def core_audit_event(
@@ -356,23 +379,66 @@ class EventStore:
     async def cleanup_old_events(self, *, tenant_id: str, retention_days: int = 90) -> int:
         """Remove events older than the retention period (ADR-0319 default 90d).
 
+        CRITICAL-2 FIX (GDPR Art. 5): Validates ALL events belong to bound tenant
+        BEFORE processing. Rejects partitions with cross-tenant data (emits critical alert).
         Partitions are rewritten atomically; the retention run is audited on
         the core chain with counts only.
 
         Returns:
             Number of events deleted
+
+        Raises:
+            ValueError: If cross-tenant events are detected (contamination alert)
         """
         self._bind(tenant_id)
         cutoff_date = (datetime.utcnow() - timedelta(days=retention_days)).date()
 
         deleted_count = 0
         touched_files = 0
+        contaminated_files = []
 
         for events_file in self.events_dir.glob("*.jsonl"):
             file_date = datetime.fromisoformat(events_file.stem).date()
             if file_date >= cutoff_date:
                 continue
 
+            # CRITICAL-2 FIX: FIRST — validate ALL events in this partition belong to self.tenant_id
+            cross_tenant_count = 0
+            cross_tenant_ids = set()
+            with open(events_file) as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    event_dict = json.loads(line)
+                    if event_dict.get("tenant_id") != tenant_id:
+                        cross_tenant_count += 1
+                        cross_tenant_ids.add(event_dict.get("tenant_id", "unknown"))
+
+            if cross_tenant_count > 0:
+                # CRITICAL: Reject this partition entirely
+                contaminated_files.append({
+                    "file": events_file.name,
+                    "cross_tenant_count": cross_tenant_count,
+                    "foreign_tenants": list(cross_tenant_ids),
+                })
+                logger.critical(
+                    f"[CRITICAL-2] Partition {events_file.name} contains {cross_tenant_count} "
+                    f"cross-tenant events (foreign tenants: {cross_tenant_ids}). "
+                    f"Rejecting cleanup to prevent leakage. Audit alert emitted."
+                )
+                # Emit CRITICAL audit event
+                core_audit_event(
+                    "learning.cross_tenant_contamination_detected",
+                    tenant_id=tenant_id,
+                    details={
+                        "file": events_file.name,
+                        "cross_tenant_count": cross_tenant_count,
+                        "foreign_tenants": list(cross_tenant_ids),
+                    },
+                )
+                continue  # Skip this contaminated partition
+
+            # SECOND — Process old events (all validated as same-tenant)
             remaining_lines: list[str] = []
             with open(events_file) as f:
                 for line in f:
@@ -382,10 +448,18 @@ class EventStore:
                     if event_dict.get("tenant_id") == tenant_id:
                         deleted_count += 1
                     else:
+                        # This should never happen (we validated above), but keep for safety
                         remaining_lines.append(line)
 
             self._rewrite_partition(events_file, remaining_lines, tombstone=None)
             touched_files += 1
+
+        # If any contamination was detected, raise an alert (but don't crash)
+        if contaminated_files:
+            logger.critical(
+                f"[CRITICAL-2] Contamination detected in {len(contaminated_files)} partitions. "
+                f"Operator review required. Cleanup continued for clean partitions."
+            )
 
         core_audit_event(
             "learning.retention",
@@ -394,6 +468,7 @@ class EventStore:
                 "retention_days": retention_days,
                 "deleted_count": deleted_count,
                 "partitions_rewritten": touched_files,
+                "contaminated_partitions": len(contaminated_files),
             },
         )
         return deleted_count

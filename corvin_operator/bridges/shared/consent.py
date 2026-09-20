@@ -145,15 +145,28 @@ def _safe_component(s: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in s)[:64] or "anon"
 
 
-def _store_path(channel: str, chat_key: str, *, tenant_id: str | None = None) -> Path:
+def _store_path(channel: str, chat_key: str, *, tenant_id: str) -> Path:
+    """CRITICAL-3 FIX: Require explicit tenant_id. Remove legacy global fallback.
+
+    VULNERABLE (old): tenant_id=None fallback allowed use of global consent path
+    (~/.corvin/global/consent/) as implicit default. An attacker could:
+    1. Write consent via global path
+    2. Queries search tenant-scoped path (different location)
+    3. Consent isolation breaks
+
+    FIXED: tenant_id is REQUIRED (no default), removing the legacy path entirely.
+    Breaking change: All callers MUST pass explicit tenant_id.
+    """
+    if not isinstance(tenant_id, str) or not tenant_id:
+        raise ValueError(
+            "tenant_id is required (GDPR Art. 6, 7). "
+            "Legacy global consent path is no longer supported. "
+            "Migrate to tenant-scoped consent (e.g., tenant_id='_default')"
+        )
     safe_channel = _safe_component(channel or "unknown")
     safe_chat = _safe_component(str(chat_key) if chat_key is not None else "anon")
     home = _corvin_home()
-    if tenant_id is None:
-        # ADR-0007 Phase 1.3: legacy path preserved for backward compat
-        base = home / "global" / "consent"
-    else:
-        base = home / "tenants" / tenant_id / "global" / "consent"
+    base = home / "tenants" / tenant_id / "global" / "consent"
     return base / f"{safe_channel}__{safe_chat}.json"
 
 
@@ -513,7 +526,7 @@ def is_granted(channel: str, chat_key: str, uid: str
         _clag_gate("L16.consent_gate")
     except Exception:
         return False, "chain-integrity-failed"
-    path = _store_path(channel, chat_key)
+    path = _store_path(channel, chat_key, tenant_id="_default")
     try:
         data = _load_store(path)
     except ConsentStoreCorrupted:
@@ -640,7 +653,7 @@ def grant(channel: str, chat_key: str, uid: str, *,
             "granted_via": via,
             "ttl_s": clamped,
         }
-    path = _store_path(channel, chat_key)
+    path = _store_path(channel, chat_key, tenant_id="_default")
     # _locked_update holds the lock across read-prune-write to prevent the
     # lost-update race where two concurrent grant() calls overwrite each other.
     _locked_update(path, lambda data: data.update({uid: entry}))
@@ -663,7 +676,7 @@ def revoke(channel: str, chat_key: str, uid: str, *,
     "nothing was on file"). Emits ``consent.revoked`` audit event."""
     if not uid:
         return False
-    path = _store_path(channel, chat_key)
+    path = _store_path(channel, chat_key, tenant_id="_default")
 
     def _do_revoke(data: dict) -> bool:
         ex = uid in data
@@ -686,7 +699,7 @@ def status(channel: str, chat_key: str, uid: str) -> dict:
     granted_at, granted_via}`` — safe for serialisation into a chat
     reply via ``/consent status``."""
     granted, reason = is_granted(channel, chat_key, uid)
-    path = _store_path(channel, chat_key)
+    path = _store_path(channel, chat_key, tenant_id="_default")
     data, _expired = _prune(_load_store(path))  # raises ConsentStoreCorrupted to caller
     entry = data.get(uid) or {}
     remaining = 0
@@ -709,7 +722,7 @@ def list_consents(channel: str, chat_key: str) -> dict[str, dict]:
     """Return all currently-valid (non-expired) consent entries for the
     chat. Used by ``/consent list`` for the owner to see who consented.
     """
-    path = _store_path(channel, chat_key)
+    path = _store_path(channel, chat_key, tenant_id="_default")
     data, _expired = _prune(_load_store(path))  # raises ConsentStoreCorrupted to caller
     return data
 
