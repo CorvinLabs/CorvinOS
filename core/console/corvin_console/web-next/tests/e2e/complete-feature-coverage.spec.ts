@@ -144,7 +144,9 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await createButtons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 2: Skills (dependent on forge tool)
-      await page.goto('/console/app/skills');
+      // /app/skills was folded into Forge on 2026-09-20 and now redirects;
+      // the ADR-0405 creator lives on Forge's Creator tab.
+      await page.goto('/console/app/forge?tab=skills');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -302,7 +304,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
     });
 
     test('Complete workflow: Forge → Skills → LDD → Chat Integration', async ({ page }) => {
-      const flows = ['/app/forge', '/app/skills', '/app/ldd', '/app/chat'];
+      const flows = ['/app/forge', '/app/ldd', '/app/chat'];
 
       for (const flow of flows) {
         await page.goto(flow);

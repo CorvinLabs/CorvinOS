@@ -134,7 +134,9 @@ async function stubApi(
 }
 
 async function openPanel(page: Page) {
-  await page.goto('/console/app/skills', { waitUntil: 'domcontentloaded' });
+  // /app/skills was folded into Forge on 2026-09-20 and now redirects;
+  // the ADR-0405 creator lives on Forge's Creator tab.
+  await page.goto('/console/app/forge?tab=creator', { waitUntil: 'domcontentloaded' });
   await expect(
     page.getByRole('heading', { name: 'Skill Creator', exact: true }),
   ).toBeVisible({ timeout: 20000 });

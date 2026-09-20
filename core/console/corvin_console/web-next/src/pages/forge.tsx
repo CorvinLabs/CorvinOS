@@ -12,6 +12,7 @@ import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
 import GraphTab from '@/components/forge/GraphTab';
 import AuditTab from '@/components/forge/AuditTab';
+import { SkillCreatorPanel } from '@/components/SkillCreatorPanel';
 import {
   ForgeTool,
   ForgeSkill,
@@ -19,7 +20,7 @@ import {
   ForgeDependency } from '@/types/forge';
 
 /** Tab ids, in tab-bar order. Also the accepted `?tab=` values. */
-const FORGE_TABS = ['tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
+const FORGE_TABS = ['tools', 'skills', 'creator', 'os-skills', 'graph', 'audit'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
 export default function ForgePage() {
@@ -141,7 +142,7 @@ export default function ForgePage() {
         }}
         className="flex-1 flex flex-col"
       >
-        <TabsList className="grid w-full grid-cols-5 mb-4">
+        <TabsList className="grid w-full grid-cols-6 mb-4">
           <TabsTrigger value="tools">
             Tools
             <span className="ml-2 text-xs bg-secondary px-2 py-1 rounded">
@@ -154,6 +155,13 @@ export default function ForgePage() {
               {skills.length}
             </span>
           </TabsTrigger>
+          {/* ADR-0405 skill generation: describe → watch the phases → read,
+              refine, keep or delete. It lived on the standalone /app/skills page
+              and would have been orphaned when that page was folded in here on
+              2026-09-20 — /app/skill-forge-generator is a DIFFERENT surface
+              (POST /v1/skill-forge/generate, a one-shot template/LLM form), not
+              a replacement for this lifecycle. */}
+          <TabsTrigger value="creator">Creator</TabsTrigger>
           <TabsTrigger value="os-skills">
             OS-Skills
             <span className="ml-2 text-xs bg-secondary px-2 py-1 rounded">
@@ -180,6 +188,10 @@ export default function ForgePage() {
             searchQuery={searchQuery}
             filterStatus={filterStatus}
           />
+        </TabsContent>
+
+        <TabsContent value="creator" className="flex-1 overflow-y-auto">
+          <SkillCreatorPanel />
         </TabsContent>
 
         <TabsContent value="os-skills" className="flex-1 overflow-y-auto">
