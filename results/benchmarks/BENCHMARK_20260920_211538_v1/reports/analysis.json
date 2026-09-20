@@ -1,0 +1,14 @@
+{
+  "patterns": {
+    "simple_always_save": true,
+    "complex_quality": -5.571742597475389
+  },
+  "insights": [
+    "Token savings vary by category: qa benefits most (41.3%), code_writing benefits least (32.1%)"
+  ],
+  "recommendations": [
+    "\u2717 BLOCKED: Fix failing tests: quality",
+    "Review routing thresholds based on failing test analysis",
+    "Consider category-specific routing heuristics"
+  ]
+}

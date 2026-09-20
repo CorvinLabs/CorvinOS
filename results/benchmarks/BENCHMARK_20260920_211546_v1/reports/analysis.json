@@ -1,0 +1,14 @@
+{
+  "patterns": {
+    "simple_always_save": true,
+    "complex_quality": -5.743736014119802
+  },
+  "insights": [
+    "Token savings vary by category: debugging benefits most (38.8%), data_analysis benefits least (37.1%)"
+  ],
+  "recommendations": [
+    "\u2717 BLOCKED: Fix failing tests: quality",
+    "Review routing thresholds based on failing test analysis",
+    "Consider category-specific routing heuristics"
+  ]
+}
