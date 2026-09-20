@@ -127,6 +127,7 @@ from .routes import (
     plugins as plugins_route,
     marketplace as marketplace_route,
     marketplace_custom_repos as marketplace_custom_repos_route,
+    marketplace_skills_routes as marketplace_skills_route,
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
@@ -198,6 +199,10 @@ from .routes import (
     video_learning_api as video_learning_api_route,
     # ADR-0677 — Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
     skill_forge_distribution_routes as skill_forge_distribution_route,
+    # ADR-0902 — Autonomous Skill Forge Console Integration
+    autonomous_forge_routes as autonomous_forge_route,
+    # ADR-0906 — Production Monitoring Dashboard
+    monitoring_routes as monitoring_route,
     # TRACK I — DataHub Creator (6-phase project workspace + learning visualization)
     datahub_creator_routes as datahub_creator_route,
     # DataHub Phase 3 — Console UI + HTTP Wiring (ADR-0510)
@@ -235,6 +240,10 @@ router.include_router(tools.router, tags=["console-tools"])
 # marketplace.py (+ marketplace_install.py) and plugins.py.
 # ADR-0677 — Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
 router.include_router(skill_forge_distribution_route.router, tags=["console-skill-forge-distribution"])
+# ADR-0902 — Autonomous Skill Forge Console Integration (canary state, approval, rollback)
+router.include_router(autonomous_forge_route.router, prefix="/autonomous-forge", tags=["console-autonomous-forge"])
+# ADR-0906 — Production Monitoring Dashboard (health, stats, skill performance, alerts)
+router.include_router(monitoring_route.router, prefix="/monitoring", tags=["console-monitoring"])
 router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
@@ -355,6 +364,8 @@ router.include_router(plugins_route.router, tags=["console-plugins"])
 router.include_router(marketplace_route.router, tags=["console-marketplace"])
 router.include_router(marketplace_custom_repos_route.router,
                       tags=["console-marketplace-custom-repos"])
+# ADR-0535+ — Marketplace Skills API (OS-Skills discovery, installation, rating)
+router.include_router(marketplace_skills_route.router, tags=["console-marketplace-skills"])
 # Corvin-Knowledge Marketplace Plugin API (Graph visualization, settings, sync)
 router.include_router(plugins_corvin_knowledge_api_route.router, tags=["console-corvin-knowledge"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
