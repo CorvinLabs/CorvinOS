@@ -428,7 +428,11 @@ def get_alerts(
 )
 def get_timeseries(
     metric: Annotated[str, Query(..., description="Metric name (confidence, latency_p95_ms, error_rate)")],
-    days: Annotated[int, Query(default=7, ge=1, le=30, description="Number of days of history")] = 7,
+    # The default goes on the parameter, never inside Query() in an Annotated:
+    # FastAPI asserts on that at app-BUILD time, so it does not fail this route —
+    # it fails the whole `import corvin_console`, which removes /console and every
+    # /v1/console/* route from the gateway (ADR-0015 opt-in mount).
+    days: Annotated[int, Query(ge=1, le=30, description="Number of days of history")] = 7,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
 ) -> TimeSeriesResponse:
     """Get historical time series data for charts.
