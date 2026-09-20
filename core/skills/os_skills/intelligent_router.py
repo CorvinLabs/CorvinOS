@@ -12,10 +12,14 @@ Decision Tree (ADR-0867):
 5. Allow operator overrides
 6. Log every decision in audit trail
 
-Token Boundaries (definitive, revised 2026-09-20):
-- SIMPLE: < 50 tokens → Haiku (one-liners: "What's 2+2?")
-- MEDIUM: 50-250 tokens → Sonnet (typical requests: "Write a function to...")
-- COMPLEX: >= 250 tokens → Opus (detailed: "Implement a system that...")
+Token Boundaries (Phase 2 Optimized, revised 2026-09-20 after quality regression analysis):
+- SIMPLE: < 30 tokens → Haiku (one-liners: "What's 2+2?")
+- MEDIUM: 30-150 tokens → Sonnet (typical requests: "Write a function to...")
+- COMPLEX: >= 150 tokens → Opus (detailed: "Implement a system that...")
+
+RATIONALE: Phase 1 benchmark showed -4.9% quality loss from 37.8% token savings.
+Root cause: too aggressive token reduction. Target Phase 2: 20-25% savings with ≤2% quality loss.
+Strategy: Conservative thresholds (favor Sonnet/Opus over Haiku), only route to Haiku for truly simple tasks.
 
 Cost Optimization:
 - SIMPLE always uses cheapest model (Haiku)
@@ -274,12 +278,15 @@ class IntelligentRouter:
         pre_computed_complexity: Optional[str],
         task_input: str = "",
     ) -> Tuple[ModelTier, float, str]:
-        """Classify task tier based on token count + task keywords (ADR-0867).
+        """Classify task tier based on token count + task keywords (ADR-0867, Phase 2 Optimized).
 
-        Decision rules (definitive):
-        - SIMPLE: < 50 tokens AND no "creation" keywords → Haiku
-        - MEDIUM: 50-250 tokens OR has "write/implement/create" keywords → Sonnet
-        - COMPLEX: >= 250 tokens OR complex keywords → Opus
+        Decision rules (Phase 2 optimized for quality):
+        - SIMPLE: < 30 tokens AND no complex keywords → Haiku
+        - MEDIUM: 30-150 tokens OR has "write/implement" keywords → Sonnet
+        - COMPLEX: >= 150 tokens OR deep analysis/architecture keywords → Opus
+
+        Phase 1 benchmark revealed -4.9% quality loss from overly aggressive token reduction (37.8%).
+        Phase 2 optimization: conservative thresholds to target 20-25% savings with ≤2% quality loss.
 
         Pre-computed complexity (e.g., from model_selector.py) is used
         as a secondary signal for confidence adjustment.
@@ -287,70 +294,61 @@ class IntelligentRouter:
         Returns:
             (ModelTier, confidence [0.0-1.0], signal_strength "strong"|"medium"|"weak")
         """
-        # Primary: token count classification
-        if token_count < 50:
+        # Primary: token count classification (Phase 2 optimized thresholds)
+        if token_count < 30:
             base_tier = ModelTier.SIMPLE
-            base_confidence = 0.90
-        elif token_count < 250:
+            base_confidence = 0.85  # Lower confidence on smaller boundary
+        elif token_count < 150:
             base_tier = ModelTier.MEDIUM
-            base_confidence = 0.75
+            base_confidence = 0.80  # Slightly higher confidence on larger window
         else:
             base_tier = ModelTier.COMPLEX
-            base_confidence = 0.95
+            base_confidence = 0.95  # High confidence on COMPLEX
 
-        # Secondary: keyword heuristics (override base classification if needed)
-        # Tasks asking to "write", "implement", "create", "develop", "analyze" etc.
-        # should be at least MEDIUM even if short
+        # Secondary: keyword heuristics (Phase 2: conservative bumping to preserve quality)
+        # Goal: only bump tiers if CLEARLY necessary; default to base tier classification
         tier = base_tier
         confidence = base_confidence
         # Signal strength correlates with token count confidence:
-        # >= 250 tokens: STRONG signal (high confidence in tier)
-        # 50-250 tokens: MEDIUM signal (moderate confidence)
-        # < 50 tokens: WEAK signal (low confidence, may be keyword-bumped)
-        signal_strength = "strong" if token_count >= 250 else ("medium" if token_count >= 50 else "weak")
+        # >= 150 tokens: STRONG signal (high confidence in tier)
+        # 30-150 tokens: MEDIUM signal (moderate confidence)
+        # < 30 tokens: WEAK signal (low confidence, may be keyword-bumped)
+        signal_strength = "strong" if token_count >= 150 else ("medium" if token_count >= 30 else "weak")
 
         if task_input:
             import re
             task_lower = task_input.lower()
 
-            # Creation/Implementation keywords → bump to at least MEDIUM
-            # Use word boundaries (\b) to avoid false positives like "rewrite", "recreate"
+            # Phase 2 Conservative: Only bump SIMPLE→MEDIUM if BOTH:
+            # 1. Has creation keyword AND
+            # 2. Task input > 50 chars (not a trivial one-liner)
             creation_patterns = (
                 r"\b(write|writing|written|wrote|writes)\b",
                 r"\b(implement|implementation|implementing|implemented)\b",
                 r"\b(create|creation|creating|created|creates)\b",
                 r"\b(develop|development|developing|developed)\b",
-                r"\b(build|building|building|built|builds)\b",
-                r"\b(design|designing|designed|designs)\b",
-                r"\b(architect|architecting|architecture)\b",
-                r"\b(refactor|refactoring|refactored|refactors)\b",
-                r"\b(optimize|optimization|optimizing|optimized|optimizes)\b",
-                r"\b(improve|improvement|improving|improved|improves)\b",
             )
-            if any(re.search(pattern, task_lower) for pattern in creation_patterns):
-                if tier == ModelTier.SIMPLE:
-                    tier = ModelTier.MEDIUM
-                    confidence = 0.75  # Keyword-based confidence
-                    signal_strength = "medium"
+            if (tier == ModelTier.SIMPLE and
+                len(task_input) > 50 and
+                any(re.search(pattern, task_lower) for pattern in creation_patterns)):
+                tier = ModelTier.MEDIUM
+                confidence = 0.80  # Keyword-based confidence
+                signal_strength = "medium"
 
-            # Complex analysis keywords → bump to COMPLEX
-            # Use word boundaries to avoid partial matches
+            # Phase 2 Conservative: Bump MEDIUM→COMPLEX or SIMPLE→COMPLEX only for deep analysis
+            # Requires BOTH: analysis keyword AND task input > 80 chars (substantive depth)
             analysis_patterns = (
                 r"\b(analyze|analysis|analyzing|analyzed|analyzes)\b",
-                r"\b(investigate|investigation|investigating|investigated)\b",
                 r"\b(debug|debugging|debugged|debugger)\b",
+                r"\b(investigate|investigation|investigating|investigated)\b",
                 r"\b(troubleshoot|troubleshooting|troubleshot)\b",
-                r"\b(evaluate|evaluation|evaluating|evaluated)\b",
-                r"\b(compare|comparison|comparing|compared|compares)\b",
-                r"\b(research|researching|researched|researcher)\b",
-                r"\b(study|studying|studied|studies|studier)\b",
-                r"\b(explore|exploration|exploring|explored|explores)\b",
             )
-            if any(re.search(pattern, task_lower) for pattern in analysis_patterns) and len(task_input) > 20:
-                if tier in (ModelTier.SIMPLE, ModelTier.MEDIUM):
-                    tier = ModelTier.COMPLEX
-                    confidence = 0.80 if token_count < 250 else 0.95
-                    signal_strength = "medium"
+            if (tier in (ModelTier.SIMPLE, ModelTier.MEDIUM) and
+                len(task_input) > 80 and
+                any(re.search(pattern, task_lower) for pattern in analysis_patterns)):
+                tier = ModelTier.COMPLEX
+                confidence = 0.85 if tier == ModelTier.MEDIUM else 0.75
+                signal_strength = "medium"
 
         # Secondary signal: pre-computed complexity (boost or lower confidence)
         if pre_computed_complexity:
