@@ -1,5 +1,5 @@
 /**
- * Template composer — the structured half of the unified Skill Creator.
+ * Template composer — the structured half of the unified Skill Forge tab.
  *
  * This is what /app/skill-forge-generator was (2026-09-20 merge): name,
  * title, description, a skill-type template, and a manifest you could copy

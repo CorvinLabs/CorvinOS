@@ -1,5 +1,5 @@
 /**
- * Skill Creator panel — browser-level coverage of the operator's loop:
+ * Skill Forge panel — browser-level coverage of the operator's loop:
  * generate → watch → inspect → refine → delete (ADR-0405).
  *
  * Runs against the live console. Every backend call is stubbed with
@@ -134,15 +134,16 @@ async function stubApi(
 }
 
 async function openPanel(page: Page) {
-  // /app/skills was folded into Forge on 2026-09-20 and now redirects;
-  // the ADR-0405 creator lives on Forge's Creator tab.
-  await page.goto('/console/app/forge?tab=creator', { waitUntil: 'domcontentloaded' });
+  // /app/skills was folded into Forge on 2026-09-20 and now redirects; the
+  // ADR-0405 lifecycle lives on Forge's Skill Forge tab (its id was 'creator'
+  // until the same day's rename — forge.tsx still accepts that as an alias).
+  await page.goto('/console/app/forge?tab=skill-forge', { waitUntil: 'domcontentloaded' });
   await expect(
-    page.getByRole('heading', { name: 'Skill Creator', exact: true }),
+    page.getByRole('heading', { name: 'Skill Forge', exact: true }),
   ).toBeVisible({ timeout: 20000 });
 }
 
-test.describe('Skill Creator — panel', () => {
+test.describe('Skill Forge — panel', () => {
   test('renders the composer and the skill library', async ({ page }) => {
     await stubApi(page);
     await openPanel(page);
@@ -178,7 +179,7 @@ test.describe('Skill Creator — panel', () => {
   });
 });
 
-test.describe('Skill Creator — progress', () => {
+test.describe('Skill Forge — progress', () => {
   test('renders the five real phases and the engine', async ({ page }) => {
     await stubApi(page);
     await openPanel(page);
@@ -257,7 +258,7 @@ test.describe('Skill Creator — progress', () => {
   });
 });
 
-test.describe('Skill Creator — inspect', () => {
+test.describe('Skill Forge — inspect', () => {
   test('View opens the skill body and its grades', async ({ page }) => {
     await stubApi(page);
     await openPanel(page);
@@ -295,7 +296,7 @@ test.describe('Skill Creator — inspect', () => {
   });
 });
 
-test.describe('Skill Creator — refine', () => {
+test.describe('Skill Forge — refine', () => {
   test('Refine targets the existing skill and sends base_skill', async ({ page }) => {
     const captured = await stubApi(page);
     await openPanel(page);
@@ -340,7 +341,7 @@ test.describe('Skill Creator — refine', () => {
   });
 });
 
-test.describe('Skill Creator — delete', () => {
+test.describe('Skill Forge — delete', () => {
   test('asks before deleting and then calls DELETE with a CSRF token', async ({ page }) => {
     const captured = await stubApi(page);
     await openPanel(page);

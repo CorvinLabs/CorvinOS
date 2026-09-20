@@ -12,33 +12,51 @@ import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
 import GraphTab from '@/components/forge/GraphTab';
 import AuditTab from '@/components/forge/AuditTab';
-import { SkillCreatorPanel } from '@/components/SkillCreatorPanel';
+import { SkillForgePanel } from '@/components/SkillForgePanel';
 import {
   ForgeTool,
   ForgeSkill,
   ForgeOSSkill,
   ForgeDependency } from '@/types/forge';
 
-/** Tab ids, in tab-bar order. Also the accepted `?tab=` values. */
-const FORGE_TABS = ['tools', 'skills', 'creator', 'os-skills', 'graph', 'audit'] as const;
+/** Tab ids, in tab-bar order. Also the accepted `?tab=` values.
+ *
+ *  Skill Forge leads: creating a skill is what an operator opens this page to
+ *  do, and the tools list is reference material next to it. The FIRST tab is
+ *  also the default — a tab bar whose leftmost entry is not the one that
+ *  opens reads as a bug — so `?tab=` is omitted for it and present for every
+ *  other. */
+const FORGE_TABS = ['skill-forge', 'tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
+
+const DEFAULT_TAB: ForgeTab = 'skill-forge';
+
+/** Retired `?tab=` values, still honoured so existing links keep landing on
+ *  the surface they named. `creator` was this tab's id until 2026-09-20, and
+ *  /app/skill-forge-generator's redirect pointed at it. */
+const TAB_ALIASES: Record<string, ForgeTab> = { creator: 'skill-forge' };
+
+function resolveTab(requested: string | null): ForgeTab {
+  if (!requested) return DEFAULT_TAB;
+  if (FORGE_TABS.includes(requested as ForgeTab)) return requested as ForgeTab;
+  return TAB_ALIASES[requested] ?? DEFAULT_TAB;
+}
 
 export default function ForgePage() {
   // ?tab= picks the opening tab, so /app/skills can redirect straight onto the
-  // Skills tab instead of dropping the operator on Tools and making them find
+  // Skills tab instead of dropping the operator elsewhere and making them find
   // it (the standalone skills panel was folded in here on 2026-09-20). An
-  // unknown or absent value falls back to 'tools', the previous default.
+  // unknown value falls back to the default rather than rendering nothing.
   const [searchParams, setSearchParams] = useSearchParams();
-  const requestedTab = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState(
-    FORGE_TABS.includes(requestedTab as ForgeTab) ? (requestedTab as string) : 'tools',
+  const [activeTab, setActiveTab] = useState<string>(() =>
+    resolveTab(searchParams.get('tab')),
   );
 
   /** Switch tab AND keep ?tab= in sync — the Skills tab hands skill creation
-   *  to the Creator through this, and a deep link has to survive a reload. */
+   *  to Skill Forge through this, and a deep link has to survive a reload. */
   const goToTab = (v: string) => {
     setActiveTab(v);
-    setSearchParams(v === 'tools' ? {} : { tab: v }, { replace: true });
+    setSearchParams(v === DEFAULT_TAB ? {} : { tab: v }, { replace: true });
   };
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'enabled' | 'disabled'>('all');
@@ -147,6 +165,17 @@ export default function ForgePage() {
         className="flex-1 flex flex-col"
       >
         <TabsList className="grid w-full grid-cols-6 mb-4">
+          {/* The ONE place a skill is created (2026-09-20), and the tab this
+              page opens on. Two composers over one registry: ADR-0405
+              orchestration (describe → watch the phases → read, refine, keep
+              or delete) and the template form rehomed from
+              /app/skill-forge-generator, whose own backend
+              (POST /v1/skill-forge/generate) was an unmounted Flask blueprint
+              answering 404 — the page could never create anything. Its fields
+              now write through POST /skills/manual, the same registry this
+              panel's library reads. The Skills tab's create dialog was the
+              third half-duplicate and now links here. */}
+          <TabsTrigger value="skill-forge">Skill Forge</TabsTrigger>
           <TabsTrigger value="tools">
             Tools
             <span className="ml-2 text-xs bg-secondary px-2 py-1 rounded">
@@ -159,16 +188,6 @@ export default function ForgePage() {
               {skills.length}
             </span>
           </TabsTrigger>
-          {/* The ONE place a skill is created (2026-09-20). Two composers:
-              ADR-0405 orchestration (describe → watch the phases → read,
-              refine, keep or delete) and the template form rehomed from
-              /app/skill-forge-generator, whose own backend
-              (POST /v1/skill-forge/generate) was an unmounted Flask blueprint
-              answering 404 — the page could never create anything. Its fields
-              now write through POST /skills/manual, the same registry this
-              panel's library reads. The Skills tab's create dialog was the
-              third half-duplicate and now links here. */}
-          <TabsTrigger value="creator">Creator</TabsTrigger>
           <TabsTrigger value="os-skills">
             OS-Skills
             <span className="ml-2 text-xs bg-secondary px-2 py-1 rounded">
@@ -178,6 +197,10 @@ export default function ForgePage() {
           <TabsTrigger value="graph">Graph</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="skill-forge" className="flex-1 overflow-y-auto">
+          <SkillForgePanel />
+        </TabsContent>
 
         <TabsContent value="tools" className="flex-1 overflow-y-auto">
           <ToolsTab
@@ -194,12 +217,8 @@ export default function ForgePage() {
             setSkills={setSkills}
             searchQuery={searchQuery}
             filterStatus={filterStatus}
-            onCreateSkill={() => goToTab('creator')}
+            onCreateSkill={() => goToTab('skill-forge')}
           />
-        </TabsContent>
-
-        <TabsContent value="creator" className="flex-1 overflow-y-auto">
-          <SkillCreatorPanel />
         </TabsContent>
 
         <TabsContent value="os-skills" className="flex-1 overflow-y-auto">
