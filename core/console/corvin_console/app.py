@@ -127,7 +127,6 @@ from .routes import (
     plugins as plugins_route,
     marketplace as marketplace_route,
     marketplace_custom_repos as marketplace_custom_repos_route,
-    marketplace_skills_routes as marketplace_skills_route,
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
@@ -364,8 +363,14 @@ router.include_router(plugins_route.router, tags=["console-plugins"])
 router.include_router(marketplace_route.router, tags=["console-marketplace"])
 router.include_router(marketplace_custom_repos_route.router,
                       tags=["console-marketplace-custom-repos"])
-# ADR-0535+ — Marketplace Skills API (OS-Skills discovery, installation, rating)
-router.include_router(marketplace_skills_route.router, tags=["console-marketplace-skills"])
+# ADR-0535+ — Marketplace Skills API (OS-Skills discovery, installation, rating):
+# the import of routes/marketplace_skills_routes.py was removed on 2026-09-20. The
+# module was referenced by 3b2df938 but never committed — it exists nowhere in the
+# history — so the import raised ImportError at module scope, and the gateway's
+# opt-in `try: from corvin_console import app` (ADR-0015) therefore dropped /console
+# AND every /v1/console/* route from the process. One absent file took the whole
+# console down. Re-add the include_router line in the same commit that adds the
+# module. Guard: tests/test_console_app_importable.py.
 # Corvin-Knowledge Marketplace Plugin API (Graph visualization, settings, sync)
 router.include_router(plugins_corvin_knowledge_api_route.router, tags=["console-corvin-knowledge"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
