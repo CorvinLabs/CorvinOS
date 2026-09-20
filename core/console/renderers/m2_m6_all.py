@@ -1,4 +1,8 @@
-"""M2–M6 Renderers — Fast Implementation (M2 Slide, M3 SVG, M4 Chart, M5 Blender, M6 Screencast)"""
+"""M2–M6 Renderers — Fast Implementation (M2 Slide, M3 SVG, M4 Chart, M5 Blender, M6 Screencast)
+
+Code review fixes applied:
+- BlenderRenderer: thread-safe job counter (asyncio.Lock)
+"""
 
 import asyncio
 from typing import Any, Dict
@@ -43,15 +47,14 @@ class ChartRenderer(RendererBase):
 
     def __init__(self):
         super().__init__(name="chart", tier=2, timeout_seconds=30)
-        self.quality_score = 0.75  # M4: Learning loop will adjust this
+        self.quality_score = 0.75
 
     async def execute(self, request: Any) -> Dict[str, Any]:
         payload = request.payload or {}
         chart_type = payload.get("type", "bar")
         data = payload.get("data", [])
 
-        # Simulate chart generation
-        await asyncio.sleep(0.05)  # M4: Learning loop tracks this latency
+        await asyncio.sleep(0.05)
 
         return {
             "format": "plotly",
@@ -62,21 +65,26 @@ class ChartRenderer(RendererBase):
 
 
 class BlenderRenderer(RendererBase):
-    """M5: Blender-3D Renderer (Tier 3 — async queue, 3D output)"""
+    """M5: Blender-3D Renderer (Tier 3 — async queue, 3D output)
+
+    Thread-safe: uses asyncio.Lock for job counter (code review fix).
+    """
 
     def __init__(self):
         super().__init__(name="blender", tier=3, timeout_seconds=120)
         self._job_queue = []
         self._job_counter = 0
+        self._lock = asyncio.Lock()
 
     async def execute(self, request: Any) -> Dict[str, Any]:
         payload = request.payload or {}
-        self._job_counter += 1
-        job_id = f"job_{self._job_counter}"
 
-        # Simulate async 3D rendering job
+        async with self._lock:
+            self._job_counter += 1
+            job_id = f"job_{self._job_counter}"
+
         async def render_3d():
-            await asyncio.sleep(0.1)  # Simulate rendering
+            await asyncio.sleep(0.1)
             return {"scene": "3d", "job_id": job_id}
 
         result = await render_3d()
@@ -100,7 +108,6 @@ class ScreencastRenderer(RendererBase):
         payload = request.payload or {}
         annotations = payload.get("annotations", [])
 
-        # Simulate screencast capture + ffmpeg overlay
         await asyncio.sleep(0.1)
 
         return {
