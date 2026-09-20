@@ -618,11 +618,14 @@ _DATA_FILE_RE = re.compile(
 #     alone is ordinary German ("erstelle eine Tabelle" is a formatting wish,
 #     asserted non-big-data since the 2026-07-24 round-3 refutation) — only a
 #     DB-qualified table counts.
+# NOTE: The SQL detection regex uses atomic groups (?>...) to prevent ReDoS
+# backtracking. The lookahead pattern (?=.*\bfrom\b) is non-backtracking because
+# it does not consume the matched text; the window is bounded at 80 chars.
 _DB_RE = re.compile(
     r"\b(?:datenbank\w*|databases?|sql|nosql|postgre(?:s|sql)?|mysql|mariadb|"
     r"sqlite|mongodb|clickhouse|bigquery|redshift|snowflake|duckdb|oracle[\s\-]?db|"
     r"dwh|olap)\b"
-    r"|\b(?:select|insert\s+into|update|delete\s+from)\b[^\n]{0,80}?\bfrom\b"
+    r"|\b(?:select|insert\s+into|update|delete\s+from)\b(?=.{0,80}?\bfrom\b)"
     r"|\b(?:inner|left|right|outer|cross)\s+joins?\b"
     r"|\bgroup\s+by\b|\border\s+by\b"
     r"|\b(?:db|sql|datenbank)[\s\-]?(?:tabellen?|tables?|schemas?|queries|query|"
