@@ -269,7 +269,7 @@ const ConfidenceTrendChart: React.FC<{ data: TimeSeriesPoint[] }> = ({ data }) =
           />
           <Tooltip
             formatter={(val: number) => `${val.toFixed(1)}%`}
-            labelFormatter={(ts) => new Date(ts).toLocaleString()}
+            labelFormatter={(ts) => new Date(ts as string | number).toLocaleString("en-US")}
           />
           <Legend />
           <Line
@@ -301,7 +301,7 @@ const LatencyTrendChart: React.FC<{ data: TimeSeriesPoint[] }> = ({ data }) => {
           <YAxis label={{ value: 'Latency (ms)', angle: -90, position: 'insideLeft' }} />
           <Tooltip
             formatter={(val: number) => `${val.toFixed(1)}ms`}
-            labelFormatter={(ts) => new Date(ts).toLocaleString()}
+            labelFormatter={(ts) => new Date(ts as string | number).toLocaleString("en-US")}
           />
           <Legend />
           <Bar dataKey="value" fill="#f59e0b" name="P95 Latency (ms)" />

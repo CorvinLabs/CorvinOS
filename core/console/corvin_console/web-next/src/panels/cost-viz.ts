@@ -8,6 +8,27 @@
  * `tests/unit/cost-viz.test.ts`.
  */
 
+/**
+ * The same model, spelled the way the caller's source spells it, reduced to one
+ * id. Three spellings of Opus 5 reach this console at once:
+ *
+ *   claude-opus-5                  the audit chain and the Claude Code pins
+ *   anthropic/claude-opus-5        the engine registry's OpenCode rows, the
+ *                                  confidence learner, OpenRouter
+ *   eu.anthropic.claude-opus-5     a Bedrock cross-region inference profile
+ *
+ * They are one model, so anything that LOOKS A ROW UP by id has to agree on
+ * which. `ChainFactsLine` did not: it matched the classifier's prefixed id
+ * against the audit chain's bare one, found nothing, and printed "no real turn
+ * has run <model> yet" over a chain that had run it. Mirrors the server-side
+ * rule in `model_selection_learner._ROUTING_PREFIX`; keep the two in step.
+ *
+ * Display is NOT normalised here — `shortModel` stays a pure label function, and
+ * the Learning tab deliberately prints ids as the learner recorded them.
+ */
+export const canonicalModelId = (id: string): string =>
+  id.replace(/^(?:[a-z]{2,6}\.)?anthropic[./]/, '');
+
 /** Short model label: "claude-haiku-4-5-20251001" -> "haiku-4-5". */
 export const shortModel = (id: string): string =>
   id.replace(/^claude-/, '').replace(/-\d{8}$/, '');

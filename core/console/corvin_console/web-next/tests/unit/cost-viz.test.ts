@@ -17,6 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  canonicalModelId,
   shortModel,
   tierOf,
   toModelRows,
@@ -32,6 +33,32 @@ describe('shortModel', () => {
 
   it('leaves an unrecognised id intact rather than mangling it', () => {
     expect(shortModel('eu.anthropic.claude-sonnet-5')).toBe('eu.anthropic.claude-sonnet-5');
+  });
+});
+
+describe('canonicalModelId — one model, three spellings', () => {
+  it('reduces every spelling of a model to the same id', () => {
+    const want = 'claude-opus-5';
+    expect(canonicalModelId('claude-opus-5')).toBe(want);
+    expect(canonicalModelId('anthropic/claude-opus-5')).toBe(want);
+    expect(canonicalModelId('eu.anthropic.claude-opus-5')).toBe(want);
+    expect(canonicalModelId('us.anthropic.claude-opus-5')).toBe(want);
+  });
+
+  it('is what makes an audit-chain lookup find the classifier\'s model', () => {
+    // The exact-compare this replaced reported a model the chain HAD run as
+    // never run, because the two sides spell it differently.
+    const chainRows = ['claude-haiku-4-5-20251001', 'claude-sonnet-5'];
+    const fromClassifier = 'anthropic/claude-haiku-4-5-20251001';
+    expect(chainRows.some((id) => id === fromClassifier)).toBe(false);
+    expect(
+      chainRows.some((id) => canonicalModelId(id) === canonicalModelId(fromClassifier)),
+    ).toBe(true);
+  });
+
+  it('leaves a non-Anthropic namespace alone — it is a different model', () => {
+    expect(canonicalModelId('ollama/qwen3:8b')).toBe('ollama/qwen3:8b');
+    expect(canonicalModelId('openai/gpt-5')).toBe('openai/gpt-5');
   });
 });
 

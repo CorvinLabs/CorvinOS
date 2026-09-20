@@ -358,10 +358,24 @@ _CACHE_WRITE_MULTIPLIER = 1.25
 _CACHE_READ_MULTIPLIER = 0.1
 
 
-#: Cross-region inference-profile prefixes Bedrock prepends to the model id
-#: (``eu.anthropic.claude-sonnet-5``). The table below is keyed on the bare
-#: family, and the lookup is prefix-ANCHORED, so an unstripped routing prefix
-#: matches nothing and the turn is dropped from cost totals entirely.
+#: Routing prefixes a host prepends to the model id, in the two spellings that
+#: reach this table. The table below is keyed on the bare family, and the lookup
+#: is prefix-ANCHORED, so an unstripped routing prefix matches nothing and the
+#: turn is dropped from cost totals — and the model is reported as unpriced —
+#: entirely.
+#:
+#:  * ``eu.anthropic.claude-sonnet-5`` — a Bedrock cross-region inference profile.
+#:  * ``anthropic/claude-opus-5`` — the PROVIDER-NAMESPACED spelling. This is how
+#:    the engine registry declares OpenCode's models (``engine_models.py``:
+#:    "the prefix is the engine's, not the provider's — same cached ids, two
+#:    spellings"), how OpenRouter addresses them, and — measured on this install
+#:    2026-09-20 — the ONLY spelling the confidence learner ever records. The
+#:    consequence was visible on two console tabs at once: every row of the
+#:    Models → Learning per-tier ranking printed "— in · — out / 1M" for models
+#:    whose rates are right here in this table, and Models → Catalog listed
+#:    Opus 5 twice, once priced and once as unpriced. ``multi_model_router.py``
+#:    had already worked around it locally with its own ``_strip_namespace`` —
+#:    a second copy of the rule instead of the rule itself.
 #:
 #: That is not a cosmetic miss. On a Bedrock-authenticated install every ACS
 #: worker turn inherits its model from ``ANTHROPIC_MODEL`` (acs_runtime.py's
@@ -374,7 +388,7 @@ _CACHE_READ_MULTIPLIER = 0.1
 #: it names is identical, and Bedrock lists Claude at the same per-token rates
 #: as the first-party API. An id whose family is still unknown after stripping
 #: is excluded as before — the honesty rule is unchanged.
-_ROUTING_PREFIX = re.compile(r"^(?:[a-z]{2,6}\.)?anthropic\.")
+_ROUTING_PREFIX = re.compile(r"^(?:(?:[a-z]{2,6}\.)?anthropic\.|anthropic/)")
 
 
 def model_price_per_1k(model: str) -> Optional[tuple[float, float]]:

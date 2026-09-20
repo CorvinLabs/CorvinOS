@@ -11,6 +11,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { canonicalModelId } from "@/panels/cost-viz";
 import { getCatalog } from "../api";
 import { usePins } from "../hooks/use-pins";
 
@@ -37,8 +38,25 @@ export function CatalogTab({ onUseFor }: { onUseFor: (id: string, turn: "os" | "
   // Ranked by OUTPUT rate: the larger of the two on every current model and
   // what a long generation is dominated by. Unpriced models are left out of
   // the ranking rather than sorted as if they were free.
-  const byCost = models.filter((m) => m.priced && m.output_usd_per_1k !== null)
-    .sort((a, b) => (a.output_usd_per_1k ?? 0) - (b.output_usd_per_1k ?? 0));
+  //
+  // Deduplicated by canonical id first. The registry declares the SAME model
+  // once per engine spelling — `claude-opus-5` for Claude Code and
+  // `anthropic/claude-opus-5` for OpenCode — so a ranking over raw rows fills
+  // its three slots with two entries for one model and hides the actual
+  // third-cheapest. The full table below keeps every row, because there the id
+  // and its engine badges are the point.
+  const byCost = (() => {
+    const seen = new Set<string>();
+    return models
+      .filter((m) => m.priced && m.output_usd_per_1k !== null)
+      .sort((a, b) => (a.output_usd_per_1k ?? 0) - (b.output_usd_per_1k ?? 0))
+      .filter((m) => {
+        const key = canonicalModelId(m.id);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  })();
 
   return (
     <div className="space-y-6">

@@ -405,13 +405,19 @@ def load_session(sid: str, *, now: float | None = None, tenant_id: str | None = 
     if rec.lic_proof:
         expected = _compute_lic_proof(sid)
         if expected and not hmac.compare_digest(expected, rec.lic_proof):
-            # Deny this request, but do NOT unlink the file. The proof can
-            # mismatch transiently while a license reload re-installs the root
-            # key (the brief window in reload_from_disk between resetting to the
-            # free root and setting the paid root); deleting here would log the
-            # owner out irreversibly mid-/license/apply. A genuine license change
-            # keeps failing every request (effective denial) and the record is
-            # reaped by the session TTL sweep — no data loss on a transient race.
+            # Deny this request, but do NOT unlink the file. A genuine license
+            # change keeps failing every request (effective denial) and the
+            # record is reaped by the session TTL sweep — no data loss.
+            #
+            # This USED to fire routinely, not just on a real licence change:
+            # reload_from_disk() reset the OTA root key to free before it had
+            # resolved the on-disk token, so every request that computed its
+            # proof inside that window derived it from the free root and was
+            # denied. On a licensed install a single console panel load (~10
+            # parallel requests, one reload every 5 s) lost 8 of them to this,
+            # and the SPA's 401 handler reads that as a lost session. The root
+            # key is now installed exactly once per reload, under
+            # _RELOAD_LOCK, and never transits through free (2026-09-20).
             _log.warning(
                 "load_session: session proof mismatch (sid_fp=%s) — denying "
                 "(not deleting; may be a transient license-reload window)",

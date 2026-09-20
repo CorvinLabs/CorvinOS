@@ -36,6 +36,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { canonicalModelId } from '@/panels/cost-viz';
+import { MIN_SAMPLES_TO_RECOMMEND } from '../hooks/use-cost-derived';
 import { useAuth } from '@/lib/auth';
 import {
   
@@ -272,7 +274,11 @@ export function ChainFactsLine({
       </p>
     );
   }
-  const row = usage.models.find((m) => m.model_id === modelId);
+  // Match on the canonical id: the classifier records "anthropic/claude-…"
+  // while the audit chain records the bare "claude-…", and an exact compare
+  // reported a model the chain HAD run as never run (2026-09-20).
+  const wanted = canonicalModelId(modelId);
+  const row = usage.models.find((m) => canonicalModelId(m.model_id) === wanted);
   if (!row) {
     return (
       <p className="opacity-75">
@@ -354,7 +360,7 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
             <CardTitle className="text-lg font-semibold">{taskLabel}</CardTitle>
             <p className="text-sm text-muted-foreground mt-1">{taskDescription}</p>
           </div>
-          {config.run_count > 0 && (
+          {config.run_count >= MIN_SAMPLES_TO_RECOMMEND && (
             <Badge
               variant="secondary"
               className={cn('ml-4', config.is_converged && 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400')}
@@ -477,6 +483,30 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
                 window, but they are not the same denominator: classified turns
                 are OS turns the shadow classifier bucketed, while the share
                 below is measured against every engine span, OS and worker.
+              </p>
+            </div>
+          </div>
+        ) : config.run_count < MIN_SAMPLES_TO_RECOMMEND ? (
+          // The SAME learned number the Learning tab shows, so it gets the SAME
+          // evidence bar (ADR-0764: one rule across pages). Presenting it as a
+          // green "✓ Learned confidence" over two samples read as a settled
+          // finding one tab away from "recommendation withheld — fewer than 5
+          // samples" for that very tier. The score is still shown — withholding
+          // it entirely would hide that learning has started — but it is
+          // labelled as the early reading it is.
+          <div className="p-3 border border-border rounded-md flex gap-2">
+            <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-muted-foreground space-y-1">
+              <p>
+                Learning has started: {(config.confidence_score * 100).toFixed(0)}% over{' '}
+                <span className="tabular-nums">{fmtInt(config.run_count)}</span> outcome
+                sample{config.run_count === 1 ? '' : 's'} — lifetime, not limited to the
+                counting window.
+              </p>
+              <p className="text-xs opacity-80">
+                Recommendation withheld below {MIN_SAMPLES_TO_RECOMMEND} samples: a
+                percentage over {fmtInt(config.run_count)}{' '}
+                {config.run_count === 1 ? 'sample' : 'samples'} is not yet evidence.
               </p>
             </div>
           </div>

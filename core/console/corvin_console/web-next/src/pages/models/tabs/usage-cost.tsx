@@ -176,9 +176,20 @@ export function UsageCostTab() {
                 : <AlertCircle size={16} className="text-amber-600 dark:text-amber-400" />}
               Turn success rate
             </div>
-            <div className="text-3xl font-bold">{status.accuracy_percent.toFixed(1)}%</div>
+            <div className="text-3xl font-bold">
+              {d.successTurns > 0 ? `${status.accuracy_percent.toFixed(1)}%` : "—"}
+            </div>
             <div className="text-xs text-muted-foreground mt-2">
-              Share of turns that finished without an error or timeout — not a content-quality score
+              {d.successTurns > 0 ? (
+                <>
+                  Of {d.successTurns} turn{d.successTurns === 1 ? "" : "s"} that reported a
+                  completion in this window — not a content-quality score. A turn still
+                  running reports none and is outside this rate; the Model Usage panel below
+                  counts it as unfinished.
+                </>
+              ) : (
+                <>No turn reported a completion in this window.</>
+              )}
             </div>
           </CardContent>
         </Card>

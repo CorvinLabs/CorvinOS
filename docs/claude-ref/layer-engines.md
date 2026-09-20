@@ -3387,6 +3387,22 @@ Verified 2026-09-18:
   the learner.
 - **Prices come from `model_selection_learner.model_price_per_1k`**, the one rate
   card the cost panels bill against; `price_of` is injectable for tests only.
+- **The lookup strips the routing prefix in BOTH spellings** — `eu.anthropic.`
+  (a Bedrock inference profile) and `anthropic/` (the provider namespace the
+  engine registry gives OpenCode's rows, that OpenRouter uses, and — measured
+  2026-09-20 — the ONLY spelling the confidence learner ever records). Adding
+  the second half turned two live surfaces from wrong to right in one commit:
+  every row of Models → Learning had printed "— in · — out / 1M" for models
+  whose rates are on the card, and Models → Catalog had listed Opus 5 twice,
+  once priced and once as unpriced (and filled its "lowest output rate" tiles
+  with duplicates of one model).
+  Stripping is not guessing: the family named is identical and the platforms
+  list Claude at the first-party rates. A namespace that names a genuinely
+  different model (`ollama/qwen3:8b`, `openai/gpt-5`) still resolves to `None`.
+  `core/console/tests/test_model_ranking_route.py` pins both halves, over the
+  id spelling production actually records; the frontend mirror is
+  `cost-viz.ts::canonicalModelId` (used for audit-chain lookups and to
+  deduplicate the catalogue ranking) with its own unit tests.
 - **A budget binds the OUTPUT rate** (the larger of the two on every current
   model, and what a long generation is dominated by). Under a cap an unpriced
   model is dropped — never treated as free (ADR-0763).
@@ -3505,13 +3521,32 @@ segments — encoded or not), `RequireAuth` forwards
 `pathname + search`, `LoginPage` prefixes the basename. Before this a bounce
 landed every bookmark on `/app/chat`.
 
-**Known, outside this ADR:** `auth.py::_compute_lic_proof` calls
-`validator.reload_from_disk()` per authenticated op and the reload resets the
-feature root to free before re-resolving, so a request that computes its
-session proof inside that window is denied with "session proof mismatch"
-(one 401 in ~40 requests under four parallel Playwright workers). ADR-0154
-territory; the live specs run one worker at a time and log in through the
-request client.
+**FIXED 2026-09-20 (ADR-0905) — the "session proof mismatch" 401.**
+`auth.py::_compute_lic_proof` calls `validator.reload_from_disk()` on every
+authenticated op, and the reload used to reset the OTA feature root to FREE
+before it had verified and resolved the on-disk token. Any request computing
+its session proof inside that window derived it from the free root, mismatched
+the proof stored in its session record, and was denied.
+
+This note previously logged it as "one 401 in ~40 requests" and deferred it.
+That rate was an artefact of measuring it with one Playwright worker at a time.
+Measured against the live console with the request pattern a real panel
+produces — ~10 parallel requests, one reload per 5 s throttle window — it was
+**8 of 10 requests in an affected round**, i.e. every tab of the Models console
+rendering its error state at once, and the SPA's shared 401 handler reading it
+as a lost session.
+
+The root key is now installed EXACTLY ONCE per reload, in a `finally`, and
+never transits through free; `reload_from_disk()` is a thin wrapper holding
+`_RELOAD_LOCK` around the work so two concurrent callers cannot interleave in
+the throttle bookkeeping either. Verified after the fix: 80/80 parallel
+requests 200 across 8 rounds. The eager paid-root install on the two success
+paths stays (the chain-DNA / CLAG work after them expects the paid root live);
+they merely record the token so the `finally` is idempotent.
+
+**Do NOT** re-introduce an eager `_set_feature_root_key(None)` at the top of a
+reload, and do not "fix" a proof mismatch by making the comparison tolerant —
+a real licence change MUST invalidate outstanding sessions (ADR-0154 M3).
 
 ### What you, as Claude Code, must NOT do (Models console)
 
@@ -3519,7 +3554,20 @@ request client.
   read `status.window` for their caption.
 - **Don't call `fetch` under `pages/models/`.** `api()` or nothing.
 - **Don't merge ranking rows across id variants** or fold OS and worker turns
-  into one bar. Label, never fold.
+  into one bar. Label, never fold. (Canonicalising is for LOOKUPS and for the
+  catalogue's top-3 tile — never for the learner's rows, which are shown as
+  recorded.)
+- **Don't show the same learned number under two evidence bars.** The Routing
+  tab's task cards and the Learning tab's per-tier ranking render the SAME
+  `(tier, model)` confidence, so both read `MIN_SAMPLES_TO_RECOMMEND` from
+  `hooks/use-cost-derived.ts`. Until 2026-09-20 the threshold was a private
+  const in `learning.tsx`: that tab withheld COMPLEX at n=3 while the Routing
+  card one tab away presented the identical score as a green "✓ Learned
+  confidence" over 2 samples.
+- **Don't print a rate without its denominator.** "Turn success rate" is over
+  the turns that REPORTED A COMPLETION, not over all turns — a still-running
+  span emits no completion event, so a bare "100%" sat on the same screen as
+  the Model Usage panel's "1 unfinished" (ADR-0764).
 - **Don't label the shadow override as the OS-turn control.** The pins serve;
   the classifier observes.
 - **Don't send an operator-typed string in a reset/window body.**

@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import types
 from pathlib import Path
@@ -196,6 +197,15 @@ _CANARY_UNCOMPUTABLE: object = object()
 
 # ── Reload rate limiter ───────────────────────────────────────────────────────
 # Prevents rapid-cycle reload attacks via the console /license/apply endpoint.
+#
+# Serialised by _RELOAD_LOCK. reload_from_disk() mutates PROCESS-WIDE state
+# (_ACTIVE_LICENSE and the OTA feature root key) and every authenticated console
+# request reaches it through auth.py::_compute_lic_proof, so it genuinely runs
+# concurrently on a busy console — a panel load fires ~10 requests at once. Two
+# threads interleaving inside it left the throttle's own bookkeeping
+# (_LAST_RELOAD_AT / _LAST_LOADED_TOKEN_HASH) inconsistent and let several
+# reloads through the cooldown at once.
+_RELOAD_LOCK = threading.RLock()
 _LAST_RELOAD_AT: float = 0.0
 _MIN_RELOAD_INTERVAL_SECONDS: float = 5.0
 # Throttled reloads are AGGREGATED into ONE ``license.reload_throttled`` chain
@@ -1295,6 +1305,19 @@ def load_license_from_env(*, force: bool = False) -> None:
 def reload_from_disk() -> None:
     """Re-read the license key from disk and update _ACTIVE_LICENSE in-process.
 
+    Thin serialising wrapper. The work is in ``_reload_from_disk_locked``; this
+    holds ``_RELOAD_LOCK`` around it so two concurrent callers cannot interleave
+    inside the throttle bookkeeping or the root-key install. Every authenticated
+    console request reaches this through ``auth.py::_compute_lic_proof``, so
+    concurrency here is the normal case, not an edge case.
+    """
+    with _RELOAD_LOCK:
+        _reload_from_disk_locked()
+
+
+def _reload_from_disk_locked() -> None:
+    """Re-read the license key from disk and update _ACTIVE_LICENSE in-process.
+
     Unlike load_license_from_env(), this function bypasses the idempotency guard
     and is safe to call after the initial boot load (e.g. when the operator
     applies a new license key via the console UI). The path snapshots set by
@@ -1366,160 +1389,182 @@ def reload_from_disk() -> None:
     _LAST_RELOAD_AT = _now
     _LAST_LOADED_TOKEN_HASH = token_hash
 
-    # ADR-0154 M1/M3/M5: reset the OTA root key to free before re-resolving (after
-    # the throttle guard, so a throttled reload keeps the current paid root).
-    _set_feature_root_key(None)
-
-    if not token:
-        log.info("license: reload — no key found on disk, reverting to Free tier")
-        _audit("license.free_tier")
-        _set_active_license(None)
-        _LICENSE_LOADED_AT = time.time()
-        _init_instance_seed()
-        return
-
-    claims = _verify_ed25519(token)
-    if claims is None:
-        log.warning("license: reload — signature invalid, reverting to Free tier")
-        _audit("license.invalid_token")
-        _set_active_license(None)
-        _LICENSE_LOADED_AT = time.time()
-        _init_instance_seed()
-        return
-
-    # ADR-0102: per-token fingerprint revocation check against Corvin-Features.
-    # This was checked at boot (load_license_from_env()) but NOT here — meaning
-    # a cancelled subscription's token kept re-activating on every reload (every
-    # authenticated console session op calls reload_from_disk() via
-    # auth.py::_compute_lic_proof) until the process was fully restarted. Mirror
-    # the boot-path check so revocation actually takes effect without a restart.
-    if _is_token_fp_revoked(token):
-        log.warning("license: reload — token is individually revoked, reverting to Free tier")
-        _audit("license.revoked")
-        _set_active_license(None)
-        _LICENSE_LOADED_AT = time.time()
-        _init_instance_seed()
-        return
-
-    validated = _validate_claims(claims)
-    if validated is None:
-        if (
-            claims is not None
-            and claims.get("iss") == "corvinlabs.io"
-            and claims.get("type") in ("session_permit", "license")  # ADR-0092 AMENDED: apply to both types
-            and claims.get("exp") is not None
-            and claims.get("exp") < time.time()
-        ):
-            if _check_session_grace_period(int(claims["exp"])):
-                if not _check_instance_id_bound(claims):
-                    log.warning("license: reload — grace-period %s instance_id mismatch", claims.get("type", "unknown"))
-                    _audit("license.instance_id_mismatch",
-                           jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""),
-                           token_type=claims.get("type", "unknown"))
-                    _set_active_license(None)
-                    _LICENSE_LOADED_AT = time.time()
-                    return
-                if not _check_device_fp(claims):
-                    log.warning("license: reload — grace-period %s device_fp mismatch", claims.get("type", "unknown"))
-                    _audit("license.device_fp_mismatch",
-                           jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""),
-                           token_type=claims.get("type", "unknown"))
-                    _set_active_license(None)
-                    _LICENSE_LOADED_AT = time.time()
-                    return
-                sal = claims.get("subscription_active_until")
-                if sal is not None and sal < time.time():
-                    log.warning("license: reload — subscription lapsed during grace period")
-                    _audit("license.subscription_lapsed",
-                           jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""))
-                    _set_active_license(None)
-                    _LICENSE_LOADED_AT = time.time()
-                    return
-                log.warning("license: reload — grace period active, using cached tier=%s",
-                            claims.get("tier", "?"))
-                _audit("license.session_grace_period",
-                       tier=claims.get("tier", ""), jti=str(claims.get("jti", ""))[:8])
-                _set_active_license(claims)
-                _set_feature_root_key(token)
-                _LICENSE_LOADED_AT = time.time()
-                return
-            log.warning("license: reload — grace period elapsed, reverting to Free tier")
-            _audit("license.grace_period_elapsed",
-                   jti=str(claims.get("jti", ""))[:8], tier=str(claims.get("tier", "")))
-        else:
-            log.warning("license: reload — claims invalid, reverting to Free tier")
-        _set_active_license(None)
-        _LICENSE_LOADED_AT = time.time()
-        return
-
-    if not _check_instance_id_bound(validated):
-        log.warning("license: reload — instance_id mismatch, reverting to Free tier")
-        _audit("license.instance_id_mismatch",
-               jti=str(validated.get("jti", ""))[:8], tier=validated.get("tier", ""))
-        _set_active_license(None)
-        _LICENSE_LOADED_AT = time.time()
-        return
-
-    if not _check_device_fp(validated):
-        _set_active_license(None)
-        _LICENSE_LOADED_AT = time.time()
-        return
-
-    _set_active_license(validated)
-    _set_feature_root_key(token)  # ADR-0154 M1/M3/M5 paid root on reload
-    _LICENSE_LOADED_AT = time.time()
-    log.info(
-        "license: reloaded — tier=%s jti=%s",
-        validated.get("tier", "?"),
-        str(validated.get("jti", ""))[:8],
-    )
-    _audit(
-        "license.loaded",
-        tier=validated.get("tier", ""),
-        jti=str(validated.get("jti", ""))[:8],
-    )
-
-    # ADR-0132/ADR-0133: re-seed chain DNA and flush CIT cache, same as the
-    # initial boot path in load_license_from_env(). Without this, a UI key-apply
-    # that upgrades to a paid tier leaves the free-tier DNA active in the running
-    # process → false-positive ChainIntegrityFailure for the CIT TTL window.
-    _rld_audit_p: "Path | None" = None
-    _rld_seed: "str | None" = None
+    # ADR-0154 M1/M3/M5 — the OTA feature root key must end this call matching
+    # the licence this reload resolved to, and must NEVER be observable as the
+    # FREE root in between. It used to be reset to free right here, before the
+    # signature check, the revocation check and claim validation ran. Every
+    # authenticated console request derives its session proof from that key
+    # (auth.py::_compute_lic_proof → feature_lattice.session_lic_proof), so on a
+    # licensed install every request that landed inside that window computed a
+    # FREE-root proof, mismatched the one stored in its session record and was
+    # denied 401 'session expired'. Measured on this install 2026-09-20: a
+    # console panel fires ~10 requests at once and one reload every 5 s (the
+    # throttle window) turned 8 of 10 of them into 401s — every tab rendered its
+    # error state, and the SPA's 401 handler treats it as a lost session.
+    #
+    # The key is therefore installed EXACTLY ONCE, in the finally below, and the
+    # two paid paths install it eagerly as before (the chain-DNA / CLAG work that
+    # follows them expects the paid root to be live) and merely record it so the
+    # finally is idempotent. Every other path falls through with _root_token None
+    # and lands on the free root — the same outcome as the old eager reset, minus
+    # the window.
+    _root_token: "str | None" = None
     try:
-        _here_rld = Path(__file__).resolve()
-        _forge_inner_rld = _here_rld.parents[1] / "forge" / "forge"
-        _bridges_rld = _here_rld.parents[1] / "bridges" / "shared"
-        for _p_rld in (_forge_inner_rld, _bridges_rld):
-            if str(_p_rld) not in sys.path:
-                sys.path.insert(0, str(_p_rld))
-        from chain_dna import derive_seed_paid as _rld_derive  # type: ignore[import]
-        from security_events import set_chain_dna_seed as _rld_seed_set, write_event as _rld_write  # type: ignore[import]
-        from instance_identity import get_instance_id as _rld_get_iid  # type: ignore[import]
-        from paths import corvin_home as _rld_corvin_home  # type: ignore[import]
-        _rld_seed = _rld_derive(token, _rld_get_iid())
-        _rld_seed_set(_rld_seed)
+
+        if not token:
+            log.info("license: reload — no key found on disk, reverting to Free tier")
+            _audit("license.free_tier")
+            _set_active_license(None)
+            _LICENSE_LOADED_AT = time.time()
+            _init_instance_seed()
+            return
+
+        claims = _verify_ed25519(token)
+        if claims is None:
+            log.warning("license: reload — signature invalid, reverting to Free tier")
+            _audit("license.invalid_token")
+            _set_active_license(None)
+            _LICENSE_LOADED_AT = time.time()
+            _init_instance_seed()
+            return
+
+        # ADR-0102: per-token fingerprint revocation check against Corvin-Features.
+        # This was checked at boot (load_license_from_env()) but NOT here — meaning
+        # a cancelled subscription's token kept re-activating on every reload (every
+        # authenticated console session op calls reload_from_disk() via
+        # auth.py::_compute_lic_proof) until the process was fully restarted. Mirror
+        # the boot-path check so revocation actually takes effect without a restart.
+        if _is_token_fp_revoked(token):
+            log.warning("license: reload — token is individually revoked, reverting to Free tier")
+            _audit("license.revoked")
+            _set_active_license(None)
+            _LICENSE_LOADED_AT = time.time()
+            _init_instance_seed()
+            return
+
+        validated = _validate_claims(claims)
+        if validated is None:
+            if (
+                claims is not None
+                and claims.get("iss") == "corvinlabs.io"
+                and claims.get("type") in ("session_permit", "license")  # ADR-0092 AMENDED: apply to both types
+                and claims.get("exp") is not None
+                and claims.get("exp") < time.time()
+            ):
+                if _check_session_grace_period(int(claims["exp"])):
+                    if not _check_instance_id_bound(claims):
+                        log.warning("license: reload — grace-period %s instance_id mismatch", claims.get("type", "unknown"))
+                        _audit("license.instance_id_mismatch",
+                               jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""),
+                               token_type=claims.get("type", "unknown"))
+                        _set_active_license(None)
+                        _LICENSE_LOADED_AT = time.time()
+                        return
+                    if not _check_device_fp(claims):
+                        log.warning("license: reload — grace-period %s device_fp mismatch", claims.get("type", "unknown"))
+                        _audit("license.device_fp_mismatch",
+                               jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""),
+                               token_type=claims.get("type", "unknown"))
+                        _set_active_license(None)
+                        _LICENSE_LOADED_AT = time.time()
+                        return
+                    sal = claims.get("subscription_active_until")
+                    if sal is not None and sal < time.time():
+                        log.warning("license: reload — subscription lapsed during grace period")
+                        _audit("license.subscription_lapsed",
+                               jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""))
+                        _set_active_license(None)
+                        _LICENSE_LOADED_AT = time.time()
+                        return
+                    log.warning("license: reload — grace period active, using cached tier=%s",
+                                claims.get("tier", "?"))
+                    _audit("license.session_grace_period",
+                           tier=claims.get("tier", ""), jti=str(claims.get("jti", ""))[:8])
+                    _set_active_license(claims)
+                    _set_feature_root_key(token)
+                    _root_token = token  # …and keep it after the finally below
+                    _LICENSE_LOADED_AT = time.time()
+                    return
+                log.warning("license: reload — grace period elapsed, reverting to Free tier")
+                _audit("license.grace_period_elapsed",
+                       jti=str(claims.get("jti", ""))[:8], tier=str(claims.get("tier", "")))
+            else:
+                log.warning("license: reload — claims invalid, reverting to Free tier")
+            _set_active_license(None)
+            _LICENSE_LOADED_AT = time.time()
+            return
+
+        if not _check_instance_id_bound(validated):
+            log.warning("license: reload — instance_id mismatch, reverting to Free tier")
+            _audit("license.instance_id_mismatch",
+                   jti=str(validated.get("jti", ""))[:8], tier=validated.get("tier", ""))
+            _set_active_license(None)
+            _LICENSE_LOADED_AT = time.time()
+            return
+
+        if not _check_device_fp(validated):
+            _set_active_license(None)
+            _LICENSE_LOADED_AT = time.time()
+            return
+
+        _set_active_license(validated)
+        _set_feature_root_key(token)  # ADR-0154 M1/M3/M5 paid root on reload
+        _root_token = token  # …and keep it after the finally below
+        _LICENSE_LOADED_AT = time.time()
+        log.info(
+            "license: reloaded — tier=%s jti=%s",
+            validated.get("tier", "?"),
+            str(validated.get("jti", ""))[:8],
+        )
+        _audit(
+            "license.loaded",
+            tier=validated.get("tier", ""),
+            jti=str(validated.get("jti", ""))[:8],
+        )
+
+        # ADR-0132/ADR-0133: re-seed chain DNA and flush CIT cache, same as the
+        # initial boot path in load_license_from_env(). Without this, a UI key-apply
+        # that upgrades to a paid tier leaves the free-tier DNA active in the running
+        # process → false-positive ChainIntegrityFailure for the CIT TTL window.
+        _rld_audit_p: "Path | None" = None
+        _rld_seed: "str | None" = None
         try:
-            from clag import clear_shadow_hashes as _rld_clag_clear  # type: ignore[import]
-            _rld_clag_clear()
-        except Exception:  # noqa: BLE001
-            pass
-        _rld_audit_p = _AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None else (
-            _rld_corvin_home() / "global" / "forge" / "audit.jsonl"
-        )
-        _rld_write(
-            _rld_audit_p,
-            "license.chain_dna_seeded",
-            details={"tier": validated.get("tier", ""), "seed_prefix": _rld_seed[:16]},
-        )
-    except Exception as _rld_exc:  # noqa: BLE001
-        log.warning("LSAD seed setup at reload failed (non-fatal): %s", _rld_exc)
-    try:
-        from clag import gate as _rld_clag_gate  # type: ignore[import]
-        if _rld_audit_p is not None:
-            _rld_clag_gate(_rld_audit_p, "L16.license_reload", dna_seed=_rld_seed)
-    except Exception as _rld_clag_exc:  # noqa: BLE001
-        log.warning("CLAG gate at license reload failed (non-fatal): %s", _rld_clag_exc)
+            _here_rld = Path(__file__).resolve()
+            _forge_inner_rld = _here_rld.parents[1] / "forge" / "forge"
+            _bridges_rld = _here_rld.parents[1] / "bridges" / "shared"
+            for _p_rld in (_forge_inner_rld, _bridges_rld):
+                if str(_p_rld) not in sys.path:
+                    sys.path.insert(0, str(_p_rld))
+            from chain_dna import derive_seed_paid as _rld_derive  # type: ignore[import]
+            from security_events import set_chain_dna_seed as _rld_seed_set, write_event as _rld_write  # type: ignore[import]
+            from instance_identity import get_instance_id as _rld_get_iid  # type: ignore[import]
+            from paths import corvin_home as _rld_corvin_home  # type: ignore[import]
+            _rld_seed = _rld_derive(token, _rld_get_iid())
+            _rld_seed_set(_rld_seed)
+            try:
+                from clag import clear_shadow_hashes as _rld_clag_clear  # type: ignore[import]
+                _rld_clag_clear()
+            except Exception:  # noqa: BLE001
+                pass
+            _rld_audit_p = _AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None else (
+                _rld_corvin_home() / "global" / "forge" / "audit.jsonl"
+            )
+            _rld_write(
+                _rld_audit_p,
+                "license.chain_dna_seeded",
+                details={"tier": validated.get("tier", ""), "seed_prefix": _rld_seed[:16]},
+            )
+        except Exception as _rld_exc:  # noqa: BLE001
+            log.warning("LSAD seed setup at reload failed (non-fatal): %s", _rld_exc)
+        try:
+            from clag import gate as _rld_clag_gate  # type: ignore[import]
+            if _rld_audit_p is not None:
+                _rld_clag_gate(_rld_audit_p, "L16.license_reload", dna_seed=_rld_seed)
+        except Exception as _rld_clag_exc:  # noqa: BLE001
+            log.warning("CLAG gate at license reload failed (non-fatal): %s", _rld_clag_exc)
 
+    finally:
+        _set_feature_root_key(_root_token)
 
 # ── Limit API (call-site interface) ──────────────────────────────────────────
 

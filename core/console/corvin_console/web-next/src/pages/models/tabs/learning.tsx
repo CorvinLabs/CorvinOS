@@ -23,10 +23,9 @@ import {
 } from "../api";
 import { fmtInt } from "../components/engine-parts";
 import { COST_STATUS_KEY, useCostOptimizerStatus } from "../hooks/use-cost-status";
-import { deriveCost } from "../hooks/use-cost-derived";
+import { MIN_SAMPLES_TO_RECOMMEND, deriveCost } from "../hooks/use-cost-derived";
 
 const TIERS = ["SIMPLE", "MEDIUM", "COMPLEX"] as const;
-const MIN_SAMPLES_TO_RECOMMEND = 5;
 const RECENT_KEY = ["analytics-recent"] as const;
 const perMillion = (v: number | null) => (v === null ? "—" : `$${(v * 1000).toFixed(2)}`);
 

@@ -8,6 +8,19 @@ import { dailyDomainMax as dailyDomain, shortModel, tierOf, toModelRows, sharedD
 import type { DashboardStatus } from "../components/cost-charts";
 
 export const MIN_SAMPLES_FOR_ADVICE = 25;
+
+/**
+ * Outcome samples a (tier, model) pair needs before its learned confidence is
+ * presented as a finding rather than as an early reading (ADR-0763: "a
+ * recommendation needs a sample").
+ *
+ * Exported so the two surfaces that show the SAME learned number apply the
+ * SAME threshold. They did not: the Learning tab withheld its COMPLEX row at
+ * n=3 ("recommendation withheld — fewer than 5 samples") while the Routing
+ * tab's own card for that tier rendered the identical score as a green
+ * "✓ Learned confidence: 68%" over 2 samples, one tab away (2026-09-20).
+ */
+export const MIN_SAMPLES_TO_RECOMMEND = 5;
 const LOW_COVERAGE_THRESHOLD = 0.5;
 const TIER_RANK: Record<string, number> = { simple: 0, medium: 1, complex: 2 };
 
@@ -96,6 +109,15 @@ export function deriveCost(status: DashboardStatus) {
   }
   const routingRows = [...byModel.values()].sort((a, b) => a.tier - b.tier);
 
+  // The DENOMINATOR behind status.accuracy_percent — the turns that reported a
+  // completion at all. Named, because the rate is not over "turns": a span that
+  // never ended emits no completion event and is therefore outside it, while
+  // the Model Usage panel on the same screen counts it and prints "1
+  // unfinished". "100% success" over a headline that also shows an unfinished
+  // turn is a contradiction the reader has to resolve; the count resolves it
+  // (ADR-0764: a narrowed total never travels without its denominator).
+  const successTurns = status.thresholds.reduce((n, t) => n + t.sample_count, 0);
+
   // Share of seen turns the cost totals are actually computed from.
   const costCoverage =
     status.cost_total_turns && status.cost_total_turns > 0
@@ -113,6 +135,6 @@ export function deriveCost(status: DashboardStatus) {
     acsMixEntries, acsMixTotal, acsCoverage,
     tierRows, hardest, cheapestServesHardest,
     osCostRows, workerCostRows, modelDomainMax, dailyDomainMax, dayCount, singleDay,
-    routingRows, costCoverage, lowCoverageDays,
+    routingRows, costCoverage, lowCoverageDays, successTurns,
   };
 }

@@ -52,6 +52,14 @@ CHEAP = "claude-haiku-4-5-20251001"
 MID = "claude-sonnet-5"
 DEAR = "claude-opus-5"
 UNPRICED = "llama-3.3-70b"
+# The spelling the confidence learner ACTUALLY records on this install. The
+# engine registry declares OpenCode's Anthropic models provider-namespaced, and
+# every id that reaches the optimizer carries that namespace — so the bare ids
+# above are the spelling this suite invented, not the one production uses. That
+# gap is why the rate card silently missed: measured 2026-09-20, EVERY row of
+# the Models -> Learning ranking rendered "-" for both rates.
+NS_CHEAP = "anthropic/claude-haiku-4-5-20251001"
+NS_DEAR = "anthropic/claude-opus-5"
 
 
 def _fake_record(tenant_id: str = "_default") -> session_auth.SessionRecord:
@@ -107,6 +115,37 @@ class ModelRankingRouteTests(unittest.TestCase):
         for m in (CHEAP, MID, DEAR):
             self.assertIsNotNone(model_price_per_1k(m), m)
         self.assertIsNone(model_price_per_1k(UNPRICED))
+
+    def test_provider_namespaced_ids_are_priced_like_their_bare_form(self) -> None:
+        """A namespace is a routing prefix, not a different model.
+
+        ``anthropic/claude-opus-5`` and ``claude-opus-5`` are one model at one
+        published rate. Pricing only the bare form reported the namespaced one
+        as unpriced, which the console renders as "-" — indistinguishable from
+        "not on the rate card" and one step from reading as free.
+        """
+        for ns, bare in ((NS_CHEAP, CHEAP), (NS_DEAR, DEAR)):
+            self.assertEqual(model_price_per_1k(ns), model_price_per_1k(bare), ns)
+            self.assertIsNotNone(model_price_per_1k(ns), ns)
+        # A namespace that names a genuinely different model stays unpriced —
+        # stripping is not guessing.
+        self.assertIsNone(model_price_per_1k("ollama/qwen3:8b"))
+        self.assertIsNone(model_price_per_1k("openai/gpt-5"))
+
+    def test_ranking_rows_carry_rates_for_the_ids_production_records(self) -> None:
+        """The same assertion as below, over the REAL id spelling."""
+        self._feed("MEDIUM", NS_DEAR, [0.9] * 8)
+        self._feed("MEDIUM", NS_CHEAP, [0.4] * 8)
+
+        rows = self._client().get("/v1/engine/analytics/task-type/MEDIUM").json()["models"]
+        self.assertEqual([x["model"] for x in rows], [NS_DEAR, NS_CHEAP])
+        for row in rows:
+            self.assertTrue(row["priced"], row["model"])
+            self.assertIsNotNone(row["input_usd_per_1k"], row["model"])
+            self.assertEqual(
+                (row["input_usd_per_1k"], row["output_usd_per_1k"]),
+                model_price_per_1k(row["model"]),
+            )
 
     def test_ranked_by_learned_confidence_with_rates(self) -> None:
         self._feed("MEDIUM", DEAR, [0.95] * 8)
