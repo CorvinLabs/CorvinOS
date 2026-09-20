@@ -12,10 +12,10 @@ Decision Tree (ADR-0867):
 5. Allow operator overrides
 6. Log every decision in audit trail
 
-Token Boundaries (definitive):
-- SIMPLE: < 500 tokens → Haiku
-- MEDIUM: 500-3000 tokens → Sonnet
-- COMPLEX: > 3000 tokens → Opus
+Token Boundaries (definitive, revised 2026-09-20):
+- SIMPLE: < 50 tokens → Haiku (one-liners: "What's 2+2?")
+- MEDIUM: 50-250 tokens → Sonnet (typical requests: "Write a function to...")
+- COMPLEX: >= 250 tokens → Opus (detailed: "Implement a system that...")
 
 Cost Optimization:
 - SIMPLE always uses cheapest model (Haiku)
@@ -161,7 +161,7 @@ class IntelligentRouter:
 
         # Step 2: Classify complexity (tier selection)
         tier, confidence, signal_strength = self._classify_tier(
-            token_count, complexity
+            token_count, complexity, task_input=task_input
         )
 
         # Step 3: Select model (with operator override)
@@ -229,13 +229,14 @@ class IntelligentRouter:
         self,
         token_count: int,
         pre_computed_complexity: Optional[str],
+        task_input: str = "",
     ) -> Tuple[ModelTier, float, str]:
-        """Classify task tier based on token count (primary signal).
+        """Classify task tier based on token count + task keywords (ADR-0867).
 
-        Decision rules (definitive, ADR-0867):
-        - SIMPLE: < 500 tokens (confidence 0.90)
-        - MEDIUM: 500-3000 tokens (confidence 0.75)
-        - COMPLEX: >= 3000 tokens (confidence 0.95)
+        Decision rules (definitive):
+        - SIMPLE: < 50 tokens AND no "creation" keywords → Haiku
+        - MEDIUM: 50-250 tokens OR has "write/implement/create" keywords → Sonnet
+        - COMPLEX: >= 250 tokens OR complex keywords → Opus
 
         Pre-computed complexity (e.g., from model_selector.py) is used
         as a secondary signal for confidence adjustment.
@@ -243,19 +244,43 @@ class IntelligentRouter:
         Returns:
             (ModelTier, confidence [0.0-1.0], signal_strength "strong"|"medium"|"weak")
         """
-        # Token-based classification (primary signal)
-        if token_count < 500:
-            tier = ModelTier.SIMPLE
-            confidence = 0.90
-            signal_strength = "strong"  # Token count is reliable
-        elif token_count < 3000:
-            tier = ModelTier.MEDIUM
-            confidence = 0.75
-            signal_strength = "medium"  # In the ambiguous middle range
+        # Primary: token count classification
+        if token_count < 50:
+            base_tier = ModelTier.SIMPLE
+            base_confidence = 0.90
+        elif token_count < 250:
+            base_tier = ModelTier.MEDIUM
+            base_confidence = 0.75
         else:
-            tier = ModelTier.COMPLEX
-            confidence = 0.95
-            signal_strength = "strong"  # High token count is very reliable
+            base_tier = ModelTier.COMPLEX
+            base_confidence = 0.95
+
+        # Secondary: keyword heuristics (override base classification if needed)
+        # Tasks asking to "write", "implement", "create", "develop", "analyze" etc.
+        # should be at least MEDIUM even if short
+        tier = base_tier
+        confidence = base_confidence
+        signal_strength = "strong" if token_count >= 250 else ("medium" if token_count >= 50 else "strong")
+
+        if task_input:
+            task_lower = task_input.lower()
+            # Creation/Implementation keywords → bump to at least MEDIUM
+            creation_keywords = ("write ", "implement ", "create ", "develop ", "build ",
+                                "design ", "architect ", "refactor ", "optimize ", "improve ")
+            if any(kw in task_lower for kw in creation_keywords):
+                if tier == ModelTier.SIMPLE:
+                    tier = ModelTier.MEDIUM
+                    confidence = 0.75  # Keyword-based confidence
+                    signal_strength = "medium"
+
+            # Complex analysis keywords → bump to COMPLEX
+            analysis_keywords = ("analyze ", "investigate ", "debug ", "troubleshoot ",
+                                "evaluate ", "compare ", "research ", "study ", "explore ")
+            if any(kw in task_lower for kw in analysis_keywords) and len(task_input) > 20:
+                if tier in (ModelTier.SIMPLE, ModelTier.MEDIUM):
+                    tier = ModelTier.COMPLEX
+                    confidence = 0.80 if token_count < 250 else 0.95
+                    signal_strength = "medium"
 
         # Secondary signal: pre-computed complexity (boost or lower confidence)
         if pre_computed_complexity:
