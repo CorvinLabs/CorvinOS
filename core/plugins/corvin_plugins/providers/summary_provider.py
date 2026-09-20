@@ -69,6 +69,16 @@ class ClaudeCliSummaryProvider:
                 input=text,
                 capture_output=True,
                 text=True,
+                # Pin the codec, don't inherit the locale's. `text=True` alone
+                # encodes stdin as cp1252 on a German Windows box; the first
+                # emoji in *text* kills subprocess's stdin writer thread with
+                # UnicodeEncodeError (not an OSError, so it escapes
+                # `_stdin_write` before `stdin.close()`), the child never sees
+                # EOF, and this call blocks for the full 30s before falling back
+                # to naive truncation. Measured live 2026-09-20 on the console's
+                # twin of this call.
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
             if result.returncode == 0 and result.stdout.strip():

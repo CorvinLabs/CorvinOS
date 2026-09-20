@@ -22,6 +22,30 @@ import os
 import sys
 from pathlib import Path
 
+
+def _force_utf8_stdio() -> None:
+    """Read stdin / write stdout as UTF-8 regardless of the locale codec.
+
+    Third copy of the same helper (twins in ``summarize.py`` and
+    ``strip_for_tts.py``), duplicated because these scripts are executed by PATH
+    and share no importable package. This one is the template fallback the
+    bridge reaches when both LLM backends are unavailable — i.e. exactly the
+    degraded path — so it must not add a SECOND failure on top: under Windows'
+    cp1252 default, printing a summary containing ``→`` or an emoji exits 1 with
+    empty stdout, which every caller reads as "no summary available".
+
+    Guard: ``tests/test_voice_subprocess_encoding.py``.
+    """
+    for stream, errs in ((sys.stdin, "replace"), (sys.stdout, "replace"),
+                         (sys.stderr, "backslashreplace")):
+        try:
+            stream.reconfigure(encoding="utf-8", errors=errs)  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_force_utf8_stdio()
+
 # Import the smart analysis & generation engine
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "console"))
 try:

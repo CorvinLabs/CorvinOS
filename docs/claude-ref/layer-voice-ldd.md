@@ -1623,15 +1623,136 @@ that into HTTP 204 + `X-Corvin-Voice-Reason`, and `useVoicePlayback.ts` plays
 nothing and shows no error. A broken TTS backend is therefore
 indistinguishable from "voice is off" in the UI. Keep the header, and when
 diagnosing "no sound" read it first — do not infer from the absence of an error
-that the request succeeded.
+that the request succeeded. The same reason, plus the last four stderr lines from
+`say.py`, is logged as a WARNING to `~/.corvin/logs/console.log` — **not** to the
+`$TEMP/corvinos-serve*.err.log` that the launcher redirects into. Grepping the
+wrong one costs a diagnosis: it was `edge-tts failed: TimeoutError` in
+`console.log` that separated §6 from the older certificate failure.
+
+### 5. Every process boundary on the voice path must pin UTF-8
+
+`subprocess.run(..., text=True)` **without** `encoding=` encodes stdin with the
+LOCALE codec — cp1252 on a German Windows install. The first character cp1252
+cannot map (an emoji is the everyday case: assistant replies open with U+1F44B
+constantly) raises `UnicodeEncodeError` inside subprocess's stdin-writer
+**thread**. That exception is not an `OSError`, so it escapes
+`Popen._stdin_write` **before** the `self.stdin.close()` at the end of that
+function: the child's stdin never reaches EOF, the child blocks in
+`sys.stdin.read()` forever, and the parent burns its ENTIRE timeout before
+raising `TimeoutExpired`. Because it happens in a daemon thread, the caller sees
+only a timeout and the traceback goes to the server's stderr.
+
+Measured on the live console, 2026-09-20:
+
+| `POST /v1/console/voice/tts` | Wall time |
+|---|---|
+| reply text beginning with U+1F44B | **154.1 s** |
+| byte-identical text without it | 37.8 s |
+
+154 s is past any browser's patience — that is what "TTS im Chat geht nicht"
+actually was. On `/voice/session-summary` the same hang lands in a
+`TimeoutExpired` branch that answers **204**, the DESIGNED "voice is off" reply,
+so the summary silently never played.
+
+**The child side is equally load-bearing.** Under cp1252 a script that merely
+prints LLM prose containing `→` or an emoji exits 1 with EMPTY stdout, and every
+caller reads that as "summarizer unavailable" and speaks the raw, truncated text.
+`summarize.py`, `strip_for_tts.py` and `summarize_smart.py` therefore each call a
+`_force_utf8_stdio()` at import time — duplicated on purpose, because they are
+executed by path from Python and from `daemon.js` and share no importable
+package.
+
+It LOOKED fine for a long time only because the two halves cancelled: cp1252
+decodes an unmapped byte to a surrogate and re-encodes that surrogate back to the
+same byte, so a pure echo round-trips. The cancellation ends the instant anything
+between the ends inspects, slices or logs the text — and it never applied to the
+parent-side ENCODE at all, which is the hang above.
+
+Pinned spawn sites (`tests/test_voice_subprocess_encoding.py::_PINNED_FILES`):
+`routes/voice.py`, `chat_runtime.py`, `providers/summary_provider.py`,
+`voice/scripts/summarize.py`, `bridges/shared/adapter.py`. The guard is an AST
+scan, deliberately scoped to that named list rather than the whole repo (~300
+text-mode spawns whose children only emit ASCII), and it catches the
+`Popen(text=True)` + `communicate(input=…)` split as well as the obvious
+`run(input=…, text=True)` — the split is exactly how `adapter.py`'s legacy engine
+path kept the defect after the obvious sites were fixed.
+
+### 6. TTS timeouts must SCALE with the text, and must nest
+
+Fixing §5 did not make the feature work: there was a **second, independent**
+defect on the same path. Synthesis is not a constant-cost call — the provider
+streams audio proportional to the text — but the budgets protecting it were three
+flat numbers: console outer 25 s, `say.py` whole-chain 22 s, per-provider 10 s.
+
+Measured on a corporate, TLS-intercepting link (2026-09-20), whole `say.py`
+process, edge-tts tier, German prose, two runs each:
+
+| Chars | Run 1 | Run 2 |
+|---|---|---|
+| 150 | 3.1 s | 4.1 s |
+| 400 | 3.9 s | 4.6 s |
+| 900 | 6.4 s | 6.5 s |
+| 1800 | 3.5 s | **14.8 s** |
+
+Two facts come out of that table: latency **grows** with length (~6.5 s per 1000
+chars at the worst end) and it **varies ~4×** for byte-identical input. So the
+flat 10 s comfortably passed a short greeting and failed a real ~1000-char voice
+summary **intermittently** — and with no OpenAI key and no Piper model downloaded
+(the state of any fresh install) edge-tts is the ONLY tier, so its cap is the
+whole feature. `/voice/tts` answered its silent 204 carrying
+`edge-tts failed: TimeoutError` for roughly half the turns. "Works sometimes" is
+the hardest form of this bug to report.
+
+Both budgets are now length-proportional, each computed by one named function:
+
+| Function | Shape | Env overrides |
+|---|---|---|
+| `say.py::provider_timeout_for(text)` | `10 + 14 · len/1000` | `CORVIN_TTS_PROVIDER_TIMEOUT_S` (base), `…_PER_1K_S` (slope) |
+| `say.py::total_budget_for(text)` | `2 · provider + 2` | `CORVIN_TTS_TOTAL_BUDGET_S` — absolute pin, wins outright |
+| `routes/voice.py::_tts_timeout_for(text)` | `max(25 + 32 · len/1000, pin) + 4` | `CORVIN_TTS_TIMEOUT_S`, `…_PER_1K_S` |
+
+14 s/1000 is ~2× the measured worst slope — headroom for the variance, not a fit
+to the mean. Piper is deliberately **not** length-scaled (`_PIPER_TIMEOUT_S`,
+flat 20 s): it is local, and model load rather than streaming dominates.
+
+**THE NESTING INVARIANT.** Three budgets sit inside each other:
+
+```
+console outer subprocess cap  >  say.py whole-chain deadline  >  per-provider cap
+```
+
+If the outer one is ever the smaller, the console SIGKILLs `say.py`
+mid-synthesis instead of letting it hit its own deadline — which orphans the
+Piper grandchild and leaves a `corvin_tts_*.wav` sibling behind (the VOICE-10
+failure). Two files compute their curve independently, so the ordering is
+**asserted**, not commented: `tests/test_voice_tts_budget.py` parametrizes it
+across 0…4000 chars, with a positive control proving an inverted pair would be
+caught. `say.py` anchors its deadline at module import
+(`_PROCESS_START_MONOTONIC`) so interpreter boot counts against it.
+
+`CORVIN_TTS_TOTAL_BUDGET_S` is read by **both** files. It pins the child's chain
+deadline, so if only `say.py` honoured it an operator raising it would re-create
+the exact mid-synthesis kill the invariant forbids.
+
+Live before/after on the running console, same emoji-carrying payload:
+
+| | Result |
+|---|---|
+| before | 204, 0 bytes (twice out of two) |
+| after | 200 / 704 880 B / 52.5 s · 200 / 446 112 B / 33.4 s · 200 / 482 112 B / 31.5 s |
+| `/voice/session-summary` (real chat sid) | 200 / 98 208 B / 15.6 s · 200 / 99 936 B / 14.9 s |
+
+Three consecutive runs, deliberately: the failure was intermittent, so a single
+green run proves nothing.
 
 ### Verifying a fresh install actually speaks
 
 Run the checks over the real transport, not against the functions:
 
 ```bash
-# 1. anchor + dependency guards (offline, fast)
-pytest tests/test_voice_tls_trust_store.py tests/test_claude_auth_probe_parity.py -q
+# 1. anchor + dependency + encoding + budget guards (offline, fast)
+pytest tests/test_voice_tls_trust_store.py tests/test_claude_auth_probe_parity.py \
+       tests/test_voice_subprocess_encoding.py tests/test_voice_tts_budget.py -q
 
 # 2. real synthesis through say.py (opt-in, hits the network)
 CORVIN_LIVE_VOICE_E2E=1 pytest tests/test_voice_tls_trust_store.py -q -k live
@@ -1644,10 +1765,19 @@ curl -s -o /tmp/tts.mp3 -w '%{http_code} %{size_download}\n' \
 file /tmp/tts.mp3     # must report MPEG ADTS / ID3, not "empty"
 ```
 
-A `/voice/tts` turn takes ~45 s end to end (~18 s summarize LLM plus annexes,
-then synthesis) because the route summarizes BEFORE it speaks. That is
-pre-existing design, not a regression — do not treat the latency as a failure and
-do not shorten the timeout to "fix" it.
+**Use a payload that carries an emoji, and run it three times.** A plain-ASCII
+(or plain-German) probe exercises neither defect above: it is encodable in cp1252,
+so §5's writer thread never dies, and it is short, so §6's flat cap never
+expires. Both defects shipped past a curl proof for exactly that reason. The real
+chat text opens with U+1F44B and runs to ~1000 chars, so probe with
+`"👋 Hallo — …"` at that length, and repeat: §6's failure was intermittent, so one
+green run is not evidence.
+
+A `/voice/tts` turn takes ~45 s end to end for a short text (~18 s summarize LLM
+plus annexes, then synthesis) because the route summarizes BEFORE it speaks, and
+longer for a long recap — the synthesis half is length-proportional (§6). That is
+design, not a regression: do not treat the latency as a failure, and do not
+shorten a timeout to "fix" it. Shortening is how §6 was created.
 
 **Must NOT do:** rely on `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` to fix an edge-tts
 certificate error (the explicit `cafile=` wins) · anchor the trust store in one
@@ -1657,4 +1787,10 @@ or rename `say.py` / `standalone.py` / `adapter.py` without re-running the ancho
 guard · assert the anchor with a source grep (a defined-but-uncalled helper passes
 it) · make a guard SKIP when the file it asserts about is missing · probe
 Claude-CLI auth from `os.environ` alone · treat an empty-body 204 from
-`/voice/tts` as success.
+`/voice/tts` as success · write text to a child's stdin with `text=True` but no
+`encoding=` anywhere on the voice path · add a spawn site to that path without
+adding the file to `_PINNED_FILES` · give a synthesis call a FLAT timeout · lower
+a TTS cap below the measured curve in `tests/test_voice_tts_budget.py` · raise
+`_TTS_TIMEOUT_S` / `CORVIN_TTS_TOTAL_BUDGET_S` on one side of the nesting
+invariant only · accept a plain-ASCII, short-text curl as proof that the chat
+speaks.

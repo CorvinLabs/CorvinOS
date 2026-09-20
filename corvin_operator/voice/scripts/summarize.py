@@ -21,6 +21,42 @@ import subprocess
 import sys
 from pathlib import Path
 
+
+def _force_utf8_stdio() -> None:
+    """Read stdin and write stdout/stderr as UTF-8, whatever the locale says.
+
+    This script's ONLY output channel is stdout, and what it prints is
+    LLM-written prose. On Windows ``sys.stdout`` is wrapped in the locale codec
+    — cp1252 on a German install — which cannot encode an em-dash-free arrow
+    (``→``), a bullet the model chose, or any emoji. The write then raises
+    UnicodeEncodeError, the script exits 1 with EMPTY stdout, and every caller
+    treats that as "summarizer unavailable" and speaks the raw, truncated text
+    instead. Measured 2026-09-20: a child printing ``'Ergebnis → fertig'`` to a
+    pipe exits 1 under cp1252.
+
+    Pinning stdin the same way removes the other half: callers hand us UTF-8
+    (routes/voice.py, chat_runtime.py, adapter.py, daemon.js all do), and
+    decoding that as cp1252 raises on any byte cp1252 leaves undefined
+    (0x81/0x8d/0x8f/0x90/0x9d — reachable from ordinary emoji such as U+1F410).
+    It used to *appear* to work only because the mojibake was re-encoded on the
+    way out and the two errors cancelled; that coincidence breaks the moment
+    anything in between looks at the text.
+
+    ``errors`` is deliberately lenient: a summarizer must degrade to slightly
+    wrong characters, never to silence.
+    """
+    for stream, errs in ((sys.stdin, "replace"), (sys.stdout, "replace"),
+                         (sys.stderr, "backslashreplace")):
+        try:
+            stream.reconfigure(encoding="utf-8", errors=errs)  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 — a redirected/replaced stream may not support it
+            pass
+
+
+# Before argparse touches stdin or anything prints. Guard:
+# tests/test_voice_subprocess_encoding.py.
+_force_utf8_stdio()
+
 # Optional Layer-11 dialectic integration. The voice_summary site is
 # default-off, so when the module is missing OR the user hasn't opted
 # in, this is a zero-cost no-op. Lazy-import keeps stop_hook calls fast
@@ -1473,6 +1509,20 @@ def _run_claude_print(payload: str, system_prompt: str, model: str, timeout_s: f
             ],
             input=payload,
             capture_output=True, text=True, env=env,
+            # Pin the codec on BOTH directions — the innermost site of the
+            # 2026-09-20 class, and the one that broke the console's voice
+            # summary. *payload* is the user's reply text: with `text=True`
+            # alone it is encoded with the LOCALE codec, cp1252 on a German
+            # Windows box, so one emoji raises UnicodeEncodeError inside
+            # subprocess's stdin writer THREAD. UnicodeEncodeError is not an
+            # OSError, so it escapes `Popen._stdin_write` before
+            # `stdin.close()`: the CLI never sees EOF, waits for stdin forever,
+            # and this call burns *timeout_s* before raising TimeoutExpired.
+            # The decode side needs it just as much — Claude answers in UTF-8,
+            # and a byte cp1252 has no mapping for (0x81/0x8d/0x8f/0x90/0x9d,
+            # reachable from ordinary emoji) makes this call raise instead of
+            # returning the summary.
+            encoding="utf-8", errors="replace",
             timeout=timeout_s, check=True,
         )
         return out.stdout.strip() or None

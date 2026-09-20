@@ -22,6 +22,31 @@ import re
 import sys
 
 
+def _force_utf8_stdio() -> None:
+    """Read stdin / write stdout as UTF-8 regardless of the locale codec.
+
+    This script is a pure text filter in the middle of the voice pipeline, so it
+    must be byte-honest about characters the locale codec cannot represent. On
+    Windows the streams default to cp1252, which has no mapping for 0x81, 0x8d,
+    0x8f, 0x90 or 0x9d — bytes that occur inside perfectly ordinary UTF-8 emoji
+    (U+1F410 is ``f0 9f 90 90``), so decoding a caller's UTF-8 stdin raises and
+    the filter dies mid-pipeline. Twin of the same helper in ``summarize.py``;
+    both are duplicated on purpose because these scripts are executed by PATH
+    from Python and from ``daemon.js`` and share no importable package.
+
+    Guard: ``tests/test_voice_subprocess_encoding.py``.
+    """
+    for stream, errs in ((sys.stdin, "replace"), (sys.stdout, "replace"),
+                         (sys.stderr, "backslashreplace")):
+        try:
+            stream.reconfigure(encoding="utf-8", errors=errs)  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_force_utf8_stdio()
+
+
 def strip_code_only(text: str) -> str:
     # Fenced code blocks: drop entirely. Their contents are noise for the
     # summarizer and the prose around them is what we want to read aloud.

@@ -13,10 +13,14 @@ Provider chain (first available wins, unless pinned):
 Pin a provider via CORVIN_TTS_PROVIDER=openai|edge|piper (operator env)
 or via the tts_provider field in the user profile (console settings).
 
-The whole chain runs under a wall-clock deadline (default 22s, override via
-CORVIN_TTS_TOTAL_BUDGET_S) kept strictly below the console's outer 25s
-subprocess budget: each provider attempt is clamped to the remaining budget,
-and a provider with too little budget left is skipped with a stderr note.
+The whole chain runs under a wall-clock deadline that SCALES WITH THE TEXT
+(``total_budget_for()``; absolute pin via CORVIN_TTS_TOTAL_BUDGET_S), kept
+strictly below the console's outer subprocess budget (routes/voice.py::
+_tts_timeout_for, computed from the same length): each provider attempt is
+clamped to the remaining budget, and a provider with too little budget left is
+skipped with a stderr note. It used to be a flat 22s under a flat outer 25s,
+which silently made every long summary unsynthesizable — see
+_PROVIDER_TIMEOUT_PER_1K_S for the measurements.
 
 Set CORVIN_SAY_NO_FALLBACK=1 to make a PINNED provider hard-fail (no
 auto-chain fallback) when it can't produce audio — a strict/isolation mode
@@ -115,28 +119,75 @@ def _resolve_voice_config_dir() -> Path:
 
 VOICE_CONFIG_DIR = _resolve_voice_config_dir()
 
-# Per-provider wall-clock cap. Network providers (OpenAI, edge-tts) can otherwise
-# block indefinitely — e.g. edge-tts hanging on its Microsoft websocket on a
-# fresh/headless install — which used to stall the whole TTS call until the
-# caller's outer timeout fired. Keeping each provider short lets the auto-chain
-# fail fast to the next provider (or to silent text-only) within budget.
+# Per-provider wall-clock cap, for a SHORT text. Network providers (OpenAI,
+# edge-tts) can otherwise block indefinitely — e.g. edge-tts hanging on its
+# Microsoft websocket on a fresh/headless install — which used to stall the whole
+# TTS call until the caller's outer timeout fired. Keeping each provider short
+# lets the auto-chain fail fast to the next provider (or to silent text-only)
+# within budget.
 _PROVIDER_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_PROVIDER_TIMEOUT_S", "10"))
+
+# …PLUS this much per 1000 characters. Synthesis is not a constant-cost call:
+# the provider streams audio proportional to the text, so ONE flat cap cannot fit
+# both a 20-char greeting and a 1000-char summary. Measured on a corporate,
+# TLS-intercepting link (2026-09-20), whole say.py process, edge-tts tier, German:
+#
+#      150 chars … 3.1 s / 4.1 s        900 chars …  6.4 s /  6.5 s
+#      400 chars … 3.9 s / 4.6 s       1800 chars …  3.5 s / 14.8 s
+#
+# Two facts come out of that table. Latency GROWS with length (~6.5 s per 1000
+# chars at the worst end), and it VARIES ~4x for byte-identical input. The old
+# flat 10 s therefore comfortably passed a short greeting and failed a real
+# ~1000-char voice summary INTERMITTENTLY — which is precisely what "TTS im Chat
+# geht nicht" still was after the 2026-09-20 cp1252 hang was fixed: /voice/tts
+# answered its designed silent 204 carrying "edge-tts failed: TimeoutError" for
+# roughly half the turns, and with no OpenAI key and no Piper model downloaded
+# there was no tier left to catch it. 14 s/1000 is ~2x the measured worst slope,
+# i.e. headroom for the variance rather than a fit to the mean.
+_PROVIDER_TIMEOUT_PER_1K_S = float(
+    os.environ.get("CORVIN_TTS_PROVIDER_TIMEOUT_PER_1K_S", "14"))
 
 # Piper binary gets a longer per-attempt cap than the network providers — a
 # local first-run synth loads the model from disk (VOICE-10 chose 20s).
 _PIPER_TIMEOUT_S = 20.0
 
 # Total wall-clock budget for the WHOLE provider chain. Per-provider caps
-# alone don't protect the caller: they SUM to up to 40s (openai 10 + edge 10
-# + piper 20) while the console's outer subprocess budget is 25s
-# (routes/voice.py::_TTS_TIMEOUT_S). When the sum overran, the console
-# SIGKILLed say.py mid-Piper — orphaning the Piper grandchild and leaving the
-# sibling corvin_tts_*.wav behind. say.py now enforces its OWN deadline,
-# strictly below the console's, so it always finishes (or degrades to the
-# documented silent skip) before the caller kills it.
-_TOTAL_BUDGET_S = float(os.environ.get("CORVIN_TTS_TOTAL_BUDGET_S", "22"))
+# alone don't protect the caller: they SUM to more than any one of them while the
+# console applies an outer subprocess budget (routes/voice.py::_TTS_TIMEOUT_S).
+# When the sum overran, the console SIGKILLed say.py mid-Piper — orphaning the
+# Piper grandchild and leaving the sibling corvin_tts_*.wav behind. say.py
+# enforces its OWN deadline, strictly below the console's, so it always finishes
+# (or degrades to the documented silent skip) before the caller kills it.
+#
+# Scales with the text for the same reason the per-provider cap does: room for a
+# failed network attempt, then a second one, plus Piper's local synth.
+_TOTAL_BUDGET_S = float(os.environ.get("CORVIN_TTS_TOTAL_BUDGET_S", "0") or 0) or None
 _DEADLINE_MARGIN_S = 1.0  # reserved for our own teardown before the deadline
 _MIN_ATTEMPT_S = 1.0      # don't even start a provider with less than this
+
+
+def provider_timeout_for(text: str) -> float:
+    """Per-attempt cap for a network provider synthesizing *text*.
+
+    ``CORVIN_TTS_PROVIDER_TIMEOUT_S`` remains the BASE, not the whole value, so
+    an operator who raised it still gets the length term on top.
+    """
+    return _PROVIDER_TIMEOUT_S + _PROVIDER_TIMEOUT_PER_1K_S * (len(text) / 1000.0)
+
+
+def total_budget_for(text: str) -> float:
+    """Whole-chain deadline for *text*: two network attempts plus teardown.
+
+    ``CORVIN_TTS_TOTAL_BUDGET_S``, when set, is an absolute pin and wins — that
+    is the operator escape hatch, and the console honours the same shape.
+
+    SSOT: ``routes/voice.py::_tts_timeout_for`` must stay strictly ABOVE this for
+    every length, or the console SIGKILLs a synthesis say.py still believes it
+    has budget for. Guard: ``tests/test_voice_tts_budget.py``.
+    """
+    if _TOTAL_BUDGET_S is not None:
+        return _TOTAL_BUDGET_S
+    return 2.0 * provider_timeout_for(text) + 2.0
 
 
 def _clamped_timeout(provider_timeout_s: float,
@@ -254,7 +305,10 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
                 timeout_s: "float | None" = None) -> bool:
     """Attempt OpenAI TTS. Returns True on success, False on any failure."""
     if timeout_s is None:
-        timeout_s = _PROVIDER_TIMEOUT_S
+        # Length-scaled, not flat: see _PROVIDER_TIMEOUT_PER_1K_S. A direct
+        # caller (test, voice-doctor) must get the same budget main() computes,
+        # or it measures a tier that behaves differently in production.
+        timeout_s = provider_timeout_for(text)
     key = _resolve_key()
     if not key:
         sys.stderr.write("say.py: no OPENAI_API_KEY — skipping OpenAI TTS\n")
@@ -368,7 +422,8 @@ def _try_edge(out_path: Path, text: str, lang: str,
               timeout_s: "float | None" = None) -> bool:
     """Attempt edge-tts (HTTPS, no API key). Returns True on success."""
     if timeout_s is None:
-        timeout_s = _PROVIDER_TIMEOUT_S
+        # Length-scaled — see the twin note in _try_openai.
+        timeout_s = provider_timeout_for(text)
     try:
         import edge_tts  # type: ignore[import-not-found]  # noqa: F401
     except ImportError:
@@ -603,12 +658,14 @@ def _try_piper(out_path: Path, text: str, lang: str,
     wav_path = out_path.with_suffix(".wav")
     try:
         # VOICE-10: keep this UNDER the caller's outer TTS budget
-        # (routes/voice.py::_TTS_TIMEOUT_S == 25s). A 120s inner cap meant the
-        # outer timeout fired first and killed a slow first Piper run
-        # inconsistently (orphaned subprocess, no clean fallback). The default
-        # (_PIPER_TIMEOUT_S == 20s) is comfortably below 25s yet ample for a
-        # local Piper synth once the model is loaded; main()'s total-deadline
-        # clamp shrinks it further when earlier providers ate into the budget.
+        # (routes/voice.py::_tts_timeout_for, >= 25s for any length). A 120s
+        # inner cap meant the outer timeout fired first and killed a slow first
+        # Piper run inconsistently (orphaned subprocess, no clean fallback). The
+        # default (_PIPER_TIMEOUT_S == 20s) stays below even the shortest outer
+        # budget yet is ample for a local Piper synth once the model is loaded;
+        # main()'s total-deadline clamp shrinks it further when earlier providers
+        # ate into the budget. Piper is local, so unlike the network tiers it does
+        # NOT need the length term — model load, not streaming, dominates.
         # input as UTF-8 BYTES (not text=True): text mode encodes stdin with
         # the locale codec — cp1252 on Windows — which mojibakes umlauts and
         # raises UnicodeEncodeError for ru/uk/zh/tr, exactly the languages in
@@ -836,8 +893,10 @@ def main() -> int:
     # _TOTAL_BUDGET_S comment above. Anchored at module import
     # (_PROCESS_START_MONOTONIC), not "now", so a slow interpreter start eats
     # into the budget instead of pushing the deadline past the outer SIGKILL
-    # (V2-RESIDUAL 2026-07-20).
-    deadline = _PROCESS_START_MONOTONIC + _TOTAL_BUDGET_S
+    # (V2-RESIDUAL 2026-07-20). Sized from THIS text's length, because that is
+    # what the synthesis time is proportional to (2026-09-20).
+    total_budget_s = total_budget_for(text)
+    deadline = _PROCESS_START_MONOTONIC + total_budget_s
 
     def _run(name: str) -> bool:
         if local_only and name in ("openai", "edge"):
@@ -845,12 +904,13 @@ def main() -> int:
                 f"say.py: provider '{name}' disabled by CORVIN_TTS_LOCAL_ONLY\n"
             )
             return False
-        base_timeout = _PIPER_TIMEOUT_S if name == "piper" else _PROVIDER_TIMEOUT_S
+        base_timeout = (_PIPER_TIMEOUT_S if name == "piper"
+                        else provider_timeout_for(text))
         timeout_s = _clamped_timeout(base_timeout, deadline - time.monotonic())
         if timeout_s is None:
             sys.stderr.write(
                 f"say.py: skipping provider '{name}' — total TTS budget "
-                f"({_TOTAL_BUDGET_S:g}s) exhausted\n"
+                f"({total_budget_s:g}s for {len(text)} chars) exhausted\n"
             )
             return False
         if name == "openai":

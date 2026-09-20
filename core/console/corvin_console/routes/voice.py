@@ -122,7 +122,8 @@ router = APIRouter()
 # Concurrent TTS syntheses allowed per console process. voice_tts/voice_segment
 # were plain sync `def`s, so FastAPI ran them in Starlette's anyio threadpool
 # (40 tokens, never overridden) and each held its token for up to
-# _TTS_SUMMARIZE_TIMEOUT_S + _TTS_TIMEOUT_S (~145 s worst case) with no cap.
+# _TTS_SUMMARIZE_TIMEOUT_S + _tts_timeout_for(text) (150 s + a length-scaled
+# synthesis cap, so minutes for a long recap) with no cap.
 # 40 concurrent /voice/tts calls therefore drained the pool and stalled EVERY
 # other sync route in the console — the same "froze the whole console" class the
 # voice_transcribe comment above was written to fix, except nothing bounded who
@@ -262,12 +263,55 @@ def _detect_audio_mime(data: bytes) -> str:
     return "audio/ogg"  # safe default — the browser will try to decode
 
 
-# TTS synthesis subprocess wall-clock cap. TTS is an optional enhancement, so
-# this is deliberately short — a hung/misconfigured provider must not stall the
-# turn. say.py's per-provider timeout (CORVIN_TTS_PROVIDER_TIMEOUT_S, default
-# 10s) sits well under this so the auto-chain can try each provider and still
-# finish within the budget.
+# TTS synthesis subprocess wall-clock cap, for a SHORT text. TTS is an optional
+# enhancement, so the floor is deliberately tight — a hung/misconfigured provider
+# must not stall the turn. say.py's per-provider timeout
+# (CORVIN_TTS_PROVIDER_TIMEOUT_S, default 10s base) sits well under this so the
+# auto-chain can try each provider and still finish within the budget.
 _TTS_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_TIMEOUT_S", "25"))
+
+# …and the LENGTH TERM. Synthesis cost is proportional to the text, so a flat cap
+# cannot fit both a 20-char greeting and a 1000-char summary. Measured on this
+# link (2026-09-20) edge-tts needs ~6.5s per 1000 chars at its worst and varies
+# ~4x run to run; say.py sizes its own chain deadline from the same length
+# (say.py::total_budget_for). Under the old flat pair — 25s outer over a flat 22s
+# chain over a flat 10s edge cap — a real voice summary of ~1000 chars simply
+# could not be synthesized on a slow link: /voice/tts kept answering its designed
+# silent 204 with "edge-tts failed: TimeoutError" and, with no OpenAI key and no
+# Piper model, nothing caught it. That is what "TTS im Chat geht nicht" was after
+# the cp1252 stdin hang was fixed.
+#
+# SSOT INVARIANT: this must stay strictly ABOVE say.py's own chain deadline for
+# EVERY length, or the console SIGKILLs a synthesis say.py still believes it has
+# budget for — the orphaned-Piper-grandchild failure VOICE-10 fixed. The margin
+# below is what keeps the two curves apart. Guard: tests/test_voice_tts_budget.py.
+_TTS_TIMEOUT_PER_1K_S = float(
+    os.environ.get("CORVIN_TTS_TIMEOUT_PER_1K_S", "32"))
+_TTS_TIMEOUT_MARGIN_S = 4.0
+
+
+def _tts_timeout_for(text: str) -> float:
+    """Outer subprocess cap for synthesizing *text*.
+
+    Mirrors ``say.py::total_budget_for`` (2 x per-provider + teardown) and then
+    adds a margin, so say.py always hits its own deadline first and degrades the
+    documented way (silent skip + a stderr reason) instead of being killed.
+
+    The env floor ``CORVIN_TTS_TIMEOUT_S`` still applies as the BASE, so an
+    operator who raised it keeps that raise and gains the length term on top.
+
+    ``CORVIN_TTS_TOTAL_BUDGET_S`` is read HERE as well, not only by say.py: it is
+    an absolute pin on the child's chain deadline, so the invariant only holds if
+    the parent tracks it. Without this branch an operator pinning a long chain
+    budget would get the one failure the invariant exists to prevent.
+    """
+    scaled = (_TTS_TIMEOUT_S
+              + _TTS_TIMEOUT_PER_1K_S * (len(text) / 1000.0))
+    try:
+        pinned = float(os.environ.get("CORVIN_TTS_TOTAL_BUDGET_S", "") or 0)
+    except ValueError:
+        pinned = 0.0
+    return max(scaled, pinned) + _TTS_TIMEOUT_MARGIN_S
 
 # OpenAI TTS in-process timeout (shorter than subprocess timeout since no fork overhead)
 _OPENAI_TTS_TIMEOUT_S = float(os.environ.get("CORVIN_OPENAI_TTS_TIMEOUT_S", "8"))
@@ -783,6 +827,21 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
         proc = subprocess.run(
             cmd,
             input=cleaned_text, capture_output=True, text=True,
+            # PIN THE CODEC — do not drop this (2026-09-20, measured live).
+            # `text=True` alone encodes stdin with the LOCALE encoding, which is
+            # cp1252 on a German Windows install. The moment the reply carries any
+            # character cp1252 cannot map — an emoji is the common case, Claude
+            # opens with 👋 constantly — subprocess's stdin writer thread dies with
+            # UnicodeEncodeError. That is NOT an OSError, so it escapes
+            # `Popen._stdin_write` BEFORE `stdin.close()`, the child's stdin never
+            # reaches EOF, summarize.py blocks on `sys.stdin.read()` forever and
+            # this call burns the FULL timeout below. Measured on the live console:
+            # /voice/tts took 154s for a reply starting with 👋 versus 38s for the
+            # identical text without it — long past any browser's patience, which
+            # is what "TTS im Chat geht nicht" actually was. The exception is
+            # raised in a daemon THREAD, so nothing surfaces here: the traceback
+            # goes to the server's stderr and this code just sees a timeout.
+            encoding="utf-8", errors="replace",
             timeout=_TTS_SUMMARIZE_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
@@ -1284,8 +1343,16 @@ def _voice_tts_sync(
     try:
         cmd = _say_cmd(out_path, tts_text, body.lang)
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, env=_say_env(),
-            timeout=_TTS_TIMEOUT_S,
+            # say.py takes the text on ARGV (Unicode-safe on Windows), so only the
+            # DECODE side matters here — but it matters: `text=True` alone decodes
+            # the child's stderr with cp1252, and a diagnostic line carrying a
+            # non-cp1252 byte would raise inside this call and turn a working
+            # synthesis into a 500. Pin it, like every other spawn in this module.
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", env=_say_env(),
+            # Length-scaled — see _tts_timeout_for. A flat cap made every long
+            # summary unsynthesizable on a slow link.
+            timeout=_tts_timeout_for(tts_text),
         )
         if proc.returncode != 0:
             console_audit.action_failed(
@@ -1313,7 +1380,8 @@ def _voice_tts_sync(
         if isinstance(stderr_txt, (bytes, bytearray)):
             stderr_txt = stderr_txt.decode("utf-8", "replace")
         stderr_txt = ((stderr_txt.rstrip() + "\n") if stderr_txt.strip() else "") \
-            + f"timeout: say.py exceeded {_TTS_TIMEOUT_S:g}s"
+            + (f"timeout: say.py exceeded "
+               f"{_tts_timeout_for(tts_text):g}s for {len(tts_text)} chars")
         return _tts_failed_response(
             subprocess.CompletedProcess(cmd, -1, stdout="", stderr=stderr_txt),
             "say-timeout",
@@ -1501,6 +1569,14 @@ def _voice_session_summary_text(
             cmd,
             input=transcript,
             capture_output=True, text=True,
+            # Pin the codec — see the long note in _summarize_for_speech. A chat
+            # TRANSCRIPT is the single most emoji-dense text this console owns, so
+            # this was the site that failed most reliably: the writer thread died,
+            # the child never saw EOF, the call hit TimeoutExpired below and the
+            # route returned a silent 204. 204 is the DESIGNED "voice off" answer,
+            # so the session voice summary simply never played and no error was
+            # shown anywhere.
+            encoding="utf-8", errors="replace",
             timeout=_TTS_SUMMARIZE_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
@@ -1539,7 +1615,13 @@ def _voice_session_summary_tts(
         # TTS voice from the real locale (same as voice_tts's own _say_cmd call).
         cmd2 = _say_cmd(out_path, recap_text, body.lang)
         proc2 = subprocess.run(cmd2, capture_output=True, text=True,
-                               env=_say_env(), timeout=_TTS_TIMEOUT_S)
+                               encoding="utf-8", errors="replace",
+                               env=_say_env(),
+                               # A session recap is the LONGEST text this module
+                               # ever speaks, so it is the site a flat cap hurt
+                               # most — and its timeout branch answers a silent
+                               # 204, i.e. the voice summary just never played.
+                               timeout=_tts_timeout_for(recap_text))
         if proc2.returncode != 0:
             return Response(status_code=http_status.HTTP_204_NO_CONTENT)
         size = out_path.stat().st_size if out_path.exists() else 0
@@ -1647,6 +1729,8 @@ def _voice_segment_sync(
         # X-Corvin-Voice-Segments and simply stops there.
         return Response(status_code=http_status.HTTP_204_NO_CONTENT)
 
+    _seg_text = segments[body.index][:_TTS_PROVIDER_CHAR_LIMIT]
+
     with tempfile.NamedTemporaryFile(prefix="corvin_seg_", suffix=".opus", delete=False) as fh:
         out_path = Path(fh.name)
     try:
@@ -1658,8 +1742,11 @@ def _voice_segment_sync(
             # segment past the provider limit makes say.py exit non-zero -> 204,
             # and playFull reads 204 as end-of-playlist, so ONE oversized
             # segment silently truncates the whole read-aloud from there on.
-            _say_cmd(out_path, segments[body.index][:_TTS_PROVIDER_CHAR_LIMIT], body.lang),
-            capture_output=True, text=True, env=_say_env(), timeout=_TTS_TIMEOUT_S,
+            _say_cmd(out_path, _seg_text, body.lang),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            # Length-scaled from the SAME clamped string that is synthesized, not
+            # from the unclamped segment — see _tts_timeout_for.
+            env=_say_env(), timeout=_tts_timeout_for(_seg_text),
         )
         # `not proc.stdout.strip()` is say.py's DOCUMENTED failure signal
         # ("0 + empty stdout -> silently disabled / all providers failed", say.py
@@ -1765,6 +1852,8 @@ def voice_summarize(
             input=body.text,
             capture_output=True,
             text=True,
+            # Pin the codec — see _summarize_for_speech. Same hang, same cause.
+            encoding="utf-8", errors="replace",
             timeout=30,
         )
 

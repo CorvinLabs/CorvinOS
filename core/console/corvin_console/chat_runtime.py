@@ -487,6 +487,16 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
                 lambda: subprocess.run(
                     [sys.executable, str(summarizer), "--lang", "de", "--appendix-mode"],
                     input=_in, capture_output=True, text=True,
+                    # Pin the codec. `text=True` alone encodes stdin with the
+                    # locale codec (cp1252 on German Windows); one emoji in the
+                    # reply kills subprocess's stdin writer THREAD with
+                    # UnicodeEncodeError, which — not being an OSError — escapes
+                    # `_stdin_write` before `stdin.close()`, so the child never
+                    # sees EOF and this call blocks for the whole timeout. The
+                    # `except Exception: pass` below then swallows it, so the
+                    # LERN-ZUGABE / metaphor annex just silently vanished from the
+                    # chat while costing the turn the full annotation budget.
+                    encoding="utf-8", errors="replace",
                     env=env, timeout=_ANN_CALL_TIMEOUT_S, check=True,
                 )
             )
@@ -515,6 +525,8 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
                     lambda: subprocess.run(
                         [sys.executable, str(summarizer), "--lang", "de", "--metapher-mode"],
                         input=_in, capture_output=True, text=True,
+                        # Pin the codec — see the appendix call above.
+                        encoding="utf-8", errors="replace",
                         env=env, timeout=_remaining, check=True,
                     )
                 )

@@ -5073,7 +5073,17 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
             windows_shim_command(args), cwd=workdir,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env=env, start_new_session=True,
+            # Pin the codec: `communicate(input=_stdin_prompt)` below writes the
+            # user's prompt to this child's stdin, and `text=True` alone would
+            # encode it with the LOCALE codec (cp1252 on a German Windows box).
+            # One emoji then raises UnicodeEncodeError in subprocess's writer
+            # THREAD — not an OSError, so it escapes `_stdin_write` before
+            # `stdin.close()`, the CLI never sees EOF and the turn hangs until
+            # CLAUDE_BRIDGE_TIMEOUT. Same defect class as the voice pipeline's
+            # (2026-09-20); the decode side would equally raise on a UTF-8 byte
+            # cp1252 leaves undefined.
+            text=True, encoding="utf-8", errors="replace",
+            env=env, start_new_session=True,
             creationflags=no_console_window_flags(),
         )
         _register_subproc(chat_key, proc)
