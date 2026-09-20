@@ -20,6 +20,12 @@ from typing import List, Optional
 
 from core.paths import tenant_audit_chain
 from core.tenants import validate_tenant_id
+from .path_traversal_validator import (
+    assert_path_safe,
+    PathTraversalError,
+)
+
+from .audit_chain_validator import AuditChainValidator
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +63,19 @@ class SkillLossTriggerDetector:
     - Tenant isolation: never cross-tenant reads
     - Deterministic: no randomness in calculations
     - Fail-closed: invalid JSON → exception, not silent skip
+    - Hash-chain integrity: validates chain before reading events
     """
 
     CONFIDENCE_THRESHOLD = 0.70
     DEFAULT_LOOKBACK_HOURS = 24
+
+    def __init__(self):
+        """Initialize the trigger detector with an audit chain validator.
+
+        The validator is instantiated once per detector to avoid redundant
+        validation on each detect_loss_signals call.
+        """
+        self._validator = AuditChainValidator()
 
     def detect_loss_signals(
         self,
@@ -85,10 +100,26 @@ class SkillLossTriggerDetector:
         Raises:
             ValueError: If tenant_id is invalid
             FileNotFoundError: If audit.jsonl does not exist
+            RuntimeError: If audit chain integrity validation fails
             json.JSONDecodeError: If audit.jsonl contains invalid JSON
         """
         # Validate tenant
         validate_tenant_id(tenant_id)
+
+        # Validate audit chain integrity (fail-closed)
+        audit_path = tenant_audit_chain(tenant_id)
+        if audit_path.exists():
+            result = self._validator.validate_chain(audit_path)
+            if not result.is_valid:
+                raise RuntimeError(
+                    f"Audit chain integrity check failed for tenant {tenant_id}: "
+                    f"{result.error} (line {result.error_line_num}). "
+                    f"Skill generation blocked (fail-closed)."
+                )
+            logger.info(
+                f"Audit chain validated: {result.event_count} events verified, "
+                f"last hash={result.last_verified_hash}"
+            )
 
         # Default lookback
         if lookback_hours is None:
@@ -158,6 +189,7 @@ class SkillLossTriggerDetector:
         Raises:
             FileNotFoundError: If audit.jsonl does not exist
             json.JSONDecodeError: If a line is invalid JSON
+            PathTraversalError: If path validation fails (cross-tenant symlink, etc.)
         """
         # Get audit chain path
         audit_path = tenant_audit_chain(tenant_id)
@@ -168,6 +200,26 @@ class SkillLossTriggerDetector:
                 "Returning empty event list."
             )
             return []
+
+        # ─────────────────────────────────────────────────────────────────────
+        # SECURITY: Validate path before opening (prevent symlink escape)
+        # ─────────────────────────────────────────────────────────────────────
+        try:
+            expected_audit_dir = audit_path.parent
+            validated_path = assert_path_safe(
+                audit_path,
+                expected_audit_dir,
+                context=f"audit_chain for tenant {tenant_id}",
+            )
+            audit_path = validated_path
+        except PathTraversalError as e:
+            logger.error(
+                f"SECURITY: Path validation failed for tenant {tenant_id}: {e}. "
+                "Returning empty event list (fail-closed)."
+            )
+            raise RuntimeError(
+                f"Audit chain path validation failed for tenant {tenant_id}: {e}"
+            ) from e
 
         events = []
         since_ts = since.timestamp()
