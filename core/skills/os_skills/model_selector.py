@@ -30,6 +30,54 @@ except ImportError:
     get_store = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Canonical complexity vocabulary
+#
+# ``ClassificationResult.complexity`` is LOWERCASE — "simple" | "medium" |
+# "complex" — and every consumer depends on it being exactly that:
+#   - core/models/model_selection_config.py::COMPLEXITY_BY_TASK_TYPE (the
+#     console task-type <-> complexity translation, which also carries the
+#     "corvinOS" task type that has NO complexity equivalent — the two
+#     vocabularies are deliberately distinct, not two spellings of one)
+#   - corvin_operator/bridges/shared/model_selector_shadow.py::_TASK_TYPE_BY_COMPLEXITY
+#   - core/console/corvin_console/routes/engine_api.py::_real_stats
+#   - ModelSelector.get_stats() and model_selector_variants.py
+#
+# 46c3b3a7 (2026-09-16, ADR-0845 k=2) switched _classify_complexity's return
+# value to UPPERCASE and adjusted none of them. Nothing raised; every consumer
+# simply stopped matching. Measured consequences over the four days it was
+# live: the console's classified-turn tally froze (512 shown, 765 real), the
+# shadow loop's _PENDING was never populated so report_turn_outcome() became a
+# no-op and the confidence store stopped accruing samples entirely, and the
+# operator's saved per-tier model choice silently stopped applying because the
+# override lookup is keyed on this exact string. 25 tests across three files
+# were red the whole time.
+#
+# Normalise at every boundary rather than trusting a caller's spelling —
+# normalize_complexity() here and model_selection_config.task_type_for_
+# complexity() are the ONLY two places that decide. Guard:
+# tests/skills/test_complexity_vocabulary_contract.py fails on the next drift.
+# ─────────────────────────────────────────────────────────────────────────────
+SIMPLE = "simple"
+MEDIUM = "medium"
+COMPLEX = "complex"
+COMPLEXITY_LEVELS = (SIMPLE, MEDIUM, COMPLEX)
+
+
+def normalize_complexity(value: Any) -> Optional[str]:
+    """Return the canonical lowercase complexity, or ``None`` if unrecognised.
+
+    Accepts either spelling on purpose. The tenant audit chain is append-only
+    (never rewritten — see CLAUDE.md), so it permanently holds records written
+    in BOTH casings; a reader that accepts only one is structurally unable to
+    see part of its own history.
+    """
+    if not isinstance(value, str):
+        return None
+    lowered = value.strip().lower()
+    return lowered if lowered in COMPLEXITY_LEVELS else None
+
+
 @dataclass(frozen=True)
 class ModelSelectorConfig:
     """Configuration for model selection (immutable, audit-safe)."""
@@ -503,8 +551,14 @@ class ModelSelector:
         # valid, deliberate override meaning "native Anthropic" and must NOT
         # fall through to _select_provider's own default (e.g. "ollama" for
         # simple) just because it's falsy.
-        if complexity in self.overrides:
-            override = self.overrides[complexity]
+        # Keyed on the canonical lowercase form (classifier_overrides() builds
+        # it from COMPLEXITY_BY_TASK_TYPE). Looking it up with a non-canonical
+        # spelling misses every time and falls through to the hardcoded rule —
+        # which is exactly how the operator's saved console choice stopped
+        # applying on 2026-09-18 without a single error being raised.
+        canonical = normalize_complexity(complexity) or complexity
+        if canonical in self.overrides:
+            override = self.overrides[canonical]
             provider = override.get("provider")
             model = override.get("model") or self._select_model_for_provider(provider, complexity)
         else:
@@ -535,17 +589,44 @@ class ModelSelector:
         tenant_id: str = "_default",
     ) -> Tuple[str, float]:
         """
-        Classify complexity using decision tree.
+        Classify complexity using the configured thresholds.
 
-        Decision Rules (ADR-0642):
-        SIMPLE: token_count < 500 AND code_blocks <= 1 AND dependencies <= 2
-        COMPLEX: token_count > 3000 OR code_blocks > 5 OR dependencies > 10
-        MEDIUM: else
+        Decision Rules (ADR-0642) — these are the CONFIGURED values, read from
+        :class:`ModelSelectorConfig`, not constants baked into this method:
 
-        Phase 2 (ADR-0377): Uses learned complexity thresholds if available.
+            COMPLEX: token_estimate > medium_max_tokens (3000)
+                  OR code_blocks > medium_max_code_blocks (5)
+                  OR dependency_count > medium_max_dependencies (10)
+                  OR keyword_complexity == "complex"
+            SIMPLE:  token_estimate < simple_max_tokens (500)
+                 AND code_blocks <= simple_max_code_blocks (1)
+                 AND dependency_count <= simple_max_dependencies (2)
+                 AND keyword_complexity != "complex"
+            MEDIUM:  everything else
+
+        Until 2026-09-20 this method described exactly those rules and then
+        applied a completely different one: a weighted average
+        (``_compute_feature_complexity``) normalised against hardcoded 5000
+        tokens / 20 blocks / 50 dependencies, compared to a 0.5 threshold.
+        ``simple_max_tokens`` and ``medium_max_tokens`` were never read by the
+        classification at all — they survived only in ``_build_reasoning``'s
+        free text. Because tokens contribute just 50 % of that average and are
+        divided by 5000, the score needed >= 2500 tokens (~10 000 characters in
+        ONE prompt) merely to leave the first branch, and COMPLEX additionally
+        required > 5 code blocks or > 10 dependencies. On the reference install
+        that made MEDIUM and COMPLEX arithmetically unreachable: 765 real
+        classifications over 8 days, 765 of them SIMPLE, peak prompt 2101
+        tokens. The console's per-tier confidence was therefore empty for two
+        of three tiers — not because those tiers were untouched, but because
+        nothing could ever land in them.
+
+        Phase 2 (ADR-0377): a learned threshold, when a cost-variance optimizer
+        is supplied, SCALES the token bounds around its 0.5 neutral point. With
+        no optimizer (every production path today) the scale is exactly 1.0 and
+        the rules above hold verbatim.
         """
         # Get learned threshold from cost variance optimizer if available
-        complexity_threshold = 0.5  # Default
+        complexity_threshold = 0.5  # Neutral point → token_scale == 1.0
         if self.cost_variance_optimizer and task_type:
             try:
                 # Get learned threshold (or base 0.5 if not yet converged)
@@ -560,45 +641,42 @@ class ModelSelector:
             except Exception as e:
                 logger.debug(f"Failed to get learned threshold: {e}, using base 0.5")
 
-        # Start with keyword-based hint
-        base_complexity = features.keyword_complexity
+        # A learned threshold ABOVE the 0.5 neutral point means "it takes more
+        # to count as complex here" → wider token bounds. Below it, narrower.
+        # Guarded so a degenerate learned value can never collapse the bounds
+        # to zero and reclassify every prompt as COMPLEX.
+        token_scale = max(0.1, complexity_threshold / 0.5)
+        simple_max_tokens = self.config.simple_max_tokens * token_scale
+        medium_max_tokens = self.config.medium_max_tokens * token_scale
 
-        # Compute a feature-based complexity score (0.0-1.0)
-        feature_complexity = self._compute_feature_complexity(features)
+        keyword_complexity = normalize_complexity(features.keyword_complexity)
 
-        # Apply learned threshold
-        if feature_complexity < complexity_threshold:
-            if features.code_blocks <= self.config.simple_max_code_blocks:
-                return "SIMPLE", 0.85  # High confidence
-        elif feature_complexity > (complexity_threshold + 0.3):
-            if (features.code_blocks > self.config.medium_max_code_blocks
-                    or features.dependency_count > self.config.medium_max_dependencies):
-                return "COMPLEX", 0.90  # High confidence
+        # COMPLEX — any single measured signal over the medium ceiling is
+        # enough; these are OR'd because one 4000-token prompt is complex
+        # regardless of how few code blocks it happens to contain.
+        if (features.token_estimate > medium_max_tokens
+                or features.code_blocks > self.config.medium_max_code_blocks
+                or features.dependency_count > self.config.medium_max_dependencies):
+            return COMPLEX, 0.90  # measured signal → high confidence
+        if keyword_complexity == COMPLEX:
+            return COMPLEX, 0.70  # keyword signal only → lower confidence
 
-        # Medium category (default, medium confidence)
-        if base_complexity == "complex":
-            return "COMPLEX", 0.70
-        elif base_complexity == "simple":
-            return "SIMPLE", 0.70
-        else:
-            return "MEDIUM", 0.60  # Uncertain
+        # SIMPLE — every measured signal must be under the simple ceiling.
+        if (features.token_estimate < simple_max_tokens
+                and features.code_blocks <= self.config.simple_max_code_blocks
+                and features.dependency_count <= self.config.simple_max_dependencies):
+            return SIMPLE, 0.85
 
-    def _compute_feature_complexity(self, features: ExtractedFeatures) -> float:
-        """Compute normalized feature-based complexity (0.0-1.0).
+        # MEDIUM — the residual class, and genuinely the least certain one.
+        return MEDIUM, 0.60
 
-        Combines token count, code blocks, and dependencies into a single score.
-        """
-        # Normalize token count (max 5000 tokens = complexity 1.0)
-        token_complexity = min(1.0, features.token_estimate / 5000.0)
-
-        # Normalize code blocks (max 20 = complexity 1.0)
-        block_complexity = min(1.0, features.code_blocks / 20.0)
-
-        # Normalize dependencies (max 50 = complexity 1.0)
-        dep_complexity = min(1.0, features.dependency_count / 50.0)
-
-        # Weighted average
-        return (token_complexity * 0.5 + block_complexity * 0.25 + dep_complexity * 0.25)
+    # _compute_feature_complexity() was removed on 2026-09-20. It normalised
+    # tokens/blocks/dependencies against hardcoded 5000/20/50 into a weighted
+    # average and was the ONLY thing _classify_complexity consulted — which is
+    # why the configured thresholds were dead and why MEDIUM/COMPLEX were
+    # unreachable. It had no other caller. Deleted rather than left in place:
+    # a disproven rule sitting next to the real one is a trap for the next
+    # reader, and the git history keeps it if it is ever needed.
 
     def _select_provider(self, complexity: str) -> str:
         """
@@ -609,41 +687,45 @@ class ModelSelector:
         COMPLEX → Anthropic/Opus (best quality)
         """
         # k=2 (ADR-0845): Always prefer Anthropic for consistency + Haiku for SIMPLE
-        if complexity == "SIMPLE":
-            return "anthropic"  # Use Haiku for cost-optimization
-        elif complexity == "MEDIUM":
-            return "anthropic"  # Use Sonnet for balanced quality
-        else:  # COMPLEX
-            return "anthropic"  # Use Opus for best quality
+        _ = normalize_complexity(complexity)  # accepted in either spelling
+        return "anthropic"
 
     def _select_model_for_provider(self, provider: str, complexity: str) -> str:
-        """Select model within provider based on complexity."""
+        """Select model within provider based on complexity.
+
+        Normalised at the boundary: a caller passing "COMPLEX" used to fall
+        through every branch into the SIMPLE default and be handed Haiku for a
+        complex task — silently, since a string comparison that misses raises
+        nothing.
+        """
+        complexity = normalize_complexity(complexity) or SIMPLE
+
         if provider == "anthropic":
-            if complexity == "COMPLEX":
+            if complexity == COMPLEX:
                 return "claude-opus-5"
-            elif complexity == "MEDIUM":
+            elif complexity == MEDIUM:
                 return "claude-sonnet-5"
             else:  # SIMPLE
                 return "claude-haiku-4-5"
 
         elif provider == "ollama":
-            if complexity == "COMPLEX":
+            if complexity == COMPLEX:
                 return "mistral:latest"
             else:
                 return "mistral:7b"
 
         elif provider == "openrouter":
-            if complexity == "COMPLEX":
+            if complexity == COMPLEX:
                 return "openai/gpt-4-turbo"
-            elif complexity == "MEDIUM":
+            elif complexity == MEDIUM:
                 return "anthropic/claude-opus"
             else:
                 return "open-mistral-7b"
 
         elif provider == "openai":
-            if complexity == "COMPLEX":
+            if complexity == COMPLEX:
                 return "gpt-4"
-            elif complexity == "MEDIUM":
+            elif complexity == MEDIUM:
                 return "gpt-4-turbo"
             else:
                 return "gpt-3.5-turbo"
@@ -682,9 +764,10 @@ class ModelSelector:
         if not self.classification_history:
             return {"classifications": 0}
 
-        simple_count = sum(1 for r in self.classification_history if r.complexity == "simple")
-        medium_count = sum(1 for r in self.classification_history if r.complexity == "medium")
-        complex_count = sum(1 for r in self.classification_history if r.complexity == "complex")
+        levels = [normalize_complexity(r.complexity) for r in self.classification_history]
+        simple_count = levels.count(SIMPLE)
+        medium_count = levels.count(MEDIUM)
+        complex_count = levels.count(COMPLEX)
 
         avg_confidence = sum(r.confidence for r in self.classification_history) / len(
             self.classification_history

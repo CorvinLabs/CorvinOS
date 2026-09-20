@@ -29,6 +29,33 @@ COMPLEXITY_BY_TASK_TYPE: dict[str, str] = {
     "COMPLEX": "complex",
 }
 
+#: Reverse direction, case-insensitive. THE one translation from a classifier
+#: complexity back to a console task type — every reader goes through this
+#: function rather than building its own ``{v: k}`` dict, because five private
+#: copies of the same mapping is what let 46c3b3a7's casing change break the
+#: console tally, the shadow learning loop and the operator's saved model
+#: choice simultaneously, each in silence.
+#:
+#: Case-insensitive is not leniency, it is a requirement: the tenant audit
+#: chain is append-only and must never be rewritten (CLAUDE.md, ADR-0232), so
+#: it permanently contains records written in both spellings — 512 lowercase
+#: and 253 uppercase on the reference install. A strict reader would be
+#: structurally unable to count a quarter of its own history.
+def task_type_for_complexity(complexity: Any) -> Optional[str]:
+    """Return the console task type for *complexity*, or ``None`` if unknown.
+
+    ``None`` covers both a genuinely unrecognised value and the "corvinOS"
+    direction, which has no complexity equivalent at all.
+    """
+    if not isinstance(complexity, str):
+        return None
+    return _TASK_TYPE_BY_COMPLEXITY.get(complexity.strip().lower())
+
+
+_TASK_TYPE_BY_COMPLEXITY: dict[str, str] = {
+    complexity: task_type for task_type, complexity in COMPLEXITY_BY_TASK_TYPE.items()
+}
+
 _DEFAULTS: dict[str, dict[str, Any]] = {
     "corvinOS": {"selected_model": "claude-haiku-4-5-20251001", "provider": None, "alternatives": []},
     "SIMPLE": {"selected_model": "claude-haiku-4-5-20251001", "provider": None, "alternatives": ["claude-sonnet-5"]},
