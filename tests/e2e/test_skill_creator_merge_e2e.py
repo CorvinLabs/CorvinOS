@@ -2,8 +2,11 @@
 
 Two surfaces claimed to create a skill:
 
-  /app/forge?tab=creator   SkillCreatorPanel → POST /v1/console/skill-creator/generate
-                           (5-phase LDD orchestration) — real.
+  /app/forge?tab=skill-forge
+                           SkillForgePanel → POST /v1/console/skill-creator/generate
+                           (5-phase LDD orchestration) — real. The tab's id was
+                           ``creator`` until the rename later the same day;
+                           forge.tsx still honours it as an alias.
   /app/skill-forge-generator
                            a form → POST /v1/skill-forge/generate, declared on a
                            FLASK blueprint (``core/console/corvin_console/routes/
@@ -13,7 +16,7 @@ Two surfaces claimed to create a skill:
                            ended in ``API error: 404``. The form was real; its
                            backend was not.
 
-The merge moved that form into the Creator tab as its "From template" composer
+The merge moved that form into the Skill Forge tab as its "From template" composer
 and wired it to ``POST /v1/console/skills/manual`` — the route that writes
 THROUGH the canonical SkillForge registry, which is also the registry the
 Creator's library lists. This file proves the three claims that merge rests on,
@@ -165,11 +168,51 @@ def test_the_old_route_redirects_rather_than_404ing(
     routed = [
         name
         for name, body in served_chunks.items()
-        if "skill-forge-generator" in body and "/app/forge?tab=creator" in body
+        if "skill-forge-generator" in body and "/app/forge?tab=skill-forge" in body
     ]
     assert routed, (
         "no served chunk pairs the retired path with its redirect target — "
         "an existing /app/skill-forge-generator bookmark would hit the 404 page"
+    )
+
+
+def test_the_retired_tab_id_is_still_honoured(served_chunks: dict[str, str]) -> None:
+    """``?tab=creator`` must still resolve, not fall through to the default.
+
+    The tab was renamed from ``creator`` to ``skill-forge`` hours after the
+    merge, and the merge's own redirect pointed at the old id. A link minted in
+    between would otherwise open the default tab with no error — the worst kind
+    of breakage, because it looks like it worked.
+    """
+    aliased = [
+        name
+        for name, body in served_chunks.items()
+        if "TAB_ALIASES" in body or ('creator:' in body and "skill-forge" in body)
+    ]
+    assert aliased, (
+        "no served chunk carries the creator → skill-forge alias; "
+        "?tab=creator would silently open the default tab"
+    )
+
+
+def test_skill_forge_is_the_first_tab_and_the_default(
+    served_chunks: dict[str, str],
+) -> None:
+    """Leftmost tab and opening tab are the same one.
+
+    A tab bar whose first entry is not the one that opens reads as a bug, and
+    the two facts live in different constants — the ordered id list and the
+    default — so nothing but a check keeps them together.
+    """
+    hits = [
+        body
+        for body in served_chunks.values()
+        if '"skill-forge","tools","skills"' in body.replace(" ", "")
+        or "'skill-forge','tools','skills'" in body.replace(" ", "")
+    ]
+    assert hits, (
+        "the served bundle does not order Forge's tabs skill-forge → tools → "
+        "skills; either the order changed or the crawl missed the page chunk"
     )
 
 

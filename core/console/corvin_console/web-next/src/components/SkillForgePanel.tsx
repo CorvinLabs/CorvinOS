@@ -1,7 +1,22 @@
 /**
- * Skill-Creator UI Panel — the console's ONE place to create a skill.
+ * Skill Forge — the console's ONE place to create a skill.
  *
- * Rendered as Forge's "Creator" tab, /console/app/forge?tab=creator (ADR-0405).
+ * Rendered as Forge's first tab, /console/app/forge?tab=skill-forge (ADR-0405).
+ *
+ * Named after the package it writes through. The registry behind both
+ * composers is `skill_forge` (corvin_operator/skill-forge/skill_forge/) —
+ * manifest, linter, content hash, hash-chained skill audit, plugin-slot
+ * mirror. The panel was called "Skill Creator" after the ORCHESTRATOR package
+ * (corvin_operator/skill_creator/), which is one of two ways in, not the
+ * thing being operated.
+ *
+ * The Python package keeps its name. `skill_creator` was itself called
+ * `skill_forge` once, collided with the registry package on sys.path and took
+ * `skill_forge.multi_registry` down process-wide for every other consumer; it
+ * was renamed for that reason and carries an explicit "do not name anything
+ * skill_forge here again" in registry_bridge.py. The HTTP surface stays
+ * `/v1/console/skill-creator/*` for the same reason plus the obvious one:
+ * renaming a live route breaks callers and buys nothing.
  *
  * Two composers, one registry (2026-09-20 merge):
  *
@@ -99,7 +114,7 @@ type Toast = { kind: "ok" | "err"; msg: string };
  *  switch only chooses HOW the body is produced. */
 type ComposerMode = "orchestrated" | "template";
 
-export const SkillCreatorPanel: React.FC = () => {
+export const SkillForgePanel: React.FC = () => {
   const { session } = useAuth();
   const qc = useQueryClient();
 
@@ -232,7 +247,7 @@ export const SkillCreatorPanel: React.FC = () => {
       <CardHeader>
         <div className="flex items-center gap-2">
           <Brain className="h-5 w-5 text-accent" />
-          <CardTitle className="text-base">Skill Creator</CardTitle>
+          <CardTitle className="text-base">Skill Forge</CardTitle>
         </div>
         <CardDescription>
           Create a reusable skill either way: let the 5-phase LDD orchestration write it
@@ -249,7 +264,7 @@ export const SkillCreatorPanel: React.FC = () => {
             run that is still spending subscription budget. */}
         <div
           className="inline-flex rounded-md border border-border/60 p-0.5"
-          role="tablist"
+          role="radiogroup"
           aria-label="Skill composer"
           data-testid="composer-mode"
         >
@@ -262,8 +277,15 @@ export const SkillCreatorPanel: React.FC = () => {
             <button
               key={id}
               type="button"
-              role="tab"
-              aria-selected={mode === id}
+              /* radio, NOT tab: this picks one of two composers, and it owns no
+                 `role="tabpanel"` region. Declaring it a tablist made it
+                 indistinguishable from Forge's own tab bar — `getByRole("tab")`
+                 on this page returned eight entries, six of them page tabs and
+                 two of them these (caught by tests/e2e/forge-tab-order.spec.ts).
+                 A nested tablist without panels is also wrong for a screen
+                 reader: it announces "tab 1 of 2" and then no tabpanel. */
+              role="radio"
+              aria-checked={mode === id}
               data-mode={id}
               data-state={mode === id ? "active" : "inactive"}
               disabled={isRunning}
@@ -855,4 +877,4 @@ function SkillViewer({
   );
 }
 
-export default SkillCreatorPanel;
+export default SkillForgePanel;

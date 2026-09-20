@@ -341,7 +341,7 @@ async def adversarial_review_skill(skill_spec: SkillSpec) -> ReviewResult:
 
 ## Console Integration
 
-### Location: `/console/app/forge?tab=creator` → Forge, Creator tab
+### Location: `/console/app/forge?tab=skill-forge` → Forge, **Skill Forge** tab (first, and the default)
 
 **Shipped today** (`SkillCreatorPanel.tsx`, `routes/skill_creator_api.py`).
 
@@ -352,8 +352,10 @@ the page was folded into Forge and `/app/skills` now redirects there. The
 generation lifecycle is NOT a duplicate of anything, so it moved with it as its
 own tab rather than being dropped.
 
-**The Creator tab is the console's ONE skill-creation surface** (same day, later
-pass). It carries two composers over one registry:
+**The Skill Forge tab is the console's ONE skill-creation surface** (same day,
+later pass). It leads the tab bar and is the tab `/app/forge` opens on —
+creating a skill is what an operator comes to this page for; the tools list is
+reference material beside it. It carries two composers over one registry:
 
 | Composer | Writes via | Cost | Use |
 |---|---|---|---|
@@ -366,7 +368,24 @@ POSTed to `/v1/skill-forge/generate`, declared on a **Flask blueprint**
 mounted it, and the live host answered **404**, so every "Generate Skill" click
 ended in `API error: 404`. The form was real; its backend never existed. The
 fields were rehomed onto `POST /skills/manual`, the blueprint was deleted, and
-`/app/skill-forge-generator` now redirects to `/app/forge?tab=creator`.
+`/app/skill-forge-generator` now redirects to `/app/forge?tab=skill-forge`.
+
+**Naming (and what deliberately did NOT get renamed).** The panel is named
+after the package it writes THROUGH — `skill_forge`
+(`corvin_operator/skill-forge/skill_forge/`: manifest, linter, content hash,
+hash-chained audit, plugin-slot mirror). It was called "Skill Creator" after
+the ORCHESTRATOR package (`corvin_operator/skill_creator/`), which is one of
+the two ways in, not the thing being operated. Renamed 2026-09-20, together
+with the tab id (`creator` → `skill-forge`; the old id stays honoured as an
+alias in `TAB_ALIASES`, so links minted in between still resolve).
+
+What keeps its name, on purpose:
+
+| Stays | Why |
+|---|---|
+| Python package `skill_creator` | it WAS called `skill_forge`, collided with the registry package of the same name on `sys.path`, and took `skill_forge.multi_registry` down process-wide for every other consumer (`skill_inject`, `promote.py`, `adapter.py`). `registry_bridge.py` carries an explicit "do not name anything `skill_forge` here again" |
+| HTTP routes `/v1/console/skill-creator/*` | renaming a live route breaks callers and buys nothing |
+| `core/skill_forge/` | a THIRD, unrelated package ("Skill Forge v2.0" — `loader.py`, `manifest.py`, `validators/`, `skill_forge_v2.py`). This panel touches none of it; its `generators/` were the dead blueprint's backend |
 
 Two of the old form's controls were deliberately NOT carried over, because the
 route has no argument for either and a control the server ignores is fabricated
@@ -376,7 +395,7 @@ path *is* the orchestrated composer beside it).
 
 The Skills tab's own "New Skill" dialog — a third variant of the same
 `POST /skills/manual` call — was removed in the same pass; its button switches to
-this tab. Both composers are gated on the `forge.create` capability: on a free
+the Skill Forge tab. Both composers are gated on the `forge.create` capability: on a free
 tier the registry refuses the write before anything is stored, and the composer
 renders that as a licence notice rather than a raw capability string.
 

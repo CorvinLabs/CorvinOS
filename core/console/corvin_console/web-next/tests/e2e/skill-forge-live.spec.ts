@@ -1,5 +1,5 @@
 /**
- * Skill Creator — live wiring proof (ADR-0405).
+ * Skill Forge — live wiring proof (ADR-0405).
  *
  * Unlike skill-creator.spec.ts, this file stubs NOTHING. It seeds fictional
  * skills into the real tenant SkillForge registry through the real HTTP API,
@@ -87,7 +87,7 @@ function fixtureCmd(action: 'seed' | 'purge', args: string[] = []): unknown {
 test.beforeAll(() => fixtureCmd('purge', ['--prefix', PREFIX]));
 test.afterAll(() => fixtureCmd('purge', ['--prefix', PREFIX]));
 
-test.describe('Skill Creator — live endpoints', () => {
+test.describe('Skill Forge — live endpoints', () => {
   test('the library, View and Delete work against the real API', async ({ page }) => {
     const { ctx } = await apiContext();
 
@@ -100,11 +100,12 @@ test.describe('Skill Creator — live endpoints', () => {
     expect(names).toContain(FIXTURES[1].name);
 
     // ── the panel shows them ────────────────────────────────────────────
-    // /app/skills was folded into Forge on 2026-09-20 and now redirects;
-    // the ADR-0405 creator lives on Forge's Creator tab.
-    await page.goto('/console/app/forge?tab=creator', { waitUntil: 'domcontentloaded' });
+    // /app/skills was folded into Forge on 2026-09-20 and now redirects; the
+    // ADR-0405 lifecycle lives on Forge's Skill Forge tab (its id was
+    // 'creator' until the same day's rename, still accepted as an alias).
+    await page.goto('/console/app/forge?tab=skill-forge', { waitUntil: 'domcontentloaded' });
     await expect(
-      page.getByRole('heading', { name: 'Skill Creator', exact: true }),
+      page.getByRole('heading', { name: 'Skill Forge', exact: true }),
     ).toBeVisible({ timeout: 20000 });
 
     const rowA = page.locator(`[data-skill="${FIXTURES[0].name}"]`);
