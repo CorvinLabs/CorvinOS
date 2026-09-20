@@ -422,6 +422,16 @@ class RunDispatcher:
             return ""
         try:
             configured = get_tenant_engine_model(tenant_id, engine_id, "worker_model")
+            # The Console persists a pin provider-qualified
+            # ("anthropic/claude-opus-5"); un-normalised it fails
+            # _model_is_available and the operator's own choice is silently
+            # replaced by the engine default. Same helper the OS pin tiers use.
+            if configured:
+                try:
+                    from model_selector import normalise_pin  # type: ignore[import]  # noqa: PLC0415
+                    configured = normalise_pin(configured, engine_id) or configured
+                except Exception:  # noqa: BLE001 — normalisation is never fatal
+                    pass
             if configured:
                 # Validate availability of operator-configured model
                 if _model_is_available(configured):

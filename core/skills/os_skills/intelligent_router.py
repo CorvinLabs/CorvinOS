@@ -360,10 +360,13 @@ class IntelligentRouter:
             return standard_decision
 
         # Step 3: Apply voting logic
-        # If judge confidence is high (>0.75) AND disagrees with token-based tier → override
+        # If judge confidence is high (>=0.75) AND disagrees with token-based tier → override
         # Phase 3 tuning (2026-09-20): Lowered from 0.9 to 0.75 to catch "kurz aber komplex"
-        # cases where 2/3 signals agree (e.g., ATP question: Q1=35, Q2=40, Q3=20 → conf=0.75)
-        if judge_confidence > 0.75 and judge_tier_str != standard_tier.value:
+        # cases where 2/3 signals agree (e.g., ATP question: Q1=35, Q2=40, Q3=20 → conf=0.75).
+        # Must be >=, not >: _compute_confidence's 2-signal-agreement branch returns
+        # exactly 0.75 (core/skills/os_skills/complexity_judge.py::_compute_confidence),
+        # so a strict > made the documented target case structurally unreachable.
+        if judge_confidence >= 0.75 and judge_tier_str != standard_tier.value:
             logger.info(
                 f"Judge override: token_tier={standard_tier.value}, "
                 f"judge_tier={judge_tier_str}, confidence={judge_confidence:.2f}"

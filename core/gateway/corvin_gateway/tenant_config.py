@@ -163,6 +163,46 @@ class EngineTrustConfig(BaseModel):
     audit_passed_sentinel:       bool = False
 
 
+class RoutingConfig(BaseModel):
+    """ADR-0867 Phase 3 — per-tenant task-routing strategy selection.
+
+    A SETTING, like ``spec.web_chat`` (see ``TenantSpec``'s docstring) —
+    NOT an admission-control field, so ``extra="allow"`` here too: a
+    routing-tuning key this schema doesn't know about yet must not take
+    the whole run down the way a typo in ``DataResidency`` correctly
+    does.
+
+    ``strategy`` selects which method of ``IntelligentRouter``
+    (``core/skills/os_skills/intelligent_router.py``)
+    ``IntelligentRouterBridge.route_with_intelligent_selection`` calls:
+
+    - ``"baseline"``: reserved; not yet a distinct code path (currently
+      behaves like ``phase2_conservative``).
+    - ``"phase2_conservative"`` (default): ``router.route_task()`` —
+      token-count tier + keyword heuristics only. This is the routing
+      behavior every tenant got before ADR-0867 Phase 3, kept as the
+      default so introducing this field does not silently change
+      existing routing for tenants that never set it.
+    - ``"phase3_judge"``: ``router.route_with_judge()`` — adds the
+      ComplexityJudge 3-signal vote (domain knowledge / reasoning depth
+      / problem novelty) as a third signal, overriding the token/keyword
+      tier when the judge disagrees with confidence above
+      ``judge_override_threshold``.
+
+    ``judge_enabled`` is a secondary gate: even with
+    ``strategy: "phase3_judge"``, an operator can set this ``false`` to
+    fall back to Phase 2 routing without changing ``strategy`` back —
+    useful for a quick kill-switch during a canary.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    strategy: Literal["baseline", "phase2_conservative", "phase3_judge"] = (
+        "phase2_conservative"
+    )
+    judge_enabled: bool = False
+    judge_override_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+
+
 class TenantSpec(BaseModel):
     """The ``spec:`` block — a SHARED namespace, not this module's alone.
 
@@ -195,6 +235,7 @@ class TenantSpec(BaseModel):
     budget:         Budget             = Field(default_factory=Budget)
     compute:        ComputeConfig | None = None
     engine_trust:   EngineTrustConfig | None = None
+    routing:        RoutingConfig      = Field(default_factory=RoutingConfig)
 
 
 class TenantMetadata(BaseModel):

@@ -12,6 +12,36 @@ from .intelligent_router import IntelligentRouter, RoutingDecision
 
 logger = logging.getLogger(__name__)
 
+# ADR-0867 Phase 3 — per-tenant routing strategy (spec.routing.strategy).
+# Fail-soft on import: tenant_config lives in corvin_gateway, which is not
+# guaranteed to be importable from every host that loads os_skills (e.g. a
+# standalone skill-forge worker). When unavailable, every tenant behaves as
+# "phase2_conservative" — the pre-ADR-0867-Phase-3 default — never as an
+# unconfigured opt-in to the judge path.
+try:
+    from core.gateway.corvin_gateway.tenant_config import load_or_default as _load_tenant_config
+except ImportError:  # pragma: no cover — exercised only on hosts without corvin_gateway
+    _load_tenant_config = None
+    logger.debug("corvin_gateway.tenant_config unavailable; routing strategy fixed at phase2_conservative")
+
+
+def _routing_strategy_for_tenant(tenant_id: str) -> tuple[str, bool]:
+    """Resolve (strategy, judge_enabled) for *tenant_id* from tenant.corvin.yaml.
+
+    Fails open to the pre-Phase-3 default ("phase2_conservative", judge
+    disabled) on any load error — a malformed/missing tenant config must
+    degrade routing quality, never break it.
+    """
+    if _load_tenant_config is None:
+        return "phase2_conservative", False
+    try:
+        cfg = _load_tenant_config(tenant_id)
+        routing = cfg.spec.routing
+        return routing.strategy, routing.judge_enabled
+    except Exception as e:  # noqa: BLE001 — config load must never break routing
+        logger.warning(f"tenant routing config load failed for {tenant_id!r}: {e}; using phase2_conservative")
+        return "phase2_conservative", False
+
 
 class IntelligentRouterBridge:
     """Singleton bridge to integrate IntelligentRouter with existing routing."""
@@ -60,6 +90,22 @@ class IntelligentRouterBridge:
             RoutingDecision with selected model, engine, reasoning
         """
         router = cls.get_router()
+        strategy, judge_enabled = _routing_strategy_for_tenant(tenant_id)
+
+        if strategy == "phase3_judge" and judge_enabled:
+            return router.route_with_judge(
+                task_input,
+                complexity=complexity,
+                token_count=token_count,
+                engine_mode=engine_mode,
+                latency_critical=latency_critical,
+                cost_limit_usd=cost_limit_usd,
+                tenant_id=tenant_id,
+            )
+
+        # "phase2_conservative" (default) and "baseline" both resolve here;
+        # "phase3_judge" with judge_enabled=False also falls back here (the
+        # operator kill-switch documented on RoutingConfig).
         return router.route_task(
             task_input,
             complexity=complexity,
