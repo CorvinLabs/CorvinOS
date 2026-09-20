@@ -181,6 +181,33 @@ def _engine_accepts_model(engine: Any) -> bool:
     return supported
 
 
+def _model_is_available(model_id: str) -> bool:
+    """Check if a model ID is available in the current installation.
+
+    This prevents routing to deprecated or unavailable models. If model
+    availability cannot be determined, defaults to True (permissive) so
+    unavailable import paths don't break routing.
+
+    Args:
+        model_id: Model identifier (e.g., "claude-haiku-4-5")
+
+    Returns:
+        True if model is available or availability cannot be determined,
+        False if model is definitely unavailable.
+    """
+    if not model_id:
+        return True  # Empty model ID is permissive
+
+    try:
+        # Try to check with the engine's model availability list
+        from engine_models import model_catalog  # type: ignore[import]  # noqa: PLC0415
+        return model_id in model_catalog or not model_catalog  # Permissive if empty
+    except Exception:  # noqa: BLE001
+        # If we can't determine availability, be permissive
+        # (fail-open on import/availability check failures)
+        return True
+
+
 #: type -> does its spawn() accept model=. Bounded by the number of engine
 #: classes in the process, which is a handful.
 _MODEL_KW_SUPPORT: dict[type, bool] = {}
@@ -327,13 +354,14 @@ class RunDispatcher:
         Integration with IntelligentRouter (ADR-0867): if a prompt is provided,
         uses intelligent routing to select Haiku/Sonnet/Opus based on task complexity.
         Falls back to operator configuration if: (1) IntelligentRouter unavailable,
-        (2) no prompt provided, (3) any exception occurs.
+        (2) no prompt provided, (3) any exception occurs, or (4) selected model is unavailable.
 
         Smart fallback order:
         1. Intelligent routing (if prompt provided AND router available)
         2. Operator-configured model (spec.engine_models.<engine>.worker_model)
         3. Engine registry default
-        4. Empty string (let engine use its own default)
+        4. Fallback to Haiku if selected model is unavailable
+        5. Empty string (let engine use its own default)
 
         Args:
             tenant_id: Tenant scope
@@ -343,6 +371,8 @@ class RunDispatcher:
         Returns:
             Model ID string (e.g., "claude-haiku-4-5") or ""
         """
+        selected_model = ""
+
         # Attempt intelligent routing if prompt is provided
         if prompt:
             try:
@@ -356,15 +386,18 @@ class RunDispatcher:
                     latency_critical=(engine_id == "native"),
                     tenant_id=tenant_id,
                 )
+                selected_model = decision.model
+
                 # Log the routing decision to audit trail (best-effort, non-blocking)
                 try:
                     _security_events.audit_event(
                         "intelligent_routing_decision",
                         {
-                            "model_selected": decision.model,
+                            "model_selected": selected_model,
                             "tier": decision.tier,
                             "confidence": decision.confidence,
-                            "reasoning": decision.reasoning[:200],  # Truncate reasoning
+                            # Store full reasoning (up to 2048 chars) to preserve context
+                            "reasoning": decision.reasoning[:2048],
                             "engine": engine_id,
                             "tenant_id": tenant_id,
                         },
@@ -373,7 +406,18 @@ class RunDispatcher:
                 except Exception:  # noqa: BLE001 — audit is best-effort
                     pass
 
-                return decision.model
+                # Validate model availability before returning
+                if selected_model and _model_is_available(selected_model):
+                    return selected_model
+                elif selected_model:
+                    # Selected model is unavailable — log and fallback
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Selected model {selected_model} is unavailable; "
+                        f"falling back to Haiku"
+                    )
+                    return "claude-haiku-4-5"  # Fallback to cheapest model
+
             except Exception as _ir_exc:  # noqa: BLE001 — IntelligentRouter unavailable or errored
                 import logging
                 logging.getLogger(__name__).debug(
@@ -391,9 +435,23 @@ class RunDispatcher:
         try:
             configured = get_tenant_engine_model(tenant_id, engine_id, "worker_model")
             if configured:
-                return configured
+                # Validate availability of operator-configured model
+                if _model_is_available(configured):
+                    return configured
+                else:
+                    # Configured model unavailable — log and use engine default
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Configured model {configured} is unavailable; "
+                        f"using engine default"
+                    )
+
             spec = load_registry().get(engine_id)
-            return (spec.default_worker_model() or "") if spec is not None else ""
+            default = (spec.default_worker_model() or "") if spec is not None else ""
+            if default and _model_is_available(default):
+                return default
+            # If engine default is also unavailable, fall back to Haiku
+            return "claude-haiku-4-5" if default else ""
         except Exception:  # noqa: BLE001
             return ""
 
@@ -787,8 +845,13 @@ class RunDispatcher:
                 pass
 
         start = time.time()
+        # STEP 0: Strip /delegate prefix if present (must happen BEFORE routing)
+        # so routing decision is deterministic regardless of entry point
+        from delegation_policy import strip_delegate_prefix
+        clean_prompt, _was_delegated = strip_delegate_prefix(prompt)
         # STEP 1 (ADR-0867): Use IntelligentRouter to select model based on task complexity
-        worker_model = self._resolve_worker_model(tenant_id, _gw_engine_id, prompt=prompt)
+        # Use the cleaned prompt (without /delegate prefix) for routing decisions
+        worker_model = self._resolve_worker_model(tenant_id, _gw_engine_id, prompt=clean_prompt)
         # ADR-0171 — engine.span.start (role=worker): every gateway engine run is
         # auditable as a span regardless of outcome (paired at all 4 exits below).
         self._emit_engine_span("start", tenant_id=tenant_id, run_id=run_id,
