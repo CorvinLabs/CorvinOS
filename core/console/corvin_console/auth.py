@@ -104,6 +104,8 @@ class SessionRecord:
     tenant_id: str
     token_fingerprint: str
     csrf_secret: str
+    csrf_nonce: str  # 32-char hex, one-time use per CSRF-protected operation (rotated after validation)
+    csrf_nonce_issued_at: float  # Timestamp when csrf_nonce was issued
     created_at: float
     last_seen_at: float
     expires_at: float
@@ -270,6 +272,10 @@ def _read_record(path: Path, sid: str) -> SessionRecord:
     if not isinstance(data, dict):
         raise SessionStoreMalformed(f"{path}: top-level must be object")
     try:
+        # Import here to avoid circular import
+        from .csrf import generate_csrf_nonce
+
+        ts = time.time()
         return SessionRecord(
             sid=sid,
             sid_fingerprint=data["sid_fingerprint"],
@@ -277,6 +283,9 @@ def _read_record(path: Path, sid: str) -> SessionRecord:
             tenant_id=data["tenant_id"],
             token_fingerprint=data.get("token_fingerprint", ""),
             csrf_secret=data["csrf_secret"],
+            # Backward-compat: pre-nonce sessions get a fresh nonce on load
+            csrf_nonce=str(data.get("csrf_nonce", generate_csrf_nonce())),
+            csrf_nonce_issued_at=float(data.get("csrf_nonce_issued_at", ts)),
             created_at=float(data["created_at"]),
             last_seen_at=float(data["last_seen_at"]),
             expires_at=float(data["expires_at"]),
@@ -292,16 +301,18 @@ def _read_record(path: Path, sid: str) -> SessionRecord:
 def _write_record(rec: SessionRecord) -> Path:
     path = _session_path(rec.sid)
     payload = {
-        "sid_fingerprint":   rec.sid_fingerprint,
-        "tier":              rec.tier,
-        "tenant_id":         rec.tenant_id,
-        "token_fingerprint": rec.token_fingerprint,
-        "csrf_secret":       rec.csrf_secret,
-        "created_at":        rec.created_at,
-        "last_seen_at":      rec.last_seen_at,
-        "expires_at":        rec.expires_at,
-        "persistent":        rec.persistent,
-        "lic_proof":         rec.lic_proof,
+        "sid_fingerprint":      rec.sid_fingerprint,
+        "tier":                 rec.tier,
+        "tenant_id":            rec.tenant_id,
+        "token_fingerprint":    rec.token_fingerprint,
+        "csrf_secret":          rec.csrf_secret,
+        "csrf_nonce":           rec.csrf_nonce,
+        "csrf_nonce_issued_at": rec.csrf_nonce_issued_at,
+        "created_at":           rec.created_at,
+        "last_seen_at":         rec.last_seen_at,
+        "expires_at":           rec.expires_at,
+        "persistent":           rec.persistent,
+        "lic_proof":            rec.lic_proof,
     }
     _atomic_write(path, payload)
     return path
@@ -326,6 +337,8 @@ def create_session(
     if not tenant_id:
         raise SessionError("console sessions require tenant_id")
 
+    from .csrf import generate_csrf_nonce
+
     sid = secrets.token_urlsafe(_SID_BYTES)
     csrf_secret = secrets.token_hex(_CSRF_BYTES)
     ts = now if now is not None else time.time()
@@ -337,6 +350,8 @@ def create_session(
         tenant_id=tenant_id,
         token_fingerprint=token_fingerprint,
         csrf_secret=csrf_secret,
+        csrf_nonce=generate_csrf_nonce(),
+        csrf_nonce_issued_at=ts,
         created_at=ts,
         last_seen_at=ts,
         expires_at=ts + lifetime,
@@ -501,3 +516,204 @@ def end_session(sid: str, tenant_id: str | None = None) -> bool:
         return True
     except OSError:
         return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Session Token Binding — Cryptographically-Bound Session Tokens (ADR-XXXX)
+# ═════════════════════════════════════════════════════════════════════════════
+# CRITICAL SECURITY: Session tokens are HMAC-SHA256 bound to server state and
+# cannot be forged via HTTP headers (User-Agent, X-Forwarded-For). Prevents
+# operator ID spoofing attacks.
+
+
+TOKEN_TTL_S = 60 * 60  # 1 hour
+_SERVER_SECRET: bytes | None = None
+
+
+def _get_server_secret() -> bytes:
+    """Get or generate the per-boot server secret (NEVER persisted)."""
+    global _SERVER_SECRET
+    if _SERVER_SECRET is None:
+        _SERVER_SECRET = secrets.token_bytes(32)
+        _log.info("Session token binding: generated fresh server secret (this boot only)")
+    return _SERVER_SECRET
+
+
+class SessionToken:
+    """Cryptographically-bound session token (immutable)."""
+
+    def __init__(
+        self,
+        token: str,
+        issued_at: float,
+        expires_at: float,
+        operator_id: str,
+        tenant_id: str,
+        session_id: str,
+    ):
+        self.token = token
+        self.issued_at = issued_at
+        self.expires_at = expires_at
+        self.operator_id = operator_id
+        self.tenant_id = tenant_id
+        self.session_id = session_id
+
+    def is_expired(self, now: float | None = None) -> bool:
+        """Check if token has expired."""
+        check_time = now if now is not None else time.time()
+        return check_time >= self.expires_at
+
+
+def token_to_json(token: SessionToken) -> dict[str, Any]:
+    """Serialize a SessionToken for an HTTP response.
+
+    Excludes session_id: it is the server-side session cookie value, never
+    sent back to the client inside another payload (that would let a
+    leaked/logged response body double as a session hijack vector).
+    """
+    return {
+        "token": token.token,
+        "issued_at": token.issued_at,
+        "expires_at": token.expires_at,
+        "operator_id": token.operator_id,
+        "tenant_id": token.tenant_id,
+    }
+
+
+def generate_token(
+    session_id: str,
+    operator_id: str,
+    tenant_id: str,
+    client_nonce: str,
+    fixed_fingerprint: str,
+    now: float | None = None,
+) -> SessionToken:
+    """Generate a new cryptographically-bound session token.
+
+    FAIL-CLOSED: If any component is missing or invalid, raise ValueError.
+    """
+    if not session_id or not isinstance(session_id, str):
+        raise ValueError("session_id required and must be string")
+    if not operator_id or not isinstance(operator_id, str):
+        raise ValueError("operator_id required and must be string")
+    if not tenant_id or not isinstance(tenant_id, str):
+        raise ValueError("tenant_id required and must be string")
+    if not client_nonce or not isinstance(client_nonce, str) or len(client_nonce) < 16:
+        raise ValueError("client_nonce required, must be string, min 16 chars")
+    if not fixed_fingerprint or not isinstance(fixed_fingerprint, str):
+        raise ValueError("fixed_fingerprint required and must be string")
+
+    ts = now if now is not None else time.time()
+    secret = _get_server_secret()
+
+    # Construct message for HMAC
+    msg = f"{session_id}|{int(ts)}|{client_nonce}|{fixed_fingerprint}|{operator_id}|{tenant_id}"
+
+    # Generate HMAC-SHA256
+    token_hex = hmac.new(
+        secret,
+        msg.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return SessionToken(
+        token=token_hex,
+        issued_at=ts,
+        expires_at=ts + TOKEN_TTL_S,
+        operator_id=operator_id,
+        tenant_id=tenant_id,
+        session_id=session_id,
+    )
+
+
+def validate_token(
+    presented_token: str,
+    session_id: str,
+    operator_id: str,
+    tenant_id: str,
+    client_nonce: str,
+    fixed_fingerprint: str,
+    now: float | None = None,
+    token_issued_at: float | None = None,
+) -> tuple[bool, str]:
+    """Validate a presented token (FAIL-CLOSED).
+
+    token_issued_at must be the timestamp the token was actually generated
+    with (e.g. stored server-side alongside the session, or returned to the
+    caller at issuance). Without it, the expected token can only be
+    recomputed against `now`, which makes any expiry check vacuous: an old
+    token would never match a freshly-generated one regardless of age, so
+    it is rejected as `token_mismatch` rather than the more informative
+    `token_expired` — still fail-closed, but expiry never actually fires.
+
+    Returns: (is_valid, reason_if_invalid)
+    """
+    ts = now if now is not None else time.time()
+    issued_at = token_issued_at if token_issued_at is not None else ts
+
+    # Validate input shape
+    if not isinstance(presented_token, str):
+        return False, "token_not_string"
+    if not _looks_like_token(presented_token):
+        return False, "token_invalid_format"
+
+    # Check expiry against the token's real issuance time, not `now`.
+    if ts - issued_at > TOKEN_TTL_S:
+        return False, "token_expired"
+
+    try:
+        expected = generate_token(
+            session_id, operator_id, tenant_id, client_nonce, fixed_fingerprint, now=issued_at
+        )
+    except ValueError as e:
+        return False, f"token_generation_failed: {str(e)}"
+
+    # Timing-safe comparison
+    if not hmac.compare_digest(presented_token, expected.token):
+        return False, "token_mismatch"
+
+    return True, ""
+
+
+def _looks_like_token(token: str) -> bool:
+    """Quick shape check: tokens are 64-char hex (SHA256)."""
+    if not isinstance(token, str):
+        return False
+    if len(token) != 64:
+        return False
+    try:
+        int(token, 16)
+        return True
+    except ValueError:
+        return False
+
+
+def emit_audit_event(
+    event_type: str,
+    session_id: str,
+    operator_id: str,
+    tenant_id: str,
+    reason: str = "",
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Emit an audit event for token validation (GDPR Art. 30, EU AI Act Art. 50)."""
+    try:
+        from . import audit as console_audit
+
+        audit_details = {
+            "session_id": session_id,
+            "operator_id": operator_id,
+        }
+        if reason:
+            audit_details["reason"] = reason
+        if details:
+            audit_details.update(details)
+
+        console_audit.system_event(
+            tenant_id=tenant_id,
+            event=event_type,
+            details=audit_details,
+        )
+    except Exception:  # noqa: BLE001
+        # FAIL-OPEN on audit: don't let logging failure block the request
+        _log.error("Failed to emit token validation audit event")

@@ -7,10 +7,13 @@ Load-bearing test set: 12 unit tests + 1 E2E test.
 All tests are fail-closed: no bypasses, no mocks.
 """
 
+import importlib.util
 import json
 import os
 import shutil
+import sys
 import tempfile
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -18,18 +21,88 @@ from unittest import mock
 
 import pytest
 
-# Import validators
-from corvin_operator.skill_forge.autonomous.path_traversal_validator import (
-    PathTraversalError,
-    validate_path_within_scope,
-    validate_tenant_audit_path,
-    validate_skill_id_and_version,
-    assert_path_safe,
-    assert_skill_parameters_safe,
+# `corvin_operator/skill-forge/` has a dash, which is not a valid Python
+# package segment, so it can't be reached via a plain `import`. Load it via
+# importlib (same pattern as tests/skill_forge/test_trigger_detector.py) and
+# register it under its dotted name in sys.modules so both `from X import Y`
+# below AND `mock.patch("corvin_operator.skill_forge.autonomous.trigger_detector...")`
+# (a string-path patch target) resolve correctly.
+#
+# trigger_detector.py does `from .audit_chain_validator import ...` (a
+# relative import), which requires its parent to be a real package with
+# __path__ — so the two missing parent levels (corvin_operator.skill_forge
+# and .autonomous; corvin_operator itself is a real package already) are
+# registered as namespace packages pointing at the dashed directory before
+# any submodule is loaded.
+_REPO = Path(__file__).resolve().parents[2]
+_SKILL_FORGE_DIR = _REPO / "corvin_operator" / "skill-forge"
+_AUTONOMOUS_DIR = _SKILL_FORGE_DIR / "autonomous"
+sys.path.insert(0, str(_REPO))
+
+
+def _ensure_namespace_package(dotted_name: str, path: Path):
+    existing = sys.modules.get(dotted_name)
+    if existing is not None:
+        return existing
+    module = types.ModuleType(dotted_name)
+    module.__path__ = [str(path)]
+    sys.modules[dotted_name] = module
+    return module
+
+
+_ensure_namespace_package("corvin_operator.skill_forge", _SKILL_FORGE_DIR)
+_ensure_namespace_package("corvin_operator.skill_forge.autonomous", _AUTONOMOUS_DIR)
+
+
+def _load_module(dotted_name: str, file_path: Path):
+    existing = sys.modules.get(dotted_name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(dotted_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[dotted_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_audit_chain_validator = _load_module(
+    "corvin_operator.skill_forge.autonomous.audit_chain_validator",
+    _AUTONOMOUS_DIR / "audit_chain_validator.py",
+)
+_path_traversal_validator = _load_module(
+    "corvin_operator.skill_forge.autonomous.path_traversal_validator",
+    _AUTONOMOUS_DIR / "path_traversal_validator.py",
+)
+_trigger_detector_module = _load_module(
+    "corvin_operator.skill_forge.autonomous.trigger_detector",
+    _AUTONOMOUS_DIR / "trigger_detector.py",
 )
 
-# Import trigger detector
-from corvin_operator.skill_forge.autonomous.trigger_detector import SkillLossTriggerDetector
+PathTraversalError = _path_traversal_validator.PathTraversalError
+validate_path_within_scope = _path_traversal_validator.validate_path_within_scope
+validate_tenant_audit_path = _path_traversal_validator.validate_tenant_audit_path
+validate_skill_id_and_version = _path_traversal_validator.validate_skill_id_and_version
+assert_path_safe = _path_traversal_validator.assert_path_safe
+assert_skill_parameters_safe = _path_traversal_validator.assert_skill_parameters_safe
+
+
+def _hash_chain_events(raw_events: list) -> list:
+    """Attach valid hash/prev_hash fields to a list of raw audit events,
+    using the exact algorithm AuditChainValidator verifies against (Fix #1).
+    Without this, any audit.jsonl fixture written by this file's tests is
+    rejected by the hash-chain check before the symlink check under test
+    ever runs."""
+    prev_hash = ""
+    chained = []
+    for event in raw_events:
+        event_hash = _audit_chain_validator.AuditChainValidator._compute_event_hash(
+            event, prev_hash
+        )
+        chained_event = {**event, "prev_hash": prev_hash, "hash": event_hash}
+        chained.append(chained_event)
+        prev_hash = event_hash
+    return chained
+SkillLossTriggerDetector = _trigger_detector_module.SkillLossTriggerDetector
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -339,18 +412,23 @@ def test_trigger_detector_symlink_escape_e2e():
         tenant1_dir.mkdir(parents=True)
         tenant2_dir.mkdir(parents=True)
 
-        # Create audit file in tenant2 with valid events
+        # Create audit file in tenant2 with valid, hash-chained events — the
+        # hash-chain check (Fix #1) runs before the path/symlink check (Fix
+        # #3) inside detect_loss_signals, so an event without valid hash
+        # fields would be rejected for the wrong reason before the symlink
+        # escape this test targets is ever evaluated.
         audit_t2 = tenant2_dir / "audit.jsonl"
-        audit_t2.write_text(
-            json.dumps({
+        chained = _hash_chain_events([
+            {
                 "event_type": "skill_executed",
                 "skill_id": "os.test",
                 "version": "1.0.0",
                 "tenant_id": "tenant2",
                 "ts": datetime.utcnow().timestamp(),
                 "outcome_feedback": {"correct": True},
-            }) + "\n"
-        )
+            }
+        ])
+        audit_t2.write_text("\n".join(json.dumps(e) for e in chained) + "\n")
 
         # Create malicious symlink in tenant1 pointing to tenant2
         audit_t1_symlink = tenant1_dir / "audit.jsonl"
@@ -397,7 +475,8 @@ def test_trigger_detector_valid_audit_e2e():
             }
             events.append(event)
 
-        audit_file.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+        chained = _hash_chain_events(events)
+        audit_file.write_text("\n".join(json.dumps(e) for e in chained) + "\n")
 
         # Mock tenant_audit_chain
         with mock.patch("corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain") as mock_chain:
