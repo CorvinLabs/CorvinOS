@@ -26,7 +26,7 @@ cd CorvinOS
 bash install.sh --editable .
 
 # or on Windows (PowerShell):
-powershell -ExecutionPolicy Bypass -File install.ps1 -Editable .\
+install.ps1 -Editable .\
 ```
 
 **What happens:**
