@@ -54,7 +54,6 @@ import {
   type ConsoleManifest,
 } from "@/adapters/capabilities";
 import { useAiPanels } from "@/adapters/ai-panels";
-import { PANELS, generateNavGroupsFromRegistry } from "@/panels/registry";
 
 // ── Engine chip — shows the active tenant-default engine in the header ───
 
@@ -126,7 +125,7 @@ interface NavGroup {
 
 // Icon mapping for dynamic nav generation (ADR-0353 P1)
 // Matches icon names from ConsolePanel.nav.icon to lucide-react components
-const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+const _ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Brain,                  // vibe-engineering, models (ADR-0885)
   CheckCircle,            // quality gates
   Settings,               // settings
@@ -187,6 +186,9 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/quality", label: "Quality Gates", icon: CheckCircle },
       { to: "/app/sync-monitor", label: "Sync Monitor", icon: Activity },
       { to: "/app/otel-telemetry", label: "OTEL Telemetry", icon: Gauge },
+      // requiredFlag: video_producer_enabled — the panel is registered in
+      // PANELS and gated in GATED_FLAGS; without this entry the route was
+      // mounted but nothing linked to it.
     ],
   },
   {
@@ -650,7 +652,7 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
 
 // ── CorvinMark SVG ─────────────────────────────────────────────────────
 
-function CorvinMarkSmall({ className }: { className?: string }) {
+function _CorvinMarkSmall({ className }: { className?: string }) {
   return (
     <svg viewBox="12 12 96 96" aria-hidden="true" className={cn("shrink-0", className)}>
       <path fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" d="M28 40 L56 60 L28 80"/>

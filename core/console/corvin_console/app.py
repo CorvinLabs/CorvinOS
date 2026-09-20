@@ -195,7 +195,6 @@ from .routes import (
     # ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI)
     video_producer_api as video_producer_route,
     # ADR-0695 Phase 2 — Video Quality Metrics Dashboard & Learning Integration
-    video_quality_metrics as video_quality_metrics_route,
     video_learning_api as video_learning_api_route,
     # ADR-0677 — Skill Forge v2.0 Phase 3: ZIP Packaging & Distribution
     skill_forge_distribution_routes as skill_forge_distribution_route,
@@ -309,7 +308,6 @@ router.include_router(skill_creator_route.router, tags=["console-skill-creator"]
 # ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI + orchestration)
 router.include_router(video_producer_route.router, tags=["console-video-producer"])
 # ADR-0695 Phase 2 — Video Quality Metrics Dashboard & Learning Integration
-router.include_router(video_quality_metrics_route.router, tags=["console-video-quality-metrics"])
 router.include_router(video_learning_api_route.router, tags=["console-video-learning"])
 # ADR-0037 (web-next) — web-bridge chat + voice (Iter 3a/b).
 router.include_router(chat_route.router, tags=["console-chat"])

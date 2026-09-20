@@ -9,6 +9,7 @@ import sys
 import os
 import logging
 import importlib.util
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +18,33 @@ VideoJob = None
 get_storage = None
 get_runner = None
 
+# The third entry used to be the maintainer's own absolute path
+# (/home/shumway/projects/Corvin-Marketplace/...), which resolves on exactly one
+# machine and is shipped inside the console wheel. It is replaced by an explicit
+# operator override so a developer whose checkout does not sit next to CorvinOS
+# can still point at the marketplace tree.
+# Where the plugin's ``src/`` (models.py + storage.py + skill.py) may live.
+# Until 2026-09-20 only two locations were tried — an install path that no
+# installer writes and a relative marketplace path that resolved to
+# ``core/console/Corvin-Marketplace`` — so on the maintainer host every
+# route answered 503 "plugin not available" although the plugin sits in the
+# sibling marketplace checkout under ``contributor/media/video_producer``.
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+_corvin_home = os.environ.get("CORVIN_HOME", "").strip() or os.path.expanduser("~/.corvin")
 plugin_locations = [
-    ("~/.corvin/plugins/video_producer/src", "installed"),
-    ("../../../Corvin-Marketplace/plugins/contributor/video_producer/src", "dev-relative"),
-    ("/home/shumway/projects/Corvin-Marketplace/plugins/contributor/video_producer/src", "dev-absolute"),
+    (os.path.join(_corvin_home, "tenants", "_default", "plugins", "instances", "video_producer", "src"), "installed-instance"),
+    (os.path.join(_corvin_home, "plugins", "media", "video_producer", "src"), "installed-media"),
+    (os.path.join(_corvin_home, "plugins", "video_producer", "src"), "installed"),
+    ("~/.corvin/plugins/media/video_producer/src", "home-media"),
+    ("~/.corvin/plugins/video_producer/src", "home"),
+    (os.path.join(_repo_root, "..", "Corvin-Marketplace", "plugins", "contributor", "media", "video_producer", "src"), "sibling-marketplace"),
+    (os.path.join(_repo_root, "..", "Corvin-Marketplace", "plugins", "contributor", "video_producer", "src"), "sibling-marketplace-legacy"),
 ]
+_marketplace_root = os.environ.get("CORVIN_MARKETPLACE_ROOT")
+if _marketplace_root:
+    for sub in (("contributor", "media", "video_producer"), ("contributor", "video_producer")):
+        plugin_locations.append((os.path.join(_marketplace_root, "plugins", *sub, "src"), "dev-env"))
+PLUGIN_SOURCE: Optional[str] = None
 
 for rel_path, location_type in plugin_locations:
     # Expand path
@@ -77,6 +100,7 @@ for rel_path, location_type in plugin_locations:
                 spec.loader.exec_module(async_runner_module)
                 get_runner = async_runner_module.get_runner
 
+            PLUGIN_SOURCE = plugin_path
             logger.info(f"✓ Successfully imported video producer from {location_type}: {plugin_path}")
             break
         except Exception as e:
@@ -364,56 +388,134 @@ async def get_job_progress(job_id: str):
     }
 
 
+def _job_dict(job) -> dict:
+    """The stored job as a plain dict (dataclass or pydantic), timestamps as ISO."""
+    if hasattr(job, "to_dict"):
+        try:
+            return dict(job.to_dict())
+        except Exception:  # noqa: BLE001
+            pass
+    data = dict(vars(job)) if hasattr(job, "__dict__") else {}
+    for k in ("created_at", "started_at", "completed_at"):
+        v = data.get(k)
+        if hasattr(v, "isoformat"):
+            data[k] = v.isoformat()
+    sb = data.get("storyboard")
+    if sb is not None and not isinstance(sb, (str, dict)):
+        data["storyboard"] = sb.to_dict() if hasattr(sb, "to_dict") else (vars(sb) if hasattr(sb, "__dict__") else None)
+    return data
+
+
+def _output_dict(video_output) -> Optional[dict]:
+    if video_output is None:
+        return None
+    if hasattr(video_output, "to_dict"):
+        try:
+            return dict(video_output.to_dict())
+        except Exception:  # noqa: BLE001
+            pass
+    return dict(vars(video_output)) if hasattr(video_output, "__dict__") else None
+
+
 @router.get("/jobs/{job_id}/quality-metrics")
 async def get_quality_metrics(job_id: str):
-    """Get quality metrics and per-scene feedback for a completed video."""
+    """Measured quality of the produced video — from its artifacts, via
+    ffprobe (``corvin_console/video_quality.py``). Until 2026-09-20 this
+    returned one hard-coded record for every job id."""
     if not get_storage:
         raise HTTPException(status_code=503, detail="Video Producer plugin not available")
-
     storage = get_storage()
     job = storage.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    from ..video_quality import measure  # noqa: PLC0415
 
-    # Try to load quality metrics from video_metadata.json
-    video_metadata_path = Path(
-        getattr(job, "project_dir", ".")) / "video_metadata.json"
+    return measure(_job_dict(job), _output_dict(storage.get_video_output(job_id)))
 
-    if video_metadata_path.exists():
-        try:
-            with open(video_metadata_path) as f:
-                metadata = json.load(f)
 
-            return {
-                "job_id": job_id,
-                "validation_status": "passed" if metadata.get("status") == "success" else "failed",
-                "encoding_parameters": {
-                    "codec": "h.264",
-                    "resolution": "1920x1080",
-                    "bitrate_kbps": 7200,
-                    "preset": "medium",
-                },
-                "overall_quality_score": metadata.get("quality_score", 0.5),
-                "timing_issues": metadata.get("timing_issues", []),
-                "per_scene_metrics": metadata.get("per_scene_metrics", []),
-            }
-        except Exception:
-            pass
+@router.get("/overview")
+async def get_overview():
+    """The library at a glance, counted from the stored jobs and their
+    measured outputs: how many videos, total runtime, mean checklist share
+    (over MEASURED videos only — the denominator is named)."""
+    if not get_storage:
+        raise HTTPException(status_code=503, detail="Video Producer plugin not available")
+    from ..video_quality import measure, ffprobe_available  # noqa: PLC0415
 
-    # Fallback: return mock data
+    storage = get_storage()
+    jobs = storage.list_jobs(limit=100, offset=0)
+    by_status: dict = {}
+    runtime = 0.0
+    shares: list = []
+    size = 0
+    last = None
+    for j in jobs:
+        by_status[j.status] = by_status.get(j.status, 0) + 1
+        if j.status == "complete":
+            q = measure(_job_dict(j), _output_dict(storage.get_video_output(j.id)))
+            if q["summary"]["rendered_s"]:
+                runtime += q["summary"]["rendered_s"]
+            if q["summary"]["size_bytes"]:
+                size += q["summary"]["size_bytes"]
+            # "measured" means ffprobe read an output file — a completed job
+            # whose file is gone has no share to average.
+            if q["container"] and q["score"]["share"] is not None:
+                shares.append(q["score"]["share"])
+        ts = j.completed_at or j.created_at
+        if ts and (last is None or ts > last):
+            last = ts
     return {
-        "job_id": job_id,
-        "validation_status": "passed" if job.status == "complete" else "pending",
-        "encoding_parameters": {
-            "codec": "h.264",
-            "resolution": "1920x1080",
-            "bitrate_kbps": 7200,
-            "preset": "medium",
-        },
-        "overall_quality_score": 0.85,
-        "timing_issues": [],
-        "per_scene_metrics": [],
+        "jobs_total": storage.get_job_count(),
+        "by_status": by_status,
+        "videos": by_status.get("complete", 0),
+        "runtime_s": round(runtime, 1),
+        "size_bytes": size,
+        "measured_videos": len(shares),
+        "mean_score_share": round(sum(shares) / len(shares), 3) if shares else None,
+        "last_activity": last.isoformat() if hasattr(last, "isoformat") else last,
+        "ffprobe_available": ffprobe_available(),
+        "plugin_source": PLUGIN_SOURCE,
     }
+
+
+@router.get("/videos/{job_id}/poster")
+async def get_poster(job_id: str):
+    """The first rendered slide (``scenes/scene_001.png``) as the video's poster."""
+    if not get_storage:
+        raise HTTPException(status_code=503, detail="Video Producer plugin not available")
+    storage = get_storage()
+    video_output = storage.get_video_output(job_id)
+    if not video_output:
+        raise HTTPException(status_code=404, detail="Video not found")
+    from pathlib import Path as _P  # noqa: PLC0415
+    from fastapi.responses import FileResponse  # noqa: PLC0415
+
+    scenes = _P(os.path.expanduser(video_output.video_path)).parent / "scenes"
+    for name in ("scene_001.png", "scene_000.png"):
+        p = scenes / name
+        if p.is_file():
+            return FileResponse(str(p), media_type="image/png")
+    raise HTTPException(status_code=404, detail="No poster for this video")
+
+
+@router.get("/videos/{job_id}/scenes/{index}/slide")
+async def get_scene_slide(job_id: str, index: int):
+    """The rendered slide of one scene (``scenes/scene_NNN.png``)."""
+    if not get_storage:
+        raise HTTPException(status_code=503, detail="Video Producer plugin not available")
+    if index < 1 or index > 999:
+        raise HTTPException(status_code=400, detail="scene index out of range")
+    storage = get_storage()
+    video_output = storage.get_video_output(job_id)
+    if not video_output:
+        raise HTTPException(status_code=404, detail="Video not found")
+    from pathlib import Path as _P  # noqa: PLC0415
+    from fastapi.responses import FileResponse  # noqa: PLC0415
+
+    p = _P(os.path.expanduser(video_output.video_path)).parent / "scenes" / f"scene_{index:03d}.png"
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="No slide for this scene")
+    return FileResponse(str(p), media_type="image/png")
 
 
 @router.post("/jobs/{job_id}/scenes/{scene_id}/feedback")

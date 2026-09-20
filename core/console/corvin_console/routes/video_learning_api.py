@@ -10,6 +10,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Optional, List, Dict
@@ -20,6 +21,7 @@ from pathlib import Path
 # Add parent dirs to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent))
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/video", tags=["video-learning"])
 
 
@@ -46,34 +48,42 @@ class VideoQualityReportRequest(BaseModel):
 # Helper: Learning Metrics Provider (Mock/Stub for Phase 2)
 # ============================================================================
 
-async def _get_learning_metrics_for_job(job_id: str) -> Dict[str, Any]:
-    """Mock learning metrics for a video job.
+async def _get_learning_metrics_for_job(job_id: str, tenant_id: str = "_default") -> Dict[str, Any]:
+    """What the operator taught the producer about THIS job: the ADR-0314
+    feedback events the scene-feedback route emitted for it. Until 2026-09-20
+    this returned one synthetic record for every job id."""
+    events: list = []
+    try:
+        from core.learning.event_store import EventStore  # noqa: PLC0415
+        from core.learning.learning_events import EventType  # noqa: PLC0415
+        from core.paths.tenant import tenant_home  # noqa: PLC0415
 
-    In Phase 3+, this will fetch from the actual learning event store (ADR-0314).
-    For now, returns synthetic data for dashboard rendering.
-    """
+        store = EventStore(tenant_home(tenant_id), tenant_id=tenant_id)
+        for ev in store.query_events(tenant_id, event_type=EventType.FEEDBACK, skill_id="os.video_producer", limit=5000):
+            sig = ev.signal or {}
+            if str(sig.get("task_id")) == job_id:
+                events.append({
+                    "timestamp": ev.timestamp,
+                    "outcome": sig.get("outcome_feedback"),
+                    "quality_rating": sig.get("quality_rating"),
+                    "confidence": sig.get("confidence"),
+                    "source": sig.get("source"),
+                })
+    except Exception as exc:  # noqa: BLE001 — no store, no events; never invent
+        logger.debug("learning metrics unavailable for %s: %s", job_id, exc)
+    approved = sum(1 for e in events if e["outcome"] == "yes")
+    rejected = sum(1 for e in events if e["outcome"] == "no")
+    confs = [float(e["confidence"]) for e in events if isinstance(e.get("confidence"), (int, float))]
     return {
         "job_id": job_id,
-        "total_feedback_events": 3,
-        "optimizer_iterations": 5,
-        "average_confidence": 0.82,
-        "convergence_trend": [
-            {"iteration": 1, "confidence": 0.60, "feedback_count": 1},
-            {"iteration": 2, "confidence": 0.68, "feedback_count": 2},
-            {"iteration": 3, "confidence": 0.75, "feedback_count": 2},
-            {"iteration": 4, "confidence": 0.78, "feedback_count": 3},
-            {"iteration": 5, "confidence": 0.82, "feedback_count": 3},
-        ],
-        "per_scene_feedback": [
-            {"scene_id": "s1", "feedback_score": 0.85, "feedback_count": 1},
-            {"scene_id": "s2", "feedback_score": 0.80, "feedback_count": 2},
-            {"scene_id": "s3", "feedback_score": 0.78, "feedback_count": 2},
-        ],
+        "total_feedback_events": len(events),
+        "approved": approved,
+        "rejected": rejected,
+        "average_confidence": round(sum(confs) / len(confs), 3) if confs else None,
+        "events": sorted(events, key=lambda e: str(e["timestamp"]))[-50:],
+        "source": "learning.event_store",
     }
 
-# ============================================================================
-# Routes
-# ============================================================================
 
 @router.get("/jobs/{job_id}/learning-metrics")
 async def get_job_learning_metrics(job_id: str) -> Dict[str, Any]:

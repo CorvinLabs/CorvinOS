@@ -97,6 +97,10 @@ export const PANELS: ConsolePanel[] = [
   rc("compliance", "Compliance", CompliancePage, { nav: { label: "Audit & Compliance", icon: "ShieldCheck", group: "system" } }),
   rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle", group: "observability" } }),
   // ADR-0695 Phase 2 — Video Quality Metrics Dashboard
+  // Reachable since 2026-09-20: NAV_GROUPS (layout.tsx, Observability) links
+  // the route, GATED_FLAGS + the feature-flag registry know
+  // video_producer_enabled, and the tenant template whitelists it. All three
+  // registrations are required — one missing hides the panel forever.
   rc("video-quality-metrics", "Video Quality", VideoQualityMetricsPage, { nav: { label: "Video Quality", icon: "Gauge", group: "observability" }, requiredFlag: "video_producer_enabled" }),
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
@@ -162,7 +166,9 @@ export interface NavGroup {
   label?: string;
   collapsible?: boolean;
   defaultOpen?: boolean;
-  items: Array<{ to: string; label: string; icon?: any; end?: boolean }>;
+  // `icon` is a lucide icon NAME (string), resolved by the sidebar renderer —
+  // it was typed `any`, which hid that from every consumer.
+  items: Array<{ to: string; label: string; icon?: string; end?: boolean }>;
 }
 
 export function generateNavGroupsFromRegistry(panels: readonly ConsolePanel[]): NavGroup[] {

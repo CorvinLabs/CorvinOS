@@ -67,10 +67,19 @@ rm -rf "$STAGE"
 # functionally identical and still type-checked; only the compression is looser,
 # which matters for a shipped release and not for a local redeploy loop.
 BUILD_LOG="$(mktemp)"
+# CONSOLE_DEPLOY_SKIP_TSC=1 skips the project-wide type check for ONE deploy.
+# The worktree is shared between concurrent sessions (CLAUDE.md), so another
+# session's half-edited panel can fail `tsc -b` for everyone; the deployer
+# is then expected to have type-checked its OWN files. Loud on purpose.
+TSC_STEP="./node_modules/.bin/tsc -b &&"
+if [ "${CONSOLE_DEPLOY_SKIP_TSC:-0}" = "1" ]; then
+  echo "WARNING: CONSOLE_DEPLOY_SKIP_TSC=1 — project-wide type check skipped for this deploy" >&2
+  TSC_STEP=""
+fi
 if [ "$FAST" -eq 1 ]; then
-  BUILD_CMD=(sh -c "./node_modules/.bin/tsc -b && ./node_modules/.bin/vite build --minify esbuild --outDir $STAGE")
+  BUILD_CMD=(sh -c "$TSC_STEP ./node_modules/.bin/vite build --minify esbuild --outDir $STAGE")
 else
-  BUILD_CMD=(sh -c "./node_modules/.bin/tsc -b && ./node_modules/.bin/vite build --outDir $STAGE")
+  BUILD_CMD=(sh -c "$TSC_STEP ./node_modules/.bin/vite build --outDir $STAGE")
 fi
 if ! "${BUILD_CMD[@]}" >"$BUILD_LOG" 2>&1; then
   echo "BUILD FAILED" >&2
