@@ -3,22 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { ReauthDialog } from '@/components/reauth-dialog';
 import { Zap, Plus, Trash2 } from 'lucide-react';
 import { ForgeSkill } from '@/types/forge';
 import {
-  createManualSkill,
   deleteManualSkill,
   promoteSkill,
   type PromoteTarget,
@@ -34,9 +22,15 @@ import { useAuth } from '@/lib/auth';
  * Carried over verbatim from the standalone /app/skills page when it was folded
  * into this tab on 2026-09-20. The page was removed as a duplicate VIEW — both
  * it and this tab list the same 643 records — but it was NOT a duplicate of the
- * ACTIONS: creating, promoting and deleting a skill existed only there, and
- * this tab's "New Skill" button had no onClick handler at all. Removing the
- * page without porting these would have silently dropped three capabilities.
+ * ACTIONS: promoting and deleting a skill existed only there, and this tab's
+ * "New Skill" button had no onClick handler at all.
+ *
+ * CREATION, however, is no longer here. Later the same day the Creator tab
+ * became the one composer for it (orchestrated run + template form, the latter
+ * rehomed from the dead /app/skill-forge-generator page), and a create dialog
+ * in this tab would have been a third variant of the same POST /skills/manual
+ * call to keep in sync. "New Skill" switches to that tab instead — the
+ * capability moved, it was not dropped.
  */
 function nextPromoteTarget(
   scopeSource: string | undefined,
@@ -59,6 +53,11 @@ interface SkillsTabProps {
   setSkills: (skills: ForgeSkill[]) => void;
   searchQuery: string;
   filterStatus: 'all' | 'enabled' | 'disabled';
+  /** Switch the page to the Creator tab. Creating a skill lives THERE, in one
+   *  composer that offers both the orchestrated run and the template form
+   *  (2026-09-20 merge); this tab's own create dialog was the third
+   *  half-duplicate of that and was removed rather than kept in sync. */
+  onCreateSkill: () => void;
 }
 
 export default function SkillsTab({
@@ -66,15 +65,12 @@ export default function SkillsTab({
   setSkills,
   searchQuery,
   filterStatus,
+  onCreateSkill,
 }: SkillsTabProps) {
   const [_selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const { session } = useAuth();
   const qc = useQueryClient();
 
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [newSkillName, setNewSkillName] = useState('');
-  const [newSkillBody, setNewSkillBody] = useState('');
-  const [newSkillError, setNewSkillError] = useState<string | null>(null);
   const [reauthOpen, setReauthOpen] = useState(false);
   const [pending, setPending] = useState<{ name: string; to: PromoteTarget; force: boolean } | null>(null);
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
@@ -90,20 +86,6 @@ export default function SkillsTab({
       /* the list simply stays as it was; the toast already reported the action */
     }
   }, [qc, setSkills]);
-
-  const createMutation = useMutation({
-    mutationFn: async ({ name, body }: { name: string; body: string }) =>
-      createManualSkill(name, body, session!.csrf_token),
-    onSuccess: async (_d, vars) => {
-      setToast({ kind: 'ok', msg: `Created skill "${vars.name}"` });
-      setIsDialogOpen(false);
-      setNewSkillName('');
-      setNewSkillBody('');
-      setNewSkillError(null);
-      await refresh();
-    },
-    onError: (e: Error) => setNewSkillError(e.message),
-  });
 
   const promoteMutation = useMutation({
     mutationFn: async ({ name, to, force }: { name: string; to: PromoteTarget; force: boolean }) =>
@@ -126,20 +108,6 @@ export default function SkillsTab({
     },
     onError: (e: Error) => setToast({ kind: 'err', msg: e.message }),
   });
-
-  function handleCreateSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setNewSkillError(null);
-    if (!newSkillName.trim()) {
-      setNewSkillError('Skill name is required.');
-      return;
-    }
-    if (!newSkillBody.trim()) {
-      setNewSkillError('Skill body is required.');
-      return;
-    }
-    createMutation.mutate({ name: newSkillName.trim(), body: newSkillBody });
-  }
 
   const filtered = React.useMemo(() => {
     return skills.filter((skill) => {
@@ -195,16 +163,7 @@ export default function SkillsTab({
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">SkillForge Skills</h2>
-        <Button
-          size="sm"
-          data-testid="new-skill-btn"
-          onClick={() => {
-            setNewSkillName('');
-            setNewSkillBody('');
-            setNewSkillError(null);
-            setIsDialogOpen(true);
-          }}
-        >
+        <Button size="sm" data-testid="new-skill-btn" onClick={onCreateSkill}>
           <Plus className="w-4 h-4 mr-2" />
           New Skill
         </Button>
@@ -214,7 +173,7 @@ export default function SkillsTab({
         <Card className="border-dashed">
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
             {skills.length === 0
-              ? 'No skills yet. Create one to get started.'
+              ? 'No skills yet. Use "New Skill" to open the Creator.'
               : 'No skills match your search.'}
           </CardContent>
         </Card>
@@ -319,56 +278,6 @@ export default function SkillsTab({
         </div>
       )}
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent>
-          <form onSubmit={handleCreateSubmit}>
-            <DialogHeader>
-              <DialogTitle>New skill</DialogTitle>
-              <DialogDescription>
-                A skill is reusable instructions the assistant saves and improves
-                over time. It starts at task scope and is promoted from there.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 py-4">
-              <div className="space-y-1">
-                <Label htmlFor="new-skill-name">Name</Label>
-                <Input
-                  id="new-skill-name"
-                  value={newSkillName}
-                  onChange={(e) => setNewSkillName(e.target.value)}
-                  placeholder="assistant.my_skill"
-                  autoFocus
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="new-skill-body">Body</Label>
-                <Textarea
-                  id="new-skill-body"
-                  value={newSkillBody}
-                  onChange={(e) => setNewSkillBody(e.target.value)}
-                  placeholder="What the assistant should do, and when."
-                  rows={8}
-                />
-              </div>
-              {newSkillError && (
-                <p className="text-sm text-destructive">{newSkillError}</p>
-              )}
-            </div>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setIsDialogOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={createMutation.isPending}>
-                {createMutation.isPending ? 'Creating…' : 'Create skill'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {toast && (
         <div

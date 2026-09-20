@@ -350,9 +350,36 @@ listed the tenant's skills. That listing duplicated Forge's Skills tab —
 `/v1/console/skills` and `/v1/console/forge/skills` return the same records — so
 the page was folded into Forge and `/app/skills` now redirects there. The
 generation lifecycle is NOT a duplicate of anything, so it moved with it as its
-own tab rather than being dropped. `/app/skill-forge-generator` is a different
-surface (`POST /v1/skill-forge/generate`, a one-shot template/LLM form) and does
-not replace this panel.
+own tab rather than being dropped.
+
+**The Creator tab is the console's ONE skill-creation surface** (same day, later
+pass). It carries two composers over one registry:
+
+| Composer | Writes via | Cost | Use |
+|---|---|---|---|
+| **Orchestrated** | `POST /skill-creator/generate` | a real `claude -p` run, minutes, charged to the subscription | describe it in prose and let the 5 phases write it |
+| **From template** | `POST /skills/manual` | none | fill in name/title/description, pick a skeleton, edit the Markdown, save |
+
+The template composer is the former `/app/skill-forge-generator` page. That page
+POSTed to `/v1/skill-forge/generate`, declared on a **Flask blueprint**
+(`routes/skill_forge_api.py`) inside a FastAPI app — nothing imported it, no app
+mounted it, and the live host answered **404**, so every "Generate Skill" click
+ended in `API error: 404`. The form was real; its backend never existed. The
+fields were rehomed onto `POST /skills/manual`, the blueprint was deleted, and
+`/app/skill-forge-generator` now redirects to `/app/forge?tab=creator`.
+
+Two of the old form's controls were deliberately NOT carried over, because the
+route has no argument for either and a control the server ignores is fabricated
+UI: **scope** (every manual skill is written at scope `user`; scope changes by
+promotion in the Skills tab, under real grade gates) and **use LLM** (the LLM
+path *is* the orchestrated composer beside it).
+
+The Skills tab's own "New Skill" dialog — a third variant of the same
+`POST /skills/manual` call — was removed in the same pass; its button switches to
+this tab. Both composers are gated on the `forge.create` capability: on a free
+tier the registry refuses the write before anything is stored, and the composer
+renders that as a licence notice rather than a raw capability string.
+
 Every route is session-scoped: the tenant comes from the authenticated
 `SessionRecord`, never an env var.
 

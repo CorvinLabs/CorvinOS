@@ -18,10 +18,20 @@ from core.skills.os_skills.datahub_unified.datahub import DataHubSkill
 from core.skills.os_skills.datahub_unified.creator import UnifiedCreator
 
 
-def test_skill_forge_api_request():
-    """Simulate Skill Forge API request."""
+def test_skill_forge_skeleton_generator():
+    """The SkeletonGenerator itself — NOT an HTTP boundary.
 
-    # Simulate POST /v1/skill-forge/generate
+    This used to be called ``test_skill_forge_api_request`` and printed
+    "POST /v1/skill-forge/generate works". It never exercised that route,
+    and the route never existed: ``routes/skill_forge_api.py`` declared it
+    on a FLASK blueprint that no FastAPI app mounted and nothing imported,
+    so the live host answered 404 and the console page in front of it could
+    not create anything. The blueprint was deleted on 2026-09-20 and the
+    console form moved to Forge's Creator tab, onto POST /skills/manual.
+
+    What remains true is what this function actually measures: the template
+    generator produces a valid manifest. Named and asserted accordingly.
+    """
     gen = SkeletonGenerator(SkillType.LEARNED_EXPERIENCE)
     manifest = gen.generate(
         name="api_test_skill",
@@ -30,16 +40,10 @@ def test_skill_forge_api_request():
         scope=SkillScope.TASK
     )
 
-    # Response would be manifest.to_dict()
-    response = {
-        "success": True,
-        "manifest": manifest.to_dict(),
-        "warnings": []
-    }
-
-    assert response["success"]
-    assert response["manifest"]["name"] == "api_test_skill"
-    print("✅ Skill Forge API: POST /v1/skill-forge/generate works")
+    payload = manifest.to_dict()
+    assert payload["name"] == "api_test_skill"
+    assert payload["body_md"].strip(), "skeleton body must not be empty"
+    print("✅ SkeletonGenerator produces a valid manifest")
 
 
 def test_datahub_api_ingestion():
@@ -103,15 +107,22 @@ def test_datahub_api_creation():
 
 
 def test_console_ui_navigation():
-    """Verify both panels are discoverable."""
+    """The console routes these features live behind.
 
+    ``/skill-forge-generator`` is no longer one of them: the panel was merged
+    into Forge's Creator tab on 2026-09-20 and the old path now only
+    redirects to ``/app/forge?tab=creator``. Asserting a string starts with
+    "/" proved nothing about reachability either way — the real wiring check
+    is web-next/tests/unit/panel-nav-wiring.test.ts, which reads the router
+    and the sidebar.
+    """
     panels = {
-        "skill-forge-generator": "/skill-forge-generator",
-        "datahub-unified": "/datahub-unified",
+        "forge (Creator tab)": "/app/forge?tab=creator",
+        "datahub-unified": "/app/datahub-unified",
     }
 
     for name, path in panels.items():
-        assert path.startswith("/")
+        assert path.startswith("/app/")
         print(f"✅ Console UI: {name} at {path}")
 
 
@@ -154,7 +165,7 @@ def test_full_e2e_both_skills():
 
 
 if __name__ == "__main__":
-    test_skill_forge_api_request()
+    test_skill_forge_skeleton_generator()
     test_datahub_api_ingestion()
     test_datahub_api_creation()
     test_console_ui_navigation()

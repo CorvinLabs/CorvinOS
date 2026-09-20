@@ -186,10 +186,6 @@ export const DataHubUnifiedPage = React.lazy(() =>
   import("@/pages/datahub-unified").then((m) => ({ default: m.default }))
 );
 
-export const SkillForgeGeneratorPage = React.lazy(() =>
-  import("@/pages/skill-forge-generator").then((m) => ({ default: m.default }))
-);
-
 
 export const OTELTelemetryPage = React.lazy(() =>
   import("@/pages/otel-telemetry").then((m) => ({ default: m.OTELTelemetryPage }))

@@ -22,7 +22,7 @@ import {
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
   QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
-  DataHubUnifiedPage, SkillForgeGeneratorPage,
+  DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
@@ -66,7 +66,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   CorvinKnowledgePage,
   VideoQualityMetricsPage,
   DataHubUnifiedPage,
-  SkillForgeGeneratorPage,
   OTELTelemetryPage,
   ModelsPage,
 };
@@ -135,8 +134,13 @@ export const PANELS: ConsolePanel[] = [
   // REMOVED 2026-09-15 (operator request): learning-dashboard panel.
   rc("datahub-unified", "DataHub", DataHubUnifiedPage,
      { nav: { label: "DataHub", icon: "Database", group: "knowledge" } }),
-  rc("skill-forge-generator", "Skill Forge", SkillForgeGeneratorPage,
-     { nav: { label: "Skill Forge", icon: "Sparkles", group: "build" } }),
+  // "skill-forge-generator" is no longer a panel (2026-09-20). Its form POSTed
+  // to /v1/skill-forge/generate — a Flask blueprint (routes/skill_forge_api.py)
+  // that no FastAPI app ever mounted and nothing ever imported, so the endpoint
+  // answered 404 on the live host and every "Generate Skill" click failed. The
+  // fields were rehomed into Forge's Creator tab as its "From template"
+  // composer, wired to POST /skills/manual, which actually writes to the
+  // registry. App.tsx redirects /app/skill-forge-generator there.
   // "licensing-audit" is no longer a panel (2026-09-20): its content is the
   // "Learning events" section of /app/compliance, where an auditor actually
   // looks. The same store also fed the Learnings panel's "Audit Events" tab,

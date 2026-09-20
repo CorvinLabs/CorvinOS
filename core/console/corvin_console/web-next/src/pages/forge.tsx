@@ -33,6 +33,13 @@ export default function ForgePage() {
   const [activeTab, setActiveTab] = useState(
     FORGE_TABS.includes(requestedTab as ForgeTab) ? (requestedTab as string) : 'tools',
   );
+
+  /** Switch tab AND keep ?tab= in sync — the Skills tab hands skill creation
+   *  to the Creator through this, and a deep link has to survive a reload. */
+  const goToTab = (v: string) => {
+    setActiveTab(v);
+    setSearchParams(v === 'tools' ? {} : { tab: v }, { replace: true });
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [filterType, setFilterType] = useState<'all' | 'tool' | 'skill' | 'os-skill'>('all');
@@ -136,10 +143,7 @@ export default function ForgePage() {
       {/* Tabs */}
       <Tabs
         value={activeTab}
-        onValueChange={(v) => {
-          setActiveTab(v);
-          setSearchParams(v === 'tools' ? {} : { tab: v }, { replace: true });
-        }}
+        onValueChange={goToTab}
         className="flex-1 flex flex-col"
       >
         <TabsList className="grid w-full grid-cols-6 mb-4">
@@ -155,12 +159,15 @@ export default function ForgePage() {
               {skills.length}
             </span>
           </TabsTrigger>
-          {/* ADR-0405 skill generation: describe → watch the phases → read,
-              refine, keep or delete. It lived on the standalone /app/skills page
-              and would have been orphaned when that page was folded in here on
-              2026-09-20 — /app/skill-forge-generator is a DIFFERENT surface
-              (POST /v1/skill-forge/generate, a one-shot template/LLM form), not
-              a replacement for this lifecycle. */}
+          {/* The ONE place a skill is created (2026-09-20). Two composers:
+              ADR-0405 orchestration (describe → watch the phases → read,
+              refine, keep or delete) and the template form rehomed from
+              /app/skill-forge-generator, whose own backend
+              (POST /v1/skill-forge/generate) was an unmounted Flask blueprint
+              answering 404 — the page could never create anything. Its fields
+              now write through POST /skills/manual, the same registry this
+              panel's library reads. The Skills tab's create dialog was the
+              third half-duplicate and now links here. */}
           <TabsTrigger value="creator">Creator</TabsTrigger>
           <TabsTrigger value="os-skills">
             OS-Skills
@@ -187,6 +194,7 @@ export default function ForgePage() {
             setSkills={setSkills}
             searchQuery={searchQuery}
             filterStatus={filterStatus}
+            onCreateSkill={() => goToTab('creator')}
           />
         </TabsContent>
 

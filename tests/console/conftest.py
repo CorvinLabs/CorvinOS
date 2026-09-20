@@ -48,7 +48,6 @@ ALL_PANELS = CRITICAL_PANELS + SECONDARY_PANELS + [
     {"route": "files", "name": "Files", "priority": "P3", "type": "upload"},
     {"route": "memory", "name": "Memory", "priority": "P3", "type": "editor"},
     {"route": "compute", "name": "Compute", "priority": "P3", "type": "metrics"},
-    {"route": "skill-forge-generator", "name": "Skill Forge Generator", "priority": "P3", "type": "wizard"},
     {"route": "ldd", "name": "LDD / Quality", "priority": "P3", "type": "metrics"},
     {"route": "rag", "name": "RAG", "priority": "P3", "type": "list"},
     {"route": "rag-hub", "name": "RAG Hub", "priority": "P3", "type": "list"},
