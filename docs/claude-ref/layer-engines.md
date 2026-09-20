@@ -2696,6 +2696,58 @@ real chained turns — every one of them classified SIMPLE. Printing "5 turns"
 under MEDIUM unqualified would attribute another tier's work to it, which is the
 invented number this whole pass exists to refuse.
 
+#### 2026-09-20 — why every turn landed in SIMPLE: the tier was unreachable
+
+The panel above is honest and the placeholder is true, but the sentence "all
+classified turns landed in SIMPLE" was read at the time as a property of the
+traffic. It was not. **MEDIUM and COMPLEX were arithmetically unreachable**, and
+the empty tiers were a classifier defect wearing an empty-state.
+
+`_classify_complexity` (`core/skills/os_skills/model_selector.py`) documented the
+ADR-0642 rule — `SIMPLE: tokens < 500`, `COMPLEX: tokens > 3000` — and then
+applied a different one. It consulted `_compute_feature_complexity`, a weighted
+average normalised against **hardcoded** 5000 tokens / 20 blocks / 50
+dependencies, against a 0.5 threshold. `ModelSelectorConfig.simple_max_tokens`
+and `medium_max_tokens` were never read by the classification at all; they
+survived only inside `_build_reasoning`'s free text. Because tokens contribute
+50 % of that average and divide by 5000, a prompt needed **≥ 2500 tokens
+(~10 000 characters, in one prompt)** merely to leave the first branch, and
+COMPLEX additionally required > 5 code blocks or > 10 dependencies. Measured on
+the reference install: 765 real classifications over 8 days, **765 SIMPLE**,
+peak prompt 2101 tokens, `code_blocks == 0` in every single record.
+
+Compounding it, commit 46c3b3a7 (2026-09-16, ADR-0845 k=2) changed the return
+value from `"simple"` to `"SIMPLE"` and adjusted **none** of the four consumers.
+Every one is a dict lookup or a string `==`, so nothing raised and nothing
+logged. Over the four days it was live:
+
+| Consumer | Silent effect |
+|---|---|
+| `engine_api._real_stats` | tally froze at 512 while the chain held 765 |
+| `model_selector_shadow` | `_PENDING` never populated → `report_turn_outcome()` a no-op → the confidence store stopped accruing samples entirely (last write 2026-09-17T23:25) |
+| `ModelSelector.classify` override lookup | the operator's saved per-tier model silently stopped applying; the console kept displaying it |
+| `ModelSelector.get_stats` | counted zero of everything |
+
+25 tests across three files were red the whole time; none had been run.
+
+**Fixed 2026-09-20.** `_classify_complexity` now reads the configured
+thresholds; the learned ADR-0377 threshold scales the token bounds around its
+0.5 neutral point, so with no optimizer (every production path today) the
+documented rule holds verbatim. The vocabulary is canonical lowercase with ONE
+normaliser per side — `model_selector.normalize_complexity()` and
+`model_selection_config.task_type_for_complexity()` — replacing five private
+copies of the same mapping. Both accept either spelling, and that is a
+requirement, not leniency: **the audit chain is append-only and must never be
+rewritten**, so it permanently holds 512 lowercase and 253 uppercase records; a
+strict reader cannot count a quarter of its own history. After the fix the same
+chain reads 765, not 512.
+
+**Must NOT do:** re-derive the complexity vocabulary in a consumer instead of
+calling the shared normaliser · change what `_classify_complexity` returns
+without running `tests/skills/test_complexity_vocabulary_contract.py` · make
+either normaliser case-sensitive · describe an empty tier as a property of the
+traffic before confirming the tier is reachable at all.
+
 **Open, not fixed: the optimizer credits the tier's CONFIGURED model, not the one
 that ran.** `optimizer.get_stats(task_type, model_id, tenant_id)` is keyed by
 (tier, model), so SIMPLE reports 5 learned outcomes for

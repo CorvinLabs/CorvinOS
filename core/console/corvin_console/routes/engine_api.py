@@ -268,15 +268,18 @@ def _real_stats(tenant_id: str) -> tuple[dict[str, dict[str, Any]], int, str | N
         since_ts = usage_epoch.epoch_ts(tenant_id)
     except Exception:  # noqa: BLE001
         since_ts = 0.0
-    from core.models.model_selection_config import COMPLEXITY_BY_TASK_TYPE  # noqa: PLC0415
-    complexity_to_task = {v: k for k, v in COMPLEXITY_BY_TASK_TYPE.items()}
+    # THE shared, case-insensitive translation (never a local {v: k} dict —
+    # the private copy here is what silently dropped every record after the
+    # classifier's casing changed on 2026-09-16: the tally froze at 512 while
+    # the chain held 765, and nothing logged a thing).
+    from core.models.model_selection_config import task_type_for_complexity  # noqa: PLC0415
     sums: dict[str, float] = {t: 0.0 for t in TASK_TYPES}
     counts: dict[str, int] = {t: 0 for t in TASK_TYPES}
     last_ts: float | None = None
 
     for rec in _iter_classified(tenant_id, since_ts=since_ts):
         details = rec.get("details") or {}
-        task_type = complexity_to_task.get(details.get("complexity"))
+        task_type = task_type_for_complexity(details.get("complexity"))
         if task_type is None:
             continue
         confidence = details.get("confidence")

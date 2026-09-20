@@ -47,7 +47,6 @@ _log = logging.getLogger(__name__)
 #: beyond the size cap below.
 _PENDING: dict[str, dict] = {}
 _PENDING_CAP = 2000
-_TASK_TYPE_BY_COMPLEXITY = {"simple": "SIMPLE", "medium": "MEDIUM", "complex": "COMPLEX"}
 
 
 def shadow_classify_task(task_input: str, tenant_id: str, chat_key: str | None = None) -> None:
@@ -104,7 +103,22 @@ def shadow_classify_task(task_input: str, tenant_id: str, chat_key: str | None =
             },
         )
         if chat_key:
-            task_type = _TASK_TYPE_BY_COMPLEXITY.get(result.complexity)
+            # THE shared, case-insensitive translation. This lookup used to be
+            # a private lowercase-keyed dict, so when the classifier started
+            # answering "SIMPLE" it returned None on every single turn, no
+            # entry was ever stashed, and report_turn_outcome() below became a
+            # silent no-op — the confidence store stopped accruing samples
+            # entirely from 2026-09-17 onwards while everything still looked
+            # healthy. Import is best-effort so a bridge-only deployment
+            # without core.models degrades to "no outcome reporting" exactly
+            # as it did before, rather than raising into a live turn.
+            try:
+                from core.models.model_selection_config import (  # noqa: PLC0415
+                    task_type_for_complexity,
+                )
+                task_type = task_type_for_complexity(result.complexity)
+            except Exception:  # noqa: BLE001
+                task_type = None
             if task_type is not None:
                 if len(_PENDING) >= _PENDING_CAP:
                     _PENDING.pop(next(iter(_PENDING)), None)  # evict oldest-ish, cheap
