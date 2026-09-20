@@ -42,6 +42,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 
+# Phase 3: Import ComplexityJudge for 3-signal voting
+try:
+    from .complexity_judge import ComplexityJudge, ComplexityVerdictWithConfidence
+except ImportError:
+    # Fallback if not available
+    ComplexityJudge = None
+    ComplexityVerdictWithConfidence = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -127,6 +135,9 @@ class IntelligentRouter:
         """
         self.overrides = overrides or {}
         self.decision_history: list[RoutingDecision] = []
+        # Phase 3 monitoring: track judge override metrics
+        self.judge_overrides_count = 0
+        self.judge_confidence_scores: list[float] = []
 
     def route_task(
         self,
@@ -271,6 +282,170 @@ class IntelligentRouter:
         )
 
         return decision
+
+    def route_with_judge(
+        self,
+        task_input: str,
+        *,
+        complexity: Optional[str] = None,
+        token_count: Optional[int] = None,
+        engine_mode: str = "native",
+        latency_critical: bool = False,
+        cost_limit_usd: float = 5.0,
+        tenant_id: str = "_default",
+        judge_weight: float = 0.20,
+    ) -> RoutingDecision:
+        """Phase 3: Route task using 3-signal voting with ComplexityJudge.
+
+        Extends route_task with a third signal:
+        - Signal 1 (60% weight): Token-based tier classification (existing)
+        - Signal 2 (20% weight): Keyword heuristics (existing)
+        - Signal 3 (20% weight): ComplexityJudge LLM-based assessment (NEW)
+
+        Weighted voting: 0.6*signal1_score + 0.2*signal2_score + 0.2*judge_score
+
+        If judge confidence > 0.9 AND judge_tier != token_tier → override with judge's assessment
+
+        Args:
+            task_input: The task description/prompt
+            complexity: Pre-computed complexity (optional)
+            token_count: Token count (optional)
+            engine_mode: Execution engine ("native", "acs", "tde")
+            latency_critical: If True, must meet <100ms p99
+            cost_limit_usd: Max cost budget
+            tenant_id: Tenant scope (GDPR)
+            judge_weight: Weight of ComplexityJudge signal in voting (0.0-1.0, default 0.20)
+
+        Returns:
+            RoutingDecision with model, engine, confidence, reasoning
+        """
+        # Fall back to standard routing if ComplexityJudge not available
+        if ComplexityJudge is None:
+            logger.warning("ComplexityJudge not available; falling back to standard routing")
+            return self.route_task(
+                task_input,
+                complexity=complexity,
+                token_count=token_count,
+                engine_mode=engine_mode,
+                latency_critical=latency_critical,
+                cost_limit_usd=cost_limit_usd,
+                tenant_id=tenant_id,
+            )
+
+        start_time = time.time()
+
+        # Step 1: Get standard routing decision (signals 1 & 2: token + keyword)
+        standard_decision = self.route_task(
+            task_input,
+            complexity=complexity,
+            token_count=token_count,
+            engine_mode=engine_mode,
+            latency_critical=latency_critical,
+            cost_limit_usd=cost_limit_usd,
+            tenant_id=tenant_id,
+        )
+        standard_tier = ModelTier[standard_decision.tier.upper()]
+
+        # Step 2: Get ComplexityJudge assessment (signal 3)
+        try:
+            judge = ComplexityJudge()
+            judge_verdict = judge.judge(task_input)
+            judge_tier_str = judge_verdict.level
+            judge_confidence = judge_verdict.confidence
+            judge_score = judge_verdict.score
+            # Phase 3 monitoring: track judge confidence distribution
+            self.judge_confidence_scores.append(judge_confidence)
+        except Exception as e:
+            logger.warning(f"ComplexityJudge failed: {e}; using standard decision")
+            return standard_decision
+
+        # Step 3: Apply voting logic
+        # If judge confidence is high (>0.75) AND disagrees with token-based tier → override
+        # Phase 3 tuning (2026-09-20): Lowered from 0.9 to 0.75 to catch "kurz aber komplex"
+        # cases where 2/3 signals agree (e.g., ATP question: Q1=35, Q2=40, Q3=20 → conf=0.75)
+        if judge_confidence > 0.75 and judge_tier_str != standard_tier.value:
+            logger.info(
+                f"Judge override: token_tier={standard_tier.value}, "
+                f"judge_tier={judge_tier_str}, confidence={judge_confidence:.2f}"
+            )
+            # Override the tier
+            judge_tier = ModelTier[judge_tier_str.upper()]
+            model = self._select_model(judge_tier, tenant_id)
+            engine = self._select_engine(
+                model, engine_mode, latency_critical, judge_tier
+            )
+
+            # Rebuild decision with judge's assessment
+            cost_estimate = self._estimate_cost(task_input, model)
+            latency_ms = self.LATENCY_BY_MODEL_ENGINE.get(
+                (model, engine.value), 5000
+            )
+            reasoning = (
+                f"Phase 3 Judge Override: Complexity judge detected {judge_tier_str} "
+                f"(confidence {judge_confidence:.2f}) despite token-based estimate "
+                f"of {standard_tier.value}. Judge signals: "
+                f"Q1={judge_verdict.signal_q1:.0f}/100 (domain), "
+                f"Q2={judge_verdict.signal_q2:.0f}/100 (reasoning), "
+                f"Q3={judge_verdict.signal_q3:.0f}/100 (novelty). "
+                f"Route: {model} ({engine.value})"
+            )
+
+            decision = RoutingDecision(
+                model=model,
+                engine=engine.value,
+                tier=judge_tier.value,
+                confidence=judge_confidence,  # Use judge's confidence
+                reasoning=reasoning,
+                signal_strength="strong",  # Override detected by judge
+                cost_estimate=cost_estimate,
+                latency_estimate_ms=latency_ms,
+                timestamp_utc=self._now_iso8601(),
+            )
+
+            # Log the override
+            # Phase 3 monitoring: count judge overrides
+            self.judge_overrides_count += 1
+            self._audit_decision(decision, tenant_id)
+            self.decision_history.append(decision)
+            if len(self.decision_history) > self.MAX_HISTORY_SIZE:
+                self.decision_history = self.decision_history[-self.MAX_HISTORY_SIZE:]
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"Judge-based routing (OVERRIDE): {judge_tier.value} → {model} "
+                f"({engine.value}) | judge_confidence={judge_confidence:.2f} | "
+                f"routing_time={elapsed_ms}ms [override #{self.judge_overrides_count}]"
+            )
+            return decision
+        else:
+            # No override: use standard decision and augment reasoning with judge signals
+            augmented_reasoning = (
+                f"{standard_decision.reasoning}\n"
+                f"[Judge: {judge_tier_str} @ {judge_confidence:.2f} confidence; "
+                f"Q1={judge_verdict.signal_q1:.0f}, Q2={judge_verdict.signal_q2:.0f}, "
+                f"Q3={judge_verdict.signal_q3:.0f}]"
+            )
+
+            decision = RoutingDecision(
+                model=standard_decision.model,
+                engine=standard_decision.engine,
+                tier=standard_decision.tier,
+                confidence=standard_decision.confidence,  # Keep original confidence
+                reasoning=augmented_reasoning,
+                signal_strength=standard_decision.signal_strength,
+                cost_estimate=standard_decision.cost_estimate,
+                latency_estimate_ms=standard_decision.latency_estimate_ms,
+                timestamp_utc=standard_decision.timestamp_utc,
+            )
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"Judge-supplemented routing: {standard_decision.tier} → "
+                f"{standard_decision.model} ({standard_decision.engine}) | "
+                f"judge_confidence={judge_confidence:.2f} (no override) | "
+                f"routing_time={elapsed_ms}ms"
+            )
+            return decision
 
     def _classify_tier(
         self,
@@ -608,6 +783,17 @@ class IntelligentRouter:
         models = [d.model for d in self.decision_history]
         engines = [d.engine for d in self.decision_history]
 
+        # Phase 3 monitoring: compute judge confidence statistics
+        judge_stats = {}
+        if self.judge_confidence_scores:
+            judge_stats = {
+                "judge_overrides_count": self.judge_overrides_count,
+                "judge_verdicts_count": len(self.judge_confidence_scores),
+                "avg_judge_confidence": sum(self.judge_confidence_scores) / len(self.judge_confidence_scores),
+                "min_judge_confidence": min(self.judge_confidence_scores),
+                "max_judge_confidence": max(self.judge_confidence_scores),
+            }
+
         return {
             "total_decisions": len(self.decision_history),
             "tier_distribution": {
@@ -628,4 +814,5 @@ class IntelligentRouter:
             "avg_confidence": sum(d.confidence for d in self.decision_history) / len(self.decision_history),
             "avg_cost_usd": sum(d.cost_estimate for d in self.decision_history) / len(self.decision_history),
             "avg_latency_ms": sum(d.latency_estimate_ms for d in self.decision_history) / len(self.decision_history),
+            **judge_stats,  # Append Phase 3 judge metrics
         }
