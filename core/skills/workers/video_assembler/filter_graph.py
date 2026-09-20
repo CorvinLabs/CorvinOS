@@ -7,8 +7,12 @@ from typing import Optional, Any
 import json
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from os_skills.video_producer.types import Storyboard
+# Imported by the package's REAL path. A sys.path.insert of <repo>/core/skills
+# plus `from os_skills...` loads video_producer/types.py a SECOND time under a
+# second module name, so the dataclasses here and the ones the rest of the
+# codebase holds are different classes and isinstance() is False across the
+# seam (2026-09-20 review).
+from core.skills.os_skills.video_producer.types import Storyboard
 
 
 class FilterGraph:

@@ -93,7 +93,7 @@ class TestComputeQuotaEnforcement:
         """Test 6: Quota counter resets at UTC midnight."""
         # TODO: Requires time mocking or real UTC observation
         # Verify quota_enforcer.py line 127 uses UTC, not local time
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestForgeCapabilityEnforcement:
@@ -130,7 +130,7 @@ class TestForgeCapabilityEnforcement:
         # TODO: Parse AST or grep for chokepoint calls
         # grep -n "require_capability.*forge.create" operator/forge/forge/registry.py
         # Should find: registry.py:123, skill_forge/registry.py:456, etc.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestA2ANetworkGating:
@@ -164,7 +164,7 @@ class TestA2ANetworkGating:
         """Test 12: A2A Member Credential (MC) has 7-day TTL."""
         # TODO: Issue MC, verify exp timestamp
         # exp should be issued_time + 7 days
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAuditTrailIntegrity:
@@ -187,12 +187,12 @@ class TestAuditTrailIntegrity:
     def test_14_audit_chain_hash_integrity(self):
         """Test 14: Audit chain is properly hash-linked."""
         # TODO: Run verify_audit_chain.py and assert exit code 0
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_15_audit_fail_closed_no_silent_failures(self):
         """Test 15: Audit failure causes capability denial (fail-closed)."""
         # TODO: Mock audit backend to fail, verify require_capability returns free allowance
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestFailClosedContract:
@@ -203,18 +203,18 @@ class TestFailClosedContract:
     def test_16_enforcement_error_resolves_to_free_allowance(self):
         """Test 16: Enforcement error falls back to free allowance."""
         # TODO: Mock capability lookup to fail, verify require_capability returns free tier
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_17_missing_capability_file_denies_class_l(self):
         """Test 17: Missing licence.key denies class L capabilities."""
         # TODO: Remove ~/.corvin/global/license.key, try compute.run
         # expect: denied or falls back to free allowance
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_18_crl_unavailable_denies_class_n(self):
         """Test 18: Unavailable CRL denies class N (new A2A peers)."""
         # TODO: Mock CRL fetch to fail, verify A2A deny for new peers (but existing pairs work)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestCapabilityMatrix:
@@ -253,7 +253,7 @@ class TestCapabilityMatrix:
     def test_21_capabilities_match_limits_py(self):
         """Test 21: Capability matrix matches operator/license/limits.py."""
         # TODO: Load CAPABILITIES from limits.py, compare to response
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestQuotaCounting:
@@ -263,23 +263,23 @@ class TestQuotaCounting:
         """Test 22: Quota is counted per installation, per UTC day."""
         # TODO: Get instance_id from ~/.corvin/global/instance_id
         # Call compute.run 5 times, verify counter persisted
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_23_quota_counter_persisted_across_restarts(self):
         """Test 23: Quota counter survives process restart."""
         # TODO: Call compute.run, get counter value
         # Restart console, verify counter is preserved
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_24_quota_boundary_exactly_10_for_free(self):
         """Test 24: Free tier quota boundary is exactly 10."""
         # TODO: Call compute.run 10 times (should succeed), 11th should fail
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_25_quota_reset_at_midnight_utc(self):
         """Test 25: Quota resets at UTC midnight, not local midnight."""
         # TODO: Mock system time, verify reset happens at correct moment
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestEdgeCases:

@@ -14,12 +14,12 @@ export function Phase6Export({ projectId }: { projectId: string }) {
         `/v1/console/datahub/projects/${projectId}/export?format=jsonl`
       );
       if (!response.ok) throw new Error("Export failed");
-      const data = await response.json();
+      const _data = await response.json();
       
       // In production, this would download the file
       setExported(true);
       setTimeout(() => setExporting(false), 500);
-    } catch (err) {
+    } catch (_err) {
       setExporting(false);
     }
   }

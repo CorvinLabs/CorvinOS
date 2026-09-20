@@ -64,12 +64,18 @@ class CompositionRoutingDecision:
     reasoning: str
     cost_estimate_usd: float
     quality_estimate: float  # 0.0-1.0
+    #: The tenant the routing was computed FOR. The decision is derived from a
+    #: tenant-scoped learning store and its `to_dict()` is declared audit-safe,
+    #: but the scope was dropped on the way out — an audit record built from it
+    #: carried no attribution (CLAUDE.md: every event carries tenant_id).
+    tenant_id: str = "_default"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to audit-safe dict (no PII)."""
         return {
             "skill_name": self.skill_name,
             "task_type": self.task_type,
+            "tenant_id": self.tenant_id,
             "recommended_model": self.recommended_model,
             "decomposition_hint": self.decomposition_hint,
             "confidence": self.confidence,
@@ -158,6 +164,7 @@ class VideoProducerModelSelectorComposition:
             reasoning=classification.reasoning,
             cost_estimate_usd=cost_estimate,
             quality_estimate=quality_estimate,
+            tenant_id=tenant_id,
         )
 
         logger.debug(

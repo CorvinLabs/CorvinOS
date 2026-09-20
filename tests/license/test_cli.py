@@ -81,9 +81,16 @@ class TestBindCommand:
     """bind --offline-request"""
 
     def test_bind_offline_request_flag_required(self):
-        """bind without --offline-request fails."""
-        ret = main(["bind"])
-        assert ret == 1
+        """bind without --offline-request fails.
+
+        argparse enforces the required flag and exits with status 2 — it does
+        not return to main(). This asserted `ret == 1` and could only ever
+        raise SystemExit; the file never ran, because
+        corvin_operator/license/cli.py imported a name that does not exist.
+        """
+        with pytest.raises(SystemExit) as exc:
+            main(["bind"])
+        assert exc.value.code == 2
 
     def test_bind_offline_request_success(self, capsys):
         """bind --offline-request returns success."""
@@ -172,9 +179,10 @@ class TestArgparse:
         assert "corvin-license" in captured.out.lower() or "usage" in captured.out.lower()
 
     def test_unknown_command_fails(self):
-        """Unknown subcommand fails."""
-        ret = main(["unknown-cmd"])
-        assert ret != 0
+        """Unknown subcommand fails — argparse exits 2, it does not return."""
+        with pytest.raises(SystemExit) as exc:
+            main(["unknown-cmd"])
+        assert exc.value.code == 2
 
     def test_log_level_argument(self, capsys):
         """--log-level sets logging level."""

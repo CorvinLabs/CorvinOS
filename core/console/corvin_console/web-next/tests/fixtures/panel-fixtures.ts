@@ -94,9 +94,9 @@ export class PanelNavigator {
   /**
    * Record performance metrics (load time, render time).
    */
-  async recordMetrics(panelSlug: string) {
+  async recordMetrics(_panelSlug: string) {
     const metrics = await this.page.evaluate(() => {
-      const perfData = (window as any).__PANEL_PERF || {};
+      const perfData = (window as unknown as { __PANEL_PERF?: Record<string, unknown> }).__PANEL_PERF || {};
       return {
         navigationStart: perfData.navigationStart || Date.now(),
         contentfulPaint: perfData.contentfulPaint || null,

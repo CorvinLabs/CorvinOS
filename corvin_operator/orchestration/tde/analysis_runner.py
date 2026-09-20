@@ -23,14 +23,25 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+# Relative FIRST, bare name only as the fallback.
+#
+# There are two modules called initial_analysis: this package's sibling
+# (corvin_operator/orchestration/initial_analysis.py, which defines the three
+# names below) and corvin_operator/initial_analysis.py, a 50-line dataclass-only
+# file. With <repo>/corvin_operator on sys.path — which several TDE test modules
+# put there — the bare `from initial_analysis import ...` resolved to the
+# dataclass-only one and raised "cannot import name
+# 'make_task_analysis_prompt'"; the except-branch then raised "attempted
+# relative import beyond top-level package" and the whole TDE suite was a
+# collection error. The relative import is unambiguous, so it goes first.
 try:
-    from initial_analysis import (
+    from ..initial_analysis import (  # type: ignore
         InitialAnalysisRequest,
         make_task_analysis_prompt,
         parse_task_analysis_response,
     )
-except ImportError:  # pragma: no cover
-    from ..initial_analysis import (  # type: ignore
+except ImportError:  # pragma: no cover - flat sys.path layouts
+    from initial_analysis import (
         InitialAnalysisRequest,
         make_task_analysis_prompt,
         parse_task_analysis_response,

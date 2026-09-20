@@ -111,8 +111,11 @@ export function useLiveMaturityData(options: UseMaturityDataOptions = {}) {
         clearInterval(refreshInterval.current);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [window, refreshIntervalMs]);
+    // `window` was listed as a dependency: it is a global, never a reactive
+    // value, so it can neither change nor re-trigger this effect — it was
+    // there to pad the array. The disable comment named a rule this file's
+    // config does not load, which made the comment itself the lint error.
+  }, [refreshIntervalMs]);
 
   return {
     loopScores,

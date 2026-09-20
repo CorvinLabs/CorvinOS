@@ -12,6 +12,17 @@ Test categories:
 Total: 40+ tests, ≥90% coverage
 """
 
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# The learning-event type used on main is
+# core.learning.learning_events.LearningEvent; this file predates that.
+#
+# This was a COLLECTION ERROR in every full run, i.e. invisible rather than
+# pending. Delete this guard in the commit that reconciles the APIs.
+import pytest
+
+pytest.skip('core.skills.skill_learning_loop has no SkillExecutionEvent (the module ships only SkillLearningLoop)', allow_module_level=True)
+
+
 import pytest
 import asyncio
 from datetime import datetime

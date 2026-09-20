@@ -14,19 +14,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Loader2, TrendingUp, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import {
   LineChart,
   Line,
-  BarChart,
-  Bar,
+  
+  
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
-  ResponsiveContainer,
-} from "recharts";
+  ResponsiveContainer } from "recharts";
 
 interface Metrics {
   avg_confidence: number;
@@ -43,8 +42,7 @@ interface Phase3MetricsDashboardProps {
 export function Phase3MetricsDashboard({
   projectId,
   metrics,
-  isConverged,
-}: Phase3MetricsDashboardProps) {
+  isConverged }: Phase3MetricsDashboardProps) {
   const [loading, setLoading] = useState(!metrics);
   const [refreshing, setRefreshing] = useState(false);
   const [displayMetrics, setDisplayMetrics] = useState<Metrics | undefined>(metrics);
@@ -55,6 +53,11 @@ export function Phase3MetricsDashboard({
     if (!displayMetrics) {
       refreshMetrics();
     }
+    // refreshMetrics is a hoisted function declaration in this component body:
+    // it reads state through the current render's closure, and adding it to the
+    // deps would re-run the effect on every render. The fetch must fire only
+    // when the project changes or the metrics are still missing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, displayMetrics]);
 
   async function refreshMetrics() {
@@ -72,8 +75,7 @@ export function Phase3MetricsDashboard({
       if (!history.length) {
         const mockHistory = Array.from({ length: 10 }, (_, i) => ({
           timestamp: `Run ${i + 1}`,
-          confidence: 0.4 + (i * 0.05) + Math.random() * 0.03,
-        }));
+          confidence: 0.4 + (i * 0.05) + Math.random() * 0.03 }));
         setHistory(mockHistory);
       }
     } catch (err) {
@@ -200,8 +202,7 @@ export function Phase3MetricsDashboard({
                   contentStyle={{
                     backgroundColor: "#1a1a1a",
                     border: "1px solid #444",
-                    borderRadius: "4px",
-                  }}
+                    borderRadius: "4px" }}
                 />
                 <Legend />
                 <Line
@@ -280,32 +281,28 @@ function getRecommendations(
     recommendations.push({
       title: "Collect More Feedback",
       description: "Low confidence indicates insufficient feedback data. Run more skills and provide detailed feedback.",
-      priority: "high",
-    });
+      priority: "high" });
   }
 
   if (metrics.convergence_status === "stalled") {
     recommendations.push({
       title: "Adjust Optimizer Settings",
       description: "Learning isn't progressing. Try adjusting convergence thresholds in Phase 4.",
-      priority: "high",
-    });
+      priority: "high" });
   }
 
   if (metrics.skills_improved < 2 && metrics.avg_confidence > 0.6) {
     recommendations.push({
       title: "Explore Edge Cases",
       description: "Good average confidence but few improved skills. Test edge cases to improve specific skills.",
-      priority: "medium",
-    });
+      priority: "medium" });
   }
 
   if (metrics.convergence_status === "complete") {
     recommendations.push({
       title: "Export Results",
       description: "Learning is complete. Move to Phase 6 to export your final metrics and archive the project.",
-      priority: "medium",
-    });
+      priority: "medium" });
   }
 
   return recommendations;

@@ -219,7 +219,7 @@ class TestCRLEvasionAttempts:
         # This test requires a mock CRL + mock credential to prove the gate works.
         # For adversarial proof, we confirm the pattern is in place:
         # capability_api.py has is_revoked() check (line 34, imported from crl.py).
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_stale_crl_more_than_7_days_blocks_new_a2a_peer(self):
         """Stale CRL (>7 days old): A2A to NEW peer → blocked (revocation unknown).
@@ -232,7 +232,7 @@ class TestCRLEvasionAttempts:
         """
         # This test requires CRL timestamp + peer tracking.
         # For proof, we verify: capability_api calls load_crl_state (line 27).
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_offline_credential_ttl_enforced(self):
         """Offline credential expires: after TTL, requires online refresh.
@@ -242,7 +242,7 @@ class TestCRLEvasionAttempts:
         """
         # Implementation: ADR-0700 §3 (Offline section).
         # For test, we verify limits.py reflects this (consumers capped, long TTL on business).
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAuditTrailTampering:
@@ -259,7 +259,7 @@ class TestAuditTrailTampering:
         #     self._write_audit_event(...)
         # except Exception as e:
         #     raise RuntimeError(f"Audit chain write failed for quota check: {e}")
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_capability_decision_audit_event_always_emitted(self):
         """Every require_capability call emits audit event (even if decision is ALLOW).
@@ -297,7 +297,7 @@ class TestOfflineCredentialAbuse:
         # Implementation: ADR-0700 §3 (Offline section, Bind subsection).
         # Enforcement: Corvin-Features (not this codebase) controls issuance.
         # This test documents the contract: TTL ≤ 90 days, no extension.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_offline_credential_with_tampered_device_fp_rejected(self):
         """Offline credential with wrong device_fp: rejected on next bind.
@@ -307,7 +307,7 @@ class TestOfflineCredentialAbuse:
         """
         # Implementation: ADR-0700 §3 (Bind subsection).
         # device_fp is included in offline credential; bind checks it locally.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_offline_credential_revert_triggers_clone_detection(self):
         """Revert attack: offline credential from DEVICE A, then from DEVICE B, then A again.
@@ -317,7 +317,7 @@ class TestOfflineCredentialAbuse:
         """
         # Implementation: ADR-0704 §4.3 (clone handling).
         # Counter: never reset, only by reinstate (manual operator decision).
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestInvalidInputHandling:
@@ -374,7 +374,7 @@ class TestInvalidInputHandling:
         """
         # entry_point is advisory (for debugging); real identity comes from call stack.
         # Audit will show the claimed entry_point (for operator review) + stack traces.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestEnforcementAvailabilityFallback:
@@ -407,7 +407,7 @@ class TestQuotaCounterDataIntegrity:
         """
         # Implementation: quota_counter.py must validate file format.
         # On corruption: treat as "quota exceeded" (deny).
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_quota_counter_file_permissions_enforced(self):
         """Quota counter file is 0o600 (owner read/write only).
@@ -416,7 +416,7 @@ class TestQuotaCounterDataIntegrity:
         Defense: on read, file mode is checked; wrong mode → fail-closed.
         """
         # Implementation: quota_counter.py should stat() and check mode.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 @pytest.mark.high_risk
@@ -431,7 +431,7 @@ class TestLicenseKeyTamper:
         """
         # Implementation: licence_token() reads from global/license.key.
         # On parse failure: falls back to free tier.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_expired_licence_jwt_falls_back_to_free(self):
         """Licence JWT is expired (iat + exp < now).
@@ -441,7 +441,7 @@ class TestLicenseKeyTamper:
         """
         # Implementation: active_tier() checks JWT exp field.
         # On expiry: return "free".
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 if __name__ == "__main__":

@@ -31,8 +31,15 @@ class DoD_FeedbackEvent:
 
     @property
     def delta(self) -> float:
-        """Operator's correction (positive = skill was too harsh)."""
-        return self.dod_score_operator - self.dod_score_automatic
+        """Operator's correction (positive = skill was too harsh).
+
+        Rounded: both scores are two-decimal ratings, so the raw subtraction
+        leaks binary-float noise (0.85 - 0.65 == 0.19999999999999996). The
+        value is surfaced to the operator through ``to_dict()`` and the
+        feedback API, and it is compared against thresholds downstream, so it
+        is rounded at the source rather than at each reader.
+        """
+        return round(self.dod_score_operator - self.dod_score_automatic, 10)
 
     def to_dict(self) -> dict:
         """Convert to dict."""

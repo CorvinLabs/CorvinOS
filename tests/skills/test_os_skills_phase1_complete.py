@@ -443,6 +443,7 @@ class TestDoDVerifier:
         # This test suite itself IS the evidence
         # pytest will report: X passed, Y failed
         pass  # If we got here, tests are running
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_dod_check_4_docs_sync(self):
         """DoD Check 4: Documentation exists and reflects behavior."""

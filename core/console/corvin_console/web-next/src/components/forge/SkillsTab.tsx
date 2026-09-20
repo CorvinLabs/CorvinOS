@@ -18,7 +18,7 @@ export default function SkillsTab({
   searchQuery,
   filterStatus,
 }: SkillsTabProps) {
-  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
+  const [_selectedSkill, setSelectedSkill] = useState<string | null>(null);
 
   const filtered = React.useMemo(() => {
     return skills.filter((skill) => {
@@ -36,7 +36,7 @@ export default function SkillsTab({
     });
   }, [skills, searchQuery, filterStatus]);
 
-  const handleRollback = async (skillId: string, version: string) => {
+  const _handleRollback = async (skillId: string, version: string) => {
     try {
       const res = await fetch(`/v1/console/forge/skills/${skillId}/rollback?version=${version}`, {
         method: 'POST',

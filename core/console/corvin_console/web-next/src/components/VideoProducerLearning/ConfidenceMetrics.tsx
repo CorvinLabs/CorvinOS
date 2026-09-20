@@ -51,7 +51,7 @@ export const ConfidenceMetrics: React.FC = () => {
     return 'bg-red-100 text-red-800';
   };
 
-  const getConvergenceIcon = (converged: boolean): string => {
+  const _getConvergenceIcon = (converged: boolean): string => {
     return converged ? '✓' : '○';
   };
 

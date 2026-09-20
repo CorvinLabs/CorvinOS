@@ -6,7 +6,13 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 import logging
 
-from .session_lifecycle_manager import SessionLifecycleManager, SplitTrigger
+# session_lifecycle_manager lives in core/vibe_engineering/, not in this
+# package — the relative import made this whole orchestrator (and every
+# test of it) a ModuleNotFoundError (2026-09-20 review).
+from core.vibe_engineering.session_lifecycle_manager import (
+    SessionLifecycleManager,
+    SplitTrigger,
+)
 from .checkpoint_manager import CheckpointManager, Checkpoint
 from .context_reducer import ContextReducer
 from .recovery_engine import RecoveryEngine

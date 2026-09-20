@@ -153,17 +153,17 @@ class TestCapabilityQuotaEnforcement:
         """Free tier has 10 compute runs/day quota."""
         # TODO: Requires compute.run entrypoint to be properly instrumented
         # This test verifies the quota counter is enforced
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_e2e_quota_compute_run_member_unlimited(self):
         """Member tier has unlimited compute runs."""
         # TODO: Wire to actual compute endpoint
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_e2e_quota_resets_at_utc_midnight(self):
         """Quota counter resets at UTC midnight (not local time)."""
         # TODO: Time-dependent test; mock or use system time
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestCapabilityAuditTrail:
@@ -180,13 +180,13 @@ class TestCapabilityAuditTrail:
         #    "decision": "allow|deny",
         #    "lom": "file:line"
         # }
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_e2e_audit_chain_integrity(self):
         """Audit events form a valid hash-chain (no gaps, no tampering)."""
         # TODO: Requires audit chain verifier
         # run: verify_audit_chain.py --tenant=_default --since=<start_time>
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestTierEnforcement:
@@ -212,12 +212,12 @@ class TestTierEnforcement:
     def test_member_tier_capabilities(self):
         """Member tier has all capabilities."""
         # TODO: Query CAPABILITIES matrix
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_tier_vocabulary_only_free_member(self):
         """Only 'free' and 'member' tiers exist (no 'universal', 'starter', etc.)."""
         # TODO: Query active_tier() and assert no legacy tier strings
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestIntegrationWithMarketplace:
@@ -227,13 +227,13 @@ class TestIntegrationWithMarketplace:
         """Free tier cannot install plugins (requires forge.create)."""
         # TODO: POST to marketplace install endpoint with free credential
         # Expect: 402 or 403 Forbidden
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_marketplace_install_member_tier_allowed(self):
         """Member tier can install plugins."""
         # TODO: POST to marketplace install endpoint with member credential
         # Expect: 200 OK
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 if __name__ == "__main__":

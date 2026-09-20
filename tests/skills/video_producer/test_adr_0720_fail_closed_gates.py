@@ -23,6 +23,17 @@ from core.skills.video_producer.workers.openai_tts_worker import OpenAITTSWorker
 from core.skills.video_producer.workers.screenshot_capturer import ScreenshotCapturerWorker, ScreenshotResult
 from core.skills.video_producer.workers.video_assembler import VideoAssemblerWorker, VideoResult
 
+# Defined BEFORE the classes: `@pytest.mark.skipif(not HAS_PIL, ...)` is
+# evaluated while the class body executes, i.e. at import time. This block sat
+# at the bottom of the file, so collection raised NameError and none of the
+# four ADR-0720 fail-closed gates was ever exercised (2026-09-20 review).
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:  # pragma: no cover - depends on the install
+    Image = None  # type: ignore[assignment]
+    HAS_PIL = False
+
 
 class TestGate1ContentPresenceGate:
     """Test GATE 1: Content-Presence Gate in maestro.py"""
@@ -122,7 +133,10 @@ class TestGate2AudioDurationGate:
             worker._validate_audio_duration(total_duration=0)
 
         assert "Audio-Duration Gate FAILED" in str(exc_info.value)
-        assert "duration is 0s" in str(exc_info.value)
+        # The gate reports the measured duration against the minimum; the
+        # literal "duration is 0s" is a message that no longer exists.
+        assert "0.00s" in str(exc_info.value)
+        assert "below minimum" in str(exc_info.value)
 
     def test_gate2_whistle_tone_simulation(self):
         """Gate 2: Simulate whistle tone audio (very short) — should reject"""
@@ -185,7 +199,13 @@ class TestGate3VisualContentSpecGate:
                    "Dominant color covers" in str(exc_info.value)
 
     def test_gate3_small_screenshot_file_rejected_fallback(self):
-        """Gate 3 (fallback without PIL): Very small screenshot file should be rejected"""
+        """Gate 3 (fallback without PIL): Very small screenshot file should be rejected.
+
+        The PIL-less branch has to be FORCED. With PIL installed the gate takes
+        the advanced-analysis path and rejects the file for a different reason
+        ("cannot identify image file"), which is still fail-closed but is not the
+        branch this test is named after — so the size check went unexercised.
+        """
         worker = ScreenshotCapturerWorker()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -194,11 +214,15 @@ class TestGate3VisualContentSpecGate:
             with open(tiny_path, "wb") as f:
                 f.write(b"PNG" + b"\x00" * 100)  # ~103 bytes
 
-            with pytest.raises(ValueError) as exc_info:
-                worker._validate_screenshot_content(screenshot_paths=[tiny_path])
+            with patch(
+                "core.skills.video_producer.workers.screenshot_capturer.HAS_PIL",
+                False,
+            ):
+                with pytest.raises(ValueError) as exc_info:
+                    worker._validate_screenshot_content(screenshot_paths=[tiny_path])
 
             assert "Visual-Content-Spec Gate FAILED" in str(exc_info.value)
-            assert "suspiciously small" in str(exc_info.value).lower() or "small" in str(exc_info.value).lower()
+            assert "suspiciously small" in str(exc_info.value).lower()
 
     @pytest.mark.skipif(not HAS_PIL, reason="PIL not available")
     def test_gate3_diverse_screenshot_passes(self):
@@ -471,13 +495,6 @@ class TestGateAuditTrail:
         assert validation_events[0]["details"]["status"] == "passed"
         assert validation_events[0]["details"]["num_scenes"] == 1
 
-
-# Helper to check if PIL is available
-try:
-    from PIL import Image
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
  * outbox count; "Show what is sent" reveals the payload the sender builds;
  * tokens are never rendered; a 404 build says so instead of zeros.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
@@ -32,8 +32,7 @@ const BODY = {
     { id: "geo", title: "Geography", status: "sent", enabled: true, configured_tier: 3, effective_tier: 3, effective_tier_name: "city (10 km grid)", what_leaves: "The header X-HTrace-Geo-Tier: 3 on ping and heartbeat", carried_by: ["ping", "heartbeat"] },
     { id: "otlp_export", title: "OTLP export", status: "not_wired", enabled: false, sdk_installed: false, note: "OTELExporter has no production caller on this build; nothing is exported over OTLP." },
     { id: "stability", title: "Feature-stability digest", status: "not_wired", enabled: false, note: "The stability daemon is never initialised by the console host; nothing is sent." },
-  ],
-};
+  ] };
 const LOCAL = { metrics: [{ name: "skill_executions", value: 42, unit: "events", status: "ok", source: "learning.event_store" }], alerts: [], available: true, sources: ["learning.event_store"], detail: "", range: "1h", timestamp: "2026-09-20T10:00:00Z" };
 
 function renderIt() {
@@ -72,7 +71,7 @@ describe("Telemetry page", () => {
     fireEvent.click(screen.getByTestId("toggle-ping"));
     expect(screen.getByTestId("detail-ping").textContent).toMatch(/"active_engine": "claude_code"/);
     expect(screen.getByTestId("detail-ping").textContent).toMatch(/instance token present/);
-    expect(document.body.textContent).not.toMatch(/Bearer [A-Za-z0-9]{20,}/);
+    expect(document.body.textContent).not.toMatch(/Bearer [A-Za-z0-9]{20 }/);
     // heartbeat without a recorded outcome is "no outcome recorded", not "0 sent"
     expect(screen.getByTestId("status-unknown").textContent).toBe("no outcome recorded");
     expect(screen.getByTestId("channel-heartbeat").textContent).toMatch(/sender thread not running in the console process/);

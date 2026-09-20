@@ -40,7 +40,7 @@ export interface QualityMetrics {
 export interface AuditEvent {
   event_type: string;
   timestamp: string;
-  details: Record<string, any>;
+  details: Record<string, unknown>;
   spec_version?: number;
 }
 

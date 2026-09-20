@@ -188,6 +188,12 @@ async def test_convergence_recovery():
         await als.record_observation(LossObservation(None, 0.1, "test", "test", 0.9))
     als.clear_signals()
     stalled2 = als.detect_convergence_stall()
-    assert stalled2 == True  # Still might be True due to window overlap
+    # The stall window is exactly the last 50 observations, and all 50 now carry
+    # loss=0.1 — below the mean_loss > 0.2 stall condition. Recovery therefore
+    # clears the signal, which is what "convergence recovery" means. This
+    # asserted True ("still might be True due to window overlap") and had never
+    # run: the module it imports raised TypeError at import time, so the whole
+    # file was a collection error rather than a test result (2026-09-20 review).
+    assert stalled2 is False
 
 # 60+ tests total (with parametrization)

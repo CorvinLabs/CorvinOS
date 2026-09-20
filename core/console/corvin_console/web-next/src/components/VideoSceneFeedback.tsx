@@ -10,8 +10,7 @@
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Check, X, Edit2 } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 interface SceneData {
@@ -39,8 +38,7 @@ interface FeedbackRequest {
 export function VideoSceneFeedback({
   jobId,
   scenes,
-  onFeedbackSubmitted,
-}: VideoSceneFeedbackProps) {
+  onFeedbackSubmitted }: VideoSceneFeedbackProps) {
   const queryClient = useQueryClient();
   const [selectedScene, setSelectedScene] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<FeedbackType | null>(null);
@@ -54,8 +52,7 @@ export function VideoSceneFeedback({
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(feedback),
-        }
+          body: JSON.stringify(feedback) }
       );
       if (!response.ok) throw new Error('Failed to submit feedback');
       return response.json();
@@ -65,15 +62,13 @@ export function VideoSceneFeedback({
       setShowRejectDialog(false);
       setRejectReason(null);
       onFeedbackSubmitted?.();
-    },
-  });
+    } });
 
   const handleApprove = async (sceneId: string) => {
     await feedbackMutation.mutateAsync({
       scene_id: sceneId,
       feedback_type: 'approved',
-      confidence: 0.95,
-    });
+      confidence: 0.95 });
   };
 
   const handleReject = async () => {
@@ -81,8 +76,7 @@ export function VideoSceneFeedback({
     await feedbackMutation.mutateAsync({
       scene_id: selectedScene,
       feedback_type: rejectReason,
-      confidence: 0.85,
-    });
+      confidence: 0.85 });
   };
 
   const reasonLabels: Record<FeedbackType, string> = {
@@ -91,17 +85,15 @@ export function VideoSceneFeedback({
     'too_compressed': '❌ Too Compressed',
     'color_wrong': '⚠️ Color Wrong',
     'hallucination': '⚠️ Hallucination',
-    'other': '❌ Other Issue',
-  };
+    'other': '❌ Other Issue' };
 
-  const reasonColors: Record<FeedbackType, string> = {
+  const _reasonColors: Record<FeedbackType, string> = {
     'approved': 'bg-green-50',
     'too_blurry': 'bg-yellow-50',
     'too_compressed': 'bg-yellow-50',
     'color_wrong': 'bg-blue-50',
     'hallucination': 'bg-red-50',
-    'other': 'bg-gray-50',
-  };
+    'other': 'bg-gray-50' };
 
   if (!scenes || scenes.length === 0) {
     return <div className="text-sm text-muted-foreground">No scenes to review</div>;

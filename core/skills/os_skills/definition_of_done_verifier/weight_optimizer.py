@@ -28,6 +28,27 @@ class DoD_WeightOptimizer:
 
     TASK_TYPES = ["cli_command", "api_endpoint", "lib_function", "plugin", "skill"]
 
+    #: Hard cap on how far ONE feedback event may move ONE weight, before
+    #: normalisation. Without it `adjustment = delta * LEARNING_RATE` is
+    #: unbounded in ``delta``: a single operator (or a compromised feedback
+    #: channel) submitting ``delta=0.99`` moved ``w_audit`` by 0.247 in one
+    #: step and could zero out the audit-trail check on the next. The
+    #: adversarial test for exactly this ("one malicious feedback must have
+    #: limited impact") existed since Phase 3 and had NEVER run, because the
+    #: skill package was not importable (2026-09-20 review).
+    MAX_ADJUSTMENT_PER_FEEDBACK = 0.05
+
+    #: Proportional step size applied to the operator delta.
+    LEARNING_RATE = 0.25
+
+    #: Confidence gained per feedback event for an affected weight. Applied as
+    #: `round(conf + STEP, 10)` because binary floats do not sum cleanly: eight
+    #: naive `+= 0.1` steps land on 0.7999999999999999, which is BELOW the 0.8
+    #: convergence threshold. The gate was therefore unreachable on the exact
+    #: path the tests exercise, and `recommend_next_weights` kept returning the
+    #: defaults forever — the learning loop looked wired and learned nothing.
+    CONFIDENCE_STEP = 0.1
+
     def __init__(self):
         """Initialize optimizer with default weights."""
         # Per-task-type weight distributions
@@ -68,11 +89,16 @@ class DoD_WeightOptimizer:
                 w_name = self._check_to_weight(check_name)
                 if w_name in self.weights[task_type]:
                     old_w = self.weights[task_type][w_name]
-                    # Reduce weight (proportional to delta)
-                    adjustment = delta * 0.25  # ~5% delta → ~1.25% adjustment per check
+                    # Reduce weight (proportional to delta, hard-capped).
+                    adjustment = min(
+                        delta * self.LEARNING_RATE,
+                        self.MAX_ADJUSTMENT_PER_FEEDBACK,
+                    )
                     new_w = max(0.0, old_w - adjustment)
                     self.weights[task_type][w_name] = new_w
-                    self.confidence[task_type][w_name] += 0.1
+                    self.confidence[task_type][w_name] = round(
+                        self.confidence[task_type][w_name] + self.CONFIDENCE_STEP, 10
+                    )
 
         elif delta < -0.05:  # Operator score much lower than Skill's
             # Skill was too lenient. Increase weights for missing checks.
@@ -80,10 +106,15 @@ class DoD_WeightOptimizer:
                 w_name = self._check_to_weight(check_name)
                 if w_name in self.weights[task_type]:
                     old_w = self.weights[task_type][w_name]
-                    adjustment = abs(delta) * 0.25
+                    adjustment = min(
+                        abs(delta) * self.LEARNING_RATE,
+                        self.MAX_ADJUSTMENT_PER_FEEDBACK,
+                    )
                     new_w = min(1.0, old_w + adjustment)
                     self.weights[task_type][w_name] = new_w
-                    self.confidence[task_type][w_name] += 0.1
+                    self.confidence[task_type][w_name] = round(
+                        self.confidence[task_type][w_name] + self.CONFIDENCE_STEP, 10
+                    )
 
         # Normalize weights to sum to 1.0
         total = sum(self.weights[task_type].values())

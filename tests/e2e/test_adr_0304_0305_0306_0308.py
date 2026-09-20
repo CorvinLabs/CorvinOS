@@ -11,6 +11,24 @@ All tests exercise REAL code paths (not mocks).
 """
 
 import pytest
+
+# ADR-0304 is `status: proposed` in Corvin-ADR — "design complete, not yet
+# implemented on main" (status amendment 2026-09-16, zero commits). The
+# tenant-scoped lock API this module drives (TenantLock, TenantRWLock,
+# LockTimeoutError, DeadlockError, set_tenant_id, get_tenant_id) exists nowhere
+# in the tree; core/concurrency/locks.py ships only the plain RWLock.
+#
+# Until 2026-09-20 that surfaced as a COLLECTION ERROR in every full run — the
+# suite reported an error, not a skip, and the 19 tests here were invisible
+# rather than pending. Skipping at module level states the real position: the
+# spec is written, the implementation is not. Delete this guard in the commit
+# that lands ADR-0304.
+pytest.skip(
+    "ADR-0304 tenant lock manager is not implemented on main "
+    "(ADR-0304 status: proposed) — core/concurrency/locks.py has no TenantLock",
+    allow_module_level=True,
+)
+
 import asyncio
 import threading
 import time

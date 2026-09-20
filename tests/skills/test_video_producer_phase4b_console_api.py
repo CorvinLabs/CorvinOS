@@ -18,29 +18,18 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from core.console.corvin_console.routes.video_learning_api import (
-    bp as video_learning_bp,
-    get_learning_loop,
-)
+# The route module is FastAPI, not Flask: it exposes `router`, never a `bp`
+# blueprint, and `get_learning_loop` does not exist. This file registered a
+# Flask blueprint that was never there, so it was a collection error in every
+# run. It now drives the SAME endpoints through the shared `client` fixture
+# (tests/fixtures_console.py), which mounts the real console router at
+# /v1/console exactly like corvin_gateway does — the paths asserted below were
+# already written for that mount.
+from core.console.corvin_console.routes import video_learning_api  # noqa: F401
 
 
 class TestVideoLearningAPI:
     """Console API for video learning infrastructure."""
-
-    @pytest.fixture
-    def app(self):
-        """Create test Flask app with learning blueprint."""
-        from flask import Flask
-
-        app = Flask(__name__)
-        app.config["TESTING"] = True
-        app.register_blueprint(video_learning_bp)
-        return app
-
-    @pytest.fixture
-    def client(self, app):
-        """Create test client."""
-        return app.test_client()
 
     def test_submit_feedback_valid(self, client):
         """Test submitting valid feedback."""
@@ -55,7 +44,7 @@ class TestVideoLearningAPI:
         )
 
         assert response.status_code == 200
-        data = json.loads(response.data)
+        data = response.json()
         assert data["success"] is True
         assert data["rating"] == 4
 
@@ -68,9 +57,12 @@ class TestVideoLearningAPI:
             },
         )
 
-        assert response.status_code == 400
-        data = json.loads(response.data)
-        assert "error" in data
+        # FastAPI/pydantic answers a schema violation with 422 and a `detail`
+        # list naming the missing field — not Flask's 400 + {"error": ...}.
+        assert response.status_code == 422
+        data = response.json()
+        assert "detail" in data
+        assert any("scene_id" in str(item) for item in data["detail"])
 
     def test_submit_feedback_invalid_rating(self, client):
         """Test feedback with invalid rating."""
@@ -99,7 +91,7 @@ class TestVideoLearningAPI:
         response = client.get("/v1/console/video/learning/stats")
 
         assert response.status_code == 200
-        data = json.loads(response.data)
+        data = response.json()
         assert "confidence_metrics" in data
         assert "model_stats" in data
         assert "timestamp" in data
@@ -109,7 +101,7 @@ class TestVideoLearningAPI:
         response = client.get("/v1/console/video/learning/models")
 
         assert response.status_code == 200
-        data = json.loads(response.data)
+        data = response.json()
         assert "total_decisions" in data
         assert "by_duration" in data
         assert "1min" in data["by_duration"]
@@ -119,7 +111,7 @@ class TestVideoLearningAPI:
         response = client.get("/v1/console/video/learning/confidence")
 
         assert response.status_code == 200
-        data = json.loads(response.data)
+        data = response.json()
         # Should return metrics for each worker type
         assert isinstance(data, dict)
 
@@ -131,7 +123,7 @@ class TestVideoLearningAPI:
         )
 
         assert response.status_code == 200
-        data = json.loads(response.data)
+        data = response.json()
         assert "model" in data
         assert data["model"] in ["gpt-4", "claude-opus", "claude-sonnet"]
         assert data["duration_seconds"] == 60
@@ -143,7 +135,7 @@ class TestVideoLearningAPI:
             "/v1/console/video/learning/select-model",
             json={"duration_seconds": 60},
         )
-        model = json.loads(select_response.data)["model"]
+        model = select_response.json()["model"]
 
         # Then report quality
         response = client.post(
@@ -157,7 +149,7 @@ class TestVideoLearningAPI:
         )
 
         assert response.status_code == 200
-        data = json.loads(response.data)
+        data = response.json()
         assert data["success"] is True
         assert data["job_id"] == "job1"
 
@@ -166,7 +158,7 @@ class TestVideoLearningAPI:
         response = client.get("/v1/console/video/learning/health")
 
         assert response.status_code == 200
-        data = json.loads(response.data)
+        data = response.json()
         assert data["status"] == "ok"
         assert "components" in data
         assert data["components"]["feedback_collector"] == "ready"
@@ -179,21 +171,6 @@ class TestVideoLearningAPI:
 
 class TestVideoLearningAPIIntegration:
     """Full API integration tests."""
-
-    @pytest.fixture
-    def app(self):
-        """Create test Flask app."""
-        from flask import Flask
-
-        app = Flask(__name__)
-        app.config["TESTING"] = True
-        app.register_blueprint(video_learning_bp)
-        return app
-
-    @pytest.fixture
-    def client(self, app):
-        """Create test client."""
-        return app.test_client()
 
     def test_full_feedback_loop_api(self, client):
         """Test complete feedback → model selection → report loop via API."""
@@ -219,7 +196,7 @@ class TestVideoLearningAPIIntegration:
             json={"duration_seconds": 60},
         )
         assert select_response.status_code == 200
-        model = json.loads(select_response.data)["model"]
+        model = select_response.json()["model"]
 
         # Step 4: Report quality
         report_response = client.post(

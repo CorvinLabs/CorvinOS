@@ -51,7 +51,7 @@ export interface ForgeOSSkill {
   layer?: string;
   boot_layer?: string;
   is_meta_skill?: boolean;
-  config?: Record<string, any>;
+  config?: Record<string, unknown>;
   dependencies?: string[];
   created_at?: string;
   updated_at?: string;
@@ -75,7 +75,7 @@ export interface ForgeAuditEvent {
   resource_name: string;
   action: string;
   user: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   hash: string;
   prev_hash: string;
 }

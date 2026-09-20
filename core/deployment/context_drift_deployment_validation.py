@@ -13,6 +13,7 @@ ADR-0362: Production Deployment Framework
 import subprocess
 import sys
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
@@ -32,8 +33,14 @@ class ValidationResult:
 class ContextDriftDeploymentValidator:
     """Validate Context-Drift solution ready for production."""
 
-    def __init__(self, repo_root: str = "/home/shumway/projects/CorvinOS"):
-        self.repo_root = Path(repo_root)
+    def __init__(self, repo_root: str | None = None):
+        # Derived from this file's location rather than hard-wired to the
+        # maintainer's checkout; CORVIN_REPO_ROOT overrides it.
+        self.repo_root = Path(
+            repo_root
+            or os.environ.get("CORVIN_REPO_ROOT")
+            or Path(__file__).resolve().parents[2]
+        )
         self.results: List[ValidationResult] = []
 
     def run_all_checks(self) -> bool:

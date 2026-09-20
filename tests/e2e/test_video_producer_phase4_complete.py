@@ -11,6 +11,29 @@ These tests prove the entire Phase 4 pipeline works end-to-end:
 PPT → Console API → Orchestrator → Workers → Feedback → Learning → Dashboard
 """
 
+# ── Not runnable on main ──────────────────────────────────────────────────
+# These tests are written against a `VideoProducerRequest` pydantic model
+# (asset_paths / title / description / tags / export_youtube / async_) that
+# exists nowhere in the tree, in this repo or in Corvin-Marketplace. The
+# shipped console route takes `CreateJobRequest(task: str)` and delegates the
+# rest to the marketplace plugin — a different API design, not a rename.
+#
+# Until 2026-09-20 this presented as a COLLECTION ERROR in every full run, so
+# the file was invisible rather than pending. The live Video Producer surface
+# IS covered: tests/skills/video_producer/ and
+# tests/skills/test_video_producer_phase1.py collect 72 tests against the
+# real API. Delete this guard in the commit that introduces the model, or
+# delete the file if the design stays as it is.
+import pytest
+
+pytest.skip(
+    "VideoProducerRequest does not exist on main; the console route takes "
+    "CreateJobRequest(task: str). See tests/skills/video_producer/ for the "
+    "coverage that runs.",
+    allow_module_level=True,
+)
+
+
 import asyncio
 import json
 import tempfile

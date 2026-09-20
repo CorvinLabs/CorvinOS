@@ -81,10 +81,21 @@ DEPRECATED_APIS = {
     },
 }
 
+#: The Corvin-Marketplace checkout. It is a SIBLING of this repo by convention;
+#: CORVIN_MARKETPLACE_ROOT overrides that for any other layout.
+_MARKETPLACE_ROOT = Path(
+    os.environ.get("CORVIN_MARKETPLACE_ROOT")
+    or (Path(__file__).resolve().parents[2].parent / "Corvin-Marketplace")
+).expanduser()
+
+
 # File patterns to scan
 SCAN_PATTERNS = {
     "core_code": "core/**/*.py",
-    "plugins": "/home/shumway/projects/Corvin-Marketplace/plugins/**/*.py",
+    # Resolved relative to this repo's parent (the marketplace is a sibling
+    # checkout), overridable with CORVIN_MARKETPLACE_ROOT. The absolute path
+    # that used to live here existed on one machine only.
+    "plugins": str(_MARKETPLACE_ROOT / "plugins" / "**" / "*.py"),
     "bridges": "corvin_operator/bridges/**/*.py",
     "tests": "tests/**/*.py",
 }

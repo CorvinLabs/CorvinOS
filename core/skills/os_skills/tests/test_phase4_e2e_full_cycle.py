@@ -34,7 +34,7 @@ class TestPhase4E2EFullCycle:
         # 7. Export compliance report
 
         # For now, we verify the structure exists
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_dashboard_loads_without_error(self):
         """Dashboard endpoint returns valid JSON without errors."""
@@ -43,7 +43,7 @@ class TestPhase4E2EFullCycle:
         # - Verify HTTP 200
         # - Verify valid JSON response
         # - Check required fields (skill_id, improvement_pct, etc.)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_trail_captures_all_events(self):
         """Audit trail has complete record of all subsystem events."""
@@ -53,7 +53,7 @@ class TestPhase4E2EFullCycle:
         # - weight_updated events logged
         # - No events missing
         # - All tenant_id fields correct
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_convergence_detection_accuracy(self):
         """Convergence status correctly reflects learning progress."""
@@ -61,7 +61,7 @@ class TestPhase4E2EFullCycle:
         # Check is_converged = False initially
         # Generate 400 more samples with stable feedback
         # Check is_converged = True
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_gdpr_compliance_pii_redacted(self):
         """GDPR compliance: PII is redacted in exports."""
@@ -69,7 +69,7 @@ class TestPhase4E2EFullCycle:
         # Export with redact=True
         # Verify no plaintext PII in export
         # Verify placeholders present
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_gdpr_compliance_user_ids_masked(self):
         """GDPR compliance: User IDs are consistently masked."""
@@ -77,7 +77,7 @@ class TestPhase4E2EFullCycle:
         # Export with redact=True
         # Verify user_id is masked
         # Verify same user_id always masks to same value
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_retention_policy_enforced(self):
         """GDPR compliance: Old events deleted per retention policy."""
@@ -86,7 +86,7 @@ class TestPhase4E2EFullCycle:
         # Enforce retention (90 days)
         # Verify old event deleted
         # Verify recent event kept
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_bias_detection_flags_skewed_feedback(self):
         """Bias detection identifies skills with one-sided feedback."""
@@ -94,7 +94,7 @@ class TestPhase4E2EFullCycle:
         # Run bias detection
         # Verify alerts include skewed_feedback
         # Verify skill_id in alert
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_prometheus_metrics_accurate(self):
         """Prometheus metrics correctly count events."""
@@ -103,7 +103,7 @@ class TestPhase4E2EFullCycle:
         # Create 15 feedback_received events
         # Export metrics
         # Verify counts match
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_chain_integrity_verified(self):
         """Audit chain hash integrity verified on boot."""
@@ -112,7 +112,7 @@ class TestPhase4E2EFullCycle:
         # Tamper with event
         # Verify integrity fails
         # Verify error message clear
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_dashboard_responsive_under_load(self):
         """Dashboard loads within SLO (<1s) with 1000 events."""
@@ -120,7 +120,7 @@ class TestPhase4E2EFullCycle:
         # Query /api/v1/learning/skills
         # Measure latency
         # Verify < 1000ms
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_e2e_audit_trail_export_for_compliance(self):
         """Audit trail export ready for compliance auditor."""
@@ -133,7 +133,7 @@ class TestPhase4E2EFullCycle:
         # - Timestamps ISO 8601
         # - Hash chain present
         # - Tenant filter applied
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_learning_loop_auditable_end_to_end(self):
         """Learning loop decisions auditable from start to finish."""
@@ -146,7 +146,7 @@ class TestPhase4E2EFullCycle:
         # - decision (skill generated / weight updated / etc)
         # - reasoning (in payload)
         # - prev_hash (chained)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestDashboardResponseModels:
@@ -165,7 +165,7 @@ class TestDashboardResponseModels:
         #   "phase_count": 10,
         #   "source": "daemon_regen"
         # }
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_weight_update_model(self):
         """WeightUpdate model validates loss changes."""
@@ -178,7 +178,7 @@ class TestDashboardResponseModels:
         #   "change_pct": 20.0,
         #   "reason": "positive_feedback"
         # }
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_convergence_status_model(self):
         """ConvergenceStatus model includes all required fields."""
@@ -190,7 +190,7 @@ class TestDashboardResponseModels:
         #   "last_update": "2026-09-11T15:30:00Z",
         #   "estimated_weeks_to_stable": 0
         # }
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAdversarialAttacks:
@@ -202,7 +202,7 @@ class TestAdversarialAttacks:
         # Attempt to modify event 3's payload
         # Verify hash-chain breaks
         # Verify chain verification catches tampering
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_trail_cannot_skip_events(self):
         """Attacker cannot skip events from the chain."""
@@ -210,14 +210,14 @@ class TestAdversarialAttacks:
         # Attempt to delete event 3 from file
         # Verify prev_hash link broken
         # Verify chain verification catches gap
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_feedback_injection_prevented(self):
         """Attacker cannot inject false feedback to game weights."""
         # With audit trail, all feedback is logged
         # Even if false feedback injected, it's auditable
         # Compliance auditor can detect pattern
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_tenant_isolation_enforced(self):
         """Attacker in tenant_A cannot access tenant_B's audit trail."""
@@ -226,14 +226,14 @@ class TestAdversarialAttacks:
         # Query as tenant_A
         # Verify only tenant_A events returned
         # Verify no tenant_B leakage
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_pii_redaction_cannot_be_bypassed(self):
         """PII redaction applies to all payload fields."""
         # Create event with email in multiple fields
         # Export with redact=True
         # Verify all instances redacted
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestComplianceReporting:
@@ -247,14 +247,14 @@ class TestComplianceReporting:
         # - retention_policy_days
         # - pii_redacted: true
         # - user_ids_masked: true
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_bias_alert_includes_severity(self):
         """Bias detection alerts include severity/context."""
         # Skill with 100% positive feedback (1 sample): LOW severity
         # Skill with 90% positive feedback (100 samples): HIGH severity
         # Verify alerts graduated by severity
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_operator_can_roll_back_via_audit(self):
         """Operator can inspect audit trail and roll back decisions."""
@@ -262,14 +262,14 @@ class TestComplianceReporting:
         # Operator finds audit event
         # Operator manually reverts to version 4
         # Verify decision auditable
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_consent_tracking_in_audit_trail(self):
         """Learning loop respects operator consent."""
         # Assume consent gate: operator must approve dashboard use
         # Verify consent event in audit trail
         # Verify learning events after consent timestamp
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestMonitoring:
@@ -282,7 +282,7 @@ class TestMonitoring:
         # - HELP + TYPE comments for each metric
         # - Metric name + value
         # - Example: "datahub_skill_generation_count 42"
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_alerting_rule_for_broken_chain(self):
         """Alert fires if audit chain broken."""
@@ -290,13 +290,13 @@ class TestMonitoring:
         # alert: AuditChainBroken
         # expr: datahub_audit_chain_verified == 0
         # severity: critical
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_alerting_rule_for_learning_stalled(self):
         """Alert fires if daemon learning stalled."""
         # No feedback > 1 hour = stalled
         # No weight updates > 2 hours = stalled
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # Placeholder for integration tests that need running infrastructure
@@ -310,4 +310,4 @@ class TestIntegrationWithPhases1_3:
         # 2. Generate skill via Creator 2.0 (Phase 2)
         # 3. Daemon learns from usage (Phase 3)
         # 4. Dashboard shows learning progress (Phase 4)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")

@@ -11,6 +11,7 @@ Tests the A2A network as a member-only capability:
 
 Covers ADR-0702 chokepoints R, R′, S, P, L.
 """
+import pytest
 from __future__ import annotations
 
 import base64
@@ -155,6 +156,7 @@ class TestA2APairingGateFree(unittest.TestCase):
 
     def test_pairing_free_tier_denied_402(self):
         """POST /a2a/pair/generate on free tier → 402 license_required."""
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestOfflineCredential(unittest.TestCase):

@@ -304,7 +304,7 @@ class TestModelSelectionConsoleIntegration:
         4. Console displays updated score
         """
         # TODO(phase1b): Implement after Console API integration
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAuditTrailIntegration:
@@ -318,7 +318,7 @@ class TestAuditTrailIntegration:
         event should be written to the audit chain (hash-chained).
         """
         # TODO(phase1b): Implement after audit integration
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 if __name__ == "__main__":

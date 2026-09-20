@@ -14,6 +14,7 @@ from typing import Optional
 import time
 import tempfile
 import shutil
+from .video_paths import THREEJS_OUTPUT, video_dir
 
 
 class ThreeJSRenderer:
@@ -23,7 +24,7 @@ class ThreeJSRenderer:
         self.name = "threejs_renderer"
         self.version = "5.3.0"
         self.timeout = timeout_seconds
-        self.output_dir = Path("/home/shumway/projects/Corvin-Videos/threejs_output")
+        self.output_dir = video_dir(THREEJS_OUTPUT)
         self.output_dir.mkdir(exist_ok=True, parents=True)
 
     def execute(self, request) -> dict:

@@ -41,7 +41,7 @@ class TestSecurityAdversarialScenarios:
         # Capture: counter=42, HMAC=...
         # Replay: POST same body
         # Verify: server rejects OR accepts but counter stays at 42
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_02_forged_capability_unknown_capability(self):
         """Test 2 (SECURITY): Attacker forges unknown capability name.
@@ -117,7 +117,7 @@ class TestSecurityAdversarialScenarios:
         Expected: All checks still respect tenant isolation.
         """
         # TODO: API should validate tenant_id; missing value → error or default
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_07_licence_jwt_expired_class_l_denied(self):
         """Test 7 (SECURITY): Expired licence JWT denies class-L capabilities.
@@ -130,7 +130,7 @@ class TestSecurityAdversarialScenarios:
         # Write expired JWT to global/license.key
         # Call require_capability("compute.run")
         # Expect: denied or falls back to free allowance
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_08_crl_unavailable_denies_class_n_new_peers(self):
         """Test 8 (SECURITY): Unavailable CRL denies class-N new peers (but existing work).
@@ -142,7 +142,7 @@ class TestSecurityAdversarialScenarios:
         # TODO: Mock CRL backend to fail
         # Try to verify new peer → denied
         # Try to verify existing peer → allowed (cached in CRL)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_09_clone_detection_counter_reversion(self):
         """Test 9 (SECURITY): Clone detection triggers on counter reversion.
@@ -155,7 +155,7 @@ class TestSecurityAdversarialScenarios:
         # TODO: Requires counter state management
         # Set counter=100, then send counter=50
         # Expect: clone detection, MC revoked
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_10_fingerprint_collision_rate_limited(self):
         """Test 10 (SECURITY): Fingerprint changes are rate-limited (1 per 24h).
@@ -167,7 +167,7 @@ class TestSecurityAdversarialScenarios:
         # TODO: Requires fingerprint tracking
         # Change fingerprint 2x rapidly
         # Expect: 2nd accepted, 3rd denied or clone-triggered
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestPerformanceAdversarialScenarios:
@@ -215,7 +215,7 @@ class TestPerformanceAdversarialScenarios:
         # TODO: Requires quota counter instrumentation
         # Run 50 threads, each calls compute.run once
         # Verify final counter == 50 (no lost updates)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_13_quota_resets_exactly_at_midnight(self):
         """Test 13 (PERFORMANCE): Quota reset happens at UTC midnight, not local midnight.
@@ -225,7 +225,7 @@ class TestPerformanceAdversarialScenarios:
         """
         # TODO: Requires time mocking or real observation
         # This is a correctness test, not a pure performance test
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_14_capability_matrix_lookup_constant_time(self):
         """Test 14 (PERFORMANCE): Capability matrix lookup is O(1) regardless of matrix size.
@@ -235,7 +235,7 @@ class TestPerformanceAdversarialScenarios:
         """
         # TODO: This is more of a code review than a runtime test
         # Verify CAPABILITIES is a dict (O(1) lookup), not a list
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_15_audit_write_non_blocking(self):
         """Test 15 (PERFORMANCE): Audit write does not block capability check.
@@ -246,7 +246,7 @@ class TestPerformanceAdversarialScenarios:
         # TODO: Mock audit backend to fail/hang
         # Call require_capability()
         # Expect: decision returned immediately, audit error logged
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestEdgeCaseAdversarialScenarios:
@@ -263,7 +263,7 @@ class TestEdgeCaseAdversarialScenarios:
         # TODO: Requires offline credential setup
         # Set MC TTL to expire, licence JWT still valid
         # Verify class-L allowed, class-N denied
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_17_free_tier_quota_boundary_exactly_10(self):
         """Test 17 (EDGE CASE): Free tier compute.run quota is exactly 10 (not 9, not 11).
@@ -274,7 +274,7 @@ class TestEdgeCaseAdversarialScenarios:
         # TODO: Requires quota counter reset for isolation
         # Make 10 successful calls, verify counter==10
         # Make 11th call, verify denied
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_18_forge_create_free_tier_0_not_negative(self):
         """Test 18 (EDGE CASE): forge.create limit for free tier is 0, not negative.
@@ -320,7 +320,7 @@ class TestEdgeCaseAdversarialScenarios:
         # TODO: Mock CAPABILITIES to be None or invalid
         # Call require_capability()
         # Expect: LicenseDenied with reason='enforcement_unavailable' or free allowance
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAuditTrailAdversarialScenarios:
@@ -337,7 +337,7 @@ class TestAuditTrailAdversarialScenarios:
         # Try to delete audit event
         # Run verify_audit_chain.py
         # Expect: gap detection, chain verification fails
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_22_audit_chain_survives_process_restart(self):
         """Test 22 (AUDIT): Audit chain is persisted; restart doesn't lose events.
@@ -347,7 +347,7 @@ class TestAuditTrailAdversarialScenarios:
         """
         # TODO: Kill process during audit write
         # Restart, verify chain is intact
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_23_audit_event_carries_lom_line_of_responsibility(self):
         """Test 23 (AUDIT): Every audit event carries LoM (line of moral responsibility).
@@ -356,7 +356,7 @@ class TestAuditTrailAdversarialScenarios:
         Expected: Every license.capability_decision event has lom field.
         """
         # TODO: Read audit chain, verify all events have lom field
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_24_audit_decision_logged_before_persisted(self):
         """Test 24 (AUDIT): Audit-first: decision is logged to chain BEFORE any side effect.
@@ -367,7 +367,7 @@ class TestAuditTrailAdversarialScenarios:
         """
         # TODO: This requires instrumentation of quota counter update
         # Verify order of operations: audit.write_event() → quota_counter.increment()
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     def test_25_audit_chain_hash_integrity_after_24h(self):
         """Test 25 (AUDIT): Hash-chain integrity verified after 24h (3000+ events).
@@ -377,7 +377,7 @@ class TestAuditTrailAdversarialScenarios:
         """
         # TODO: Run verify_audit_chain.py
         # Expect: exit 0, output shows all events verified
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 if __name__ == "__main__":

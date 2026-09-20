@@ -187,19 +187,22 @@ class TestDoD_ConsoleRouting:
         assert dod_verifier_dashboard.router is not None
         # Should have POST /api/dod/verify route
         routes = [route.path for route in dod_verifier_dashboard.router.routes]
-        assert "/verify" in routes
+        # The router carries prefix="/api/dod"; asserting the bare suffix
+        # passed vacuously against nothing and broke when the prefix moved
+        # onto the router itself.
+        assert "/api/dod/verify" in routes
 
     def test_dod_feedback_endpoint_exists(self):
         """Verify /api/dod/feedback endpoint is registered."""
         from core.console.corvin_console.routes import dod_verifier_dashboard
         routes = [route.path for route in dod_verifier_dashboard.router.routes]
-        assert "/feedback" in routes
+        assert "/api/dod/feedback" in routes
 
     def test_dod_history_endpoint_exists(self):
         """Verify /api/dod/history/{task_id} endpoint is registered."""
         from core.console.corvin_console.routes import dod_verifier_dashboard
         routes = [route.path for route in dod_verifier_dashboard.router.routes]
-        assert "/history/{task_id}" in routes
+        assert "/api/dod/history/{task_id}" in routes
 
 
 class TestDoD_DashboardWidget:

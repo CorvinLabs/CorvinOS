@@ -12,6 +12,7 @@ import json
 import asyncio
 import uuid
 import subprocess
+from .video_paths import PREMIUM_OUTPUT, video_dir
 
 
 @dataclass
@@ -34,7 +35,7 @@ class PremiumAsyncQueue:
         self.queue: Dict[str, PremiumRenderJob] = {}
         self.max_concurrent = max_concurrent
         self.running_count = 0
-        self.base_dir = Path("/home/shumway/projects/Corvin-Videos/premium_output")
+        self.base_dir = video_dir(PREMIUM_OUTPUT)
         self.base_dir.mkdir(exist_ok=True)
 
     def submit_job(self, animation_id: str) -> str:

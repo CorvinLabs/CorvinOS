@@ -1,0 +1,207 @@
+# CorvinOS Premium Video Generator Configuration
+# ============================================
+
+project:
+  name: "CorvinOS Premium Video"
+  version: "1.0"
+  description: "Broadcast-quality 51-second premium video with Blender 3D, Manim animations, and particle effects"
+
+output:
+  # Final output file
+  file: "/home/shumway/projects/CorvinOS/outputs/corvinos_premium_final.mp4"
+
+  # Intermediate outputs
+  temp_dir: "/tmp/corvinos_video_gen"
+  assets_dir: "./output/assets"
+  frames_dir: "./output/frames"
+
+# Video Quality Settings
+video:
+  codec: "libx264"
+  preset: "slow"  # slower = better quality; fast, medium, slow, slower
+  crf: 18  # 0-51; lower = better quality; 18 = high quality, 23 = default
+  profile: "main"
+
+  # Resolution
+  width: 1920
+  height: 1080
+
+  # Frame rate
+  fps: 25  # PAL standard
+
+  # Bitrate
+  bitrate: "50M"  # High quality bitrate
+  maxrate: "60M"
+  bufsize: "100M"
+
+  # Color space
+  color_format: "yuv420p"  # Broadcast standard
+
+  # Pixel format
+  pix_fmt: "yuv420p"
+
+# Audio Settings
+audio:
+  narration_file: "/tmp/narration_espeak_natural.aac"
+  bitrate: "192k"
+  sample_rate: 24000
+  channels: 2
+
+# Color Grading Profile
+color_grading:
+  theme: "corvinos-dark"
+  primary_color: "#FFD700"      # Gold
+  secondary_color: "#FF006E"    # Magenta/Red
+  tertiary_color: "#00D9FF"     # Cyan
+  accent_color: "#00F077"       # Green
+  background: "#0f1320"         # Dark navy
+
+  # LUT (Look-Up Table) for color grading
+  lut_file: "./config/corvinos_color_profile.cube"
+
+# Phase Configuration
+phases:
+  # Phase 1: Blender 3D Logo
+  phase1_blender:
+    enabled: true
+    duration_seconds: 5
+    frame_count: 125
+    fallback: true  # Use fallback if Blender unavailable
+
+    # Blender script output
+    output_frames: "./output/frames/phase1_blender_%04d.png"
+    output_video: "./output/phase1_blender_intro.mp4"
+
+    # Logo parameters
+    logo:
+      name: "CorvinOS"
+      type: "torus_ring"
+      major_radius: 2.0
+      minor_radius: 0.3
+      rotation_speed: 1.0  # Full rotation per duration
+      color: "#FFD700"
+      material_metallic: 0.8
+      material_roughness: 0.2
+
+  # Phase 2: Manim Architecture Diagrams
+  phase2_manim:
+    enabled: true
+    duration_seconds: 12
+
+    output_four_pillars: "./output/phase2_four_pillars.mp4"
+    output_architecture: "./output/phase2_architecture.mp4"
+
+    # Manim render quality
+    quality: "high_quality"  # low, medium, high_quality
+    fps: 25
+
+  # Phase 3: SVG Data Flow Graphics
+  phase3_svg:
+    enabled: true
+    duration_seconds: 24  # 8s each for 3 flows
+
+    flows:
+      - name: "healthcare"
+        duration: 8
+        output: "./output/phase3_healthcare_flow.mp4"
+      - name: "finance"
+        duration: 8
+        output: "./output/phase3_finance_flow.mp4"
+      - name: "government"
+        duration: 8
+        output: "./output/phase3_government_flow.mp4"
+
+  # Phase 4: Particle Effects
+  phase4_particles:
+    enabled: true
+    duration_seconds: 51  # Full video duration
+    frame_count: 1275  # 51s @ 25fps
+
+    output_sequence: "./output/frames/phase4_particles_%04d.png"
+    output_video: "./output/phase4_particles.mp4"
+
+    # Particle parameters
+    num_particles: 100
+    particle_color: "#FFD700"
+    particle_size_min: 2
+    particle_size_max: 8
+    opacity_falloff: 0.95
+
+  # Phase 5: Final Composition & Color Grading
+  phase5_compositor:
+    enabled: true
+
+    # Master sequence
+    master_video: "./output/corvinos_video_master.mp4"
+
+    # Particle overlay blend mode
+    blend_mode: "lighten"  # screen, add, lighten, lighten_overlay
+    particle_opacity: 0.7
+
+# Timeline Configuration
+timeline:
+  total_duration: 51  # seconds
+  segments:
+    - name: "Intro"
+      start: 0
+      duration: 5
+      source: "phase1_blender"
+    - name: "Four Pillars"
+      start: 5
+      duration: 6
+      source: "phase2_manim"
+    - name: "Architecture"
+      start: 11
+      duration: 6
+      source: "phase2_manim"
+    - name: "Healthcare Flow"
+      start: 17
+      duration: 8
+      source: "phase3_svg"
+    - name: "Finance Flow"
+      start: 25
+      duration: 8
+      source: "phase3_svg"
+    - name: "Government Flow"
+      start: 33
+      duration: 8
+      source: "phase3_svg"
+    - name: "Closing"
+      start: 41
+      duration: 10
+      source: "phase1_blender"  # Fade/closing animation
+
+# Dependency Checks
+dependencies:
+  # Required
+  required:
+    - ffmpeg
+    - python3.11
+
+  # Optional with fallback
+  optional:
+    - blender  # Has fallback CGI
+    - manim    # Has fallback static images
+    - inkscape # For SVG processing
+
+# Logging & Debugging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "./logs/video_generation.log"
+  verbose: true
+  keep_intermediates: true  # Keep temp files for debugging
+
+# Performance Tuning
+performance:
+  parallel_phases: false  # Run phases sequentially for stability
+  max_threads: 4
+  gpu_acceleration: false  # Enable CUDA/GPU if available
+  memory_limit_gb: 8
+
+# Validation
+validation:
+  verify_audio: true
+  check_frame_count: true
+  verify_duration: true
+  check_bitrate: true
+  test_playback: false  # Optional test with ffplay

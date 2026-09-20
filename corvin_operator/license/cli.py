@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Optional
 import time
 
-from corvin_operator.forge.forge.paths import corvin_home, validate_tenant_id
+from corvin_operator.forge.forge.paths import corvin_home
+# See capability_api.py: forge.paths has no public validate_tenant_id;
+# forge.tenants is the canonical validator (CLAUDE.md § Multi-tenant Axis).
+from corvin_operator.forge.forge.tenants import validate_tenant_id
 from corvin_operator.forge.forge.tenants import current_tenant
 
 from .capability_api import active_credential, Credential, Tier
@@ -106,8 +109,11 @@ def cmd_bind_offline_request(args) -> int:
     """Request offline binding (generate device fingerprint, print QR)."""
     try:
         # Phase 1.2: Generate device fingerprint, emit it for authority binding
-        from .device_fp import compute_device_fingerprint
-        device_fp = compute_device_fingerprint()
+        # The function is compute_device_fp; `compute_device_fingerprint` never
+        # existed, so `corvin-license bind --offline-request` always took the
+        # except branch and returned 1 while logging an ImportError.
+        from .device_fp import compute_device_fp
+        device_fp = compute_device_fp()
         print(f"Device fingerprint: {device_fp}")
         print("Share this with your license administrator to bind offline")
         return 0

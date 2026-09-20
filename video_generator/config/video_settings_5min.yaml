@@ -1,0 +1,29 @@
+narration:
+  audio_file: /tmp/narration_corvinos_300s.aac
+  language: de
+phases:
+  phase1_intro:
+    duration: 30
+    style: 3d_logo
+  phase2_pillars:
+    duration: 50
+    style: animated_icons
+  phase3_usecases:
+    duration: 70
+    style: data_flows
+  phase4_architecture:
+    duration: 80
+    style: layer_animation
+  phase5_ecosystem:
+    duration: 70
+    style: network_graph
+video:
+  bitrate_mbps: 50
+  codec: libx264
+  crf: 18
+  duration_seconds: 300
+  fps: 25
+  preset: slow
+  resolution:
+  - 1920
+  - 1080

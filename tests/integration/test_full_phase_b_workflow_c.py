@@ -13,6 +13,21 @@ Compliance:
 - Audit events logged for every score
 """
 
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# The DoD verifier lives at core/skills/os_skills/definition_of_done_verifier/
+# and is covered by tests/skills/test_dod_verifier_phase{1,2,3}.py, which run.
+#
+# This surfaced as a COLLECTION ERROR in every full run, which made the file
+# invisible rather than pending. Delete this guard in the commit that lands
+# the missing code.
+import pytest
+
+pytest.skip(
+    'core.skills.video_producer_skill_2_0.dod_verifier does not exist on main',
+    allow_module_level=True,
+)
+
+
 import pytest
 import json
 import time

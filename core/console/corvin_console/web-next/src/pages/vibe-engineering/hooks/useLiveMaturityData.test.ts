@@ -9,7 +9,7 @@
  * - Refresh intervals
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // Mock types
 interface LiveMeasurement {
@@ -76,30 +76,25 @@ function getSampleMeasurement(): LiveMeasurement {
       loss_confidence: 0.025,
       loss_feedback: 0.015,
       accuracy_routing: 0.95,
-      convergence_rate: 0.816,
-    },
+      convergence_rate: 0.816 },
     system: {
       latency_p99_ms: 48.26,
       throughput_tasks_per_sec: 38.42,
       memory_usage_mb: 242.08,
       cpu_usage_percent: 52.89,
-      audit_chain_length: 86230,
-    },
+      audit_chain_length: 86230 },
     user_actions: {
       tasks_completed_this_hour: 23,
       routing_decisions: 12,
       training_batches: 5,
-      anomalies_detected: 1,
-    },
+      anomalies_detected: 1 },
     component_health: {
       routing: { active: true, contribution: 0.154, drift: 0.002 },
       confidence: { active: true, contribution: 0.132, drift: 0.029 },
       feedback: { active: true, contribution: 0.196, drift: 0.016 },
       attention: { active: true, contribution: 0.040, drift: -0.023 },
       latency: { active: true, contribution: 0.119, drift: 0.022 },
-      diversity: { active: true, contribution: 0.096, drift: 0.041 },
-    },
-  };
+      diversity: { active: true, contribution: 0.096, drift: 0.041 } } };
 }
 
 function transformToLoopScores(measurements: LiveMeasurement[]): LoopScores {
@@ -118,8 +113,7 @@ function transformToLoopScores(measurements: LiveMeasurement[]): LoopScores {
       audit: 6.8,
       compliance: 7.0,
       system: 7.1,
-      meta_convergence: 8.1,
-    };
+      meta_convergence: 8.1 };
   }
 
   // Average metrics across all measurements
@@ -133,8 +127,7 @@ function transformToLoopScores(measurements: LiveMeasurement[]): LoopScores {
       latency_p99_ms: acc.latency_p99_ms + m.system.latency_p99_ms,
       memory_usage_mb: acc.memory_usage_mb + m.system.memory_usage_mb,
       cpu_usage: acc.cpu_usage + m.system.cpu_usage_percent,
-      anomalies: acc.anomalies + m.user_actions.anomalies_detected,
-    }),
+      anomalies: acc.anomalies + m.user_actions.anomalies_detected }),
     {
       loss_confidence: 0,
       loss_routing: 0,
@@ -144,8 +137,7 @@ function transformToLoopScores(measurements: LiveMeasurement[]): LoopScores {
       latency_p99_ms: 0,
       memory_usage_mb: 0,
       cpu_usage: 0,
-      anomalies: 0,
-    }
+      anomalies: 0 }
   );
 
   const n = measurements.length;
@@ -185,8 +177,7 @@ function transformToLoopScores(measurements: LiveMeasurement[]): LoopScores {
     compliance: Math.min(10, Math.max(2, 8)),
     system: Math.min(10, Math.max(2, systemScore)),
 
-    meta_convergence: Math.min(10, Math.max(2, metaScore)),
-  };
+    meta_convergence: Math.min(10, Math.max(2, metaScore)) };
 }
 
 // ============ TESTS: TRANSFORMATION ============

@@ -17,11 +17,21 @@ from pathlib import Path
 from typing import Optional, Any
 from datetime import datetime
 
-# Import from video_producer
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from os_skills.video_producer.types import AssetAnalysisResult, FactualClaim, Contradiction
-from os_skills.video_producer.exceptions import AssetIngestionError
+# Import from video_producer by its REAL package path.
+#
+# This block used to insert <repo>/core/skills onto sys.path and then import
+# `os_skills.video_producer.types`. That loads the very same types.py a SECOND
+# time under a second module name, so
+# `core.skills.os_skills.video_producer.types.Contradiction` and
+# `os_skills.video_producer.types.Contradiction` are two unrelated classes and
+# every isinstance() check across that seam is False — silently, at runtime,
+# not only in tests. It also polluted sys.path for the whole process.
+from core.skills.os_skills.video_producer.types import (
+    AssetAnalysisResult,
+    Contradiction,
+    FactualClaim,
+)
+from core.skills.os_skills.video_producer.exceptions import AssetIngestionError
 
 
 class AssetAnalyzer:

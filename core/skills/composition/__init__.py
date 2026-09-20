@@ -1,4 +1,13 @@
-"""Skill Composition — pipeline multiple skills (ADR-0311)."""
+"""Skill Composition — pipeline multiple skills (ADR-0311).
+
+This is a PACKAGE ``__init__``, not a sibling module. ``composition.py`` and
+``composition/`` coexisted, and a module beats a package of the same name on
+``sys.path``: ``core.skills.composition.video_producer_model_selector`` was
+therefore unimportable ("'core.skills.composition' is not a package") and every
+test of the Tier-3 model selector was a collection error. Same failure shape as
+the documented frontend ``pages/foo.tsx`` vs ``pages/foo/`` shadow — keep the
+package form so both the composition API and its submodules resolve.
+"""
 
 from __future__ import annotations
 

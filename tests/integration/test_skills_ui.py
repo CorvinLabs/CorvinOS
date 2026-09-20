@@ -96,7 +96,7 @@ class TestSkillsOverviewPanel:
         """Verify detail modal is wrapped in error boundary."""
         # Error boundary should catch React errors
         # and render fallback UI instead of crashing
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_score_bar_color_coding(self):
         """Verify score bar uses correct colors."""

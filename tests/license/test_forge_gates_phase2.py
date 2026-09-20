@@ -21,34 +21,34 @@ class TestG1ForgeToolMCP:
         # Setup: free tier context
         # Call: MCP forge_tool
         # Expect: license_required error, audit event emitted
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     @pytest.mark.asyncio
     async def test_forge_tool_allowed_on_member_tier(self):
         """Member tier creates tool → 200 OK, tool registered"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     @pytest.mark.asyncio
     async def test_forge_promote_denied_on_free_tier(self):
         """Free tier attempt to promote → license_required error"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     @pytest.mark.asyncio
     async def test_forge_promote_allowed_on_member_tier(self):
         """Member tier promotes tool → 200 OK"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_event_emitted_on_deny(self):
         """Every forge denial emits license.capability_decision audit event"""
         # Verify audit trail contains: capability, tier, decision, reason, entry_point
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_enforcement_error_fails_closed(self):
         """If require_capability raises, deny (fail-closed)"""
         # Setup: require_capability ImportError
         # Call: forge_tool
         # Expect: tool_error, not created
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestG2SkillForgeRegistry:
@@ -57,17 +57,17 @@ class TestG2SkillForgeRegistry:
     @pytest.mark.asyncio
     async def test_skill_create_denied_on_free(self):
         """Free tier can't create skills via registry"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     @pytest.mark.asyncio
     async def test_skill_create_with_files_denied_on_free(self):
         """Free tier can't create multi-file skills"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     @pytest.mark.asyncio
     async def test_multi_skill_promote_denied_on_free(self):
         """Free tier can't promote via MultiSkillRegistry"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestG3ConsoleRoutes:
@@ -124,12 +124,12 @@ class TestG4PluginBuilder:
         # Setup: free tier, plugin_builder_enabled deleted (use capability gate only)
         # Call: /chat with message "/plugin-builder create my-plugin"
         # Expect: chat response with upgrade link
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_plugin_builder_enabled_flag_deleted(self):
         """Feature flag plugin_builder_enabled is removed from codebase"""
         # Verify grep: plugin_builder_enabled → 0 results (except in this test file)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestG5QuotaGate:
@@ -139,7 +139,7 @@ class TestG5QuotaGate:
         """quota_gate.increment_and_check for forge keys calls require_capability"""
         # Currently: no production caller (Brain v0.2 is unused)
         # But skeleton is wired for future use
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAuditTrail:
@@ -149,17 +149,17 @@ class TestAuditTrail:
         """All G1–G5 denials appear in audit.jsonl"""
         # Verify: event_type = "license.capability_decision"
         # Fields: capability, tier, decision, reason, entry_point, tenant_id, lom
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_forge_provenance_events_emitted_on_create(self):
         """forge.artifact_provenance_signed event on successful create"""
         # Fields: artifact_kind, artifact_id, seat_fp, instance_id, binding_hash
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_events_are_immutable_and_hashchained(self):
         """Audit events cannot be modified after commit"""
         # Verify via tenant_audit_chain() entries
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestErrorHandling:
@@ -168,15 +168,15 @@ class TestErrorHandling:
     def test_invalid_tier_fails_closed(self):
         """Unknown tier value → deny (free allowance)"""
         # e.g., tier = "platinum" (not recognized)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_require_capability_exception_fails_closed(self):
         """If require_capability raises any exception → deny"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_missing_tenant_id_fails_closed(self):
         """If tenant_id is missing/invalid → deny"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestGuardTests:
@@ -186,17 +186,17 @@ class TestGuardTests:
         """All code paths that write tools/skills go through Registry.create or install()"""
         # Grep: Registry.create|SkillRegistry.create calls
         # Guard: no direct writes to .forge/tools or .forge/skills directories
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_every_skill_body_reader_uses_registry_get_body(self):
         """All code that reads skill implementations go through get_body()"""
         # Verify: routes/workflows.py readers use SkillRegistry.get_body
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_no_forge_create_bypass_paths(self):
         """Grep for direct artifact creation outside gated chokepoints"""
         # Should return 0: direct writes to registry.json, SKILL.md, etc.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestEndToEnd:
@@ -208,7 +208,7 @@ class TestEndToEnd:
         # 1. POST /forge_tool (MCP)
         # 2. Verify: license_required error
         # 3. Verify: tool not added to registry
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     @pytest.mark.asyncio
     async def test_member_user_forge_workflow_succeeds(self):
@@ -217,13 +217,13 @@ class TestEndToEnd:
         # 2. Verify: 200 OK, tool created
         # 3. Verify: audit event emitted
         # 4. Verify: tool callable via MCP
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     @pytest.mark.asyncio
     async def test_member_downgrade_to_free_revokes_capability(self):
         """Member → free: artifact remains, but forge creation denied"""
         # Scenario: license revoked mid-session
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestCompliance:
@@ -231,12 +231,12 @@ class TestCompliance:
 
     def test_audit_events_carry_tenant_id(self):
         """All events include tenant_id for isolation"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_events_carry_lom(self):
         """All events include lom (line of moral responsibility)"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_no_pii_in_audit_events(self):
         """Audit events contain no PII (customer name, email, etc.)"""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")

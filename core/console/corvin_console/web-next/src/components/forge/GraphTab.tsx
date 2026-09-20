@@ -2,8 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { AlertTriangle, Network } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { ForgeTool, ForgeSkill, ForgeOSSkill, ForgeDependency } from '@/types/forge';
 
 interface GraphTabProps {
@@ -24,8 +23,7 @@ export default function GraphTab({
   tools,
   skills,
   osSkills,
-  dependencies,
-}: GraphTabProps) {
+  dependencies }: GraphTabProps) {
   const [highlightedNode, setHighlightedNode] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'tool' | 'skill' | 'os-skill'>('all');
 
@@ -108,7 +106,7 @@ export default function GraphTab({
               key={type}
               variant={filterType === type ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setFilterType(type as any)}
+              onClick={() => setFilterType(type as 'all' | 'tool' | 'skill' | 'os-skill')}
             >
               {type === 'all' ? 'All' : type.replace('-', ' ').toUpperCase()}
             </Button>

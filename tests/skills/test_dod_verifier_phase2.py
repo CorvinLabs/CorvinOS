@@ -149,11 +149,20 @@ class TestDoD_WeightOptimizer:
         opt = DoD_WeightOptimizer()
         assert not opt.is_converged("api_endpoint")
 
+        # is_converged() is deliberately conservative: EVERY weight must have
+        # reached the confidence threshold, not just the one the operator
+        # happened to give feedback on. Feeding only "audit_trail" leaves the
+        # other four weights at confidence 0.0, and a task type whose other
+        # checks were never rated has not converged.
+        all_checks = [
+            "reachability", "audit_trail", "test_evidence",
+            "docs_sync", "reproducibility",
+        ]
         for _ in range(8):
             opt.observe_feedback(
                 "api_endpoint",
                 delta=0.10,
-                affected_checks=["audit_trail"]
+                affected_checks=all_checks,
             )
 
         assert opt.is_converged("api_endpoint", threshold=0.8)
@@ -230,12 +239,17 @@ class TestDoD_WeightOptimizer:
         """Convergence is independent per task type."""
         opt = DoD_WeightOptimizer()
 
-        # Build confidence only for API
+        # Build confidence only for API — across all of its checks, since
+        # is_converged() requires every weight of a task type to be confident.
+        all_checks = [
+            "reachability", "audit_trail", "test_evidence",
+            "docs_sync", "reproducibility",
+        ]
         for _ in range(8):
             opt.observe_feedback(
                 "api_endpoint",
                 delta=0.10,
-                affected_checks=["audit_trail"]
+                affected_checks=all_checks,
             )
 
         # API converged, CLI not

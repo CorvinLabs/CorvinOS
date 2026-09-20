@@ -9,15 +9,16 @@ Tests:
   - UI components accept input (search, filter)
 """
 
+from pathlib import Path
+
 import pytest
-from httpx import AsyncClient
-from fastapi.testclient import TestClient
 
 
-@pytest.fixture
-async def client(app):
-    """FastAPI test client for console routes."""
-    return TestClient(app)
+# `client` and `app` come from tests/fixtures_console.py (registered as a
+# pytest plugin in tests/conftest.py). The local override here was an
+# `async def` fixture that RETURNED a TestClient instead of yielding one, so
+# every test received a coroutine — and `app` was never defined at all, which
+# is why all ten tests in this file were "fixture 'app' not found" errors.
 
 
 class TestForgeUnifiedPanel:
@@ -31,13 +32,18 @@ class TestForgeUnifiedPanel:
             "/v1/console/forge/os-skills",
             "/v1/console/forge/graph",
             "/v1/console/forge/audit",
-            "/v1/console/forge/search",
         ]
 
         for endpoint in endpoints:
             response = client.get(endpoint)
             # Scaffold stage: endpoints exist (200/500 ok, 404 would be bad)
             assert response.status_code in [200, 401, 500], f"Endpoint {endpoint} not found"
+
+        # /forge/search is listed separately: `q` is a REQUIRED query param, so
+        # a bare GET is a 422 (which still proves the route is mounted), and
+        # listing it above asserted 404-is-bad against a 422.
+        assert client.get("/v1/console/forge/search").status_code == 422
+        assert client.get("/v1/console/forge/search?q=x").status_code in [200, 401, 500]
 
     async def test_tools_list_endpoint(self, client):
         """GET /v1/console/forge/tools returns tools list."""
@@ -87,7 +93,10 @@ class TestForgeUnifiedPanel:
         if response.status_code == 200:
             data = response.json()
             assert "events" in data
-            assert "total" in data
+            # The endpoint names the size field `count` (and carries tenant_id
+            # + timestamp); `total` never existed in this payload.
+            assert "count" in data
+            assert data["count"] == len(data["events"])
             assert isinstance(data["events"], list)
 
     async def test_search_endpoint(self, client):
@@ -97,13 +106,17 @@ class TestForgeUnifiedPanel:
         if response.status_code == 200:
             data = response.json()
             assert "results" in data
-            assert "total" in data
+            assert "count" in data
+            assert data["count"] == len(data["results"])
             assert isinstance(data["results"], list)
 
     async def test_tool_enable_endpoint(self, client):
         """POST /v1/console/forge/tools/{id}/enable changes tool state."""
         response = client.post("/v1/console/forge/tools/test_tool/enable")
-        assert response.status_code in [200, 401, 403, 500]
+        # 501 is the DECLARED contract: the route is registered with
+        # status_code=HTTP_501_NOT_IMPLEMENTED (forge_unified.py:168), so a 501
+        # proves it is wired and honest, not missing.
+        assert response.status_code in [200, 401, 403, 500, 501]
         if response.status_code == 200:
             data = response.json()
             assert data.get("status") == "enabled"
@@ -125,7 +138,9 @@ class TestForgeUnifiedPanel:
             "/v1/console/forge/os-skills/test_os_skill/config",
             json={"threshold": 0.85, "mode": "adaptive"},
         )
-        assert response.status_code in [200, 401, 403, 500]
+        # Registered with status_code=HTTP_501_NOT_IMPLEMENTED
+        # (forge_unified.py:401) — see the tools/enable test above.
+        assert response.status_code in [200, 401, 403, 500, 501]
         if response.status_code == 200:
             data = response.json()
             assert data.get("status") == "configured"
@@ -134,33 +149,45 @@ class TestForgeUnifiedPanel:
 
 
 class TestForgeConsolePages:
-    """Tests for the unified Forge console panel (frontend)."""
+    """The Forge panel's frontend files exist and export what the router imports.
 
-    async def test_forge_page_exports(self):
-        """Verify ForgePage is properly exported from pages/forge.tsx."""
-        from core.console.corvin_console.web_next.src.pages.forge import ForgePage
+    These three tests used to do `from core.console.corvin_console.web_next.src.
+    pages.forge import ForgePage` — importing TypeScript through Python. There
+    is no `web_next` Python package (the directory is `web-next`, with a
+    hyphen, and holds an npm project), so all three were guaranteed
+    ModuleNotFoundError and proved nothing about the panel. They now assert on
+    the real files and their real export statements; the behavioural side is
+    covered by the vitest suite under web-next/tests.
+    """
 
-        assert ForgePage is not None
-        assert callable(ForgePage)
+    WEB = (
+        Path(__file__).resolve().parents[2]
+        / "core" / "console" / "corvin_console" / "web-next"
+    )
 
-    async def test_tabs_components_exist(self):
-        """Verify all Tab components are importable."""
-        from core.console.corvin_console.web_next.src.components.forge.ToolsTab import ToolsTab
-        from core.console.corvin_console.web_next.src.components.forge.SkillsTab import SkillsTab
-        from core.console.corvin_console.web_next.src.components.forge.OSSkillsTab import OSSkillsTab
-        from core.console.corvin_console.web_next.src.components.forge.GraphTab import GraphTab
-        from core.console.corvin_console.web_next.src.components.forge.AuditTab import AuditTab
+    def test_forge_page_exports(self):
+        page = self.WEB / "src" / "pages" / "forge.tsx"
+        assert page.is_file(), f"{page} missing"
+        src = page.read_text(encoding="utf-8")
+        assert "export default function ForgePage" in src
+        assert "export { ForgePage }" in src, "named re-export is what lazy-pages imports"
 
-        assert all([ToolsTab, SkillsTab, OSSkillsTab, GraphTab, AuditTab])
+    def test_tabs_components_exist(self):
+        tabs = ["ToolsTab", "SkillsTab", "OSSkillsTab", "GraphTab", "AuditTab"]
+        missing = []
+        for tab in tabs:
+            f = self.WEB / "src" / "components" / "forge" / f"{tab}.tsx"
+            if not f.is_file() or f"export default function {tab}" not in f.read_text(encoding="utf-8"):
+                missing.append(tab)
+        assert not missing, f"tab components missing or not exported: {missing}"
 
-    async def test_forge_types_defined(self):
-        """Verify TypeScript types are properly defined."""
-        from core.console.corvin_console.web_next.src.types.forge import (
-            ForgeTool, ForgeSkill, ForgeOSSkill, ForgeDependency, ForgeAuditEvent
-        )
-
-        assert all([ForgeTool, ForgeSkill, ForgeOSSkill, ForgeDependency, ForgeAuditEvent])
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_forge_types_defined(self):
+        types = self.WEB / "src" / "types" / "forge.ts"
+        assert types.is_file(), f"{types} missing"
+        src = types.read_text(encoding="utf-8")
+        for name in (
+            "ForgeTool", "ForgeSkill", "ForgeOSSkill",
+            "ForgeDependency", "ForgeAuditEvent",
+        ):
+            assert f"interface {name}" in src or f"type {name}" in src, \
+                f"{name} not declared in forge.ts"

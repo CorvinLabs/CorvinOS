@@ -11,7 +11,6 @@
 
 import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -271,5 +270,4 @@ export const panelConfig = {
   description: "6-phase project workspace with skill metrics and learning visualization",
   route: "/app/datahub-creator",
   component: DataHubCreatorPanel,
-  requiredFlag: "datahub_creator_enabled",
-};
+  requiredFlag: "datahub_creator_enabled" };

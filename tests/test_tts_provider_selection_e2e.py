@@ -213,7 +213,7 @@ class TestEndToEndScenarios:
         """Scenario 1: OpenAI TTS succeeds"""
         # Setup: valid OpenAI key, SDK installed
         # Expected: voice.ogg file created with quality_score=0.95
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
     @pytest.mark.asyncio
@@ -221,7 +221,7 @@ class TestEndToEndScenarios:
         """Scenario 2: OpenAI fails (e.g., network), falls back to Edge"""
         # Setup: valid OpenAI key, but API unreachable
         # Expected: Edge TTS used, voice.ogg still created
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
     @pytest.mark.asyncio
@@ -229,7 +229,7 @@ class TestEndToEndScenarios:
         """Scenario 3: OpenAI quota exceeded (429)"""
         # Setup: OpenAI returns 429 quota error
         # Expected: backoff timer set, Edge TTS fallback, subsequent calls skip OpenAI for 1h
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
     @pytest.mark.asyncio
@@ -237,7 +237,7 @@ class TestEndToEndScenarios:
         """Scenario 4: All TTS engines fail"""
         # Setup: OpenAI fails, Edge unavailable, Piper missing
         # Expected: synthesize_voice_note returns None, text-only delivery with skip reason
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # Test helpers

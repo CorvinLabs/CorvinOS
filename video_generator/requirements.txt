@@ -1,0 +1,25 @@
+# CorvinOS Premium Video Generator Requirements
+
+# Core dependencies
+pyyaml>=6.0
+numpy>=1.21.0
+
+# Optional: Blender Python API (if using native Blender rendering)
+# blender>=3.0
+
+# Optional: Manim (if using native Manim rendering)
+# manim>=0.15.0
+# pygments>=2.9.0
+# pydub>=0.25.1
+# pillow>=8.2.0
+# scipy>=1.7.0
+
+# Optional: SVG handling
+# svgwrite>=1.4.0
+# svglib>=1.4.0
+
+# Optional: Image processing
+pillow>=8.2.0
+
+# Development/debugging
+python-dotenv>=0.19.0

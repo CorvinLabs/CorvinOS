@@ -1,6 +1,7 @@
 """Phase 1 Tests: DoD Verifier Skill Unit + E2E Tests."""
 
 import pytest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, mock_open
 import sys
@@ -99,34 +100,54 @@ class TestDoD_VerifierSkillE2E:
     """End-to-end tests of the full Skill."""
 
     def test_all_checks_pass_e2e(self):
-        """Simulate a task that passes all checks."""
-        skill = DoD_VerifierSkill(
-            audit_path=Path("/tmp/audit.jsonl"),
-            cwd=Path("/repo")
-        )
+        """Simulate a task that passes all five checks.
 
-        with patch("subprocess.run") as mock_run:
-            with patch("pathlib.Path.exists") as mock_exists:
-                with patch("builtins.open", mock_open(read_data='{"task_id": "t1", "event_type": "dod_verified"}\n')):
-                    # Setup mocks
-                    mock_exists.return_value = True
-                    mock_run.return_value.returncode = 0
-                    mock_run.return_value.stdout = "src/api.py:42: delete_panel()"
+        Real files on disk, not a single global ``builtins.open`` mock. The
+        mock returned the SAME audit JSON for every file the skill opened, so
+        the test-evidence check read audit JSON instead of pytest output and
+        failed; docs_sync and reproducibility were never fed an input at all.
+        Three of five checks failed and the score was 0.45 — this test asserted
+        ``> 0.5`` and had never been executed, because the skill package was
+        not importable (2026-09-20 review).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            audit_path = tmp / "audit.jsonl"
+            audit_path.write_text(
+                '{"task_id": "t1", "event_type": "dod_verified"}\n',
+                encoding="utf-8",
+            )
+            test_path = tmp / "test_api.py"
+            test_path.write_text("def test_x():\n    assert True\n", encoding="utf-8")
+            test_output = tmp / "test_output.txt"
+            test_output.write_text("3 passed in 0.10s\n", encoding="utf-8")
 
-                    # Execute
-                    result = skill.execute(
-                        task_id="t1",
-                        task_type="api_endpoint",
-                        symbol_name="delete_panel",
-                        test_path=Path("/tests/test_api.py"),
-                        test_output_file=Path("/tmp/test_output.txt"),
-                    )
+            skill = DoD_VerifierSkill(audit_path=audit_path, cwd=tmp)
 
-                    # Assert
-                    assert result.task_id == "t1"
-                    assert result.score > 0.5
-                    # Check that all checks were attempted
-                    assert len(result.checks) == 5
+            with patch("subprocess.run") as mock_run:
+                # Both subprocess users (reachability grep, docs_sync git diff)
+                # get an output that satisfies them.
+                mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = (
+                    "src/api.py:42: delete_panel()\n"
+                    "+docs/api.md: feat: delete_panel endpoint\n"
+                )
+
+                result = skill.execute(
+                    task_id="t1",
+                    task_type="api_endpoint",
+                    symbol_name="delete_panel",
+                    test_path=test_path,
+                    test_output_file=test_output,
+                    commit_msg="feat: delete_panel\n\nReproduce: pytest tests/test_api.py",
+                )
+
+            assert result.task_id == "t1"
+            assert len(result.checks) == 5
+            failed = {n: c for n, c in result.checks.items() if not c["passed"]}
+            assert not failed, f"checks that did not pass: {failed}"
+            assert result.score > 0.5
+            assert result.passed is True
 
     def test_hallucinated_task_fails(self):
         """Task with no reachability + no audit → should fail."""

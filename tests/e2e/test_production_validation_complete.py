@@ -63,16 +63,19 @@ class TestExecutionContext:
         # assert ctx.task_id == "task-1"
         # assert ctx.user_id == "user-1"
         pass  # TODO: wire ExecutionContext
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_context_propagation_async(self, event_loop):
         """ExecutionContext propagates across async boundaries."""
         # Ensure ContextVar inheritance in async/await
         pass  # TODO: verify ContextVar inheritance
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_context_isolation_threads(self):
         """ExecutionContext isolates between threads."""
         # Verify threading.Thread does not inherit ContextVars
         pass  # TODO: verify thread isolation
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestHealthMonitor:
@@ -81,14 +84,17 @@ class TestHealthMonitor:
     def test_health_monitor_initialization(self):
         """HealthMonitor initializes with subsystem registry."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_health_probe_interval(self):
         """HealthMonitor probes at configured intervals."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_health_degradation_alert(self):
         """HealthMonitor alerts on degradation."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestLoopEngineer:
@@ -97,14 +103,17 @@ class TestLoopEngineer:
     def test_loop_planning(self):
         """LoopEngineer produces iteration plan."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_loop_execution(self, event_loop):
         """LoopEngineer executes iterations sequentially."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_loop_early_exit(self):
         """LoopEngineer exits when success criteria met."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestOrchestrator:
@@ -113,10 +122,12 @@ class TestOrchestrator:
     def test_orchestrator_dispatch(self, event_loop):
         """Orchestrator dispatches to correct subsystems."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_orchestrator_error_handling(self):
         """Orchestrator handles subsystem errors gracefully."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestLearningEngine:
@@ -125,10 +136,12 @@ class TestLearningEngine:
     def test_learning_event_emission(self):
         """LearningEngine emits typed events."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_learning_persistence(self, temp_audit_dir):
         """LearningEngine persists events to audit trail."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================
@@ -141,14 +154,17 @@ class TestVibePhase1:
     def test_task_registration(self):
         """Phase 1: Task registers with orchestrator."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_task_state_machine(self):
         """Phase 1: Task transitions through states correctly."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_task_artifact_tracking(self):
         """Phase 1: Task artifacts tracked and retrievable."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestVibePhase2:
@@ -157,14 +173,17 @@ class TestVibePhase2:
     def test_session_renewal_trigger(self):
         """Phase 2: Session renewal triggers at context limit."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_session_renewal_checkpoint(self):
         """Phase 2: Checkpoint saved before renewal."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_session_continuation(self):
         """Phase 2: Task continues after session renewal."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestVibePhase3:
@@ -173,10 +192,12 @@ class TestVibePhase3:
     def test_background_monitoring(self, event_loop):
         """Phase 3: BackgroundMonitor polls task status."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_notification_dispatch(self):
         """Phase 3: Notifications dispatched on state change."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestVibePhase4:
@@ -185,10 +206,12 @@ class TestVibePhase4:
     def test_adaptive_routing(self):
         """Phase 4: Routing adapts based on performance."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_cost_awareness(self):
         """Phase 4: Cost optimization active."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================
@@ -201,10 +224,12 @@ class TestConfidenceScoring:
     def test_confidence_interval_calculation(self):
         """Confidence intervals calculated correctly."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_confidence_decay_over_time(self):
         """Confidence decays without recent observations."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestDecisionHistory:
@@ -213,10 +238,12 @@ class TestDecisionHistory:
     def test_decision_logged_with_context(self):
         """Each decision logged with full context."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_decision_history_queryable(self):
         """Decision history queryable by user/task/time."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestOutcomeFeedback:
@@ -225,10 +252,12 @@ class TestOutcomeFeedback:
     def test_feedback_acknowledgment(self):
         """Feedback acknowledged and linked to decision."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_feedback_updates_confidence(self):
         """Feedback updates decision confidence."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAttentionBudget:
@@ -237,10 +266,12 @@ class TestAttentionBudget:
     def test_budget_allocation(self):
         """Attention budget allocated to task."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_budget_enforcement_on_overspend(self):
         """Task paused on budget exhaustion."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================
@@ -253,14 +284,17 @@ class TestRWLockSafety:
     def test_multiple_readers_concurrent(self):
         """Multiple readers hold lock simultaneously."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_writer_exclusive_access(self):
         """Writer excludes all readers and writers."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_rwlock_fairness(self):
         """RWLock does not starve writers."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestContextVarIsolation:
@@ -269,14 +303,17 @@ class TestContextVarIsolation:
     def test_context_var_thread_isolation(self):
         """ContextVars isolated between threads."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_context_var_task_isolation(self):
         """ContextVars isolated between async tasks."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_context_var_inheritance_in_create_task(self):
         """ContextVars inherited in asyncio.create_task()."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestAsyncThreadIntegration:
@@ -285,14 +322,17 @@ class TestAsyncThreadIntegration:
     def test_thread_to_async_boundary(self):
         """Thread can invoke async without deadlock."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_async_to_thread_boundary(self):
         """Async can spawn thread without event loop issues."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_context_propagation_async_to_thread(self):
         """ExecutionContext propagates async → thread."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestContextPropagationADR0424:
@@ -301,6 +341,7 @@ class TestContextPropagationADR0424:
     def test_context_survives_worker_pool(self):
         """Context preserved through worker pool."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================
@@ -329,6 +370,7 @@ class TestMemoryStability:
     def test_memory_cleanup_after_task_completion(self):
         """Memory released after task completion."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestLatencyUnderLoad:
@@ -337,10 +379,12 @@ class TestLatencyUnderLoad:
     def test_p99_latency_under_10_concurrent_tasks(self):
         """P99 latency <500ms with 10 concurrent tasks."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_p99_latency_under_100_concurrent_tasks(self):
         """P99 latency <2s with 100 concurrent tasks."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestThroughputStability:
@@ -349,10 +393,12 @@ class TestThroughputStability:
     def test_throughput_sustained_1min(self):
         """Throughput stable for 1 minute sustained load."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_no_tail_latency_spikes(self):
         """No unexplained tail latency spikes in 1 min run."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================
@@ -365,42 +411,52 @@ class TestProductionReadiness:
     def test_all_feature_flags_configured(self):
         """All feature flags have defaults configured."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_trail_integrity(self):
         """Audit trail hash-chain intact."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_compliance_disclosure_enabled(self):
         """Compliance disclosure active (EU AI Act Art. 50)."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_gdpr_consent_gate_active(self):
         """GDPR consent gate enforced (Art. 6, 7)."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_data_retention_policy_enforced(self):
         """Data retention policy enforced (90-day default)."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_plugin_isolation_verified(self):
         """Plugin isolation maintains security boundary."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_version_bump_in_package_metadata(self):
         """Version bumped to 1.0.0 in package metadata."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_release_notes_current(self):
         """Release notes match current feature set."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_runbook_deployment_tested(self):
         """Deployment runbook steps tested."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_operator_monitoring_dashboard_live(self):
         """Operator monitoring dashboard functional."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================
@@ -413,22 +469,27 @@ class TestIntegrationConsistency:
     def test_unified_audit_trail(self):
         """All subsystems write to unified audit trail."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_tenant_isolation_enforced(self):
         """Tenant isolation enforced across all subsystems."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_no_cross_tenant_leaks(self):
         """No data leaks between tenants in high-load scenario."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_unified_error_handling(self):
         """Unified error handling across subsystems."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_version_compatibility_matrix(self):
         """Version compatibility verified (all v1.0.0)."""
         pass  # TODO: implement
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================

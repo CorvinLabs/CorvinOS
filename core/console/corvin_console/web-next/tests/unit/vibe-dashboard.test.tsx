@@ -28,9 +28,6 @@ import { VibeDashboard } from '@/pages/vibe-engineering/VibeDashboard';
 vi.mock('@/pages/vibe-engineering/components/MaturityDashboard', () => ({
   MaturityDashboard: () => <div data-testid="tab-maturity">Maturity body</div>,
 }));
-vi.mock('@/pages/vibe-engineering/tabs/LicensingAuditTab', () => ({
-  LicensingAuditTab: () => <div data-testid="tab-audit">Audit body</div>,
-}));
 vi.mock('@/pages/vibe-engineering/tabs/MonitoringTab', () => ({
   MonitoringTab: () => <div data-testid="tab-metrics">Metrics body</div>,
 }));
@@ -38,7 +35,11 @@ vi.mock('@/pages/vibe-engineering/tabs/ModelsTab', () => ({
   ModelsTab: () => <div data-testid="tab-models">Models body</div>,
 }));
 
-const TABS = ['Maturity Metrics', 'Audit Events', 'System Metrics', 'Models'];
+// "Audit Events" left this panel on 2026-09-20: the same
+// /v1/console/v1/licensing/audit-events store backed both this tab and a
+// standalone Licensing Audit panel, and it now lives once, in
+// /app/compliance's "Learning events" section.
+const TABS = ['Maturity Metrics', 'System Metrics', 'Models'];
 
 describe('Vibe Engineering panel', () => {
   const renderComponent = () =>
@@ -53,23 +54,26 @@ describe('Vibe Engineering panel', () => {
     expect(screen.getByTestId('vibe-dashboard-panel')).toBeInTheDocument();
   });
 
-  it('offers exactly the four Phase 2 tabs', () => {
+  it('offers exactly the three Phase 2 tabs', () => {
     renderComponent();
     for (const label of TABS) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
+    // The tab is gone, not merely unlabelled — a renamed tab would still
+    // mount the duplicate view this consolidation removed.
+    expect(screen.queryByRole('button', { name: /audit/i })).toBeNull();
   });
 
   it('opens on Maturity Metrics', async () => {
     renderComponent();
     expect(await screen.findByTestId('tab-maturity')).toBeInTheDocument();
-    expect(screen.queryByTestId('tab-audit')).toBeNull();
+    expect(screen.queryByTestId('tab-metrics')).toBeNull();
   });
 
   it('switches tab bodies on click', async () => {
     renderComponent();
-    fireEvent.click(screen.getByRole('button', { name: 'Audit Events' }));
-    expect(await screen.findByTestId('tab-audit')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'System Metrics' }));
+    expect(await screen.findByTestId('tab-metrics')).toBeInTheDocument();
     expect(screen.queryByTestId('tab-maturity')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Models' }));
     expect(await screen.findByTestId('tab-models')).toBeInTheDocument();

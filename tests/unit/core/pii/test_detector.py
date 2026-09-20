@@ -651,7 +651,7 @@ class TestFailClosedBehavior:
         """Test that patterns are validated at module load time."""
         # If any pattern is invalid, module import should fail
         # This is tested implicitly by the fact that this test file imports successfully
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_detect_all_patterns_available(self, detector):
         """Test that all expected patterns are registered."""

@@ -309,7 +309,7 @@ class TestCE003PersonaModelDefaults:
     def test_placeholder(self):
         """Placeholder for CE-003 tests (requires PersonaModel import)."""
         # TODO: Add PersonaModel tests when available
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 if __name__ == "__main__":

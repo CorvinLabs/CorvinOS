@@ -1,9 +1,26 @@
 """E2E tests for Plugin Manager v2 — complete lifecycle (k=2 wiring proof).
 
 Tests: install (quota check) → status → enable/disable → uninstall
-All E2E tests passing ✅
 """
+
 from __future__ import annotations
+
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# PluginManager itself lives in core/plugins/plugin_manager_v2.py (this file
+# imports it from plugin_manager, which holds PluginRegistry), but the three
+# other names it needs exist nowhere — this is a design that was never built,
+# not a rename.
+#
+# This surfaced as a COLLECTION ERROR in every full run, which made the file
+# invisible rather than pending. Delete this guard in the commit that lands
+# the missing code.
+import pytest
+
+pytest.skip(
+    'InstallRequest / QuotaExceeded / PluginInstallFailed do not exist on main',
+    allow_module_level=True,
+)
+
 
 import json
 import tempfile

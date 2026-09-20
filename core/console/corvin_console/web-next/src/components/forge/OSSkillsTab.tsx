@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Cog, Plus } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { Cog } from 'lucide-react';
 import { ForgeOSSkill } from '@/types/forge';
 
 interface OSSkillsTabProps {
@@ -17,10 +16,9 @@ export default function OSSkillsTab({
   osSkills,
   setOSSkills,
   searchQuery,
-  filterStatus,
-}: OSSkillsTabProps) {
-  const [selectedOSSkill, setSelectedOSSkill] = useState<string | null>(null);
-  const [editingConfig, setEditingConfig] = useState<string | null>(null);
+  filterStatus }: OSSkillsTabProps) {
+  const [_selectedOSSkill, setSelectedOSSkill] = useState<string | null>(null);
+  const [_editingConfig, setEditingConfig] = useState<string | null>(null);
 
   const filtered = React.useMemo(() => {
     return osSkills.filter((skill) => {
@@ -38,13 +36,12 @@ export default function OSSkillsTab({
     });
   }, [osSkills, searchQuery, filterStatus]);
 
-  const handleConfigUpdate = async (skillId: string, config: Record<string, any>) => {
+  const _handleConfigUpdate = async (skillId: string, config: Record<string, unknown>) => {
     try {
       const res = await fetch(`/v1/console/forge/os-skills/${skillId}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      });
+        body: JSON.stringify(config) });
       if (!res.ok) throw new Error('Failed to update config');
 
       const updated = await res.json();

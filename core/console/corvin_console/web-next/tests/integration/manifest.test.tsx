@@ -1,3 +1,6 @@
+/* Empty test bodies below are marked `.skip`: they contained only
+ * comments and counted as PASSES in every run until the 2026-09-20
+ * review. Skipping states the gap instead of inflating the green count. */
 /**
  * Frontend Manifest Integration Tests (ADR-0561 Phase 1)
  *
@@ -260,12 +263,12 @@ describe("useConsoleManifest Hook", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("ManifestNavRenderer", () => {
-  it("renders nav groups from manifest", () => {
+  it.skip("renders nav groups from manifest", () => {
     // Import ManifestNavRenderer and test rendering
     // (Requires React Testing Library setup)
   })
 
-  it("excludes gated panels from nav", () => {
+  it.skip("excludes gated panels from nav", () => {
     // Test that vibe_engineering panel is excluded when flag=false
   })
 })
@@ -275,11 +278,11 @@ describe("ManifestNavRenderer", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("Manifest Fallback (ADR-0561 Synthesis)", () => {
-  it("renders with fallback when manifest unavailable", () => {
+  it.skip("renders with fallback when manifest unavailable", () => {
     // Test that Console still shows core panels when manifest fetch fails
   })
 
-  it("shows loading state while manifest fetches", () => {
+  it.skip("shows loading state while manifest fetches", () => {
     // Test loading UI
   })
 })

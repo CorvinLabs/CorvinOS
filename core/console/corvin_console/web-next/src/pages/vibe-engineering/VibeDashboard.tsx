@@ -2,26 +2,29 @@
  * Vibe Engineering Dashboard — Phase 2 Live Data Wiring (2026-09-15)
  *
  * Integrated Maturity Metrics + Live Endpoints (ADR-0728)
- * - Licensing: /v1/console/v1/licensing/audit-events (EventStore + PII filtering)
  * - Monitoring: /v1/console/v1/monitoring/metrics (HealthMonitor + alerts)
  * - Models: /v1/console/v1/models/available (Engine registry)
  *
  * History: This route used to be a tabbed hub (Graph View, Inspector, Timeline, Learning).
  * On 2026-09-05 the operator requested the Learning view alone; on 2026-09-15 the
  * Phase 2 live-data tabs above replaced it (Maturity Metrics · Audit Events ·
- * System Metrics · Models). The route id stays `vibe-engineering` for bookmark
+ * System Metrics · Models). On 2026-09-20 the "Audit Events" tab moved to
+ * /app/compliance as its "Learning events" section — the same
+ * /v1/console/v1/licensing/audit-events store also backed a standalone
+ * Licensing Audit panel, so one set of records had two homes and neither was
+ * the compliance page an auditor opens. The route id stays `vibe-engineering`
+ * for bookmark
  * stability. This directory is the page: a sibling FILE pages/vibe-engineering.tsx
  * wins over it silently (happened 2026-08-27 and 2026-09-17) — never add one.
  */
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { MaturityDashboard } from './components/MaturityDashboard';
-import { LicensingAuditTab } from './tabs/LicensingAuditTab';
 import { MonitoringTab } from './tabs/MonitoringTab';
 import { ModelsTab } from './tabs/ModelsTab';
 
-type TabType = 'maturity' | 'audit' | 'metrics' | 'models';
+type TabType = 'maturity' | 'metrics' | 'models';
 
 const LoadingFallback = () => (
   <div className="flex justify-center py-12">
@@ -39,7 +42,6 @@ export function VibeDashboard() {
         <div className="flex gap-4 px-6 py-4">
           {[
             { id: 'maturity' as TabType, label: 'Maturity Metrics' },
-            { id: 'audit' as TabType, label: 'Audit Events' },
             { id: 'metrics' as TabType, label: 'System Metrics' },
             { id: 'models' as TabType, label: 'Models' },
           ].map((tab) => (
@@ -62,7 +64,6 @@ export function VibeDashboard() {
       <div className="min-h-screen">
         <Suspense fallback={<LoadingFallback />}>
           {activeTab === 'maturity' && <MaturityDashboard />}
-          {activeTab === 'audit' && <LicensingAuditTab />}
           {activeTab === 'metrics' && <MonitoringTab />}
           {activeTab === 'models' && <ModelsTab />}
         </Suspense>
@@ -70,8 +71,9 @@ export function VibeDashboard() {
 
       {/* Footer */}
       <div className="border-t bg-muted/50 p-4 text-xs text-muted-foreground">
-        Phase 2 Features: Live audit events • System metrics • Model registry • Maturity dashboard
-        — All endpoints PII-safe • Last updated: {new Date().toLocaleTimeString()}
+        System metrics • Model registry • Maturity dashboard — All endpoints
+        PII-safe • Audit events moved to Audit &amp; Compliance • Last updated:{' '}
+        {new Date().toLocaleTimeString()}
       </div>
     </div>
   );

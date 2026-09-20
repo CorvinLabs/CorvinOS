@@ -1,15 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Tabs,
   TabsContent,
   TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs';
+  TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Loader2, Search } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import ToolsTab from '@/components/forge/ToolsTab';
 import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
@@ -19,11 +16,22 @@ import {
   ForgeTool,
   ForgeSkill,
   ForgeOSSkill,
-  ForgeDependency,
-} from '@/types/forge';
+  ForgeDependency } from '@/types/forge';
+
+/** Tab ids, in tab-bar order. Also the accepted `?tab=` values. */
+const FORGE_TABS = ['tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
+type ForgeTab = (typeof FORGE_TABS)[number];
 
 export default function ForgePage() {
-  const [activeTab, setActiveTab] = useState('tools');
+  // ?tab= picks the opening tab, so /app/skills can redirect straight onto the
+  // Skills tab instead of dropping the operator on Tools and making them find
+  // it (the standalone skills panel was folded in here on 2026-09-20). An
+  // unknown or absent value falls back to 'tools', the previous default.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(
+    FORGE_TABS.includes(requestedTab as ForgeTab) ? (requestedTab as string) : 'tools',
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [filterType, setFilterType] = useState<'all' | 'tool' | 'skill' | 'os-skill'>('all');
@@ -97,7 +105,7 @@ export default function ForgePage() {
           />
           <select
             value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as any)}
+            onChange={(e) => setFilterStatus(e.target.value as 'all' | 'enabled' | 'disabled')}
             className="flex h-10 w-32 rounded-md border border-input bg-background px-3 py-2 text-sm"
           >
             <option value="all">All</option>
@@ -106,7 +114,7 @@ export default function ForgePage() {
           </select>
           <select
             value={filterType}
-            onChange={(e) => setFilterType(e.target.value as any)}
+            onChange={(e) => setFilterType(e.target.value as 'all' | 'tool' | 'skill' | 'os-skill')}
             className="flex h-10 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm"
           >
             <option value="all">All Types</option>
@@ -125,7 +133,14 @@ export default function ForgePage() {
       )}
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => {
+          setActiveTab(v);
+          setSearchParams(v === 'tools' ? {} : { tab: v }, { replace: true });
+        }}
+        className="flex-1 flex flex-col"
+      >
         <TabsList className="grid w-full grid-cols-5 mb-4">
           <TabsTrigger value="tools">
             Tools

@@ -189,6 +189,8 @@ spec:
     # Plugin registry surface + runtime lifecycle (ADR-0233 / ADR-0511):
     - plugin_console_surface        # GET /api/v1/plugins + Installed tab (else 404)
     - plugin_runtime_lifecycle      # install/uninstall/enable/disable → registry.yaml (else refused)
+    # Video Producer surface (ADR-0892 review, 2026-09-20):
+    - video_producer_enabled        # /app/video-quality-metrics panel (else hidden forever)
     # Phase 8-12 features (proactive learning):
     # - learning_anomaly_detection   # Detect confidence drops
     # - learning_pattern_discovery   # Auto-discover patterns from failures

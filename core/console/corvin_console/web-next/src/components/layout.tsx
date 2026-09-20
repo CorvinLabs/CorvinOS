@@ -156,11 +156,18 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "primary",
     items: [
+      // Chat is the install's landing route (App.tsx redirects the index to it),
+      // so it leads the sidebar — operator request 2026-09-20. It is mounted
+      // directly in App.tsx, not through PANELS, because chat/:sid is a param
+      // route; panel-nav-wiring.test.ts only walks PANELS, so a nav entry with
+      // no PANELS counterpart is fine here and was removed once (2026-09-19) on
+      // the mistaken assumption that it had to be one.
+      { to: "/app/chat", label: "Chat", icon: MessagesSquare },
       { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
       // Vibe Engineering dashboard (ADR-0400): unified 3-column learnings view.
       // A panel needs BOTH registrations: panelRoutes() mounts /app/<route> from PANELS,
       // this list makes it reachable. tests/unit/panel-nav-wiring.test.ts verifies
-      // the two stay in sync (Audit 2026-09-19: Chat page removed as it's not in PANELS).
+      // the two stay in sync.
       { to: "/app/vibe-engineering", label: "Learnings", icon: Brain },
     ],
   },
@@ -177,26 +184,16 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/marketplace", label: "Marketplace", icon: Blocks },
     ],
   },
-  {
-    id: "observability",
-    label: "Observability",
-    collapsible: true,
-    defaultOpen: true,
-    items: [
-      { to: "/app/quality", label: "Quality Gates", icon: CheckCircle },
-      { to: "/app/sync-monitor", label: "Sync Monitor", icon: Activity },
-      { to: "/app/otel-telemetry", label: "OTEL Telemetry", icon: Gauge },
-      // requiredFlag: video_producer_enabled — the panel is registered in
-      // PANELS and gated in GATED_FLAGS; without this entry the route was
-      // mounted but nothing linked to it.
-    ],
-  },
+  // The "observability" group was dissolved on 2026-09-20 (operator request:
+  // "Observability directly above Settings"). A group cannot nest inside
+  // another, so its three entries moved into "system" immediately above the
+  // Settings link rather than staying a separate section further up.
   {
     id: "messaging",
     label: "Messaging",
     items: [
       { to: "/app/bridges", label: "Channels", icon: Network },
-      { to: "/app/voice",   label: "Profile",  icon: AudioLines },
+      { to: "/app/voice",   label: "Voice",    icon: AudioLines },
     ],
   },
   {
@@ -217,8 +214,12 @@ const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
+      // Forge's "Skills" tab is the one skills surface. /app/skills served the
+      // SAME 643 records off /v1/console/skills that /v1/console/forge/skills
+      // returns (verified against the live host, 2026-09-20), so the standalone
+      // panel was a duplicate view, not a second capability. Its route now
+      // redirects here; see App.tsx.
       { to: "/app/forge",      label: "Forge",           icon: Hammer },
-      { to: "/app/skills",     label: "Skills",          icon: BookOpen },
       { to: "/app/skill-forge-generator", label: "Skill Forge", icon: Sparkles },
     ],
   },
@@ -253,9 +254,17 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/api-keys",       label: "API Keys",           icon: KeyRound },
       { to: "/app/license",        label: "License",            icon: Lock },
-      { to: "/app/licensing-audit", label: "Licensing Audit",   icon: Lock },
+      // Licensing Audit was folded into the Audit & Compliance panel as its
+      // "Learning events" section (2026-09-20). It read the same
+      // /v1/console/v1/licensing/audit-events store the Learnings panel's
+      // "Audit Events" tab did, so the records had two homes and neither was
+      // the compliance page where an auditor looks. Its route redirects here.
       { to: "/app/compliance",     label: "Audit & Compliance", icon: ShieldCheck },
       { to: "/app/ldd",            label: "Quality",            icon: Boxes },
+      // Ex-"Observability" group, moved here so it sits directly above Settings.
+      { to: "/app/quality",        label: "Quality Gates",      icon: CheckCircle },
+      { to: "/app/sync-monitor",   label: "Sync Monitor",       icon: Activity },
+      { to: "/app/otel-telemetry", label: "OTEL Telemetry",     icon: Gauge },
       { to: "/app/settings",       label: "Settings",           icon: Settings },
     ],
   },

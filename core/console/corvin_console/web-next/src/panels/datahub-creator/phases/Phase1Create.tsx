@@ -27,7 +27,9 @@ const AVAILABLE_SKILLS = [
   { id: "os.flow_guard", label: "Flow Guard" },
 ];
 
-export function Phase1Create({ projectId, isEdit, onProjectCreated }: Phase1CreateProps) {
+// projectId is part of the props contract but unread in this phase; renaming
+// the BINDING (not the prop) keeps the call sites intact.
+export function Phase1Create({ projectId: _projectId, isEdit, onProjectCreated }: Phase1CreateProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [goals, setGoals] = useState<string[]>([]);

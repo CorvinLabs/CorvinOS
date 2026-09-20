@@ -11,6 +11,17 @@ Tests the complete plugin lifecycle and compliance guarantees:
 7. Self-healing circuit breaker
 """
 
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# The manifest module ships DependencyConflictError, not a Dependency type;
+# the dependency resolver is core/skills/dependency_resolver.py.
+#
+# This was a COLLECTION ERROR in every full run, i.e. invisible rather than
+# pending. Delete this guard in the commit that reconciles the APIs.
+import pytest
+
+pytest.skip('core.plugins.corvin_plugins.manifest has no Dependency / PluginRecord', allow_module_level=True)
+
+
 import json
 import tempfile
 from pathlib import Path

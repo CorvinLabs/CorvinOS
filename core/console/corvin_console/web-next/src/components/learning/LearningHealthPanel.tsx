@@ -3,16 +3,15 @@
  * Displays: feedback lag, param updates, convergence rate, optimizer trends
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 
 export const LearningHealthPanel: React.FC = () => {
-  const [metrics, setMetrics] = useState({
+  const [metrics, _setMetrics] = useState({
     feedback_lag_ms: 245,
     param_updates_count: 127,
     convergence_rate_percent: 33,
     active_skills: 3,
-    converged_skills: 1,
-  });
+    converged_skills: 1 });
 
   return (
     <div style={{ padding: '16px', border: '1px solid #ccc', borderRadius: '8px' }}>

@@ -15,7 +15,7 @@ import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getFeatureWhitelist, toggleFeature, type DelegationBudgetResponse, type HealingConfigResponse, type WhitelistResponse } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getFeatureWhitelist, toggleFeature, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -48,21 +48,18 @@ const KIND_PLACEHOLDER: Record<string, string> = {
   json: `{
   "example": true
 }
-`,
-};
+` };
 
 function formatTs(ts: number | null): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleString(undefined, {
-    month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  });
+    month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function FileCard({
   file,
   csrf,
-  onSaved,
-}: {
+  onSaved }: {
   file: SettingsFile;
   csrf: string;
   onSaved: () => void;
@@ -202,8 +199,7 @@ function AutoUpdateCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["auto-update"],
-    queryFn: ({ signal }) => getAutoUpdate(signal),
-  });
+    queryFn: ({ signal }) => getAutoUpdate(signal) });
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -269,8 +265,7 @@ function ServiceTierCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["service-tier"],
-    queryFn: ({ signal }) => getServiceTier(signal),
-  });
+    queryFn: ({ signal }) => getServiceTier(signal) });
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [manualCommand, setManualCommand] = React.useState<string | null>(null);
@@ -372,8 +367,7 @@ function TelemetryCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["healing-config"],
-    queryFn: ({ signal }) => getHealingConfig(signal),
-  });
+    queryFn: ({ signal }) => getHealingConfig(signal) });
   const [saving, setSaving] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -406,20 +400,17 @@ function TelemetryCard({ csrf }: { csrf: string }) {
       key: "ping_enabled", patchKey: "ping",
       label: "Anonymous instance ping",
       desc: "A random installation id + version, once a day — lets us count how " +
-            "many CorvinOS instances exist. Nothing else, no PII.",
-    },
+            "many CorvinOS instances exist. Nothing else, no PII." },
     {
       key: "error_enabled", patchKey: "error",
       label: "Error diagnostics",
       desc: "Scrubbed, content-free crash signatures (error type, code file, " +
-            "function) so bugs get fixed. Never prompts or user data.",
-    },
+            "function) so bugs get fixed. Never prompts or user data." },
     {
       key: "telemetry_enabled", patchKey: "healing",
       label: "Self-healing traces",
       desc: "Anonymised self-healing events uploaded to CorvinLabs/CorvinLogs for " +
-            "public transparency. No prompts, no message content, no PII.",
-    },
+            "public transparency. No prompts, no message content, no PII." },
   ];
 
   const licenseTier = q.data?._license_tier ?? "free";
@@ -481,8 +472,7 @@ function HealingCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["healing-config"],
-    queryFn: ({ signal }) => getHealingConfig(signal),
-  });
+    queryFn: ({ signal }) => getHealingConfig(signal) });
   const [saving, setSaving] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -586,8 +576,7 @@ const BUDGET_LABELS: Record<string, { label: string; unit: string; description: 
   max_loops:         { label: "Max iterations",     unit: "loops",   description: "How many planner→worker cycles the ACS orchestrator runs." },
   max_wall_time:     { label: "Max wall time",      unit: "s",       description: "Hard overall time limit for a full delegation run." },
   max_total_workers: { label: "Max workers",        unit: "workers", description: "How many parallel worker processes ACS may spawn per run." },
-  max_depth:         { label: "Max nesting depth",  unit: "levels",  description: "Maximum recursion depth for nested delegation calls." },
-};
+  max_depth:         { label: "Max nesting depth",  unit: "levels",  description: "Maximum recursion depth for nested delegation calls." } };
 
 /**
  * Feature Whitelist Card — enable/disable verified features (ADR-0386).
@@ -597,8 +586,7 @@ function FeatureFlagsCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["feature-whitelist"],
-    queryFn: ({ signal }) => getFeatureWhitelist(signal),
-  });
+    queryFn: ({ signal }) => getFeatureWhitelist(signal) });
 
   const [saving, setSaving] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -607,33 +595,25 @@ function FeatureFlagsCard({ csrf }: { csrf: string }) {
   const featureDescriptions: Record<string, { label: string; description: string }> = {
     vibe_engineering: {
       label: "Vibe Engineering",
-      description: "CEL brief deterministic insights — analyze request patterns and extract key information.",
-    },
+      description: "CEL brief deterministic insights — analyze request patterns and extract key information." },
     vibe_engineering_active: {
       label: "Vibe Engineering (Active Mode)",
-      description: "CEL active mode with LLM + Toolforge + SkillForge — full agentic decision-making.",
-    },
+      description: "CEL active mode with LLM + Toolforge + SkillForge — full agentic decision-making." },
     tree_of_thoughts: {
       label: "Tree of Thoughts",
-      description: "Multi-path exploration for complex reasoning — enables alternative solution paths.",
-    },
+      description: "Multi-path exploration for complex reasoning — enables alternative solution paths." },
     learning_objectives: {
       label: "Learning Objectives",
-      description: "User Learning Objectives (ULO) tracking — remember what users want to learn.",
-    },
+      description: "User Learning Objectives (ULO) tracking — remember what users want to learn." },
     token_metrics: {
       label: "Token Metrics",
-      description: "Visualize token usage, costs, and cache efficiency across all turns.",
-    },
+      description: "Visualize token usage, costs, and cache efficiency across all turns." },
     outcome_feedback_loop: {
       label: "Outcome Feedback",
-      description: "Auto-grade CEL stages and collect user feedback for learning loop.",
-    },
+      description: "Auto-grade CEL stages and collect user feedback for learning loop." },
     cross_device_sync: {
       label: "Cross-Device Sync",
-      description: "Sync learning state and preferences across devices.",
-    },
-  };
+      description: "Sync learning state and preferences across devices." } };
 
   const toggle = async (featureId: string, enabled: boolean) => {
     setError(null);
@@ -724,8 +704,7 @@ function DelegationBudgetCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["delegation-budget"],
-    queryFn: ({ signal }) => getDelegationBudget(signal),
-  });
+    queryFn: ({ signal }) => getDelegationBudget(signal) });
 
   type BudgetValues = DelegationBudgetResponse["values"];
   const [draft, setDraft] = React.useState<Partial<BudgetValues>>({});

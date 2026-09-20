@@ -234,7 +234,7 @@ class TestGatesAreActuallyInvoked:
         """Routes must not have alternative paths that bypass the gate."""
         # This is verified by the code review: all routes have the gate in their signature.
         # If code review passes, this test should pass.
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================
