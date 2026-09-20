@@ -15,6 +15,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import summarize  # noqa: E402
 
@@ -733,10 +735,48 @@ def test_claude_authenticated_true_with_api_key(monkeypatch) -> None:
     assert summarize._claude_authenticated() is True
 
 
-def test_claude_authenticated_false_without_creds(monkeypatch, tmp_path) -> None:
+#: Every 3rd-party-platform flag the probe accepts. Tests that mean "no
+#: credentials at all" must clear these too — on a Bedrock/Vertex/Foundry host
+#: they are the ONLY credential signal, and one of them is typically present in
+#: the environment of whatever spawned pytest, which would otherwise make the
+#: negative test below pass or fail by accident of where it ran.
+_PLATFORM_FLAGS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                   "CLAUDE_CODE_USE_FOUNDRY")
+
+
+def _no_credentials(monkeypatch, tmp_path) -> None:
+    """Neutralise every credential source the probe knows about."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for flag in _PLATFORM_FLAGS:
+        monkeypatch.delenv(flag, raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+
+def test_claude_authenticated_false_without_creds(monkeypatch, tmp_path) -> None:
+    _no_credentials(monkeypatch, tmp_path)
     assert summarize._claude_authenticated() is False
+
+
+@pytest.mark.parametrize("flag", _PLATFORM_FLAGS)
+def test_claude_authenticated_true_on_a_platform_install(
+    monkeypatch, tmp_path, flag: str,
+) -> None:
+    """Bedrock / Vertex / Foundry carry auth in the PLATFORM's own credentials
+    (AWS / GCP / Azure), so there is no ANTHROPIC_API_KEY and no
+    ~/.claude/.credentials.json to find. A probe that demanded one of those
+    returned False on a perfectly working install, `_summarize_via_cli` then
+    skipped the `claude` backend without ever spawning it, and every spoken
+    summary degraded to a near-verbatim echo of the answer (live 2026-09-20).
+
+    The flag is read from the shell env here; the settings.json variant — which
+    is what the setup wizards actually write, and the shape that broke the real
+    install — is covered in tests/test_claude_auth_probe_parity.py across all
+    four copies of this probe.
+    """
+    _no_credentials(monkeypatch, tmp_path)
+    monkeypatch.setenv(flag, "1")
+    assert summarize._claude_authenticated() is True
 
 
 def test_claude_authenticated_true_with_oauth_creds(monkeypatch, tmp_path) -> None:
@@ -778,16 +818,21 @@ def test_appendix_falls_back_to_hermes_when_cli_unavailable() -> None:
 
 
 def test_metapher_falls_back_to_hermes_when_cli_unavailable() -> None:
+    # generate_metapher runs the backend's answer through _extract_metapher,
+    # which only accepts a CURRENT marker — so the fake Hermes reply is built
+    # from summarize's own list. A hard-coded opener made this test assert the
+    # fallback was broken as soon as the prompt was reworded (381d330a /
+    # ADR-0780), when in fact only the fixture had gone stale.
+    reply = f"{summarize._METAPHER_MARKERS[0]} das ist wie ein Beispiel."
     from unittest.mock import patch
     with (
         patch.object(summarize, "_metapher_via_cli", return_value=None) as cli,
-        patch.object(summarize, "_metapher_via_hermes",
-                     return_value="Bildlich gesprochen, das ist wie ein Beispiel.") as herm,
+        patch.object(summarize, "_metapher_via_hermes", return_value=reply) as herm,
     ):
         out = summarize.generate_metapher("some source text", lang="de")
     cli.assert_called_once()
     herm.assert_called_once()
-    assert out == "Bildlich gesprochen, das ist wie ein Beispiel."
+    assert out == reply
 
 
 # ---------------------------------------------------------------------------
@@ -1148,10 +1193,20 @@ def test_adapter_metapher_dedup_recognizes_summarize_actual_marker() -> None:
     emit -> detect chain agrees today, not just that the two literal tuples
     happen to look alike."""
     adapter = _load_adapter_module()
-    raw = "Bildlich gesprochen, das ist wie ein gut sortiertes Regal."
-    extracted = summarize._extract_metapher(raw)
-    assert extracted, "summarize._extract_metapher rejected its own marker output"
-    assert adapter._has_metapher_suffix(extracted) is True
+    # The marker is taken FROM summarize's own list rather than hard-coded: a
+    # literal here goes stale the moment the prompt is reworded, and then this
+    # test fails for its fixture instead of for the coupling it guards. That is
+    # exactly what happened after 381d330a (ADR-0780) changed the openers.
+    for marker in summarize._METAPHER_MARKERS:
+        raw = f"{marker} das ist wie ein gut sortiertes Regal."
+        extracted = summarize._extract_metapher(raw)
+        assert extracted, (
+            f"summarize._extract_metapher rejected its own marker {marker!r}"
+        )
+        assert adapter._has_metapher_suffix(extracted) is True, (
+            f"adapter._has_metapher_suffix missed {marker!r} — the dedup check "
+            "goes blind and the metaphor is spoken twice"
+        )
 
 
 def test_marker_wording_drift_in_summarize_breaks_adapter_dedup_silently() -> None:
@@ -1366,4 +1421,86 @@ def test_every_marker_profile_mandates_is_actually_detectable() -> None:
         f"profile.py tells the model to emit {sorted(missing)}, but no detector "
         "knows that marker -> _has_lern_zugabe_suffix/_has_metapher_suffix will "
         "miss the annex and a SECOND one gets appended"
+    )
+
+
+def _load_profile_module():
+    """Import operator/bridges/shared/profile.py by path.
+
+    `profile` is also a stdlib module name, so any cached entry is stashed and
+    restored by the caller — otherwise a shadowed `profile` leaks into the rest
+    of the session.
+    """
+    import sys as _sys
+
+    shared_dir = str(
+        Path(summarize.__file__).resolve().parent.parent.parent / "bridges" / "shared"
+    )
+    if shared_dir not in _sys.path:
+        _sys.path.insert(0, shared_dir)
+    _sys.modules.pop("profile", None)
+    import profile  # type: ignore
+    return profile
+
+
+@pytest.mark.parametrize("learning", [0, 3])
+@pytest.mark.parametrize("lang", ["de", "en"])
+def test_profile_mandates_only_openers_summarize_itself_emits(lang, learning) -> None:
+    """Close the profile <-> summarize side of the marker quadrangle.
+
+    The sibling test above compares profile.py against ADAPTER's hand-copies —
+    so a drift in which profile and adapter stay wrong TOGETHER passes it. That
+    is exactly what 381d330a (ADR-0780) produced: it reworded the German
+    openers in summarize.py alone, leaving profile.py mandating
+    "Bildlich gesprochen," and adapter.py detecting "Bildlich gesprochen,"
+    while the model was being prompted by summarize.py to emit
+    "Bildlich gesagt,". Consistent hand-copies, both stale, dedup blind,
+    metaphor spoken twice.
+
+    summarize.py::_METAPHER_MARKERS / _APPENDIX_MARKERS is the SSOT, so this
+    asserts against it — and it renders the REAL audience block rather than
+    regexing the source, which also covers openers that carry no trailing comma
+    ("Think of it like") that the source-regex sibling cannot see.
+    """
+    import sys as _sys
+
+    cached = _sys.modules.get("profile")
+    try:
+        profile = _load_profile_module()
+        # Pure render: patching load() avoids touching the on-disk profile that
+        # for_tts_audience would otherwise read (and that test_profile.py's own
+        # state leakage comes from).
+        profile.load = lambda force=False: {  # type: ignore[assignment]
+            "voice_audience_level": "beginner",
+            "voice_audience_metaphors": "on",
+            "voice_audience_learning": learning,
+        }
+        block = profile.for_tts_audience(lang)
+    finally:
+        if cached is not None:
+            _sys.modules["profile"] = cached
+        else:
+            _sys.modules.pop("profile", None)
+
+    assert block, f"audience block empty for lang={lang} learning={learning}"
+
+    import re as _re
+
+    # Every marker the block mandates is rendered inside double quotes; nothing
+    # else in the block is quoted (verified for all four lang/learning combos).
+    mandated = {m.strip() for m in _re.findall(r'"([^"]{3,60})"', block)}
+    assert mandated, (
+        f"no quoted opener found in the rendered block (lang={lang}, "
+        f"learning={learning}) — the regex stopped matching the block's shape, "
+        "so this guard has zero reach and must be re-written, not deleted"
+    )
+
+    known = set(summarize._METAPHER_MARKERS) | set(summarize._APPENDIX_MARKERS)
+    unknown = {m for m in mandated if m not in known}
+    assert not unknown, (
+        f"profile.py tells the model to emit {sorted(unknown)}, which is in "
+        "neither summarize._METAPHER_MARKERS nor summarize._APPENDIX_MARKERS "
+        "(the SSOT the prompts and the detectors are copied from) — the model "
+        "will obey, no detector will recognise it, and the annex gets spoken "
+        "twice"
     )

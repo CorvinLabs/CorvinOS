@@ -607,10 +607,21 @@ def for_tts_audience(lang: str = "de") -> str:
     if a.get("metaphors") == "on":
         if learning_clause:
             # Metapher-Brücke direkt nach der LERN-ZUGABE, wenn beide aktiv sind.
+            # The mandated markers must stay identical to
+            # summarize.py::_METAPHER_MARKERS — that tuple is what the detectors
+            # (adapter._has_metapher_suffix, chat_runtime._METAPHER_MARKERS) look
+            # for, and a marker demanded HERE but unknown THERE means the dedup
+            # misses the metaphor and a second one is appended. 381d330a
+            # (ADR-0780) reworded summarize.py's list and left this clause
+            # behind, which is exactly how that happened.
+            # Guard: test_summarize.py::
+            #        test_every_marker_profile_mandates_is_actually_detectable
             metapher_clause = (
                 " METAPHER-BRÜCKE (folgt auf die LERN-ZUGABE) — direkt nach "
                 "der LERN-ZUGABE, füge genau EINEN Satz an, der mit "
-                "\"Als Bild gesprochen,\" oder \"Bildlich gesprochen,\" beginnt. "
+                "\"Bildlich gesagt,\", \"Mit anderen Worten,\", "
+                "\"Wenn man so will,\" oder \"Übersetzt ins Menschliche,\" "
+                "beginnt. "
                 "Bilde das Konzept aus der LERN-ZUGABE auf etwas aus dem Alltag "
                 "ab — eine einzige konkrete Analogie, kein neues Wissen."
             )
@@ -620,8 +631,9 @@ def for_tts_audience(lang: str = "de") -> str:
                 " METAPHER-ZUGABE (PFLICHT, NICHT OPTIONAL) — beende deine "
                 "Ausgabe mit ein bis zwei Sätzen als Metapher oder Analogie, "
                 "die das Kernthema auf etwas aus dem Alltag überträgt. Die "
-                "Sätze MÜSSEN mit \"Als Bild gesprochen,\" oder \"Bildlich "
-                "gesprochen,\" beginnen. Der Marker ist der Verifikations-Anker "
+                "Sätze MÜSSEN mit \"Bildlich gesagt,\", \"Mit anderen Worten,\", "
+                "\"Wenn man so will,\" oder \"Übersetzt ins Menschliche,\" "
+                "beginnen. Der Marker ist der Verifikations-Anker "
                 "— ohne ihn hast du die Aufgabe nicht erfüllt. Rein ADDITIV: "
                 "niemals Quellinhalt kürzen oder gegen die Metapher tauschen."
             )

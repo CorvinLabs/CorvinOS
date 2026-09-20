@@ -114,6 +114,16 @@ What it does, in order:
 corvin-voice doctor
 ```
 
+**What `doctor` does NOT cover:** its TTS round-trip calls
+`adapter.synthesize_voice_note(...)` **in process**, while the console's TTS path
+spawns `voice/scripts/say.py` as a SUBPROCESS. The two anchor their TLS trust
+independently, so neither a green nor a red `doctor` tells you what the console
+will do. (Until 2026-09-20 `adapter.py` did not anchor at all, so behind a
+re-signing proxy `doctor` reported a red TTS round-trip on an install whose
+console spoke fine.) Use `tests/test_voice_tls_trust_store.py` and its opt-in live
+case to check the anchors; see [layer-voice-ldd.md](layer-voice-ldd.md) § "Voice in
+the console must work on a FRESH install".
+
 Exit code `0` only when both round-trips pass; `1` otherwise (per-check `PASS`/`FAIL`
 lines and an `OVERALL` summary are printed either way — no stack trace only). CI
 runs the same command, unmodified, on `ubuntu-latest` / `macos-latest` /

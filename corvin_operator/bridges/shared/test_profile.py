@@ -515,7 +515,11 @@ class TtsAudienceTests(unittest.TestCase):
         prof.set_value("voice_audience_metaphors", "on")
         out = prof.for_tts_audience("de")
         self.assertIn("METAPHER-BRÜCKE", out)
-        self.assertIn("Als Bild gesprochen,", out)
+        # The mandated opener must be one the detectors know — SSOT is
+        # summarize.py::_METAPHER_MARKERS (see test_summarize.py::
+        # test_every_marker_profile_mandates_is_actually_detectable). It was
+        # "Als Bild gesprochen," until ADR-0780 reworded the list.
+        self.assertIn("Bildlich gesagt,", out)
         idx_annex = out.index("LERN-ZUGABE")
         idx_bridge = out.index("METAPHER-BRÜCKE")
         idx_faith = out.index("Treue und Vollständigkeit")

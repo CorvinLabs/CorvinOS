@@ -38,6 +38,39 @@ _OBSERVER_SESSION_TOKEN: str = secrets.token_hex(8)
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+
+def _use_os_trust_store() -> None:
+    """Anchor TLS verification to the OS trust store for the in-process TTS/STT
+    providers (edge-tts via aiohttp, the OpenAI client).
+
+    Third copy of this helper, and it has to be: the anchor is process-wide, and
+    the three processes that open a TLS socket to a voice provider have no shared
+    import — `standalone.py` (console/uvicorn), `voice/scripts/say.py`
+    (subprocess, spawned per TTS call) and THIS file (the bridge daemon, which
+    synthesises in-process via `_try_edge_tts` / `synthesize_voice_note`).
+    Anchoring two of them left the bridge failing every edge-tts handshake behind
+    a re-signing corporate proxy — observed live on 2026-09-20 as
+    `edge TTS: synthesis failed: ... CERTIFICATE_VERIFY_FAILED` in
+    `test_adapter_progress.py`'s log while the console itself spoke fine.
+
+    Why the env vars don't help, and why verification is NOT weakened: see the
+    long docstring on `voice/scripts/say.py::_use_os_trust_store`.
+    `corvin-voice doctor` also runs through here, so without this its TTS
+    round-trip reports a red that says nothing about the console.
+
+    Guarded: a missing `truststore` or any injection error leaves the previous
+    certifi behaviour untouched — this only ever ADDS a working trust path.
+    """
+    try:
+        import truststore  # type: ignore[import-not-found]
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001 — trust-store setup must never break boot
+        pass
+
+
+# Before any provider opens a socket. Guard: tests/test_voice_tls_trust_store.py.
+_use_os_trust_store()
+
 # Layer-17 process table — visible session lifecycle for /ps + signals.
 # Optional: graceful no-op when the module isn't importable, mirroring the
 # voice/cowork/forge/skill_inject pattern. Phase-3 minimal hooks: register
@@ -7900,9 +7933,21 @@ _METAPHER_ZUGABE_MARKERS = (
 # metapher sentence is already present in the text.  Used in the long-text
 # path to skip a second _append_metapher call when summarize.py already
 # included one via the --audience instruction.
+#
+# SSOT is summarize.py::_METAPHER_MARKERS — the literal list its METAPHER
+# system prompt instructs the model to open with.  This is a hand-copy because
+# adapter.py cannot import a script from voice/scripts/, so it MUST be updated
+# in the same commit as that list.  381d330a (ADR-0780, 2026-09-17) rewrote the
+# prompt to the four German openers below and touched only summarize.py; this
+# copy kept the pre-ADR-0780 wording, so _has_metapher_suffix matched nothing,
+# the dedup went blind and the metaphor was spoken TWICE — the same
+# "Metapher doppelt" symptom f2b6584 fixed once before.
+# Guard: corvin_operator/voice/scripts/test_summarize.py::
+#        test_metapher_markers_agree_across_summarize_adapter_chat_runtime
 _METAPHER_SENTENCE_MARKERS = (
-    "Als Bild gesprochen,", "Bildlich gesprochen,",
-    "As a picture,", "Think of it like",
+    "Bildlich gesagt,", "Mit anderen Worten,", "Wenn man so will,",
+    "Übersetzt ins Menschliche,",
+    "As a picture,", "In other words,", "Suppose,", "Think of it like",
 )
 
 

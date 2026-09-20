@@ -17,7 +17,10 @@ from pathlib import Path
 import pytest
 
 _THIS_DIR = Path(__file__).resolve().parent
-_REPO = _THIS_DIR.parents[2]
+# tests/unit -> tests -> repo root. This was parents[2] (one level too high, i.e.
+# the directory CONTAINING the checkout), so every assertion that reads
+# summarize.py raised FileNotFoundError and this whole guard never actually ran.
+_REPO = _THIS_DIR.parents[1]
 _SUMMARIZE_SCRIPT = _REPO / "corvin_operator" / "voice" / "scripts" / "summarize.py"
 
 # New markers for subtle-irony mode (from summarize.py:_METAPHER_MARKERS)
@@ -223,7 +226,7 @@ class TestMetapherSystemPrompt:
 
     def test_system_prompt_contains_irony_techniques(self):
         """The _METAPHER_SYSTEM_DE prompt includes irony/wordplay/unexpected examples."""
-        summarize_code = _SUMMARIZE_SCRIPT.read_text()
+        summarize_code = _SUMMARIZE_SCRIPT.read_text(encoding="utf-8")
         assert "subtiler Ironie" in summarize_code or "subtle irony" in summarize_code, (
             "System prompt must mention irony/subtle techniques"
         )
@@ -236,14 +239,14 @@ class TestMetapherSystemPrompt:
 
     def test_system_prompt_forbids_new_facts(self):
         """The system prompt enforces no-new-facts rule."""
-        summarize_code = _SUMMARIZE_SCRIPT.read_text()
+        summarize_code = _SUMMARIZE_SCRIPT.read_text(encoding="utf-8")
         assert "Kein neues Wissen" in summarize_code or "No new information" in summarize_code, (
             "System prompt must forbid introducing new facts"
         )
 
     def test_system_prompt_new_markers_de(self):
         """The _METAPHER_MARKERS tuple includes new German markers."""
-        summarize_code = _SUMMARIZE_SCRIPT.read_text()
+        summarize_code = _SUMMARIZE_SCRIPT.read_text(encoding="utf-8")
         for marker in _IRONY_MARKERS_DE:
             assert marker in summarize_code, (
                 f"System prompt must reference new marker: {marker}"
@@ -251,7 +254,7 @@ class TestMetapherSystemPrompt:
 
     def test_system_prompt_new_markers_en(self):
         """The _METAPHER_MARKERS tuple includes new English markers."""
-        summarize_code = _SUMMARIZE_SCRIPT.read_text()
+        summarize_code = _SUMMARIZE_SCRIPT.read_text(encoding="utf-8")
         for marker in _IRONY_MARKERS_EN:
             assert marker in summarize_code, (
                 f"System prompt must reference new marker: {marker}"

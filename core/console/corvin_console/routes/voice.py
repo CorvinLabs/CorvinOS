@@ -20,6 +20,7 @@ for TTS — only ``len(text)`` is logged.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import random
 import shutil
@@ -845,6 +846,36 @@ _AUDIO_EXT_BY_MIME = {
 }
 
 
+def _say_interpreter() -> list[str]:
+    """argv prefix that runs say.py in an environment which HAS a TTS provider.
+
+    Prefer this process's own interpreter: the installer provisions the console
+    env with the TTS extras (edge-tts, openai, piper), so it is the one
+    environment we can actually verify — ``find_spec`` here is a real check, not
+    an assumption, and it costs nothing (no import).
+
+    ``uv run`` is the fallback for a console running from an env without the
+    extras (a minimal wheel install). It is deliberately NOT the default: uv
+    resolves its project by walking up from the CWD, so the env say.py lands in
+    depends on where the operator launched the console from — inside the
+    checkout it finds the repo venv, anywhere else it gets a bare ephemeral env
+    with no edge-tts and TTS goes silently mute (ADR-0194 asked for venv
+    isolation, which the running interpreter already provides).
+
+    ``--project`` pins that walk to the tree say.py itself lives in, so the
+    fallback is at least deterministic rather than CWD-dependent.
+    """
+    if importlib.util.find_spec("edge_tts") or importlib.util.find_spec("openai"):
+        return [sys.executable]
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "run", "--project", str(_VOICE_SCRIPTS.parents[2]), "python"]
+    # No provider importable and no uv: say.py will exit 0 with no audio and the
+    # endpoint answers its designed 204. Spawn it anyway — its own diagnostics
+    # on stderr are what a `voice-doctor` run needs to report the cause.
+    return [sys.executable]
+
+
 def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     """Build say.py's argv — the ONE definition of a subtle positional contract.
 
@@ -860,9 +891,19 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     everywhere else) that a TTS problem never surfaces as an error to the user.
     Control characters are unspeakable anyway; dropping them loses nothing.
 
-    Uses `uv run` to ensure say.py executes in the project's virtual environment,
-    guaranteeing access to openai, edge-tts, piper-tts, and pywhispercpp (ADR-0194).
-    Falls back to sys.executable if uv is unavailable (e.g. in vendored wheels).
+    INTERPRETER CHOICE (see _say_interpreter). The console's OWN interpreter is
+    used whenever it can already import a network TTS provider; `uv run` is only
+    the fallback for an environment that cannot. It used to be the other way
+    round, guarded by a `shutil.which("uv")` whose RESULT WAS DISCARDED inside
+    `except (OSError, TypeError)` — which never fires, because `which()` returns
+    None rather than raising. So the sys.executable branch was dead code and
+    every install took `uv run`, resolving a project by walking up from whatever
+    CWD the console happened to be started in. Outside a checkout that is no
+    project at all: uv then runs say.py in a bare ephemeral env with no
+    edge-tts, the provider chain comes up empty, and the endpoint answers the
+    designed silent 204 — i.e. voice is simply mute on a fresh install, with no
+    error anywhere. Preferring the running interpreter removes the CWD
+    dependency entirely.
     """
     safe_text = "".join(
         ch for ch in text
@@ -871,14 +912,8 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     voice = _resolve_tts_voice(lang)
     provider = _resolve_tts_provider()
 
-    # Try to use uv run for correct venv isolation; fall back to sys.executable
-    try:
-        shutil.which("uv")  # noqa: B605
-        cmd = ["uv", "run", "python", str(_VOICE_SCRIPTS / "say.py"),
-               str(out_path), safe_text, lang, voice or ""]
-    except (OSError, TypeError):
-        cmd = [sys.executable, str(_VOICE_SCRIPTS / "say.py"),
-               str(out_path), safe_text, lang, voice or ""]
+    cmd = [*_say_interpreter(), str(_VOICE_SCRIPTS / "say.py"),
+           str(out_path), safe_text, lang, voice or ""]
 
     if provider:
         cmd.append(provider)

@@ -374,9 +374,18 @@ def _resolve_voice_scripts_dir() -> Path:
 
 
 _SCRIPTS_DIR = _resolve_voice_scripts_dir()
+# Openers that mean "this text already carries a metaphor" — used below to skip
+# the second annotation spawn. SSOT is summarize.py::_METAPHER_MARKERS, the list
+# its METAPHER system prompt instructs the model to start with; this is a
+# hand-copy (the console cannot import a voice script) and must move with it.
+# It did not move with 381d330a (ADR-0780, 2026-09-17), so the check matched
+# nothing and every turn appended a second metaphor.
+# Guard: corvin_operator/voice/scripts/test_summarize.py::
+#        test_metapher_markers_agree_across_summarize_adapter_chat_runtime
 _METAPHER_MARKERS = (
-    "Als Bild gesprochen,", "Bildlich gesprochen,",
-    "As a picture,", "Think of it like",
+    "Bildlich gesagt,", "Mit anderen Worten,", "Wenn man so will,",
+    "Übersetzt ins Menschliche,",
+    "As a picture,", "In other words,", "Suppose,", "Think of it like",
 )
 
 

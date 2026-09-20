@@ -753,6 +753,24 @@ the original metapher out of ITS window → a second metapher too (the reported
 "Learning und Metapher doppelt"). Window widened to 900. Regression guard:
 `corvin_operator/bridges/shared/test_adapter_voice_annex_dedup.py`.
 
+**The metapher openers have ONE source of truth: `summarize.py::_METAPHER_MARKERS`.**
+The same eight strings are hand-copied into three more places —
+`adapter.py::_METAPHER_SENTENCE_MARKERS`, `chat_runtime.py::_METAPHER_MARKERS`, and
+the mandating clauses in `profile.py::for_tts_audience` — because each runs in a
+different process with no shared import. ADR-0780 (`381d330a`) reworded the German
+openers (`"Als Bild gesprochen," / "Bildlich gesprochen,"` → `"Bildlich gesagt,",
+"Mit anderen Worten,", "Wenn man so will,", "Übersetzt ins Menschliche,"`) in
+summarize.py **only**. Consequence: `_has_metapher_suffix` matched nothing the
+summarizer produced, the dedup above went blind, and the metaphor was spoken twice —
+the exact symptom the dedup exists to prevent, re-opened by a wording change that
+looked cosmetic. All four copies were realigned on 2026-09-20 and each now carries a
+comment naming summarize.py as the SSOT. Guard:
+`test_summarize.py::test_metapher_markers_agree_across_summarize_adapter_chat_runtime`
+compares the three tuples directly, so the next one-sided edit fails instead of
+shipping. **Test fixtures must derive their opener from the SSOT tuple, never
+hard-code one** — a literal in a fixture stops exercising the dedup the moment the
+list is reworded, and then fails for its fixture instead of for the behaviour.
+
 **Chat-render is voice-ONLY by default.** The annex rides the TTS path only; it
 enters the visible chat/DM text solely when the user opts in via
 `voice_audience_chat_render=on` (`adapter.py` gates the audience-block injection
@@ -1519,3 +1537,124 @@ already-present / success / network-failure / empty-result paths.
 - `core/gateway/corvin_gateway/audit_metrics.py` — two
   new metric families.
 
+---
+
+## Voice in the console must work on a FRESH install (2026-09-20)
+
+Two symptoms were reported together — "kein edge-tts im Console-Chat" and "die
+Voice-Summary geht nicht" — and both traced to the same lost commit (`c7ea7449`,
+reverted by the rename-without-`git mv` pair `735acec3`/`459047ed`). Fixing the
+local checkout is not the same thing as making a fresh install work, so the
+prerequisites below are now each pinned by a test rather than by a habit.
+
+### 1. TLS trust anchor — required in EVERY process that speaks HTTPS
+
+`edge_tts/communicate.py` builds its SSL context as
+`ssl.create_default_context(cafile=certifi.where())`. An explicit `cafile=`
+**overrides** `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE`, so on a network with a
+re-signing proxy (corporate TLS interception) those environment variables are
+NOT a workaround — every edge-tts call dies with
+`ClientConnectorCertificateError` no matter how they are set. The fix is
+`truststore.inject_into_ssl()`, which swaps `ssl.SSLContext` for a backend that
+reads the OS trust store. Verification stays ON; only the anchor set changes.
+
+**Three sites, all required.** The anchor is process-wide and these three
+processes share no import:
+
+| Process | File | Opens the TLS socket via |
+|---|---|---|
+| console / uvicorn | `core/console/corvin_console/standalone.py` | in-process providers on the console side |
+| TTS subprocess | `corvin_operator/voice/scripts/say.py` | spawned per `/voice/tts` call — inherits no Python-level monkeypatch |
+| bridge daemon | `corvin_operator/bridges/shared/adapter.py` | `_try_edge_tts` / `synthesize_voice_note`, in-process — also what `corvin-voice doctor` exercises |
+
+Anchoring a subset produces the most misleading shape this bug has: the half you
+fixed answers 200 and speaks, the half you missed fails every handshake. Both
+halves were observed — the console/say.py pair on 2026-09-15, and the bridge on
+2026-09-20, the latter as an `edge TTS: synthesis failed: ...
+CERTIFICATE_VERIFY_FAILED` line sitting inside a *passing* `test_adapter_progress.py`
+log while the console itself spoke fine. `truststore` is therefore a declared
+dependency in both `pyproject.toml` and `core/console/requirements.txt`, not an
+optional extra.
+
+Guard: `tests/test_voice_tls_trust_store.py` — asserts a fresh interpreter is
+NOT injected (positive control), that importing `say.py` and importing
+`adapter.py` each leave `ssl.SSLContext.__module__` under `truststore`, that
+`standalone.py` still carries the call, and that the dependency is declared in
+both manifests. The say.py and adapter.py cases are behavioural imports in a
+fresh interpreter, not source greps: a `_use_os_trust_store` that is *defined and
+never called* passes a text search and still leaves TTS dead — verified by
+deleting the call site and watching the assertion go red. A missing `say.py`
+FAILS the suite rather than skipping it, so the next rename cannot quietly
+re-open this. The live end-to-end synthesis case is opt-in via
+`CORVIN_LIVE_VOICE_E2E=1`.
+
+### 2. Interpreter selection for the `say.py` subprocess
+
+`routes/voice.py::_say_interpreter()` prefers `sys.executable` whenever the
+current environment can already import `edge_tts` / `openai`, and only falls back
+to `uv run --project <repo>`. The previous code discarded `shutil.which("uv")`'s
+result inside an `except (OSError, TypeError)` block — `which()` returns `None`
+instead of raising, so the `uv run` branch was taken unconditionally and resolved
+its project from the CONSOLE's working directory. On a fresh install started from
+anywhere but the repo root that spawns an interpreter without the voice deps.
+
+### 3. Claude-CLI auth detection on a third-party platform
+
+`summarize.py::_claude_authenticated()` (and its twin in
+`bridges/shared/dialectic.py`) used to check `ANTHROPIC_API_KEY` and
+`~/.claude/.credentials.json` only. A Bedrock / Vertex / Foundry install has
+neither: the wizard writes `CLAUDE_CODE_USE_BEDROCK` (or `_VERTEX` / `_FOUNDRY`)
+into the `env` block of `~/.claude/settings.json`, and the credential itself is a
+chain (AWS profile / IMDS / IRSA / ADC / Azure token). The probe therefore
+false-negatived every wizard install, `summarize.py` fell through to its
+`[summarize] degraded:` truncation path, and the operator saw a raw, unstructured
+"summary". Both probes now also read the three platform flags out of
+`~/.claude/settings.json` (honouring `CLAUDE_CONFIG_DIR`) as well as the
+environment. Guard: `tests/test_claude_auth_probe_parity.py`, plus a parametrized
+platform case in `test_summarize.py` — note that test must clear the flags
+explicitly, because on a Bedrock box `CLAUDE_CODE_USE_BEDROCK=1` is already in
+every inherited process environment and a naive "no credentials" fixture is a
+false green.
+
+### 4. The 204 degradation contract hides all of the above
+
+`say.py` exits 0 with empty stdout when every provider fails; `/voice/tts` turns
+that into HTTP 204 + `X-Corvin-Voice-Reason`, and `useVoicePlayback.ts` plays
+nothing and shows no error. A broken TTS backend is therefore
+indistinguishable from "voice is off" in the UI. Keep the header, and when
+diagnosing "no sound" read it first — do not infer from the absence of an error
+that the request succeeded.
+
+### Verifying a fresh install actually speaks
+
+Run the checks over the real transport, not against the functions:
+
+```bash
+# 1. anchor + dependency guards (offline, fast)
+pytest tests/test_voice_tls_trust_store.py tests/test_claude_auth_probe_parity.py -q
+
+# 2. real synthesis through say.py (opt-in, hits the network)
+CORVIN_LIVE_VOICE_E2E=1 pytest tests/test_voice_tls_trust_store.py -q -k live
+
+# 3. the console routes themselves — 200 + audio bytes, never 204
+curl -s -o /tmp/tts.mp3 -w '%{http_code} %{size_download}\n' \
+  -X POST http://127.0.0.1:8765/v1/console/voice/tts \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $TOKEN" \
+  -d '{"text":"Die Sprachausgabe funktioniert.","lang":"de"}'
+file /tmp/tts.mp3     # must report MPEG ADTS / ID3, not "empty"
+```
+
+A `/voice/tts` turn takes ~45 s end to end (~18 s summarize LLM plus annexes,
+then synthesis) because the route summarizes BEFORE it speaks. That is
+pre-existing design, not a regression — do not treat the latency as a failure and
+do not shorten the timeout to "fix" it.
+
+**Must NOT do:** rely on `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` to fix an edge-tts
+certificate error (the explicit `cafile=` wins) · anchor the trust store in one
+process and assume another inherits it · add a fourth process that opens a TLS
+socket to a voice provider without anchoring it AND adding it to the guard · move
+or rename `say.py` / `standalone.py` / `adapter.py` without re-running the anchor
+guard · assert the anchor with a source grep (a defined-but-uncalled helper passes
+it) · make a guard SKIP when the file it asserts about is missing · probe
+Claude-CLI auth from `os.environ` alone · treat an empty-body 204 from
+`/voice/tts` as success.

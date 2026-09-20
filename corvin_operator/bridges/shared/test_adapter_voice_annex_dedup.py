@@ -77,11 +77,16 @@ def test_override_with_both_markers_is_not_doubled() -> None:
     # An annex opener followed by ~500 chars (filler + metapher) so the opener
     # sits well past the OLD 400-char window but inside the widened 900 one.
     filler = "Das ist ein zusätzlicher erklärender Satz zum Konzept. " * 8  # ~430 chars
+    # The metapher opener is taken from the detector's own tuple rather than
+    # hard-coded: a literal here silently stops exercising the dedup the moment
+    # the marker list is reworded (as ADR-0780 did), and the test then fails for
+    # its fixture instead of for the behaviour it guards.
+    metapher_opener = adapter._METAPHER_SENTENCE_MARKERS[0]
     override = (
         "Kurze fachliche Antwort in einem Satz. "
         "Und zur Einordnung, hier das Konzept in ein bis zwei Sätzen erklärt. "
         + filler
-        + "Bildlich gesprochen, ein einziger anschaulicher Vergleich zum Schluss."
+        + f"{metapher_opener} ein einziger anschaulicher Vergleich zum Schluss."
     )
     assert len(override) > 500  # opener is definitely >400 chars from the end
 
