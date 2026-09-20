@@ -853,6 +853,60 @@ catalogue refresh as a failure (4 671 such records buried the real events).
 
 ---
 
+## OS-Model Routing — three tiers, one resolver (ADR-0952, load-bearing)
+
+**OS turns route Haiku 4.5 / Sonnet 5 / Opus 5, decided by the complexity
+classifier at Tier 2.9 of `model_selector.resolve_os_model`.** That resolver is
+THE single source of truth for both surfaces — the console web-chat
+(`chat_runtime.py`) and the bridge adapter — and both pass `task_input`. Wiring
+one and not the other re-creates the divergence the shared function exists to
+prevent: measured 2026-09-20, the bridge produced 295 of 300 recorded OS turns.
+
+**A pin at Tier 2.5 still wins outright.** `spec.engine_models.<engine>.os_model`
+returns immediately and every tier below it is unreachable — which is correct,
+and is why an install pinned to one model shows one model on all three
+complexity tiers. That is not a licence limit; say so.
+
+**Every model any tier can choose MUST be in `_MODEL_RANK`.** An absent id ranks
+0 — below Haiku — so the cache guard reads an escalation to it as a downgrade
+and `apply_floor` can never reach it. `claude-opus-5` was missing, and that
+alone made the top tier unreachable.
+
+**Resolve a model id against the registry before routing it.** The operator's
+saved per-tier choice is provider-qualified (`anthropic/claude-opus-5`), the
+classifier names a family (`claude-haiku-4-5`), and the registry holds the
+dated snapshot (`claude-haiku-4-5-20251001`) behind an exact-match, fail-closed
+test. `resolve_registry_id()` strips the prefix and accepts a dated snapshot
+only when exactly ONE registered id extends the family — never when two do.
+
+**Admission is per verdict, not one scalar.** The classifier's "confidence" is
+four constants on four branches of a rule tree, not a probability. `simple`
+0.85, `medium` 0.60 and measured `complex` 0.90 route; keyword-only `complex`
+0.70 does not, and keeping it out is what gives the table a live subject.
+Admitting `medium` changes no served model — Tier 3 returns Sonnet 5 anyway —
+it makes the decision auditable.
+
+**`CORVIN_OS_MODEL_AUTOSELECT=off` disables Tier 2.9 too.** It means "do not
+pick a model for me"; a kill-switch that silently stops killing is worse than
+none. Explicit pins are unaffected.
+
+**Import the classifier off the request path.** `core.skills.os_skills.model_selector`
+costs 1.09 s to import (numpy chain) and 2.2 ms to run. Paid lazily it lands
+inside `stream_turn`'s async generator and stalls the whole event loop — the
+2026-09-13 incident shape. A daemon-thread warm-up at module import also closed
+a 50%-rate WebSocket-test hang that had been read as flakiness.
+
+**Must NOT do:** wire `task_input` on one surface only · let Tier 2.9 override an
+operator pin · add a routable model without a `_MODEL_RANK` entry · pass a
+provider-qualified or family id to the CLI unresolved · collapse the per-verdict
+admission table back into one threshold · leave Tier 2.9 outside the autoselect
+kill-switch · import the classifier on the hot path.
+
+→ Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Three-tier OS-model routing
+→ ADR: See Corvin-ADR for ADR-0952
+
+---
+
 ## Usage Counting Epoch (ADR-0760, load-bearing)
 
 **Never trim the audit chain to "reset" a counter.** It is append-only and

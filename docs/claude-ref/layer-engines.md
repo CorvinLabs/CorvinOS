@@ -3005,6 +3005,72 @@ facet's empty state now names which of the two cases it is ("N delegated worker
 runs in this window, none with token data" vs. "no delegated worker run
 recorded"), because "no worker data" is wrong for the first one.
 
+## Three-tier OS-model routing (ADR-0952, 2026-09-20)
+
+Operator report: *"wieso wird hier immer haiku verwendet — sollte nicht medium
+sonnet 5 und complex opus 5 sein"*, against a "Workload by complexity" panel
+showing `haiku-4-5` on all three tiers, each at `−80% vs. Opus` — one model's
+fixed price ratio restated three times.
+
+Four independent causes, all measured, each sufficient alone:
+
+| # | Cause | Evidence |
+|---|---|---|
+| 1 | `spec.engine_models.claude_code.os_model` pin at **Tier 2.5** returns immediately | `resolve_os_model(None, payload_chars=50_000)` → Haiku |
+| 2 | **Tier 2.9 did not exist**: written 2026-09-15 (`4bf77ef9`) into `operator/bridges/shared/model_selector.py`; `459047ed` the same day created the `corvin_operator/` copy WITHOUT it (ADR-0730 rename) and `operator/` was deleted. The CALLER survived | `chat_runtime.py` still passed `task_input=` → `TypeError` into `except Exception: _os_model = None`. Chain: `os_turn.started` `model: ""` on all 5 `channel: web` turns, a real id on the 295 bridge turns. `test_os_model_tier29_classifier_e2e.py` red since the rename, saying *"Tier 2.9 is dead"* |
+| 3 | `claude-opus-5` absent from `_MODEL_RANK` → ranks **0, below Haiku** | the cache guard reads an escalation to it as a downgrade; `_FLOOR_TO_MODEL["opus"]` pointed at `claude-opus-4-7`, absent from this registry |
+| 4 | the operator's OWN saved mapping was already haiku/sonnet-5/opus-5, stored provider-qualified (`anthropic/claude-opus-5`) against a bare-id, exact-match, fail-closed registry test | all three tiers would have abstained `not_registered` |
+
+Cause 2 is the same rename-sweep loss class as `aws_sigv4.py` above: the code
+went, its caller and its docs stayed.
+
+**The ladder now**, through the real resolver against the real registry:
+
+| task | verdict | model |
+|---|---|---|
+| `"Was ist 2+2?"` | simple 0.85 | `claude-haiku-4-5-20251001` |
+| ~1 000 words | medium 0.60 | `claude-sonnet-5` |
+| ~5 000 words | complex 0.90 | `claude-opus-5` |
+| `"Design a complex distributed architecture"` | complex 0.70 (keyword only) | abstain → Tier 3 → `claude-sonnet-5` |
+
+**Admission is per verdict, not one scalar.** The classifier's "confidence" is
+four literal constants on four branches of a deterministic rule tree, not a
+probability; one threshold across them conflates two questions. Admitting
+`medium` is risk-free rather than a relaxation — Tier 3 returns Sonnet 5
+unconditionally anyway, so the served model is identical and what changes is
+that the decision becomes an auditable `os_model.classified outcome=applied`
+record. Keeping keyword-only `complex` OUT is what gives the table a live
+subject: a guard whose condition nothing can satisfy reads as a safety property
+and is not one. `_CLASSIFY_MIN_CONFIDENCE = 0.7` survives as the bar for a
+verdict this module does not model.
+
+**`CORVIN_OS_MODEL_AUTOSELECT=off` gates Tier 2.9 as well as Tier 3.** It means
+"do not pick a model for me". `test_adapter_os_model.py::test_autoselect_off_no_model_flag`
+caught this as a real regression before it shipped. Explicit pins are
+unaffected — the switch is about automatic selection, not the operator's own
+choice, and Tier 2.5 keeps winning outright (*"the classifier overrode my pin"*
+would be a worse defect than the one being fixed).
+
+**Import the classifier off the request path.** `core.skills.os_skills.model_selector`
+costs **1.09 s** to import (numpy / feature-extractor chain); the constructor
+and a classification cost 0.000 s and 2.2 ms. Paid lazily that second lands
+inside `stream_turn`'s async generator and stalls the whole event loop — the
+2026-09-13 incident shape. A daemon-thread warm-up at module import fixed it,
+and also closed what had been read as WebSocket-test flakiness: the tier29
+suite errored at ~40–47 s on roughly half of runs, with AND without this
+change; after the warm-up, four consecutive clean runs at 12–18 s.
+
+**Not fixed here:** model flips invalidate the prompt cache (one real turn on
+this install: 1 039 311 cache-read tokens vs 26 input tokens). The downgrade
+guard refuses de-escalation above `threshold_chars()` and never blocks
+escalation, which is a partial mitigation only; per-conversation stickiness
+with a cache-TTL reset needs `chat_key` threaded through the shared resolver.
+
+**MEDIUM and COMPLEX only became reachable at all on 2026-09-20** (`9161a477`):
+before that the weighted-average scoring made both arithmetically unreachable —
+765 classifications over 8 days, 765 SIMPLE. This section is only true on top
+of that fix.
+
 ### Bedrock / Vertex / Foundry are `auth_mode: platform`, not base-url redirects
 
 ADR-0181 models a provider as *base URL + one credential env var* and redirects

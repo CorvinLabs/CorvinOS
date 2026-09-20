@@ -2947,8 +2947,9 @@ def _resolve_os_model(
     workload_hint: dict | None = None,
     chat_key: str | None = None,
     ato_plan_hint: dict | None = None,
+    task_input: str | None = None,
 ) -> str | None:
-    """The 6-tier resolution, then the ADR-0251 ``engine.model_selection`` hook.
+    """The tier resolution, then the ADR-0251 ``engine.model_selection`` hook.
 
     Split into a bundled rule and a composing wrapper for the same reason
     ``delegation_policy`` is: the tier ladder has six exit points, and threading
@@ -2971,6 +2972,7 @@ def _resolve_os_model(
         workload_hint=workload_hint,
         chat_key=chat_key,
         ato_plan_hint=ato_plan_hint,
+        task_input=task_input,
     )
     try:
         from model_selector import resolve_step_model as _rsm  # noqa: PLC0415
@@ -2997,8 +2999,9 @@ def _resolve_os_model_bundled(
     workload_hint: dict | None = None,
     chat_key: str | None = None,
     ato_plan_hint: dict | None = None,
+    task_input: str | None = None,
 ) -> str | None:
-    """Bridge entry point for the shared 6-Tier OS model resolver.
+    """Bridge entry point for the shared OS model resolver.
 
     Thin wrapper — the actual 6-Tier cascade (ADR-0024 / ADR-0119 / ADR-0123 /
     ADR-0043) now lives in ``model_selector.resolve_os_model()`` so the
@@ -3010,6 +3013,15 @@ def _resolve_os_model_bundled(
 
     ADR-0165: ato_plan_hint (from ATO classification) is passed through to
     resolve_os_model() as Tier 2 input.
+
+    ADR-0952: ``task_input`` is the turn's raw task text, forwarded to
+    Tier 2.9. 4bf77ef9 wired the console only and left the bridge on the old
+    ladder deliberately — but the bridge is where the turns are (measured
+    2026-09-20: 295 of 300 recorded OS turns came from here, 5 from the
+    console), so leaving it out meant the classifier decided almost nothing.
+    Both surfaces call the SAME resolver precisely so they cannot diverge;
+    passing the text on one and not the other re-creates the divergence the
+    shared function exists to prevent.
     """
     try:
         from . import model_selector as _ms  # type: ignore
@@ -3033,6 +3045,7 @@ def _resolve_os_model_bundled(
         workload_hint=workload_hint,
         chat_key=chat_key,
         ato_plan_hint=ato_plan_hint,
+        task_input=task_input,
         audit_fn=_audit_event,
     )
 
@@ -3622,6 +3635,7 @@ def _resolve_spawn_inputs(
         workload_hint=workload_hint,
         chat_key=chat_key,
         ato_plan_hint=_ato_plan_hint,
+        task_input=prompt,
     )
 
     # Vibe Engineering (ADR-0275/0278) — inject the CEL brief into THIS turn's

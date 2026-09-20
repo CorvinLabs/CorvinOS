@@ -13,6 +13,7 @@ Resolution order (managed in adapter._resolve_os_model):
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -31,6 +32,15 @@ except Exception:  # pragma: no cover
 
 DEFAULT_LOW: Final[str] = "claude-haiku-4-5-20251001"
 DEFAULT_HIGH: Final[str] = "claude-sonnet-5"
+#: The THIRD OS tier (ADR-0952). Until 2026-09-20 OS turns had a two-model
+#: ladder — Haiku or Sonnet — while the complexity classifier in
+#: ``core/skills/os_skills/model_selector.py`` had mapped COMPLEX to Opus since
+#: it was written. The two never met: the classifier was not a routing input
+#: (Tier 2.9, lost in the ADR-0730 rename) and ``claude-opus-5`` was absent
+#: from ``_MODEL_RANK`` below, which ranks an unknown id 0 — BELOW Haiku — so
+#: the cache guard would have read an Opus answer as a downgrade and refused
+#: it. Both halves are fixed together or neither works.
+DEFAULT_TOP: Final[str] = "claude-opus-5"
 DEFAULT_THRESHOLD_CHARS: Final[int] = 60_000
 _MIN_THRESHOLD: Final[int] = 20_000
 _MAX_THRESHOLD: Final[int] = 200_000
@@ -46,18 +56,23 @@ _CONTEXT_ERROR_PATTERNS: Final[tuple[str, ...]] = (
     "input length",
 )
 
+#: Ordering ONLY — a rank compares two ids, it never prices them. An id absent
+#: here ranks 0, i.e. below Haiku, which is why every model any tier can choose
+#: must appear: an unranked answer is silently treated as the cheapest possible
+#: one by every comparison in this module.
 _MODEL_RANK: Final[dict[str, int]] = {
     "claude-haiku-4-5-20251001": 1,
     "claude-haiku-4-5": 1,
     "claude-sonnet-5": 2,
     "claude-sonnet-4-6": 2,
     "claude-opus-4-7": 3,
+    "claude-opus-5": 3,
 }
 
 _FLOOR_TO_MODEL: Final[dict[str, str]] = {
     "haiku": DEFAULT_LOW,
     "sonnet": DEFAULT_HIGH,
-    "opus": "claude-opus-4-7",
+    "opus": DEFAULT_TOP,
 }
 
 # Curated values for audit fields — changing these requires an ADR amendment.
@@ -530,6 +545,293 @@ def _write_event(event_type: str, details: dict) -> None:
         pass  # audit is observability; never crash the OS turn
 
 
+# ── Tier 2.9 — the complexity classifier as a REAL routing input ─────────────
+#
+# Restored 2026-09-20 (ADR-0952). Written on 2026-09-15 in 4bf77ef9 into
+# ``operator/bridges/shared/model_selector.py``; commit 459047ed the SAME DAY
+# created ``corvin_operator/bridges/shared/model_selector.py`` from a
+# pre-Tier-2.9 copy during the ADR-0730 rename, and the ``operator/`` tree was
+# then deleted. The caller survived the sweep and the callee did not:
+# ``chat_runtime.py`` still passed ``task_input=prompt``, so every console
+# web-chat turn raised ``TypeError: resolve_os_model() got an unexpected
+# keyword argument 'task_input'`` into a surrounding ``except Exception:
+# _os_model = None`` — silently. Live evidence on the audit chain before the
+# restore: ``os_turn.started`` carried ``model: ""`` for every ``channel: web``
+# turn (5 of them) while the 295 bridge turns, whose caller never passed the
+# kwarg, carried a real id. Same rename-sweep loss class as ``aws_sigv4.py``.
+
+#: Per-verdict admission. NOT a single scalar, and the difference is
+#: load-bearing: the classifier's "confidence" is four literal constants
+#: attached to four branches of a deterministic rule tree, not a probability,
+#: so comparing them on one axis conflates two different questions. The
+#: branches, from ``_classify_complexity``:
+#:
+#:   * ``complex`` 0.90 — a MEASURED signal crossed the medium ceiling.
+#:   * ``complex`` 0.70 — a keyword hint only, nothing measured. NOT admitted:
+#:     this is the original floor's real subject ("a classifier that guesses is
+#:     worse than a default"), and keeping it above the bar is what stops this
+#:     table from being a guard that can never fire.
+#:   * ``simple``  0.85 — every measured signal under the simple ceiling.
+#:   * ``medium``  0.60 — the residual band. Admitted, and admitting it is
+#:     RISK-FREE here rather than a relaxation: Tier 3 below returns
+#:     ``high_model()`` (Sonnet 5) unconditionally unless
+#:     ``CORVIN_OS_MODEL_ALLOW_HAIKU=1``, so a medium turn lands on Sonnet 5
+#:     either way. What changes is that the decision becomes an auditable
+#:     ``os_model.classified outcome=applied`` record instead of an unexplained
+#:     fallback.
+_MIN_CONFIDENCE_BY_COMPLEXITY: Final[dict[str, float]] = {
+    "simple": 0.80,
+    "medium": 0.60,
+    "complex": 0.90,
+}
+
+#: Fallback bar for a verdict this module does not know. Kept as a scalar
+#: because an unrecognised complexity is exactly the "uncertain source" case
+#: the original guard was written for, and a future classifier that emits a
+#: real probability lands here rather than in the table above.
+_CLASSIFY_MIN_CONFIDENCE: Final[float] = 0.7
+
+_ALLOWED_FIELDS_CLASSIFIED: Final[frozenset[str]] = frozenset({
+    "complexity", "confidence", "selected_model", "engine", "tier",
+    "payload_chars", "outcome",
+})
+
+
+def _register_classified_allowlist() -> None:
+    """ADR-0129 M2: an event type with no registered allowlist is default-DENY,
+    so every field below would land as ``_dropped_fields`` and the decision
+    would be unauditable. Unions per event type, so calling it repeatedly is
+    safe."""
+    try:
+        try:
+            from forge.security_events import register_event_allowlist  # type: ignore
+        except ImportError:
+            from security_events import register_event_allowlist  # type: ignore
+        register_event_allowlist("os_model.classified", _ALLOWED_FIELDS_CLASSIFIED)
+    except Exception:  # noqa: BLE001 — best-effort; generic fields still survive
+        pass
+
+
+def resolve_registry_id(model: str, engine_id: str) -> str | None:
+    """The registry's own id for *model*, or ``None`` when it has none.
+
+    The classifier names a model FAMILY (``claude-haiku-4-5``); the registry
+    stores the dated snapshot the CLI actually accepts
+    (``claude-haiku-4-5-20251001``). ``model_is_registered`` is an exact-match,
+    fail-closed test, so without this step every SIMPLE verdict would abstain
+    with ``not_registered`` and the cheap tier — the whole point of classifying
+    — would be unreachable while COMPLEX (whose id happens to be dateless in
+    the registry too) worked. Measured 2026-09-20:
+    ``model_is_registered('claude-haiku-4-5', 'claude_code') == False``.
+
+    A ``provider/`` prefix is stripped first. The operator's per-tier choice
+    from Settings → AI Engines is persisted provider-qualified
+    (``anthropic/claude-opus-5``) while the engine registry stores the bare id,
+    so without this the operator's OWN saved mapping abstains on all three
+    tiers — measured 2026-09-20, with simple/medium/complex already set to
+    exactly haiku-4-5 / sonnet-5 / opus-5 and none of them reaching the CLI.
+    Stripping is safe for a foreign id: ``openai/gpt-4-turbo`` becomes
+    ``gpt-4-turbo``, which no claude_code registry entry matches, so it still
+    abstains.
+
+    A dated snapshot is accepted only when EXACTLY ONE registered id extends
+    the family with ``-<suffix>``. Two candidates is ambiguity, and this
+    function guesses at nothing: it returns ``None`` and the caller abstains.
+    """
+    if not model:
+        return None
+    model = model.rsplit("/", 1)[-1].strip()
+    if not model:
+        return None
+    try:
+        try:
+            from engine_models import load_registry, model_is_registered  # noqa: PLC0415
+        except ImportError:
+            from .engine_models import (  # type: ignore  # noqa: PLC0415
+                load_registry, model_is_registered)
+    except Exception:  # noqa: BLE001 — no registry → fail closed
+        return None
+
+    try:
+        if model_is_registered(model, engine_id):
+            return model
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        spec = load_registry().get(engine_id)
+        if spec is None:
+            return None
+        known = {m.id for m in spec.os_models} | {m.id for m in spec.worker_models}
+    except Exception:  # noqa: BLE001
+        return None
+
+    dated = sorted(m for m in known if m and m.startswith(model + "-"))
+    return dated[0] if len(dated) == 1 else None
+
+
+def _warm_classifier() -> None:
+    """Import the classifier off the request path, at module import.
+
+    Measured 2026-09-20: importing ``core.skills.os_skills.model_selector``
+    costs **1.09 s** (the numpy/feature-extractor chain); constructing the
+    selector and classifying afterwards cost 0.000 s and 2.2 ms. Left lazy,
+    that second is paid by whichever turn happens to be first — and on the
+    console that turn is inside ``stream_turn``'s async generator, so it
+    stalls the ENTIRE event loop, not just that turn. CLAUDE.md records the
+    same shape as a live incident on 2026-09-13 (``shadow_classify_task``
+    blocking every web-chat turn) and the remedy there was the same: get it
+    off the loop.
+
+    A daemon thread, best-effort, started once at import. Python's module
+    cache makes the real call a no-op once this finishes, and a race with an
+    early first turn degrades to exactly the pre-warm behaviour rather than
+    failing. An install without ``core.skills`` (bridge-only) swallows the
+    ImportError here instead of on the hot path.
+    """
+    def _run() -> None:
+        try:
+            import core.skills.os_skills.model_selector  # noqa: F401,PLC0415
+        except Exception:  # noqa: BLE001 — absent on a bridge-only install
+            pass
+
+    try:
+        import threading  # noqa: PLC0415
+
+        threading.Thread(target=_run, name="corvin-classifier-warm",
+                         daemon=True).start()
+    except Exception:  # noqa: BLE001 — never block import over a warm-up
+        pass
+
+
+_warm_classifier()
+
+
+def classify_os_model(
+    task_input: str,
+    *,
+    tenant_id: str = "_default",
+    engine_id: str = "claude_code",
+    payload_chars: int = 0,
+) -> str | None:
+    """Complexity-classify *task_input* and return the model it selects, or
+    ``None`` to abstain (caller falls through to Tier 3).
+
+    This is the APPLIED counterpart to
+    ``model_selector_shadow.shadow_classify_task``, which is
+    shadow-by-construction (it returns ``None`` so its answer cannot be used).
+    Without this function the classifier runs on every turn, recommends a tier,
+    and is discarded — so the Model Cost Optimizer's model mix is a single
+    model and its "savings" figure is that model's fixed price ratio against
+    the Opus baseline, never a routing result.
+
+    The complexity → model mapping is NOT hardcoded here: it is the operator's
+    own per-tier choice from Settings → AI Engines, persisted in
+    ``model_selection_config.json`` and read via ``classifier_overrides()``.
+    This function only decides *whether* that choice is admissible.
+
+    Four independent abstain guards, each fail-closed:
+
+    1. **Per-verdict confidence** — see ``_MIN_CONFIDENCE_BY_COMPLEXITY``.
+    2. **Registry membership**, via :func:`resolve_registry_id`. The
+       classifier's provider rules can name Ollama/OpenRouter ids the
+       claude_code OS engine cannot run at all, so an unregistered answer is
+       refused rather than passed to the CLI.
+    3. **Prompt-cache guard** — a DOWN-tier move is refused once the turn's
+       estimated context exceeds ``threshold_chars()``. A cost guard, not a
+       quality one: switching model mid-conversation invalidates the prompt
+       cache, and cache tokens dominate a long chat (one real turn on this
+       install: 1,039,311 cache-read tokens vs 26 plain input tokens).
+       Re-writing a ~1M-token context on the cheaper model costs multiples of
+       serving the turn from the established cache, so downgrading a long chat
+       would RAISE spend while appearing to pick the cheap model. Escalation is
+       never blocked — only de-escalation.
+    4. **Unknown verdict** — a complexity this module does not model falls back
+       to the scalar ``_CLASSIFY_MIN_CONFIDENCE``.
+
+    Never raises: any import/classify failure abstains and the turn keeps
+    whatever the remaining tiers resolve.
+    """
+    if not task_input or not isinstance(task_input, str):
+        return None
+
+    # NEVER import on the hot path. ``core.skills.os_skills.model_selector``
+    # costs 1.09 s to import (numpy chain) against 2.2 ms to run, and this
+    # function is called synchronously from inside ``stream_turn``'s async
+    # generator — so a lazy import here stalls the WHOLE event loop for a
+    # second on whichever turn happens to be first, which is the 2026-09-13
+    # incident shape. ``_warm_classifier`` does that import in a daemon thread
+    # at module load; until it finishes this tier ABSTAINS rather than paying
+    # the second itself. A first turn therefore falls through to Tier 3
+    # (Sonnet 5, the pre-existing default) and every turn after the warm-up
+    # is classified.
+    #
+    # Measured, and stated at the strength it was measured: with the import on
+    # this path the tier29 WebSocket suite's module fixture timed out at ~38 s
+    # on MOST combined runs (one identical run passed), and none of those runs
+    # took the ~12 s a clean pass takes. With the import off it, 4 of 4 clean
+    # runs at ~12 s. That suite has its own residual intermittency which this
+    # does not claim to fix — see ADR-0952 § Verification.
+    _classifier = sys.modules.get("core.skills.os_skills.model_selector")
+    ModelSelector = getattr(_classifier, "ModelSelector", None)
+    if ModelSelector is None:
+        return None
+
+    overrides: dict = {}
+    try:
+        from core.models.model_selection_config import classifier_overrides  # noqa: PLC0415
+        overrides = classifier_overrides(tenant_id)
+    except Exception:  # noqa: BLE001 — no saved preference → classifier defaults
+        pass
+
+    try:
+        result = ModelSelector(overrides=overrides).classify(task_input, tenant_id)
+    except Exception:  # noqa: BLE001
+        _mlog.debug("classify_os_model: classification failed", exc_info=True)
+        return None
+
+    _register_classified_allowlist()
+    complexity = str(getattr(result, "complexity", "") or "").strip().lower()
+    confidence = float(getattr(result, "confidence", 0.0) or 0.0)
+
+    def _audit(outcome: str, model: str | None) -> None:
+        details = {
+            "complexity": complexity,
+            "confidence": round(confidence, 3),
+            "selected_model": model or "",
+            "engine": engine_id,
+            "tier": "2.9_classifier",
+            "payload_chars": int(payload_chars),
+            "outcome": outcome,
+        }
+        _validate_details(details, _ALLOWED_FIELDS_CLASSIFIED, "os_model.classified")
+        _write_event("os_model.classified", details)
+
+    floor = _MIN_CONFIDENCE_BY_COMPLEXITY.get(complexity, _CLASSIFY_MIN_CONFIDENCE)
+    if confidence < floor:
+        _audit("abstain_low_confidence", getattr(result, "recommended_model", ""))
+        return None
+
+    model = (getattr(result, "recommended_model", "") or "").strip()
+    if not model:
+        _audit("abstain_no_model", None)
+        return None
+
+    registry_id = resolve_registry_id(model, engine_id)
+    if not registry_id:
+        _audit("abstain_not_registered", model)
+        return None
+
+    # Guard 3 — never de-escalate an already-large context (see docstring).
+    default_rank = _MODEL_RANK.get(high_model(), 0)
+    if _MODEL_RANK.get(registry_id, 0) < default_rank and payload_chars >= threshold_chars():
+        _audit("abstain_cache_guard", registry_id)
+        return None
+
+    _audit("applied", registry_id)
+    return registry_id
+
+
 # ── ADR-0119/0123/0251 — the single OS-model resolver for BOTH surfaces ───────
 
 
@@ -542,6 +844,7 @@ def resolve_os_model(
     workload_hint: dict | None = None,
     chat_key: str | None = None,
     ato_plan_hint: dict | None = None,
+    task_input: str | None = None,
     audit_fn=None,
 ) -> str | None:
     """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 7-Tier adaptive OS model selection.
@@ -559,7 +862,8 @@ def resolve_os_model(
       1.5. profile._persona_os_model                                → per-persona pin (ADR-0123)
       2.5. spec.engine_models.<engine_id>.os_model in tenant YAML   → per-engine tenant default (ADR-0119)
       2.7. ADR-0043 workload classification (CHAT fast-path only)    → opt-in tenant feature flag
-      2.8. ADR-0165 ATO plan recommendation                          → complexity-based routing (NEW)
+      2.8. ADR-0165 ATO plan recommendation                          → complexity-based routing
+      2.9. classify_os_model(task_input)                             → real complexity classifier (ADR-0952, autoselect-gated)
       3.   autoselect(payload_chars) + floor                         → adaptive (default path)
       4.   None                                                      → CLI subscription default
 
@@ -570,6 +874,13 @@ def resolve_os_model(
     ``workload_hint`` / ``chat_key`` / ``audit_fn`` are ADR-0043 bridge
     concerns: a caller that never passes ``workload_hint`` never reaches
     Tier 2.7 and never needs to supply ``audit_fn``.
+
+    ``task_input`` is the turn's raw task text. A caller that omits it skips
+    Tier 2.9 entirely and keeps the pre-classifier behaviour, so the tier is
+    opt-in per surface rather than a silent change to every caller. That one
+    kwarg is the whole difference between a routing input and a shadow
+    record — and, between 2026-09-15 and 2026-09-20, between a working console
+    turn and a swallowed ``TypeError`` (see the Tier 2.9 block).
 
     When ``CORVIN_OS_MODEL_AUTOSELECT=off``, Tier 3 is skipped → Tier 4
     (``None``). On estimate failure, Tier 3 returns HIGH (Sonnet) as a safe
@@ -740,6 +1051,33 @@ def resolve_os_model(
                     return actual_model
         except Exception:  # noqa: BLE001
             pass  # Tier 2.8 routing failure is non-fatal; fall through to Tier 3
+
+    # Tier 2.9 — complexity classifier as a REAL routing input (see
+    # classify_os_model). Sits below every explicit operator pin above (a pin
+    # still wins outright) and above the payload-size-only Tier 3, because it
+    # decides on what the task IS rather than only how big its context is.
+    # Abstains — returning None, falling through untouched — on a verdict below
+    # its own confidence bar, an unregistered model, or a cache-invalidating
+    # downgrade.
+    #
+    # Gated on autoselect_enabled() with Tier 3, and the gate is load-bearing:
+    # CORVIN_OS_MODEL_AUTOSELECT=off means "do not pick a model for me", and a
+    # kill-switch that silently stops killing is worse than none. An explicit
+    # pin (Tiers 1 / 2 / 1.5 / 2.5) is unaffected — the switch is about
+    # AUTOMATIC selection, not about the operator's own choice.
+    # Guard: test_adapter_os_model.py::test_autoselect_off_no_model_flag.
+    if task_input and autoselect_enabled():
+        try:
+            classified = classify_os_model(
+                task_input,
+                tenant_id=tenant_id,
+                engine_id=engine_id,
+                payload_chars=payload_chars,
+            )
+            if classified:
+                return apply_floor(classified, profile.get("os_model_floor"))
+        except Exception:  # noqa: BLE001 — advisory tier; never break the turn
+            _mlog.debug("Tier 2.9 classifier skipped", exc_info=True)
 
     # Tier 3 — adaptive autoselect (the new default path)
     if autoselect_enabled():
