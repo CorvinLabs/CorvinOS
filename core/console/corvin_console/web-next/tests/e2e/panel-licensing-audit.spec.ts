@@ -1,63 +1,33 @@
 /**
- * Licensing Audit Panel E2E Tests
+ * /app/licensing-audit — consolidated into Audit & Compliance (2026-09-20).
  *
- * Auto-generated test suite for licensing-audit panel.
+ * The panel is gone; the route stays so existing bookmarks keep working. The
+ * same /v1/console/v1/licensing/audit-events store used to back BOTH this panel
+ * and the Learnings panel's "Audit Events" tab, so one set of records had two
+ * homes and neither was the compliance page an auditor opens. It now lives once,
+ * as the "Learning events" section of /app/compliance.
+ *
+ * What this asserts is the redirect and the destination — not the old panel.
  */
 
-import { test, expect } from '../fixtures/panel-fixtures';
+import { test, expect } from '@playwright/test';
 
-test.describe('Licensing Audit Panel', () => {
-  const panelSlug = 'licensing-audit';
-  const panelTitle = 'Licensing Audit';
-
-  test('navigates to licensing-audit and loads', async ({ panelNav }) => {
-    await panelNav.goto(panelSlug);
-    await panelNav.assertLoaded(panelSlug);
-    expect(panelNav.page).toHaveURL(/\/app\/licensing-audit/);
+test.describe('Licensing Audit (consolidated)', () => {
+  test('redirects to Audit & Compliance', async ({ page }) => {
+    await page.goto('/console/app/licensing-audit', { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL(/\/app\/compliance/);
   });
 
-  test('displays page title', async ({ panelNav }) => {
-    await panelNav.goto(panelSlug);
-    const title = panelNav.getTitle();
-    await expect(title).toContainText(panelTitle);
+  test('the compliance panel carries the learning events section', async ({ page }) => {
+    await page.goto('/console/app/compliance', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByText('Learning events')).toBeVisible();
+    // The records are content-free by construction — the card says so, and that
+    // sentence is the compliance property, not decoration.
+    await expect(page.getByText(/content-free by construction/i)).toBeVisible();
   });
 
-  test('main content is visible', async ({ panelNav }) => {
-    await panelNav.goto(panelSlug);
-    const mainContent = panelNav.getMainContent();
-    await expect(mainContent).toBeVisible();
-  });
-
-  test('breadcrumb navigation is optional', async ({ panelNav }) => {
-    await panelNav.goto(panelSlug);
-    const breadcrumb = panelNav.getBreadcrumb();
-    const _isVisible = await breadcrumb.isVisible().catch(() => false);
-    // Breadcrumb is optional
-  });
-
-  test('responds to user interactions', async ({ page, panelNav }) => {
-    await panelNav.goto(panelSlug);
-    const buttons = page.locator('button');
-    const count = await buttons.count();
-    expect(count).toBeGreaterThanOrEqual(0);
-  });
-
-  test('handles API errors gracefully', async ({ page, panelNav }) => {
-    await page.route('**/v1/console/licensing-audit/**', (route) => {
-      route.abort('failed');
-    });
-
-    await panelNav.goto(panelSlug);
-    const mainContent = panelNav.getMainContent();
-    const _isVisible = await mainContent.isVisible().catch(() => false);
-    // Panel should recover or show error
-  });
-
-  test('performance baseline', async ({ panelNav }) => {
-    const startTime = Date.now();
-    await panelNav.goto(panelSlug);
-    const loadTime = Date.now() - startTime;
-
-    expect(loadTime).toBeLessThan(5000);
+  test('the old panel heading is gone, not merely relabelled', async ({ page }) => {
+    await page.goto('/console/app/compliance', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: 'Licensing Audit' })).toHaveCount(0);
   });
 });

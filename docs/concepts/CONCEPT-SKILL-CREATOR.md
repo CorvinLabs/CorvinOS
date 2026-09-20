@@ -341,9 +341,18 @@ async def adversarial_review_skill(skill_spec: SkillSpec) -> ReviewResult:
 
 ## Console Integration
 
-### Location: `/console/app/skills` → Skill Creator panel
+### Location: `/console/app/forge?tab=creator` → Forge, Creator tab
 
 **Shipped today** (`SkillCreatorPanel.tsx`, `routes/skill_creator_api.py`).
+
+Moved 2026-09-20. It used to render on `/console/app/skills`, a page that also
+listed the tenant's skills. That listing duplicated Forge's Skills tab —
+`/v1/console/skills` and `/v1/console/forge/skills` return the same records — so
+the page was folded into Forge and `/app/skills` now redirects there. The
+generation lifecycle is NOT a duplicate of anything, so it moved with it as its
+own tab rather than being dropped. `/app/skill-forge-generator` is a different
+surface (`POST /v1/skill-forge/generate`, a one-shot template/LLM form) and does
+not replace this panel.
 Every route is session-scoped: the tenant comes from the authenticated
 `SessionRecord`, never an env var.
 
