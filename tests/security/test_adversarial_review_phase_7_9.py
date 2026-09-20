@@ -19,6 +19,7 @@ on the current codebase, proving the vulnerability exists.
 
 import asyncio
 import hashlib
+import importlib.util
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -37,17 +39,96 @@ import pytest
 import yaml
 from httpx import AsyncClient
 
-# Import components under test
-try:
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "corvin_operator"))
-    from skill_forge.autonomous import SkillLossTriggerDetector, LossTrigger
-    from skill_forge.autonomous.validator import SkillValidator
-    from skill_forge.automation.cron_trigger_poller import CronTriggerPoller
-    from skill_forge.automation.cron_service import CronService
-except ImportError as e:
-    pytest.skip(f"Autonomous skill forge not available: {e}")
+# `corvin_operator/skill-forge/` has a dash, so `from skill_forge...` (or
+# `from corvin_operator.skill_forge...`) can never resolve as a plain import
+# — this previously hit an ImportError that was swallowed into a module-level
+# `pytest.skip()`, which pytest itself rejects without
+# `allow_module_level=True`, turning a "skip, forge unavailable" intent into
+# a hard collection error. Load the real dashed-directory modules via
+# importlib instead (same pattern as tests/skill_forge/test_trigger_detector.py).
+_REPO = Path(__file__).resolve().parents[2]
+_SKILL_FORGE_DIR = _REPO / "corvin_operator" / "skill-forge"
+sys.path.insert(0, str(_REPO))
+
+
+def _ensure_namespace_package(dotted_name: str, path: Path):
+    existing = sys.modules.get(dotted_name)
+    if existing is not None:
+        return existing
+    module = types.ModuleType(dotted_name)
+    module.__path__ = [str(path)]
+    sys.modules[dotted_name] = module
+    return module
+
+
+def _load_module(dotted_name: str, file_path: Path):
+    existing = sys.modules.get(dotted_name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(dotted_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[dotted_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_ensure_namespace_package("corvin_operator.skill_forge", _SKILL_FORGE_DIR)
+_ensure_namespace_package(
+    "corvin_operator.skill_forge.automation", _SKILL_FORGE_DIR / "automation"
+)
+
+# NOT pre-registered as an empty namespace package: `autonomous` is loaded
+# directly below from its real __init__.py, which must be the module that
+# ends up in sys.modules under this name — a stale empty namespace intercepts
+# `_load_module`'s "already loaded" check and cron_trigger_poller.py's own
+# `from corvin_operator.skill_forge.autonomous import SkillLossTriggerDetector`
+# then fails against that empty module instead.
+_autonomous_pkg = _load_module(
+    "corvin_operator.skill_forge.autonomous",
+    _SKILL_FORGE_DIR / "autonomous" / "__init__.py",
+)
+_cron_trigger_poller = _load_module(
+    "corvin_operator.skill_forge.automation.cron_trigger_poller",
+    _SKILL_FORGE_DIR / "automation" / "cron_trigger_poller.py",
+)
+_cron_service = _load_module(
+    "corvin_operator.skill_forge.automation.cron_service",
+    _SKILL_FORGE_DIR / "automation" / "cron_service.py",
+)
+
+SkillLossTriggerDetector = _autonomous_pkg.SkillLossTriggerDetector
+LossTrigger = _autonomous_pkg.LossTrigger
+SkillValidator = _autonomous_pkg.SkillValidator
+CronTriggerPoller = _cron_trigger_poller.CronTriggerPoller
+CronService = _cron_service.CronService
+
+_audit_chain_validator_module = sys.modules.get(
+    "corvin_operator.skill_forge.autonomous.audit_chain_validator"
+) or _load_module(
+    "corvin_operator.skill_forge.autonomous.audit_chain_validator",
+    _SKILL_FORGE_DIR / "autonomous" / "audit_chain_validator.py",
+)
+AuditChainValidator = _audit_chain_validator_module.AuditChainValidator
 
 logger = logging.getLogger(__name__)
+
+
+def _hash_chain_events(raw_events: list) -> list:
+    """Attach valid hash/prev_hash fields to raw audit events using the
+    exact algorithm AuditChainValidator (Fix #1) verifies against. Written
+    when this file's tests were adversarial vulnerability demonstrations
+    predating Fix #1 — without this, every event here is rejected for
+    missing hash fields before the scenario each test actually targets
+    (forged content, tampering, symlink escape, division-by-zero) is ever
+    reached."""
+    prev_hash = ""
+    chained = []
+    for event in raw_events:
+        event_hash = AuditChainValidator._compute_event_hash(event, prev_hash)
+        chained_event = {**event, "prev_hash": prev_hash, "hash": event_hash}
+        chained.append(chained_event)
+        prev_hash = event_hash
+    return chained
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -94,35 +175,58 @@ def test_loss_signal_injection_via_forged_audit_events(tmp_corvin_home, audit_pa
     """
     audit_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Inject 100 forged skill_executed events
+    # Inject 100 forged skill_executed events, correctly hash-chained: Fix #1
+    # (2026-09-21) makes the hash-chain a fail-closed gate, but hash-chaining
+    # only proves an append-only file wasn't retroactively edited — it does
+    # NOT prove who authored an event. An attacker with write access to
+    # audit.jsonl can compute a valid next hash for a freshly forged event
+    # just as legitimately as the real writer can. This test's original
+    # (pre-fix) form skipped the hash fields entirely and got rejected for
+    # that unrelated reason; chaining them here tests what Fix #1 actually
+    # defends against.
+    fake_events = [
+        {
+            "ts": time.time() - (100 - i),
+            "event_type": "skill_executed",
+            "tenant_id": "_default",
+            "skill_id": "os.delegation_router",
+            "version": "1.0.0",
+            "outcome_feedback": {"correct": False},  # All failures
+            "input": "fake_input",
+            "output": "fake_output",
+        }
+        for i in range(100)
+    ]
     with open(audit_path, "a") as f:
-        for i in range(100):
-            fake_event = {
-                "ts": time.time() - (100 - i),
-                "event_type": "skill_executed",
-                "tenant_id": "_default",
-                "skill_id": "os.delegation_router",
-                "version": "1.0.0",
-                "outcome_feedback": {"correct": False},  # All failures
-                "input": "fake_input",
-                "output": "fake_output",
-            }
-            f.write(json.dumps(fake_event) + "\n")
+        for event in _hash_chain_events(fake_events):
+            f.write(json.dumps(event) + "\n")
 
-    # Detector should pick up the injected signals
     detector = SkillLossTriggerDetector()
-    with patch("corvin_operator.skill_forge.autonomous.trigger_detector.corvin_home", return_value=tmp_corvin_home):
+    with patch(
+        "corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain",
+        return_value=audit_path,
+    ):
         triggers = detector.detect_loss_signals("_default", lookback_hours=1)
 
-    # VULNERABLE if: Injected events are detected as real loss signals
-    assert len(triggers) > 0, "Loss signal injection failed"
+    # STILL VULNERABLE, by design of what a hash chain can prove: a
+    # correctly-chained forged append is indistinguishable from a real one.
+    # Fix #1 closes retroactive tampering (test_loss_trigger_without_hash_
+    # chain_verification, below); closing THIS residual — an attacker with
+    # audit.jsonl write access forging brand-new, self-consistent events —
+    # needs per-writer signing (e.g. an HMAC keyed to the writing process),
+    # which is out of scope for the 6 CRITICAL fixes and not claimed as
+    # closed. This assertion documents that residual, it does not newly
+    # discover it.
+    assert len(triggers) > 0, (
+        "Expected residual: correctly hash-chained forged events are still "
+        "accepted — hash-chaining proves order, not authorship"
+    )
     assert triggers[0].skill_id == "os.delegation_router"
     assert triggers[0].confidence < 0.70, "Confidence threshold not triggered"
 
-    # Verify attacker-controlled confidence is used
-    print(f"VULNERABLE: Injected {len(triggers)} fake loss signals")
+    print(f"RESIDUAL (documented, not closed by Fix #1): Injected {len(triggers)} fake loss signals")
     print(f"  Skill: {triggers[0].skill_id}")
-    print(f"  Confidence: {triggers[0].confidence:.2f} (forged)")
+    print(f"  Confidence: {triggers[0].confidence:.2f} (forged, but validly chained)")
 
 
 @pytest.mark.unit
@@ -137,7 +241,7 @@ def test_loss_trigger_without_hash_chain_verification(tmp_corvin_home, audit_pat
     """
     audit_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write legitimate event
+    # Write a legitimate, correctly hash-chained event.
     legit_event = {
         "ts": time.time(),
         "event_type": "skill_executed",
@@ -147,9 +251,14 @@ def test_loss_trigger_without_hash_chain_verification(tmp_corvin_home, audit_pat
         "outcome_feedback": {"correct": True},
     }
     with open(audit_path, "a") as f:
-        f.write(json.dumps(legit_event) + "\n")
+        for event in _hash_chain_events([legit_event]):
+            f.write(json.dumps(event) + "\n")
 
-    # Attacker modifies the event (changes correct: True → False)
+    # Attacker retroactively modifies the already-written, already-hashed
+    # event (changes correct: True → False) without recomputing its hash —
+    # this is exactly the tampering-after-the-fact scenario Fix #1 exists
+    # to catch, unlike the fresh-forgery residual documented in
+    # test_loss_signal_injection_via_forged_audit_events above.
     with open(audit_path, "r") as f:
         lines = f.readlines()
 
@@ -157,22 +266,16 @@ def test_loss_trigger_without_hash_chain_verification(tmp_corvin_home, audit_pat
     with open(audit_path, "w") as f:
         f.write(modified_line)
 
-    # Detector should detect tampering (if hash-chain in place)
-    # VULNERABLE if: Modified event is accepted without error
+    # Fix #1 (2026-09-21): retroactive tampering breaks the hash link and is
+    # now rejected fail-closed with RuntimeError, before any trigger is ever
+    # emitted from the tampered content.
     detector = SkillLossTriggerDetector()
-    try:
-        with patch("corvin_operator.skill_forge.autonomous.trigger_detector.corvin_home", return_value=tmp_corvin_home):
-            triggers = detector.detect_loss_signals("_default", lookback_hours=1)
-
-        # If we get here without exception, hash-chain is missing
-        print(f"VULNERABLE: Modified audit event accepted without hash verification")
-        print(f"  Event tampered: correct changed from true → false")
-        print(f"  Triggers detected: {len(triggers)}")
-    except ValueError as e:
-        if "hash" in str(e).lower():
-            print(f"NOT vulnerable: Hash-chain validation caught tampering")
-        else:
-            raise
+    with patch(
+        "corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain",
+        return_value=audit_path,
+    ):
+        with pytest.raises(RuntimeError, match="(?i)hash"):
+            detector.detect_loss_signals("_default", lookback_hours=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -324,7 +427,7 @@ def test_cross_tenant_audit_leakage_via_symlink(tmp_corvin_home):
     ]
 
     with open(audit_b, "a") as f:
-        for event in sensitive_events:
+        for event in _hash_chain_events(sensitive_events):
             f.write(json.dumps(event) + "\n")
 
     # ATTACK: Create symlink from tenant A to tenant B
@@ -332,22 +435,21 @@ def test_cross_tenant_audit_leakage_via_symlink(tmp_corvin_home):
         audit_a.unlink()
     audit_a.symlink_to(audit_b)
 
-    # Run detector for tenant A
+    # Verify the symlink was actually created as intended, before asserting
+    # anything about the detector's behavior against it.
+    assert audit_a.resolve() == audit_b.resolve(), "Symlink setup failed"
+
+    # Fix #3 (2026-09-21): the detector validates the resolved audit path is
+    # within the requesting tenant's own directory before reading it —
+    # tenant_a's symlink resolving into tenant_b's directory is rejected
+    # fail-closed, so tenant_b's events are never read at all.
     detector = SkillLossTriggerDetector()
-    with patch("corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain", return_value=audit_a):
-        triggers = detector.detect_loss_signals("tenant_a", lookback_hours=1)
-
-    # VULNERABLE if: Tenant A successfully read tenant B's events
-    if len(triggers) > 0:
-        print(f"VULNERABLE: Cross-tenant audit leakage via symlink")
-        print(f"  Tenant A read {len(triggers)} events from tenant B")
-        print(f"  Exposed skill: {triggers[0].skill_id}")
-        print(f"  Attacker learned: Tenant B is using security_orchestrator")
-
-    # Verify symlink was actually followed
-    real_path = audit_a.resolve()
-    if real_path == audit_b.resolve():
-        print(f"  Symlink confirmed: {audit_a} → {audit_b}")
+    with patch(
+        "corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain",
+        return_value=audit_a,
+    ):
+        with pytest.raises(RuntimeError, match="(?i)validation failed"):
+            detector.detect_loss_signals("tenant_a", lookback_hours=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -423,29 +525,36 @@ def test_confidence_calculation_division_by_zero(tmp_corvin_home, audit_path):
     """
     audit_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create events with missing 'correct' field
+    # Create events with missing 'correct' field, correctly hash-chained so
+    # Fix #1's chain-integrity gate doesn't short-circuit this scenario
+    # before the confidence calculation (what this test actually targets)
+    # is ever reached.
+    malformed_events = [
+        {
+            "ts": time.time() - (10 - i),
+            "event_type": "skill_executed",
+            "tenant_id": "_default",
+            "skill_id": "os.delegation_router",
+            "version": "1.0.0",
+            "outcome_feedback": {},  # Missing 'correct' field!
+        }
+        for i in range(10)
+    ]
     with open(audit_path, "a") as f:
-        for i in range(10):
-            malformed_event = {
-                "ts": time.time() - (10 - i),
-                "event_type": "skill_executed",
-                "tenant_id": "_default",
-                "skill_id": "os.delegation_router",
-                "version": "1.0.0",
-                "outcome_feedback": {},  # Missing 'correct' field!
-            }
-            f.write(json.dumps(malformed_event) + "\n")
+        for event in _hash_chain_events(malformed_events):
+            f.write(json.dumps(event) + "\n")
 
     detector = SkillLossTriggerDetector()
-    try:
-        with patch("corvin_operator.skill_forge.autonomous.trigger_detector.corvin_home", return_value=tmp_corvin_home):
-            triggers = detector.detect_loss_signals("_default", lookback_hours=1)
-        print(f"SECURE: No division by zero; confidence calculation handled gracefully")
-        print(f"  Events with missing 'correct' field: 10")
-        print(f"  Returned triggers: {len(triggers)}")
-    except (ZeroDivisionError, ValueError) as e:
-        print(f"VULNERABLE: Division by zero error in confidence calculation")
-        print(f"  Error: {type(e).__name__}: {e}")
+    with patch(
+        "corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain",
+        return_value=audit_path,
+    ):
+        # Must not raise ZeroDivisionError — the only acceptable outcomes are
+        # a clean empty/zero-confidence result or a deliberate ValueError.
+        triggers = detector.detect_loss_signals("_default", lookback_hours=1)
+    print(f"No division by zero; confidence calculation handled gracefully")
+    print(f"  Events with missing 'correct' field: 10")
+    print(f"  Returned triggers: {len(triggers)}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
