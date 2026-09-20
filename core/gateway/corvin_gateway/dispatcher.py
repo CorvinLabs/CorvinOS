@@ -321,18 +321,67 @@ class RunDispatcher:
                                            **self._usage_split(usage)))
 
     @staticmethod
-    def _resolve_worker_model(tenant_id: str, engine_id: str) -> str:
-        """The worker model this tenant configured for ``engine_id``, or "".
+    def _resolve_worker_model(tenant_id: str, engine_id: str, prompt: str = "") -> str:
+        """The worker model intelligently selected or operator-configured for ``engine_id``.
 
-        Reads the SAME key the console writes (``spec.engine_models.<engine>.
-        worker_model``, PUT /settings/engine) and the same registry default the
-        picker marks, so "what the operator selected" and "what the gateway
-        spawns" cannot drift apart. Before this, the gateway passed no model at
-        all: the console offered a worker-model choice that silently applied to
-        ACS delegation only, while every gateway run used the CLI default.
-        "" means "no configured preference" and is passed through as None so the
-        engine keeps its own default — never a guessed id.
+        Integration with IntelligentRouter (ADR-0867): if a prompt is provided,
+        uses intelligent routing to select Haiku/Sonnet/Opus based on task complexity.
+        Falls back to operator configuration if: (1) IntelligentRouter unavailable,
+        (2) no prompt provided, (3) any exception occurs.
+
+        Smart fallback order:
+        1. Intelligent routing (if prompt provided AND router available)
+        2. Operator-configured model (spec.engine_models.<engine>.worker_model)
+        3. Engine registry default
+        4. Empty string (let engine use its own default)
+
+        Args:
+            tenant_id: Tenant scope
+            engine_id: Engine identifier ("native", "acs", "tde", etc.)
+            prompt: Optional task/prompt for intelligent routing
+
+        Returns:
+            Model ID string (e.g., "claude-haiku-4-5") or ""
         """
+        # Attempt intelligent routing if prompt is provided
+        if prompt:
+            try:
+                from core.skills.os_skills.intelligent_router_integration import (
+                    IntelligentRouterBridge,
+                )  # noqa: PLC0415
+
+                decision = IntelligentRouterBridge.route_with_intelligent_selection(
+                    prompt,
+                    engine_mode=engine_id,  # Pass engine mode for cost/latency tuning
+                    latency_critical=(engine_id == "native"),
+                    tenant_id=tenant_id,
+                )
+                # Log the routing decision to audit trail (best-effort, non-blocking)
+                try:
+                    _security_events.audit_event(
+                        "intelligent_routing_decision",
+                        {
+                            "model_selected": decision.model,
+                            "tier": decision.tier,
+                            "confidence": decision.confidence,
+                            "reasoning": decision.reasoning[:200],  # Truncate reasoning
+                            "engine": engine_id,
+                            "tenant_id": tenant_id,
+                        },
+                        severity="INFO",
+                    )
+                except Exception:  # noqa: BLE001 — audit is best-effort
+                    pass
+
+                return decision.model
+            except Exception as _ir_exc:  # noqa: BLE001 — IntelligentRouter unavailable or errored
+                import logging
+                logging.getLogger(__name__).debug(
+                    f"IntelligentRouter fallback: {type(_ir_exc).__name__}"
+                )
+                # Fall through to operator config below
+
+        # Fallback to operator-configured model
         try:
             from engine_models import (  # type: ignore[import]  # noqa: PLC0415
                 get_tenant_engine_model, load_registry,
@@ -738,7 +787,8 @@ class RunDispatcher:
                 pass
 
         start = time.time()
-        worker_model = self._resolve_worker_model(tenant_id, _gw_engine_id)
+        # STEP 1 (ADR-0867): Use IntelligentRouter to select model based on task complexity
+        worker_model = self._resolve_worker_model(tenant_id, _gw_engine_id, prompt=prompt)
         # ADR-0171 — engine.span.start (role=worker): every gateway engine run is
         # auditable as a span regardless of outcome (paired at all 4 exits below).
         self._emit_engine_span("start", tenant_id=tenant_id, run_id=run_id,
