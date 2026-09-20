@@ -30,6 +30,9 @@ const layoutSrc = readFileSync(
 /** Panels intentionally absent from the sidebar (reached from another panel,
  *  or a detail route). Add here WITH a reason rather than deleting the test. */
 const NAV_EXEMPT = new Set<string>([
+  // Folded into the Video Producer studio's Quality tab (2026-09-20); the
+  // route only redirects ?job_id= deep links to /app/video-producer.
+  "video-quality-metrics",
   // Reached from the Settings page (settings.tsx navigates to it), not the sidebar.
   "settings/github",
   // Backend routes are absent — /api/console/audit/* and /api/console/releases/*
