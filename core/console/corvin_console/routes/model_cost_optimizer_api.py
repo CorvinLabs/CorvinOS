@@ -93,10 +93,13 @@ class DashboardStatusResponse(BaseModel):
     acs_cost_actual_usd: float = 0.0
     acs_cost_baseline_usd: float = 0.0
     acs_model_mix: Dict[str, int] = {}
-    # Whether ANY acs.engine_completed event with usable token data was found.
-    # Load-bearing for honesty: without it the UI cannot tell "workers cost
-    # $0.00" from "no worker turn was ever recorded", and the per-day
-    # acs_*_usd zeros below plot as a flat line that reads as the former.
+    # Whether ANY delegated worker run with usable token data was found — i.e.
+    # at least one PRICED run, never merely a recorded one. Load-bearing for
+    # honesty: without it the UI cannot tell "workers cost $0.00" from "no
+    # worker turn was ever priced", and the per-day acs_*_usd zeros below plot
+    # as a flat line that reads as the former. The recorded-but-unpriced case
+    # is carried by acs_counted_turns/acs_total_turns instead ("0 of 267"),
+    # which is what the coverage meter renders.
     acs_data_available: bool = False
     # Real per-model turn counts for every counted os_turn.completed event
     # (e.g. {"claude-haiku-4-5-20251001": 244}). A single-key mix means
@@ -289,8 +292,23 @@ async def get_learning_status(
         # docstring — two independently-measured cost sources). Its own
         # availability check: ACS can have data on days the OS-turn chain
         # doesn't, and vice versa.
-        acs_data_available = bool(cost_result and cost_result.acs_daily)
-        acs_by_date = {p.date: p for p in cost_result.acs_daily} if acs_data_available else {}
+        # TWO different questions, and conflating them fabricates a number.
+        # ``acs_recorded`` = a worker run reached the chain at all; it gates the
+        # per-day counts, which is how the console says "N runs, none with
+        # token data". ``acs_data_available`` is the API contract above — at
+        # least one run was PRICED — and it is what the UI gates its dollar
+        # figures on. Until 2026-09-20 both were ``bool(acs_daily)``, so an
+        # install whose worker runs were all unpriceable (the live case: 267
+        # runs, 0 priced) rendered a green "0.0% saved · $0.0000 on Opus →
+        # $0.0000 actual" — a measured-looking zero over nothing measured,
+        # exactly what ADR-0763 forbids. The OS half has always gated on
+        # ``has_data`` (counted > 0); this is the same rule, applied
+        # symmetrically.
+        acs_recorded = bool(cost_result and cost_result.acs_daily)
+        acs_data_available = bool(
+            cost_result and any(p.counted_turns > 0 for p in cost_result.acs_daily)
+        )
+        acs_by_date = {p.date: p for p in cost_result.acs_daily} if acs_recorded else {}
         os_by_date = {p.date: p for p in cost_result.daily} if cost_data_available else {}
         # A date only earns a point if SOMETHING on it was actually priced.
         # Until 2026-09-15 every date that produced an event joined the series
@@ -328,7 +346,7 @@ async def get_learning_status(
                 {"date": d, **_series(os_by_date.get(d), ""), **_series(acs_by_date.get(d), "acs_")}
                 for d in all_dates
             ]
-            if (cost_data_available or acs_data_available)
+            if (cost_data_available or acs_recorded)
             else []
         )
         cost_counted_turns = sum(p.counted_turns for p in cost_result.daily) if cost_data_available else 0
@@ -348,11 +366,13 @@ async def get_learning_status(
 
         cost_model_mix = cost_result.model_mix if cost_data_available else {}
 
+        # Counted over what was RECORDED, not over what was priced — this pair
+        # IS the coverage meter, and "0 of 267" is the whole message.
         acs_counted_turns = (
-            sum(p.counted_turns for p in cost_result.acs_daily) if acs_data_available else 0
+            sum(p.counted_turns for p in cost_result.acs_daily) if acs_recorded else 0
         )
         acs_total_turns = (
-            sum(p.total_turns for p in cost_result.acs_daily) if acs_data_available else 0
+            sum(p.total_turns for p in cost_result.acs_daily) if acs_recorded else 0
         )
         # Same definition as the OS figure: 1 - actual/baseline against the
         # Opus reference, on the SAME real token counts. Clamped like the OS one

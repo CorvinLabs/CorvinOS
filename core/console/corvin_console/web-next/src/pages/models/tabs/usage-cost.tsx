@@ -267,7 +267,15 @@ export function UsageCostTab() {
                                color="var(--viz-role-worker)" title="Worker runs" domainMax={d.dailyDomainMax} />
                 ) : (
                   <div className="py-10 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
-                    No worker data in this window. Deliberately EMPTY rather than a zero line — a flat zero claims delegated runs are free.
+                    {(status.acs_total_turns ?? 0) > 0 ? (
+                      <>
+                        {status.acs_total_turns} delegated worker run{status.acs_total_turns === 1 ? "" : "s"} in
+                        this window, none with token data — so none can be priced.
+                      </>
+                    ) : (
+                      <>No delegated worker run recorded in this window.</>
+                    )}{" "}
+                    Deliberately EMPTY rather than a zero line — a flat zero claims delegated runs are free.
                   </div>
                 )}
               </div>

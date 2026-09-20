@@ -234,6 +234,46 @@ def collect(events: Iterator[StreamEvent]) -> SpawnResult:
     return result
 
 
+#: Where the raw engine frames carry the model the turn actually ran on.
+#: ``system.init`` and the final ``result`` frame put it at the top level;
+#: an ``assistant`` frame nests it under ``message``. Checked in that order
+#: per frame, newest frame first.
+_MODEL_FRAME_PATHS: tuple[tuple[str, ...], ...] = (
+    ("model",),
+    ("usage", "model"),
+    ("message", "model"),
+)
+
+
+def attested_model(result: SpawnResult) -> str:
+    """The model id the ENGINE reported for this turn, ``""`` when it reported
+    none.
+
+    ADR-0759: a span closes on the model the engine reports, not on the one
+    that was requested — an engine free to pick its own default (no ``model=``
+    was passed) or to downgrade under load would otherwise be priced at the
+    wrong rate. Returning ``""`` rather than a configured guess is deliberate:
+    the cost readers treat a model-less span as *unpriced*, which is the honest
+    reading, whereas a guessed id produces a confident wrong number.
+
+    Scans the drained frames newest-first, so a late ``result`` frame wins over
+    the ``system.init`` frame if they ever disagree (a mid-turn downgrade).
+    """
+    for ev in reversed(result.events):
+        raw = ev.raw
+        if not isinstance(raw, dict):
+            continue
+        for path in _MODEL_FRAME_PATHS:
+            node: Any = raw
+            for key in path:
+                node = node.get(key) if isinstance(node, dict) else None
+                if node is None:
+                    break
+            if isinstance(node, str) and node.strip():
+                return node.strip()
+    return ""
+
+
 def parse_jsonl_line(line: bytes | str) -> dict[str, Any] | None:
     """Parse a single JSONL line. Returns None on malformed input.
 
@@ -274,5 +314,6 @@ __all__ = [
     "WorkerEngine",
     "CapabilityError",
     "collect",
+    "attested_model",
     "parse_jsonl_line",
 ]

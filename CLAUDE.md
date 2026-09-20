@@ -799,6 +799,20 @@ carries the four-way token split (`input`/`output`/`cache_read`/`cache_write`);
 a single `tokens_used` total cannot be priced, because the four bill at four
 different rates.
 
+**All THREE worker paths, not just the dispatcher.** ACS (`acs_runtime`), the
+gateway dispatcher, and L38 inbound A2A (`a2a_worker`) each emit their own
+worker span. The A2A one shipped with neither a model nor tokens until
+2026-09-20, and because the reader drops a span that has neither, every inbound
+run was discarded below the console: measured on this install, 267 worker runs
+over 11 days, **0 priced**, the panel reading "0 priced worker runs" on an
+install that delegates. Derive the split with `engine_span.usage_split()` — the
+one normaliser every emitter shares; a private per-path copy is how the same run
+prices differently depending on who spawned it — and take the model from
+`agents.attested_model(result)`, never from config: A2A passes no `model=`, and
+a guessed id prices the run at the wrong rate. An engine that reports no model
+leaves it `""` (unpriced, honest); one that reports a model but no tokens still
+yields a span, counted in `total_turns` as "N runs, none with token data".
+
 **A field not in `_EVENT_ALLOWLIST` is dropped silently.** `acs.engine_completed`
 emitted its token split for months into a floor that discarded it, so ACS worker
 cost read as $0.00 while the emitter looked correct. Add the field to the
@@ -826,7 +840,10 @@ is exactly the only credential a Bedrock/Vertex worker has. Restore is scoped to
 the ACTIVE platform and to registry-declared names; never widen `_SECRET_NAME_RE`.
 
 **Must NOT do:** re-tighten `TenantSpec` · write the tenant YAML at umask · emit a
-span without `model_id` · pass `model=` to an engine without probing the keyword ·
+span without `model_id` · add a worker spawn path without a priceable span ·
+copy the usage normaliser instead of calling `engine_span.usage_split()` ·
+fill a span's `model_id` from config when the engine reported one ·
+pass `model=` to an engine without probing the keyword ·
 add an audit field without an allowlist entry · compose an audit-chain path by
 hand · give a platform provider a `credential_env` · audit a credential-absent
 catalogue refresh as a failure (4 671 such records buried the real events).

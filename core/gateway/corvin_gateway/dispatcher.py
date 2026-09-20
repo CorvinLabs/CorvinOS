@@ -287,31 +287,19 @@ class RunDispatcher:
 
     @staticmethod
     def _usage_split(usage: "dict[str, Any] | None") -> dict[str, int]:
-        """The four token counts from an engine's raw usage object.
+        """The four billed token counts from an engine's raw usage object.
 
-        Key names differ between the CLI's ``result`` frame
-        (``cache_read_input_tokens``) and the shorter span field
-        (``cache_read_tokens``); both spellings are accepted so a future engine
-        that reports either lands in the same columns. Missing keys are 0 — an
-        absent count is never inferred from another one.
+        Delegates to ``engine_span.usage_split``, the ONE normaliser every span
+        emitter shares (ADR-0759). It used to be a private copy here, and a
+        private copy is how two paths end up pricing the same run differently
+        — the A2A worker path had no split at all and every inbound run read as
+        $0.00. Kept as a method so the existing call sites and tests are
+        unchanged.
         """
-        if not isinstance(usage, dict):
+        if _espan is None:  # forge/shared not importable — span emission is off
             return {"input_tokens": 0, "output_tokens": 0,
                     "cache_read_tokens": 0, "cache_write_tokens": 0}
-
-        def _pick(*names: str) -> int:
-            for name in names:
-                val = usage.get(name)
-                if isinstance(val, (int, float)) and not isinstance(val, bool):
-                    return int(val)
-            return 0
-
-        return {
-            "input_tokens":      _pick("input_tokens"),
-            "output_tokens":     _pick("output_tokens"),
-            "cache_read_tokens": _pick("cache_read_input_tokens", "cache_read_tokens"),
-            "cache_write_tokens": _pick("cache_creation_input_tokens", "cache_write_tokens"),
-        }
+        return _espan.usage_split(usage)
 
     def _emit_engine_span(self, kind: str, *, tenant_id: str, run_id: str,
                           engine_id: str, model_id: str = "", status: str = "ok",

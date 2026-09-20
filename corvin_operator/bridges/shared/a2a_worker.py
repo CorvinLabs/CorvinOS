@@ -72,16 +72,32 @@ from typing import Any, Callable
 
 # ── Type-only import of WorkerEngine protocol ────────────────────────────
 try:
-    from agents import WorkerEngine, collect  # type: ignore[import-not-found]
+    from agents import WorkerEngine, attested_model, collect  # type: ignore[import-not-found]
 except ImportError:
     _shared = Path(__file__).resolve().parent
     if str(_shared) not in sys.path:
         sys.path.insert(0, str(_shared))
     try:
-        from agents import WorkerEngine, collect  # type: ignore[import-not-found]
+        from agents import WorkerEngine, attested_model, collect  # type: ignore[import-not-found]
     except ImportError:
         WorkerEngine = None  # type: ignore[assignment,misc]
         collect = None  # type: ignore[assignment]
+        attested_model = None  # type: ignore[assignment]
+
+
+def _attested_model_of(result: Any) -> str:
+    """The engine-reported model for a drained spawn, ``""`` when unknown.
+
+    Wrapped so a missing/old ``agents`` module degrades to an unpriced span
+    instead of losing the whole audit event — the span is a GDPR Art. 30
+    record first and a cost input second.
+    """
+    if attested_model is None:
+        return ""
+    try:
+        return attested_model(result)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 # ── ADR-0144: Snapshot CORVIN_HOME at import time (A3 fix) ──────────────
@@ -900,8 +916,15 @@ def spawn_a2a_worker(
     shutil.rmtree(workspace, ignore_errors=True)
 
     # ADR-0171 — engine.span.end (paired with the start above).
+    # ADR-0759 — closes on the model the engine REPORTED plus its four-way
+    # token split, so the run is priceable in the Models console. Both come
+    # from the drained frames; neither is guessed when the engine stays quiet.
     _emit_a2a_engine_span("end", task_id=task_id, engine_id=engine_name,
-                          status=("error" if err else "ok"), duration_ms=_ms(start))
+                          status=("error" if err else "ok"), duration_ms=_ms(start),
+                          model_id=_attested_model_of(result),
+                          usage=result.usage,
+                          tool_call_count=sum(
+                              1 for ev in result.events if ev.type == "tool_call"))
     return WorkerResult(
         status="rejected" if err else "ok",
         raw_output=raw,
@@ -1056,9 +1079,31 @@ except Exception:  # noqa: BLE001
 
 
 def _emit_a2a_engine_span(kind: str, *, task_id: str, engine_id: str,
-                          status: str = "ok", duration_ms: int = 0) -> None:
+                          status: str = "ok", duration_ms: int = 0,
+                          model_id: str = "",
+                          usage: "dict[str, Any] | None" = None,
+                          tool_call_count: int = 0) -> None:
     """engine.span.start/end for the A2A worker — on the OS chain via audit_event
-    (same resolution as worker_session.* events). Best-effort, metadata-only."""
+    (same resolution as worker_session.* events). Best-effort, metadata-only.
+
+    ``model_id`` + ``usage`` are what make this span PRICEABLE (ADR-0759).
+    Until 2026-09-20 the A2A path emitted neither, and the consequence was not
+    a missing field: ``model_selection_learner._read_worker_spans`` drops a
+    span that has no model AND no tokens as "not attributable to any model
+    turn", so every inbound A2A run vanished from the Models console — the
+    Worker facets read "0 priced worker runs / no worker data", which is what
+    an install that never delegates looks like. The end span now closes on the
+    model the ENGINE reported (``agents.attested_model``) and the four-way
+    token split the CLI returned, exactly like the gateway dispatcher's worker
+    span.
+
+    An engine that reports a model but no usage still yields a span: the
+    reader counts it in ``total_turns`` with zero priced turns, so the console
+    can say "N runs, none with token data" instead of claiming none happened.
+    The start span carries no model on purpose — A2A passes no ``model=``, so
+    before the first frame there is nothing but a guess, and a guessed id
+    prices the run at the wrong rate.
+    """
     if _espan is None:
         return
     try:
@@ -1079,7 +1124,10 @@ def _emit_a2a_engine_span(kind: str, *, task_id: str, engine_id: str,
         else:
             _espan.emit_end(audit_event, span_id=span_id, role="worker",
                             engine_id=engine_id, run_id=task_id, status=status,
-                            duration_ms=int(duration_ms))
+                            duration_ms=int(duration_ms),
+                            model_id=model_id,
+                            tool_call_count=int(tool_call_count),
+                            **_espan.usage_split(usage))
     except Exception:  # noqa: BLE001
         pass
 

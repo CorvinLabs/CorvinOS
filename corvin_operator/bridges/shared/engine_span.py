@@ -52,6 +52,44 @@ def new_span_id() -> str:
     return "spn_" + secrets.token_hex(8)
 
 
+#: Key spellings an engine may use for each of the four BILLED token columns.
+#: The Claude CLI's ``result`` frame says ``cache_read_input_tokens``; the span
+#: field is the shorter ``cache_read_tokens``. Both are accepted so a span
+#: emitter never has to know which engine produced the usage object, and a
+#: spelling mismatch can no longer silently zero a column.
+_USAGE_ALIASES: dict[str, tuple[str, ...]] = {
+    "input_tokens":       ("input_tokens",),
+    "output_tokens":      ("output_tokens",),
+    "cache_read_tokens":  ("cache_read_input_tokens", "cache_read_tokens"),
+    "cache_write_tokens": ("cache_creation_input_tokens", "cache_write_tokens"),
+}
+
+
+def usage_split(usage: "dict[str, Any] | None") -> dict[str, int]:
+    """The four billed token counts from an engine's raw usage object.
+
+    THE normaliser for every span emitter (ADR-0759). A single ``tokens_used``
+    total cannot be priced — input, output, cache-write and cache-read bill at
+    four different rates — so the split is what the cost readers key on, and
+    every emitter has to derive it identically or the same run prices
+    differently depending on which path spawned it.
+
+    Missing keys are 0; an absent count is never inferred from another one,
+    and a bool is never read as an int.
+    """
+    if not isinstance(usage, dict):
+        return {k: 0 for k in _USAGE_ALIASES}
+
+    def _pick(names: "tuple[str, ...]") -> int:
+        for name in names:
+            val = usage.get(name)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                return int(val)
+        return 0
+
+    return {field: _pick(names) for field, names in _USAGE_ALIASES.items()}
+
+
 def _register_allowlists() -> None:
     """Best-effort positive-allowlist registration so the audit floor keeps the
     span fields (and would drop any future non-allowlisted key). Harmless if

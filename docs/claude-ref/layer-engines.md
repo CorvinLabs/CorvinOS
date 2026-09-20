@@ -2948,6 +2948,63 @@ line count unchanged.
 `acs_total_turns` (276) and never in a daily row; the coverage meter shows
 9/276 and the tile says "with token data". Not estimated.
 
+### The A2A worker path emitted no model and no tokens at all (2026-09-20)
+
+Live finding on the same console, one layer further out. Over the FULL history
+of `_default` (epoch ignored): **11 worker days, 267 runs, 0 priced**, and every
+`engine.span.end` with `role=worker` on the canonical chain carried
+`model_id: ""` with all four token fields `0`. The Usage & Cost tab therefore
+read "Worker runs — over 0 priced worker runs" and "No worker data in this
+window" on an install that *does* delegate.
+
+Neither the console nor the counting epoch was at fault. The **third** worker
+path — L38 inbound A2A (`a2a_worker._emit_a2a_engine_span`, reached from
+`remote_trigger_receiver` which `corvin_gateway.app` mounts) — emitted its span
+with no `model_id` and no usage, and the reader's documented rule ("a span with
+neither model nor tokens is a stub engine or an aborted spawn — skipped, never
+estimated") then discarded every inbound run one layer below the console. The
+ADR-0759 pass fixed the gateway dispatcher and ACS; this path was missed.
+
+| Piece | Rule now |
+|---|---|
+| `a2a_worker._emit_a2a_engine_span` | the END span carries `model_id`, the four-way split and `tool_call_count` |
+| the model on it | `agents.attested_model(result)` — the model the ENGINE reported, scanned newest-frame-first (`system.init`, the `result` frame, `message.model`). A2A passes no `model=`, so a configured id would be a guess, and a guess prices the run at the wrong rate. No frame reported one → `""`, i.e. *unpriced*, which is the honest reading |
+| the START span | keeps `model_id: ""` on purpose — before the first frame there is nothing but that guess, and pricing reads the END span |
+| the token split | `engine_span.usage_split()` — ONE normaliser for every emitter. `dispatcher._usage_split` was a private copy of it; a per-path copy is how the same run prices differently depending on who spawned it |
+| an engine that reports a model but no usage | still a span: counted in `total_turns`, never priced → "N runs, none with token data", not "no worker runs" |
+
+Guarded by `tests/e2e/test_a2a_worker_span_priceable_adr0759_e2e.py` (20 tests):
+the real `spawn_a2a_worker` against a stub engine and the REAL chain writer,
+then `compute_cost_efficiency` off that chain, then the status route over
+TestClient. It opens with a reachability class and `_run_a2a` asserts
+`status == "ok"` — a positive control, because the A2A compute-quota counter is
+snapshotted at import (ADR-0144 A3) and silently starts rejecting spawns after
+~10 runs in one session, which otherwise surfaces as an unrelated console
+assertion three layers away.
+
+**Historical records do not change.** The 267 runs stay unpriced; the chain is
+append-only. Only runs from this fix forward are priceable, and on an install
+whose counter was reset (ADR-0760) nothing shows until the next delegated run.
+
+**`acs_data_available` meant the wrong thing, and the wrong thing was a
+fabricated zero.** Its docstring has always said "ANY event **with usable token
+data**"; the implementation was `bool(cost_result.acs_daily)`, true as soon as a
+DAY recorded a run. On the live shape above — 267 runs, 0 priced — the tile
+therefore rendered a green **"0.0 % · $0.0000 on Opus → $0.0000 actual"**: a
+measured-looking zero over nothing measured (ADR-0763). The OS half never had
+this, because it gates on `has_data` (`counted > 0`). Two variables now:
+
+| Name | Means | Gates |
+|---|---|---|
+| `acs_recorded` | a worker run reached the chain at all | the per-day `acs_*` counts, and the date list |
+| `acs_data_available` | at least one run was **PRICED** | every dollar figure, the daily facet, `combined_data_available` |
+
+`acs_counted_turns`/`acs_total_turns` keep counting over what was RECORDED —
+that pair IS the coverage meter, and "0 of 267" is the whole message. The daily
+facet's empty state now names which of the two cases it is ("N delegated worker
+runs in this window, none with token data" vs. "no delegated worker run
+recorded"), because "no worker data" is wrong for the first one.
+
 ### Bedrock / Vertex / Foundry are `auth_mode: platform`, not base-url redirects
 
 ADR-0181 models a provider as *base URL + one credential env var* and redirects
