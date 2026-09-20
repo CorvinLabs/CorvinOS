@@ -89,4 +89,9 @@ def test_routes_models_call_sites_use_real_signature():
                     f"routes/models.py passes unknown kwarg {kw.arg!r} to "
                     f"system_event(); real params are {sorted(sig_params)}"
                 )
-    assert call_sites == 2, f"expected 2 system_event call sites, found {call_sites}"
+    # Reach control, not an inventory: the point is that the scan actually found
+    # models.py's call sites before reporting every kwarg as valid. Pinning the
+    # exact count made the fence fail on an unrelated commit that legitimately
+    # added two more emitters (4 found, 2 expected) — a red test that says
+    # nothing about signature drift.
+    assert call_sites >= 2, f"expected at least 2 system_event call sites, found {call_sites}"

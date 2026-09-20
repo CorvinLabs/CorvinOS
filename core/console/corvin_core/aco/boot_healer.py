@@ -344,8 +344,9 @@ def _write_audit(sessions: int, repaired: int, delta: int) -> None:
     """Write a single aco.boot_heal event to the console audit chain."""
     try:
         from .. import audit as console_audit
-        console_audit.action_performed(
-            action="aco.boot_heal",
+        console_audit.system_event(
+            tenant_id=None,
+            event="aco.boot_heal",
             details={
                 "sessions_scanned": sessions,
                 "sessions_repaired": repaired,
@@ -362,14 +363,16 @@ def _write_integrity_audit(tenant_id: str, findings: list) -> None:
         from .. import audit as console_audit
         critical = [f for f in findings if f.severity == "CRITICAL"]
         high = [f for f in findings if f.severity == "HIGH"]
-        console_audit.action_performed(
-            action="aco.integrity_scan",
+        console_audit.system_event(
+            tenant_id=tenant_id,
+            event="aco.integrity_scan",
             details={
                 "tenant_id": tenant_id,
                 "critical_count": len(critical),
                 "high_count": len(high),
                 "checks_failed": [f.check_name for f in findings if f.severity in ("CRITICAL", "HIGH")],
             },
+            severity="WARNING",
         )
     except Exception:
         pass
@@ -379,8 +382,9 @@ def _write_engine_audit(tenant_id: str, heal_result: object) -> None:
     """Write an aco.engine_heal audit event when an action was taken or a warning issued."""
     try:
         from .. import audit as console_audit
-        console_audit.action_performed(
-            action="aco.engine_heal",
+        console_audit.system_event(
+            tenant_id=tenant_id,
+            event="aco.engine_heal",
             details={"tenant_id": tenant_id, **heal_result.to_audit_details()},
         )
     except Exception:

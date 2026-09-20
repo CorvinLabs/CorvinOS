@@ -119,6 +119,65 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "panel_id", "tenant_id", "sid_fingerprint",
         "deleted_by",  # fingerprint of operator
     }),
+    # Phase 5.1 — Marketplace discovery + SLO (ADR-0892). These carry decision
+    # context that does not fit action_performed's fixed vocabulary, so they are
+    # emitted through system_event() under their own event_type. Registering them
+    # here keeps the strict pre-write gate AND the core writer's floor in sync.
+    "marketplace.discover": frozenset({
+        "tenant_id", "sid_fingerprint",
+        "rollout_enabled", "rollout_pct", "is_canary", "visible_tiers",
+    }),
+    "marketplace.slo_check": frozenset({
+        "tenant_id", "sid_fingerprint",
+        "status", "p99_latency_ms", "error_rate_pct", "sample_count",
+        "breached", "circuit_breaker_open", "timestamp",
+    }),
+    "marketplace.skills.discover": frozenset({
+        "tenant_id", "sid_fingerprint",
+        "category", "layer", "installed_only", "count",
+    }),
+    # NOTE: the raw search string is operator free text and never leaves the
+    # process — only its length and the result count are auditable.
+    "marketplace.skills.search": frozenset({
+        "tenant_id", "sid_fingerprint", "query_len", "results",
+    }),
+    "marketplace.skills.install": frozenset({
+        "tenant_id", "sid_fingerprint", "skill_id", "job_id", "version",
+    }),
+    "marketplace.skills.uninstall": frozenset({
+        "tenant_id", "sid_fingerprint", "skill_id", "version",
+    }),
+    "marketplace.skills.rate": frozenset({
+        "tenant_id", "sid_fingerprint", "skill_id", "rating", "has_comment",
+    }),
+    # ACO self-healing / integrity (corvin_core.aco). These fire from background
+    # loops that have no SessionRecord, so they are system events, not operator
+    # actions. Every one of them used to call action_performed(action=..., details=...)
+    # — a TypeError swallowed by the surrounding best-effort try/except, so none
+    # of these records ever reached the chain.
+    # No free-text field here: the core writer's denylist refuses to re-admit a
+    # content key, and a nerve signal's message is unbounded operator-visible
+    # text. Length + an 8-hex digest correlate a record with its log line
+    # without the chain carrying the line itself.
+    "aco.nerve_signal": frozenset({
+        "tenant_id", "fiber_id", "signal_type", "severity",
+        "message_len", "message_digest8",
+    }),
+    "aco.integrity_alert": frozenset({
+        "tenant_id", "critical_count", "checks_failed",
+    }),
+    "aco.integrity_scan": frozenset({
+        "tenant_id", "critical_count", "high_count", "checks_failed",
+    }),
+    "aco.boot_heal": frozenset({
+        "tenant_id", "sessions_scanned", "sessions_repaired", "total_delta_loss",
+    }),
+    "aco.engine_heal": frozenset({
+        "tenant_id",
+        "engine_ok", "engine_id", "engine_action",
+        "tts_ok", "tts_provider", "tts_action",
+        "stt_ok", "stt_provider", "warnings",
+    }),
 }
 
 

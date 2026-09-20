@@ -453,13 +453,15 @@ def alert_operator(findings: list[IntegrityFinding], tenant_id: str) -> None:
     # Audit-Event
     try:
         from corvin_console import audit as console_audit
-        console_audit.action_performed(
-            action="aco.integrity_alert",
+        console_audit.system_event(
+            tenant_id=tenant_id,
+            event="aco.integrity_alert",
             details={
                 "tenant_id": tenant_id,
                 "critical_count": len(critical),
                 "checks_failed": [f.check_name for f in critical],
             },
+            severity="WARNING",
         )
     except Exception:
         pass

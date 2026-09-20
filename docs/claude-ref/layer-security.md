@@ -402,6 +402,34 @@ data minimisation, the audit chain captures only:
 - Event details extracted from `ExecutionContext.to_dict()` for JSON serialization.
 - Audit event allowlist (`_ALLOWED_FIELDS["console.execution_context"]`) prevents PII leakage.
 
+#### Console audit emitters — curated fields, never a free `details` dict
+
+`corvin_console.audit` exposes two shapes and they are not interchangeable:
+
+| Emitter | Signature | Use for |
+|---|---|---|
+| `action_performed` / `action_denied` / `action_failed` | keyword-only, **fixed** vocabulary (`action`, `target_kind`, `target_id`, optional `run_id` / `step_id` / `trigger`) — **no `details` parameter** | operator attribution: who did what, to which object |
+| `system_event(tenant_id=…, event=…, details=…)` | free `event` string + `details` dict | background/decision context that has no operator action, e.g. `marketplace.discover`, `aco.boot_heal` |
+
+Both go through `_emit()`, which raises `AuditFieldNotAllowed` on a key that is
+not in that event's `_ALLOWED_FIELDS` entry. Adding an entry there also
+registers it with the CORE writer (`_register_console_allowlists`), so a key
+missing from the list is *rejected*, not silently dropped.
+
+The two shapes were conflated in nine call sites: `action_performed(action=…,
+details=…)` — a `TypeError` that Python only raises at call time. In
+`routes/marketplace.py` it surfaced as `GET /v1/console/api/v1/marketplace/plugins`
+answering **500**, so the marketplace panel never loaded; in the five
+`corvin_core/aco/*` emitters the same `TypeError` was swallowed by a
+best-effort `try/except`, so those audit records silently never existed.
+`core/console/tests/test_console_audit_call_sites.py` AST-scans every call site
+against the emitters' real signatures and fails on the next one.
+
+The core writer's own denylist refuses to re-admit a content/PII key name even
+via an allowlist, which is why `aco.nerve_signal` carries `message_len` +
+`message_digest8` rather than the message, and `marketplace.skills.search`
+carries `query_len` rather than the query.
+
 ### Phase 3D — Loopback-deny (sitecustomize shim wired into bwrap)
 
 Personas with `network: allow` (research) share the host

@@ -544,18 +544,26 @@ def write_signals_to_audit(signals: list[NerveSignal], tenant_id: str = "_defaul
     if not critical_or_high:
         return
     try:
+        import hashlib as _hashlib
+
         from corvin_console import audit as console_audit
         for sig in critical_or_high[:20]:  # Sicherheitsobergrenze pro Zyklus
             if not sig.audit:
                 continue
-            console_audit.action_performed(
-                action=f"nerve.signal.{sig.severity.lower()}",
+            console_audit.system_event(
+                tenant_id=tenant_id,
+                event="aco.nerve_signal",
                 details={
+                    "tenant_id": tenant_id,
                     "fiber_id": sig.fiber_id,
                     "signal_type": sig.signal_type,
-                    "message": sig.message[:500],
-                    "tenant_id": tenant_id,
+                    "severity": sig.severity.lower(),
+                    "message_len": len(sig.message or ""),
+                    "message_digest8": _hashlib.sha256(
+                        (sig.message or "").encode("utf-8")
+                    ).hexdigest()[:8],
                 },
+                severity="WARNING",
             )
     except Exception as exc:
         logger.debug("[Nerve] Audit-Schreiben fehlgeschlagen: %s", exc)

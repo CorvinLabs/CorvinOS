@@ -189,10 +189,12 @@ async def list_plugins(
     )
 
     # Audit the rollout decision
-    console_audit.action_performed(
-        "marketplace.discover",
-        rec=rec,
+    console_audit.system_event(
+        tenant_id=rec.tenant_id,
+        event="marketplace.discover",
         details={
+            "tenant_id": rec.tenant_id,
+            "sid_fingerprint": rec.sid_fingerprint,
             "rollout_enabled": rollout_enabled,
             "rollout_pct": rollout_pct,
             "is_canary": is_canary,
@@ -431,10 +433,14 @@ async def marketplace_slo_status(
     status["circuit_breaker_open"] = monitor.is_circuit_breaker_open()
 
     # Audit the status check
-    console_audit.action_performed(
-        "marketplace.slo_check",
-        rec=rec,
-        details=status,
+    console_audit.system_event(
+        tenant_id=rec.tenant_id,
+        event="marketplace.slo_check",
+        details={
+            "tenant_id": rec.tenant_id,
+            "sid_fingerprint": rec.sid_fingerprint,
+            **status,
+        },
     )
 
     return status
