@@ -212,6 +212,15 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     defaultOpen: true,
     items: [
+      // Restored 2026-09-20. d6c3f3c3 ("remove dead-code pages that have zero
+      // production callers") dropped this line while its own commit message
+      // listed the ten pages it meant to remove — workflows was not among them,
+      // and the `Workflow, // workflows` entry it left behind in ICON_MAP is
+      // what gives the collateral away. The page is alive: /v1/console/workflows
+      // answers 200 with this tenant's workflows, and the editor, runs and run
+      // detail routes are all mounted in App.tsx. It was reachable only by
+      // typing the URL for a day.
+      { to: "/app/workflows",  label: "Workflows",       icon: Workflow },
       { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
       // Forge's "Skills" tab is the one skills surface. /app/skills served the
       // SAME 643 records off /v1/console/skills that /v1/console/forge/skills

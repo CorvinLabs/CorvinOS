@@ -74,6 +74,46 @@ describe("panel wiring: registry route <-> sidebar nav", () => {
     },
   );
 
+  /**
+   * The OTHER direction, and the one that was missing.
+   *
+   * The check below asks "does every sidebar link go somewhere?". Nothing asked
+   * "does every page have a sidebar link?" — and a page mounted directly in
+   * App.tsx is invisible to the PANELS-driven checks above, so it fell through
+   * both nets. That is how /app/workflows lost its Build-group entry in
+   * d6c3f3c3 (2026-09-19) without a single test going red: the commit removed
+   * the line as collateral while its message listed ten unrelated dead pages,
+   * and the route, the page and its live backend all kept working — reachable
+   * only by typing the URL.
+   */
+  it("every page mounted directly in App.tsx is linked from NAV_GROUPS", () => {
+    const appSrc = readFileSync(resolve(here, "../../src/App.tsx"), "utf8");
+
+    // Real pages only: a `Navigate` element is a redirect (its target is what
+    // needs the nav entry) and a `:param` segment is a detail route reached
+    // from its own list page.
+    const mounted = [
+      ...appSrc.matchAll(/<Route\s+path="([a-z0-9-]+)"\s+element=\{<(\w+)/g),
+    ]
+      .filter(([, , element]) => element !== "Navigate")
+      .map(([, path]) => path);
+
+    // Positive control. If App.tsx is restructured so this pattern stops
+    // matching, `mounted` goes empty and the assertion below passes while
+    // checking nothing — the vacuous-green failure mode this whole file exists
+    // to prevent. These two are mounted here and not in PANELS; if either ever
+    // moves into the registry, drop it from this list rather than the test.
+    expect(mounted).toEqual(expect.arrayContaining(["chat", "workflows"]));
+
+    // Reached from elsewhere, not the sidebar. Add here WITH a reason.
+    const APP_ROUTE_NAV_EXEMPT = new Set<string>([]);
+
+    const unlinked = mounted.filter(
+      (r) => !APP_ROUTE_NAV_EXEMPT.has(r) && !layoutSrc.includes(`/app/${r}"`),
+    );
+    expect(unlinked).toEqual([]);
+  });
+
   it("every NAV_GROUPS /app/ target resolves to a mounted panel or a core route", () => {
     // Core routes live directly in App.tsx, not in the panel registry.
     const CORE_ROUTES = new Set([
