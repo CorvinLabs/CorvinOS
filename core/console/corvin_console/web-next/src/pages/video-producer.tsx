@@ -159,9 +159,9 @@ function QualityTab({ q }: { q: Quality }) {
     <div className="space-y-5" data-testid="quality-tab">
       <div className="grid gap-4 lg:grid-cols-[auto_1fr] items-start">
         <ScoreRing score={q.score} />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
           <Fact k="Runtime" v={fmtDur(q.container?.duration_s)} />
-          <Fact k="Picture" v={q.video ? `${q.video.width}×${q.video.height} · ${q.video.fps} fps · ${q.video.codec}` : "—"} />
+          <Fact k="Picture" v={q.video ? <><span className="whitespace-nowrap">{q.video.width}×{q.video.height}</span> · {q.video.fps} fps · {q.video.codec}</> : "—"} />
           <Fact k="Sound" v={q.audio ? `${q.audio.codec} · ${q.audio.sample_rate_hz ? `${(q.audio.sample_rate_hz / 1000).toFixed(1)} kHz` : "—"} · ${q.audio.channels === 1 ? "mono" : q.audio.channels === 2 ? "stereo" : `${q.audio.channels} ch`}` : "none"} />
           <Fact k="File" v={q.container ? `${fmtBytes(q.container.size_bytes)} · ${q.container.bitrate_kbps} kbps` : "—"} />
           <Fact k="Captions" v={q.captions ? `${q.captions.cues} cues · ${pct(q.captions.coverage)} covered` : "none"} />
