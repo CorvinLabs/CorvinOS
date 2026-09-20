@@ -3209,6 +3209,8 @@ def _should_delegate(prompt: str, *, tenant_id: str) -> bool:
     """
     bundled = _should_delegate_bundled(prompt)
     try:
+        if str(_BRIDGES_SHARED) not in sys.path:
+            sys.path.insert(0, str(_BRIDGES_SHARED))
         from delegation_policy import resolve_delegation_route  # noqa: PLC0415
 
         return resolve_delegation_route(
@@ -3363,6 +3365,8 @@ def _is_big_data_task(prompt: str) -> bool:
     (moved 2026-07-26); this wrapper keeps the console-local name that the
     routing tests and call sites already use.
     """
+    if str(_BRIDGES_SHARED) not in sys.path:
+        sys.path.insert(0, str(_BRIDGES_SHARED))
     from delegation_policy import is_big_data_task as _shared  # noqa: PLC0415
     return _shared(prompt)
 
@@ -3478,6 +3482,8 @@ def _worker_engine_target(
     ``_default``. With ``plugin_extension_points`` off — the default — the two
     entries are behaviourally identical.
     """
+    if str(_BRIDGES_SHARED) not in sys.path:
+        sys.path.insert(0, str(_BRIDGES_SHARED))
     from delegation_policy import resolve_worker_engine as _shared_target  # noqa: PLC0415
     is_big_data = _is_big_data_task(prompt)
     if mode == "tde" and not (force_delegate or is_big_data):
