@@ -1,0 +1,16 @@
+{
+  "id": "observability.token_metrics",
+  "name": "Token Metrics",
+  "version": "1.0.0",
+  "boot_layer": "bundled",
+  "origin": "builtin",
+  "requires": ["core.audit", "core.telemetry"],
+  "config": {
+    "enabled": true,
+    "track_cache_efficiency": true,
+    "report_interval_seconds": 300
+  },
+  "description": "Visualize token usage, costs, and cache efficiency across all turns. Tracks input/output/cache tokens and computes real-time cost breakdowns.",
+  "entry_point": "token_tracker:TokenMetricsTracker",
+  "audit_events": ["plugin_loaded", "plugin_disabled", "token_usage_recorded"]
+}

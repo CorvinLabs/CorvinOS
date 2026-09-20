@@ -1,0 +1,16 @@
+{
+  "id": "learning.feedback_loop",
+  "name": "Outcome Feedback Loop",
+  "version": "1.0.0",
+  "boot_layer": "bundled",
+  "origin": "builtin",
+  "requires": ["core.audit", "core.learning"],
+  "config": {
+    "enabled": true,
+    "auto_grade_enabled": true,
+    "feedback_collection": "opt-in"
+  },
+  "description": "Auto-grade CEL stages and collect user feedback for learning loop. Enables outcome-driven optimization of routing + reasoning decisions.",
+  "entry_point": "feedback_handler:FeedbackLoopHandler",
+  "audit_events": ["plugin_loaded", "plugin_disabled", "feedback_collected", "grade_recorded"]
+}

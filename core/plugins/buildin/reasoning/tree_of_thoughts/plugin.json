@@ -1,0 +1,16 @@
+{
+  "id": "reasoning.tree_of_thoughts",
+  "name": "Tree of Thoughts",
+  "version": "1.0.0",
+  "boot_layer": "bundled",
+  "origin": "builtin",
+  "requires": ["core.audit"],
+  "config": {
+    "enabled": true,
+    "max_branches": 3,
+    "depth_limit": 5
+  },
+  "description": "Multi-path exploration for complex reasoning — enables alternative solution paths. Implements tree-of-thought prompting to explore multiple reasoning branches.",
+  "entry_point": "tree_explorer:TreeOfThoughtsReasoner",
+  "audit_events": ["plugin_loaded", "plugin_disabled", "tree_explored"]
+}

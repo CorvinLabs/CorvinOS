@@ -1,0 +1,19 @@
+{
+  "id": "ai.vibe_engineering",
+  "name": "Vibe Engineering",
+  "version": "2.0.0",
+  "boot_layer": "bundled",
+  "origin": "builtin",
+  "requires": ["core.audit"],
+  "config": {
+    "active_mode": false,
+    "description": "Enable LLM-powered active routing (CEL brief mode is always available)"
+  },
+  "description": "CEL brief deterministic + active agentic routing (L5). Analyzes request patterns and routes via deterministic CEL or LLM-powered SkillForge.",
+  "entry_point": "vibe_routing:VibeRouter",
+  "audit_events": [
+    "plugin_loaded",
+    "plugin_disabled",
+    "vibe_route_executed"
+  ]
+}
