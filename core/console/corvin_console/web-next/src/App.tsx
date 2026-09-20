@@ -195,8 +195,16 @@ export default function App() {
                 /v1/console/forge/skills return the SAME 643 records, verified
                 against the live host, so the page was a duplicate view.
                 licensing-audit → the compliance panel's "Learning events"
-                section, which is where an auditor looks for them. */}
+                section, which is where an auditor looks for them.
+                skill-forge-generator → Forge's Creator tab, which absorbed its
+                fields as the "From template" composer. That page's backend
+                (POST /v1/skill-forge/generate) was an unmounted Flask blueprint
+                answering 404, so nothing working was removed. */}
             <Route path="skills" element={<Navigate to="/app/forge?tab=skills" replace />} />
+            <Route
+              path="skill-forge-generator"
+              element={<Navigate to="/app/forge?tab=creator" replace />}
+            />
             <Route path="licensing-audit" element={<Navigate to="/app/compliance" replace />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />

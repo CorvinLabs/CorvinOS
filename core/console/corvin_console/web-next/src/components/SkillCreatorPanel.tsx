@@ -1,7 +1,21 @@
 /**
- * Skill-Creator UI Panel — generate, inspect, refine and delete skills.
+ * Skill-Creator UI Panel — the console's ONE place to create a skill.
  *
- * Rendered on /console/app/skills (ADR-0405).
+ * Rendered as Forge's "Creator" tab, /console/app/forge?tab=creator (ADR-0405).
+ *
+ * Two composers, one registry (2026-09-20 merge):
+ *
+ *   Orchestrated — describe it in prose, a real `claude -p` run executes the
+ *                  5-phase LDD pipeline. Minutes, charged to the subscription.
+ *   Template     — structured fields and an editable Markdown body, written
+ *                  straight to the registry. Instant, no engine.
+ *
+ * The template composer is the former /app/skill-forge-generator page, whose
+ * own backend (`POST /v1/skill-forge/generate`) was a Flask blueprint no
+ * FastAPI app ever mounted — it answered 404, so the page could not create
+ * anything. Its fields were rehomed here onto `POST /skills/manual`, which
+ * writes through the same registry this panel's library lists, so both
+ * composers produce skills that show up in the one list below.
  *
  * The panel owns the full lifecycle of a GENERATED skill, because that is
  * where an operator's loop actually runs: describe → watch the phases →
@@ -23,9 +37,11 @@ import {
   CheckCircle,
   Copy,
   Cpu,
+  FileCode2,
   Loader2,
   Pencil,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -54,6 +70,7 @@ import {
   type SkillRunStatus,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import TemplateSkillForm from "@/components/forge/TemplateSkillForm";
 
 /**
  * The five phases SkillCreatorOrchestrator.create_skill reports. The backend
@@ -78,10 +95,15 @@ const ENGINE_LABELS: Record<string, string> = {
 
 type Toast = { kind: "ok" | "err"; msg: string };
 
+/** Which composer is on screen. Both write to the same tenant registry; the
+ *  switch only chooses HOW the body is produced. */
+type ComposerMode = "orchestrated" | "template";
+
 export const SkillCreatorPanel: React.FC = () => {
   const { session } = useAuth();
   const qc = useQueryClient();
 
+  const [mode, setMode] = useState<ComposerMode>("orchestrated");
   const [userRequest, setUserRequest] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
   const [refineTarget, setRefineTarget] = useState<string | null>(null);
@@ -169,11 +191,23 @@ export const SkillCreatorPanel: React.FC = () => {
   const startRefine = useCallback((name: string) => {
     setRefineTarget(name);
     setError(null);
-    // Scroll the composer into view: the list can be long, and a refine
-    // banner nobody sees looks like a button that did nothing.
-    document.getElementById("skill-request")?.scrollIntoView({ block: "center" });
-    document.getElementById("skill-request")?.focus();
+    // Refinement is an orchestrated run; the template composer has no notion
+    // of a base skill. The scroll+focus happens in the effect below, not here:
+    // when the template composer is on screen the textarea is still display:none
+    // at this point in the tick, and neither scrollIntoView nor focus does
+    // anything to a hidden element.
+    setMode("orchestrated");
   }, []);
+
+  // Scroll the composer into view once the refine target is set AND the
+  // orchestrated composer is visible: the list can be long, and a refine
+  // banner nobody sees looks like a button that did nothing.
+  useEffect(() => {
+    if (!refineTarget || mode !== "orchestrated") return;
+    const el = document.getElementById("skill-request");
+    el?.scrollIntoView({ block: "center" });
+    el?.focus();
+  }, [refineTarget, mode]);
 
   const submit = () => {
     if (!userRequest.trim()) {
@@ -201,15 +235,63 @@ export const SkillCreatorPanel: React.FC = () => {
           <CardTitle className="text-base">Skill Creator</CardTitle>
         </div>
         <CardDescription>
-          Generate reusable skills through 5-phase LDD orchestration (Planning, Validation,
-          LDD Iteration, Adversarial Review, Promotion) — on your Claude subscription via the
-          Claude Code engine, no API key required.
+          Create a reusable skill either way: let the 5-phase LDD orchestration write it
+          (Planning, Validation, LDD Iteration, Adversarial Review, Promotion — on your Claude
+          subscription, no API key required), or fill in a template and write it to the registry
+          yourself. Both land in the same registry and the same library below.
         </CardDescription>
       </CardHeader>
 
       <CardContent className="space-y-6">
-        {/* ── Composer ──────────────────────────────────────────────────── */}
-        <div className="space-y-3">
+        {/* ── Composer ──────────────────────────────────────────────────────
+            Two ways in, one registry out. The switch is disabled mid-run:
+            leaving the orchestrated mode would hide the phase stepper of a
+            run that is still spending subscription budget. */}
+        <div
+          className="inline-flex rounded-md border border-border/60 p-0.5"
+          role="tablist"
+          aria-label="Skill composer"
+          data-testid="composer-mode"
+        >
+          {(
+            [
+              ["orchestrated", "Orchestrated", Sparkles],
+              ["template", "From template", FileCode2],
+            ] as const
+          ).map(([id, label, Icon]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={mode === id}
+              data-mode={id}
+              data-state={mode === id ? "active" : "inactive"}
+              disabled={isRunning}
+              onClick={() => {
+                setMode(id);
+                setError(null);
+              }}
+              className={
+                "flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-xs transition-colors disabled:opacity-50 " +
+                (mode === id
+                  ? "bg-accent/15 font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "template" && (
+          <TemplateSkillForm
+            disabled={isRunning}
+            onCreated={(name) => setToast({ kind: "ok", msg: `Created "${name}"` })}
+          />
+        )}
+
+        <div className={mode === "orchestrated" ? "space-y-3" : "hidden"}>
           {refineTarget && (
             <div
               className="flex items-center justify-between gap-2 rounded-md border border-accent/40 bg-accent/5 p-2 text-xs"

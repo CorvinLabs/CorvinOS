@@ -143,7 +143,6 @@ const _ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Database,               // rag, datahub-unified
   Server,                 // data-sources
   Gauge,                  // otel-telemetry, compute
-  Sparkles,               // skill-forge-generator
   Workflow,               // workflows
   Blocks,                 // marketplace-hub
   Activity,               // sync-monitor
@@ -219,8 +218,10 @@ const NAV_GROUPS: NavGroup[] = [
       // returns (verified against the live host, 2026-09-20), so the standalone
       // panel was a duplicate view, not a second capability. Its route now
       // redirects here; see App.tsx.
+      // The Creator tab absorbed /app/skill-forge-generator the same day: that
+      // page's only backend was an unmounted Flask blueprint answering 404, so
+      // its fields moved into Forge's Creator as the "From template" composer.
       { to: "/app/forge",      label: "Forge",           icon: Hammer },
-      { to: "/app/skill-forge-generator", label: "Skill Forge", icon: Sparkles },
     ],
   },
   {
