@@ -150,6 +150,7 @@ from .routes import (
     datasources_http as datasources_http_route,
     skills_manual as skills_manual_route,
     skills_monitoring as skills_monitoring_route,
+    phase3_monitor as phase3_monitor_route,
     tools_manual as tools_manual_route,
     audit_layers as audit_layers_route,
     webhooks as webhooks_route,
@@ -247,6 +248,7 @@ router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
+router.include_router(phase3_monitor_route.router, tags=["console-phase3-monitor"])
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])

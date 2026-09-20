@@ -199,7 +199,7 @@ class RoutingConfig(BaseModel):
     strategy: Literal["baseline", "phase2_conservative", "phase3_judge"] = (
         "phase2_conservative"
     )
-    judge_enabled: bool = False
+    judge_enabled: bool = True
     judge_override_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
