@@ -13,6 +13,12 @@ from __future__ import annotations
 
 import pytest
 
+# Shared console fixtures (app / client / async_client / real_*_client).
+# 107 errors in the 2026-09-20 full run were "fixture '<name>' not found"; the
+# fixtures live in one module and are registered as a plugin here so every
+# suite under tests/ sees them.
+pytest_plugins = ["tests.fixtures_console"]
+
 
 @pytest.fixture(autouse=True)
 def _isolated_audit_chain_for_all_tests(monkeypatch, tmp_path):

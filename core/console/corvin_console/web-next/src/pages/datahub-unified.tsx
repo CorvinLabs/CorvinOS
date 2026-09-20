@@ -8,6 +8,14 @@ import { Card } from "@/components/ui/card";
 type SourceType = "json" | "csv" | "sql" | "api" | "parquet";
 type CreationType = "skill" | "tool" | "dataset" | "pipeline";
 
+interface CreationResult {
+  analysis?: { row_count?: number; completeness?: number };
+  artifact_name?: string;
+  artifact_type?: string;
+  test_count?: number;
+  validation_errors?: string[];
+}
+
 export default function DataHubUnified() {
   const [stage, setStage] = useState<"ingestion" | "creation">("ingestion");
   const [sourceType, setSourceType] = useState<SourceType>("json");
@@ -17,7 +25,9 @@ export default function DataHubUnified() {
   const [artifactName, setArtifactName] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  // Shaped, not `any`: these are the fields this page actually renders.
+  // Everything is optional because the backend fills them per creation type.
+  const [result, setResult] = useState<CreationResult | null>(null);
   const [error, setError] = useState("");
 
   const handleIngest = async () => {
@@ -134,7 +144,7 @@ export default function DataHubUnified() {
               Ingested: <strong>{result.analysis?.row_count}</strong> rows
             </p>
             <p className="text-sm">
-              Completeness: <strong>{(result.analysis?.completeness * 100).toFixed(0)}%</strong>
+              Completeness: <strong>{((result.analysis?.completeness ?? 0) * 100).toFixed(0)}%</strong>
             </p>
           </div>
 
@@ -193,9 +203,9 @@ export default function DataHubUnified() {
             <p>
               <strong>Tests:</strong> {result.test_count || 0}
             </p>
-            {result.validation_errors?.length > 0 && (
+            {(result.validation_errors?.length ?? 0) > 0 && (
               <p className="text-red-600">
-                <strong>Errors:</strong> {result.validation_errors.join(", ")}
+                <strong>Errors:</strong> {result.validation_errors?.join(", ")}
               </p>
             )}
           </div>

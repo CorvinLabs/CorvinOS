@@ -134,6 +134,9 @@ GATED_FLAGS: tuple[str, ...] = (
     "learning_gap_7_operator_feedback",
     "learning_enabled",
     "skill_forge_enabled",
+
+    # Video Producer
+    "video_producer_enabled",
 )
 
 
@@ -410,21 +413,19 @@ def _get_builtin_panels() -> list[dict]:
             "tenant_scoped": True,
         },
         # More builtin panels...
-        {
-            "id": "skills",
-            "title": "Skills",
-            "route": "skills",
-            "icon": "BookOpen",
-            "kind": "feature",
-            "source": "builtin",
-            "nav_group": "build",
-            "requiredFlag": None,
-            "requiredCapability": None,
-            "element": {"kind": "react-component", "component": "SkillsPage"},
-            "version": "1.0.0",
-            "audit_events": ["console_panel_opened"],
-            "tenant_scoped": True,
-        },
+        # The standalone "skills" panel was removed on 2026-09-20: it served
+        # the SAME records as Forge's Skills tab (/v1/console/skills and
+        # /v1/console/forge/skills both return the tenant's 643 skills), so
+        # the page was a duplicate view. The frontend redirects /app/skills
+        # to /app/forge?tab=skills.
+        #
+        # It has to go HERE too, not only from the frontend's NAV_GROUPS:
+        # mergeManifestNav() appends any manifest panel whose route is not
+        # already linked in the sidebar, so leaving this entry would have
+        # silently re-added the very item that was just removed — and
+        # manifestPanelRoutes() would have tried to mount /app/skills from a
+        # "SkillsPage" component name the frontend no longer resolves,
+        # racing the redirect for the same path.
         {
             # ONE marketplace (ADR-0892). Until 2026-09-19 this declared route
             # "plugin-center" → component "PluginCenterPage", which the SPA had
@@ -554,8 +555,6 @@ def _get_nav_groups(panels: list[dict], flags: dict[str, bool]) -> list[dict]:
             "collapsible": True,
             "defaultOpen": True,
             "items": [
-                {"panel_id": "skills"},
-            ] + [
                 {"panel_id": p["id"]} for p in panels
                 if p["kind"] == "skill" and p["nav_group"] == "build"
             ],

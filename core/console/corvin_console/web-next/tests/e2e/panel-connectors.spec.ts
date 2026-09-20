@@ -31,7 +31,7 @@ test.describe('Connectors Panel', () => {
   test('breadcrumb navigation is optional', async ({ panelNav }) => {
     await panelNav.goto(panelSlug);
     const breadcrumb = panelNav.getBreadcrumb();
-    const isVisible = await breadcrumb.isVisible().catch(() => false);
+    const _isVisible = await breadcrumb.isVisible().catch(() => false);
     // Breadcrumb is optional
   });
 
@@ -49,7 +49,7 @@ test.describe('Connectors Panel', () => {
 
     await panelNav.goto(panelSlug);
     const mainContent = panelNav.getMainContent();
-    const isVisible = await mainContent.isVisible().catch(() => false);
+    const _isVisible = await mainContent.isVisible().catch(() => false);
     // Panel should recover or show error
   });
 

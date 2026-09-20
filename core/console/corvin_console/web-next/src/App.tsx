@@ -188,6 +188,16 @@ export default function App() {
             <Route path="extensions" element={<Navigate to="/app/marketplace?tab=installed" replace />} />
             <Route path="mcp-plugins" element={<Navigate to="/app/marketplace?tab=tools" replace />} />
             <Route path="packages" element={<Navigate to="/app/marketplace?tab=packages" replace />} />
+            {/* Consolidated 2026-09-20 (operator request). Both routes stay
+                mounted so existing bookmarks and in-app links keep working —
+                the panels behind them are gone, not the addresses.
+                skills → Forge's Skills tab: /v1/console/skills and
+                /v1/console/forge/skills return the SAME 643 records, verified
+                against the live host, so the page was a duplicate view.
+                licensing-audit → the compliance panel's "Learning events"
+                section, which is where an auditor looks for them. */}
+            <Route path="skills" element={<Navigate to="/app/forge?tab=skills" replace />} />
+            <Route path="licensing-audit" element={<Navigate to="/app/compliance" replace />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>

@@ -20,7 +20,8 @@ export default function SkillForgeGenerator() {
   const [scope, setScope] = useState<SkillScope>("task");
   const [useLLM, setUseLLM] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  // The generator returns a manifest; `name` is the only field read here.
+  const [result, setResult] = useState<{ name?: string } | null>(null);
   const [error, setError] = useState("");
 
   const handleGenerate = async () => {

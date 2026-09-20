@@ -58,9 +58,24 @@ class ManifestValidator:
             if pattern.lower() in manifest.body_md.lower():
                 self.errors.append(f"Dangerous pattern detected: '{pattern}'")
 
-        # Warn if body is mostly code
+        # Warn if body is mostly code.
+        #
+        # The previous count matched only the FENCE lines (```) and
+        # four-space-indented lines, never the code BETWEEN the fences — a body
+        # of three python blocks scored 0.17 and never tripped the 0.4
+        # threshold, so this warning was effectively unreachable. Track the
+        # fenced regions and count everything inside them.
         lines = manifest.body_md.split('\n')
-        code_lines = sum(1 for l in lines if l.strip().startswith('```') or l.strip().startswith('    '))
+        code_lines = 0
+        in_fence = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('```'):
+                in_fence = not in_fence
+                code_lines += 1
+                continue
+            if in_fence or line.startswith('    '):
+                code_lines += 1
         code_ratio = code_lines / max(len(lines), 1)
         if code_ratio > 0.4:
             self.warnings.append("High code density (>40%) — consider using forge tool instead")

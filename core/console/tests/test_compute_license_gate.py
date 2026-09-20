@@ -406,7 +406,7 @@ def test_enforce_chat_turns_leaks_across_tenants_cross_tenant_dos(monkeypatch, t
 def test_acs_chokepoint_charges_daily_quota():
     """ADR-0149 WF-CLI-ACS-01: run_acs_workflow charges the daily counter at the
     single chokepoint, so the CLI and scheduler paths cannot bypass it."""
-    shared = Path("/home/shumway/projects/CorvinOS/corvin_operator/bridges/shared")
+    shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
     src = (shared / "acs_engine_adapter.py").read_text(encoding="utf-8")
     assert "_enforce_acs_compute_quota" in src and "increment_and_check" in src, (
         "run_acs_workflow must charge compute_units_per_day at the ACS chokepoint"

@@ -14,7 +14,7 @@
  * Timeline: Should complete in ~3-5 minutes
  */
 
-import { test, expect, Page, request as createRequest } from '@playwright/test';
+import { test, expect, Page, request as _createRequest } from '@playwright/test';
 
 // Helper: set theme and persist
 async function setTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
@@ -91,7 +91,7 @@ test.describe('Phase 2: Panel Consistency', () => {
       if (msg.type() === 'error') errors.push(msg.text());
     });
 
-    const response = await page.goto('/console/app/models?tab=usage-cost', { waitUntil: 'domcontentloaded' }).catch(() => null);
+    const _response = await page.goto('/console/app/models?tab=usage-cost', { waitUntil: 'domcontentloaded' }).catch(() => null);
     // During consolidation, page may not exist - that's okay for now
     // Check that if page loads, it doesn't have >2 real errors (404s don't count)
     const realErrors = errors.filter(e => !e.includes('404') && !e.includes('undefined'));
@@ -101,7 +101,7 @@ test.describe('Phase 2: Panel Consistency', () => {
   test('Dark mode toggle works on model-cost-optimizer', async ({ page }) => {
     await page.goto('/console/app/models?tab=usage-cost');
     
-    let theme = await getTheme(page);
+    const theme = await getTheme(page);
     expect(['light', 'dark']).toContain(theme);
     
     await setTheme(page, 'dark');

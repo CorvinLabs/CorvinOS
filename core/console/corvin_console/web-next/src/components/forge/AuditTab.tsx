@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { HistoryIcon, Download } from 'lucide-react';
 
 interface AuditEvent {
@@ -14,7 +13,7 @@ interface AuditEvent {
   resource_name: string;
   action: string;
   user: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   hash: string;
   prev_hash: string;
 }
@@ -137,7 +136,9 @@ export default function AuditTab({ searchQuery, filterType }: AuditTabProps) {
       <div className="flex gap-4 items-center">
         <select
           value={selectedAction}
-          onChange={(e) => setSelectedAction(e.target.value as any)}
+          onChange={(e) => setSelectedAction(
+                    e.target.value as 'all' | 'create' | 'update' | 'delete' | 'enable' | 'disable',
+                  )}
           className="flex h-10 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm"
         >
           <option value="all">All Actions</option>

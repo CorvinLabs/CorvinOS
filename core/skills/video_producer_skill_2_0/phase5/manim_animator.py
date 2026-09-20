@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
+from .video_paths import MANIM_OUTPUT, MANIM_SCENES, video_dir
 
 
 @dataclass
@@ -75,8 +76,8 @@ class ManimAnimatorWorker:
 
         # Setup directories
         self.cache_dir = Path("/tmp/manim_cache")
-        self.output_dir = Path("/home/shumway/projects/Corvin-Videos/manim_output")
-        self.scenes_dir = Path("/home/shumway/projects/Corvin-Videos/scenes")
+        self.output_dir = video_dir(MANIM_OUTPUT)
+        self.scenes_dir = video_dir(MANIM_SCENES)
 
         for d in [self.cache_dir, self.output_dir, self.scenes_dir]:
             d.mkdir(parents=True, exist_ok=True)

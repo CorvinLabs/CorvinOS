@@ -168,12 +168,12 @@ class TestErrorHandling:
         """Verify missing skill returns 404, not 500."""
         # This would be an actual HTTP test in a real test suite
         # For now, we document the expected behavior
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_malformed_tenant_id_returns_bad_request(self):
         """Verify invalid tenant_id returns 400."""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_filesystem_error_returns_500(self):
         """Verify filesystem errors return 500 (not silent failures)."""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")

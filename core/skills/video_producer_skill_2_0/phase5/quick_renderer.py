@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 from typing import Optional
 import tempfile
+from .video_paths import QUICK_OUTPUT, video_dir
 
 
 class QuickRendererWorker:
@@ -136,7 +137,7 @@ class QuickRendererWorker:
     def _create_mp4_from_frames(self, png_path: Path, duration_seconds: int) -> Path:
         """Create MP4 from single PNG (with fade effect)"""
 
-        output_dir = Path("/home/shumway/projects/Corvin-Videos/tier1_output")
+        output_dir = video_dir(QUICK_OUTPUT)
         output_dir.mkdir(exist_ok=True)
         output_path = output_dir / "diagram.mp4"
 

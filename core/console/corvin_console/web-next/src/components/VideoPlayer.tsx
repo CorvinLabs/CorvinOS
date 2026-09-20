@@ -4,7 +4,7 @@
  * Supports: play/pause, seek, volume, download, metadata
  */
 
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Download, Play, Pause, Volume2, VolumeX } from "lucide-react";
 
@@ -25,8 +25,7 @@ export function VideoPlayer({
   srtPath,
   title,
   metadata,
-  onDownload,
-}: VideoPlayerProps) {
+  onDownload }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);

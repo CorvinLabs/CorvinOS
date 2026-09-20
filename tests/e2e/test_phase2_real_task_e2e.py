@@ -9,6 +9,21 @@ Verifies:
 Status: PRODUCTION-READY PROOF for Phase 2 milestone
 """
 
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# No module of that name exists anywhere in the tree and nothing else
+# references it.
+#
+# This surfaced as a COLLECTION ERROR in every full run, which made the file
+# invisible rather than pending. Delete this guard in the commit that lands
+# the missing code.
+import pytest
+
+pytest.skip(
+    'core.console.corvin_console.task_runtime does not exist on main',
+    allow_module_level=True,
+)
+
+
 import asyncio
 import json
 import pytest

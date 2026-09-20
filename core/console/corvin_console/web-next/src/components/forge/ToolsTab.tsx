@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Hammer, Plus, Search } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { Hammer, Plus } from 'lucide-react';
 import { ForgeTool } from '@/types/forge';
 
 interface ToolsTabProps {
@@ -17,9 +16,8 @@ export default function ToolsTab({
   tools,
   setTools,
   searchQuery,
-  filterStatus,
-}: ToolsTabProps) {
-  const [selectedTool, setSelectedTool] = useState<string | null>(null);
+  filterStatus }: ToolsTabProps) {
+  const [_selectedTool, setSelectedTool] = useState<string | null>(null);
 
   const filtered = React.useMemo(() => {
     return tools.filter((tool) => {

@@ -20,6 +20,7 @@ Usage:
 """
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import List, Optional
 import subprocess
@@ -42,8 +43,17 @@ class PanelDeletionResult:
 class ConsolePanelDeletionVerifier:
     """Verify that deleted panels are truly gone from console frontend."""
 
-    def __init__(self, console_root: str = "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next"):
-        self.console_root = Path(console_root)
+    def __init__(self, console_root: str | None = None):
+        # Derived from this file's location; the absolute default only ever
+        # resolved on the maintainer's machine.
+        self.console_root = Path(
+            console_root
+            or os.environ.get("CORVIN_CONSOLE_WEB_ROOT")
+            or Path(__file__).resolve().parents[1]
+            / "console"
+            / "corvin_console"
+            / "web-next"
+        )
         self.src_dir = self.console_root / "src"
         self.dist_dir = self.console_root / "dist"
 

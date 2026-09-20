@@ -8,12 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
-from checks.reachability import ReachabilityCheck
-from checks.audit_trail import AuditTrailCheck
-from checks.test_evidence import TestEvidenceCheck
-from checks.docs_sync import DocsSyncCheck
-from checks.reproducibility import ReproducibilityCheck
-from scoring import ScoringEngine
+from .checks.reachability import ReachabilityCheck
+from .checks.audit_trail import AuditTrailCheck
+from .checks.test_evidence import TestEvidenceCheck
+from .checks.docs_sync import DocsSyncCheck
+from .checks.reproducibility import ReproducibilityCheck
+from .scoring import ScoringEngine
 
 
 @dataclass(frozen=True)

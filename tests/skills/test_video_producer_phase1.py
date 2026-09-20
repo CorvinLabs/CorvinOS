@@ -44,10 +44,15 @@ class TestAssetAnalyzerStages:
 
     @pytest.mark.asyncio
     async def test_stage_1_ingestion_empty(self, analyzer):
-        """Stage 1: Ingestion returns empty list for no assets."""
+        """Stage 1: Ingestion returns an empty ingest payload for no assets.
+
+        The stage returns the ingest_assets.py payload shape
+        ({"summary": ..., "assets": [...]}), not a bare list — this asserted
+        `isinstance(result, list)` against a dict and had never run.
+        """
         result = await analyzer._stage_1_ingest([])
-        assert isinstance(result, list)
-        assert len(result) == 0
+        assert isinstance(result, dict)
+        assert result == {"summary": {}, "assets": []}
 
     @pytest.mark.asyncio
     async def test_stage_2_deep_read_returns_facts(self, analyzer):
@@ -115,8 +120,11 @@ class TestAssetAnalyzerGates:
     async def test_analyze_metadata_present(self, analyzer):
         """Analysis result includes metadata with timestamp."""
         result = await analyzer.analyze([])
-        assert "metadata" in result.metadata
+        # `result.metadata` IS the metadata mapping; it does not nest another
+        # "metadata" key inside itself.
         assert "processed_at" in result.metadata
+        assert "total_assets" in result.metadata
+        assert "analysis_complete" in result.metadata
 
 
 class TestOrchestratorGates:
@@ -293,29 +301,31 @@ class TestE2EWorkflow:
 
     @pytest.mark.asyncio
     async def test_e2e_orchestrate_no_assets(self, orchestrator):
-        """E2E: Orchestrate with no assets."""
-        result = await orchestrator.orchestrate([])
-        assert "analysis" in result
-        assert "status" in result
-        # Without proper assets, analysis gates should fail
-        assert "analysis" in result or "error" in str(result)
+        """E2E: Orchestrate with no assets is fail-closed.
+
+        The analysis gate raises AnalysisGateFailedError rather than returning
+        a dict with an error field — that is the fail-closed contract
+        (ADR-0720). These three tests asserted the old return-a-dict shape and
+        had never executed, because the module was a collection error.
+        """
+        with pytest.raises(AnalysisGateFailedError) as exc:
+            await orchestrator.orchestrate([])
+        assert "need" in str(exc.value)
 
     @pytest.mark.asyncio
     async def test_e2e_orchestrate_returns_dict_structure(self, orchestrator):
-        """E2E: Orchestrate returns proper structure."""
-        result = await orchestrator.orchestrate([])
-        assert isinstance(result, dict)
-        assert "analysis" in result
-        assert "status" in result
-        # Storyboard may be None if analysis gates fail
-        assert "storyboard" in result
+        """E2E: the gate names every unmet precondition, not just the first."""
+        with pytest.raises(AnalysisGateFailedError) as exc:
+            await orchestrator.orchestrate([])
+        message = str(exc.value)
+        assert "facts" in message
+        assert "asset roles" in message
 
     @pytest.mark.asyncio
     async def test_e2e_orchestrate_gate_blocks_on_insufficient_facts(self, orchestrator):
         """E2E: Orchestrator blocks when analysis gates are not met."""
-        result = await orchestrator.orchestrate([])
-        # With no assets, analysis will have no facts
-        assert result["status"] == "blocked" or "ready_for_narration" in result["analysis"]
+        with pytest.raises(AnalysisGateFailedError):
+            await orchestrator.orchestrate([])
 
     @pytest.mark.asyncio
     async def test_e2e_orchestrator_saves_analysis_json(self, orchestrator):

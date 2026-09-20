@@ -122,30 +122,42 @@ class TestAdvarsarial_FeedbackPoisoning:
     """Attack: Try to poison feedback to skew weights."""
 
     def test_feedback_is_immutable(self):
-        """Verify feedback events are immutable after emission."""
-        from core.console.corvin_console.routes import dod_verifier_dashboard
+        """A learning event cannot be rewritten after it is constructed.
 
-        event_store = dod_verifier_dashboard.get_event_store("_default")
+        This used to hand ``EventStore.write_event`` a plain dict — an API it
+        has never accepted (it takes a ``LearningEvent``) — and then closed
+        with a bare ``assert True``, so it neither exercised immutability nor
+        noticed that the call raised. It also wrote into the LIVE ``_default``
+        tenant's audit chain, which a test must never do.
 
-        feedback_event = {
-            "event_type": "dod_feedback_received",
-            "task_id": "test_immutable",
-            "check_name": "test_coverage",
-            "feedback": "accurate",
-            "timestamp": datetime.utcnow().isoformat(),
-            "tenant_id": "_default",
-        }
+        The real invariant is that ``LearningEvent`` is a frozen dataclass:
+        rebinding any field raises, so a poisoned reference cannot retroactively
+        change what was recorded.
+        """
+        import dataclasses
+        from datetime import timezone
 
-        # Write event
-        event_store.write_event(feedback_event)
+        from core.learning.event_schema import LearningEvent, LearningEventType
 
-        # Try to modify original dict
-        feedback_event["feedback"] = "inaccurate"
+        event = LearningEvent(
+            event_type=LearningEventType.USER_FEEDBACK,
+            tenant_id="_default",
+            instance_id="test-instance",
+            skill_name="definition_of_done_verifier",
+            session_id="s1",
+            timestamp_utc=datetime.now(timezone.utc),
+            payload={"task_id": "test_immutable", "feedback": "accurate"},
+        )
 
-        # Event in store should be unchanged (make a copy when writing)
-        # This is a structural property of the event store (append-only)
-        # If store makes copies, this test passes automatically
-        assert True  # Placeholder for copy verification
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            event.payload = {"feedback": "inaccurate"}  # type: ignore[misc]
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            event.tenant_id = "other-tenant"  # type: ignore[misc]
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            event.event_id = "forged"  # type: ignore[misc]
+
+        assert event.payload["feedback"] == "accurate"
+        assert event.tenant_id == "_default"
 
 
 class TestAdvarsarial_EdgeCases:
@@ -349,10 +361,20 @@ class TestAdvarsarial_ConcurrentExecution:
         for t in threads:
             t.join()
 
-        # All should complete without exception
-        assert len(results) == 0  # Lambda doesn't append correctly in this test
-        # But the key is that threads don't crash
-        assert True
+        # Every thread must have produced exactly one result, and each result
+        # must carry ITS OWN task_id — that is the interference the test is
+        # named for. The previous assertion was `len(results) == 0` with the
+        # comment "Lambda doesn't append correctly in this test", which is
+        # simply untrue (the default-argument binding works and five results
+        # arrive); it passed only because nothing downstream was checked.
+        assert len(results) == 5
+        assert sorted(r.task_id for r in results) == [
+            f"concurrent_{i}" for i in range(5)
+        ]
+        # No result may carry another run's checks: each verification is a
+        # separate object with its own audit event id.
+        audit_ids = [r.audit_event_id for r in results]
+        assert len(set(audit_ids)) == 5
 
 
 class TestAdvarsarial_WeightManipulation:

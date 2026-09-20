@@ -1,6 +1,7 @@
 """Quick test to verify suppression logic works."""
+from pathlib import Path
 import sys
-sys.path.insert(0, '/home/shumway/projects/CorvinOS')
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.observability.alert_engine import AlertEngine, AlertSeverity
 from datetime import datetime

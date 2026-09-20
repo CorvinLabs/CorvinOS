@@ -21,7 +21,7 @@ class LossSignalType(Enum):
 @dataclass
 class LossObservation:
     """Single loss measurement with metadata."""
-    timestamp: str
+    timestamp: Optional[str]
     loss: float
     model: str
     task_type: str
@@ -34,13 +34,22 @@ class LossObservation:
 
 @dataclass
 class ConceptDriftSignal:
-    """Detected concept drift (distribution shifted)."""
-    signal_type: LossSignalType = LossSignalType.CONCEPT_DRIFT
+    """Detected concept drift (distribution shifted).
+
+    Field order matters: a dataclass field WITH a default may not precede one
+    without, and `signal_type` used to lead the list — so importing this module
+    raised ``TypeError: non-default argument 'severity' follows default
+    argument`` and every consumer of Tier-3 loss signals was dead on import.
+    Both signal classes are constructed by keyword only (see
+    ``AdvancedLossSignals.detect_*``), so moving the defaulted fields last is
+    behaviour-preserving.
+    """
     severity: float  # 0-1
     mean_shift: float  # How much mean changed
     variance_shift: float
     window_size: int
-    timestamp: str = None
+    signal_type: LossSignalType = LossSignalType.CONCEPT_DRIFT
+    timestamp: Optional[str] = None
     
     def __post_init__(self):
         if self.timestamp is None:
@@ -49,14 +58,14 @@ class ConceptDriftSignal:
 
 @dataclass
 class SkillMismatchSignal:
-    """Detected skill → task mismatch."""
-    signal_type: LossSignalType = LossSignalType.SKILL_MISMATCH
+    """Detected skill -> task mismatch. Defaulted fields last, see above."""
     skill_id: str
     expected_loss: float
     actual_loss: float
     error_rate: float  # % of tasks that broke routing
     recommendation: str
-    timestamp: str = None
+    signal_type: LossSignalType = LossSignalType.SKILL_MISMATCH
+    timestamp: Optional[str] = None
     
     def __post_init__(self):
         if self.timestamp is None:

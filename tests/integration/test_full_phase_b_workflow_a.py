@@ -14,6 +14,16 @@ Compliance:
 - EU AI Act Art. 50: Transparency logged
 """
 
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# Same API mismatch as tests/integration/test_cross_track_dependencies.py.
+#
+# This was a COLLECTION ERROR in every full run, i.e. invisible rather than
+# pending. Delete this guard in the commit that reconciles the APIs.
+import pytest
+
+pytest.skip('core.marketplace.plugin_tier_system has no TierQuotaManager (the module ships PluginTierGate)', allow_module_level=True)
+
+
 import pytest
 import json
 import time

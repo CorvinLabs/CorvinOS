@@ -56,17 +56,17 @@ class TestFeatureStatusEndpoints:
         """Test GET /feature-status/preset returns current preset."""
         # Endpoint returns default preset
         # In full test, would use TestClient
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_set_preset_valid(self):
         """Test POST /feature-status/preset with valid preset."""
         # Endpoint accepts minimal|standard|advanced
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_set_preset_invalid(self):
         """Test POST /feature-status/preset with invalid preset."""
         # Endpoint rejects invalid preset
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestPresetSwitcher:

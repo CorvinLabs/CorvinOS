@@ -14,10 +14,12 @@ from pathlib import Path
 import sys
 
 # Add paths
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills"))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core" / "console" / "corvin_console" / "routes"))
 
-from datahub_api import (
+# Imported by full package path. These used to insert a PACKAGE directory
+# onto sys.path and import its submodules by bare name; the submodules'
+# own relative imports then raised "attempted relative import with no
+# known parent package" and the whole file was a collection error.
+from core.console.corvin_console.routes.datahub_api import (
     create_artifact, get_artifact, delete_artifact, list_artifacts,
     _artifacts_dir, _read_artifact, _artifact_exists
 )
@@ -61,7 +63,7 @@ class TestDataHubHttpRoutesK1:
     def test_create_artifact_basic(self, temp_json_file, mock_session):
         """Test basic artifact creation."""
         # This test verifies the internal create logic (HTTP framework not available in unit tests)
-        from datahub_api import ArtifactCreateRequest, _artifact_exists
+        from core.console.corvin_console.routes.datahub_api import ArtifactCreateRequest, _artifact_exists
         
         request = ArtifactCreateRequest(
             name="test_skill_1",
@@ -97,7 +99,7 @@ class TestDataHubHttpRoutesK1:
 
     def test_artifact_metadata_schema(self, temp_json_file, mock_session):
         """Test that artifact metadata follows schema."""
-        from datahub_api import ArtifactMetadata
+        from core.console.corvin_console.routes.datahub_api import ArtifactMetadata
         from datetime import datetime
         
         # Create sample metadata
@@ -129,7 +131,7 @@ class TestDataHubPersistenceK1:
 
     def test_write_and_read_artifact(self, test_tenant_id):
         """Test write then read artifact."""
-        from datahub_api import _write_artifact, _read_artifact
+        from core.console.corvin_console.routes.datahub_api import _write_artifact, _read_artifact
         
         artifact = {
             "artifact_id": "test_123",
@@ -155,7 +157,7 @@ class TestDataHubPersistenceK1:
 
     def test_duplicate_name_detection(self, test_tenant_id):
         """Test detection of duplicate artifact names."""
-        from datahub_api import _write_artifact, _artifact_exists
+        from core.console.corvin_console.routes.datahub_api import _write_artifact, _artifact_exists
         
         # Write first artifact
         artifact1 = {
@@ -177,7 +179,7 @@ class TestDataHubPersistenceK1:
 
     def test_soft_delete_artifact(self, test_tenant_id):
         """Test soft delete (mark as deleted)."""
-        from datahub_api import _write_artifact, _read_artifact
+        from core.console.corvin_console.routes.datahub_api import _write_artifact, _read_artifact
         
         # Write artifact
         artifact = {

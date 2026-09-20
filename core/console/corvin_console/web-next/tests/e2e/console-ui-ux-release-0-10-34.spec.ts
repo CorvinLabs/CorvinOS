@@ -129,7 +129,7 @@ test.describe('Console Dark Mode — Complete Coverage', () => {
 
     // Cycle through modes
     const themes: ('auto' | 'dark' | 'light')[] = ['auto', 'dark', 'light'];
-    for (const theme of themes) {
+    for (const _theme of themes) {
       await themeToggle.click();
       const stored = await getTheme(page);
       // After clicking, we should have cycled through one mode
@@ -361,7 +361,7 @@ test.describe('Console Component Rendering — Coverage', () => {
     // Check for header elements
     const hasNav = await page.locator('nav').isVisible().catch(() => false);
     const hasThemeToggle = await page.locator('button[title*="Theme"]').isVisible().catch(() => false);
-    const hasEngineChip = await page.locator('a[title*="engine"], [title*="Engine"]').isVisible().catch(() => false);
+    const _hasEngineChip = await page.locator('a[title*="engine"], [title*="Engine"]').isVisible().catch(() => false);
 
     expect(hasNav || hasThemeToggle).toBe(true); // At least nav or theme toggle
   });
@@ -472,7 +472,7 @@ test.describe('Console Edge Cases — Error Handling', () => {
     await page.context().setOffline(false);
   });
 
-  test('theme toggle works even if localStorage is unavailable', async ({ page, context }) => {
+  test('theme toggle works even if localStorage is unavailable', async ({ page, _context }) => {
     // This is tested by the theme-toggle component itself, but we verify end-to-end
     await page.goto('/console/app/chat');
 

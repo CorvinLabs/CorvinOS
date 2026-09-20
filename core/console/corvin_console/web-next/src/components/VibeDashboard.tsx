@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
-import { BarChart, LineChart, PieChart, Activity, Volume2, Zap } from 'lucide-react'
+import { Activity, Volume2, Zap } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 
@@ -40,7 +40,12 @@ export const VibeDashboard: React.FC = () => {
         if (response.ok) {
           const data = await response.json()
           setScore(data)
-          setTrends([...trends.slice(-8), data.overall])
+          // Functional update: this runs inside a setInterval created by an
+          // effect with an empty dependency array, so the `trends` captured
+          // in the closure is the FIRST render's value forever. Reading it
+          // directly made every 30s tick append to the same stale array, so
+          // the sparkline never showed more than one real data point.
+          setTrends((prev) => [...prev.slice(-8), data.overall])
         }
       } catch (error) {
         console.error('Failed to load maturity score:', error)

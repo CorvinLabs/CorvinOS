@@ -40,7 +40,7 @@ test.describe('P3: Video Quality Metrics Panel (ADR-0695)', () => {
     }
   });
 
-  test('P3-2: Video Quality panel displays metrics data', async ({ page, panelNav }) => {
+  test('P3-2: Video Quality panel displays metrics data', async ({ page, _panelNav }) => {
     const mainContent = page.locator('main');
     const isVisible = await mainContent.isVisible().catch(() => false);
 
@@ -64,7 +64,7 @@ test.describe('P3: Video Quality Metrics Panel (ADR-0695)', () => {
     }
   });
 
-  test('P3-4: Video Quality charts render', async ({ page, panelNav }) => {
+  test('P3-4: Video Quality charts render', async ({ page, _panelNav }) => {
     const mainContent = page.locator('main');
     const isVisible = await mainContent.isVisible().catch(() => false);
 
@@ -242,7 +242,7 @@ test.describe('P3: Connectors Panel (External Integrations)', () => {
 // ─ P3 Cross-Panel Features ──────────────────────────────────────────────────
 
 test.describe('P3: Cross-Panel Features', () => {
-  test('P3-19: All P3 panels maintain consistent styling', async ({ page, panelNav }) => {
+  test('P3-19: All P3 panels maintain consistent styling', async ({ page, _panelNav }) => {
     const panels = ['video-quality-metrics', 'vibe-engineering', 'compute', 'connectors'];
 
     for (const panelId of panels) {

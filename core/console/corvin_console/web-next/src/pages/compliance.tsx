@@ -21,6 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -56,10 +57,221 @@ export function CompliancePage() {
         <RolesCard />
       </div>
       <AuditTailCard />
+      <LearningEventsCard />
       <CustomAuditLayersSection />
       <WebhookChannelsSection />
     </div>
   );
+}
+
+/**
+ * Learning events (ADR-0856) — folded in from /app/licensing-audit on
+ * 2026-09-20 at the operator's request.
+ *
+ * The same `/v1/console/v1/licensing/audit-events` store had TWO homes before
+ * this: a standalone "Licensing Audit" panel and the Learnings panel's "Audit
+ * Events" tab. Neither was the compliance page, which is where an auditor
+ * looks for an audit record. Both are gone now; /app/licensing-audit redirects
+ * here.
+ *
+ * This is the richer of the two implementations (text filter, outcome filter,
+ * CSV export, LoM column) carried over as-is — nothing about the data or the
+ * request changed in the move.
+ *
+ * Content-free by construction: ids, event type, skill id, outcome, the Line of
+ * Moral Responsibility and a hash-chain reference. No payloads, no user
+ * identity — that IS the compliance property, so the card says so rather than
+ * implying a redaction step ran over real personal data.
+ */
+function LearningEventsCard() {
+  const [events, setEvents] = React.useState<LearningAuditEvent[]>([]);
+  const [note, setNote] = React.useState("");
+  const [loading, setLoading] = React.useState(true);
+  const [filter, setFilter] = React.useState("");
+  const [outcomeFilter, setOutcomeFilter] = React.useState("all");
+
+  const fetchEvents = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/v1/console/v1/licensing/audit-events?limit=200");
+      if (!res.ok) {
+        setEvents([]);
+        setNote(`Request failed (HTTP ${res.status}).`);
+        return;
+      }
+      const data = await res.json();
+      setEvents(Array.isArray(data.events) ? data.events : []);
+      setNote(
+        data.available === false
+          ? data.detail || "Event store not available on this build."
+          : "",
+      );
+    } catch {
+      setEvents([]);
+      setNote("Request failed.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void fetchEvents();
+    const interval = setInterval(() => void fetchEvents(), 30000);
+    return () => clearInterval(interval);
+  }, [fetchEvents]);
+
+  const needle = filter.toLowerCase();
+  const filtered = events.filter((e) => {
+    const matchesText =
+      needle === "" ||
+      e.id.toLowerCase().includes(needle) ||
+      e.event_type.toLowerCase().includes(needle) ||
+      (e.skill_id || "").toLowerCase().includes(needle) ||
+      (e.lom || "").toLowerCase().includes(needle);
+    const matchesOutcome = outcomeFilter === "all" || e.outcome === outcomeFilter;
+    return matchesText && matchesOutcome;
+  });
+
+  const outcomes = Array.from(
+    new Set(events.map((e) => e.outcome).filter((o): o is string => !!o)),
+  ).sort();
+
+  function handleExport() {
+    const csv = [
+      ["ID", "Timestamp", "Event Type", "Skill", "Outcome", "LoM", "Audit Ref"],
+      ...filtered.map((e) => [
+        e.id,
+        e.timestamp,
+        e.event_type,
+        e.skill_id,
+        e.outcome ?? "",
+        e.lom,
+        e.audit_ref ?? "",
+      ]),
+    ]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `learning-events-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+        <div>
+          <CardTitle className="text-base">Learning events</CardTitle>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Skill decisions and task outcomes, each carrying its Line of Moral
+            Responsibility and a reference into the hash chain.
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button variant="outline" size="sm" onClick={() => void fetchEvents()} disabled={loading}>
+            {loading ? "Loading…" : "Refresh"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
+            Export CSV
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          <Input
+            placeholder="Filter by id, event type, skill or LoM…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="min-w-56 flex-1"
+          />
+          <Select
+            value={outcomeFilter}
+            onChange={(e) => setOutcomeFilter(e.target.value)}
+            className="h-10 w-44"
+          >
+            <option value="all">All outcomes</option>
+            {outcomes.map((o) => (
+              <option key={o} value={o}>{o}</option>
+            ))}
+          </Select>
+        </div>
+
+        {note && <p className="text-sm text-muted-foreground">{note}</p>}
+
+        {filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {loading
+              ? "Reading the event store…"
+              : events.length === 0
+                ? "No learning events recorded yet."
+                : "No event matches this filter."}
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-xs">
+              <thead className="border-b bg-muted">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">Timestamp</th>
+                  <th className="px-3 py-2 text-left font-medium">Event type</th>
+                  <th className="px-3 py-2 text-left font-medium">Skill</th>
+                  <th className="px-3 py-2 text-left font-medium">Outcome</th>
+                  <th className="px-3 py-2 text-left font-medium">LoM</th>
+                  <th className="px-3 py-2 text-left font-medium">Chain ref</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filtered.map((e) => (
+                  <tr key={e.id} className="hover:bg-muted/50">
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums">
+                      {e.timestamp ? formatDate(e.timestamp) : "—"}
+                    </td>
+                    <td className="px-3 py-2">{e.event_type || "—"}</td>
+                    <td className="px-3 py-2 font-mono">{e.skill_id || "—"}</td>
+                    <td className="px-3 py-2">
+                      {e.outcome ? (
+                        <Badge variant={
+                          e.outcome === "success" || e.outcome === "completed"
+                            ? "ok"
+                            : "danger"
+                        }>
+                          {e.outcome}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-muted-foreground">{e.lom || "—"}</td>
+                    <td className="px-3 py-2 font-mono text-muted-foreground">
+                      {e.audit_ref ? `${e.audit_ref.slice(0, 8)}…` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          Showing {filtered.length} of {events.length} record
+          {events.length === 1 ? "" : "s"} · refreshed every 30 s. Records are
+          content-free by construction: ids, type, skill and a chain reference —
+          never payloads or user identity.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface LearningAuditEvent {
+  id: string;
+  timestamp: string;
+  event_type: string;
+  skill_id: string;
+  outcome: string | null;
+  lom: string;
+  audit_ref: string | null;
 }
 
 function GuaranteesCard() {

@@ -1,10 +1,10 @@
 """API Handlers: DoD Outcome Sink + Feedback Collection."""
 
 from typing import Dict, Any, Optional
-from loss_signal import DoD_LossSignal
-from feedback_event import DoD_FeedbackEvent
-from weight_optimizer import DoD_WeightOptimizer
-from weight_persistence import WeightPersistence
+from .loss_signal import DoD_LossSignal
+from .feedback_event import DoD_FeedbackEvent
+from .weight_optimizer import DoD_WeightOptimizer
+from .weight_persistence import WeightPersistence
 
 
 class DoD_OutcomeSink:
@@ -83,7 +83,10 @@ class DoD_FeedbackCollector:
         """
         try:
             # Create feedback event
-            delta = dod_score_operator - dod_score_automatic
+            # Rounded for the same reason as DoD_FeedbackEvent.delta: the raw
+            # subtraction of two two-decimal scores leaks binary-float noise
+            # into the API response and into the optimizer's step size.
+            delta = round(dod_score_operator - dod_score_automatic, 10)
             feedback = DoD_FeedbackEvent(
                 task_id=task_id,
                 dod_score_automatic=dod_score_automatic,

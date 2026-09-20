@@ -19,7 +19,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal, Optional
 
-from corvin_operator.forge.forge.paths import corvin_home, validate_tenant_id
+from corvin_operator.forge.forge.paths import corvin_home
+# `validate_tenant_id` is NOT in forge.paths — that module keeps a private
+# `_validate_tenant_id` copy (raising ValueError). The canonical validator,
+# the one CLAUDE.md § Multi-tenant Axis names, lives in forge.tenants and
+# raises InvalidTenantID. Importing the non-existent public name made this
+# whole module — and every licensing capability check that goes through
+# it — raise ImportError (2026-09-20 review).
+from corvin_operator.forge.forge.tenants import validate_tenant_id
 from corvin_operator.forge.forge.tenants import current_tenant
 
 try:

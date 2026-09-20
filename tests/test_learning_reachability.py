@@ -9,7 +9,7 @@ def test_e2e_decorator_marking():
     """Test @e2e_for decorator marks a test function."""
     @e2e_for("pattern_test")
     def test_something():
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     
     assert hasattr(test_something, "_e2e_for")
     assert test_something._e2e_for == "pattern_test"

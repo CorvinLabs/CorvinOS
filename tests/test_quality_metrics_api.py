@@ -53,63 +53,64 @@ def test_get_quality_metrics_has_required_fields(client, mock_metrics_dir):
 
 def test_export_metrics_csv_format(client):
     """POST /v1/console/quality/metrics/export returns CSV"""
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
     # response = client.post("/v1/console/quality/metrics/export?task_id=test&format=csv")
     # assert response.headers["content-type"] == "text/csv"
 
 def test_export_metrics_json_format(client):
     """POST /v1/console/quality/metrics/export returns JSON"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_export_metrics_includes_audit_when_requested(client):
     """Export includes audit events when include_audit=true"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_export_metrics_includes_spec_history(client):
     """Export includes spec history when include_spec_history=true"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_quality_score_converged_status(client):
     """Status is 'converged' when quality_score >= 0.85"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_quality_score_in_progress_status(client):
     """Status is 'in_progress' when quality_score < 0.85"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_convergence_history_sorted_by_iteration(client, mock_metrics_dir):
     """Convergence history is sorted by iteration number"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_spec_constraints_grouped_by_type(client):
     """Spec constraints are grouped correctly (critical, domain, success)"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_not_found_for_missing_task(client):
     """Returns 404 for non-existent task_id"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_csv_has_all_required_columns(client):
     """Exported CSV has iteration, quality_score, dod, hallucin, loss, timestamp"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_csv_rows_match_convergence_history_length(client):
     """CSV rows = convergence_history rows + 1 header"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_export_filename_includes_task_id(client):
     """Export filename includes task_id"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_quality_score_calculation_correct(client):
     """Quality score matches α*dod + β*hallucin (weighted by task_size)"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_loss_equals_one_minus_quality(client):
     """loss = 1 - quality_score for all points"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 def test_timestamp_iso_format(client):
     """Timestamps are ISO 8601 formatted"""
-    pass
+    pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 # 20 tests scaffolded

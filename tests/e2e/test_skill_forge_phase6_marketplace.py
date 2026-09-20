@@ -409,15 +409,15 @@ class TestMarketplaceAPI:
         """GET /marketplace/index lists skills."""
         # This will fail in test if routes not fully integrated
         # but demonstrates the expected API
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_api_search(self, mock_app):
         """GET /marketplace/search searches skills."""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_api_detail(self, mock_app):
         """GET /marketplace/{skill_id} returns detail."""
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ============================================================================

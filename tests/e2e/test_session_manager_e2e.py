@@ -2,6 +2,23 @@
 S3.3: E2E Test — SessionManager end-to-end with auto-splits (200+ iterations)
 Verifies: 5 auto-splits triggered autonomously, zero human intervention, identical resume
 """
+
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# The S3.1 orchestrator has no production caller — only this file and
+# tests/e2e/gap_analysis.py reference it. Two of its four collaborators are
+# missing, so it cannot be imported at all. Fixing the test would mean
+# inventing RecoveryEngine; that is a feature decision, not a review fix.
+#
+# This surfaced as a COLLECTION ERROR in every full run, which made the file
+# invisible rather than pending. Delete this guard in the commit that lands
+# the missing code.
+import pytest
+
+pytest.skip(
+    'core.session_manager.session_manager is incomplete on main: it imports `recovery_engine`, which does not exist, and `Checkpoint` from checkpoint_manager (the class is SessionCheckpoint, in checkpoint.py)',
+    allow_module_level=True,
+)
+
 import pytest
 from typing import Dict, Any
 

@@ -15,7 +15,7 @@ import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import {
   DashboardPage, SettingsPage,
-  ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage,
+  ComputePage, BridgesPage, VoicePage, ForgePage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
@@ -23,7 +23,7 @@ import {
   GitHubPage, SyncMonitorPage,
   QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
   DataHubUnifiedPage, SkillForgeGeneratorPage,
-  LicensingAuditPage, OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
+  OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -43,7 +43,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   BridgesPage,
   VoicePage,
   ForgePage,
-  SkillsPage,
   LddPage,
   CompliancePage,
   FilesPage,
@@ -68,7 +67,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   VideoQualityMetricsPage,
   DataHubUnifiedPage,
   SkillForgeGeneratorPage,
-  LicensingAuditPage,
   OTELTelemetryPage,
   ModelsPage,
 };
@@ -90,18 +88,21 @@ export const PANELS: ConsolePanel[] = [
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
   rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),
   rc("bridges", "Bridges", BridgesPage, { nav: { label: "Channels", icon: "Network", group: "messaging" } }),
-  rc("voice", "Voice", VoicePage, { nav: { label: "Profile", icon: "AudioLines", group: "messaging" } }),
+  rc("voice", "Voice", VoicePage, { nav: { label: "Voice", icon: "AudioLines", group: "messaging" } }),
   rc("forge", "Forge", ForgePage, { nav: { label: "Forge", icon: "Hammer", group: "build" } }),
-  rc("skills", "Skills", SkillsPage, { nav: { label: "Skills", icon: "BookOpen", group: "build" } }),
+  // "skills" is no longer a panel (2026-09-20). /v1/console/skills and
+  // /v1/console/forge/skills return the SAME 643 records (verified against
+  // the live host), so the standalone page duplicated Forge's Skills tab.
+  // App.tsx redirects /app/skills to /app/forge.
   rc("ldd", "LDD", LddPage, { nav: { label: "Quality", icon: "Boxes", group: "system" } }),
   rc("compliance", "Compliance", CompliancePage, { nav: { label: "Audit & Compliance", icon: "ShieldCheck", group: "system" } }),
-  rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle", group: "observability" } }),
+  rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle", group: "system" } }),
   // ADR-0695 Phase 2 — Video Quality Metrics Dashboard
   // Reachable since 2026-09-20: NAV_GROUPS (layout.tsx, Observability) links
   // the route, GATED_FLAGS + the feature-flag registry know
   // video_producer_enabled, and the tenant template whitelists it. All three
   // registrations are required — one missing hides the panel forever.
-  rc("video-quality-metrics", "Video Quality", VideoQualityMetricsPage, { nav: { label: "Video Quality", icon: "Gauge", group: "observability" }, requiredFlag: "video_producer_enabled" }),
+  rc("video-quality-metrics", "Video Quality", VideoQualityMetricsPage, { nav: { label: "Video Quality", icon: "Gauge", group: "system" }, requiredFlag: "video_producer_enabled" }),
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
@@ -128,7 +129,7 @@ export const PANELS: ConsolePanel[] = [
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "system" } }),
   rc("sync-monitor", "Sync Monitor", SyncMonitorPage,
-     { nav: { label: "Sync Monitor", icon: "Activity", group: "observability" } }),
+     { nav: { label: "Sync Monitor", icon: "Activity", group: "system" } }),
   // REMOVED: webhooks, audit, releases — backend routes 404 (not implemented)
   // Use compliance.tsx for audit needs; GitHub integration works via settings/github
   // REMOVED 2026-09-15 (operator request): learning-dashboard panel.
@@ -136,10 +137,13 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "DataHub", icon: "Database", group: "knowledge" } }),
   rc("skill-forge-generator", "Skill Forge", SkillForgeGeneratorPage,
      { nav: { label: "Skill Forge", icon: "Sparkles", group: "build" } }),
-  rc("licensing-audit", "Licensing Audit", LicensingAuditPage,
-     { nav: { label: "Licensing Audit", icon: "Lock", group: "system" } }),
+  // "licensing-audit" is no longer a panel (2026-09-20): its content is the
+  // "Learning events" section of /app/compliance, where an auditor actually
+  // looks. The same store also fed the Learnings panel's "Audit Events" tab,
+  // so the records had two homes and neither was the compliance page.
+  // App.tsx redirects /app/licensing-audit to /app/compliance.
   rc("otel-telemetry", "OTEL Telemetry", OTELTelemetryPage,
-     { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "observability" } }),
+     { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "system" } }),
   // ADR-0885 — ONE panel for routing, usage & cost, learning and the catalogue.
   // Replaced engine-config, model-cost-optimizer and model-selection on
   // 2026-09-18; App.tsx redirects the three old paths to its tabs.
@@ -184,7 +188,6 @@ export function generateNavGroupsFromRegistry(panels: readonly ConsolePanel[]): 
   const groupMeta: Record<string, { label?: string; order: number; collapsible?: boolean; defaultOpen?: boolean }> = {
     primary: { order: 0 },
     marketplace: { label: "Marketplace", order: 1, collapsible: true, defaultOpen: true },
-    observability: { label: "Observability", order: 2, collapsible: true, defaultOpen: true },
     messaging: { label: "Messaging", order: 3 },
     intelligence: { label: "Assistant", order: 4 },
     build: { label: "Build", order: 5, collapsible: true, defaultOpen: true },

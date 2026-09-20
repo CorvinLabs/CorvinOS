@@ -2,6 +2,7 @@
 
 import pytest
 import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
@@ -199,22 +200,28 @@ class TestAdversarialPhase3:
         from definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
 
         check = AuditTrailCheck()
-        # JSON with malformed lines mixed in
+        # A REAL file, not a mocked `open`. The check reads the chain with
+        # `for line in f`; the previous mock only stubbed `.read()`, so the
+        # iteration yielded nothing and the assertion measured the mock rather
+        # than the parser. Corrupt lines must be skipped while the valid ones
+        # still count — that is the fail-closed property under test.
         audit_content = (
             '{"task_id": "t1", "event_type": "dod_verified"}\n'
             'THIS IS NOT JSON AT ALL\n'
             '{"task_id": "t1", "event_type": "feedback"}\n'
+            '{"task_id": "other", "event_type": "dod_verified"}\n'
         )
 
-        with patch("builtins.open", create=True) as mock_file:
-            mock_file.return_value.__enter__.return_value.read = MagicMock(
-                return_value=audit_content
-            )
-            with patch("pathlib.Path.exists", return_value=True):
-                result = check.run("t1", Path("/audit.jsonl"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audit_path = Path(tmpdir) / "audit.jsonl"
+            audit_path.write_text(audit_content, encoding="utf-8")
 
-                # Should still count valid events (2 found)
-                assert result.event_count == 2
+            result = check.run("t1", audit_path)
+
+            # Two valid events for t1; the corrupt line is skipped and the
+            # event belonging to another task is not counted.
+            assert result.event_count == 2
+            assert result.passed is True
 
     @pytest.mark.adversarial
     def test_permission_denied_on_audit_file_fail_closed(self):

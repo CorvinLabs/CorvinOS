@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manual E2E test for Phase 1 Skills (no pytest required).
 
-Run: cd /home/shumway/projects/CorvinOS/core/skills/os_skills/phase1 && python3 test_manual_e2e.py
+Run: cd <repo>/core/skills/os_skills/phase1 && python3 test_manual_e2e.py
 """
 
 import sys

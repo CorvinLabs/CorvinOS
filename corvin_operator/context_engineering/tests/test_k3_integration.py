@@ -70,6 +70,7 @@ class TestH2FileSnapshot:
         # This test verifies the CONTRACT: only files present at aggregation start are processed
         # (Actual enforcement happens in aggregator)
         pass  # Contract documented; enforcement in K=4
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 class TestH4IntegrationE2E:

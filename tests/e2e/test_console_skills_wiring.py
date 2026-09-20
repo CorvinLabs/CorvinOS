@@ -6,14 +6,16 @@ from pathlib import Path
 skill_forge_path = str(Path(__file__).parent.parent.parent / "core" / "skill_forge")
 datahub_path = str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills" / "datahub_unified")
 
-sys.path.insert(0, skill_forge_path)
-sys.path.insert(0, datahub_path)
 
-from generators.manifest import SkillType, SkillScope
-from generators.skeleton import SkeletonGenerator
-from models import DataSourceType, CreationType, DataIngestion, CreationRequest
-from datahub import DataHubSkill
-from creator import UnifiedCreator
+# Imported by full package path. These used to insert a PACKAGE directory
+# onto sys.path and import its submodules by bare name; the submodules'
+# own relative imports then raised "attempted relative import with no
+# known parent package" and the whole file was a collection error.
+from core.skill_forge.generators.manifest import SkillType, SkillScope
+from core.skill_forge.generators.skeleton import SkeletonGenerator
+from core.skills.os_skills.datahub_unified.models import DataSourceType, CreationType, DataIngestion, CreationRequest
+from core.skills.os_skills.datahub_unified.datahub import DataHubSkill
+from core.skills.os_skills.datahub_unified.creator import UnifiedCreator
 
 
 def test_skill_forge_api_request():

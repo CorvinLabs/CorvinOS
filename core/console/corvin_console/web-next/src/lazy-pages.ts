@@ -39,9 +39,6 @@ export const ForgePage = React.lazy(() =>
   import("@/pages/forge").then((m) => ({ default: m.ForgePage }))
 );
 
-export const SkillsPage = React.lazy(() =>
-  import("@/pages/skills").then((m) => ({ default: m.SkillsPage }))
-);
 
 
 export const LddPage = React.lazy(() =>
@@ -193,9 +190,6 @@ export const SkillForgeGeneratorPage = React.lazy(() =>
   import("@/pages/skill-forge-generator").then((m) => ({ default: m.default }))
 );
 
-export const LicensingAuditPage = React.lazy(() =>
-  import("@/pages/licensing-audit").then((m) => ({ default: m.LicensingAuditPage }))
-);
 
 export const OTELTelemetryPage = React.lazy(() =>
   import("@/pages/otel-telemetry").then((m) => ({ default: m.OTELTelemetryPage }))

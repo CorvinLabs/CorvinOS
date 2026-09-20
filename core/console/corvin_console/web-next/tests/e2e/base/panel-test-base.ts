@@ -263,7 +263,7 @@ export class ConsolePanelTest {
   async getConsoleErrors(page: Page): Promise<string[]> {
     return new Promise((resolve) => {
       const errors: string[] = [];
-      const handler = (msg: any) => {
+      const handler = (msg: { type(): string; text(): string }) => {
         if (msg.type() === 'error') {
           errors.push(msg.text());
         }
@@ -279,7 +279,7 @@ export class ConsolePanelTest {
   /**
    * Test panel navigation from sidebar or breadcrumb.
    */
-  async testPanelNavigation(page: Page, panelNav: PanelNavigator): Promise<void> {
+  async testPanelNavigation(page: Page, _panelNav: PanelNavigator): Promise<void> {
     // Test navigation to this panel
     const navLink = page.locator(`a[href*="${this.config.id}"]`).first();
     if (await navLink.isVisible().catch(() => false)) {
@@ -291,7 +291,7 @@ export class ConsolePanelTest {
   /**
    * Verify panel is accessible (keyboard navigation, screen reader labels).
    */
-  async testAccessibility(page: Page, panelNav: PanelNavigator): Promise<void> {
+  async testAccessibility(page: Page, _panelNav: PanelNavigator): Promise<void> {
     // Check for main landmark
     const main = page.locator('main');
     await expect(main).toBeVisible();

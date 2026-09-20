@@ -19,7 +19,7 @@ const dashboardTest = new ConsolePanelTest({
 });
 
 test.describe('P0: Dashboard Panel (Core Infrastructure)', () => {
-  test.beforeEach(async ({ panelNav, page }) => {
+  test.beforeEach(async ({ _panelNav, page }) => {
     // Ensure fresh navigation state
     await page.goto('/console/');
   });

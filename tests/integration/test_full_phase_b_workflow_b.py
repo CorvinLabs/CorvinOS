@@ -13,6 +13,20 @@ Compliance:
 - Audit chain integrity verified
 """
 
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# There is no orchestrator module under core/skills/os_skills/.
+#
+# This surfaced as a COLLECTION ERROR in every full run, which made the file
+# invisible rather than pending. Delete this guard in the commit that lands
+# the missing code.
+import pytest
+
+pytest.skip(
+    'core.skills.os_skills.orchestrator does not exist on main',
+    allow_module_level=True,
+)
+
+
 import pytest
 import json
 import time

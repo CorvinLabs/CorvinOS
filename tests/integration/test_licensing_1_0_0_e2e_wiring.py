@@ -374,7 +374,7 @@ class TestCapabilityMatrixConsistency:
         """
         # This is a documentation check; implementation is in core/console/routes/license.py
         # For now, we verify the route exists (implementation detail for Gate 3 RED→GREEN)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 # ── Adversarial Wiring Tests ──────────────────────────────────────────────
@@ -389,7 +389,7 @@ class TestWiringEdgeCases:
         """
         # This is a concurrency test; implementation in quota_counter.py
         # For wiring proof, we verify the lock exists (implementation detail)
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_capability_check_with_zero_requested_allowed(self):
         """Requesting 0 units should be allowed (no-op, used in tests).
@@ -426,7 +426,7 @@ class TestFailClosedBehavior:
         """
         # This is tested by mocking a corrupt matrix
         # For now, verify the pattern is documented in capability_api.py
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
     def test_audit_chain_failure_raises_runtime_error(self):
         """If audit chain write fails, quota check raises RuntimeError (fail-closed).
@@ -435,7 +435,7 @@ class TestFailClosedBehavior:
         """
         # Implementation: core/license/quota_enforcer.py line 188
         # "raise RuntimeError(f'Audit chain write failed for quota check: {e}')"
-        pass
+        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
 
 
 if __name__ == "__main__":

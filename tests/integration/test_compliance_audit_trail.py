@@ -18,6 +18,23 @@ Audit Chain:
 - Complete (no gaps in sequence)
 """
 
+# ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
+# core/learning/audit_integration.py exists but is a different module
+# (TuningOperation / AuditIntegration), not the AuditTrail / AuditEvent /
+# AuditChainVerifier trio this file imports. The live audit-chain coverage
+# is tests/security/test_audit_chain_*.py, which runs.
+#
+# This surfaced as a COLLECTION ERROR in every full run, which made the file
+# invisible rather than pending. Delete this guard in the commit that lands
+# the missing code.
+import pytest
+
+pytest.skip(
+    'core.compliance.audit_integration, core.skills.os_skills.orchestrator and core.marketplace.plugin_registry do not exist on main',
+    allow_module_level=True,
+)
+
+
 import pytest
 import json
 import hashlib

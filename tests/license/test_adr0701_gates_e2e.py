@@ -43,7 +43,12 @@ class TestG1E2E:
         with patch('corvin_operator.forge.forge.registry.require_capability') as mock_req:
             mock_req.return_value = None  # No exception = allowed
 
-            registry = Registry(tmp_path, hash_chain=False)
+            # hash_chain=False is refused for every event but
+            # 'audit.chain_gap_detected' (security_events.py:3276) — an
+            # unchained record is exactly what the GDPR Art. 30/32 trail
+            # may not contain. The registry writes its own chain under
+            # tmp_path, so the real default is also the isolated one.
+            registry = Registry(tmp_path)
 
             # create() should succeed
             result = registry.create(
@@ -70,7 +75,12 @@ class TestG1E2E:
         with patch('corvin_operator.forge.forge.registry.require_capability') as mock_req:
             mock_req.return_value = None
 
-            registry = Registry(tmp_path, hash_chain=False)
+            # hash_chain=False is refused for every event but
+            # 'audit.chain_gap_detected' (security_events.py:3276) — an
+            # unchained record is exactly what the GDPR Art. 30/32 trail
+            # may not contain. The registry writes its own chain under
+            # tmp_path, so the real default is also the isolated one.
+            registry = Registry(tmp_path)
             registry.create(
                 name="test_tool",
                 description="test",
@@ -94,9 +104,14 @@ class TestG4E2E:
     def test_g4_command_denies_free_tier(self):
         """E2E: /plugin-builder command denies free tier."""
         from core.plugins.plugin_builder.turn import command, LicenseDenied
+        from corvin_operator.license.capability_api import Tier
 
         with patch('core.plugins.plugin_builder.turn.require_capability') as mock_req:
-            mock_req.side_effect = LicenseDenied("forge.create not available")
+            # LicenseDenied(capability, tier, reason) — the single-arg form
+            # raised TypeError inside the test itself.
+            mock_req.side_effect = LicenseDenied(
+                "forge.create", Tier.FREE, "forge.create not available"
+            )
 
             result = command(
                 "",
@@ -136,9 +151,12 @@ class TestG5E2E:
     def test_g5_skill_forge_denies_free_tier(self):
         """E2E: check_forge_capability denies free tier."""
         from core.orchestration.quota_gate import check_forge_capability, LicenseDenied
+        from corvin_operator.license.capability_api import Tier
 
         with patch('core.orchestration.quota_gate.require_capability') as mock_req:
-            mock_req.side_effect = LicenseDenied("forge.create denied")
+            mock_req.side_effect = LicenseDenied(
+                "forge.create", Tier.FREE, "forge.create denied"
+            )
 
             with pytest.raises(LicenseDenied):
                 check_forge_capability("_default", entry_point="skill_forge_mcp")

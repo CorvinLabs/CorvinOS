@@ -15,6 +15,7 @@ import time
 from typing import Optional, Dict
 import os
 import signal
+from .video_paths import BLENDER_OUTPUT, video_dir
 
 try:
     import psutil
@@ -29,7 +30,7 @@ class BlenderAsyncExecutor:
         self.name = "blender_async_executor"
         self.version = "5.4.0"
         self.blender_timeout = blender_timeout_minutes * 60
-        self.output_dir = Path("/home/shumway/projects/Corvin-Videos/blender_output")
+        self.output_dir = video_dir(BLENDER_OUTPUT)
         self.output_dir.mkdir(exist_ok=True, parents=True)
 
         self.active_jobs: Dict[str, dict] = {}  # job_id → {pid, start_time, animation_id, status}
