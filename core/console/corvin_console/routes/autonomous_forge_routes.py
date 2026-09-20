@@ -99,13 +99,50 @@ _AUTONOMOUS_AVAILABLE = False
 _VALIDATOR = None
 
 try:
+    # corvin_operator/skill-forge/ has a dash, so `from skill_forge...` (or
+    # `from corvin_operator.skill_forge...`) never resolved as a plain
+    # import — this try/except silently swallowed that ImportError on every
+    # boot, logging a warning and leaving _AUTONOMOUS_AVAILABLE permanently
+    # False. Neither flag has any reader in this module today, so nothing
+    # was functionally gated by it, but the boot log was misleading.
+    # importlib.util loads the dashed directory directly (same pattern as
+    # tests/skill_forge/test_trigger_detector.py). validator.py does
+    # `from .result import ...` etc, which needs a real parent package with
+    # __path__ set, so the whole autonomous/__init__.py is loaded (it
+    # already resolves its own submodule relative imports) rather than
+    # validator.py alone.
+    import importlib.util
+    import types as _types
+
     _THIS_DIR = Path(__file__).resolve().parent.parent
     _REPO = _THIS_DIR.parents[2]
-    _OPERATOR = _REPO / "corvin_operator"
-    if str(_OPERATOR) not in sys.path:
-        sys.path.insert(0, str(_OPERATOR))
+    _SKILL_FORGE_DIR = _REPO / "corvin_operator" / "skill-forge"
 
-    from skill_forge.autonomous.validator import SkillValidator
+    def _ensure_forge_namespace(dotted_name: str, path: Path):
+        existing = sys.modules.get(dotted_name)
+        if existing is not None:
+            return existing
+        _module = _types.ModuleType(dotted_name)
+        _module.__path__ = [str(path)]
+        sys.modules[dotted_name] = _module
+        return _module
+
+    def _load_forge_module(dotted_name: str, file_path: Path):
+        existing = sys.modules.get(dotted_name)
+        if existing is not None:
+            return existing
+        _spec = importlib.util.spec_from_file_location(dotted_name, file_path)
+        _module = importlib.util.module_from_spec(_spec)
+        sys.modules[dotted_name] = _module
+        _spec.loader.exec_module(_module)
+        return _module
+
+    _ensure_forge_namespace("corvin_operator.skill_forge", _SKILL_FORGE_DIR)
+    _autonomous_pkg = _load_forge_module(
+        "corvin_operator.skill_forge.autonomous",
+        _SKILL_FORGE_DIR / "autonomous" / "__init__.py",
+    )
+    SkillValidator = _autonomous_pkg.SkillValidator
 
     _VALIDATOR = SkillValidator()
     _AUTONOMOUS_AVAILABLE = True
