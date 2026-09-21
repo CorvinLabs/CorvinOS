@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Optional, List, Literal
 
@@ -142,9 +143,43 @@ class LoopDetailsResponse(BaseModel):
     recommendations: List[str] = Field(default_factory=list, description="Actionable alerts")
 
 
+# ── Response Transformers ──────────────────────────────────────────────────
+
+def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> HealthTrend:
+    """Transform service response format to HealthTrend model.
+
+    Service returns: {timestamps, health_scores, event_counts}
+    Convert to: {points: [{date, health_score, event_count}, ...]}
+    """
+    if not trend_data:
+        return HealthTrend(points=[], min_score=0.0, max_score=1.0, avg_score=0.5)
+
+    timestamps = trend_data.get("timestamps", [])
+    scores = trend_data.get("health_scores", [])
+    counts = trend_data.get("event_counts", [])
+
+    points = [
+        HealthTrendPoint(
+            date=ts[:10] if len(ts) > 10 else ts,  # Extract YYYY-MM-DD from ISO format
+            health_score=float(s),
+            event_count=int(c),
+        )
+        for ts, s, c in zip(timestamps, scores, counts)
+    ]
+
+    health_scores = [float(s) for s in scores]
+    return HealthTrend(
+        points=points,
+        min_score=min(health_scores) if health_scores else 0.0,
+        max_score=max(health_scores) if health_scores else 1.0,
+        avg_score=sum(health_scores) / len(health_scores) if health_scores else 0.5,
+    )
+
+
 # ── Cache ──────────────────────────────────────────────────────────────────
 
 _cache = {}  # {(tenant_id, key): (data, timestamp)}
+_cache_lock = threading.Lock()  # Thread-safe cache access
 _CACHE_TTL_LIST = 120  # 2m
 _CACHE_TTL_DETAIL = 300  # 5m
 
@@ -152,29 +187,41 @@ _CACHE_TTL_DETAIL = 300  # 5m
 def _get_cached(tenant_id: str, key: str, ttl: int) -> Any | None:
     """Get cached value if fresh."""
     cache_key = (tenant_id, key)
-    if cache_key in _cache:
-        data, ts = _cache[cache_key]
-        if (datetime.utcnow() - ts).total_seconds() < ttl:
-            return data
-        del _cache[cache_key]
+    with _cache_lock:
+        if cache_key in _cache:
+            data, ts = _cache[cache_key]
+            if (datetime.utcnow() - ts).total_seconds() < ttl:
+                return data
+            del _cache[cache_key]
     return None
 
 
 def _set_cached(tenant_id: str, key: str, data: Any) -> None:
     """Cache a value."""
-    _cache[(tenant_id, key)] = (data, datetime.utcnow())
+    with _cache_lock:
+        _cache[(tenant_id, key)] = (data, datetime.utcnow())
 
 
 # ── Backend Integration ────────────────────────────────────────────────────
 
-def _get_learning_loop_service():
-    """Lazy load the KG MCP service (Phase 2 backend)."""
+def _get_learning_loop_service(tenant_id: str) -> Optional['LearningLoopService']:
+    """Lazy load the KG MCP service (Phase 2 backend).
+
+    Args:
+        tenant_id: Tenant identifier for scoped queries
+
+    Returns:
+        LearningLoopService instance or None if unavailable
+    """
     try:
         from core.knowledge_graph.mcp.learning_loop_service import LearningLoopService
-        # Pass tenant_id, not tenant_home; service resolves path internally
+        # Pass tenant_id; service resolves path internally
         return LearningLoopService(tenant_id=tenant_id)
     except ImportError:
         logger.warning("Learning loop service not available; using stub")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to initialize learning loop service: {e}")
         return None
 
 
@@ -232,7 +279,7 @@ async def list_learning_loops(
     if cached is not None:
         return cached
 
-    service = _get_learning_loop_service()
+    service = _get_learning_loop_service(tenant_id)
     if service is None:
         raise HTTPException(status_code=503, detail="Learning loop service not available")
 
@@ -244,7 +291,7 @@ async def list_learning_loops(
         if plugin_id:
             all_entries = [e for e in all_entries if e.plugin_id == plugin_id]
         if skill_id:
-            all_entries = [e for e in all_entries if e.skill_id == skill_id]
+            all_entries = [e for e in all_entries if e.owner_skill == skill_id]
         if status:
             all_entries = [e for e in all_entries if e.status == status]
 
@@ -267,12 +314,12 @@ async def list_learning_loops(
             LoopSummary(
                 loop_id=e.loop_id,
                 plugin_id=e.plugin_id,
-                skill_id=e.skill_id,
+                skill_id=e.owner_skill,
                 status=e.status,
                 health=LoopHealthScore(
                     score=e.health_score,
-                    trend=_trend_direction(e.health_trend_7d),
-                    previous_score=e.previous_health_score,
+                    trend=_trend_direction(None),  # Trend not in index; use flat as default
+                    previous_score=None,  # Not tracked in index
                 ),
                 last_event=e.last_event_ts,
                 event_count_7d=e.event_count_7d,
@@ -322,32 +369,31 @@ async def get_learning_loop_details(
     if cached is not None:
         return cached
 
-    service = _get_learning_loop_service()
+    service = _get_learning_loop_service(tenant_id)
     if service is None:
         raise HTTPException(status_code=503, detail="Learning loop service not available")
 
     try:
-        # Get loop entry
-        entry = service.get_loop(tenant_id=tenant_id, loop_id=loop_id)
+        # Get loop entry: find by loop_id across all plugins
+        all_entries = service.list_loops()
+        entry = None
+        for e in all_entries:
+            if e.loop_id == loop_id:
+                entry = e
+                break
+
         if entry is None:
             raise HTTPException(status_code=404, detail=f"Loop not found: {loop_id}")
 
-        # Get health trend
-        trend_data = service.get_health_trend(tenant_id=tenant_id, loop_id=loop_id, days=days)
-
-        health_trend = HealthTrend(
-            points=[
-                HealthTrendPoint(
-                    date=p["date"],
-                    health_score=p["health_score"],
-                    event_count=p["event_count"],
-                )
-                for p in (trend_data.get("points") or [])
-            ],
-            min_score=trend_data.get("min_score", 0.0),
-            max_score=trend_data.get("max_score", 1.0),
-            avg_score=trend_data.get("avg_score", 0.5),
+        # Get health trend (service expects plugin_id + loop_id, not tenant_id)
+        trend_data = service.get_health_trend(
+            plugin_id=entry.plugin_id,
+            loop_id=loop_id,
+            days=days
         )
+
+        # Transform service response to expected format
+        health_trend = _get_health_trend_from_service_response(trend_data)
 
         # Get audit events
         events_data = await _get_audit_events(tenant_id, loop_id, limit=10)
@@ -377,18 +423,18 @@ async def get_learning_loop_details(
         loop_detail = LoopDetail(
             loop_id=entry.loop_id,
             plugin_id=entry.plugin_id,
-            skill_id=entry.skill_id,
+            skill_id=entry.owner_skill,
             status=entry.status,
             health=LoopHealthScore(
                 score=entry.health_score,
-                trend="up" if (entry.health_trend_7d or 0) > 0 else ("down" if (entry.health_trend_7d or 0) < 0 else "flat"),
-                previous_score=entry.previous_health_score,
+                trend="flat",  # Trend computed from health_trend data above, not stored in index
+                previous_score=None,  # Not tracked in index
             ),
             last_event=entry.last_event_ts,
             event_count_7d=entry.event_count_7d,
-            event_count_30d=entry.event_count_30d,
+            event_count_30d=0,  # Not available in current schema; would require audit query
             description=entry.description,
-            owner=entry.owner,
+            owner=entry.owner_skill,
             created_at=entry.created_at,
         )
 
