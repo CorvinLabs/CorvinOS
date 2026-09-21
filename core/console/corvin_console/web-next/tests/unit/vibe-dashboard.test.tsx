@@ -39,7 +39,11 @@ vi.mock('@/pages/vibe-engineering/tabs/ModelsTab', () => ({
 // /v1/console/v1/licensing/audit-events store backed both this tab and a
 // standalone Licensing Audit panel, and it now lives once, in
 // /app/compliance's "Learning events" section.
-const TABS = ['Maturity Metrics', 'System Metrics', 'Models'];
+// "Learning Loops" joined on 2026-09-21 (ADR-0908). It is NOT the retired
+// "Learning Hub" view of the old tabbed hub — it mounts LearningLoopsView, the
+// same component /app/learning-loops renders, so the two surfaces cannot show
+// different numbers for the same loops.
+const TABS = ['Maturity Metrics', 'Learning Loops', 'System Metrics', 'Models'];
 
 describe('Vibe Engineering panel', () => {
   const renderComponent = () =>
@@ -54,7 +58,7 @@ describe('Vibe Engineering panel', () => {
     expect(screen.getByTestId('vibe-dashboard-panel')).toBeInTheDocument();
   });
 
-  it('offers exactly the three Phase 2 tabs', () => {
+  it('offers exactly the Phase 2 tabs', () => {
     renderComponent();
     for (const label of TABS) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
@@ -81,12 +85,22 @@ describe('Vibe Engineering panel', () => {
 
   it('renders no retired view', () => {
     renderComponent();
+    // "Learning Loops" was on this list until 2026-09-21, when the tab was
+    // added for real. The retired views below are the old hub's, and stay out.
     for (const gone of [
       /graph view/i, /inspector/i, /timeline/i,
       /brain monitor/i, /context intelligence/i, /learning hub/i, /session explorer/i,
-      /learning loops/i,
     ]) {
       expect(screen.queryByText(gone)).toBeNull();
     }
+  });
+
+  it('mounts the shared Learning Loops view, not a second implementation', async () => {
+    renderComponent();
+    fireEvent.click(screen.getByRole('button', { name: 'Learning Loops' }));
+    // The shared view's own copy — a private re-implementation would not carry it.
+    expect(
+      await screen.findByText(/Also available as its own panel at/i),
+    ).toBeInTheDocument();
   });
 });

@@ -41,6 +41,10 @@ export const getStatusColor = (status: string): string => {
     degrading:
       "bg-red-100 text-red-800 border-red-300 " +
       "dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/40",
+    // Not a fifth health state — the absence of an age. A source that does not
+    // date its records cannot support "stale", which is a claim that a loop
+    // stopped emitting. Deliberately neutral, so it does not read as a verdict.
+    unknown: "bg-muted text-muted-foreground border-border",
   };
   return colors[status] || "bg-muted text-muted-foreground border-border";
 };

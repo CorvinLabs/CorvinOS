@@ -55,14 +55,25 @@ def _trend_direction(trend_value: Optional[float]) -> str:
 
 # ── Models ─────────────────────────────────────────────────────────────────
 
-Status = Literal["active", "dormant", "stale", "degrading"]
+# "unknown" is not a fifth health state — it is the absence of an age. The CEL
+# stage-grade store dates none of its records, so no age-based verdict about
+# those loops can be read from it, and claiming "stale" there would assert a
+# measurement that was never taken.
+Status = Literal["active", "dormant", "stale", "degrading", "unknown"]
 
 
 class LoopHealthScore(BaseModel):
-    """Health score with trend direction."""
-    score: float = Field(..., ge=0.0, le=1.0, description="Health score 0.0–1.0")
+    """Health score with trend direction.
+
+    ``score`` is **optional on purpose**. A loop that has executed thousands of
+    times but produced no outcome and no grade has no measured health, and the
+    neutral 0.5 this field used to carry was indistinguishable from a real
+    score of 0.5 (ADR-0763). ``basis`` names what a present score counts.
+    """
+    score: Optional[float] = Field(None, ge=0.0, le=1.0, description="Health score 0.0–1.0, null when nothing measured one")
     trend: Literal["up", "down", "flat"] = Field(..., description="7d trend direction")
     previous_score: Optional[float] = Field(None, description="Previous period score")
+    basis: str = Field(default="", description="What the score is counted from; empty when there is no score")
 
 
 class LoopSummary(BaseModel):
@@ -74,7 +85,16 @@ class LoopSummary(BaseModel):
     health: LoopHealthScore
     last_event: Optional[datetime] = None
     event_count_7d: int = Field(default=0, description="Events in last 7 days")
+    event_count_total: int = Field(default=0, description="Events over the whole scanned window")
     description: Optional[str] = None
+    origin: str = Field(default="plugin", description="plugin | os_skill | cel_stage")
+    event_source: str = Field(default="", description="Which store these numbers were read from")
+
+
+class ListWindow(BaseModel):
+    """The window a narrowed total was counted over (never travels apart from it)."""
+    scanned_events: int = Field(default=0, description="Learning events read this pass")
+    truncated: bool = Field(default=False, description="True when the scan hit its bound and older events fell outside it")
 
 
 class LoopListResponse(BaseModel):
@@ -82,6 +102,7 @@ class LoopListResponse(BaseModel):
     loops: List[LoopSummary]
     total: int = Field(..., description="Total count (ignoring pagination)")
     timestamp: datetime
+    window: ListWindow = Field(default_factory=ListWindow)
 
 
 class LoopDetail(BaseModel):
@@ -100,18 +121,23 @@ class LoopDetail(BaseModel):
 
 
 class HealthTrendPoint(BaseModel):
-    """One point in the 7-day health trend."""
+    """One point in the 7-day health trend.
+
+    ``health_score`` is null for a day that recorded no outcome. Carrying the
+    previous day's value forward would draw a line through data that does not
+    exist, and a 0.0 would render a quiet day as a total failure.
+    """
     date: str = Field(..., description="ISO date (YYYY-MM-DD)")
-    health_score: float = Field(..., ge=0.0, le=1.0)
+    health_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     event_count: int
 
 
 class HealthTrend(BaseModel):
-    """7-day health trend for sparkline."""
+    """7-day health trend for sparkline. Aggregates ignore days with no score."""
     points: List[HealthTrendPoint]
-    min_score: float
-    max_score: float
-    avg_score: float
+    min_score: Optional[float] = None
+    max_score: Optional[float] = None
+    avg_score: Optional[float] = None
 
 
 class AuditEventRow(BaseModel):
@@ -495,6 +521,55 @@ def _parse_audit_event_row(event_dict: dict) -> Optional[AuditEventRow]:
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 
+def _core_loop_summaries(tenant_id: str) -> tuple[List[LoopSummary], ListWindow]:
+    """The loops CorvinOS runs itself, measured from its own stores.
+
+    ADR-0906 covers loops a PLUGIN declares. It has no way to express the loops
+    the OS runs — the skills whose executions, outcomes and feedback are already
+    in the tenant event store, and the CEL pipeline stages the outcome loop
+    grades. Those are not indexed and do not need to be: their store IS the
+    record, so reading it live cannot drift from it the way a copy would.
+    A failure here contributes nothing and never fails the route.
+    """
+    try:
+        from core.learning.loop_discovery import discover_core_loops
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("core loop discovery unavailable: %s", exc)
+        return [], ListWindow()
+
+    try:
+        result = discover_core_loops(tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("core loop discovery failed: %s", exc)
+        return [], ListWindow()
+
+    summaries = [
+        LoopSummary(
+            loop_id=obs.loop_id,
+            plugin_id="corvinos",
+            skill_id=obs.owner,
+            status=obs.status,
+            health=LoopHealthScore(
+                score=obs.health_score,
+                # No dated history exists for these loops yet, so no direction
+                # can be computed. "flat" is the schema's neutral, not a claim
+                # that the score held steady.
+                trend="flat",
+                previous_score=None,
+                basis=obs.health_basis,
+            ),
+            last_event=obs.last_event_ts,
+            event_count_7d=obs.event_count_7d,
+            event_count_total=obs.event_count_total,
+            description=obs.description,
+            origin=obs.origin,
+            event_source=obs.event_source,
+        )
+        for obs in result.loops
+    ]
+    return summaries, ListWindow(scanned_events=result.scanned, truncated=result.truncated)
+
+
 @router.get("/list", response_model=LoopListResponse)
 async def list_learning_loops(
     session: SessionRecord = Depends(require_session),
@@ -526,63 +601,79 @@ async def list_learning_loops(
     if cached is not None:
         return cached
 
+    # Two sources, one list. Plugin-declared loops live in the index (ADR-0906
+    # declares them, the auto-indexing hook fills their metrics); the loops the
+    # OS runs itself are read live from the stores that already record them.
+    # The index being unavailable must not hide the core loops — it did until
+    # 2026-09-21, when a single 503 from an unrelated storage defect emptied the
+    # whole panel.
+    core_loops, window = _core_loop_summaries(tenant_id)
+
+    indexed: List[LoopSummary] = []
     service = _get_learning_loop_service(tenant_id)
-    if service is None:
+    if service is not None:
+        # Pick up loops declared by plugins installed since the last sync.
+        _sync_index_from_manifest(service, tenant_id)
+        try:
+            for e in service.list_loops():
+                indexed.append(
+                    LoopSummary(
+                        loop_id=e.loop_id,
+                        plugin_id=e.plugin_id,
+                        skill_id=e.owner_skill,
+                        status=e.status,
+                        health=LoopHealthScore(
+                            score=e.health_score,
+                            trend=_trend_direction(None),  # no dated history in the index
+                            previous_score=None,
+                            basis="index health score",
+                        ),
+                        last_event=e.last_event_ts,
+                        event_count_7d=e.event_count_7d,
+                        event_count_total=e.event_count_7d,
+                        description=e.description,
+                        origin="plugin",
+                        event_source="learning loop index",
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Indexed loop listing failed: %s", exc)
+    elif not core_loops:
+        # Nothing to show from either source AND the index is broken — that is a
+        # real service failure, not an empty install.
         raise HTTPException(status_code=503, detail="Learning loop service not available")
 
-    # Pick up loops declared by plugins installed since the last sync (ADR-0906).
-    _sync_index_from_manifest(service, tenant_id)
-
     try:
-        # Query backend (Phase 2) — tenant_id already scoped in service instance
-        all_entries = service.list_loops()
+        all_entries = core_loops + indexed
 
         # Filter
         if plugin_id:
             all_entries = [e for e in all_entries if e.plugin_id == plugin_id]
         if skill_id:
-            all_entries = [e for e in all_entries if e.owner_skill == skill_id]
+            all_entries = [e for e in all_entries if e.skill_id == skill_id]
         if status:
             all_entries = [e for e in all_entries if e.status == status]
 
-        # Sort
-        # Use module-level timezone-aware epoch to avoid recomputation on every request
+        # Sort. A loop with no measured health sorts last under health_score
+        # rather than being treated as a zero, which would rank "not measured"
+        # below a genuinely failing loop.
         sort_key = {
             "plugin_id": lambda e: e.plugin_id,
             "status": lambda e: e.status,
-            "last_event": lambda e: e.last_event_ts or _EPOCH_UTC,  # Use module-level constant
-            "health_score": lambda e: e.health_score,
-        }.get(sort_by, lambda e: e.last_event_ts or _EPOCH_UTC)
-        # String fields ascending, numeric fields descending
+            "last_event": lambda e: e.last_event or _EPOCH_UTC,
+            "health_score": lambda e: (e.health.score is not None, e.health.score or 0.0),
+        }.get(sort_by, lambda e: e.last_event or _EPOCH_UTC)
         reverse = sort_by not in ("plugin_id", "status")
         all_entries.sort(key=sort_key, reverse=reverse)
 
         total = len(all_entries)
-        paginated = all_entries[offset : offset + limit]
-
-        # Build response
-        loops = [
-            LoopSummary(
-                loop_id=e.loop_id,
-                plugin_id=e.plugin_id,
-                skill_id=e.owner_skill,
-                status=e.status,
-                health=LoopHealthScore(
-                    score=e.health_score,
-                    trend=_trend_direction(None),  # Trend not in index; use flat as default
-                    previous_score=None,  # Not tracked in index
-                ),
-                last_event=e.last_event_ts,
-                event_count_7d=e.event_count_7d,
-                description=e.description,
-            )
-            for e in paginated
-        ]
+        loops = all_entries[offset : offset + limit]
 
         response = LoopListResponse(
             loops=loops,
             total=total,
             timestamp=datetime.now(timezone.utc),
+            window=window,
         )
 
         # Cache (use hashed key with appropriate TTL)
@@ -601,6 +692,112 @@ async def list_learning_loops(
     except Exception as e:
         logger.error(f"Failed to list learning loops: {e}")
         raise HTTPException(status_code=500, detail="Failed to list learning loops")
+
+
+def _core_loop_detail(tenant_id: str, loop_id: str, days: int) -> Optional[LoopDetailsResponse]:
+    """Full detail for a ``core:`` loop, or None when the id is not one / not found."""
+    try:
+        from core.learning import loop_discovery
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("core loop discovery unavailable: %s", exc)
+        return None
+
+    if loop_discovery.core_loop_owner(loop_id) is None:
+        return None
+
+    try:
+        observed = next(
+            (o for o in loop_discovery.discover_core_loops(tenant_id).loops if o.loop_id == loop_id),
+            None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("core loop discovery failed: %s", exc)
+        return None
+    if observed is None:
+        return None
+
+    points = [
+        HealthTrendPoint(date=p.date, health_score=p.health_score, event_count=p.event_count)
+        for p in loop_discovery.core_loop_trend(tenant_id, loop_id, days=days)
+    ]
+    scored = [p.health_score for p in points if p.health_score is not None]
+    trend = HealthTrend(
+        points=points,
+        min_score=min(scored) if scored else None,
+        max_score=max(scored) if scored else None,
+        avg_score=(sum(scored) / len(scored)) if scored else None,
+    )
+
+    rows = loop_discovery.core_loop_events(tenant_id, loop_id, limit=100)
+    last_10 = [
+        AuditEventRow(
+            timestamp=r.timestamp,
+            event_type=r.event_type,
+            skill_id=r.skill_id,
+            signal=r.signal,
+            outcome=r.outcome,
+            metadata={},
+        )
+        for r in rows[-10:][::-1]
+    ]
+
+    count_30d = sum(
+        1
+        for r in rows
+        if r.timestamp >= datetime.now(timezone.utc) - timedelta(days=30)
+    )
+
+    # Recommendations state what the numbers support and nothing more. A loop
+    # with no measured health gets a note saying exactly that, not a warning
+    # about a low score it does not have.
+    recommendations: List[str] = []
+    if observed.health_score is None:
+        recommendations.append(
+            "No health score: this loop records executions but no outcomes or grades, "
+            "so nothing has measured whether its decisions were right."
+        )
+    elif observed.health_score < 0.5:
+        recommendations.append(
+            f"Health below 0.5 ({observed.health_basis}). Review recent feedback or config changes."
+        )
+    if observed.status == "stale":
+        recommendations.append("No events for more than 7 days — the loop may no longer be running.")
+    elif observed.status == "unknown":
+        recommendations.append(
+            "Activity age is unknown: this loop's source store does not date its records."
+        )
+    if observed.outcome_total and observed.outcome_total < 10:
+        recommendations.append(
+            f"Only {observed.outcome_total} outcomes recorded — too few to read the score as a rate."
+        )
+
+    detail = LoopDetail(
+        loop_id=observed.loop_id,
+        plugin_id="corvinos",
+        skill_id=observed.owner,
+        status=observed.status,
+        health=LoopHealthScore(
+            score=observed.health_score,
+            trend=_trend_direction(
+                (scored[-1] - scored[0]) if len(scored) > 1 else None
+            ),
+            previous_score=scored[0] if len(scored) > 1 else None,
+            basis=observed.health_basis,
+        ),
+        last_event=observed.last_event_ts,
+        event_count_7d=observed.event_count_7d,
+        event_count_30d=count_30d,
+        description=observed.description,
+        owner=observed.owner,
+        created_at=None,
+    )
+
+    return LoopDetailsResponse(
+        loop=detail,
+        health_trend=trend,
+        last_10_events=last_10,
+        recommendations=recommendations,
+    )
 
 
 @router.get("/{loop_id}/details", response_model=LoopDetailsResponse)
@@ -627,6 +824,15 @@ async def get_learning_loop_details(
     cached = _get_cached(tenant_id, cache_key_hash, _CACHE_TTL_DETAIL)
     if cached is not None:
         return cached
+
+    core_detail = _core_loop_detail(tenant_id, loop_id, days)
+    if core_detail is not None:
+        _set_cached(tenant_id, cache_key_hash, core_detail, _CACHE_TTL_DETAIL)
+        try:
+            await _audit_log_route(session, f"/learning-loops/{loop_id}/details", days=days)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed to audit GET /details: {exc}")
+        return core_detail
 
     service = _get_learning_loop_service(tenant_id)
     if service is None:
@@ -736,6 +942,31 @@ async def get_learning_loop_details(
         raise HTTPException(status_code=500, detail="Failed to get loop details")
 
 
+def _core_loop_event_rows(tenant_id: str, loop_id: str, want: int) -> Optional[List[AuditEventRow]]:
+    """Event rows for a ``core:`` loop, newest first — or None if not a core loop."""
+    try:
+        from core.learning import loop_discovery
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("core loop discovery unavailable: %s", exc)
+        return None
+
+    if loop_discovery.core_loop_owner(loop_id) is None:
+        return None
+
+    rows = loop_discovery.core_loop_events(tenant_id, loop_id, limit=max(want, 100))
+    return [
+        AuditEventRow(
+            timestamp=r.timestamp,
+            event_type=r.event_type,
+            skill_id=r.skill_id,
+            signal=r.signal,
+            outcome=r.outcome,
+            metadata={},
+        )
+        for r in rows[::-1]
+    ]
+
+
 @router.get("/{loop_id}/events", response_model=EventsResponse)
 async def get_learning_loop_events(
     loop_id: str,
@@ -756,6 +987,27 @@ async def get_learning_loop_events(
     This means total_count reflects only filtered events, not total unfiltered events.
     """
     tenant_id = session.tenant_id
+
+    # A core loop's events live in the tenant event store, not in the audit
+    # chain's loop_id-tagged records — the chain filter below keys on a loop_id
+    # these events do not carry.
+    core_rows = _core_loop_event_rows(tenant_id, loop_id, limit + offset)
+    if core_rows is not None:
+        if event_type:
+            core_rows = [r for r in core_rows if r.event_type.startswith(event_type)]
+        total = len(core_rows)
+        response = EventsResponse(
+            events=core_rows[offset : offset + limit],
+            total_count=total,
+            limit=limit,
+            offset=offset,
+        )
+        try:
+            await _audit_log_route(session, f"/learning-loops/{loop_id}/events",
+                                   limit=limit, offset=offset, event_type=event_type)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed to audit GET /events: {exc}")
+        return response
 
     try:
         # Query audit chain with oversampling to account for event_type filtering loss.

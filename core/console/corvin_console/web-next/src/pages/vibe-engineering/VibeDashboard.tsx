@@ -23,8 +23,9 @@ import { Loader2 } from 'lucide-react';
 import { MaturityDashboard } from './components/MaturityDashboard';
 import { MonitoringTab } from './tabs/MonitoringTab';
 import { ModelsTab } from './tabs/ModelsTab';
+import { LearningLoopsTab } from './tabs/LearningLoopsTab';
 
-type TabType = 'maturity' | 'metrics' | 'models';
+type TabType = 'maturity' | 'loops' | 'metrics' | 'models';
 
 const LoadingFallback = () => (
   <div className="flex justify-center py-12">
@@ -42,6 +43,7 @@ export function VibeDashboard() {
         <div className="flex gap-4 px-6 py-4">
           {[
             { id: 'maturity' as TabType, label: 'Maturity Metrics' },
+            { id: 'loops' as TabType, label: 'Learning Loops' },
             { id: 'metrics' as TabType, label: 'System Metrics' },
             { id: 'models' as TabType, label: 'Models' },
           ].map((tab) => (
@@ -64,6 +66,7 @@ export function VibeDashboard() {
       <div className="min-h-screen">
         <Suspense fallback={<LoadingFallback />}>
           {activeTab === 'maturity' && <MaturityDashboard />}
+          {activeTab === 'loops' && <LearningLoopsTab />}
           {activeTab === 'metrics' && <MonitoringTab />}
           {activeTab === 'models' && <ModelsTab />}
         </Suspense>
@@ -71,8 +74,8 @@ export function VibeDashboard() {
 
       {/* Footer */}
       <div className="border-t bg-muted/50 p-4 text-xs text-muted-foreground">
-        System metrics • Model registry • Maturity dashboard — All endpoints
-        PII-safe • Audit events moved to Audit &amp; Compliance • Last updated:{' '}
+        System metrics • Model registry • Maturity dashboard • Learning loops — All
+        endpoints PII-safe • Audit events moved to Audit &amp; Compliance • Last updated:{' '}
         {new Date().toLocaleTimeString()}
       </div>
     </div>

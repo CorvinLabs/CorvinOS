@@ -1,51 +1,51 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { ListWindow, LoopEntry, LoopListResponse } from "@/types/learning-loops";
 
-interface LoopEntry {
-  loop_id: string;
-  plugin_id: string;
-  skill_id?: string | null;
-  status: "active" | "dormant" | "stale" | "degrading";
-  health: { score: number; trend: "up" | "down" | "flat" };
-  last_event?: string;
-  event_count_7d: number;
-  description?: string;
-}
-
-export const useLoops = () => {
+/** Poll the learning-loop list. Returns [] with an error string on failure — never mock rows. */
+export const useLoops = (pollMs = 120_000) => {
   const [loops, setLoops] = useState<LoopEntry[] | null>(null);
+  const [window_, setWindow] = useState<ListWindow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchLoops = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch("/v1/console/learning-loops/list", {
-          headers: { "Content-Type": "application/json" },
-        });
-        if (!res.ok) {
-          if (res.status === 503) {
-            setError("Learning subsystem not available");
-          } else {
-            setError(`Failed to fetch learning loops (${res.status})`);
-          }
-          setLoops([]);
-        } else {
-          const data = await res.json();
-          setLoops(data.loops || []);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unknown error");
+  const fetchLoops = useCallback(async (signal?: AbortSignal) => {
+    setError(null);
+    try {
+      const res = await fetch("/v1/console/learning-loops/list", {
+        headers: { "Content-Type": "application/json" },
+        signal,
+      });
+      if (!res.ok) {
+        setError(
+          res.status === 503
+            ? "Learning subsystem not available on this build"
+            : `Failed to load learning loops (HTTP ${res.status})`,
+        );
         setLoops([]);
-      } finally {
-        setLoading(false);
+        return;
       }
-    };
-    fetchLoops();
-    const interval = setInterval(fetchLoops, 120000); // Poll every 2 minutes
-    return () => clearInterval(interval);
+      const data: LoopListResponse = await res.json();
+      setLoops(data.loops ?? []);
+      setWindow(data.window ?? null);
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") return;
+      setError(err instanceof Error ? err.message : "Unknown error");
+      setLoops([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  return { loops, loading, error };
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoading(true);
+    void fetchLoops(ctrl.signal);
+    const id = setInterval(() => void fetchLoops(), pollMs);
+    return () => {
+      ctrl.abort();
+      clearInterval(id);
+    };
+  }, [fetchLoops, pollMs]);
+
+  return { loops, window: window_, loading, error, refresh: () => void fetchLoops() };
 };
