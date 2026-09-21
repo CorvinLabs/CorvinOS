@@ -1,0 +1,44 @@
+{
+  "id": "video_producer_renderers",
+  "name": "Video Producer Phase 4 Renderers",
+  "version": "2.0.0",
+  "description": "SVG, Effects Pipeline, Screencast, Blender rendering backends for Video Producer Skill 2.0",
+  "author": "Claude Code (Haiku 4.5)",
+  "license": "Apache-2.0",
+  "category": "video-production",
+  "boot_layer": "bundled",
+  "source_url": "https://github.com/CorvinLabs/CorvinOS/tree/main/core/skills/video_producer_skill_2_0",
+  "entry_points": {
+    "svg_renderer": "video_producer_skill_2_0.renderers.svg_renderer:SvgRenderer",
+    "effects_processor": "video_producer_skill_2_0.renderers.effects_processor:EffectsProcessor",
+    "screencast_renderer": "video_producer_skill_2_0.renderers.screencast_renderer:ScreencastRenderer",
+    "blender_renderer": "video_producer_skill_2_0.renderers.blender_renderer:BlenderRenderer"
+  },
+  "dependencies": {
+    "pillow": ">=9.0.0",
+    "cairosvg": ">=2.5.0",
+    "ffmpeg-python": ">=0.2.1"
+  },
+  "optional_dependencies": {
+    "blender": ">=3.0.0",
+    "imagemagick": ">=7.0.0"
+  },
+  "provides": [
+    "extension_point:svg_renderer",
+    "extension_point:effects_processor",
+    "extension_point:screencast_renderer",
+    "extension_point:blender_renderer"
+  ],
+  "audit_events": [
+    "renderer_loaded",
+    "renderer_executed",
+    "renderer_failed",
+    "effect_applied",
+    "frame_composed"
+  ],
+  "compliance": {
+    "tenant_scoped": true,
+    "audit_trail": true,
+    "pii_safe": true
+  }
+}
