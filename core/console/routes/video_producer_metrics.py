@@ -21,12 +21,37 @@ def initialize_globals():
     global dispatcher, optimizer
 
     if dispatcher is None or optimizer is None:
-        # Lazy import to avoid circular dependencies
-        from core.skills.video_producer_skill_2_0.phase5.tier_dispatcher import TierDispatcher
-        from core.skills.video_producer_skill_2_0.phase5.quick_renderer import QuickRendererWorker
-        from core.skills.video_producer_skill_2_0.phase5.manim_animator import ManimAnimatorWorker
-        from core.skills.video_producer_skill_2_0.phase5.premium_renderer import PremiumAsyncQueue
-        from core.skills.video_producer_skill_2_0.phase5.learning_integration import LearningOptimizer
+        # Lazy import from marketplace plugin
+        # Try to import from installed marketplace plugin locations
+        import sys
+        import os
+        from pathlib import Path
+
+        # Build marketplace plugin path
+        _corvin_home = os.environ.get("CORVIN_HOME", "").strip() or os.path.expanduser("~/.corvin")
+        _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+
+        plugin_src_paths = [
+            os.path.join(_corvin_home, "tenants", "_default", "plugins", "instances", "video_producer", "src"),
+            os.path.join(_corvin_home, "plugins", "media", "video_producer", "src"),
+            os.path.join(_repo_root, "..", "Corvin-Marketplace", "plugins", "contributor", "media", "video_producer", "src"),
+        ]
+
+        for plugin_path in plugin_src_paths:
+            if plugin_path not in sys.path and os.path.exists(plugin_path):
+                sys.path.insert(0, plugin_path)
+
+        try:
+            from phase5.tier_dispatcher import TierDispatcher
+            from phase5.quick_renderer import QuickRendererWorker
+            from phase5.manim_animator import ManimAnimatorWorker
+            from phase5.premium_renderer import PremiumAsyncQueue
+            from phase5.learning_integration import LearningOptimizer
+        except ImportError as e:
+            # Fallback for testing/development
+            import logging
+            logging.error(f"Failed to import video_producer marketplace plugin: {e}")
+            raise
 
         if dispatcher is None:
             tier1 = QuickRendererWorker()

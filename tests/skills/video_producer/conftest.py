@@ -2,11 +2,18 @@
 
 import pytest
 import sys
+import os
 from pathlib import Path
 
 # Setup paths for all video producer modules
 repo_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(repo_root / "core/skills/video_producer_skill_2_0"))  # For Phase 5 modules
+
+# Try marketplace first, then fallback to core skills
+marketplace_path = repo_root.parent / "Corvin-Marketplace" / "plugins" / "contributor" / "media" / "video_producer" / "src"
+if marketplace_path.exists():
+    sys.path.insert(0, str(marketplace_path))
+
+# Core skills paths (for backwards compatibility)
 sys.path.insert(0, str(repo_root / "core/skills/video_producer"))  # For Phase 1-4 modules
 
 try:
