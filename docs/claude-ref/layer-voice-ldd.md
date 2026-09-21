@@ -729,6 +729,41 @@ guards the flag and pins `timeout`/`max_retries=0`. The pipeline in
    local-only enforcement) — unchanged, including the 204 +
    `X-Corvin-Voice-Reason` degradation contract and audit events.
 
+**`X-Corvin-TTS-Provider` names the TIER, not the mechanism (2026-09-21).**
+Steps 4 and 5 are three candidate providers behind one response, so "the
+subprocess produced audio" does not say which of them spoke — and the header
+reported the literal string `"say.py"` for every subprocess synthesis. That
+made the whole configured priority chain unverifiable from outside the box:
+the one observable that claims to report the provider reported a filename.
+say.py now writes `say.py: provider=<tier>` to **stderr** on success (stdout is
+the contract — the out-path and nothing else; both `_voice_tts_sync` and
+`daemon.js` parse it as a bare path, so a second stdout line would be read as
+part of the filename), and `routes/voice.py::_say_provider` turns it into
+`say.py:openai` / `say.py:edge` / `say.py:piper`. Rules that are load-bearing
+for the header's honesty: the tier is matched against a **closed set**
+(`_SAY_TIERS`) because the value lands in an HTTP header; an absent marker
+stays the bare `"say.py"` and is **never** inferred from the chain order (a
+guess that reads like a measurement is worse than admitting the tier is
+unknown — and it is what lets a test stub say.py without imitating its
+diagnostics); and the marker is emitted from the SUCCESS path only, never from
+`_run`, so the header can never name a tier that produced nothing. Guards:
+`core/console/tests/test_voice_tts_provider_header.py` (reader cases for all
+three tiers, absent/unknown/empty token, last-marker-wins, a source-coupling
+check that fails if either side renames the marker, and a dependency-free
+negative control running the real say.py with every tier disabled).
+
+Measured live on a corporate-proxied box the same day: with a valid key
+configured, OpenAI is genuinely attempted first and returns **HTTP 403** from
+the TLS proxy (all of `openai.com` is policy-blocked), the console logs
+`in-process OpenAI TTS failed (will try say.py): PermissionDeniedError
+status=403` — content-free, `type(e).__name__` + `status_code` only, never
+`str(e)`, which can embed the spoken text — and the header reads
+`say.py:edge`. The doomed attempt costs ~0.1 s (the proxy rejects immediately),
+which is why it is **not** cached or short-circuited: retrying every turn is
+what makes voice recover by itself the moment `api.openai.com` is allowlisted,
+and a cached "blocked" verdict would keep the preferred tier off after the
+network was fixed.
+
 The redundant `core/console/corvin_console/voice_bootstrap.py` was deleted
 in the same pass: never imported anywhere, its `urlretrieve(..., context=)`
 call raised TypeError on every invocation, its GitHub model URLs 404 — and

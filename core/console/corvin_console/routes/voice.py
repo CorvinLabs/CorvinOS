@@ -1125,6 +1125,37 @@ def _tts_failed_response(proc: "subprocess.CompletedProcess[str]", stage: str) -
                     headers={"X-Corvin-Voice-Reason": reason})
 
 
+# Tier names say.py can report. A closed set, matched fail-closed: the value
+# lands in an HTTP header, so an unrecognised token from a future say.py must
+# never be echoed through unvalidated.
+_SAY_TIERS = frozenset({"openai", "edge", "piper"})
+_SAY_PROVIDER_MARKER = "say.py: provider="
+
+
+def _say_provider(stderr: str) -> str:
+    """Which say.py tier actually synthesized, per its ``provider=`` marker.
+
+    say.py leads with openai and falls back to edge then piper, so "the
+    subprocess produced audio" says nothing about WHICH of the three spoke —
+    and X-Corvin-TTS-Provider used to report the literal string "say.py", i.e.
+    the mechanism rather than the provider. That made the configured priority
+    chain unverifiable from outside the box (found 2026-09-21).
+
+    Returns ``say.py:<tier>`` when the marker is present, and plain ``say.py``
+    when it is not — an older say.py, or a caller that did not capture stderr.
+    Deliberately NOT inferred from the chain order on absence: a guess that
+    reads like a measurement is worse than admitting the tier is unknown, and
+    keeping the bare-mechanism answer is also what lets a test stub say.py
+    without having to imitate its diagnostics.
+    """
+    tier = ""
+    for line in (stderr or "").splitlines():
+        line = line.strip()
+        if line.startswith(_SAY_PROVIDER_MARKER):
+            tier = line[len(_SAY_PROVIDER_MARKER):].strip()  # last marker wins
+    return f"say.py:{tier}" if tier in _SAY_TIERS else "say.py"
+
+
 def _cleanup_tts_tmp(out_path: "Path") -> None:
     """Unlink a say.py temp target AND its ``.wav`` sibling. Best-effort.
 
@@ -1389,7 +1420,7 @@ def _voice_tts_sync(
     finally:
         _cleanup_tts_tmp(out_path)
 
-    return _serve_tts_response(rec, body, data, "say.py")
+    return _serve_tts_response(rec, body, data, _say_provider(proc.stderr))
 
 
 # ── Session recap — a spoken recap of a WHOLE session, not one turn ─────────

@@ -921,6 +921,25 @@ def main() -> int:
             return _try_piper(out_path, text, lang, timeout_s)
         return False
 
+    def _succeeded(name: str) -> int:
+        """Hand the path to the caller, naming the tier that actually spoke.
+
+        The tier goes to STDERR on purpose: stdout is the contract — the
+        out-path and nothing else — and both callers (routes/voice.py::
+        _voice_tts_sync, daemon.js) read it as a bare path, so a second stdout
+        line would be parsed as part of the filename. stderr is already
+        captured by every caller for the per-provider failure reasons.
+
+        Without this marker the chain was unobservable from outside: the
+        console could only label a subprocess synthesis "say.py", so an
+        operator who configured openai → edge → piper had no way to see which
+        tier served — X-Corvin-TTS-Provider named the mechanism, not the
+        provider (found 2026-09-21 while proving the chain end-to-end).
+        """
+        sys.stderr.write(f"say.py: provider={name}\n")
+        sys.stdout.write(str(out_path))
+        return 0
+
     strict = os.environ.get("CORVIN_SAY_NO_FALLBACK", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -930,8 +949,7 @@ def main() -> int:
         # voice always works even if the configured provider is temporarily broken
         # (e.g. missing API key, network outage, not installed).
         if _run(provider):
-            sys.stdout.write(str(out_path))
-            return 0
+            return _succeeded(provider)
         if strict:
             # No-fallback (VOICE-1 isolation): a pinned provider must hard-fail
             # instead of masking a dead tier behind the auto-chain. Silent skip
@@ -949,8 +967,7 @@ def main() -> int:
     # Auto chain: openai → edge → piper → silent.
     for name in _AUTO_CHAIN:
         if _run(name):
-            sys.stdout.write(str(out_path))
-            return 0
+            return _succeeded(name)
 
     # All providers failed — caller falls back to text-only delivery.
     return 0
