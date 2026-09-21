@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 _extensions = {
     "spec_generator": None,
     "frame_renderer": None,
+    "svg_renderer": None,           # Phase 4: SVG/diagram rendering
+    "screencast_renderer": None,    # Phase 4: Screen capture + overlays
+    "blender_renderer": None,       # Phase 4: 3D animation rendering
+    "effects_processor": None,      # Phase 4: Transitions, color grading, animations
     "audio_renderer": None,
     "video_composer": None,
     "quality_scorer": None,
