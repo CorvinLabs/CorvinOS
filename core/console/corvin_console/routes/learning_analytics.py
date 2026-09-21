@@ -80,13 +80,6 @@ class LoopListResponse(BaseModel):
     timestamp: datetime
 
 
-class LoopDetailRow(BaseModel):
-    """One row in the details drawer."""
-    field: str
-    value: Any
-    unit: Optional[str] = None
-
-
 class LoopDetail(BaseModel):
     """Full details for a single loop."""
     loop_id: str
@@ -414,7 +407,7 @@ async def list_learning_loops(
         response = LoopListResponse(
             loops=loops,
             total=total,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
         # Cache
@@ -478,10 +471,19 @@ async def get_learning_loop_details(
         # Transform service response to expected format
         health_trend = _get_health_trend_from_service_response(trend_data)
 
+        # Compute trend direction from health_trend points (simple regression: first vs. last)
+        trend_value = 0.0
+        if health_trend.points and len(health_trend.points) > 1:
+            first_score = health_trend.points[0].health_score
+            last_score = health_trend.points[-1].health_score
+            trend_value = last_score - first_score  # Positive = improving, negative = degrading
+
         # Get audit events
         events_data = await _get_audit_events(tenant_id, loop_id, limit=100)
         last_10_events = []
         event_count_30d = 0
+        now = datetime.now(timezone.utc)
+        since_30d = now - timedelta(days=30)
 
         for e in events_data:
             parsed = _parse_audit_event_row(e)
@@ -490,8 +492,8 @@ async def get_learning_loop_details(
                 if len(last_10_events) < 10:
                     last_10_events.append(parsed)
 
-                # Count events within 30 days (use parsed timestamp for accuracy)
-                if entry.last_event_ts and (entry.last_event_ts - parsed.timestamp).days < 30:
+                # Count events within last 30 days (from now, not from last event)
+                if parsed.timestamp >= since_30d:
                     event_count_30d += 1
 
         # Generate recommendations
@@ -512,7 +514,7 @@ async def get_learning_loop_details(
             status=entry.status,
             health=LoopHealthScore(
                 score=entry.health_score,
-                trend="flat",  # Trend computed from health_trend data above, not stored in index
+                trend=_trend_direction(trend_value),  # Computed from health_trend points
                 previous_score=None,  # Not tracked in index
             ),
             last_event=entry.last_event_ts,

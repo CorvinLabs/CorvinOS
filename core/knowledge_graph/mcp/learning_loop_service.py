@@ -18,7 +18,7 @@ ADR-0314: Learning Infrastructure
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Literal
 from dataclasses import replace
@@ -194,7 +194,7 @@ class LearningLoopService:
         Raises:
             ValueError: If arguments invalid
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         entry = LearningLoopIndexEntry(
             tenant_id=self.tenant_id,
             plugin_id=plugin_id,
@@ -248,7 +248,7 @@ class LearningLoopService:
             )
             return None
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         age_hours = (now - entry.last_event_ts).total_seconds() / 3600.0
 
         # Update event count (7-day rolling window)
@@ -334,7 +334,7 @@ class LearningLoopService:
 
         # In a real implementation, this would query the audit chain
         # For now, return a stub response
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         since = now - timedelta(days=days)
 
         return {

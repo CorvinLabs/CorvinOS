@@ -1,0 +1,149 @@
+{
+  "title": "Video Producer Phase 4 — All Renderers Demo",
+  "description": "Complete showcase: SVG flowcharts, Effects pipeline, Screencast overlay, Blender 3D",
+  "duration_seconds": 120,
+  "framerate": 30,
+  "total_frames": 3600,
+  "resolution": "1920x1080",
+
+  "scenes": [
+    {
+      "id": "intro",
+      "type": "title_card",
+      "duration_seconds": 3,
+      "title": "Video Producer Skill 2.0",
+      "subtitle": "Phase 4: 4 Renderers + Effects Pipeline",
+      "background_color": "#1a1a1a",
+      "text_color": "#ffffff"
+    },
+    {
+      "id": "svg_demo",
+      "type": "svg",
+      "duration_seconds": 20,
+      "title": "SVG Renderer: Flowcharts & Diagrams",
+      "nodes": [
+        {"id": "start", "label": "BEGIN", "x": 400, "y": 150, "color": "#4CAF50", "shape": "rect"},
+        {"id": "process1", "label": "Render Frames", "x": 400, "y": 350, "color": "#2196F3", "shape": "rect"},
+        {"id": "process2", "label": "Apply Effects", "x": 200, "y": 550, "color": "#FF9800", "shape": "rect"},
+        {"id": "process3", "label": "Compose Video", "x": 600, "y": 550, "color": "#F44336", "shape": "rect"},
+        {"id": "end", "label": "DONE", "x": 400, "y": 750, "color": "#9C27B0", "shape": "diamond"}
+      ],
+      "edges": [
+        {"from_id": "start", "to_id": "process1", "label": "30fps"},
+        {"from_id": "process1", "to_id": "process2", "label": "Fade"},
+        {"from_id": "process1", "to_id": "process3", "label": "Slide"},
+        {"from_id": "process2", "to_id": "end"},
+        {"from_id": "process3", "to_id": "end"}
+      ],
+      "effects": [
+        {"type": "transition", "name": "fade", "start_frame": 0, "end_frame": 90, "params": {"direction": "in"}},
+        {"type": "color_grade", "name": "saturate", "start_frame": 0, "end_frame": 600, "params": {"factor": 1.2}}
+      ]
+    },
+    {
+      "id": "effects_demo",
+      "type": "effects_showcase",
+      "duration_seconds": 25,
+      "title": "Effects Pipeline: Transitions & Color Grading",
+      "effects_sequence": [
+        {
+          "effect_type": "transition",
+          "name": "fade",
+          "duration_frames": 90,
+          "params": {"direction": "in"}
+        },
+        {
+          "effect_type": "color_grade",
+          "name": "saturate",
+          "duration_frames": 300,
+          "params": {"factor": 1.5}
+        },
+        {
+          "effect_type": "animation",
+          "name": "pan",
+          "duration_frames": 150,
+          "params": {"pan_x": 200}
+        },
+        {
+          "effect_type": "transition",
+          "name": "zoom",
+          "duration_frames": 150,
+          "params": {"direction": "out"}
+        }
+      ]
+    },
+    {
+      "id": "screencast_demo",
+      "type": "screencast",
+      "duration_seconds": 30,
+      "title": "Screencast Renderer: Screen Capture + Overlays",
+      "config": {
+        "framerate": 30,
+        "quality": "high",
+        "cursor_highlight": true,
+        "show_keystrokes": true
+      },
+      "overlays": [
+        {"type": "annotation", "position": "top-left", "text": "Recording started..."},
+        {"type": "keystroke", "position": "bottom-right"},
+        {"type": "timestamp", "position": "top-right"}
+      ],
+      "annotations": [
+        {"text": "Click to render", "frame": 150, "position": "center"},
+        {"text": "Processing...", "frame": 450, "position": "bottom-center"}
+      ]
+    },
+    {
+      "id": "blender_demo",
+      "type": "blender",
+      "duration_seconds": 40,
+      "title": "Blender Renderer: 3D Animations",
+      "blend_file": "/path/to/demo_scene.blend",
+      "start_frame": 1,
+      "end_frame": 1200,
+      "config": {
+        "framerate": 30,
+        "samples": 128,
+        "engine": "CYCLES",
+        "use_gpu": true
+      },
+      "camera_animation": [
+        {"frame": 1, "x": 0, "y": 0, "z": 10},
+        {"frame": 300, "x": 5, "y": 5, "z": 12},
+        {"frame": 600, "x": 10, "y": 0, "z": 15},
+        {"frame": 900, "x": 5, "y": -5, "z": 12},
+        {"frame": 1200, "x": 0, "y": 0, "z": 10}
+      ]
+    },
+    {
+      "id": "composite_demo",
+      "type": "effects",
+      "duration_seconds": 2,
+      "title": "Final Effects",
+      "effects": [
+        {"type": "color_grade", "name": "contrast", "params": {"factor": 1.1}},
+        {"type": "animation", "name": "fade_out", "params": {}}
+      ]
+    },
+    {
+      "id": "credits",
+      "type": "title_card",
+      "duration_seconds": 3,
+      "title": "Video Producer Skill 2.0",
+      "subtitle": "Phase 4 Complete — Ready for Production",
+      "background_color": "#1a1a1a",
+      "text_color": "#4CAF50"
+    }
+  ],
+
+  "metadata": {
+    "created_at": "2026-09-21",
+    "created_by": "Claude Haiku 4.5",
+    "adr_reference": "ADR-0955",
+    "renderers_used": ["svg_renderer", "effects_processor", "screencast_renderer", "blender_renderer"],
+    "total_frames_estimate": 3600,
+    "render_time_estimate_hours": 48,
+    "output_format": "mp4",
+    "quality": "high"
+  }
+}
