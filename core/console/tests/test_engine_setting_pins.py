@@ -130,6 +130,33 @@ class EngineSettingPinTests(unittest.TestCase):
         self.assertIsNone(cfg["os_model"])
         self.assertEqual(cfg["worker_model"], MID)
 
+    def test_put_stores_a_provider_qualified_pin_bare(self) -> None:
+        """Incident 2026-09-21 — every Discord turn answered "Claude API call
+        failed: 404".
+
+        The Routing tab offers catalogue ids as the Anthropic entry spells
+        them (``anthropic/claude-sonnet-5``). Stored verbatim, that string
+        reaches ``--model`` and the API answers ``404 model_not_found``:
+        ``duration_api_ms: 0``, ``modelUsage: {}``, no token billed, on EVERY
+        turn of that surface. The pin is normalised before it is written, so
+        what the operator reads back is what actually runs.
+        """
+        client = self._client()
+        r = client.put("/v1/console/settings/engine", json={
+            "default_engine": "claude_code",
+            "engine_models": {"claude_code": {
+                "os_model": "anthropic/" + MID,
+                "worker_model": "anthropic/claude-opus-5",
+            }},
+        })
+        self.assertEqual(r.status_code, 200, r.text)
+        raw = (Path(self._tmp.name) / "tenants" / "_default" / "global"
+               / "tenant.corvin.yaml").read_text()
+        self.assertNotIn("anthropic/", raw, raw)
+        cfg = client.get("/v1/console/settings/engine").json()["engine_models"]["claude_code"]
+        self.assertEqual(cfg["os_model"], MID)
+        self.assertEqual(cfg["worker_model"], "claude-opus-5")
+
     def test_put_503_when_registry_failed_to_load(self) -> None:
         with mock.patch.object(engine_models, "registry_load_status", lambda: (False, "boom")), \
              mock.patch.object(EA, "_claude_catalog_offline", lambda: set()):

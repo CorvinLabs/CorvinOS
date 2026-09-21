@@ -15,7 +15,8 @@ import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getFeatureWhitelist, toggleFeature, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
+import { PluginManagerCard } from "@/components/plugin-manager-card";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -578,127 +579,8 @@ const BUDGET_LABELS: Record<string, { label: string; unit: string; description: 
   max_total_workers: { label: "Max workers",        unit: "workers", description: "How many parallel worker processes ACS may spawn per run." },
   max_depth:         { label: "Max nesting depth",  unit: "levels",  description: "Maximum recursion depth for nested delegation calls." } };
 
-/**
- * Feature Whitelist Card — enable/disable verified features (ADR-0386).
- * Only whitelisted features are ON; all others are OFF (deny-all-else).
- */
-function FeatureFlagsCard({ csrf }: { csrf: string }) {
-  const qc = useQueryClient();
-  const q = useQuery({
-    queryKey: ["feature-whitelist"],
-    queryFn: ({ signal }) => getFeatureWhitelist(signal) });
-
-  const [saving, setSaving] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-
-  // Feature descriptions (5 most important from ADR-0386)
-  const featureDescriptions: Record<string, { label: string; description: string }> = {
-    vibe_engineering: {
-      label: "Vibe Engineering",
-      description: "CEL brief deterministic insights — analyze request patterns and extract key information." },
-    vibe_engineering_active: {
-      label: "Vibe Engineering (Active Mode)",
-      description: "CEL active mode with LLM + Toolforge + SkillForge — full agentic decision-making." },
-    tree_of_thoughts: {
-      label: "Tree of Thoughts",
-      description: "Multi-path exploration for complex reasoning — enables alternative solution paths." },
-    learning_objectives: {
-      label: "Learning Objectives",
-      description: "User Learning Objectives (ULO) tracking — remember what users want to learn." },
-    token_metrics: {
-      label: "Token Metrics",
-      description: "Visualize token usage, costs, and cache efficiency across all turns." },
-    outcome_feedback_loop: {
-      label: "Outcome Feedback",
-      description: "Auto-grade CEL stages and collect user feedback for learning loop." },
-    cross_device_sync: {
-      label: "Cross-Device Sync",
-      description: "Sync learning state and preferences across devices." } };
-
-  const toggle = async (featureId: string, enabled: boolean) => {
-    setError(null);
-    setSaving(featureId);
-    try {
-      await toggleFeature({ feature_id: featureId, enabled }, csrf);
-      qc.invalidateQueries({ queryKey: ["feature-whitelist"] });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  const whitelist = q.data?.whitelist ?? [];
-  const mode = q.data?.mode ?? "legacy";
-
-  // Show top features (filter by what's in the whitelist or common features)
-  const topFeatures = ["vibe_engineering", "vibe_engineering_active", "tree_of_thoughts", "learning_objectives", "token_metrics"];
-
-  return (
-    <Card>
-      <CardContent className="pt-4 pb-3 space-y-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">Feature Whitelist</span>
-            {mode === "whitelist" && (
-              <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400 border-emerald-500/40">
-                whitelist mode
-              </Badge>
-            )}
-            {mode === "legacy" && (
-              <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                legacy mode
-              </Badge>
-            )}
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
-            Only whitelisted features are ON; all others are OFF (deny-all-else strategy).
-            Enable verified features to unlock additional capabilities.
-          </p>
-        </div>
-
-        {q.isLoading && (
-          <div className="flex justify-center py-4">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
-        )}
-
-        {!q.isLoading && (
-          <div className="space-y-2 border-t border-border/60 pt-3">
-            {topFeatures.map((featureId) => {
-              const info = featureDescriptions[featureId];
-              if (!info) return null;
-              const isEnabled = whitelist.includes(featureId);
-              return (
-                <div key={featureId} className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <div className="min-w-0 flex-1">
-                      <span className="text-sm font-medium block">{info.label}</span>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">{info.description}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {saving === featureId && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-                    <Switch
-                      checked={isEnabled}
-                      onCheckedChange={(next) => toggle(featureId, next)}
-                      disabled={saving !== null}
-                      aria-label={`Toggle ${info.label}`}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {error && (
-          <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+// FeatureFlagsCard DEPRECATED (ADR-0903)
+// Replaced by PluginManagerCard — see PluginManagerCard component
 
 function DelegationBudgetCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
@@ -909,8 +791,8 @@ export function SettingsPage() {
       </div>
 
       <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-foreground">Feature Control</h2>
-        <FeatureFlagsCard csrf={session!.csrf_token} />
+        <h2 className="text-sm font-semibold text-foreground">Plugins</h2>
+        <PluginManagerCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">

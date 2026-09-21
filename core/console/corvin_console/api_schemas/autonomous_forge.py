@@ -23,6 +23,9 @@ class CanaryStateResponse(BaseModel):
     """Current canary deployment state for a single forked skill.
 
     Immutable metrics from the canary monitor. No mutations allowed on this resource.
+
+    CRITICAL SECURITY (ADR-XXXX): Includes cryptographic token and fixed_fingerprint
+    for subsequent mutation requests. Token is HMAC-bound and cannot be forged via headers.
     """
     skill_id: str = Field(..., description="Unique skill identifier (e.g., 'os.delegation_router')")
     version: str = Field(..., description="Semantic version of the skill (e.g., '2.1.0')")
@@ -37,6 +40,18 @@ class CanaryStateResponse(BaseModel):
     time_remaining_sec: int = Field(..., ge=0, description="Seconds until canary expires or decision required")
     created_at: datetime = Field(..., description="When the canary was created")
     tenant_id: str = Field(..., description="Tenant scope (immutable; from auth)")
+    session_token: str = Field(
+        ...,
+        description="Cryptographic session token (64-char hex SHA256 HMAC) for mutation requests"
+    )
+    fixed_fingerprint: str = Field(
+        ...,
+        description="Fixed browser fingerprint (pre-computed server-side) for token binding"
+    )
+    token_expires_at: datetime = Field(
+        ...,
+        description="When the session token expires (TTL 1 hour)"
+    )
 
     class Config:
         json_schema_extra = {
@@ -61,10 +76,22 @@ class CanaryStateResponse(BaseModel):
 
 
 class ApproveRequest(BaseModel):
-    """Request to approve a canary and roll out to 100% traffic."""
+    """Request to approve a canary and roll out to 100% traffic.
+
+    CRITICAL SECURITY (ADR-XXXX): All mutation requests must include a cryptographically-bound
+    session token to prevent operator ID spoofing via HTTP headers (User-Agent, X-Forwarded-For).
+    """
     skill_id: str = Field(..., description="Skill ID to approve")
     version: str = Field(..., description="Skill version to approve")
     operator_id: str = Field(..., description="Operator fingerprint (from auth)")
+    session_token: str = Field(
+        ...,
+        description="Cryptographic session token (64-char hex SHA256 HMAC, from GET /status or last operation)"
+    )
+    client_nonce: str = Field(
+        ...,
+        description="Client nonce for token binding (prevents replay, min 16 chars)"
+    )
 
     class Config:
         extra = "forbid"
@@ -87,11 +114,23 @@ class ApproveResponse(BaseModel):
 
 
 class DeferRequest(BaseModel):
-    """Request to defer a canary to a later time."""
+    """Request to defer a canary to a later time.
+
+    CRITICAL SECURITY (ADR-XXXX): All mutation requests must include a cryptographically-bound
+    session token to prevent operator ID spoofing via HTTP headers (User-Agent, X-Forwarded-For).
+    """
     skill_id: str = Field(..., description="Skill ID to defer")
     version: str = Field(..., description="Skill version to defer")
     reason: str = Field(..., max_length=500, description="Why the canary is being deferred")
     operator_id: str = Field(..., description="Operator fingerprint (from auth)")
+    session_token: str = Field(
+        ...,
+        description="Cryptographic session token (64-char hex SHA256 HMAC, from GET /status or last operation)"
+    )
+    client_nonce: str = Field(
+        ...,
+        description="Client nonce for token binding (prevents replay, min 16 chars)"
+    )
 
     class Config:
         extra = "forbid"
@@ -112,9 +151,21 @@ class DeferResponse(BaseModel):
 
 
 class PauseRequest(BaseModel):
-    """Request to pause autonomous skill forge entirely."""
+    """Request to pause autonomous skill forge entirely.
+
+    CRITICAL SECURITY (ADR-XXXX): All mutation requests must include a cryptographically-bound
+    session token to prevent operator ID spoofing via HTTP headers (User-Agent, X-Forwarded-For).
+    """
     operator_id: str = Field(..., description="Operator fingerprint (from auth)")
     reason: str = Field(..., max_length=500, description="Why autonomous forge is being paused")
+    session_token: str = Field(
+        ...,
+        description="Cryptographic session token (64-char hex SHA256 HMAC, from GET /status or last operation)"
+    )
+    client_nonce: str = Field(
+        ...,
+        description="Client nonce for token binding (prevents replay, min 16 chars)"
+    )
 
     class Config:
         extra = "forbid"
@@ -137,8 +188,20 @@ class PauseResponse(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    """Request to resume autonomous skill forge."""
+    """Request to resume autonomous skill forge.
+
+    CRITICAL SECURITY (ADR-XXXX): All mutation requests must include a cryptographically-bound
+    session token to prevent operator ID spoofing via HTTP headers (User-Agent, X-Forwarded-For).
+    """
     operator_id: str = Field(..., description="Operator fingerprint (from auth)")
+    session_token: str = Field(
+        ...,
+        description="Cryptographic session token (64-char hex SHA256 HMAC, from GET /status or last operation)"
+    )
+    client_nonce: str = Field(
+        ...,
+        description="Client nonce for token binding (prevents replay, min 16 chars)"
+    )
 
     class Config:
         extra = "forbid"
@@ -161,10 +224,22 @@ class ResumeResponse(BaseModel):
 
 
 class RollbackRequest(BaseModel):
-    """Request for emergency rollback of a skill."""
+    """Request for emergency rollback of a skill.
+
+    CRITICAL SECURITY (ADR-XXXX): All mutation requests must include a cryptographically-bound
+    session token to prevent operator ID spoofing via HTTP headers (User-Agent, X-Forwarded-For).
+    """
     skill_id: str = Field(..., description="Skill ID to rollback")
     reason: str = Field(..., max_length=500, description="Reason for emergency rollback")
     operator_id: str = Field(..., description="Operator fingerprint (from auth)")
+    session_token: str = Field(
+        ...,
+        description="Cryptographic session token (64-char hex SHA256 HMAC, from GET /status or last operation)"
+    )
+    client_nonce: str = Field(
+        ...,
+        description="Client nonce for token binding (prevents replay, min 16 chars)"
+    )
 
     class Config:
         extra = "forbid"

@@ -4349,6 +4349,23 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
     # Legacy persona fallback
     if not acs_wm and profile:
         acs_wm = profile.get("acs_worker_model", "").strip()
+    # Same normalisation the OS pin tiers get (model_selector.normalise_pin):
+    # the Console persists a worker pin provider-qualified
+    # ("anthropic/claude-opus-5") and the API answers 404 model_not_found for
+    # that string, so an un-normalised pin fails every delegated worker turn.
+    if acs_wm:
+        try:
+            from .model_selector import normalise_pin as _normalise_pin  # noqa: PLC0415
+        except ImportError:
+            try:
+                from model_selector import normalise_pin as _normalise_pin  # type: ignore  # noqa: PLC0415
+            except Exception:  # noqa: BLE001
+                _normalise_pin = None  # type: ignore[assignment]
+        if _normalise_pin is not None:
+            try:
+                acs_wm = _normalise_pin(acs_wm, engine_id) or acs_wm
+            except Exception:  # noqa: BLE001 — normalisation must never be fatal
+                pass
     if acs_wm:
         env["CORVIN_ACS_WORKER_MODEL"] = acs_wm
     else:

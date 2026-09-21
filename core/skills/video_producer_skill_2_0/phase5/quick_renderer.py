@@ -4,11 +4,11 @@ Renders simple ASCII diagrams or SVG graphics quickly (<10s).
 Used when Manim fails or for ultra-fast preview renders.
 """
 
-from dataclasses import dataclass
-from pathlib import Path
+import shutil
 import subprocess
-from typing import Optional
 import tempfile
+from pathlib import Path
+
 from .video_paths import QUICK_OUTPUT, video_dir
 
 
@@ -129,7 +129,6 @@ class QuickRendererWorker:
             output_png = output_dir / "diagram.png"
 
             if png_path.exists():
-                import shutil
                 shutil.copy(png_path, output_png)
 
             return output_png

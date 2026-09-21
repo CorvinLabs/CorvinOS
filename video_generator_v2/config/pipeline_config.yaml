@@ -1,0 +1,121 @@
+# CorvinOS Video Generator v2 Configuration
+# Complete pipeline configuration for all 4 phases
+
+output:
+  directory: /tmp/corvinos_video_v2
+  final_video: corvinos_final.mp4
+  keep_intermediates: true
+
+video:
+  width: 1920
+  height: 1080
+  fps: 25
+  bitrate: 50M
+  crf: 18
+  preset: medium
+  codec: libx264
+
+audio:
+  bitrate: 192k
+  sample_rate: 24000
+  channels: 2
+
+# PowerPoint Slides Configuration
+powerpoint:
+  default_duration_per_slide: 5
+  slides:
+    - name: intro
+      title: CORVINOS
+      subtitle: Next-Generation AI Infrastructure
+      duration: 5
+
+    - name: pillars
+      title: Four Pillars
+      subtitle: Voice • Encryption • Dedup • A2A
+      duration: 5
+
+    - name: architecture
+      title: Architecture
+      subtitle: 36 Security Layers
+      duration: 5
+
+    - name: roadmap
+      title: Roadmap 2024-2026
+      subtitle: Production Ready
+      duration: 5
+
+    - name: closing
+      title: The Future is Here
+      subtitle: CorvinOS Powers Enterprise AI
+      duration: 3
+
+# SVG Diagram Configuration
+svg_diagrams:
+  - name: four_pillars
+    title: Four Pillars of CorvinOS
+    duration: 8
+
+  - name: architecture
+    title: 36-Layer Security Stack
+    duration: 8
+
+  - name: dataflow
+    title: Healthcare Data Flow
+    duration: 8
+
+  - name: timeline
+    title: CorvinOS Roadmap
+    duration: 8
+
+# OpenAI TTS Narration Configuration
+narration:
+  language: de
+  voice: nova
+  speed: 1.0
+  model: tts-1
+
+# Narration segments (German)
+segments:
+  - name: intro
+    text: "Willkommen zu CorvinOS. Die nächste Generation der KI-Infrastruktur, entwickelt für Enterprise-Anforderungen."
+    duration_seconds: 5
+
+  - name: pillars
+    text: "CorvinOS basiert auf vier Säulen: Sprachsteuerung für natürliche Interaktion, Verschlüsselung für Sicherheit, Deduplication für Effizienz, und A2A Bridge für Integration."
+    duration_seconds: 8
+
+  - name: architecture
+    text: "Das System besteht aus 36 Sicherheitsebenen, von der API Gateway über Orchestration, Worker Engine bis zur Audit und Encryption Schicht."
+    duration_seconds: 8
+
+  - name: dataflow
+    text: "Healthcare-Daten fließen durch vollständige Verschlüsselung, HIPAA-Compliance-Checks und sichere Speicherung in unter zehn Millisekunden."
+    duration_seconds: 8
+
+  - name: roadmap
+    text: "CorvinOS wurde 2024 gegründet, wird 2025 Enterprise-Ready, und ist 2026 vollständig produktiv mit allen Sicherheits- und Compliance-Features."
+    duration_seconds: 6
+
+  - name: closing
+    text: "CorvinOS - Die Zukunft der Enterprise AI ist hier. Sicher. Skalierbar. Vertrauenswürdig."
+    duration_seconds: 4
+
+# Color Theme
+colors:
+  primary: "#FFD700"      # Gold
+  secondary: "#FF006E"    # Magenta
+  tertiary: "#00D9FF"     # Cyan
+  accent: "#00F077"       # Green
+  background: "#0f1320"   # Navy
+
+# Performance Configuration
+performance:
+  parallel_phases: false
+  max_threads: 2
+  gpu_acceleration: false
+
+# Logging Configuration
+logging:
+  level: INFO
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+  file: "logs/pipeline.log"

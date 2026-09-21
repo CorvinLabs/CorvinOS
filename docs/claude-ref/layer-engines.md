@@ -3033,6 +3033,62 @@ went, its caller and its docs stayed.
 | ~5 000 words | complex 0.90 | `claude-opus-5` |
 | `"Design a complex distributed architecture"` | complex 0.70 (keyword only) | abstain → Tier 3 → `claude-sonnet-5` |
 
+### The pin tiers normalise too — the 2026-09-21 404 (follow-up to cause 4)
+
+Cause 4 above was fixed for Tier 2.9 by routing the classifier's answer through
+`resolve_registry_id()`. The PIN tiers were not touched, and on 2026-09-21 that
+became the whole system's failure mode: at 00:05 a Console save wrote
+
+```yaml
+spec:
+  engine_models:
+    claude_code:
+      os_model: anthropic/claude-haiku-4-5-20251001
+      worker_model: anthropic/claude-opus-5
+```
+
+Tier 2.5 returns that string verbatim, the bridge passes it as `--model`, and
+the API answers `404 model_not_found`. From 00:09 every Discord message got
+"Claude API call failed: 404". The signature in the journal is distinctive and
+worth recognising:
+
+| field | value | why it matters |
+|---|---|---|
+| `duration_api_ms` | `0` | the request was rejected before inference — not a timeout, not a rate limit |
+| `modelUsage` | `{}` | nothing was billed; a cost panel shows the surface as idle, not as failing |
+| `total_cost_usd` | `0` | same |
+| `terminal_reason` | `api_error` | |
+| CLI `error` | `"404"` alone | `_enrich_naked_error` finds no stderr tail on this path, so the journal shows a naked code and the human-readable cause (`"There's an issue with the selected model (anthropic/…)"`, `error: model_not_found`) lives ONLY in the session transcript under `~/.claude/projects/<slug>/<session_id>.jsonl` |
+
+That last row is the practical lesson: on a naked `404`/`400` from the bridge,
+read the session transcript, not the journal — `apiErrorStatus` and the
+message text are there in full.
+
+`model_selector.normalise_pin(model, engine_id)` is the shared guard, applied
+at Tiers 1, 2, 1.5, 2.5 and 2.7, and it is deliberately **not** fail-closed:
+
+1. `resolve_registry_id` — strips `provider/` AND maps a family id onto the
+   dated snapshot.
+2. otherwise strip a `provider/` prefix anyway — an unreadable registry must
+   not turn an operator pin into a guaranteed 404.
+3. otherwise verbatim — `sonnet`, `opusplan` and a brand-new snapshot are CLI
+   aliases this process cannot verify and has no business dropping. Dropping a
+   pin substitutes a different model in silence, which is the defect the Models
+   console already had.
+
+Same normalisation on the worker side (`CORVIN_ACS_WORKER_MODEL` in
+`adapter.py`, the `worker_model` lookup in `corvin_gateway/dispatcher.py` —
+there an un-normalised pin failed `_model_is_available` and the operator's Opus
+choice was silently replaced by the engine default), and on the WRITE side:
+`PUT /v1/console/settings/engine` normalises Claude-native pins before the YAML
+is written, so the value read back in the console is the value that runs. A
+platform provider (Bedrock/Vertex/Foundry) is left alone — it declares its own
+id spelling.
+
+Guards: `tests/e2e/test_os_model_three_tier_adr0952_e2e.py::TestAPinNeverReachesTheCLIProviderQualified`
+and `core/console/tests/test_engine_setting_pins.py::test_put_stores_a_provider_qualified_pin_bare`.
+Both were confirmed red with the normalisation disabled before being kept.
+
 **Admission is per verdict, not one scalar.** The classifier's "confidence" is
 four literal constants on four branches of a deterministic rule tree, not a
 probability; one threshold across them conflates two questions. Admitting

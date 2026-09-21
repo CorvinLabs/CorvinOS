@@ -349,6 +349,7 @@ def put_engine_setting(
             providers = {}
             known_providers = set()
         for eid, cfg in body.engine_models.items():
+            _normalise_claude_native_pins(eid, cfg)
             _validate_pins(_rec, eid, cfg, providers)
             if cfg.provider is not None and known_providers and cfg.provider not in known_providers:
                 console_audit.action_failed(
@@ -399,6 +400,42 @@ def put_engine_setting(
         engine_models=engine_models,
         compliance_warnings=_assess_model_compliance(engine_models, _rec.tenant_id),
     )
+
+
+def _normalise_claude_native_pins(eid: str, cfg: "EngineModelConfig") -> None:
+    """Store a Claude-native pin in the form the CLI accepts, in place.
+
+    The Routing tab offers model ids as the catalogue spells them, which for
+    the Anthropic entry is PROVIDER-QUALIFIED
+    (``anthropic/claude-haiku-4-5-20251001``). Written into
+    ``spec.engine_models.claude_code.os_model`` verbatim, that string reaches
+    ``--model`` and the API answers ``404 model_not_found``: on 2026-09-21
+    every Discord turn returned "Claude API call failed: 404" from 00:05, the
+    minute the pin was saved, until the pin was rewritten.
+
+    ``model_selector.normalise_pin`` (the reader-side guard) makes a stored
+    prefix harmless; this makes sure one is not stored in the first place, so
+    the value an operator reads back in the console is the value that runs.
+    Only the Claude-native path is touched — a platform provider
+    (Bedrock/Vertex/Foundry) declares its own id spelling and
+    ``_validate_pins`` already accepts those as given.
+    """
+    if cfg.provider not in (None, "anthropic"):
+        return
+    try:
+        from model_selector import normalise_pin  # type: ignore[import]  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — bridges subtree absent (unit sandbox)
+        return
+    for role in ("os_model", "worker_model"):
+        current = getattr(cfg, role, None)
+        if not isinstance(current, str) or not current.strip():
+            continue
+        try:
+            cleaned = normalise_pin(current, eid)
+        except Exception:  # noqa: BLE001 — normalisation is never fatal
+            continue
+        if cleaned and cleaned != current:
+            setattr(cfg, role, cleaned)
 
 
 def _validate_pins(rec, eid: str, cfg: "EngineModelConfig", providers: dict) -> None:

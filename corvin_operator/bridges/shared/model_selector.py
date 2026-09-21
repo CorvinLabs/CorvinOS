@@ -670,6 +670,52 @@ def resolve_registry_id(model: str, engine_id: str) -> str | None:
     return dated[0] if len(dated) == 1 else None
 
 
+def normalise_pin(model: str | None, engine_id: str) -> str | None:
+    """Return an operator pin in the form the CLI actually accepts.
+
+    Every explicit pin tier (1 / 2 / 1.5 / 2.5 / 2.7) used to return whatever
+    string was stored, verbatim. The Console persists a model choice
+    PROVIDER-QUALIFIED (``anthropic/claude-haiku-4-5-20251001`` — that is what
+    Settings -> AI Engines and the Models routing tab write into
+    ``spec.engine_models.<engine>.os_model``), and the Anthropic API has no
+    such model: it answers ``404 model_not_found``, the CLI reports a naked
+    ``404`` with ``duration_api_ms: 0``, and EVERY turn on that surface fails
+    before a token is billed. Measured 2026-09-21 on this install: the bridge
+    answered Discord with "Claude API call failed: 404" on every message from
+    00:09 onwards, with ``os_model: anthropic/claude-haiku-4-5-20251001``
+    written into the tenant YAML at 00:05.
+
+    Tier 2.9 never had this bug because it goes through
+    :func:`resolve_registry_id`. This function gives the pin tiers the same
+    treatment, and is deliberately more forgiving than Tier 2.9's gate: a pin
+    is the operator's explicit instruction, so an id this process cannot
+    verify is passed through rather than dropped.
+
+    Order:
+      1. ``resolve_registry_id`` — strips the ``provider/`` prefix AND maps a
+         family id onto the dated snapshot the registry holds.
+      2. Prefix strip — a ``provider/`` prefix is never valid CLI input, so
+         drop it even when the registry cannot confirm the remainder
+         (an unreadable registry must not turn into a guaranteed 404).
+      3. Verbatim — a bare, unregistered id (``sonnet``, ``opusplan``, a brand
+         new snapshot) stays the operator's business; the CLI validates it.
+    """
+    if not isinstance(model, str):
+        return None
+    model = model.strip()
+    if not model:
+        return None
+    try:
+        registry_id = resolve_registry_id(model, engine_id)
+    except Exception:  # noqa: BLE001 — normalisation must never raise
+        registry_id = None
+    if registry_id:
+        return registry_id
+    if "/" in model:
+        return model.rsplit("/", 1)[-1].strip() or None
+    return model
+
+
 def _warm_classifier() -> None:
     """Import the classifier off the request path, at module import.
 
@@ -889,18 +935,19 @@ def resolve_os_model(
     # Tier 1 — operator-wide kill-switch (wins even over explicit model:)
     override = os_model_override()
     if override:
-        return override
+        return normalise_pin(override, engine_id) or override
 
     # Tier 2 — explicit per-persona / per-chat-profile pin
     profile = profile or {}
     explicit = profile.get("model")
     if isinstance(explicit, str) and explicit.strip():
-        return explicit.strip()
+        return normalise_pin(explicit, engine_id) or explicit.strip()
 
     # Tier 1.5 — per-persona JSON pin (ADR-0123); injected by call_claude_streaming
     persona_os_model = profile.get("_persona_os_model")
     if isinstance(persona_os_model, str) and persona_os_model.strip():
-        return persona_os_model.strip()
+        return (normalise_pin(persona_os_model, engine_id)
+                or persona_os_model.strip())
 
     # Tier 2.5 — per-engine tenant default (ADR-0119)
     try:
@@ -914,7 +961,7 @@ def resolve_os_model(
         try:
             tenant_os_model = get_tenant_engine_model(tenant_id, engine_id, "os_model")
             if tenant_os_model:
-                return tenant_os_model
+                return normalise_pin(tenant_os_model, engine_id) or tenant_os_model
         except Exception:  # noqa: BLE001
             pass
 
@@ -988,6 +1035,7 @@ def resolve_os_model(
                             confidence=conf,
                             fast_chat_enabled=True,
                         )
+                        model = normalise_pin(model, engine_id) or model
                         if model:
                             # ADR-0043 §6: audit every routing decision (BUG#15).
                             # No user-message content — workload/confidence/model only.

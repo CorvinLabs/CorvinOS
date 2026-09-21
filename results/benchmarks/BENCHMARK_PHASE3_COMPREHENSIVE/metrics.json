@@ -1,0 +1,12 @@
+{
+  "phase2_token_savings_pct": 0,
+  "phase3_token_savings_pct": 0,
+  "phase2_latency_improvement_pct": 33.199579733914106,
+  "phase3_latency_improvement_pct": 85.72812321104786,
+  "phase2_quality_accuracy_pct": 90.1,
+  "phase3_quality_accuracy_pct": 93.5,
+  "phase2_edge_case_accuracy_pct": 20.0,
+  "phase3_edge_case_accuracy_pct": 78.0,
+  "judge_high_confidence_accuracy": 90.0,
+  "judge_confidence_mean": 0.5
+}

@@ -879,6 +879,25 @@ dated snapshot (`claude-haiku-4-5-20251001`) behind an exact-match, fail-closed
 test. `resolve_registry_id()` strips the prefix and accepts a dated snapshot
 only when exactly ONE registered id extends the family — never when two do.
 
+**Every PIN tier normalises too, not just Tier 2.9.** Tiers 1 / 2 / 1.5 / 2.5 /
+2.7 used to return the stored string verbatim, and the Console persists an
+operator's choice PROVIDER-QUALIFIED — so a pin saved from Settings → AI
+Engines or the Models routing tab reached `--model` as
+`anthropic/claude-haiku-4-5-20251001` and the API answered `404
+model_not_found`: `duration_api_ms: 0`, `modelUsage: {}`, `terminal_reason:
+api_error`, not one token billed, on EVERY turn of that surface. Measured
+2026-09-21: the Discord bridge answered "Claude API call failed: 404" from the
+minute the pin was written. `model_selector.normalise_pin()` is the shared
+guard, and it is deliberately more forgiving than Tier 2.9's gate — a pin is
+the operator's instruction, so an id this process cannot verify passes through
+(minus a `provider/` prefix, which is never valid CLI input) rather than being
+dropped; dropping it would silently substitute a different model, which is the
+defect the Models console already had. The worker side is the same shape:
+`CORVIN_ACS_WORKER_MODEL` (adapter) and the gateway dispatcher's
+`worker_model` lookup both normalise. `PUT /v1/console/settings/engine` also
+normalises Claude-native pins BEFORE writing the YAML, so what an operator
+reads back is what runs.
+
 **Admission is per verdict, not one scalar.** The classifier's "confidence" is
 four constants on four branches of a rule tree, not a probability. `simple`
 0.85, `medium` 0.60 and measured `complex` 0.90 route; keyword-only `complex`
@@ -898,7 +917,10 @@ a 50%-rate WebSocket-test hang that had been read as flakiness.
 
 **Must NOT do:** wire `task_input` on one surface only · let Tier 2.9 override an
 operator pin · add a routable model without a `_MODEL_RANK` entry · pass a
-provider-qualified or family id to the CLI unresolved · collapse the per-verdict
+provider-qualified or family id to the CLI unresolved · add a pin tier that
+returns its stored string without `normalise_pin()` · make `normalise_pin()`
+fail-closed (a pin it cannot verify is the operator's business, not a drop) ·
+write a provider-qualified pin into the tenant YAML · collapse the per-verdict
 admission table back into one threshold · leave Tier 2.9 outside the autoselect
 kill-switch · import the classifier on the hot path.
 

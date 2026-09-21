@@ -8,12 +8,11 @@ ADR-0741: 3-Tier Animation Architecture (Phase 5.3)
 """
 
 import subprocess
-import json
+import tempfile
+import time
 from pathlib import Path
 from typing import Optional
-import time
-import tempfile
-import shutil
+
 from .video_paths import THREEJS_OUTPUT, video_dir
 
 
@@ -217,20 +216,44 @@ class ThreeJSRenderer:
 </html>"""
 
     def _scene_learning_loop(self, duration_seconds: int) -> str:
-        """Learning Loop: 5-step cycle animation"""
-        return self._scene_maestro_architecture(duration_seconds)  # Placeholder
+        """Learning Loop: 5-step cycle animation
+
+        TODO (M1): Implement dedicated Three.js scene for learning loop visualization.
+        Currently returns maestro architecture as placeholder.
+
+        Expected scene: 5-step cycle with animated transitions (measure → feedback → analyze → optimize → repeat)
+        """
+        return self._scene_maestro_architecture(duration_seconds)
 
     def _scene_audit_chain(self, duration_seconds: int) -> str:
-        """Audit Chain: Hash-linked nodes"""
-        return self._scene_maestro_architecture(duration_seconds)  # Placeholder
+        """Audit Chain: Hash-linked nodes
+
+        TODO (M1): Implement dedicated Three.js scene for audit chain visualization.
+        Currently returns maestro architecture as placeholder.
+
+        Expected scene: Hash-linked nodes with verification flow animations
+        """
+        return self._scene_maestro_architecture(duration_seconds)
 
     def _scene_skill_system(self, duration_seconds: int) -> str:
-        """Skill System: Hierarchical Skills"""
-        return self._scene_maestro_architecture(duration_seconds)  # Placeholder
+        """Skill System: Hierarchical Skills
+
+        TODO (M1): Implement dedicated Three.js scene for skill system visualization.
+        Currently returns maestro architecture as placeholder.
+
+        Expected scene: Hierarchical skill nodes with execution flow
+        """
+        return self._scene_maestro_architecture(duration_seconds)
 
     def _scene_context_flow(self, duration_seconds: int) -> str:
-        """Context Flow: Data movement"""
-        return self._scene_maestro_architecture(duration_seconds)  # Placeholder
+        """Context Flow: Data movement
+
+        TODO (M1): Implement dedicated Three.js scene for context flow visualization.
+        Currently returns maestro architecture as placeholder.
+
+        Expected scene: Data flow through context layers with animated paths
+        """
+        return self._scene_maestro_architecture(duration_seconds)
 
     def _render_via_puppeteer(self, html_scene: str, animation_id: str) -> Optional[Path]:
         """Render Three.js scene via Puppeteer (headless Chrome)"""

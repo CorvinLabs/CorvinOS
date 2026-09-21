@@ -416,3 +416,80 @@ class TestTheDecisionIsAuditable:
         monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
         MS.classify_os_model(COMPLEX_PROMPT, tenant_id="_default")
         assert "Analyse the delegation path" not in chain.read_text()
+
+
+# ── 7. the pin tiers normalise what they return ──────────────────────
+
+
+class TestAPinNeverReachesTheCLIProviderQualified:
+    """Incident 2026-09-21: every Discord turn answered "Claude API call
+    failed: 404".
+
+    The Console writes an operator's model choice into
+    ``spec.engine_models.<engine>.os_model`` PROVIDER-QUALIFIED
+    (``anthropic/claude-haiku-4-5-20251001`` — the same spelling
+    ``model_selection_config.json`` already held, see cause 4 above). Tier 2.5
+    returned that string verbatim, the bridge passed it as ``--model``, and the
+    API answered ``404 model_not_found`` — ``duration_api_ms: 0``,
+    ``modelUsage: {}``, ``terminal_reason: api_error``, so not one turn on that
+    surface produced a token. Tier 2.9 was never affected because it goes
+    through ``resolve_registry_id``; the PIN tiers did not.
+
+    ``normalise_pin`` is deliberately more forgiving than Tier 2.9's gate: a
+    pin is the operator's explicit instruction, so an id this process cannot
+    verify is passed through (minus a prefix that is never valid CLI input)
+    rather than dropped — dropping it would silently replace the operator's
+    choice, which is the failure mode the Models console already had.
+    """
+
+    def test_tier_2_5_normalises_the_provider_qualified_pin(self, tmp_path):
+        with _tenant_home(
+            tmp_path,
+            "spec:\n  engine_models:\n    claude_code:\n"
+            "      os_model: anthropic/claude-haiku-4-5-20251001\n"
+            "      worker_model: anthropic/claude-opus-5\n",
+        ):
+            assert EM.get_tenant_engine_model(
+                "_default", "claude_code", "os_model",
+            ) == "anthropic/claude-haiku-4-5-20251001", "fixture must hold the broken shape"
+            assert MS.resolve_os_model(
+                None, payload_chars=15, tenant_id="_default",
+                task_input="wie schauts aus",
+            ) == "claude-haiku-4-5-20251001"
+
+    def test_an_explicit_profile_pin_is_normalised(self):
+        assert MS.resolve_os_model(
+            {"model": "anthropic/claude-opus-5"}, payload_chars=10,
+            tenant_id="_default",
+        ) == "claude-opus-5"
+
+    def test_a_persona_pin_is_normalised(self):
+        assert MS.resolve_os_model(
+            {"_persona_os_model": "anthropic/claude-sonnet-5"}, payload_chars=10,
+            tenant_id="_default",
+        ) == "claude-sonnet-5"
+
+    def test_the_env_override_is_normalised(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_OS_MODEL_OVERRIDE", "anthropic/claude-opus-5")
+        assert MS.resolve_os_model(
+            None, payload_chars=10, tenant_id="_default") == "claude-opus-5"
+
+    def test_a_family_pin_becomes_the_dated_snapshot_the_cli_accepts(self):
+        assert MS.normalise_pin(
+            "claude-haiku-4-5", "claude_code") == "claude-haiku-4-5-20251001"
+
+    def test_an_unverifiable_bare_pin_stays_the_operators_business(self):
+        # CLI aliases and brand-new snapshots are not in the registry; the CLI
+        # validates them, this function does not second-guess them.
+        for pin in ("sonnet", "opusplan", "claude-sonnet-9-29991231"):
+            assert MS.normalise_pin(pin, "claude_code") == pin, pin
+
+    def test_a_prefix_is_stripped_even_when_the_registry_cannot_confirm(self):
+        # An unreadable / foreign id must not become a GUARANTEED 404: a
+        # `provider/` prefix is never valid CLI input either way.
+        assert MS.normalise_pin("openai/gpt-4-turbo", "claude_code") == "gpt-4-turbo"
+        assert MS.normalise_pin("anthropic/claude-opus-5", "no-such-engine") == "claude-opus-5"
+
+    def test_empty_and_non_string_pins_are_refused(self):
+        for pin in ("", "   ", "anthropic/", None, 5, []):
+            assert MS.normalise_pin(pin, "claude_code") is None, pin

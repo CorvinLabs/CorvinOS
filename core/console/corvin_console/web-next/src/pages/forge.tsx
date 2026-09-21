@@ -12,6 +12,7 @@ import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
 import GraphTab from '@/components/forge/GraphTab';
 import AuditTab from '@/components/forge/AuditTab';
+import AutonomousForgePanel from '@/components/forge/AutonomousForgePanel';
 import { SkillForgePanel } from '@/components/SkillForgePanel';
 import {
   ForgeTool,
@@ -26,7 +27,7 @@ import {
  *  also the default — a tab bar whose leftmost entry is not the one that
  *  opens reads as a bug — so `?tab=` is omitted for it and present for every
  *  other. */
-const FORGE_TABS = ['skill-forge', 'tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
+const FORGE_TABS = ['skill-forge', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
 const DEFAULT_TAB: ForgeTab = 'skill-forge';
@@ -164,7 +165,7 @@ export default function ForgePage() {
         onValueChange={goToTab}
         className="flex-1 flex flex-col"
       >
-        <TabsList className="grid w-full grid-cols-6 mb-4">
+        <TabsList className="grid w-full grid-cols-7 mb-4">
           {/* The ONE place a skill is created (2026-09-20), and the tab this
               page opens on. Two composers over one registry: ADR-0405
               orchestration (describe → watch the phases → read, refine, keep
@@ -176,6 +177,7 @@ export default function ForgePage() {
               panel's library reads. The Skills tab's create dialog was the
               third half-duplicate and now links here. */}
           <TabsTrigger value="skill-forge">Skill Forge</TabsTrigger>
+          <TabsTrigger value="autonomous-forge">Autonomous</TabsTrigger>
           <TabsTrigger value="tools">
             Tools
             <span className="ml-2 text-xs bg-secondary px-2 py-1 rounded">
@@ -200,6 +202,10 @@ export default function ForgePage() {
 
         <TabsContent value="skill-forge" className="flex-1 overflow-y-auto">
           <SkillForgePanel />
+        </TabsContent>
+
+        <TabsContent value="autonomous-forge" className="flex-1 overflow-y-auto">
+          <AutonomousForgePanel />
         </TabsContent>
 
         <TabsContent value="tools" className="flex-1 overflow-y-auto">
