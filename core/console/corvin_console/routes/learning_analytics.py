@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -150,6 +150,11 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
 
     Service returns: {timestamps, health_scores, event_counts}
     Convert to: {points: [{date, health_score, event_count}, ...]}
+
+    Validation:
+    - Timestamps must be ISO format strings (YYYY-MM-DD...)
+    - Scores and counts must be numeric or convertible to numeric
+    - Handles missing/malformed values gracefully
     """
     if not trend_data:
         return HealthTrend(points=[], min_score=0.0, max_score=1.0, avg_score=0.5)
@@ -158,21 +163,50 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
     scores = trend_data.get("health_scores", [])
     counts = trend_data.get("event_counts", [])
 
-    points = [
-        HealthTrendPoint(
-            date=ts[:10] if len(ts) > 10 else ts,  # Extract YYYY-MM-DD from ISO format
-            health_score=float(s),
-            event_count=int(c),
-        )
-        for ts, s, c in zip(timestamps, scores, counts)
-    ]
+    points = []
+    health_scores_valid = []
 
-    health_scores = [float(s) for s in scores]
+    for ts, s, c in zip(timestamps, scores, counts):
+        try:
+            # Extract YYYY-MM-DD from ISO format (validate it's a string)
+            if not isinstance(ts, str):
+                logger.warning(f"Invalid timestamp type {type(ts).__name__}: {ts}")
+                continue
+            date_str = ts[:10] if len(ts) > 10 else ts
+
+            # Validate date format (YYYY-MM-DD)
+            if len(date_str) != 10 or date_str[4] != '-' or date_str[7] != '-':
+                logger.warning(f"Malformed date string: {date_str}")
+                continue
+
+            # Convert scores and counts with error handling
+            try:
+                score_val = float(s)
+            except (TypeError, ValueError):
+                logger.warning(f"Invalid health_score: {s}")
+                score_val = 0.5  # Default to neutral
+
+            try:
+                count_val = int(c)
+            except (TypeError, ValueError):
+                logger.warning(f"Invalid event_count: {c}")
+                count_val = 0  # Default to no events
+
+            points.append(HealthTrendPoint(
+                date=date_str,
+                health_score=score_val,
+                event_count=count_val,
+            ))
+            health_scores_valid.append(score_val)
+        except Exception as exc:
+            logger.error(f"Failed to parse trend point [{ts}, {s}, {c}]: {exc}")
+            continue
+
     return HealthTrend(
         points=points,
-        min_score=min(health_scores) if health_scores else 0.0,
-        max_score=max(health_scores) if health_scores else 1.0,
-        avg_score=sum(health_scores) / len(health_scores) if health_scores else 0.5,
+        min_score=min(health_scores_valid) if health_scores_valid else 0.0,
+        max_score=max(health_scores_valid) if health_scores_valid else 1.0,
+        avg_score=sum(health_scores_valid) / len(health_scores_valid) if health_scores_valid else 0.5,
     )
 
 
@@ -190,7 +224,7 @@ def _get_cached(tenant_id: str, key: str, ttl: int) -> Any | None:
     with _cache_lock:
         if cache_key in _cache:
             data, ts = _cache[cache_key]
-            if (datetime.utcnow() - ts).total_seconds() < ttl:
+            if (datetime.now(timezone.utc) - ts).total_seconds() < ttl:
                 return data
             del _cache[cache_key]
     return None
@@ -199,7 +233,7 @@ def _get_cached(tenant_id: str, key: str, ttl: int) -> Any | None:
 def _set_cached(tenant_id: str, key: str, data: Any) -> None:
     """Cache a value."""
     with _cache_lock:
-        _cache[(tenant_id, key)] = (data, datetime.utcnow())
+        _cache[(tenant_id, key)] = (data, datetime.now(timezone.utc))
 
 
 # ── Backend Integration ────────────────────────────────────────────────────
@@ -212,15 +246,19 @@ def _get_learning_loop_service(tenant_id: str) -> Optional['LearningLoopService'
 
     Returns:
         LearningLoopService instance or None if unavailable
+
+    Note: Returns None (not raises) on ImportError or initialization failure
+    to allow graceful degradation to stub responses (503 Service Unavailable).
     """
     try:
         from core.knowledge_graph.mcp.learning_loop_service import LearningLoopService
         # Pass tenant_id; service resolves path internally
         return LearningLoopService(tenant_id=tenant_id)
     except ImportError:
-        logger.warning("Learning loop service not available; using stub")
+        logger.warning("Learning loop service not available; module not found")
         return None
-    except Exception as e:
+    except (ValueError, OSError) as e:
+        # ValueError: tenant_id invalid; OSError: DB path inaccessible
         logger.warning(f"Failed to initialize learning loop service: {e}")
         return None
 
@@ -230,6 +268,8 @@ async def _get_audit_events(tenant_id: str, loop_id: str, limit: int = 10) -> Li
 
     Queries: learning_event_received, skill_config_updated, outcome_feedback events
     that reference this loop_id.
+
+    Returns: List of audit events, or empty list on error.
     """
     try:
         from forge.security import audit_query
@@ -241,9 +281,46 @@ async def _get_audit_events(tenant_id: str, loop_id: str, limit: int = 10) -> Li
             order="descending",
         )
         return events if events else []
-    except Exception as e:
+    except ImportError:
+        logger.warning("Audit query module not available")
+        return []
+    except (ValueError, RuntimeError) as e:
         logger.error(f"Failed to query audit events: {e}")
         return []
+
+
+def _parse_audit_event_row(event_dict: dict) -> Optional[AuditEventRow]:
+    """Parse an audit event dict into an AuditEventRow with validation.
+
+    Handles missing or malformed timestamp fields gracefully.
+    Returns None if event is unparseable.
+    """
+    try:
+        timestamp_str = event_dict.get("timestamp", "")
+
+        # Validate and parse timestamp
+        if not timestamp_str:
+            logger.warning("Audit event missing timestamp field")
+            return None
+
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Malformed timestamp '{timestamp_str}': {e}")
+            # Use epoch as fallback (not ideal, but better than crashing)
+            timestamp = datetime.fromtimestamp(0, tz=timezone.utc)
+
+        return AuditEventRow(
+            timestamp=timestamp,
+            event_type=event_dict.get("event_type", ""),
+            skill_id=event_dict.get("skill_id"),
+            signal=event_dict.get("signal"),
+            outcome=event_dict.get("outcome"),
+            metadata=event_dict.get("metadata", {}),
+        )
+    except Exception as exc:
+        logger.error(f"Failed to parse audit event: {exc}")
+        return None
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
@@ -397,17 +474,11 @@ async def get_learning_loop_details(
 
         # Get audit events
         events_data = await _get_audit_events(tenant_id, loop_id, limit=10)
-        last_10_events = [
-            AuditEventRow(
-                timestamp=datetime.fromisoformat(e.get("timestamp", "")),
-                event_type=e.get("event_type", ""),
-                skill_id=e.get("skill_id"),
-                signal=e.get("signal"),
-                outcome=e.get("outcome"),
-                metadata=e.get("metadata", {}),
-            )
-            for e in events_data
-        ]
+        last_10_events = []
+        for e in events_data:
+            parsed = _parse_audit_event_row(e)
+            if parsed is not None:
+                last_10_events.append(parsed)
 
         # Generate recommendations
         recommendations = []
@@ -420,10 +491,22 @@ async def get_learning_loop_details(
         if entry.health_score < 0.5:
             recommendations.append("⚡ Low health (<0.5). Optimizer may need tuning.")
 
+        # Compute event_count_30d from audit events
+        # Note: Index only tracks 7d count; 30d requires audit log analysis
+        event_count_30d = 0
+        for evt in events_data:
+            try:
+                evt_ts = datetime.fromisoformat(evt.get("timestamp", ""))
+                if (entry.last_event_ts - evt_ts).days < 30:
+                    event_count_30d += 1
+            except (ValueError, TypeError, AttributeError):
+                # Skip unparseable timestamps
+                pass
+
         loop_detail = LoopDetail(
             loop_id=entry.loop_id,
             plugin_id=entry.plugin_id,
-            skill_id=entry.owner_skill,
+            skill_id=entry.owner_skill,  # Skill ID managing this loop (from manifest)
             status=entry.status,
             health=LoopHealthScore(
                 score=entry.health_score,
@@ -432,9 +515,9 @@ async def get_learning_loop_details(
             ),
             last_event=entry.last_event_ts,
             event_count_7d=entry.event_count_7d,
-            event_count_30d=0,  # Not available in current schema; would require audit query
+            event_count_30d=event_count_30d,  # Computed from audit events
             description=entry.description,
-            owner=entry.owner_skill,
+            owner=entry.owner_skill,  # Same as skill_id; index doesn't track creator separately
             created_at=entry.created_at,
         )
 
@@ -485,17 +568,11 @@ async def get_learning_loop_events(
         total = len(events_data)
         paginated = events_data[offset : offset + limit]
 
-        rows = [
-            AuditEventRow(
-                timestamp=datetime.fromisoformat(e.get("timestamp", "")),
-                event_type=e.get("event_type", ""),
-                skill_id=e.get("skill_id"),
-                signal=e.get("signal"),
-                outcome=e.get("outcome"),
-                metadata=e.get("metadata", {}),
-            )
-            for e in paginated
-        ]
+        rows = []
+        for e in paginated:
+            parsed = _parse_audit_event_row(e)
+            if parsed is not None:
+                rows.append(parsed)
 
         return EventsResponse(
             events=rows,
