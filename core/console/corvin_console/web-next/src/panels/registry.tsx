@@ -23,7 +23,7 @@ import {
   GitHubPage, SyncMonitorPage,
   QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
   DataHubUnifiedPage,
-  OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
+  OTELTelemetryPage, VibeEngineeringPage, ModelsPage, LearningLoopsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -68,6 +68,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   DataHubUnifiedPage,
   OTELTelemetryPage,
   ModelsPage,
+  LearningLoopsPage,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -152,6 +153,8 @@ export const PANELS: ConsolePanel[] = [
   // Replaced engine-config, model-cost-optimizer and model-selection on
   // 2026-09-18; App.tsx redirects the three old paths to its tabs.
   rc("models", "Models", ModelsPage, { nav: { label: "Models", icon: "Brain", group: "intelligence" } }),
+  // ADR-0908 — Learning Loops Dashboard: observability for plugin and skill learning loops.
+  rc("learning-loops", "Learning Loops", LearningLoopsPage, { nav: { label: "Learning Loops", icon: "TrendingUp", group: "intelligence" } }),
   // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);
