@@ -210,7 +210,7 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
 
 import hashlib
 
-_cache = {}  # {(tenant_id, key_hash): (data, timestamp)}
+_cache = {}  # {(tenant_id, key_hash): (data, timestamp, ttl)}
 _cache_lock = threading.Lock()  # Thread-safe cache access
 _CACHE_TTL_LIST = 120  # 2m
 _CACHE_TTL_DETAIL = 300  # 5m
@@ -225,16 +225,18 @@ def _hash_cache_key(plugin_id: Optional[str], skill_id: Optional[str],
     Uses SHA256 hash of normalized parameters instead of string concatenation
     to prevent cache key collisions and parameter injection attacks.
     """
+    # Normalize sort_by first (before including in hash)
+    normalized_sort_by = sort_by or "last_event"
+    if normalized_sort_by not in ("plugin_id", "status", "last_event", "health_score"):
+        normalized_sort_by = "last_event"
+
     # Normalize to strings, replacing None with empty string
     parts = [
         plugin_id or "",
         skill_id or "",
         status or "",
-        sort_by or "",
+        normalized_sort_by,  # Use normalized value in hash
     ]
-    # Validate sort_by is from allowed set (already done in route, but belt-and-braces)
-    if sort_by not in ("plugin_id", "status", "last_event", "health_score"):
-        sort_by = "last_event"
 
     key_str = "|".join(parts)
     return hashlib.sha256(key_str.encode()).hexdigest()
@@ -251,10 +253,16 @@ def _cleanup_expired_cache() -> None:
 
     with _cache_lock:
         expired_keys = []
-        for cache_key, (data, ts) in _cache.items():
-            tenant_id, key_hash = cache_key
-            # Get TTL based on cache key pattern (simplified: use longer TTL)
-            ttl = max(_CACHE_TTL_LIST, _CACHE_TTL_DETAIL)
+        for cache_key, entry in _cache.items():
+            # Entry format: (data, ts, ttl)
+            if len(entry) >= 3:
+                data, ts, ttl = entry[0], entry[1], entry[2]
+            else:
+                # Fallback for old format (shouldn't happen, but defensive)
+                data, ts = entry[0], entry[1]
+                ttl = max(_CACHE_TTL_LIST, _CACHE_TTL_DETAIL)
+
+            # Use per-entry TTL (stored when cached)
             if (now - ts).total_seconds() >= ttl:
                 expired_keys.append(cache_key)
 
@@ -277,23 +285,31 @@ def _get_cached(tenant_id: str, key_hash: str, ttl: int) -> Any | None:
 
     with _cache_lock:
         if cache_key in _cache:
-            data, ts = _cache[cache_key]
-            if (datetime.now(timezone.utc) - ts).total_seconds() < ttl:
+            entry = _cache[cache_key]
+            # Handle both 2-tuple (legacy) and 3-tuple (with TTL) formats
+            if len(entry) >= 3:
+                data, ts, stored_ttl = entry[0], entry[1], entry[2]
+            else:
+                data, ts = entry[0], entry[1]
+                stored_ttl = ttl
+
+            if (datetime.now(timezone.utc) - ts).total_seconds() < stored_ttl:
                 return data
             del _cache[cache_key]
     return None
 
 
-def _set_cached(tenant_id: str, key_hash: str, data: Any) -> None:
+def _set_cached(tenant_id: str, key_hash: str, data: Any, ttl: int) -> None:
     """Cache a value.
 
     Args:
         tenant_id: Tenant identifier
         key_hash: SHA256 hash of cache parameters (from _hash_cache_key)
         data: Data to cache
+        ttl: Time-to-live in seconds (stored with entry for per-entry cleanup)
     """
     with _cache_lock:
-        _cache[(tenant_id, key_hash)] = (data, datetime.now(timezone.utc))
+        _cache[(tenant_id, key_hash)] = (data, datetime.now(timezone.utc), ttl)
 
 
 # ── Backend Integration ────────────────────────────────────────────────────
@@ -474,8 +490,8 @@ async def list_learning_loops(
             timestamp=datetime.now(timezone.utc),
         )
 
-        # Cache (use hashed key)
-        _set_cached(tenant_id, cache_key_hash, response)
+        # Cache (use hashed key with appropriate TTL)
+        _set_cached(tenant_id, cache_key_hash, response, _CACHE_TTL_LIST)
 
         # Audit-log this API call (ADR-0232)
         try:
@@ -604,8 +620,8 @@ async def get_learning_loop_details(
             recommendations=recommendations,
         )
 
-        # Cache (use hashed key)
-        _set_cached(tenant_id, cache_key_hash, response)
+        # Cache (use hashed key with appropriate TTL)
+        _set_cached(tenant_id, cache_key_hash, response, _CACHE_TTL_DETAIL)
 
         # Audit-log this API call (ADR-0232)
         try:
@@ -641,14 +657,20 @@ async def get_learning_loop_events(
     tenant_id = session.tenant_id
 
     try:
-        # Query audit chain
-        events_data = await _get_audit_events(tenant_id, loop_id, limit=limit + offset)
+        # Query audit chain with oversampling to account for filtering loss.
+        # Fetch 5x the requested amount to ensure sufficient results after filtering.
+        # Note: pagination is over filtered results, not total unfiltered results.
+        fetch_limit = max(500, (limit + offset) * 5)
+        events_data = await _get_audit_events(tenant_id, loop_id, limit=fetch_limit)
 
-        # Filter by event_type if specified
+        # Filter by event_type if specified (post-query filtering in Python)
         if event_type:
             events_data = [e for e in events_data if e.get("event_type", "").startswith(event_type)]
 
+        # Calculate total count from filtered results
         total = len(events_data)
+
+        # Slice for pagination (pagination is over filtered results)
         paginated = events_data[offset : offset + limit]
 
         rows = []
