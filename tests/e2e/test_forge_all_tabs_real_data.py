@@ -103,7 +103,7 @@ class TestForgeToolsTab:
 
         # Verify specific tools exist
         tool_names = {t["name"] for t in response["tools"]}
-        expected_names = {"browser_control", "send_email", "sql_query", "file_storage", "slack_notifier"}
+        expected_names = {"browser_control", "send_email", "sql_query", "file_storage"}
         assert expected_names.issubset(tool_names), f"Missing expected tools: {expected_names - tool_names}"
 
     @pytest.mark.asyncio

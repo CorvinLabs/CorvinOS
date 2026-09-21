@@ -1,16 +1,15 @@
 {
   "version": "1.0.0",
   "timestamp": "2026-09-21T18:08:00.000000",
-  "total_plugins": 2,
+  "total_plugins": 1,
   "categories": {
-    "Observability": 1,
-    "Integration": 1
+    "Observability": 1
   },
   "stats": {
     "buildin_plugins": 1,
-    "community_plugins": 1,
-    "total_installs": 3680,
-    "avg_rating": 4.5
+    "community_plugins": 0,
+    "total_installs": 2789,
+    "avg_rating": 4.6
   },
   "plugins": [
     {
@@ -24,19 +23,6 @@
       "boot_layer": "bundled",
       "rating": 4.6,
       "installs": 2789
-    },
-    {
-      "id": "nlp-toolkit",
-      "name": "NLP Toolkit",
-      "category": "Integration",
-      "version": "0.5.0",
-      "author": "Community",
-      "description": "Advanced NLP processing, sentiment analysis, entity extraction",
-      "tier": "contributor",
-      "boot_layer": "installed",
-      "rating": 4.4,
-      "installs": 891,
-      "github": "https://github.com/community/corvin-nlp-toolkit"
     }
   ]
 }

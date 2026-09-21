@@ -26,20 +26,7 @@ def generate_marketplace_index():
             "rating": 4.6,
             "installs": 2789,
         },
-        # Community Plugins (1)
-        {
-            "id": "nlp-toolkit",
-            "name": "NLP Toolkit",
-            "category": "Integration",
-            "version": "0.5.0",
-            "author": "Community",
-            "description": "Advanced NLP processing, sentiment analysis, entity extraction",
-            "tier": "contributor",
-            "boot_layer": "installed",
-            "rating": 4.4,
-            "installs": 891,
-            "github": "https://github.com/community/corvin-nlp-toolkit",
-        },
+        # Community Plugins are now managed via Corvin-Marketplace only
     ]
     
     index = {
@@ -48,11 +35,10 @@ def generate_marketplace_index():
         "total_plugins": len(plugins),
         "categories": {
             "Observability": 1,
-            "Integration": 1,
         },
         "stats": {
             "buildin_plugins": 1,
-            "community_plugins": 1,
+            "community_plugins": 0,
             "total_installs": sum(p.get("installs", 0) for p in plugins),
             "avg_rating": round(sum(p.get("rating", 0) for p in plugins) / len(plugins), 2),
         },
