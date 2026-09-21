@@ -235,7 +235,7 @@ class EventStore:
     # ── write ───────────────────────────────────────────────────────────
 
     async def write_event(self, event: LearningEvent, tenant_id: str) -> str:
-        """Write event to the audit chain, then to disk.
+        """Write event to the audit chain, then to disk, then update KG index.
 
         Args:
             event: Learning event to persist
@@ -275,7 +275,52 @@ class EventStore:
         with open(events_file, "a") as f:
             f.write(json.dumps(event_dict) + "\n")
 
+        # 3. Update KG index (SECOND, async-safe; never blocks on failure)
+        # ADR-0907 Stream 2.2: Auto-Indexing Hook
+        await self._update_kg_index(event, tenant_id)
+
         return audit_ref
+
+    async def _update_kg_index(self, event: LearningEvent, tenant_id: str) -> None:
+        """Update KG learning loop index on event (non-blocking, async-safe).
+
+        This is called AFTER audit chain + disk write are committed. It attempts
+        to update the learning loop index but failures never block or propagate.
+
+        Args:
+            event: Learning event
+            tenant_id: Tenant ID
+        """
+        try:
+            # Extract loop identifiers from event (if present)
+            plugin_id = getattr(event, "plugin_id", None)
+            loop_id = getattr(event, "learning_loop_id", None)
+
+            if not plugin_id or not loop_id:
+                # Events without learning_loop_id are skipped (no-op)
+                return
+
+            # Get or create the index hook for this tenant
+            from core.learning.index_update_hook import get_index_update_hook
+
+            hook = get_index_update_hook(tenant_id)
+            if hook is None:
+                logger.warning(f"Index hook unavailable for {tenant_id}; skipping update")
+                return
+
+            # Update the index (non-blocking)
+            feedback_signal = getattr(event, "feedback_value", None)
+            event_type = event.event_type.value if hasattr(event, "event_type") else None
+            await hook.update_on_event(
+                tenant_id=tenant_id,
+                plugin_id=plugin_id,
+                loop_id=loop_id,
+                feedback_signal=feedback_signal,
+                event_type=event_type,
+            )
+        except Exception as exc:
+            # Log but never raise - index update is async and must not block
+            logger.error(f"KG index update failed: {exc}", exc_info=False)
 
     # ── read ────────────────────────────────────────────────────────────
 
