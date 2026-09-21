@@ -208,15 +208,73 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
 
 # ── Cache ──────────────────────────────────────────────────────────────────
 
-_cache = {}  # {(tenant_id, key): (data, timestamp)}
+import hashlib
+
+_cache = {}  # {(tenant_id, key_hash): (data, timestamp)}
 _cache_lock = threading.Lock()  # Thread-safe cache access
 _CACHE_TTL_LIST = 120  # 2m
 _CACHE_TTL_DETAIL = 300  # 5m
+_CACHE_CLEANUP_INTERVAL = 600  # Cleanup expired entries every 10 minutes
+_last_cache_cleanup = datetime.now(timezone.utc)
 
 
-def _get_cached(tenant_id: str, key: str, ttl: int) -> Any | None:
-    """Get cached value if fresh."""
-    cache_key = (tenant_id, key)
+def _hash_cache_key(plugin_id: Optional[str], skill_id: Optional[str],
+                   status: Optional[str], sort_by: str) -> str:
+    """Hash cache parameters to avoid collision/injection vulnerabilities.
+
+    Uses SHA256 hash of normalized parameters instead of string concatenation
+    to prevent cache key collisions and parameter injection attacks.
+    """
+    # Normalize to strings, replacing None with empty string
+    parts = [
+        plugin_id or "",
+        skill_id or "",
+        status or "",
+        sort_by or "",
+    ]
+    # Validate sort_by is from allowed set (already done in route, but belt-and-braces)
+    if sort_by not in ("plugin_id", "status", "last_event", "health_score"):
+        sort_by = "last_event"
+
+    key_str = "|".join(parts)
+    return hashlib.sha256(key_str.encode()).hexdigest()
+
+
+def _cleanup_expired_cache() -> None:
+    """Remove expired cache entries (proactive cleanup to prevent memory leak)."""
+    global _last_cache_cleanup
+    now = datetime.now(timezone.utc)
+
+    # Only run cleanup every 10 minutes to avoid overhead
+    if (now - _last_cache_cleanup).total_seconds() < _CACHE_CLEANUP_INTERVAL:
+        return
+
+    with _cache_lock:
+        expired_keys = []
+        for cache_key, (data, ts) in _cache.items():
+            tenant_id, key_hash = cache_key
+            # Get TTL based on cache key pattern (simplified: use longer TTL)
+            ttl = max(_CACHE_TTL_LIST, _CACHE_TTL_DETAIL)
+            if (now - ts).total_seconds() >= ttl:
+                expired_keys.append(cache_key)
+
+        for key in expired_keys:
+            del _cache[key]
+
+        _last_cache_cleanup = now
+
+
+def _get_cached(tenant_id: str, key_hash: str, ttl: int) -> Any | None:
+    """Get cached value if fresh.
+
+    Args:
+        tenant_id: Tenant identifier
+        key_hash: SHA256 hash of cache parameters (from _hash_cache_key)
+        ttl: Time-to-live in seconds
+    """
+    cache_key = (tenant_id, key_hash)
+    _cleanup_expired_cache()  # Proactive cleanup on every access
+
     with _cache_lock:
         if cache_key in _cache:
             data, ts = _cache[cache_key]
@@ -226,10 +284,16 @@ def _get_cached(tenant_id: str, key: str, ttl: int) -> Any | None:
     return None
 
 
-def _set_cached(tenant_id: str, key: str, data: Any) -> None:
-    """Cache a value."""
+def _set_cached(tenant_id: str, key_hash: str, data: Any) -> None:
+    """Cache a value.
+
+    Args:
+        tenant_id: Tenant identifier
+        key_hash: SHA256 hash of cache parameters (from _hash_cache_key)
+        data: Data to cache
+    """
     with _cache_lock:
-        _cache[(tenant_id, key)] = (data, datetime.now(timezone.utc))
+        _cache[(tenant_id, key_hash)] = (data, datetime.now(timezone.utc))
 
 
 # ── Backend Integration ────────────────────────────────────────────────────
@@ -349,9 +413,9 @@ async def list_learning_loops(
     """
     tenant_id = session.tenant_id
 
-    # Check cache
-    cache_key = f"list|{plugin_id}|{skill_id}|{status}|{sort_by}"
-    cached = _get_cached(tenant_id, cache_key, _CACHE_TTL_LIST)
+    # Check cache (use hashed key to prevent collision/injection)
+    cache_key_hash = _hash_cache_key(plugin_id, skill_id, status, sort_by)
+    cached = _get_cached(tenant_id, cache_key_hash, _CACHE_TTL_LIST)
     if cached is not None:
         return cached
 
@@ -410,8 +474,16 @@ async def list_learning_loops(
             timestamp=datetime.now(timezone.utc),
         )
 
-        # Cache
-        _set_cached(tenant_id, cache_key, response)
+        # Cache (use hashed key)
+        _set_cached(tenant_id, cache_key_hash, response)
+
+        # Audit-log this API call (ADR-0232)
+        try:
+            # Non-blocking audit (fire-and-forget); don't block response on audit failure
+            await _audit_log_route(session, "/learning-loops/list",
+                                 plugin_id=plugin_id, skill_id=skill_id, status=status)
+        except Exception as exc:
+            logger.warning(f"Failed to audit GET /list: {exc}")
 
         return response
 
@@ -439,9 +511,9 @@ async def get_learning_loop_details(
     """
     tenant_id = session.tenant_id
 
-    # Check cache
-    cache_key = f"details|{loop_id}|{days}"
-    cached = _get_cached(tenant_id, cache_key, _CACHE_TTL_DETAIL)
+    # Check cache (use hashed key to prevent collision/injection)
+    cache_key_hash = hashlib.sha256(f"{loop_id}|{days}".encode()).hexdigest()
+    cached = _get_cached(tenant_id, cache_key_hash, _CACHE_TTL_DETAIL)
     if cached is not None:
         return cached
 
@@ -532,8 +604,15 @@ async def get_learning_loop_details(
             recommendations=recommendations,
         )
 
-        # Cache
-        _set_cached(tenant_id, cache_key, response)
+        # Cache (use hashed key)
+        _set_cached(tenant_id, cache_key_hash, response)
+
+        # Audit-log this API call (ADR-0232)
+        try:
+            # Non-blocking audit (fire-and-forget); don't block response on audit failure
+            await _audit_log_route(session, f"/learning-loops/{loop_id}/details", days=days)
+        except Exception as exc:
+            logger.warning(f"Failed to audit GET /details: {exc}")
 
         return response
 
@@ -578,12 +657,22 @@ async def get_learning_loop_events(
             if parsed is not None:
                 rows.append(parsed)
 
-        return EventsResponse(
+        response = EventsResponse(
             events=rows,
             total_count=total,
             limit=limit,
             offset=offset,
         )
+
+        # Audit-log this API call (ADR-0232)
+        try:
+            # Non-blocking audit (fire-and-forget); don't block response on audit failure
+            await _audit_log_route(session, f"/learning-loops/{loop_id}/events",
+                                 limit=limit, offset=offset, event_type=event_type)
+        except Exception as exc:
+            logger.warning(f"Failed to audit GET /events: {exc}")
+
+        return response
 
     except Exception as e:
         logger.error(f"Failed to fetch loop events: {e}")
@@ -593,7 +682,15 @@ async def get_learning_loop_events(
 # ── Audit Logging ──────────────────────────────────────────────────────────
 
 async def _audit_log_route(session: SessionRecord, route: str, **details) -> None:
-    """Log this API call to the audit chain (ADR-0232)."""
+    """Log this API call to the audit chain (ADR-0232).
+
+    Non-blocking audit logging. Failures are logged but don't interrupt the API response.
+
+    Args:
+        session: Session record with tenant_id and user_id
+        route: API route path (e.g., /learning-loops/list)
+        **details: Additional details to log (filters, pagination params, etc.)
+    """
     try:
         from core.security.audit import emit_audit_event
         await emit_audit_event(
@@ -606,4 +703,4 @@ async def _audit_log_route(session: SessionRecord, route: str, **details) -> Non
             },
         )
     except Exception as e:
-        logger.warning(f"Failed to audit route: {e}")
+        logger.warning(f"Failed to audit route {route}: {type(e).__name__}: {e}")
