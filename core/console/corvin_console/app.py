@@ -130,6 +130,7 @@ from .routes import (
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
+    learning_analytics as learning_analytics_route,
     deprecated_api_metrics as deprecated_api_metrics_route,
     world_map as world_map_route,
     infinite_session_api as infinite_session_route,
@@ -252,6 +253,7 @@ router.include_router(phase3_monitor_route.router, tags=["console-phase3-monitor
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
+router.include_router(learning_analytics_route.router, tags=["console-learning-analytics"])
 # TRACK I — DataHub Creator (6-phase project workspace with skill metrics + learning visualization)
 router.include_router(datahub_creator_route.router, tags=["console-datahub-creator"])
 router.include_router(features_phase2_route.router, tags=["console-phase2-features"])
