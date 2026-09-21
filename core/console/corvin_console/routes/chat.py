@@ -595,6 +595,17 @@ async def chat_stream(
                     "(tool result or file content exceeded 8 MB). Try a shorter request or "
                     "avoid reading very large files in one shot."
                 )
+            elif isinstance(_exc, tm_module.QuotaExceededError):
+                # NOT "unexpected": the per-chat concurrency cap is a designed,
+                # actionable condition, and the catch-all wording actively
+                # misdirected — an operator whose chat had accumulated five
+                # orphaned `running` tasks (2026-09-21) read "unexpected" and
+                # went looking for a crash. The exception text is a bare count,
+                # no user content, so it is safe to show verbatim.
+                _user_msg = (
+                    f"This chat already has too many turns running at once ({_exc_msg}). "
+                    "Wait for them to finish, or open a new chat."
+                )
             else:
                 _user_msg = f"The turn failed unexpectedly ({_exc_type}). Check server logs for details."
             with contextlib.suppress(Exception):

@@ -395,7 +395,7 @@ pubsub.subscriber_count("_default")  # Active WebSocket connections
 | Pub/sub queue size | 1000 events | Per tenant, backpressure drops slow subscribers |
 | Task result cap | 64 MB | Same as Forge output |
 
-### Stuck-task recovery (two complementary mechanisms)
+### Stuck-task recovery (three complementary mechanisms)
 
 A task killed mid-run (process SIGKILL / `bridge.sh restart`) never writes a
 terminal event and is stuck on `running` — which also counts against the
@@ -421,6 +421,97 @@ Two layers clean this up:
   subprocess; the delegation path runs inline and records no engine pid (a
   console restart there is a genuine orphan). The adapter `main()` runs the
   reaper once per boot across all tenants/chats (logged as `task-reaper: …`).
+
+**EVERY host reaps, not just the bridge (2026-09-21).** Until this date the sweep
+had exactly one caller — `adapter.py`'s boot — so an install that never started a
+messenger bridge never reaped at all. On a console-only install that is not a slow
+leak but a **permanently dead chat**: nothing moves a task out of `running` except
+a terminal event or this sweep, so every console restart mid-turn leaks one, and
+the fifth leak reaches `max_concurrent=5` and makes every subsequent turn raise
+`QuotaExceededError` forever. No restart, cache clear or waiting recovers it,
+because the count is read from `status: "running"` in the on-disk meta, which
+nothing reconciles against reality. Measured on a console-only Windows install:
+5/5 orphans on one web chat, oldest 9.7 h, chat dead — surfacing to the operator
+only as the opaque `chat.py` catch-all "The turn failed unexpectedly
+(QuotaExceededError)".
+
+The sweep therefore lives in `corvin_plugins.bootstrap._reap_stale_tasks()`, called
+from **`boot_platform()`** — the one sequence both shipped hosts provably run
+(`corvin_console.standalone`, `corvin_gateway.app`; pinned by
+`core/plugins/tests/test_boot_platform_call_site.py`). That is the same seam, and
+the same remedy, as the ADR-0232 tripwire, the ACP Skills registry and the
+ADR-0231 health collector — each of which also shipped wired into one host only.
+The adapter keeps its own call: a bridge process is a fourth host and reaps its own
+boot.
+
+Properties that are load-bearing:
+
+- **Boot-only.** `reap_stale_running()` must never run concurrently with active
+  workers — that is how a live task gets a second terminal event. `boot_platform`
+  runs once per process, before it serves.
+- **It inherits the pid liveness gate and must never add its own staleness rule.**
+  An age cutoff layered on top would re-create the 2026-06-17 false-positive on a
+  reparented engine that outlived the restart.
+- **It resolves the tree through `corvin_home()`** (ADR-0007). Hard-wiring
+  `~/.corvin` makes a `CORVIN_HOME` install sweep the wrong subtree and log
+  success while its own chats stay starved.
+- **It is best-effort and swallows everything.** The cost of a failed sweep is a
+  blocked quota; the cost of a fatal one is an install that will not serve.
+- **The "nothing found" log line is indistinguishable from "swept the wrong
+  tree".** Hence `test_the_sweep_honours_corvin_home` carries a positive control:
+  it proves the orphan *was* reapable before asserting the wrong-home sweep
+  returned 0.
+
+**The boot sweep is only half of it — the PRODUCER must finalize too (2026-09-21).**
+Reaping at boot fixes the orphans a dead process left behind. It cannot help while
+the console keeps running for days, and that is where the leak is actually
+produced: a client that vanishes mid-turn. The console's own turn generator
+(`chat_runtime._stream_turn_impl`) records a terminal event on every ordinary exit
+(~25 call sites), and on interruption recorded none — its three
+`(CancelledError, GeneratorExit)` handlers emit the paired ADR-0171 audit end and
+re-raise without touching the task lifecycle, and an interruption earlier than any
+of them (pre-spawn gates, model resolution, context build) reached no handler at
+all. Measured: one mid-turn disconnect → `running=1` at t+30s, event log
+`['task.created', 'task.started']`, forever. Five browser refreshes and the chat is
+dead with no restart involved.
+
+The seam is `chat_runtime.stream_turn`, a thin wrapper whose only job is a
+`finally` calling `_finalize_in_flight_task(sess)`; the impl registers its task in
+`sess.in_flight_task` immediately after `create_task`. Load-bearing properties:
+
+- **`contextlib.aclosing` around the impl.** A bare `async for` delegation leaves
+  closing the inner generator to the garbage collector, so the finalizer could run
+  before the impl's own `finally` (which kills the engine subprocess). Deterministic
+  close also orders the impl's own terminal write FIRST, so it wins.
+- **Idempotent by STATUS, not by bookkeeping.** It writes only while the task is
+  still `running`/`pending`. A "did we already finalize" flag would drift from the
+  meta it guards; double-writing would double-count the turn and re-emit its
+  ADR-0314 outcome — worse than the leak.
+- **`task.cancelled`, not `task.failed`.** An abandoned turn is not a statement
+  about engine quality, and `record_event` deliberately emits no learning outcome
+  for `task.cancelled` (it does for `failed`).
+- **No pid liveness probe here, unlike the boot sweep.** The sweep infers deadness
+  from outside and needs `_task_pid_alive` to avoid finalizing a reparented engine
+  (incident 2026-06-17). The producer KNOWS the turn is over: the consumer is gone,
+  the generator is closing, no further event can reach this task.
+- **Fully synchronous.** It runs inside a `finally` during cancellation, where any
+  `await` re-raises `CancelledError` and skips the write entirely.
+
+Quota exhaustion is also no longer reported as "unexpected": `routes/chat.py` maps
+`QuotaExceededError` to an actionable message naming the count. The catch-all
+wording sent the 2026-09-21 investigation looking for a crash.
+
+Guards: `core/console/tests/test_chat_turn_task_finalized_on_disconnect.py` — real
+WebSocket route + real on-disk `TaskManager`, with the five-disconnect quota
+reproduction, the "no second terminal event on a completed turn" idempotence check,
+and an AST assertion that the impl still registers its task adjacent to
+`create_task` (the one half those WS tests substitute).
+Also `core/plugins/tests/test_stale_task_reaper_call_site.py` — an AST
+assertion that `boot_platform` calls it (a substring search would be satisfied by
+the comment explaining it), ordering after `assert_compliance`, no off switch, and
+a red→green reproduction that builds five orphans at the real
+`tenants/*/sessions/web_*/tasks` path, asserts `check_quota` raises, sweeps, and
+asserts it passes.
 
 ## Testing
 

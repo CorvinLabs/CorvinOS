@@ -600,10 +600,21 @@ The glob covers **all** session directories regardless of bridge type (Discord,
 Telegram, WhatsApp, web, CLI). The reaper is called once per boot, before any
 new task can be created, so there is no TOCTOU race on the status transition.
 
+**This is no longer the only caller (2026-09-21).** Sweeping every session dir is
+not the same as sweeping on every host: an install that never starts a bridge
+never ran this code, and a console-only install then dies permanently on its fifth
+interrupted turn with `QuotaExceededError`. The same sweep now also runs from
+`corvin_plugins.bootstrap._reap_stale_tasks()` via `boot_platform()`, which both
+shipped console hosts call. The adapter keeps this call — a bridge is its own
+process and reaps its own boot. Details and guards:
+[layer-22-task-engine-m2.md](layer-22-task-engine-m2.md) § Stuck-task recovery.
+
 **Must NOT do:**
 - Don't call `reap_stale_running()` during normal operation — it is a boot-only
   sweep and calling it concurrently with active workers would cause double
   terminal events.
+- Don't remove either boot call on the grounds that the other one covers it. They
+  are different processes, and an install may run either without the other.
 
 ---
 
