@@ -159,52 +159,44 @@ async def list_plugins(
     {
       "plugins": [...],
       "count": int,
-      "filtered_by": {"category": str, "tier": str},
-      "marketplace_rollout": {"is_enabled": bool, "is_canary": bool, "percentage": int}
+      "filtered_by": {"category": str, "tier": str}
     }
 
-    **Phase 5.1 Marketplace Rollout (ADR-0892 amendment):**
-    - Community plugins (contributor tier) are only visible when:
-      (1) marketplace_rollout_pct flag is enabled AND
-      (2) this tenant is in the canary group (via canary_percentage_routing)
-    - Otherwise, only buildin tier plugins are returned.
-    - Non-canary tenants see a 200 response with only buildin plugins (no error).
+    **Every indexed plugin is discoverable (2026-09-21).** Discovery used to be
+    gated: contributor-tier entries were dropped unless the
+    ``marketplace_rollout_pct`` flag was on AND the tenant hashed into its
+    canary bucket. The flag ships OFF, so on every ordinary install the
+    marketplace showed 30 builtin plugins and hid all five community ones —
+    which is what an operator reports as "the contributor plugins are missing".
+
+    That gate contradicted the repo's own policy: feature flags are no longer
+    the isolation unit, plugins are (CLAUDE.md, 2026-09-01 — "don't ship feature
+    flags with default-off"; installs activate plugins and control them through
+    the plugin lifecycle). It also gated the wrong thing. Discovery is a
+    read-only listing of a static index; what carries risk is INSTALL, and that
+    path keeps every one of its checks — ``installable``/``install_blocker``
+    below, ``resolve_builtin_dir``, the consent gate and the audit trail. Hiding
+    a row never protected anything; it only made the catalogue lie about its
+    own contents.
+
+    The rollout flag's monitoring endpoints (``/rollout/status``, SLO and
+    circuit-breaker reporting) are untouched — they measure install health,
+    which is a real signal, rather than deciding who may see a list.
     """
     index = _index_manager.get_index()
     plugins = index.get("plugins", [])
 
-    # Phase 5.1: Community Plugin Discovery with staged rollout
-    rollout_enabled = _feature_flags.is_enabled("marketplace_rollout_pct", rec.tenant_id)
-    rollout_pct = 0
-    if rollout_enabled:
-        # Get the percentage from spec.features or default to 10 (canary)
-        spec = _get_tenant_spec(rec.tenant_id)
-        rollout_pct = spec.get("marketplace_rollout_pct", 10)
-
-    is_canary = (
-        rollout_enabled
-        and _feature_flags.canary_percentage_routing(
-            rec.tenant_id, "marketplace_rollout_pct", rollout_pct
-        )
-    )
-
-    # Audit the rollout decision
+    # Audit the discovery (no rollout decision left to record).
     console_audit.system_event(
         tenant_id=rec.tenant_id,
         event="marketplace.discover",
         details={
             "tenant_id": rec.tenant_id,
             "sid_fingerprint": rec.sid_fingerprint,
-            "rollout_enabled": rollout_enabled,
-            "rollout_pct": rollout_pct,
-            "is_canary": is_canary,
-            "visible_tiers": ["buildin", "contributor"] if is_canary else ["buildin"],
+            "indexed_count": len(plugins),
+            "visible_tiers": sorted({p.get("tier") for p in plugins if p.get("tier")}),
         },
     )
-
-    # Apply feature-flag gating: hide community plugins if not in canary
-    if not is_canary:
-        plugins = [p for p in plugins if p.get("tier") != "contributor"]
 
     # Apply filters
     if category:
@@ -232,11 +224,6 @@ async def list_plugins(
         "filtered_by": {
             "category": category,
             "tier": tier,
-        },
-        "marketplace_rollout": {
-            "is_enabled": rollout_enabled,
-            "is_canary": is_canary,
-            "percentage": rollout_pct,
         },
     }
 

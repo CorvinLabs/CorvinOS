@@ -131,8 +131,11 @@ def resolve_builtin_dir(index_id: str) -> Path:
         if (resolved / "plugin.yaml").is_file():
             return resolved
     raise MarketplaceResolveError(
-        f"no local builtin source for {index_id!r} "
-        f"(expected buildin/{category}/{name}/plugin.yaml under the marketplace checkout)"
+        # Name the tier the id actually carries. This message said "buildin"
+        # unconditionally, so a contributor plugin missing its plugin.yaml sent
+        # the reader to a path that never existed for it.
+        f"no local source for {index_id!r} "
+        f"(expected {tier}/{category}/{name}/plugin.yaml under the marketplace checkout)"
     )
 
 

@@ -1286,13 +1286,15 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         id="marketplace_rollout_pct",
         label="Marketplace Staged Rollout (Community Plugin Discovery)",
         description=(
-            "Phase 5.1 Marketplace activation: enable community plugin discovery for staged rollout. "
-            "Off (default): marketplace discovery hidden (builtin plugins only in /app/marketplace). "
-            "On: community plugins visible, routed via canary_percentage_routing() using this flag ID. "
-            "Use percentage flag (0-100) to control rollout: 10% canary → 50% beta → 100% GA. "
-            "SLO gates (ADR-0892 amendment): p99 latency <500ms, error rate <0.1%. Circuit breaker "
-            "engages on breach; auto-recovery after 60s of healthy metrics. Requires E2E monitoring "
-            "and SLO alert integration (Slack, email, or PagerDuty)."
+            "DEPRECATED for discovery (2026-09-21): this flag no longer decides which plugins "
+            "the marketplace lists. It used to hide every contributor-tier entry unless the flag "
+            "was on AND the tenant hashed into its canary bucket — and since it ships OFF, every "
+            "ordinary install saw 30 builtin plugins and none of the community ones, which "
+            "operators reported as missing plugins. Discovery is a read-only listing; install is "
+            "the path that carries risk and keeps all of its checks. "
+            "Still read by the rollout MONITORING endpoints (/marketplace/rollout/status): "
+            "SLO gates p99 <500ms, error rate <0.1%, circuit breaker on breach with auto-recovery "
+            "after 60s healthy. Those measure install health and are unaffected."
         ),
         owner="maintainer",
         target_release="0.12.x",

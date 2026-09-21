@@ -123,9 +123,14 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     # context that does not fit action_performed's fixed vocabulary, so they are
     # emitted through system_event() under their own event_type. Registering them
     # here keeps the strict pre-write gate AND the core writer's floor in sync.
+    # 2026-09-21: the canary discovery gate is gone (every indexed plugin is
+    # listed), so rollout_enabled/rollout_pct/is_canary no longer exist to
+    # record. The allowlist is fail-closed — an emitter that adds a field
+    # without adding it HERE raises AuditFieldNotAllowed and 500s the route,
+    # which is what it did until this entry was updated in the same commit.
     "marketplace.discover": frozenset({
         "tenant_id", "sid_fingerprint",
-        "rollout_enabled", "rollout_pct", "is_canary", "visible_tiers",
+        "indexed_count", "visible_tiers",
     }),
     "marketplace.slo_check": frozenset({
         "tenant_id", "sid_fingerprint",

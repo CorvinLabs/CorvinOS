@@ -955,6 +955,49 @@ AND enabled (`capabilities._plugin_is_enabled`) — a stale
 with nothing behind it — and `get_panel_registry` re-creates its cached
 instance when the tenant home moves.
 
+**Discovery lists every indexed plugin (amendment 2026-09-21).** It used to
+drop every contributor-tier entry unless the `marketplace_rollout_pct` flag was
+enabled AND the tenant hashed into its canary bucket
+(`canary_percentage_routing`). The flag ships OFF, so on every ordinary install
+`/app/marketplace` showed 30 builtin plugins and hid all five community ones —
+reported as "the contributor plugins are missing from the marketplace".
+
+The gate is removed, for two reasons. It contradicted the repo's own policy —
+feature flags are no longer the isolation unit, plugins are, and a flag that
+defaults to off is exactly what that policy forbids. And it gated the wrong
+verb: discovery is a read-only listing of a static index, while INSTALL is what
+changes the install, and that path keeps every check it had (`installable` /
+`install_blocker` on each row, `resolve_builtin_dir`, the consent gate, the
+audit trail). Hiding a row never protected anything; it made the catalogue
+misdescribe its own contents. The flag's MONITORING endpoints
+(`/marketplace/rollout/status`, SLO + circuit breaker) are untouched — they
+measure install health, which is a real signal.
+
+The audit event `marketplace.discover` now carries `indexed_count` +
+`visible_tiers` instead of the three rollout fields. `audit._EVENT_ALLOWLIST` is
+FAIL-CLOSED: the first request after the emitter changed raised
+`AuditFieldNotAllowed` and 500'd the route until the allowlist entry was updated
+in the same commit. Add the field in both places or the route breaks loudly.
+
+**The index is cached for the life of the process.** `_IndexManager.get_index()`
+reads `plugins.json` once and never re-reads it, so regenerating the index does
+not change what the console serves until `corvin-webui` restarts. Worth knowing
+before debugging a "the new plugin isn't showing" report.
+
+**`learning` and `session` joined the contributor tree (2026-09-21).**
+`plugins/learning/user_objectives/` and `plugins/session/device_sync/` sat at
+the wrong depth (`plugins/<name>/<plugin>/`, three levels where the generator
+requires four) and carried pre-ADR-0511 manifests — no `tier`, no
+`distribution`, a `requires` list of core modules where the schema wants plugin
+ids, an `origin`-vocabulary `sla_level`, and free-form tags. They were
+therefore skipped by the generator and invisible everywhere. Both moved to
+`plugins/contributor/<learning|session>/<name>/`, their manifests were completed,
+and each gained the `plugin.yaml` the loader needs — without it
+`resolve_builtin_dir` refuses the install, which is why they first appeared
+listed but not installable. `plugin-schema.json` gained the two categories (as
+`media` and `knowledge_management` were added on 2026-09-20) and `audit_events`,
+which three manifests already carried and were rejected for.
+
 **Knowledge Graph (contributor/knowledge_management/corvin_knowledge, 2026-09-20).**
 The Corvin-Knowledge plugin (branch `add/corvin-knowledge-marketplace-v1.0.0`,
 already merged into the marketplace's `main`) lived at
