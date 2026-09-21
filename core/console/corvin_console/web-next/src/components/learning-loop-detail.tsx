@@ -45,7 +45,7 @@ export const LearningLoopDetail: React.FC<{ loop: LoopEntry }> = ({ loop }) => {
                   {loop.status}
                 </Badge>
               </CardTitle>
-              <p className="text-sm text-gray-600 mt-2">{loop.loop_id}</p>
+              <p className="mt-2 text-sm text-muted-foreground">{loop.loop_id}</p>
             </div>
             <Button variant="outline" size="sm" onClick={exportJSON}>
               <Download className="h-4 w-4 mr-2" />
@@ -56,25 +56,25 @@ export const LearningLoopDetail: React.FC<{ loop: LoopEntry }> = ({ loop }) => {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <p className="text-xs text-gray-500 uppercase">Health</p>
+              <p className="text-xs uppercase text-muted-foreground">Health</p>
               <p className="text-2xl font-bold">{(loop.health.score * 100).toFixed(0)}%</p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase">Last Event</p>
+              <p className="text-xs uppercase text-muted-foreground">Last Event</p>
               <p className="text-sm">{formatTime(loop.last_event)}</p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase">Events (7d)</p>
+              <p className="text-xs uppercase text-muted-foreground">Events (7d)</p>
               <p className="text-2xl font-bold">{loop.event_count_7d}</p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase">Events (30d)</p>
+              <p className="text-xs uppercase text-muted-foreground">Events (30d)</p>
               <p className="text-2xl font-bold">{loop.event_count_30d || 0}</p>
             </div>
           </div>
           {loop.description && (
             <div className="border-t pt-4">
-              <p className="text-xs text-gray-500 uppercase">Description</p>
+              <p className="text-xs uppercase text-muted-foreground">Description</p>
               <p className="text-sm mt-2">{loop.description}</p>
             </div>
           )}
@@ -96,41 +96,44 @@ export const LearningLoopDetail: React.FC<{ loop: LoopEntry }> = ({ loop }) => {
             <CardContent className="pt-6">
               {loading ? (
                 <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               ) : trend ? (
                 <div className="space-y-4">
                   <div className="grid grid-cols-3 gap-4">
                     <div className="border rounded p-4">
-                      <p className="text-xs text-gray-500 uppercase">Min</p>
+                      <p className="text-xs uppercase text-muted-foreground">Min</p>
                       <p className="text-lg font-semibold">{(trend.min_score * 100).toFixed(0)}%</p>
                     </div>
                     <div className="border rounded p-4">
-                      <p className="text-xs text-gray-500 uppercase">Avg</p>
+                      <p className="text-xs uppercase text-muted-foreground">Avg</p>
                       <p className="text-lg font-semibold">{(trend.avg_score * 100).toFixed(0)}%</p>
                     </div>
                     <div className="border rounded p-4">
-                      <p className="text-xs text-gray-500 uppercase">Max</p>
+                      <p className="text-xs uppercase text-muted-foreground">Max</p>
                       <p className="text-lg font-semibold">{(trend.max_score * 100).toFixed(0)}%</p>
                     </div>
                   </div>
 
                   <div className="border rounded p-4">
-                    <p className="text-xs text-gray-500 uppercase mb-3">7-Day Health Trend</p>
+                    <p className="mb-3 text-xs uppercase text-muted-foreground">7-Day Health Trend</p>
                     <div className="flex gap-1 items-end h-24">
                       {trend.points.map((point, i) => {
                         const height = (point.health_score / (trend.max_score || 1)) * 100;
                         return (
                           <div
                             key={i}
-                            className="flex-1 bg-blue-600 rounded-t"
-                            style={{ height: `${Math.max(height, 5)}%` }}
+                            className="flex-1 rounded-t"
+                            style={{
+                              height: `${Math.max(height, 5)}%`,
+                              background: "var(--viz-tier-2)",
+                            }}
                             title={`${point.date}: ${(point.health_score * 100).toFixed(0)}% (${point.event_count} events)`}
                           />
                         );
                       })}
                     </div>
-                    <div className="flex justify-between text-xs text-gray-500 mt-2">
+                    <div className="mt-2 flex justify-between text-xs text-muted-foreground">
                       {trend.points.length > 0 && (
                         <>
                           <span>{trend.points[0].date}</span>
@@ -141,7 +144,7 @@ export const LearningLoopDetail: React.FC<{ loop: LoopEntry }> = ({ loop }) => {
                   </div>
                 </div>
               ) : (
-                <div className="text-gray-500 text-center py-8">No trend data available</div>
+                <div className="py-8 text-center text-sm text-muted-foreground">No trend data available</div>
               )}
             </CardContent>
           </Card>
@@ -152,27 +155,27 @@ export const LearningLoopDetail: React.FC<{ loop: LoopEntry }> = ({ loop }) => {
             <CardContent className="pt-6">
               {loading ? (
                 <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               ) : events && events.length > 0 ? (
                 <div className="space-y-2 max-h-96 overflow-y-auto">
                   {events.map((event, i) => (
-                    <div key={i} className="border rounded p-3 text-sm bg-gray-50">
+                    <div key={i} className="rounded border p-3 text-sm bg-muted/40">
                       <div className="flex justify-between items-start">
                         <div>
                           <p className="font-medium">{event.event_type}</p>
-                          <p className="text-xs text-gray-600">{formatTime(event.timestamp)}</p>
+                          <p className="text-xs text-muted-foreground">{formatTime(event.timestamp)}</p>
                         </div>
                         {event.outcome && <Badge variant="outline">{event.outcome}</Badge>}
                       </div>
                       {event.signal && (
-                        <p className="text-xs text-gray-600 mt-2">Signal: {event.signal}</p>
+                        <p className="mt-2 text-xs text-muted-foreground">Signal: {event.signal}</p>
                       )}
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-gray-500 text-center py-8">No events available</div>
+                <div className="py-8 text-center text-sm text-muted-foreground">No events available</div>
               )}
             </CardContent>
           </Card>

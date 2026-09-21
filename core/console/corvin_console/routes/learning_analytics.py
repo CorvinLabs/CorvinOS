@@ -361,6 +361,72 @@ def _get_learning_loop_service(tenant_id: str) -> Optional['LearningLoopService'
         return None
 
 
+_MANIFEST_SYNC_TTL = 300  # 5 minutes
+_manifest_sync_at: dict[str, datetime] = {}
+_manifest_sync_lock = threading.Lock()
+
+
+def _sync_index_from_manifest(service: 'LearningLoopService', tenant_id: str) -> None:
+    """Reconcile the loop index with the loops declared by installed plugins.
+
+    ADR-0906 makes a plugin's ``learning_loops:`` manifest section the source of
+    truth for WHICH loops exist; the index (ADR-0907) then carries their runtime
+    metrics, updated per event by the hook in
+    ``core.learning.event_persistence.EventStore._update_kg_index``. Nothing
+    registered a loop in the first place, so that hook could only ever log
+    "index entry not found" and the panel showed an empty list.
+
+    ``ManifestRefreshService`` was written for this job but polls
+    ``/v1/console/capabilities/manifest`` over HTTP with aiohttp and has no
+    production caller — a console process issuing an authenticated request to
+    itself to read data it can compute in-process. ``_get_learning_loops()`` is
+    that same computation as a plain function, so this calls it directly: no
+    socket, no session cookie, no optional dependency.
+
+    Additive plus archival: a loop whose plugin no longer declares it is
+    archived (audited by the service), never silently dropped. Failures are
+    logged and swallowed — a stale index degrades the panel, an exception
+    would take the route down.
+    """
+    now = datetime.now(timezone.utc)
+    with _manifest_sync_lock:
+        last = _manifest_sync_at.get(tenant_id)
+        if last is not None and (now - last).total_seconds() < _MANIFEST_SYNC_TTL:
+            return
+        _manifest_sync_at[tenant_id] = now
+
+    try:
+        from .capabilities import _get_learning_loops
+
+        declared = {
+            (d["plugin_id"], d["loop_id"]): d
+            for d in _get_learning_loops(tenant_id)
+        }
+        indexed = {(e.plugin_id, e.loop_id) for e in service.list_loops()}
+
+        for key, d in declared.items():
+            if key in indexed:
+                continue
+            service.insert_from_manifest(
+                plugin_id=d["plugin_id"],
+                loop_id=d["loop_id"],
+                description=d.get("description", ""),
+                event_source=d.get("event_source", ""),
+                feedback_types=d.get("feedback_types", []),
+                aggregation=d.get("aggregation", "rolling_mean_7d"),
+                health_threshold=d.get("health_threshold"),
+                dormancy_alert_hours=d.get("dormancy_alert_hours", 24),
+                owner_skill=d.get("owner_skill"),
+            )
+            logger.info("Indexed learning loop %s:%s", *key)
+
+        for plugin_id, loop_id in indexed - set(declared):
+            service.archive_loop(plugin_id, loop_id)
+            logger.info("Archived learning loop %s:%s", plugin_id, loop_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Learning loop manifest sync failed: %s", exc)
+
+
 async def _get_audit_events(tenant_id: str, loop_id: str, limit: int = 10) -> List[dict]:
     """Fetch audit events for a loop from the core audit chain.
 
@@ -463,6 +529,9 @@ async def list_learning_loops(
     service = _get_learning_loop_service(tenant_id)
     if service is None:
         raise HTTPException(status_code=503, detail="Learning loop service not available")
+
+    # Pick up loops declared by plugins installed since the last sync (ADR-0906).
+    _sync_index_from_manifest(service, tenant_id)
 
     try:
         # Query backend (Phase 2) — tenant_id already scoped in service instance

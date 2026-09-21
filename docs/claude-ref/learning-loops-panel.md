@@ -4,7 +4,14 @@ Monitor plugin and skill learning loop health, events, and trends in real-time.
 
 ## Navigation
 
-**Path:** `/app/learning-loops` | **Group:** Assistant | **Icon:** TrendingUp
+**URL:** `http://<host>:8765/console/app/learning-loops` | **Group:** Assistant | **Icon:** TrendingUp
+
+The console SPA is mounted under `/console/`, so the bare `/app/learning-loops`
+is a 404 on the host — that is the router path inside the SPA, not a server
+route. The panel needs BOTH registrations to be reachable: `PANELS`
+(`web-next/src/panels/registry.tsx`) mounts the route, `NAV_GROUPS`
+(`web-next/src/components/layout.tsx`) draws the sidebar entry.
+`tests/unit/panel-nav-wiring.test.ts` keeps the two in sync.
 
 ## Overview
 
@@ -46,7 +53,39 @@ A learning loop (declared by a plugin via `learning_loops:` manifest field) repr
 
 ### Real-Time Updates
 
-Dashboard polls `/v1/console/learning-loops/list` every 2 minutes. Details are fetched on-demand. WebSocket updates (future) will push live changes without polling.
+The panel polls `/v1/console/learning-loops/list` every 2 minutes; details are
+fetched on demand. There is no WebSocket feed: `use-websocket-loop-updates.ts`
+exists but points at `/v1/console/learning-loops/{id}/updates`, a route the
+backend does not define, and nothing imports the hook. Wire the route before
+wiring the hook.
+
+### Where the rows come from
+
+Loops are declared by installed plugins (`learning_loops:` in the manifest,
+ADR-0906) and indexed per tenant (ADR-0907). The `/list` route reconciles the
+index against the installed plugins in-process on each call, at most once every
+five minutes — it calls `capabilities._get_learning_loops()` directly rather
+than issuing an authenticated HTTP request to its own manifest endpoint.
+New loops are added, loops a plugin no longer declares are archived (audited).
+
+Runtime metrics fill in separately: `EventStore._update_kg_index`
+(`core/learning/event_persistence.py`) updates a loop's health score, event
+count and status for every learning event carrying both `plugin_id` and
+`learning_loop_id`. An event without those is a no-op, and an event naming a
+loop that is not indexed logs "index entry not found".
+
+**As of 2026-09-21 no installed plugin declares a `learning_loops:` section**,
+so the panel correctly shows an empty state naming that reason. It is not an
+error and not a placeholder for sample data.
+
+### Storage backend
+
+The index is a tenant-scoped key/value store under
+`<tenant_home>/learning_loop_index/`. It runs on **sqlite3 from the standard
+library** by default; plyvel/LevelDB is used only when plyvel happens to be
+installed, so an existing LevelDB directory stays readable. plyvel is in no
+requirements file and is not installable on the Windows releases — requiring it
+is what made every install answer 503.
 
 ## Status States
 
@@ -72,18 +111,24 @@ Events in the audit log represent:
 **Health declining (↓):** negative feedback accumulating; parameter tuning may be failing.  
 **Health flat (→):** stable state; loop converged or no new feedback.
 
-## Dark Mode
+## Colour
 
-All colors adapt to light/dark theme:
-- Status badges: green (active), yellow (dormant), orange (stale), red (degrading)
-- Health bars: emerald (good), amber (fair), rose (poor)
-- Trend arrows: green (up), red (down), gray (flat)
+The console is `data-theme` driven, so every colour carries an explicit dark
+variant; a bare `bg-green-100 text-green-800` renders near-white on dark.
+
+- **Status badges** colour the category by identity (ADR-0761): emerald
+  (active), amber (dormant), orange (stale), red (degrading) — each with a
+  `dark:` pair in `utils/learning-loop-formatting.ts`.
+- **Health bars and the 7-day trend** draw on `var(--viz-tier-2)` over a
+  `bg-muted` track. They encode the value as length; the hue is constant, so
+  the bar does not double-encode its own number.
+- **Trend arrows** are emerald (up) / red (down) / muted (flat), each with a
+  dark variant.
 
 ## Export & Sharing
 
-**Export options** in detail view:
-- **JSON:** full loop state + 100 recent events
-- **CSV:** spreadsheet-compatible event log
+The detail view's **Export** button downloads one JSON file holding the loop
+summary, its 7-day trend and the fetched events. There is no CSV export.
 
 Use exports for:
 - Compliance audits (GDPR Art. 30 — decision history)
@@ -94,8 +139,9 @@ Use exports for:
 
 | Issue | Cause | Fix |
 |---|---|---|
-| No loops displayed | no plugins installed with learning loops | install a plugin with `learning_loops:` declared |
-| "Learning subsystem not available" | core.learning module not available | rebuild console, reinstall package |
+| No loops displayed | no installed plugin declares `learning_loops:` | expected today; add the section to a plugin manifest (ADR-0906) |
+| "Learning subsystem not available" (503) | `LearningLoopService` failed to construct — check `journalctl --user -u corvin-webui` for the import or storage error it logged | fix the underlying import; the route degrades rather than crashing, so the log is the only signal |
+| Panel missing from the sidebar | `NAV_GROUPS` entry absent while `PANELS` has one | add both; `tests/unit/panel-nav-wiring.test.ts` catches it |
 | Health stuck at 0% | loop received no feedback yet | plugin may not emit outcome signals |
 | Events tab empty | loop has no audit events | wait 24h or trigger plugin behavior |
 
@@ -108,4 +154,5 @@ Use exports for:
 
 ---
 
-**Go-Live:** 2026-09-21 | **Last Updated:** 2026-09-21
+**Go-Live:** 2026-09-21 | **Last Updated:** 2026-09-21 (panel wired into the
+sidebar, backend reachability fixed, manifest→index sync wired)

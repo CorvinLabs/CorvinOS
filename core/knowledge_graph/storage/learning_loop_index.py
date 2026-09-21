@@ -1,4 +1,4 @@
-"""Learning Loop Index — LevelDB-backed storage for loop metadata + metrics.
+"""Learning Loop Index — key/value storage for loop metadata + metrics.
 
 This module provides a persistent, tenant-isolated index of learning loops with
 runtime metrics (health score, status, event count). The index is the single
@@ -7,7 +7,8 @@ source of truth for loop metadata and is updated atomically on each learning eve
 Key semantics:
 - Key: `{tenant_id}:{plugin_id}:{loop_id}` (UTF-8 encoded)
 - Value: JSON-serialized LearningLoopIndexEntry
-- ACID semantics via LevelDB
+- ACID semantics via the backing store (sqlite3 by default, LevelDB when
+  plyvel is installed — see the backend section below)
 - Tenant isolation: every operation validates tenant_id
 
 ADR-0907: KG MCP Learning-Loop Index
@@ -19,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Literal, Optional, List
@@ -108,7 +109,7 @@ class LearningLoopCache:
             if key not in self._cache:
                 return None
             entry, cached_at = self._cache[key]
-            age = (datetime.utcnow() - cached_at).total_seconds()
+            age = (datetime.now(timezone.utc) - cached_at).total_seconds()
             if age > self.ttl_seconds:
                 del self._cache[key]
                 return None
@@ -121,7 +122,7 @@ class LearningLoopCache:
                 # Evict oldest
                 oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k][1])
                 del self._cache[oldest_key]
-            self._cache[key] = (entry, datetime.utcnow())
+            self._cache[key] = (entry, datetime.now(timezone.utc))
 
     def clear(self) -> None:
         """Clear all entries."""
@@ -134,11 +135,99 @@ class LearningLoopCache:
             self._cache.pop(key, None)
 
 
-# ── LevelDB Storage ─────────────────────────────────────────────────────────
+# ── Key/value backends ──────────────────────────────────────────────────────
+#
+# The index was written against LevelDB (plyvel). plyvel is a C extension over
+# libleveldb and appears in NO requirements file in this repo; neither the
+# binding nor the system library is present on a stock install, and it is not
+# installable at all on the Windows releases. Every LearningLoopIndexStorage
+# construction therefore raised ImportError, the console route caught it and
+# answered 503 "Learning loop service not available" — which is exactly what
+# /app/learning-loops showed. So the store is backed by sqlite3 from the
+# standard library (ACID, single file, present everywhere) and plyvel is used
+# only when it happens to be installed, keeping existing LevelDB directories
+# readable. Both backends speak the same bytes-in/bytes-out API.
+
+
+class _SqliteKV:
+    """sqlite3-backed ordered key/value store (stdlib, no extra dependency)."""
+
+    def __init__(self, db_path: Path):
+        import sqlite3
+
+        self._sqlite3 = sqlite3
+        self._path = db_path / "index.sqlite3"
+        # check_same_thread=False + an RLock around every call: the console
+        # serves these reads from a threadpool, and one connection guarded by
+        # our own lock is simpler than a per-thread connection pool.
+        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS kv (k BLOB PRIMARY KEY, v BLOB NOT NULL)"
+        )
+        self._conn.commit()
+        self._lock = RLock()
+
+    def put(self, key: bytes, value: bytes) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO kv (k, v) VALUES (?, ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (key, value),
+            )
+            self._conn.commit()
+
+    def get(self, key: bytes) -> Optional[bytes]:
+        with self._lock:
+            row = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def delete(self, key: bytes) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM kv WHERE k = ?", (key,))
+            self._conn.commit()
+
+    def iterator(self, prefix: bytes):
+        """Yield (key, value) for every key starting with `prefix`, key-ordered."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT k, v FROM kv WHERE substr(k, 1, ?) = ? ORDER BY k",
+                (len(prefix), prefix),
+            ).fetchall()
+        return list(rows)
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+
+class _PlyvelKV:
+    """plyvel/LevelDB backend — used only when plyvel is actually installed."""
+
+    def __init__(self, plyvel, db_path: Path):
+        self._db = plyvel.DB(str(db_path), create_if_missing=True)
+
+    def put(self, key: bytes, value: bytes) -> None:
+        self._db.put(key, value)
+
+    def get(self, key: bytes) -> Optional[bytes]:
+        return self._db.get(key)
+
+    def delete(self, key: bytes) -> None:
+        self._db.delete(key)
+
+    def iterator(self, prefix: bytes):
+        return self._db.iterator(prefix=prefix)
+
+    def close(self) -> None:
+        self._db.close()
+
+
+# ── Index storage ───────────────────────────────────────────────────────────
 
 
 class LearningLoopIndexStorage:
-    """Thread-safe LevelDB-backed storage for learning loop index."""
+    """Thread-safe key/value-backed storage for the learning loop index."""
 
     def __init__(self, tenant_id: str, db_path: Optional[Path] = None):
         """Initialize storage.
@@ -162,21 +251,25 @@ class LearningLoopIndexStorage:
         self.db_path = Path(db_path)
         self.db_path.mkdir(parents=True, exist_ok=True)
 
-        # Lazy-load plyvel (LevelDB Python binding)
+        # Backend selection: prefer an existing LevelDB install so a machine
+        # that already has one keeps reading its data; fall back to sqlite3,
+        # which is what every stock install actually runs on.
         try:
-            import plyvel
-
-            self._plyvel = plyvel
+            import plyvel  # noqa: F401
         except ImportError:
-            raise ImportError(
-                "plyvel not installed; run: pip install plyvel (LevelDB binding)"
-            )
+            plyvel = None
 
-        # Open LevelDB handle (auto-create if missing)
         try:
-            self._db = plyvel.DB(str(self.db_path), create_if_missing=True)
+            if plyvel is not None:
+                self._db = _PlyvelKV(plyvel, self.db_path)
+                self.backend = "leveldb"
+            else:
+                self._db = _SqliteKV(self.db_path)
+                self.backend = "sqlite"
         except Exception as exc:
-            raise ValueError(f"Failed to open LevelDB at {self.db_path}: {exc}") from exc
+            raise ValueError(
+                f"Failed to open learning loop index at {self.db_path}: {exc}"
+            ) from exc
 
         # In-memory cache for hot entries
         self._cache = LearningLoopCache()

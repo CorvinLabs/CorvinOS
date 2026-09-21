@@ -40,7 +40,7 @@ export const LearningLoopGrid: React.FC<Props> = ({ loops, loading, onSelect }) 
   if (loading) {
     return (
       <div className="flex justify-center py-8">
-        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -70,37 +70,37 @@ export const LearningLoopGrid: React.FC<Props> = ({ loops, loading, onSelect }) 
         <TableHeader>
           <TableRow>
             <TableHead
-              className="cursor-pointer hover:bg-gray-100"
+              className="cursor-pointer hover:bg-muted"
               onClick={() => setSortBy("plugin_id")}
             >
               Plugin
             </TableHead>
             <TableHead
-              className="cursor-pointer hover:bg-gray-100"
+              className="cursor-pointer hover:bg-muted"
               onClick={() => setSortBy("loop_id")}
             >
               Loop ID
             </TableHead>
             <TableHead
-              className="cursor-pointer hover:bg-gray-100"
+              className="cursor-pointer hover:bg-muted"
               onClick={() => setSortBy("status")}
             >
               Status
             </TableHead>
             <TableHead
-              className="cursor-pointer hover:bg-gray-100"
+              className="cursor-pointer hover:bg-muted"
               onClick={() => setSortBy("last_event")}
             >
               Last Event
             </TableHead>
             <TableHead
-              className="cursor-pointer hover:bg-gray-100"
+              className="cursor-pointer hover:bg-muted"
               onClick={() => setSortBy("event_count_7d")}
             >
               Events/7d
             </TableHead>
             <TableHead
-              className="cursor-pointer hover:bg-gray-100"
+              className="cursor-pointer hover:bg-muted"
               onClick={() => setSortBy("health")}
             >
               Health
@@ -110,9 +110,9 @@ export const LearningLoopGrid: React.FC<Props> = ({ loops, loading, onSelect }) 
         </TableHeader>
         <TableBody>
           {sorted.map((loop) => (
-            <TableRow key={loop.loop_id} className="hover:bg-gray-50 cursor-pointer">
+            <TableRow key={loop.loop_id} className="cursor-pointer hover:bg-muted/60">
               <TableCell className="font-medium">{loop.plugin_id}</TableCell>
-              <TableCell className="text-sm text-gray-600">{loop.loop_id}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">{loop.loop_id}</TableCell>
               <TableCell>
                 <Badge variant="outline" className={getStatusColor(loop.status)}>
                   {loop.status}
@@ -122,14 +122,17 @@ export const LearningLoopGrid: React.FC<Props> = ({ loops, loading, onSelect }) 
               <TableCell className="text-right">{loop.event_count_7d}</TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">
-                  <div className="w-16 bg-gray-200 rounded h-2">
+                  <div className="h-2 w-16 rounded bg-muted">
                     <div
-                      className="bg-blue-600 h-2 rounded"
-                      style={{ width: `${loop.health.score * 100}%` }}
+                      className="h-2 rounded"
+                      style={{
+                        width: `${loop.health.score * 100}%`,
+                        background: "var(--viz-tier-2)",
+                      }}
                     />
                   </div>
                   <span className="text-sm">{(loop.health.score * 100).toFixed(0)}%</span>
-                  <span className={`text-xs ${loop.health.trend === "up" ? "text-green-600" : loop.health.trend === "down" ? "text-red-600" : "text-gray-600"}`}>
+                  <span className={`text-xs ${loop.health.trend === "up" ? "text-emerald-600 dark:text-emerald-400" : loop.health.trend === "down" ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
                     {loop.health.trend === "up" ? "↑" : loop.health.trend === "down" ? "↓" : "→"}
                   </span>
                 </div>
@@ -150,8 +153,21 @@ export const LearningLoopGrid: React.FC<Props> = ({ loops, loading, onSelect }) 
       </Table>
 
       {sorted.length === 0 && (
-        <div className="text-center py-8 text-gray-500">
-          {filterStatus ? `No ${filterStatus} loops found` : "No learning loops available"}
+        <div className="py-10 text-center text-sm text-muted-foreground">
+          {filterStatus ? (
+            `No ${filterStatus} loops.`
+          ) : (
+            <>
+              <p className="font-medium text-foreground">No learning loops declared</p>
+              <p className="mx-auto mt-2 max-w-md">
+                A loop appears here once an installed plugin declares a{" "}
+                <code className="rounded bg-muted px-1 py-0.5">learning_loops</code> section
+                in its manifest. The index is reconciled with the installed plugins
+                every five minutes; runtime metrics fill in from the learning events
+                those loops emit.
+              </p>
+            </>
+          )}
         </div>
       )}
     </div>

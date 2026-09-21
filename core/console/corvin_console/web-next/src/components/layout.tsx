@@ -202,6 +202,10 @@ const NAV_GROUPS: NavGroup[] = [
       // ADR-0885: routing, usage & cost, learning and the catalogue in ONE panel
       // (replaced Engine Config + Model Cost Optimizer + Model Selection, 2026-09-18).
       { to: "/app/models",   label: "Models",    icon: Brain },
+      // ADR-0908 — Learning Loops observability. Registered in PANELS since
+      // 2026-09-21 but missing here, so the route mounted and nothing linked
+      // to it: reachable only by typing the URL. A panel needs BOTH.
+      { to: "/app/learning-loops", label: "Learning Loops", icon: TrendingUp },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },
     ],

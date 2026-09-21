@@ -14,12 +14,12 @@ function LearningLoopsPageComponent() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Learning Loops</h1>
-        <p className="text-gray-600">Monitor plugin and skill learning loops</p>
+        <p className="text-muted-foreground">Monitor plugin and skill learning loops</p>
       </div>
 
       {error && (
-        <Card className="border-red-200 bg-red-50">
-          <CardContent className="pt-6 text-sm text-red-800">{error}</CardContent>
+        <Card className="border-destructive/40 bg-destructive/10">
+          <CardContent className="pt-6 text-sm text-destructive">{error}</CardContent>
         </Card>
       )}
 
@@ -47,7 +47,7 @@ function LearningLoopsPageComponent() {
             <LearningLoopDetail loop={selectedLoopData} />
           ) : (
             <Card>
-              <CardContent className="pt-6 text-gray-600">Select a loop to view details</CardContent>
+              <CardContent className="pt-6 text-sm text-muted-foreground">Select a loop to view details</CardContent>
             </Card>
           )}
         </TabsContent>
