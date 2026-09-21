@@ -41,6 +41,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/console/learning-loops", tags=["learning-loops"])
 
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+def _trend_direction(trend_value: Optional[float]) -> str:
+  """Classify trend as 'up', 'down', or 'flat'."""
+  val = trend_value or 0
+  return "up" if val > 0 else ("down" if val < 0 else "flat")
+
 # ── Models ─────────────────────────────────────────────────────────────────
 
 Status = Literal["active", "dormant", "stale", "degrading"]
@@ -164,8 +171,8 @@ def _get_learning_loop_service():
     """Lazy load the KG MCP service (Phase 2 backend)."""
     try:
         from core.knowledge_graph.mcp.learning_loop_service import LearningLoopService
-        from forge.tenants import tenant_home
-        return LearningLoopService(tenant_home=tenant_home("_default"))
+        # Pass tenant_id, not tenant_home; service resolves path internally
+        return LearningLoopService(tenant_id=tenant_id)
     except ImportError:
         logger.warning("Learning loop service not available; using stub")
         return None
@@ -230,8 +237,8 @@ async def list_learning_loops(
         raise HTTPException(status_code=503, detail="Learning loop service not available")
 
     try:
-        # Query backend (Phase 2)
-        all_entries = service.list_loops(tenant_id=tenant_id)
+        # Query backend (Phase 2) — tenant_id already scoped in service instance
+        all_entries = service.list_loops()
 
         # Filter
         if plugin_id:
@@ -248,7 +255,9 @@ async def list_learning_loops(
             "last_event": lambda e: e.last_event_ts or datetime.min,
             "health_score": lambda e: e.health_score,
         }.get(sort_by, lambda e: e.last_event_ts)
-        all_entries.sort(key=sort_key, reverse=True)
+        # String fields ascending, numeric fields descending
+        reverse = sort_by not in ("plugin_id", "status")
+        all_entries.sort(key=sort_key, reverse=reverse)
 
         total = len(all_entries)
         paginated = all_entries[offset : offset + limit]
@@ -262,7 +271,7 @@ async def list_learning_loops(
                 status=e.status,
                 health=LoopHealthScore(
                     score=e.health_score,
-                    trend="up" if (e.health_trend_7d or 0) > 0 else ("down" if (e.health_trend_7d or 0) < 0 else "flat"),
+                    trend=_trend_direction(e.health_trend_7d),
                     previous_score=e.previous_health_score,
                 ),
                 last_event=e.last_event_ts,

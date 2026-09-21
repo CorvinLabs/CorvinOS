@@ -367,7 +367,8 @@ class EventStore:
                     if session_id and event_dict.get("session_id") != session_id:
                         continue
 
-                    event_ts = datetime.fromisoformat(event_dict["timestamp"].rstrip("Z"))
+                    # Preserve UTC timezone: "2026-09-21T12:34:56Z" → "2026-09-21T12:34:56+00:00"
+                    event_ts = datetime.fromisoformat(event_dict["timestamp"].replace("Z", "+00:00"))
                     if since and event_ts < since:
                         continue
 
