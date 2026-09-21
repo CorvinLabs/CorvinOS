@@ -26,6 +26,7 @@ ADR-0906: Learning-Loop Manifest Schema
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -39,6 +40,9 @@ from ..deps import require_csrf, require_session
 from ..auth import SessionRecord
 
 logger = logging.getLogger(__name__)
+
+# Module-level constant for timezone-aware epoch (avoid recomputation)
+_EPOCH_UTC = datetime.fromtimestamp(0, tz=timezone.utc)
 
 router = APIRouter(prefix="/v1/console/learning-loops", tags=["learning-loops"])
 
@@ -209,8 +213,6 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
 
 # ── Cache ──────────────────────────────────────────────────────────────────
 
-import hashlib
-
 _cache = {}  # {(tenant_id, key_hash): (data, timestamp, ttl)}
 _cache_lock = threading.Lock()  # Thread-safe cache access
 _CACHE_TTL_LIST = 120  # 2m
@@ -243,16 +245,28 @@ def _hash_cache_key(plugin_id: Optional[str], skill_id: Optional[str],
     return hashlib.sha256(key_str.encode()).hexdigest()
 
 
+def _hash_simple_cache_key(*args: Any) -> str:
+    """Hash simple cache parameters (no normalization needed).
+
+    Used for details endpoint and other simple parameter combinations.
+    Prevents cache key collisions and parameter injection attacks.
+    """
+    # Convert all args to strings and hash
+    key_str = "|".join(str(arg or "") for arg in args)
+    return hashlib.sha256(key_str.encode()).hexdigest()
+
+
 def _cleanup_expired_cache() -> None:
     """Remove expired cache entries (proactive cleanup to prevent memory leak)."""
     global _last_cache_cleanup
     now = datetime.now(timezone.utc)
 
-    # Only run cleanup every 10 minutes to avoid overhead
-    if (now - _last_cache_cleanup).total_seconds() < _CACHE_CLEANUP_INTERVAL:
-        return
-
+    # Check cleanup interval under lock to prevent multiple threads running cleanup simultaneously
     with _cache_lock:
+        # Only run cleanup every 10 minutes to avoid overhead
+        if (now - _last_cache_cleanup).total_seconds() < _CACHE_CLEANUP_INTERVAL:
+            return
+
         expired_keys = []
         for cache_key, entry in _cache.items():
             # Entry format: (data, ts, ttl)
@@ -373,6 +387,7 @@ def _parse_audit_event_row(event_dict: dict) -> Optional[AuditEventRow]:
     """Parse an audit event dict into an AuditEventRow with validation.
 
     Handles missing or malformed timestamp fields gracefully.
+    All returned timestamps are guaranteed timezone-aware (UTC).
     Returns None if event is unparseable.
     """
     try:
@@ -385,10 +400,13 @@ def _parse_audit_event_row(event_dict: dict) -> Optional[AuditEventRow]:
 
         try:
             timestamp = datetime.fromisoformat(timestamp_str)
+            # Ensure timezone-aware (fromisoformat can return naive datetime)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError) as e:
             logger.warning(f"Malformed timestamp '{timestamp_str}': {e}")
             # Use epoch as fallback (not ideal, but better than crashing)
-            timestamp = datetime.fromtimestamp(0, tz=timezone.utc)
+            timestamp = _EPOCH_UTC
 
         return AuditEventRow(
             timestamp=timestamp,
@@ -453,14 +471,13 @@ async def list_learning_loops(
             all_entries = [e for e in all_entries if e.status == status]
 
         # Sort
-        # Use timezone-aware epoch for naive comparisons to avoid TypeError
-        epoch_utc = datetime.fromtimestamp(0, tz=timezone.utc)
+        # Use module-level timezone-aware epoch to avoid recomputation on every request
         sort_key = {
             "plugin_id": lambda e: e.plugin_id,
             "status": lambda e: e.status,
-            "last_event": lambda e: e.last_event_ts or epoch_utc,  # Use timezone-aware epoch
+            "last_event": lambda e: e.last_event_ts or _EPOCH_UTC,  # Use module-level constant
             "health_score": lambda e: e.health_score,
-        }.get(sort_by, lambda e: e.last_event_ts or epoch_utc)
+        }.get(sort_by, lambda e: e.last_event_ts or _EPOCH_UTC)
         # String fields ascending, numeric fields descending
         reverse = sort_by not in ("plugin_id", "status")
         all_entries.sort(key=sort_key, reverse=reverse)
@@ -531,7 +548,7 @@ async def get_learning_loop_details(
     tenant_id = session.tenant_id
 
     # Check cache (use hashed key to prevent collision/injection)
-    cache_key_hash = hashlib.sha256(f"{loop_id}|{days}".encode()).hexdigest()
+    cache_key_hash = _hash_simple_cache_key(loop_id, days)
     cached = _get_cached(tenant_id, cache_key_hash, _CACHE_TTL_DETAIL)
     if cached is not None:
         return cached
