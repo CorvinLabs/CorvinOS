@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Module-level constant for timezone-aware epoch (avoid recomputation)
 _EPOCH_UTC = datetime.fromtimestamp(0, tz=timezone.utc)
 
-router = APIRouter(prefix="/v1/console/learning-loops", tags=["learning-loops"])
+router = APIRouter(prefix="/learning-loops", tags=["learning-loops"])
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
