@@ -153,7 +153,8 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
     """
     if not trend_data:
         # Return empty trend (not sample data) when unavailable
-        return HealthTrend(points=[], min_score=0.0, max_score=0.0, avg_score=0.0)
+        # Use 0.5 as neutral middle value to match default health_score
+        return HealthTrend(points=[], min_score=0.5, max_score=0.5, avg_score=0.5)
 
     timestamps = trend_data.get("timestamps", [])
     scores = trend_data.get("health_scores", [])
@@ -200,8 +201,8 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
 
     return HealthTrend(
         points=points,
-        min_score=min(health_scores_valid) if health_scores_valid else 0.0,
-        max_score=max(health_scores_valid) if health_scores_valid else 1.0,
+        min_score=min(health_scores_valid) if health_scores_valid else 0.5,  # Consistent: 0.5 for empty
+        max_score=max(health_scores_valid) if health_scores_valid else 0.5,  # Consistent: 0.5 for empty
         avg_score=sum(health_scores_valid) / len(health_scores_valid) if health_scores_valid else 0.5,
     )
 
@@ -452,12 +453,14 @@ async def list_learning_loops(
             all_entries = [e for e in all_entries if e.status == status]
 
         # Sort
+        # Use timezone-aware epoch for naive comparisons to avoid TypeError
+        epoch_utc = datetime.fromtimestamp(0, tz=timezone.utc)
         sort_key = {
             "plugin_id": lambda e: e.plugin_id,
             "status": lambda e: e.status,
-            "last_event": lambda e: e.last_event_ts or datetime.min,
+            "last_event": lambda e: e.last_event_ts or epoch_utc,  # Use timezone-aware epoch
             "health_score": lambda e: e.health_score,
-        }.get(sort_by, lambda e: e.last_event_ts)
+        }.get(sort_by, lambda e: e.last_event_ts or epoch_utc)
         # String fields ascending, numeric fields descending
         reverse = sort_by not in ("plugin_id", "status")
         all_entries.sort(key=sort_key, reverse=reverse)
