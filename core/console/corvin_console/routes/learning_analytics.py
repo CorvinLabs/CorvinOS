@@ -156,8 +156,9 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
       Per ADR-0763, never fabricate sample data. Empty trend indicates no measurements.
     """
     if not trend_data:
-        # Return empty trend (not sample data) when unavailable
-        # Use 0.5 as neutral middle value to match default health_score
+        # Return empty trend (not sample data) when unavailable.
+        # Sentinel value 0.5 = "no measurements"; clients use this to distinguish
+        # empty state from real data (which ranges 0.0–1.0). Per ADR-0763.
         return HealthTrend(points=[], min_score=0.5, max_score=0.5, avg_score=0.5)
 
     timestamps = trend_data.get("timestamps", [])
@@ -205,8 +206,8 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
 
     return HealthTrend(
         points=points,
-        min_score=min(health_scores_valid) if health_scores_valid else 0.5,  # Consistent: 0.5 for empty
-        max_score=max(health_scores_valid) if health_scores_valid else 0.5,  # Consistent: 0.5 for empty
+        min_score=min(health_scores_valid) if health_scores_valid else 0.5,  # 0.5 sentinel: no measurements
+        max_score=max(health_scores_valid) if health_scores_valid else 0.5,  # 0.5 sentinel: no measurements
         avg_score=sum(health_scores_valid) / len(health_scores_valid) if health_scores_valid else 0.5,
     )
 
@@ -587,8 +588,10 @@ async def get_learning_loop_details(
         # Compute trend direction from health_trend points (simple regression: first vs. last)
         trend_value = 0.0
         if health_trend.points and len(health_trend.points) > 1:
-            first_score = health_trend.points[0].health_score
-            last_score = health_trend.points[-1].health_score
+            # Sort points by date to ensure correct trend direction (earliest to latest)
+            sorted_points = sorted(health_trend.points, key=lambda p: p.date)
+            first_score = sorted_points[0].health_score
+            last_score = sorted_points[-1].health_score
             trend_value = last_score - first_score  # Positive = improving, negative = degrading
 
         # Get audit events
@@ -686,8 +689,13 @@ async def get_learning_loop_events(
     tenant_id = session.tenant_id
 
     try:
-        # Query audit chain with oversampling to account for filtering loss.
-        # Fetch 5x the requested amount to ensure sufficient results after filtering.
+        # Query audit chain with oversampling to account for event_type filtering loss.
+        # Critical: must account for BOTH offset and limit to support high-offset pagination.
+        # Multiplier 5× is REQUIRED for correctness (not optimization):
+        #   - User requests offset=100, limit=50 (positions 100–150 in filtered set)
+        #   - If filter keeps 20%, we need 750 raw events to get 150 filtered
+        #   - (limit + offset) * 5 = 150 * 5 = 750 ✓ Correct
+        #   - Any lower multiplier fails for high offset + selective filtering
         # Note: pagination is over filtered results, not total unfiltered results.
         fetch_limit = max(500, (limit + offset) * 5)
         events_data = await _get_audit_events(tenant_id, loop_id, limit=fetch_limit)

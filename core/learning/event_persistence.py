@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -28,6 +29,8 @@ from uuid import uuid4
 from core.tenants.validation import validate_tenant_id
 
 from .event_schema import LearningEvent, LearningEventType
+
+logger = logging.getLogger(__name__)
 
 TOMBSTONE_EVENT_TYPE = "learning.tombstone"
 
@@ -437,7 +440,7 @@ class EventStore:
             ValueError: If cross-tenant events are detected (contamination alert)
         """
         self._bind(tenant_id)
-        cutoff_date = (datetime.utcnow() - timedelta(days=retention_days)).date()
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=retention_days)).date()
 
         deleted_count = 0
         touched_files = 0
@@ -562,7 +565,7 @@ class EventStore:
                 "tenant_id": tenant_id,
                 "erasure_id": erasure_id,
                 "erased_count": removed_here,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', '') + "Z",
             }
             self._rewrite_partition(events_file, remaining, tombstone)
             erased += removed_here
