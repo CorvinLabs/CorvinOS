@@ -3,9 +3,10 @@ import { LearningLoopsView } from '@/components/learning-loops-view';
 /**
  * Learnings dashboard → "Learning Loops" tab (ADR-0908).
  *
- * Renders the same component the standalone /app/learning-loops panel does,
- * rather than a second implementation reading the same endpoints: two views of
- * one set of loops that can disagree is worse than one view in two places.
+ * The only Learning Loops surface. A standalone /app/learning-loops panel
+ * existed for a few hours on 2026-09-21 and was retired the same day: it
+ * mounted this very component, so it was a second door to one room. That path
+ * now redirects here (App.tsx → ?tab=loops).
  */
 export function LearningLoopsTab() {
   return (
@@ -13,8 +14,8 @@ export function LearningLoopsTab() {
       <div>
         <h2 className="text-xl font-semibold">Learning Loops</h2>
         <p className="text-sm text-muted-foreground">
-          Feedback loops this install records events for. Also available as its own panel at{' '}
-          <code className="rounded bg-muted px-1 py-0.5">/app/learning-loops</code>.
+          Every feedback loop this install runs — OS skills, context-pipeline stages and
+          plugin-declared loops
         </p>
       </div>
       <LearningLoopsView />

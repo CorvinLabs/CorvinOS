@@ -208,6 +208,13 @@ export default function App() {
               element={<Navigate to="/app/forge?tab=skill-forge" replace />}
             />
             <Route path="licensing-audit" element={<Navigate to="/app/compliance" replace />} />
+            {/* learning-loops → the Learnings dashboard's "Learning Loops" tab
+                (ADR-0908, retired 2026-09-21). The standalone panel and the tab
+                mounted the SAME LearningLoopsView, so the panel was a second
+                door to one room. The ?tab= parameter only lands on the right tab
+                because VibeDashboard reads it — a redirect to a query string
+                nothing consumes opens the default tab and looks like a bug. */}
+            <Route path="learning-loops" element={<Navigate to="/app/vibe-engineering?tab=loops" replace />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>

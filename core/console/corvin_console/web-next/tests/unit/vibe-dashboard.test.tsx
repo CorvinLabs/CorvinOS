@@ -31,9 +31,6 @@ vi.mock('@/pages/vibe-engineering/components/MaturityDashboard', () => ({
 vi.mock('@/pages/vibe-engineering/tabs/MonitoringTab', () => ({
   MonitoringTab: () => <div data-testid="tab-metrics">Metrics body</div>,
 }));
-vi.mock('@/pages/vibe-engineering/tabs/ModelsTab', () => ({
-  ModelsTab: () => <div data-testid="tab-models">Models body</div>,
-}));
 
 // "Audit Events" left this panel on 2026-09-20: the same
 // /v1/console/v1/licensing/audit-events store backed both this tab and a
@@ -43,7 +40,11 @@ vi.mock('@/pages/vibe-engineering/tabs/ModelsTab', () => ({
 // "Learning Hub" view of the old tabbed hub — it mounts LearningLoopsView, the
 // same component /app/learning-loops renders, so the two surfaces cannot show
 // different numbers for the same loops.
-const TABS = ['Maturity Metrics', 'Learning Loops', 'System Metrics', 'Models'];
+// "Models" was retired on 2026-09-21: it fetched the same
+// /v1/console/v1/models/available the Models panel's Catalog tab reads, minus
+// that tab's filter, pins and "use for" hand-off. ?tab=models now redirects to
+// /app/models?tab=catalog (ADR-0885 owns the models surface).
+const TABS = ['Maturity Metrics', 'Learning Loops', 'System Metrics'];
 
 describe('Vibe Engineering panel', () => {
   const renderComponent = () =>
@@ -66,6 +67,7 @@ describe('Vibe Engineering panel', () => {
     // The tab is gone, not merely unlabelled — a renamed tab would still
     // mount the duplicate view this consolidation removed.
     expect(screen.queryByRole('button', { name: /audit/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^models$/i })).toBeNull();
   });
 
   it('opens on Maturity Metrics', async () => {
@@ -79,8 +81,6 @@ describe('Vibe Engineering panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'System Metrics' }));
     expect(await screen.findByTestId('tab-metrics')).toBeInTheDocument();
     expect(screen.queryByTestId('tab-maturity')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Models' }));
-    expect(await screen.findByTestId('tab-models')).toBeInTheDocument();
   });
 
   it('renders no retired view', () => {
@@ -98,9 +98,11 @@ describe('Vibe Engineering panel', () => {
   it('mounts the shared Learning Loops view, not a second implementation', async () => {
     renderComponent();
     fireEvent.click(screen.getByRole('button', { name: 'Learning Loops' }));
-    // The shared view's own copy — a private re-implementation would not carry it.
-    expect(
-      await screen.findByText(/Also available as its own panel at/i),
-    ).toBeInTheDocument();
+    // "Learning loop status" is LearningLoopsView's own card title — the tab
+    // wrapper does not render it, so a private re-implementation inside the
+    // dashboard would not produce it. This tab is the ONLY Learning Loops
+    // surface since the standalone panel was retired (2026-09-21), so if the
+    // shared view stops mounting here it is unreachable everywhere.
+    expect(await screen.findByText(/Learning loop status/i)).toBeInTheDocument();
   });
 });

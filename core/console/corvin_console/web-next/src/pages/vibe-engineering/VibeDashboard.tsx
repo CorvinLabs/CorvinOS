@@ -18,14 +18,19 @@
  * wins over it silently (happened 2026-08-27 and 2026-09-17) — never add one.
  */
 
-import { Suspense, useState } from 'react';
+import { Suspense, useCallback, useEffect } from 'react';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { MaturityDashboard } from './components/MaturityDashboard';
 import { MonitoringTab } from './tabs/MonitoringTab';
-import { ModelsTab } from './tabs/ModelsTab';
 import { LearningLoopsTab } from './tabs/LearningLoopsTab';
 
-type TabType = 'maturity' | 'loops' | 'metrics' | 'models';
+type TabType = 'maturity' | 'loops' | 'metrics';
+
+const TAB_IDS: readonly TabType[] = ['maturity', 'loops', 'metrics'] as const;
+const DEFAULT_TAB: TabType = 'maturity';
+const isTabId = (v: string | null): v is TabType =>
+  v !== null && (TAB_IDS as readonly string[]).includes(v);
 
 const LoadingFallback = () => (
   <div className="flex justify-center py-12">
@@ -34,7 +39,43 @@ const LoadingFallback = () => (
 );
 
 export function VibeDashboard() {
-  const [activeTab, setActiveTab] = useState<TabType>('maturity');
+  // Tab ↔ URL, the same contract the Models and Marketplace panels use: the tab
+  // is `?tab=` so it is deep-linkable and a switch is a PUSH (browser back
+  // returns to the previous tab). /app/learning-loops redirects to ?tab=loops,
+  // which only lands on the right tab because the parameter is read here — a
+  // redirect to a query string nothing consumes silently opens the default tab.
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const activeTab: TabType = isTabId(raw) ? raw : DEFAULT_TAB;
+  // The retired "Models" tab read the SAME /v1/models/available the Models
+  // panel's Catalog tab reads, minus its filter, pins and "use for" action —
+  // a poorer second view of one registry (retired 2026-09-21). Its links go to
+  // the panel that owns the catalogue. Falling through to isTabId() instead
+  // would drop such a link on Maturity Metrics with no explanation.
+  const retiredToModelsPanel = raw === 'models';
+
+  // Missing / unknown tab → canonical URL, without a history entry.
+  useEffect(() => {
+    if (retiredToModelsPanel) return; // redirected below; don't rewrite first
+    if (raw !== activeTab) {
+      const next = new URLSearchParams(params);
+      next.set('tab', activeTab);
+      setParams(next, { replace: true });
+    }
+  }, [raw, activeTab, params, setParams, retiredToModelsPanel]);
+
+  const setActiveTab = useCallback(
+    (tab: TabType) => {
+      const next = new URLSearchParams(params);
+      next.set('tab', tab);
+      setParams(next); // PUSH — back returns to the previous tab
+    },
+    [params, setParams],
+  );
+
+  if (retiredToModelsPanel) {
+    return <Navigate to="/app/models?tab=catalog" replace />;
+  }
 
   return (
     <div data-testid="vibe-dashboard-panel" className="min-h-screen bg-background text-foreground">
@@ -45,7 +86,6 @@ export function VibeDashboard() {
             { id: 'maturity' as TabType, label: 'Maturity Metrics' },
             { id: 'loops' as TabType, label: 'Learning Loops' },
             { id: 'metrics' as TabType, label: 'System Metrics' },
-            { id: 'models' as TabType, label: 'Models' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -68,14 +108,14 @@ export function VibeDashboard() {
           {activeTab === 'maturity' && <MaturityDashboard />}
           {activeTab === 'loops' && <LearningLoopsTab />}
           {activeTab === 'metrics' && <MonitoringTab />}
-          {activeTab === 'models' && <ModelsTab />}
         </Suspense>
       </div>
 
       {/* Footer */}
       <div className="border-t bg-muted/50 p-4 text-xs text-muted-foreground">
-        System metrics • Model registry • Maturity dashboard • Learning loops — All
-        endpoints PII-safe • Audit events moved to Audit &amp; Compliance • Last updated:{' '}
+        System metrics • Maturity dashboard • Learning loops — All endpoints PII-safe •
+        Audit events moved to Audit &amp; Compliance • Model catalogue moved to Models •
+        Last updated:{' '}
         {new Date().toLocaleTimeString()}
       </div>
     </div>

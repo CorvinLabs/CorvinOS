@@ -4,13 +4,17 @@ Monitor plugin and skill learning loop health, events, and trends in real-time.
 
 ## Navigation
 
-**URL:** `http://<host>:8765/console/app/learning-loops` | **Group:** Assistant | **Icon:** TrendingUp
+**URL:** `http://<host>:8765/console/app/vibe-engineering?tab=loops`
+(sidebar: **Learnings** → "Learning Loops" tab)
 
-**Also a tab** in the Learnings dashboard: `/console/app/vibe-engineering` →
-"Learning Loops". Both mount the SAME component (`components/learning-loops-view.tsx`),
-so the two surfaces cannot show different numbers for the same loops. A second
-implementation reading the same endpoints would eventually disagree with the
-first; one component in two places cannot.
+There is **one** Learning Loops surface. A standalone `/app/learning-loops`
+panel existed briefly on 2026-09-21 and was retired the same day — it mounted
+the very same `LearningLoopsView` the tab does, so it was a second door to one
+room. That path redirects to `?tab=loops` (`src/App.tsx`), and the redirect only
+lands on the right tab because `VibeDashboard` reads `?tab=`: a redirect to a
+query string nothing consumes opens the default tab and looks like a working
+link until someone notices they are on Maturity Metrics.
+`tests/unit/learning-loops-retired-panel.test.tsx` asserts both halves.
 
 The console SPA is mounted under `/console/`, so the bare `/app/learning-loops`
 is a 404 on the host — that is the router path inside the SPA, not a server
@@ -72,6 +76,17 @@ wiring the hook.
 | **OS skills** | `os_skill` | One loop per skill the tenant records learning events for — executions, task outcomes and operator feedback | `core.learning.event_store.EventStore`, the same store `GET /v1/console/learning/status` reports from |
 | **CEL stages** | `cel_stage` | One loop per context-engineering pipeline stage; confidence earned from every turn's outcome | `ce_stage_grades.json` (ADR-0269 G4 / ADR-0285 G3) — the store `core.learning.earned_tree` projects |
 | **Plugin-declared** | `plugin` | A loop an installed plugin declares via `learning_loops:` (ADR-0906) | the tenant loop index (ADR-0907) |
+
+### Sibling tabs on the Learnings dashboard
+
+`Maturity Metrics` · `Learning Loops` · `System Metrics`. Two tabs were retired
+into the panels that own their content, both on 2026-09-21: **Audit Events** →
+`/app/compliance` ("Learning events"), and **Models** → `/app/models?tab=catalog`
+— the Models tab fetched the same `/v1/console/v1/models/available` the Catalog
+tab reads, minus that tab's filter, pins and "use for" hand-off, so one registry
+had two views and this was the poorer one (ADR-0885 makes `/app/models` the
+single models surface). `?tab=models` redirects there rather than falling
+through the unknown-tab branch onto Maturity Metrics.
 
 The first two are discovered live by `core/learning/loop_discovery.py`. They are
 deliberately **not** indexed: their store already is the record, so reading it
@@ -186,6 +201,7 @@ Use exports for:
 | No loops displayed | no installed plugin declares `learning_loops:` | expected today; add the section to a plugin manifest (ADR-0906) |
 | "Learning subsystem not available" (503) | `LearningLoopService` failed to construct — check `journalctl --user -u corvin-webui` for the import or storage error it logged | fix the underlying import; the route degrades rather than crashing, so the log is the only signal |
 | Panel missing from the sidebar | `NAV_GROUPS` entry absent while `PANELS` has one | add both; `tests/unit/panel-nav-wiring.test.ts` catches it |
+| `/app/learning-loops` shows Maturity Metrics | the `?tab=` parameter is not being read by `VibeDashboard` | the redirect target is only as good as the parameter's consumer |
 | Health stuck at 0% | loop received no feedback yet | plugin may not emit outcome signals |
 | Events tab empty | loop has no audit events | wait 24h or trigger plugin behavior |
 

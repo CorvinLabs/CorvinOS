@@ -196,10 +196,5 @@ export const ModelsPage = React.lazy(() =>
   import("@/pages/models").then((m) => ({ default: m.ModelsPage }))
 );
 
-/** ADR-0908 — Learning Loops Dashboard (plugin & skill learning loop observability). */
-export const LearningLoopsPage = React.lazy(() =>
-  import("@/pages/learning-loops").then((m) => ({ default: m.default }))
-);
-
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
