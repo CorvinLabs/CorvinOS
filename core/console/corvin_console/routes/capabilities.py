@@ -353,6 +353,7 @@ async def get_surfaces(session: Any = Depends(require_session)) -> dict:
 import hashlib
 import json
 from datetime import datetime
+from typing import Optional
 
 
 def _get_builtin_panels() -> list[dict]:
@@ -571,15 +572,92 @@ def _get_nav_groups(panels: list[dict], flags: dict[str, bool]) -> list[dict]:
     ]
 
 
+def _get_learning_loops(tenant_id: str = "_default") -> list[dict]:
+    """Get all learning loops declared by installed plugins (ADR-0906).
+
+    Extracts learning_loops sections from plugin manifests and formats them
+    for inclusion in the console manifest. Gracefully degrades if plugins are
+    unavailable.
+
+    Returns:
+        List of learning loop summaries (empty if no loops or plugins unavailable)
+    """
+    loops: list[dict] = []
+    try:
+        from core.plugins.schema.learning_loop_schema import LearningLoopsManifestResponse
+        from core.plugins.validators.learning_loop_validator import (
+            extract_learning_loops_from_manifest,
+        )
+    except Exception:  # noqa: BLE001
+        # Schema/validators unavailable; fail-closed with empty list
+        return []
+
+    try:
+        # Get plugin manifests from the registry
+        from core.plugins.plugin_manager_v2 import PluginRegistry
+
+        try:
+            registry = PluginRegistry(tenant_id=tenant_id)
+            plugins = registry.list_all()
+        except Exception:  # noqa: BLE001
+            # Registry unavailable; return empty list
+            return []
+
+        # Extract loops from each plugin manifest
+        for plugin in plugins:
+            try:
+                plugin_manifest = getattr(plugin, "manifest", None)
+                if not plugin_manifest:
+                    continue
+
+                # Extract validated loops from the manifest
+                valid_loops, _ = extract_learning_loops_from_manifest(plugin_manifest)
+
+                # Format for response
+                plugin_id = getattr(plugin, "plugin_id", None) or plugin_manifest.get(
+                    "id", "unknown"
+                )
+                for loop in valid_loops:
+                    loops.append({
+                        "loop_id": f"{plugin_id}:{loop.id}",
+                        "plugin_id": plugin_id,
+                        "description": loop.description,
+                        "event_source": loop.event_source,
+                        "feedback_types": loop.feedback_types,
+                        "aggregation": loop.aggregation,
+                        "health_threshold": loop.health_threshold,
+                        "dormancy_alert_hours": loop.dormancy_alert_hours,
+                        "owner_skill": loop.owner_skill,
+                        # Runtime metrics (will be populated by KG MCP in Phase 2)
+                        "last_event_ts": None,
+                        "event_count_7d": 0,
+                        "health_score": 0.0,
+                        "status": "active",
+                    })
+            except Exception:  # noqa: BLE001
+                # Skip plugins that fail to parse
+                continue
+
+    except Exception:  # noqa: BLE001
+        # Fallback: return empty list on any error
+        pass
+
+    return loops
+
+
 def _compute_manifest_hash(manifest: dict) -> str:
     """Compute a stable hash of the manifest for caching/invalidation (ADR-0561)."""
-    # Hash panels + nav_groups (ignore timestamps and hash itself)
+    # Hash panels + nav_groups + learning_loops (ignore timestamps and hash itself)
     data = {
         "panels": [
             {k: v for k, v in p.items() if k != "lom"}
-            for p in manifest["panels"]
+            for p in manifest.get("panels", [])
         ],
-        "nav_groups": manifest["nav_groups"],
+        "nav_groups": manifest.get("nav_groups", []),
+        "learning_loops": [
+            {k: v for k, v in l.items() if k not in ("last_event_ts", "event_count_7d", "health_score", "status")}
+            for l in manifest.get("learning_loops", [])
+        ],
     }
     return hashlib.sha256(
         json.dumps(data, sort_keys=True).encode()
@@ -624,6 +702,8 @@ async def get_console_manifest(session: Any = Depends(require_session)) -> dict:
     nav_groups = _get_nav_groups(gated_panels, flags)
 
     # Construct manifest
+    learning_loops = _get_learning_loops(tenant_id)
+
     manifest = {
         "version": "2.0",
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -632,6 +712,7 @@ async def get_console_manifest(session: Any = Depends(require_session)) -> dict:
         "flags": flags,
         "panels": gated_panels,
         "nav_groups": nav_groups,
+        "learning_loops": learning_loops,
     }
 
     # Compute hash for caching + invalidation
