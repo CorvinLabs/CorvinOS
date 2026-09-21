@@ -155,9 +155,12 @@ def _get_health_trend_from_service_response(trend_data: Optional[dict]) -> Healt
     - Timestamps must be ISO format strings (YYYY-MM-DD...)
     - Scores and counts must be numeric or convertible to numeric
     - Handles missing/malformed values gracefully
+    - IMPORTANT: Returns empty points (not fabricated data) if no trend available.
+      Per ADR-0763, never fabricate sample data. Empty trend indicates no measurements.
     """
     if not trend_data:
-        return HealthTrend(points=[], min_score=0.0, max_score=1.0, avg_score=0.5)
+        # Return empty trend (not sample data) when unavailable
+        return HealthTrend(points=[], min_score=0.0, max_score=0.0, avg_score=0.0)
 
     timestamps = trend_data.get("timestamps", [])
     scores = trend_data.get("health_scores", [])
@@ -247,7 +250,7 @@ def _get_learning_loop_service(tenant_id: str) -> Optional['LearningLoopService'
     Returns:
         LearningLoopService instance or None if unavailable
 
-    Note: Returns None (not raises) on ImportError or initialization failure
+    Note: Returns None (not raises) on any initialization failure
     to allow graceful degradation to stub responses (503 Service Unavailable).
     """
     try:
@@ -257,9 +260,10 @@ def _get_learning_loop_service(tenant_id: str) -> Optional['LearningLoopService'
     except ImportError:
         logger.warning("Learning loop service not available; module not found")
         return None
-    except (ValueError, OSError) as e:
-        # ValueError: tenant_id invalid; OSError: DB path inaccessible
-        logger.warning(f"Failed to initialize learning loop service: {e}")
+    except Exception as e:
+        # Catch all exceptions (ValueError, OSError, TypeError, etc.) to ensure
+        # graceful degradation. Log the error for debugging but don't crash.
+        logger.warning(f"Failed to initialize learning loop service: {type(e).__name__}: {e}")
         return None
 
 
@@ -269,7 +273,7 @@ async def _get_audit_events(tenant_id: str, loop_id: str, limit: int = 10) -> Li
     Queries: learning_event_received, skill_config_updated, outcome_feedback events
     that reference this loop_id.
 
-    Returns: List of audit events, or empty list on error.
+    Returns: List of audit events, or empty list on error (graceful degradation).
     """
     try:
         from forge.security import audit_query
@@ -284,8 +288,10 @@ async def _get_audit_events(tenant_id: str, loop_id: str, limit: int = 10) -> Li
     except ImportError:
         logger.warning("Audit query module not available")
         return []
-    except (ValueError, RuntimeError) as e:
-        logger.error(f"Failed to query audit events: {e}")
+    except Exception as e:
+        # Catch all exceptions (ValueError, RuntimeError, asyncio errors, etc.)
+        # to ensure graceful degradation. Log for debugging but return empty list.
+        logger.error(f"Failed to query audit events: {type(e).__name__}: {e}")
         return []
 
 
@@ -473,12 +479,20 @@ async def get_learning_loop_details(
         health_trend = _get_health_trend_from_service_response(trend_data)
 
         # Get audit events
-        events_data = await _get_audit_events(tenant_id, loop_id, limit=10)
+        events_data = await _get_audit_events(tenant_id, loop_id, limit=100)
         last_10_events = []
+        event_count_30d = 0
+
         for e in events_data:
             parsed = _parse_audit_event_row(e)
             if parsed is not None:
-                last_10_events.append(parsed)
+                # Keep first 10 for display
+                if len(last_10_events) < 10:
+                    last_10_events.append(parsed)
+
+                # Count events within 30 days (use parsed timestamp for accuracy)
+                if entry.last_event_ts and (entry.last_event_ts - parsed.timestamp).days < 30:
+                    event_count_30d += 1
 
         # Generate recommendations
         recommendations = []
@@ -490,18 +504,6 @@ async def get_learning_loop_details(
             recommendations.append("📭 No events in 7d. Loop may be inactive.")
         if entry.health_score < 0.5:
             recommendations.append("⚡ Low health (<0.5). Optimizer may need tuning.")
-
-        # Compute event_count_30d from audit events
-        # Note: Index only tracks 7d count; 30d requires audit log analysis
-        event_count_30d = 0
-        for evt in events_data:
-            try:
-                evt_ts = datetime.fromisoformat(evt.get("timestamp", ""))
-                if (entry.last_event_ts - evt_ts).days < 30:
-                    event_count_30d += 1
-            except (ValueError, TypeError, AttributeError):
-                # Skip unparseable timestamps
-                pass
 
         loop_detail = LoopDetail(
             loop_id=entry.loop_id,
