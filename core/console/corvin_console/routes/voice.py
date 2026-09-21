@@ -997,7 +997,110 @@ _OPENAI_TTS_VOICES = frozenset({
 _openai_tts_warned_once = False
 
 
-def _try_openai_tts(text: str, lang: str, voice: "str | None") -> "bytes | None":
+# ── OpenAI TTS endpoint resolution (ADR-less setting, like every other
+#    CORVIN_TTS_* knob) ──────────────────────────────────────────────────────
+#
+# Both OpenAI tiers used to hardcode the public endpoint and ``model="tts-1"``,
+# which made the tier unusable wherever api.openai.com is unreachable — even
+# with a perfectly valid key and an APPROVED OpenAI-compatible endpoint
+# available. Measured 2026-09-21 on a corporate-proxied install: every request
+# to api.openai.com returns HTTP 403 from the TLS proxy with category
+# "Generative AI and ML Applications", i.e. a deliberate data-governance block
+# that points at approved internal AI systems instead. There was no way to
+# point the tier at one of those.
+#
+# Azure OpenAI is the common shape of such an approved endpoint, and it is NOT
+# reachable by a plain base_url swap: it authenticates with an ``api-key``
+# header instead of a bearer token, requires an ``api-version``, and addresses
+# the model by DEPLOYMENT name in the URL path. Hence the flavour split below.
+_AZURE_OPENAI_HOST_SUFFIX = ".openai.azure.com"
+# Azure's TTS-capable data-plane version. Overridable because Azure retires
+# versions on its own schedule and an install may be pinned to another one.
+_AZURE_OPENAI_DEFAULT_API_VERSION = "2024-05-01-preview"
+
+
+def _openai_tts_endpoint() -> "tuple[str, str, str]":
+    """``(base_url, api_version, model)`` for the OpenAI TTS tier.
+
+    ``base_url`` is "" for OpenAI's public endpoint (the SDK default), so the
+    out-of-the-box behaviour is byte-identical to before this existed.
+
+    ``CORVIN_TTS_OPENAI_BASE_URL`` is read first, then ``OPENAI_BASE_URL`` —
+    the SDK's own convention, honoured so an operator who already exported it
+    for other OpenAI traffic is not silently ignored here. ``model`` must be
+    configurable for the same reason the base URL must: on Azure the model IS
+    the deployment name, which the operator chooses, so a hardcoded "tts-1"
+    cannot address it.
+
+    Resolved through ``provider_keys.resolve_by_env_var`` — process env →
+    secrets.enc → ``service.env`` — NOT bare ``os.environ``. That is what lets
+    the endpoint live next to the key the operator already saved, be picked up
+    live without restarting the console (bare env would require a restart with
+    the variable exported, which on an autostarted install means editing the
+    scheduled task), and stay overridable by an explicit export. Falls back to
+    ``os.environ`` if the resolver is unavailable, so this can never be the
+    reason TTS stops working.
+    """
+    def _setting(name: str) -> str:
+        try:
+            import provider_keys as _pk  # noqa: PLC0415
+            return (_pk.resolve_by_env_var(name) or "").strip()
+        except Exception:  # noqa: BLE001
+            return (os.environ.get(name) or "").strip()
+
+    base_url = _setting("CORVIN_TTS_OPENAI_BASE_URL") or _setting("OPENAI_BASE_URL")
+    api_version = (_setting("CORVIN_TTS_OPENAI_API_VERSION")
+                   or _AZURE_OPENAI_DEFAULT_API_VERSION)
+    model = _setting("CORVIN_TTS_OPENAI_MODEL") or "tts-1"
+    return base_url, api_version, model
+
+
+def _openai_tts_base_url_rejected(base_url: str, tenant_id: str) -> "str | None":
+    """Why this base URL must not be used, or None when it may be.
+
+    Two independent checks, both fail-CLOSED for the OpenAI tier specifically
+    (returning a reason only skips a best-effort tier — say.py still runs — so
+    refusing is cheap and sending credentials somewhere unintended is not):
+
+    1. **https only.** A base URL is where an API KEY is sent. ``http://`` would
+       put it on the wire in clear text. Loopback is exempt: an OpenAI-compatible
+       server on 127.0.0.1 is a legitimate (and egress-free) configuration, and
+       it is what the E2E test drives.
+    2. **L35 egress policy.** Pointing TTS at an operator-chosen host is exactly
+       the decision the egress gate governs, so it is asked — via the same
+       ``load_egress_gate_for_tenant`` / ``validate_or_raise`` pair that
+       ``routes/models.py::_egress_denied`` uses, rather than a second
+       allowlist. Same semantics as there: fail-OPEN when the gate is absent or
+       errors (an unconfigured install must keep working), honour an EXPLICIT
+       denial. The gate emits its own ``egress.approved`` / ``egress.blocked``
+       audit records onto the L16 chain.
+    """
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    if not host:
+        return "no host in CORVIN_TTS_OPENAI_BASE_URL"
+    is_loopback = host in ("127.0.0.1", "::1", "localhost")
+    if parsed.scheme != "https" and not is_loopback:
+        return f"scheme '{parsed.scheme or 'none'}' is not https (would send the API key in clear text)"
+    if is_loopback:
+        return None  # no egress to gate
+    try:
+        from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]  # noqa: PLC0415
+        gate = load_egress_gate_for_tenant(tenant_id or "_default")
+        if gate is None:
+            return None
+        gate.validate_or_raise(host, engine_id="voice_tts_openai")
+    except ImportError:
+        return None  # gate unavailable — don't break a working install
+    except Exception as e:  # noqa: BLE001 — explicit denial
+        return f"L35 egress policy blocks '{host}' ({str(e)[:120]})"
+    return None
+
+
+def _try_openai_tts(text: str, lang: str, voice: "str | None",
+                    tenant_id: str = "_default") -> "bytes | None":
     """Direct OpenAI TTS call, in-process. Returns audio bytes or None on failure.
 
     Mirrors ``adapter.py::_try_openai_tts`` (the messenger bridges' twin):
@@ -1041,12 +1144,35 @@ def _try_openai_tts(text: str, lang: str, voice: "str | None") -> "bytes | None"
     if openai_voice not in _OPENAI_TTS_VOICES:
         openai_voice = "nova"
 
+    base_url, api_version, model = _openai_tts_endpoint()
+    if base_url:
+        reason = _openai_tts_base_url_rejected(base_url, tenant_id)
+        if reason is not None:
+            # Not once-per-process: a misconfigured endpoint is an operator
+            # error they must be able to see, and it costs no network call.
+            _log.warning("OpenAI TTS endpoint refused (will try say.py): %s",
+                         reason)
+            return None
+
     try:
-        client = openai_module.OpenAI(
-            api_key=key, timeout=_OPENAI_TTS_TIMEOUT_S, max_retries=0,
-        )
+        is_azure = base_url and _AZURE_OPENAI_HOST_SUFFIX in base_url.lower()
+        if is_azure:
+            # Azure: api-key header + api-version + deployment-as-model. The
+            # SDK's AzureOpenAI client handles all three; a plain OpenAI client
+            # pointed at the same URL 401s on every request.
+            client = openai_module.AzureOpenAI(
+                api_key=key, azure_endpoint=base_url, api_version=api_version,
+                timeout=_OPENAI_TTS_TIMEOUT_S, max_retries=0,
+            )
+        else:
+            # base_url="" → the SDK's own default (api.openai.com), so the
+            # unconfigured path is unchanged.
+            client = openai_module.OpenAI(
+                api_key=key, timeout=_OPENAI_TTS_TIMEOUT_S, max_retries=0,
+                **({"base_url": base_url} if base_url else {}),
+            )
         response = client.audio.speech.create(
-            model="tts-1",
+            model=model,
             voice=openai_voice,
             input=text[:_TTS_PROVIDER_CHAR_LIMIT],  # OpenAI TTS-1 hard cap 4096
             speed=1.0,
@@ -1059,8 +1185,16 @@ def _try_openai_tts(text: str, lang: str, voice: "str | None") -> "bytes | None"
         global _openai_tts_warned_once
         level = logging.DEBUG if _openai_tts_warned_once else logging.WARNING
         _openai_tts_warned_once = True
-        _log.log(level, "in-process OpenAI TTS failed (will try say.py): %s status=%s",
-                 type(e).__name__, getattr(e, "status_code", ""))
+        # The endpoint is part of the diagnosis, not noise: the same
+        # PermissionDeniedError means "your key is wrong" against OpenAI and
+        # "your proxy blocks this category" against a corporate egress path,
+        # and without the host the two are indistinguishable in the log. A
+        # hostname is neither PII nor a secret; the key and str(e) stay out.
+        from urllib.parse import urlparse  # noqa: PLC0415
+        _host = (urlparse(base_url).hostname if base_url else None) or "api.openai.com"
+        _log.log(level, "in-process OpenAI TTS failed (will try say.py): "
+                 "%s status=%s endpoint=%s model=%s",
+                 type(e).__name__, getattr(e, "status_code", ""), _host, model)
         return None
 
 
@@ -1098,6 +1232,21 @@ def _say_env() -> dict[str, str]:
         except Exception:  # noqa: BLE001
             val = None
         if val:
+            env[env_var] = val
+
+    # The ENDPOINT travels too, for the same reason the key does: say.py
+    # re-derives its own configuration in a child process, so a console
+    # configured against an approved OpenAI-compatible endpoint would hand
+    # say.py's openai tier the PUBLIC one — which is precisely the unreachable
+    # host the setting exists to avoid. Both tiers must aim at the same place,
+    # or the subprocess fallback silently contradicts the in-process branch.
+    # Only set what the environment does not already carry (an explicit export
+    # wins), and only after the console has validated it above.
+    _base_url, _api_version, _model = _openai_tts_endpoint()
+    for env_var, val in (("CORVIN_TTS_OPENAI_BASE_URL", _base_url),
+                         ("CORVIN_TTS_OPENAI_API_VERSION", _api_version),
+                         ("CORVIN_TTS_OPENAI_MODEL", _model)):
+        if val and not (env.get(env_var) or "").strip():
             env[env_var] = val
     return env
 
@@ -1357,7 +1506,7 @@ def _voice_tts_sync(
     # with a key configured this is the same tier without the fork overhead.
     # Any other pin (piper, edge) must reach say.py untouched.
     if provider in (None, "openai"):
-        _tts_data = _try_openai_tts(tts_text, body.lang, voice)
+        _tts_data = _try_openai_tts(tts_text, body.lang, voice, rec.tenant_id)
         if _tts_data is not None:
             return _serve_tts_response(rec, body, _tts_data, "openai")
 

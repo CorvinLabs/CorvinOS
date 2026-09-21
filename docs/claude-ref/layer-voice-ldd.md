@@ -764,6 +764,69 @@ what makes voice recover by itself the moment `api.openai.com` is allowlisted,
 and a cached "blocked" verdict would keep the preferred tier off after the
 network was fixed.
 
+**The OpenAI tier is endpoint-configurable, because "OpenAI TTS" is not the same
+thing as `api.openai.com` (2026-09-21).** Both tiers hardcoded the public
+endpoint *and* `model="tts-1"`, so on the box above the PREFERRED tier was dead
+with no setting able to revive it — and the block page there points at approved
+internal AI systems, i.e. reachable OpenAI-compatible endpoints the tier had no
+way to address. Three settings, resolved by `_openai_tts_endpoint()`:
+
+| Setting | Default | Why it must be configurable |
+|---|---|---|
+| `CORVIN_TTS_OPENAI_BASE_URL` (then `OPENAI_BASE_URL`) | `""` → the SDK default, so an unconfigured install is byte-identical to before | the approved endpoint is per-organisation |
+| `CORVIN_TTS_OPENAI_MODEL` | `tts-1` | on Azure the model IS the operator-chosen **deployment name**; `tts-1` cannot address it |
+| `CORVIN_TTS_OPENAI_API_VERSION` | `2024-05-01-preview` | Azure retires data-plane versions on its own schedule |
+
+Four things here are load-bearing:
+
+- **Resolved via `provider_keys.resolve_by_env_var`, not bare `os.environ`** —
+  process env → `secrets.enc` → `service.env`, re-read per request. That is what
+  lets the endpoint live next to the key the operator already saved and take
+  effect **without restarting the console**; bare env would mean a restart with
+  the variable exported, which on an autostarted install means editing the
+  scheduled task. Falls back to `os.environ` if the resolver is unavailable, so
+  this can never itself be the reason TTS stops working.
+- **Azure is a flavour, not a base_url swap.** `*.openai.azure.com` authenticates
+  with an `api-key` header instead of a bearer token, requires `api-version`, and
+  puts the deployment in the path — a plain client aimed at that host 401s every
+  request. Hence the `AzureOpenAI` branch, keeping `max_retries=0` and the same
+  timeout as the plain one.
+- **The base URL is validated fail-CLOSED, because it is where the API KEY goes.**
+  https only, with loopback (`127.0.0.1`/`::1`/`localhost`) exempt — an
+  OpenAI-compatible server on loopback is a legitimate, egress-free setup and is
+  what the E2E drives. Then the **L35 egress gate**, through the same
+  `load_egress_gate_for_tenant` / `validate_or_raise` pair as
+  `routes/models.py::_egress_denied` rather than a second allowlist: fail-OPEN
+  when the gate is absent or errors, honour an EXPLICIT denial, and the gate
+  emits its own `egress.approved` / `egress.blocked` records onto the L16 chain.
+  Refusing only skips a best-effort tier (say.py still runs), so refusing is
+  cheap and sending a credential somewhere unintended is not.
+  `CORVIN_TTS_LOCAL_ONLY=1` still wins over a configured endpoint and is still
+  checked before any key or endpoint resolution — a configured endpoint is still
+  a cloud endpoint.
+- **`_say_env()` forwards all three**, because say.py re-derives its own config
+  in a child process under the *system* interpreter and cannot import
+  `provider_keys`. Without the forward, the in-process tier would call the
+  approved endpoint while the console's own subprocess fallback silently called
+  the unreachable public one. Nothing but a shared variable NAME couples the two
+  halves, so `test_say_py_reads_the_same_three_settings` fails on a rename.
+
+Guard: `core/console/tests/test_voice_tts_openai_endpoint.py` (11 cases) — the
+first is a real E2E, a live OpenAI-compatible `HTTPServer` on loopback reached by
+the real SDK over a real socket from the real route, asserting the *deployment*
+name and bearer auth arrive; plus unconfigured→no `base_url` kwarg, Azure→never
+the plain client, plaintext-remote refused before any client is constructed,
+local-only still wins, and the `_say_env` forward.
+
+Proven live on the same box (2026-09-21), both tiers: `POST /v1/console/voice/tts`
+→ `200`, `x-corvin-tts-provider: **openai**` with the endpoint logging
+`model='proof-deployment'`; and say.py pinned with `CORVIN_SAY_NO_FALLBACK=1`
+→ `say.py: provider=openai` (no fallback could have produced that). Reverting the
+setting put the header straight back to `say.py:edge`. What this does **not**
+change: `api.openai.com` itself stays policy-blocked there, so reaching OpenAI's
+own cloud still needs either that network exception or an approved deployment —
+the code is no longer what blocks it.
+
 The redundant `core/console/corvin_console/voice_bootstrap.py` was deleted
 in the same pass: never imported anywhere, its `urlretrieve(..., context=)`
 call raised TypeError on every invocation, its GitHub model URLs 404 — and
@@ -960,6 +1023,25 @@ extended) so power users can manage them via either UI.
   clause. Without it the LLM may emit the teaching content as
   chat-only metadata or markdown the TTS path strips — defeating the
   whole purpose of a *voice* learning mode.
+- Don't hardcode an OpenAI TTS endpoint or model again, and don't let the
+  two tiers read different variable names — the subprocess tier then
+  silently reverts to the public endpoint while the in-process one uses
+  the approved deployment.
+- Don't accept a non-https base URL for a remote host, and don't drop the
+  L35 gate call — the base URL is where the API key is sent.
+- Don't let a configured endpoint outrank `CORVIN_TTS_LOCAL_ONLY=1`, and
+  don't move that check after key or endpoint resolution.
+- Don't read the endpoint from bare `os.environ` instead of
+  `provider_keys.resolve_by_env_var` — that reintroduces a console
+  restart (and a scheduled-task edit) for a setting change.
+- Don't guess the served tier from the chain order, and don't log
+  `str(e)` from a TTS failure — the exception text can embed the spoken
+  words; `type(e).__name__` + `status_code` + hostname only.
+- Don't work around a corporate "Generative AI" category block by
+  tunneling, proxy bypass, alternate hosts or DNS tricks. It is a
+  deliberate data-protection control; the routes are the operator's
+  documented exception process or an approved endpoint, which is exactly
+  what the three settings above exist to reach.
 
 ## Layer 13 — `/btw <text>` mid-stream injection
 

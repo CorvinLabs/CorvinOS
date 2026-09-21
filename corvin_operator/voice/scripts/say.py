@@ -319,15 +319,53 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         sys.stderr.write("say.py: openai package not installed — skipping\n")
         return False
 
+    # Endpoint override — the twin of routes/voice.py::_openai_tts_endpoint,
+    # which is also what INJECTS these three vars into this process's env
+    # (_say_env). Without it this tier would keep aiming at api.openai.com
+    # while the console's in-process tier aims at the operator's approved
+    # endpoint: the subprocess fallback would silently contradict the branch it
+    # is supposed to back up. Empty base_url → the SDK default, unchanged.
+    base_url = (os.environ.get("CORVIN_TTS_OPENAI_BASE_URL")
+                or os.environ.get("OPENAI_BASE_URL") or "").strip()
+    api_version = (os.environ.get("CORVIN_TTS_OPENAI_API_VERSION")
+                   or "2024-05-01-preview").strip()
+    model = (os.environ.get("CORVIN_TTS_OPENAI_MODEL") or "tts-1").strip()
+    # https-only, loopback excepted — a base URL is where the API KEY is sent.
+    # The console validates this too (and additionally asks the L35 egress
+    # gate, which this standalone script has no access to), but say.py is also
+    # run directly by voice-doctor and by hand, so it cannot rely on that.
+    if base_url:
+        from urllib.parse import urlparse
+        _p = urlparse(base_url)
+        if _p.scheme != "https" and (_p.hostname or "") not in (
+                "127.0.0.1", "::1", "localhost"):
+            sys.stderr.write(
+                f"say.py: refusing OpenAI base URL with scheme "
+                f"'{_p.scheme or 'none'}' — https required (the API key would "
+                "travel in clear text)\n")
+            return False
+
     # Retry with exponential backoff on RateLimitError (429)
     max_retries = 2
     for attempt in range(max_retries + 1):
         try:
             # max_retries=0: disable SDK retries to protect the outer 25s route
             # budget (VOICE-10). We handle RateLimitError with manual backoff.
-            client = OpenAI(api_key=key, timeout=timeout_s, max_retries=0)
+            if base_url and ".openai.azure.com" in base_url.lower():
+                # Azure authenticates with an api-key header, needs an
+                # api-version, and addresses the model by DEPLOYMENT name — a
+                # plain OpenAI client on the same URL 401s every request.
+                from openai import AzureOpenAI  # type: ignore[import-not-found]
+                client = AzureOpenAI(
+                    api_key=key, azure_endpoint=base_url,
+                    api_version=api_version,
+                    timeout=timeout_s, max_retries=0,
+                )
+            else:
+                client = OpenAI(api_key=key, timeout=timeout_s, max_retries=0,
+                                **({"base_url": base_url} if base_url else {}))
             resp = client.audio.speech.create(
-                model="tts-1",
+                model=model,
                 voice=_openai_voice_for(lang, voice),
                 input=text,
                 response_format="opus",
@@ -352,9 +390,17 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         except Exception as e:  # noqa: BLE001
             # CONTENT-FREE: SDK exception str()s can embed the request payload —
             # i.e. the text being spoken. Type + HTTP status only (2026-07-17).
+            # The endpoint belongs in the diagnosis: the same
+            # PermissionDeniedError means "bad key" against OpenAI and "your
+            # proxy blocks this category" against a corporate egress path. A
+            # hostname is neither PII nor a secret; the key and str(e) stay out.
+            from urllib.parse import urlparse
+            _host = (urlparse(base_url).hostname if base_url else None) \
+                or "api.openai.com"
             sys.stderr.write(
                 f"say.py: OpenAI TTS failed: {type(e).__name__} "
-                f"status={getattr(e, 'status_code', '')}\n"
+                f"status={getattr(e, 'status_code', '')} "
+                f"endpoint={_host} model={model}\n"
             )
             return False
 
