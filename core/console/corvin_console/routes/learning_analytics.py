@@ -49,9 +49,9 @@ router = APIRouter(prefix="/v1/console/learning-loops", tags=["learning-loops"])
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _trend_direction(trend_value: Optional[float]) -> str:
-  """Classify trend as 'up', 'down', or 'flat'."""
-  val = trend_value or 0
-  return "up" if val > 0 else ("down" if val < 0 else "flat")
+    """Classify trend as 'up', 'down', or 'flat'."""
+    val = trend_value or 0
+    return "up" if val > 0 else ("down" if val < 0 else "flat")
 
 # ── Models ─────────────────────────────────────────────────────────────────
 
@@ -261,9 +261,13 @@ def _cleanup_expired_cache() -> None:
     global _last_cache_cleanup
     now = datetime.now(timezone.utc)
 
-    # Check cleanup interval under lock to prevent multiple threads running cleanup simultaneously
+    # Quick check before acquiring lock (TOCTOU race is acceptable for cache cleanup)
+    # Only run cleanup every 10 minutes to avoid per-request overhead
+    if (now - _last_cache_cleanup).total_seconds() < _CACHE_CLEANUP_INTERVAL:
+        return
+
     with _cache_lock:
-        # Only run cleanup every 10 minutes to avoid overhead
+        # Double-check inside lock to prevent multiple cleanups if multiple threads passed the first check
         if (now - _last_cache_cleanup).total_seconds() < _CACHE_CLEANUP_INTERVAL:
             return
 
@@ -274,8 +278,9 @@ def _cleanup_expired_cache() -> None:
                 data, ts, ttl = entry[0], entry[1], entry[2]
             else:
                 # Fallback for old format (shouldn't happen, but defensive)
+                # Use minimum TTL to avoid keeping stale entries longer than intended
                 data, ts = entry[0], entry[1]
-                ttl = max(_CACHE_TTL_LIST, _CACHE_TTL_DETAIL)
+                ttl = _CACHE_TTL_LIST  # 120s minimum for list cache entries
 
             # Use per-entry TTL (stored when cached)
             if (now - ts).total_seconds() >= ttl:
@@ -514,8 +519,8 @@ async def list_learning_loops(
         _set_cached(tenant_id, cache_key_hash, response, _CACHE_TTL_LIST)
 
         # Audit-log this API call (ADR-0232)
+        # Fire-and-forget on audit failure: don't block response on audit errors
         try:
-            # Non-blocking audit (fire-and-forget); don't block response on audit failure
             await _audit_log_route(session, "/learning-loops/list",
                                  plugin_id=plugin_id, skill_id=skill_id, status=status)
         except Exception as exc:
@@ -673,6 +678,10 @@ async def get_learning_loop_events(
 
     No cache (always fresh).
     Performance target: <500ms for 100 events
+
+    Note: Pagination (offset/limit) is computed over filtered results, not the entire
+    dataset. Filtering happens client-side after fetching a large batch from the backend.
+    This means total_count reflects only filtered events, not total unfiltered events.
     """
     tenant_id = session.tenant_id
 
