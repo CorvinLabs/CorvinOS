@@ -10,6 +10,8 @@ import tempfile
 import shutil
 import asyncio
 import json
+import fcntl
+import time
 from pathlib import Path
 from typing import Optional, Dict, List
 from dataclasses import dataclass
@@ -85,8 +87,8 @@ class BlenderRenderer:
             if result.returncode != 0:
                 raise RuntimeError(f"Blender render failed: {result.stderr.decode()}")
 
-            # Collect output frames
-            output_frames = sorted(output_dir.glob("*.png"))
+            # Collect output frames (with file-locking to ensure Blender finished writing)
+            output_frames = self._collect_frames_with_lock(output_dir)
             logger.info(f"✅ Blender render completed: {len(output_frames)} frames")
 
             return [str(f) for f in output_frames]
@@ -274,6 +276,33 @@ print(f"BLEND_INFO:{len(cameras)}|{len(lights)}|{len(materials)}|{len(scenes)}")
                     }
 
         return {}
+
+    def _collect_frames_with_lock(self, output_dir: Path) -> List[Path]:
+        """Collect frames with file-locking to avoid race conditions
+
+        Ensures Blender has finished writing before we read.
+        """
+        frames = []
+        for png_file in sorted(output_dir.glob("*.png")):
+            # Try to acquire exclusive lock (will wait if Blender is writing)
+            try:
+                with open(png_file, "rb") as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)  # Shared lock (wait for writer)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # Release
+                frames.append(png_file)
+            except IOError as e:
+                logger.warning(f"Failed to lock {png_file}: {e}")
+                # Retry with backoff
+                time.sleep(0.5)
+                try:
+                    with open(png_file, "rb") as f:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    frames.append(png_file)
+                except IOError:
+                    logger.error(f"Failed to acquire lock on {png_file}")
+                    continue
+        return frames
 
     def cleanup(self) -> None:
         """Clean up temporary files and processes"""
