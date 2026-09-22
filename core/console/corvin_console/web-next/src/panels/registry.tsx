@@ -24,6 +24,7 @@ import {
   QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
+  ControlIntentRouterPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -68,6 +69,10 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   DataHubUnifiedPage,
   OTELTelemetryPage,
   ModelsPage,
+  ControlIntentRouterPage,
+  ControlSubsystemsPage,
+  ControlOverridesPage,
+  ControlSnapshotsPage,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -160,6 +165,11 @@ export const PANELS: ConsolePanel[] = [
   // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
   // retired on 2026-09-05 (their content is reachable as dashboard tabs);
   // Brain Status and Debug Panel had already been folded in before that.
+  // Control Plane UI Panels (ADR-2029 Phase 9b) — Operator Control Plane
+  rc("control-intent-router", "Intent Router", ControlIntentRouterPage, { nav: { label: "Intent Router", icon: "Zap", group: "system" } }),
+  rc("control-subsystems", "Subsystems", ControlSubsystemsPage, { nav: { label: "Subsystems", icon: "Layers", group: "system" } }),
+  rc("control-overrides", "Overrides", ControlOverridesPage, { nav: { label: "Overrides", icon: "Lock", group: "system" } }),
+  rc("control-snapshots", "Snapshots", ControlSnapshotsPage, { nav: { label: "Snapshots", icon: "Archive", group: "system" } }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {
