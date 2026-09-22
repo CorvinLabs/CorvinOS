@@ -211,6 +211,13 @@ from .routes import (
     datahub_api as datahub_route,
     # Corvin-Knowledge Marketplace Plugin API
     plugins_corvin_knowledge_api as plugins_corvin_knowledge_api_route,
+    # ADR-2028 — Natural Language Intent Router (Phase 9a)
+    intents as intents_route,
+    # ADR-2029 — User-Centric CorvinOS Control Plane (Phase 9b)
+    control_plane_plugins as control_plane_plugins_route,
+    control_plane_subsystems as control_plane_subsystems_route,
+    control_plane_overrides as control_plane_overrides_route,
+    control_plane_snapshots as control_plane_snapshots_route,
 )
 
 
@@ -327,17 +334,24 @@ router.include_router(chat_route.router, tags=["console-chat"])
 router.include_router(voice_route.router, tags=["console-voice"])
 # ADR-0039 — Workflow Builder (Phases 1-7, Phase 6: plugin migration).
 # Load workflows router from marketplace plugin with console adapters (fallback: console routes).
-workflows_router = plugins_loader.get_workflows_router(
-    session_auth_module=None,  # Injected by plugin with console session auth
-    audit_backend=None,         # Console audit backend (injected by plugin)
-    storage_backend=None,       # Console storage backend (injected by plugin)
-    license_backend=None,       # Console license backend (injected by plugin)
-    prompt_guard=None,          # Console prompt guard (injected by plugin)
-    scheduler_backend=None,     # Console scheduler backend (injected by plugin)
-    forge_paths=None,           # Console forge paths (injected by plugin)
-    spawn_gates=None,           # Console spawn gates (injected by plugin)
-)
-router.include_router(workflows_router, tags=["console-workflows"])
+try:
+    workflows_router = plugins_loader.get_workflows_router(
+        session_auth_module=None,  # Injected by plugin with console session auth
+        audit_backend=None,         # Console audit backend (injected by plugin)
+        storage_backend=None,       # Console storage backend (injected by plugin)
+        license_backend=None,       # Console license backend (injected by plugin)
+        prompt_guard=None,          # Console prompt guard (injected by plugin)
+        scheduler_backend=None,     # Console scheduler backend (injected by plugin)
+        forge_paths=None,           # Console forge paths (injected by plugin)
+        spawn_gates=None,           # Console spawn gates (injected by plugin)
+    )
+    router.include_router(workflows_router, tags=["console-workflows"])
+except Exception as _workflows_exc:
+    import logging as _workflows_log
+    _workflows_log.getLogger(__name__).warning(
+        "Workflows router failed to load (plugin + console fallback unavailable); "
+        "workflows feature will not be available: %r", _workflows_exc
+    )
 router.include_router(connectors_route.router, tags=["console-connectors"])
 router.include_router(setup_route.router, tags=["console-setup"])
 # Phase D extension — settings file watcher SSE stream.
@@ -389,6 +403,13 @@ router.include_router(marketplace_custom_repos_route.router,
 # module. Guard: tests/test_console_app_importable.py.
 # Corvin-Knowledge Marketplace Plugin API (Graph visualization, settings, sync)
 router.include_router(plugins_corvin_knowledge_api_route.router, tags=["console-corvin-knowledge"])
+# ADR-2028 — Natural Language Intent Router (Phase 9a)
+router.include_router(intents_route.router, tags=["console-intents"])
+# ADR-2029 — User-Centric CorvinOS Control Plane (Phase 9b Streams 1-4)
+router.include_router(control_plane_plugins_route.router, tags=["console-control-plane"])
+router.include_router(control_plane_subsystems_route.router, tags=["console-control-plane"])
+router.include_router(control_plane_overrides_route.router, tags=["console-control-plane"])
+router.include_router(control_plane_snapshots_route.router, tags=["console-control-plane"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
 # packages_route.router already has prefix="/packages", so mount without additional prefix
 router.include_router(packages_route.router, tags=["console-packages"])
