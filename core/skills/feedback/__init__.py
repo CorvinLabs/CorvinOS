@@ -1,12 +1,17 @@
 """
-Feedback Integration Schema Module — ADR-2033
+Feedback Integration — ADR-2033
 
-Unified feedback API for Skills 2.0 learning loop.
+Week 1 (COMPLETE): Feedback Integration Schema
+  - schema: Feedback event types (Outcome, Preference, Confidence, Metric)
+  - consumer: Async queue consumer for feedback processing
+  - api: FastAPI routes for feedback ingestion and config management
 
-Public interface:
-- FeedbackEvent, OutcomeFeedback, PreferenceFeedback, ConfidenceFeedback, MetricFeedback
-- FeedbackConsumer (async consumer with config hot-reload)
-- FastAPI router with routes: POST /feedback, GET /history, PUT /config, GET /metrics
+Week 2 (COMPLETE): Production Monitoring + Feedback Loop Closure
+  - monitoring: Prometheus metrics, health checks, alert rules
+  - loop_closure: Feedback → config update transformation
+  - api_extended: Config update history, learning curves
+
+All components are audit-first, tenant-scoped, and immutable.
 """
 
 from core.skills.feedback.schema import (
@@ -32,7 +37,21 @@ from core.skills.feedback.api import (
     get_feedback_consumer,
 )
 
+from core.skills.feedback.monitoring import (
+    FeedbackMetrics,
+    HealthCheck,
+    AlertManager,
+)
+
+from core.skills.feedback.loop_closure import (
+    LoopClosureManager,
+    ConfigUpdate,
+)
+
+from core.skills.feedback.api_extended import router as router_extended
+
 __all__ = [
+    # Week 1: Schema
     "FeedbackType",
     "FeedbackEvent",
     "OutcomeFeedback",
@@ -47,4 +66,13 @@ __all__ = [
     "router",
     "init_feedback_consumer",
     "get_feedback_consumer",
+    # Week 2: Monitoring
+    "FeedbackMetrics",
+    "HealthCheck",
+    "AlertManager",
+    # Week 2: Loop Closure
+    "LoopClosureManager",
+    "ConfigUpdate",
+    # Week 2: Extended API
+    "router_extended",
 ]

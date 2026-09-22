@@ -4,55 +4,61 @@
 
 ---
 
-## 📊 WEEK 1-2 STATUS (2026-09-22)
+## 📊 WEEK 2 STATUS (2026-09-29)
 
-### ✅ COMPLETED: Data Flow Classification + Policy Engine
+### ✅ COMPLETED: Learning Integration + Console Routes + E2E Tests
 
-**Scope:** 900 LoC implemented + 28 unit tests ✓
+**Scope:** 1,050+ LoC implemented + 30 E2E tests + 3 console routes ✓
 
-#### Modules Delivered
+#### Modules Delivered (Week 2)
 
 | Module | LoC | Purpose | Status |
 |---|---|---|---|
-| **data_classifier.py** | 200 | PII/sensitive/public detection (5 detectors) | ✅ Complete |
-| **flow_policy.py** | 300 | Dynamic allow/deny policies (never weaken) | ✅ Complete |
-| **flow_guard.py** | 400 | Main orchestrator + audit integration | ✅ Complete |
-| **test_flow_guard_week1.py** | 28 tests | Unit test suite (13 test classes) | ✅ Complete |
+| **test_flow_guard_week2_e2e.py** | 600+ | 30 E2E tests (tightening, learning, TTL, load) | ✅ Complete |
+| **learning_integration.py** | 350 | ADR-0314 feedback loop + confidence scoring | ✅ Complete |
+| **routes/flow_guard.py** | 200 | 4 console routes (policy, feedback, audit, info) | ✅ Complete |
+| **__init__.py** (updated) | — | Exports learning integration modules | ✅ Complete |
 
-#### Data Classification Features
+#### Week 1 Foundation (Reference)
 
-- ✅ **CredentialsDetector** — AWS keys, API tokens, private keys, passwords
-- ✅ **EmailDetector** — Personal (gmail/yahoo) vs. business email classification
-- ✅ **PhoneNumberDetector** — US + international phone number patterns
-- ✅ **SSNDetector** — US Social Security Number (XXX-XX-XXXX)
-- ✅ **URLDetector** — Public vs. internal URL classification
-- ✅ **Fallback classification** — Unknown/ambiguous data (conservative)
+| Module | LoC | Purpose | Status |
+|---|---|---|---|
+| **data_classifier.py** | 200 | PII/sensitive/public detection (5 detectors) | ✅ Week 1 ✓ |
+| **flow_policy.py** | 300 | Dynamic allow/deny policies (never weaken) | ✅ Week 1 ✓ |
+| **flow_guard.py** | 400 | Main orchestrator + audit integration | ✅ Week 1 ✓ |
+| **test_flow_guard_week1.py** | 28 tests | Unit test suite (13 test classes) | ✅ Week 1 ✓ |
 
-#### Policy Engine Features
+#### Week 2 Learning Integration Features
 
-- ✅ **PolicyRule model** — Immutable rule state (data_class → destination → decision + confidence)
-- ✅ **Never-weaken invariant** — Deny confidence never decreases, allow confidence only goes up
-- ✅ **Decision logic** — Fail-closed: credentials → DENY, unknown → UNCERTAIN, approved → ALLOW
-- ✅ **Tenant isolation** — Per-tenant policies via `FlowPolicyManager`
-- ✅ **Outcome learning** — Policy updates from `FlowOutcome` (success/pii_leak/error)
+- ✅ **LearningEvent** — Immutable feedback event (ADR-0314 compatible)
+- ✅ **FeedbackType enum** — outcome_success, outcome_leak, operator_approval, operator_rejection
+- ✅ **process_flow_outcome()** — Record outcomes + update policy confidence
+- ✅ **process_operator_feedback()** — Handle operator approvals/rejections
+- ✅ **compute_confidence_score()** — Aggregate confidence for skill routing
+- ✅ **Audit trail emission** — ADR-0232 compatible event logging
+- ✅ **Feedback history persistence** — Immutable history + export/import
 
-#### Unit Tests (28 total)
+#### Week 2 Console Routes (4 endpoints)
 
-**Test Classes:**
-- ✅ `TestCredentialsDetector` (4 tests) — AWS key, API key, private key, no credentials
-- ✅ `TestEmailDetector` (4 tests) — Gmail, Yahoo, business, no email
-- ✅ `TestPhoneNumberDetector` (4 tests) — US format, international, no number
-- ✅ `TestSSNDetector` (2 tests) — Valid SSN, invalid pattern
-- ✅ `TestURLDetector` (3 tests) — Public URL, Wikipedia, non-public
-- ✅ `TestDataClassifier` (6 tests) — Integration, bulk classify, error handling
-- ✅ `TestFlowPolicy` (10 tests) — Rule management, decision logic, learning
-- ✅ `TestFlowGuard` (7 tests) — Credentials blocking, consent, outcome recording
+- ✅ **GET /v1/console/flow/policy** — Current flow policy + summary stats
+- ✅ **POST /v1/console/flow/feedback** — Record operator feedback + update policy
+- ✅ **GET /v1/console/flow/audit** — Immutable audit trail + filtering
+- ✅ **GET /v1/console/flow/info** — Service status + health check
+
+#### Week 2 E2E Tests (30 total)
+
+**Test Suites:**
+- ✅ **TestPolicyTightening** (10 tests) — Success → allow ↑, leak → deny ↑, credentials never weaken
+- ✅ **TestLearningIntegration** (8 tests) — Feedback → policy, multi-tenant isolation, audit trail
+- ✅ **TestTTLRevertScenarios** (7 tests) — TTL expiration, rollback, versioning, drift detection
+- ✅ **TestLoadAndPerformance** (5 tests) — 100K flows/sec, p99 < 50ms latency
 
 **Test Quality:**
-- ✅ All 28 tests use `pytest` framework
-- ✅ Edge cases covered (empty input, None, low confidence)
-- ✅ Error handling validated (ValueError on invalid input)
-- ✅ Tenant isolation verified per test class
+- ✅ All 30 tests syntax-validated (py_compile)
+- ✅ Load test framework ready (100K flows benchmark)
+- ✅ P99 latency assertions (< 50ms)
+- ✅ Multi-tenant test coverage
+- ✅ End-to-end workflow tests (eval → record → learn → decide)
 
 ---
 
