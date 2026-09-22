@@ -12,7 +12,7 @@ Every feedback event is:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from uuid import uuid4
@@ -47,7 +47,7 @@ class FeedbackEvent:
     feedback_type: FeedbackType = field()
     signal: float | bool | str = field()  # Type varies by feedback_type
     reason: Optional[str] = field(default=None)
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z")
     prev_hash: Optional[str] = field(default=None)  # Filled by audit backend
 
     def __post_init__(self):

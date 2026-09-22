@@ -31,7 +31,10 @@ from core.learning.convergence_detector_stream2 import ConvergenceDetector
 from core.learning.dashboard_metrics_stream2 import DashboardMetrics
 from core.learning.alert_dispatcher_stream2 import AlertDispatcher
 from core.learning.hotfix_flow_stream2 import HotfixFlow
-from core.paths.tenant import current_tenant
+from core.paths.tenant import tenant_home
+
+from .. import auth as session_auth
+from ..deps import require_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/console/learning", tags=["learning-optimizer"])
@@ -68,13 +71,16 @@ class HotfixRequest(BaseModel):
 # Dependency: Get Components
 # ============================================================================
 
-async def get_components(tenant_id: str = Depends(current_tenant)) -> Dict:
-    """Get all learning components for tenant."""
-    learning_home = Path.home() / ".corvin" / "tenants" / tenant_id / "learning"
-    feedback_home = Path.home() / ".corvin" / "tenants" / tenant_id / "feedback"
-    convergence_home = Path.home() / ".corvin" / "tenants" / tenant_id / "convergence"
-    alert_home = Path.home() / ".corvin" / "tenants" / tenant_id / "alerts"
-    hotfix_home = Path.home() / ".corvin" / "tenants" / tenant_id / "hotfixes"
+async def get_components(
+    rec: session_auth.SessionRecord = Depends(require_session),
+) -> Dict:
+    """Get all learning components for the session's tenant (never an env var)."""
+    tenant_id = rec.tenant_id
+    learning_home = tenant_home(tenant_id) / "learning"
+    feedback_home = tenant_home(tenant_id) / "feedback"
+    convergence_home = tenant_home(tenant_id) / "convergence"
+    alert_home = tenant_home(tenant_id) / "alerts"
+    hotfix_home = tenant_home(tenant_id) / "hotfixes"
 
     return {
         "tenant_id": tenant_id,

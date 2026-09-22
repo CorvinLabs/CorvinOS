@@ -18,10 +18,11 @@ Example usage:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, List
 import logging
+from uuid import uuid4
 
 from .data_classifier import DataClassifier, ClassificationResult, DataClassification
 from .flow_policy import (
@@ -106,11 +107,18 @@ class FlowGuard:
         Initialize Flow Guard.
 
         Args:
-            tenant_id: Tenant ID for policy isolation
+            tenant_id: Tenant ID for policy isolation (required, fail-closed)
             confidence_threshold: Confidence level for auto-allow/deny (0.0–1.0)
             allow_uncertain_flows: If False (default), uncertain flows are blocked
+
+        Raises:
+            ValueError: If tenant_id is empty or None (fail-closed validation)
         """
-        self.tenant_id = tenant_id
+        # Fail-closed validation: tenant_id is REQUIRED
+        if not tenant_id or not isinstance(tenant_id, str) or tenant_id.strip() == "":
+            raise ValueError("tenant_id is required and must be a non-empty string (fail-closed)")
+
+        self.tenant_id = tenant_id.strip()
         self.confidence_threshold = confidence_threshold
         self.allow_uncertain_flows = allow_uncertain_flows
 
@@ -261,16 +269,26 @@ class FlowGuard:
         )
         self.policy_manager.record_outcome(self.tenant_id, outcome)
 
-        # Log to audit trail
+        # Emit audit event (structured, hash-chainable format)
+        # TODO: Wire to formal audit backend (ADR-0232)
+        audit_event = {
+            "event_id": str(uuid4()),
+            "event_type": "flow_outcome_recorded",
+            "skill_id": "os.flow_guard",
+            "tenant_id": self.tenant_id,
+            "data_class": data_class,
+            "destination_engine": destination_engine,
+            "result": result,
+            "reasoning": reasoning,
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z",
+            "lom": "flow_guard.FlowGuard.record_outcome:L245",
+        }
+
+        # Log structured event (can be consumed by audit backend)
         logger.info(
             f"Flow outcome recorded: data_class={data_class}, "
             f"destination={destination_engine}, result={result}",
-            extra={
-                "skill_id": "os.flow_guard",
-                "event_type": "flow_outcome_recorded",
-                "data_class": data_class,
-                "result": result,
-            },
+            extra=audit_event,
         )
 
     def add_policy_rule(self, rule: PolicyRule) -> None:
@@ -283,16 +301,25 @@ class FlowGuard:
         policy = self.policy_manager.get_or_create_policy(self.tenant_id)
         policy.add_rule(rule)
 
+        # Emit audit event (structured, hash-chainable format)
+        # TODO: Wire to formal audit backend (ADR-0232)
+        audit_event = {
+            "event_id": str(uuid4()),
+            "event_type": "flow_policy_updated",
+            "skill_id": "os.flow_guard",
+            "tenant_id": self.tenant_id,
+            "data_class": rule.data_class,
+            "destination_engine": rule.destination_engine,
+            "decision": rule.decision.value,
+            "confidence": rule.confidence,
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z",
+            "lom": "flow_guard.FlowGuard.add_policy_rule:L297",
+        }
+
         logger.info(
             f"Policy rule added: {rule.data_class} → {rule.destination_engine} "
             f"({rule.decision.value}, confidence={rule.confidence})",
-            extra={
-                "skill_id": "os.flow_guard",
-                "event_type": "flow_policy_updated",
-                "data_class": rule.data_class,
-                "decision": rule.decision.value,
-                "confidence": rule.confidence,
-            },
+            extra=audit_event,
         )
 
     def get_policy(self) -> FlowPolicy:

@@ -56,10 +56,49 @@ class PolicyEngine:
         self.policy = {"auth_max_failures": 5}
         self.active_tightenings = {}
 
-    def tighten_policy(self, threat_signal, audit_backend=None, tenant_id="", skill_id=""):
+    def tighten_policy(self, threat_signal, audit_backend=None, tenant_id=None, skill_id=None):
+        """
+        Tighten security policy in response to threat.
+
+        Args:
+            threat_signal: ThreatSignal to respond to
+            audit_backend: Backend for audit events (optional but strongly recommended)
+            tenant_id: Tenant ID (required for audit isolation)
+            skill_id: Skill ID for attribution (required for audit)
+
+        Returns:
+            Dict with success status, affected gate, old/new values
+
+        Raises:
+            ValueError: If tenant_id or skill_id is empty (fail-closed)
+        """
+        # Fail-closed: require tenant_id and skill_id for audit attribution
+        if not tenant_id or not isinstance(tenant_id, str) or tenant_id.strip() == "":
+            raise ValueError("tenant_id is required for audit isolation (fail-closed)")
+        if not skill_id or not isinstance(skill_id, str) or skill_id.strip() == "":
+            raise ValueError("skill_id is required for audit attribution (fail-closed)")
+
         return {"success": True, "gate": "auth_max_failures", "old_value": 5, "new_value": 3}
 
-    def check_ttl_and_revert(self, audit_backend=None, tenant_id="", skill_id=""):
+    def check_ttl_and_revert(self, audit_backend=None, tenant_id=None, skill_id=None):
+        """
+        Check TTL on active policy tightenings and revert expired ones.
+
+        Args:
+            audit_backend: Backend for audit events
+            tenant_id: Tenant ID (required for audit isolation)
+            skill_id: Skill ID for attribution
+
+        Returns:
+            List of reverted tightening IDs
+
+        Raises:
+            ValueError: If tenant_id is empty (fail-closed)
+        """
+        # Fail-closed: require tenant_id for audit isolation
+        if not tenant_id or not isinstance(tenant_id, str) or tenant_id.strip() == "":
+            raise ValueError("tenant_id is required for audit isolation (fail-closed)")
+
         return []
 
     def get_current_policy(self):
@@ -113,14 +152,21 @@ class SecurityOrchestratorSkill:
     ):
         """
         Initialize the Security Orchestrator Skill.
-        
+
         Args:
-            tenant_id: Tenant context for audit isolation
+            tenant_id: Tenant context for audit isolation (required, fail-closed)
             audit_backend: Backend for writing immutable audit events (required for compliance)
             learning_backend: Optional backend for feedback/optimization (ADR-0314)
             **detector_kwargs: Passed to ThreatDetector (window_minutes, thresholds, etc.)
+
+        Raises:
+            ValueError: If tenant_id is empty or None (fail-closed validation)
         """
-        self.tenant_id = tenant_id
+        # Fail-closed validation: tenant_id is REQUIRED
+        if not tenant_id or not isinstance(tenant_id, str) or tenant_id.strip() == "":
+            raise ValueError("tenant_id is required and must be a non-empty string (fail-closed)")
+
+        self.tenant_id = tenant_id.strip()
         self.audit_backend = audit_backend
         self.learning_backend = learning_backend
         

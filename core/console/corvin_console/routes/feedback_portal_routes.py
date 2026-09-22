@@ -17,7 +17,10 @@ from typing import Optional
 
 from core.feedback.phase9_feedback_portal import FeedbackPortal
 from core.feedback.feedback_models import FeedbackSeverity
-from core.paths.tenant import current_tenant
+from core.paths.tenant import tenant_home
+
+from .. import auth as session_auth
+from ..deps import require_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/console/feedback", tags=["feedback"])
@@ -69,9 +72,12 @@ class FeedbackResponse(BaseModel):
 # Dependency: Get Portal
 # ============================================================================
 
-async def get_feedback_portal(tenant_id: str = Depends(current_tenant)) -> FeedbackPortal:
-    """Get feedback portal for current tenant."""
-    feedback_home = Path.home() / ".corvin" / "tenants" / tenant_id / "feedback"
+async def get_feedback_portal(
+    rec: session_auth.SessionRecord = Depends(require_session),
+) -> FeedbackPortal:
+    """Get feedback portal for the session's tenant (never an env var)."""
+    tenant_id = rec.tenant_id
+    feedback_home = tenant_home(tenant_id) / "feedback"
     return FeedbackPortal(feedback_home, tenant_id)
 
 

@@ -5,7 +5,7 @@ Logs gate decisions to audit chain with hash-chaining.
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import logging
 import duckdb
@@ -98,7 +98,7 @@ class QualityGateAuditLogger:
         event_hash = self.compute_event_hash(event_data, prior_hash)
 
         # Prepare timestamp
-        timestamp = result.timestamp or datetime.utcnow().isoformat() + "Z"
+        timestamp = result.timestamp or datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z"
 
         # Generate event ID
         event_id = f"{result.artifact_id}:{event_hash[:16]}"
@@ -147,7 +147,7 @@ class QualityGateAuditLogger:
         Returns:
             AuditEvent
         """
-        timestamp = result.timestamp or datetime.utcnow().isoformat() + "Z"
+        timestamp = result.timestamp or datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z"
 
         return AuditEvent(
             event_type=EventType.QUALITY_GATE_DECIDED,

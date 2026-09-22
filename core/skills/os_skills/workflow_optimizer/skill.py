@@ -89,7 +89,12 @@ class RoutingInput:
     task_content: str  # Task description / prompt
     task_type: Optional[str] = None  # "code", "analysis", "chat", etc.
     user_id: Optional[str] = None
-    tenant_id: str = "_default"
+    tenant_id: str  # REQUIRED: no default (fail-closed tenant isolation)
+
+    def __post_init__(self):
+        """Validate routing input (fail-closed)."""
+        if not self.tenant_id or not isinstance(self.tenant_id, str) or self.tenant_id.strip() == "":
+            raise ValueError("tenant_id is required and must be a non-empty string (fail-closed)")
 
 
 @dataclass
