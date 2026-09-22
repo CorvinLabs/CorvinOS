@@ -128,6 +128,32 @@ export function getInstallProgress(jobId: string, signal?: AbortSignal): Promise
   return api<InstallJob>(`/api/v1/marketplace/install/${encodeURIComponent(jobId)}/progress`, { signal });
 }
 
+// ── Dependency resolution ────────────────────────────────────────────────
+
+export interface DependencyNode {
+  plugin_id: string;
+  index_id: string;
+  version: string;
+  installed: boolean;
+  missing: boolean;
+  reason?: string;
+  children: DependencyNode[];
+}
+
+export interface InstallPlan {
+  root_id: string;
+  root_plugin_id: string;
+  dependency_tree: DependencyNode;
+  to_install: string[];
+  already_installed: string[];
+  total_new: number;
+  total_existing: number;
+}
+
+export function getPluginDependencies(indexId: string, signal?: AbortSignal): Promise<InstallPlan> {
+  return api<InstallPlan>(`/api/v1/marketplace/plugins/${encodeURIComponent(indexId)}/dependencies`, { signal });
+}
+
 // ── Skill packages (ADR-0268) ────────────────────────────────────────────
 
 export interface PackageInfo {

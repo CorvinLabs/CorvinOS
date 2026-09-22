@@ -8,6 +8,7 @@ routers used to declare the prefix, which doubled it to
 reachable for anyone else. Adversarial review E-03, 2026-09-03.)
 
 Effective paths (under ``/v1/console``):
+- GET   /api/v1/marketplace/plugins/{id}/dependencies (ADR-0892 Session 2)
 - POST  /api/v1/marketplace/plugins/{id}/install
 - POST  /api/v1/marketplace/plugins/{id}/uninstall
 - PATCH /api/v1/marketplace/plugins/{id}/enable
@@ -72,6 +73,9 @@ except ImportError:
     _LICENSING_AVAILABLE = False
 
 log = logging.getLogger(__name__)
+
+# Import dependency resolver
+from . import marketplace_dependencies as _dependencies
 
 router = APIRouter(tags=["marketplace-install"])
 
@@ -198,6 +202,38 @@ def _index_has(plugin_id: str) -> bool:
     except Exception:  # noqa: BLE001 - a broken index must not 500 the install
         return False
     return plugin_id in (index.get("by_id") or {})
+
+
+@router.get("/plugins/{plugin_id}/dependencies")
+async def get_plugin_dependencies(
+    plugin_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
+    """Get the dependency tree for a plugin before installation.
+
+    Returns a tree of dependencies (direct + transitive), marked with:
+    - Whether each is already installed
+    - Whether each could be resolved from the marketplace
+    - A flattened list of what needs to be installed
+
+    Raises 404 if the plugin is not in the marketplace index.
+    Raises 422 if dependency resolution fails (circular deps, max depth).
+    """
+    plugin_id = _validate_plugin_id(plugin_id)
+    if not _index_has(plugin_id):
+        raise HTTPException(status_code=404, detail=f"{plugin_id} is not in the marketplace index")
+
+    try:
+        plan = _dependencies.get_install_plan(plugin_id, tenant_id=rec.tenant_id)
+        return plan
+    except _dependencies.DependencyResolveError as exc:
+        raise HTTPException(status_code=422, detail=f"Dependency resolution failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception(f"Dependency resolution error for {plugin_id}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dependency resolution error: {type(exc).__name__}",
+        ) from exc
 
 
 #: The install's phases, each a REAL step with its own failure mode, recorded on

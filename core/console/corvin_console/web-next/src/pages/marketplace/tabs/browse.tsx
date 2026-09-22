@@ -35,6 +35,7 @@ import {
   type IndexPlugin, type InstallJob,
 } from "../api";
 import type { TabId } from "../tabs";
+import { InstallFlowModal } from "../components/install-flow-modal";
 
 /** Query keys the sidebar reads (adapters/capabilities.ts) — invalidated after
  *  every lifecycle change so a plugin panel appears/disappears without a reload. */
@@ -84,7 +85,7 @@ function useInstallJob(jobId: string | null, onDone: (j: InstallJob) => void) {
 
 function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: (t: TabId) => void }) {
   const qc = useQueryClient();
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [installModalOpen, setInstallModalOpen] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [detail, setDetail] = useState(false);
   const invalidate = () => {
@@ -94,20 +95,12 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
     qc.invalidateQueries({ queryKey: [...KEY_MANIFEST] });
     qc.invalidateQueries({ queryKey: [...KEY_CAPABILITIES] });
   };
-  const start = useMutation({
-    mutationFn: () => startInstallJob(p.id, p.version, csrf),
-    onSuccess: (j) => { setOutcome(null); setJobId(j.job_id); },
-    onError: (e) => setOutcome(outcomeOfError(e)),
-  });
-  const job = useInstallJob(jobId, (j) => { setJobId(null); setOutcome(outcomeOfJob(j)); invalidate(); });
   const community = tierKey(p.tier) === "contributor";
   const enable = useMutation({
     mutationFn: () => enablePlugin(p.registry_id as string, csrf, community),
     onSuccess: () => { setOutcome({ kind: "enabled", text: community ? "Enabled with your consent — audited. A panel this plugin declares is now in the sidebar." : "Enabled — audited. A panel this plugin declares is now in the sidebar." }); invalidate(); },
     onError: () => setOutcome({ kind: "error", text: "Not enabled — the plugin refused to load; the registry was rolled back." }),
   });
-  const running = job !== null && job.status !== "completed" && job.status !== "failed";
-  const busy = start.isPending || running;
   const justInstalled = outcome?.kind === "ok" || outcome?.kind === "already";
   const tier = TIER[tierKey(p.tier)];
 
@@ -132,13 +125,6 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
           {p.runtime_loaded && <Badge variant="secondary">running</Badge>}
         </div>
 
-        {running && job && (
-          <div className="space-y-1" data-testid={`install-progress-${p.id}`}>
-            <Progress value={job.progress} />
-            <div className="text-xs text-muted-foreground">{job.message} · {job.progress}%</div>
-          </div>
-        )}
-
         {justInstalled && !p.enabled && outcome?.kind !== "enabled" ? (
           <Button variant="accent" size="sm" className="w-full" disabled={enable.isPending || !csrf || !p.registry_id}
                   onClick={() => enable.mutate()} data-testid={`enable-now-${p.id}`}>
@@ -150,8 +136,8 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
             Manage on the Installed tab
           </Button>
         ) : p.installable ? (
-          <Button variant="accent" size="sm" className="w-full" disabled={busy || !csrf} onClick={() => start.mutate()}>
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Install
+          <Button variant="accent" size="sm" className="w-full" disabled={!csrf} onClick={() => setInstallModalOpen(true)}>
+            Install
           </Button>
         ) : (
           <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
@@ -168,6 +154,15 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
           </p>
         )}
       </CardContent>
+
+      <InstallFlowModal
+        plugin={p}
+        csrf={csrf}
+        open={installModalOpen}
+        onOpenChange={setInstallModalOpen}
+        onSuccess={() => { setOutcome({ kind: "ok", text: "Installed — disabled until you enable it." }); invalidate(); }}
+        onGoTo={onGoTo}
+      />
 
       <Dialog open={detail} onOpenChange={setDetail}>
         <DialogContent className="max-w-2xl">
