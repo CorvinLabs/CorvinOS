@@ -14,10 +14,10 @@ ADR-2029: User-Centric CorvinOS Control Plane — Stream 1
 
 from typing import Optional, List, Dict, Any, Annotated
 from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from corvin_console.control_plane.plugin_manager import PluginManager, PluginInfo
-from corvin_console.deps import require_session, require_csrf
+from corvin_console.control_plane.plugin_manager import PluginManager, PluginInfo, BootLayer
+from corvin_console.deps import require_session, require_csrf, consent_required
 from corvin_console import auth as session_auth
 
 router = APIRouter(
@@ -44,6 +44,16 @@ class PluginInstallRequest(BaseModel):
     version: str
     boot_layer: str  # bundled, installed, community
 
+    @field_validator("boot_layer")
+    @classmethod
+    def validate_boot_layer(cls, v: str) -> str:
+        """Validate boot_layer is a recognized value."""
+        try:
+            BootLayer(v)
+        except (ValueError, KeyError):
+            raise ValueError(f"Invalid boot_layer: {v}. Must be one of: {', '.join([bl.value for bl in BootLayer])}")
+        return v
+
 
 class PluginOperationResponse(BaseModel):
     """Response from plugin operation."""
@@ -55,7 +65,8 @@ class PluginOperationResponse(BaseModel):
 @router.put("/install")
 async def install_plugin(
     req: PluginInstallRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
 ) -> PluginOperationResponse:
     """
     Install a plugin from marketplace (tenant-scoped, CSRF-protected).
@@ -96,7 +107,8 @@ async def install_plugin(
 
 @router.get("")
 async def list_plugins(
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
 ) -> List[Dict[str, Any]]:
     """
     List all plugins for the current tenant (tenant-scoped).
@@ -133,7 +145,8 @@ async def list_plugins(
 @router.get("/{plugin_id}")
 async def get_plugin(
     plugin_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
 ) -> Dict[str, Any]:
     """
     Get plugin info by ID (tenant-scoped).
@@ -174,7 +187,8 @@ async def get_plugin(
 @router.patch("/{plugin_id}/enable")
 async def enable_plugin(
     plugin_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
 ) -> PluginOperationResponse:
     """
     Enable an installed plugin (tenant-scoped, CSRF-protected).
@@ -212,7 +226,8 @@ async def enable_plugin(
 @router.patch("/{plugin_id}/disable")
 async def disable_plugin(
     plugin_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
 ) -> PluginOperationResponse:
     """
     Disable an enabled plugin (tenant-scoped, CSRF-protected).
@@ -253,7 +268,8 @@ async def disable_plugin(
 @router.delete("/{plugin_id}")
 async def uninstall_plugin(
     plugin_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
 ) -> PluginOperationResponse:
     """
     Uninstall a plugin (tenant-scoped, CSRF-protected).
@@ -293,7 +309,8 @@ async def uninstall_plugin(
 @router.get("/audit-log")
 async def get_audit_log(
     limit: int = Query(10, ge=1, le=100),
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
 ) -> List[Dict[str, Any]]:
     """
     Get plugin operation audit log for a tenant (read-only, immutable, tenant-scoped).

@@ -15,10 +15,10 @@ ADR-2029: User-Centric CorvinOS Control Plane — Stream 2
 
 from typing import Optional, List, Dict, Any, Annotated
 from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from corvin_console.control_plane.subsystem_manager import SubsystemManager, SubsystemState
-from corvin_console.deps import require_session, require_csrf
+from corvin_console.deps import require_session, require_csrf, consent_required
 from corvin_console import auth as session_auth
 
 router = APIRouter(
@@ -41,7 +41,7 @@ def get_subsystem_manager() -> SubsystemManager:
 class SubsystemOperationRequest(BaseModel):
     """Request to control a subsystem."""
     force: Optional[bool] = False  # For stop operations
-    timeout_s: Optional[int] = 30  # Graceful shutdown timeout
+    timeout_s: Optional[int] = Field(default=30, ge=1, le=3600)  # Graceful shutdown timeout (1-3600 seconds, fail-closed)
 
 
 class SubsystemOperationResponse(BaseModel):
@@ -62,7 +62,8 @@ class SubsystemStatusResponse(BaseModel):
 @router.patch("/{subsystem_id}/start")
 async def start_subsystem(
     subsystem_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> SubsystemOperationResponse:
     """
     Start a subsystem (tenant-scoped, CSRF-protected).
@@ -97,7 +98,8 @@ async def start_subsystem(
 async def pause_subsystem(
     subsystem_id: str,
     req: SubsystemOperationRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> SubsystemOperationResponse:
     """
     Pause a subsystem (tenant-scoped, CSRF-protected, graceful shutdown with timeout bounds).
@@ -135,7 +137,8 @@ async def pause_subsystem(
 @router.patch("/{subsystem_id}/resume")
 async def resume_subsystem(
     subsystem_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> SubsystemOperationResponse:
     """
     Resume a paused subsystem (tenant-scoped, CSRF-protected).
@@ -170,7 +173,8 @@ async def resume_subsystem(
 async def stop_subsystem(
     subsystem_id: str,
     req: SubsystemOperationRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> SubsystemOperationResponse:
     """
     Stop a subsystem (tenant-scoped, CSRF-protected, graceful or force).
@@ -209,7 +213,8 @@ async def stop_subsystem(
 @router.get("/{subsystem_id}")
 async def get_subsystem_status(
     subsystem_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> SubsystemStatusResponse:
     """
     Get subsystem status (tenant-scoped).
@@ -238,7 +243,8 @@ async def get_subsystem_status(
 
 @router.get("")
 async def list_subsystems(
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> List[SubsystemStatusResponse]:
     """
     List all subsystems for the current tenant (tenant-scoped).
@@ -262,7 +268,8 @@ async def list_subsystems(
 async def get_subsystem_logs(
     subsystem_id: str,
     lines: int = Query(default=100, ge=1, le=1000),
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> Dict[str, Any]:
     """
     Get subsystem logs (last N lines, tenant-scoped).
@@ -299,7 +306,8 @@ async def get_subsystem_logs(
 
 @router.get("/audit-log", tags=["audit"])
 async def get_subsystem_audit_log(
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
 ) -> Dict[str, Any]:
     """
     Get subsystem audit trail for a tenant (read-only, immutable, tenant-scoped).

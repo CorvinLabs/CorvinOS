@@ -1,0 +1,377 @@
+PHASE 9 CRITICAL FIXES — FILES TO MODIFY (IN PRIORITY ORDER)
+================================================================
+
+This file lists every file that needs modification, in the order they should be fixed
+(respecting dependencies).
+
+DEPENDENCIES FIRST:
+===================
+
+[1] core/console/corvin_console/routes/intents.py
+    Lines to change: 22
+    Current:  from core.audit import audit_backend
+    Change:  from core.plugins.corvin_plugins.providers import audit_backend
+    Why: Imports from non-existent location in core.audit
+    Severity: CRITICAL — Blocks console startup
+    Time: 2 minutes
+    Priority: P0 (1st)
+
+[2] core/compliance/consent.py (NEW FILE — MUST CREATE)
+    Purpose: Define consent_required decorator
+    Location: /home/shumway/projects/CorvinOS/core/compliance/consent.py
+    Must contain:
+      - consent_required decorator (async, FastAPI-compatible)
+      - Checks GDPR Art. 6 consent before mutation
+      - Fail-closed on missing consent
+    Size: ~150-200 LOC
+    Ref: Use as template: core/console/corvin_console/routes/intents.py:58
+    Time: 1 hour
+    Priority: P0 (2nd)
+
+[3] core/console/corvin_console/deps.py
+    Lines to add/change: Export section (bottom of file)
+    Add export: from core.compliance.consent import consent_required
+    Add to: Public exports or make available for route imports
+    Why: Routes need to import consent_required decorator
+    Time: 5 minutes
+    Priority: P0 (3rd)
+
+ROUTE FIXES (AUTH/CSRF/CONSENT):
+================================
+
+[4] core/console/corvin_console/routes/control_plane_snapshots.py
+
+    Lines needing @Depends(require_session):
+      - 71 (create_snapshot) — add @Depends(require_csrf) instead
+      - 114 (list_snapshots)
+      - 133 (get_snapshot_audit_log)
+      - 159 (get_snapshot_detail)
+      - 186 (restore_snapshot) — add @Depends(require_csrf) instead
+      - 223 (diff_snapshot) — add @Depends(require_csrf) instead
+      - 256 (delete_snapshot) — add @Depends(require_csrf) instead
+
+    Lines needing @consent_required("control_plane_snapshot_operations"):
+      - All 7 endpoints above
+
+    Lines needing input validation (add to model):
+      - 44-45 (SnapshotCreateRequest): Add Field(max_length=256) to name
+      - 44-45 (SnapshotCreateRequest): Add Field(max_length=4096) to description
+
+    Lines needing session extraction:
+      - 74 (create_snapshot): Change from Query to rec.tenant_id
+      - 101 (create_snapshot): Change from "console-user" to rec.sid
+      - 116 (list_snapshots): Change from Query to rec.tenant_id
+      - 135 (get_audit_log): Change from Query to rec.tenant_id
+      - 162 (get_snapshot_detail): Change from Query to rec.tenant_id
+      - 190 (restore_snapshot): Change from Query to rec.tenant_id, hardcoded to rec.sid
+      - 211 (restore_snapshot): Change from "console-user" to rec.sid
+      - 226 (diff_snapshot): Change from Query to rec.tenant_id
+      - 259 (delete_snapshot): Change from Query to rec.tenant_id
+      - 275 (delete_snapshot): Change from "console-user" to rec.sid
+      - 269 (get_audit_log): Change from Query to rec.tenant_id
+
+    Lines needing audit_backend wiring:
+      - 38 (get_snapshot_manager): Wire real audit_backend (from dependency injection)
+
+    Pattern: Add decorator imports at top:
+      from ..deps import require_csrf, require_session
+      from core.compliance.consent import consent_required
+
+    Time: 45 minutes
+    Priority: P0 (4th — can do in parallel with other routes)
+
+[5] core/console/corvin_console/routes/control_plane_plugins.py
+
+    Lines needing @Depends(require_session):
+      - 84 (list_plugins)
+      - 111 (get_plugin)
+      - 229 (get_audit_log)
+
+    Lines needing @Depends(require_csrf):
+      - 54 (install_plugin)
+      - 141 (enable_plugin)
+      - 168 (disable_plugin)
+      - 199 (uninstall_plugin)
+
+    Lines needing @consent_required("plugin_management"):
+      - All 7 endpoints above
+
+    Lines needing boot_layer validation:
+      - 69 (install_plugin): Add validation before calling manager
+        try:
+            BootLayer(req.boot_layer)
+        except ValueError:
+            raise HTTPException(400, f"Invalid boot_layer: {req.boot_layer}")
+
+    Lines needing session extraction:
+      - 70 (install_plugin): Change from "default" to rec.tenant_id
+      - 71 (install_plugin): Change from "console-user" to rec.sid
+      - 154 (enable_plugin): Change from "default" to rec.tenant_id
+      - 155 (enable_plugin): Change from "console-user" to rec.sid
+      - 184 (disable_plugin): Change from "default" to rec.tenant_id
+      - 185 (disable_plugin): Change from "console-user" to rec.sid
+      - 214 (uninstall_plugin): Change from "default" to rec.tenant_id
+      - 215 (uninstall_plugin): Change from "console-user" to rec.sid
+
+    Pattern: Same as control_plane_snapshots.py
+    Time: 45 minutes
+    Priority: P0 (can do in parallel)
+
+[6] core/console/corvin_console/routes/control_plane_subsystems.py
+
+    Lines needing @Depends(require_session):
+      - 191 (get_subsystem_status)
+      - 215 (list_subsystems)
+      - 234 (get_subsystem_logs)
+      - 267 (get_subsystem_audit_log)
+
+    Lines needing @Depends(require_csrf):
+      - 60 (start_subsystem)
+      - 91 (pause_subsystem)
+      - 125 (resume_subsystem)
+      - 156 (stop_subsystem)
+
+    Lines needing @consent_required("subsystem_control"):
+      - All 8 endpoints above
+
+    Lines needing timeout_s validation (modify model):
+      - 42 (SubsystemOperationRequest): Change timeout_s to:
+        timeout_s: Optional[int] = Field(default=30, ge=1, le=3600)
+      - 111 (pause_subsystem): Already uses req.timeout_s (will be validated by model)
+      - 177 (stop_subsystem): Already uses req.timeout_s (will be validated by model)
+
+    Lines needing session extraction:
+      - 63, 95, 128, 160, 194, 217, 238, 269: Replace Query defaults with rec.tenant_id
+      - 79, 113, 144, 179: Replace "console-user" with rec.sid
+
+    Pattern: Same as other routes
+    Time: 50 minutes
+    Priority: P0 (can do in parallel)
+
+[7] core/console/corvin_console/routes/control_plane_overrides.py
+
+    Lines needing privilege escalation fix:
+      - 206 (approve_override): DELETE the line "authority.add_approver(rec.sid)"
+      - 252 (deny_override): DELETE the line "authority.add_approver(rec.sid)"
+      Why: Users should not be able to grant themselves approver privileges
+
+    Lines needing audit_backend wiring:
+      - 43-48 (get_authority): Replace MockAuditBackend with real backend
+        from core.plugins.corvin_plugins.providers import audit_backend as backend_provider
+        ...
+        _authority = OverrideAuthority(backend_provider.get_active())
+
+    Lines already have @Depends(require_csrf):
+      - 191 (approve_override) ✓ OK
+      - 237 (deny_override) ✓ OK
+      - 284 (interrupt_override) ✓ OK
+
+    Lines already have @consent_required:
+      - None (ADD @consent_required("override_authority") to approve/deny/interrupt)
+
+    Time: 30 minutes
+    Priority: P0 (5th)
+
+CORE LOGIC FIXES:
+=================
+
+[8] core/control_plane/override_authority.py
+
+    Note: This file is mostly OK — issues cascade from route layer
+
+    Lines that should NOT call unconditional add_approver (in routes, not here):
+      - 347-354 (add_approver method): Keep as-is, route should not call it
+
+    No changes needed — fixed via route changes
+    Time: 0 minutes (no changes needed)
+    Priority: N/A
+
+[9] core/control_plane/snapshot_manager.py
+
+    Lines needing audit_backend wiring:
+      - 45 (constructor): Already accepts audit_backend parameter
+      - 52 (self.audit assignment): Already done
+      - 129 (log_event call): Will work once route wires real backend
+
+    Lines needing validation:
+      - 61-66 (create_snapshot): Already has parameter docs
+      Note: Input validation happens in route (Pydantic model), not here
+
+    High-severity fix (functionality, not auth):
+      - Line 209 (restore_snapshot): Implement actual state restoration
+        Currently returns success but doesn't change state
+        Needs to: Apply control_plane_state to actual system
+
+    No critical route-layer changes needed — depends on snapshots.py fix
+    Time: 1 hour (for restore implementation)
+    Priority: P1 (after critical auth fixes)
+
+[10] core/console/corvin_console/control_plane/plugin_manager.py
+
+     Lines needing audit chain wiring:
+       - 68 (self.audit_events = []): Replace with core audit chain writer
+       Why: Audit trail currently lost on process restart
+
+     Change:
+       From: self.audit_events = []  # Volatile
+       To:   from core.audit.chain import AuditChain
+            self.audit_chain = AuditChain(tenant_id=tenant_id)
+
+     Lines needing updates:
+       - 150 (self.audit_events.append()): Replace with self.audit_chain.write()
+       - 241 (return events[-limit:]): Change to query audit chain
+
+     Note: This file is currently in core/console/corvin_console/control_plane/
+     Consider moving or restructuring (architectural issue)
+
+     Time: 1 hour
+     Priority: P1 (after auth fixes)
+
+[11] core/control_plane/subsystem_controller.py
+
+     Likely has same issue as plugin_manager.py (volatile audit events)
+
+     Same pattern:
+       - Replace self.audit_events = [] with audit chain
+       - Update get_audit_log() to query chain instead of volatile list
+
+     Status: TBD (verify file exists and has this issue)
+     Time: 45 minutes
+     Priority: P1 (after auth fixes)
+
+CONFIG/EXPORT FIXES:
+====================
+
+[12] core/audit/__init__.py
+
+     Action: Either add export OR leave as-is (since we're fixing intents.py)
+
+     Option A (RECOMMENDED): Just fix intents.py (already done in [1])
+       No change needed to __init__.py
+
+     Option B: Add export to __init__.py
+       Add line: from core.plugins.corvin_plugins.providers import audit_backend
+       But this creates a circular import risk — not recommended
+
+     Recommendation: DO NOT CHANGE — fix via intents.py import change
+     Time: 0 minutes
+     Priority: N/A
+
+[13] core/console/corvin_console/deps.py
+
+     Action: Export consent_required for route imports
+
+     Add to the public imports section (around line 20):
+       from core.compliance.consent import consent_required
+
+     Add to __all__ if it exists:
+       __all__ = [..., "consent_required"]
+
+     This makes it available: from ..deps import consent_required
+
+     Time: 5 minutes
+     Priority: P0 (depends on [2], done after)
+
+
+================================================================
+PARALLEL WORK STREAMS
+================================================================
+
+Can be done in parallel (no dependencies on each other):
+  - [4] control_plane_snapshots.py
+  - [5] control_plane_plugins.py
+  - [6] control_plane_subsystems.py
+  (All are similar auth/CSRF/consent/tenant fixes)
+
+Must be sequential (dependencies):
+  [1] → intents.py import fix
+  [2] → create consent.py
+  [3] → export from deps.py
+  Then: [4], [5], [6], [7] in parallel
+  Then: [8], [9], [10], [11] sequential
+  Finally: [12], [13]
+
+
+================================================================
+TIME ESTIMATE
+================================================================
+
+Phase 0 (Dependencies): 1.5 hours
+  [1] Fix intents.py import: 2 min
+  [2] Create consent.py: 1 hour
+  [3] Export from deps.py: 5 min
+  [13] Update deps.py: 5 min
+
+Phase 1 (Route Auth/CSRF): 2.5 hours
+  [4] Snapshots: 45 min
+  [5] Plugins: 45 min
+  [6] Subsystems: 50 min
+  [7] Overrides: 30 min
+
+Phase 2 (Core Logic & Audit): 2.5 hours
+  [8] override_authority.py: 0 min (no changes)
+  [9] snapshot_manager.py: 1 hour
+  [10] plugin_manager.py: 1 hour
+  [11] subsystem_controller.py: 45 min
+  [12] audit/__init__.py: 0 min (no changes)
+
+Total: ~6-7 hours development
+
+Plus testing: 1-2 hours
+Plus review: 1 hour
+
+Total remediation: 8-10 hours
+
+
+================================================================
+TESTING REQUIRED
+================================================================
+
+After each file fix, run:
+  pytest tests/control_plane/test_*.py -v
+
+Full test suite:
+  pytest tests/ -k "control_plane or consent or auth" -v
+
+Adversarial tests (must fail appropriately):
+  - Unauthenticated requests → 401/403
+  - Invalid CSRF token → 403
+  - Missing consent → 403
+  - Cross-tenant access → 403
+  - Unbounded inputs → 422
+  - Privilege escalation → 403
+
+
+================================================================
+GO/NO-GO CHECKLIST (Before Merge)
+================================================================
+
+Security:
+  [ ] All routes have @require_session or @require_csrf
+  [ ] All mutations have @require_csrf
+  [ ] All sensitive operations have @consent_required
+  [ ] No hardcoded user IDs (all from rec.sid)
+  [ ] No hardcoded tenant_ids (all from rec.tenant_id)
+  [ ] Privilege escalation fixed (add_approver removed)
+  [ ] Real audit_backend wired (not Mock or None)
+  [ ] Input validation (bounds on name/description/timeout_s)
+
+Compliance:
+  [ ] audit_backend not None in any manager
+  [ ] All operations audit-logged
+  [ ] Tenant isolation verified in tests
+  [ ] GDPR Art. 30 user attribution working
+
+Functionality:
+  [ ] snapshot_manager.restore() actually restores
+  [ ] Error messages sanitized (no impl details)
+  [ ] All tests pass (including adversarial)
+
+Sign-off:
+  [ ] Security review approved
+  [ ] All findings from audit resolved
+  [ ] Ready for production merge
+
+
+================================================================
+

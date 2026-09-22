@@ -19,7 +19,7 @@ from corvin_console.intent_router import (
     IntentType,
     IntentClassification
 )
-from core.audit import audit_backend
+from core.plugins.corvin_plugins.providers import audit_backend
 from core.compliance.consent import consent_required
 from core.paths import tenant_audit_chain
 

@@ -23,7 +23,7 @@ from starlette import status as http_status
 
 from .. import audit as console_audit
 from .. import auth as session_auth
-from ..deps import require_csrf, require_session
+from ..deps import require_csrf, require_session, consent_required
 from ..error_handling import safe_error_response, safe_override_error
 from core.control_plane.override_authority import (
     OverrideAuthority,
@@ -80,6 +80,7 @@ class OverrideDetailModel(BaseModel):
 async def create_override(
     body: OverrideRequestModel,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
 ) -> dict[str, Any]:
     """Create an override request.
 
@@ -189,6 +190,7 @@ async def approve_override(
     override_id: str,
     body: ApprovalDecisionModel,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
 ) -> dict[str, Any]:
     """Approve an override (admin only, authorization checked).
 
@@ -249,6 +251,7 @@ async def deny_override(
     override_id: str,
     body: ApprovalDecisionModel,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
 ) -> dict[str, Any]:
     """Deny an override (admin only, authorization checked).
 
@@ -310,6 +313,7 @@ async def deny_override(
 async def interrupt_override(
     override_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
 ) -> dict[str, Any]:
     """Interrupt/cancel a pending override.
 

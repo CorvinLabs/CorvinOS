@@ -19,7 +19,7 @@ from datetime import datetime
 import json
 
 from core.control_plane.snapshot_manager import SnapshotManager, Snapshot
-from corvin_console.deps import require_session, require_csrf
+from corvin_console.deps import require_session, require_csrf, consent_required
 from corvin_console import auth as session_auth
 from ..error_handling import safe_snapshot_error, safe_error_response
 
@@ -97,7 +97,8 @@ class SnapshotOperationResponse(BaseModel):
 @router.post("", response_model=SnapshotOperationResponse)
 async def create_snapshot(
     req: SnapshotCreateRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("control_plane_snapshot_operations"))] = None
 ) -> SnapshotOperationResponse:
     """
     Create a snapshot of Control Plane state (tenant-scoped, CSRF-protected).
@@ -140,7 +141,8 @@ async def create_snapshot(
 
 @router.get("", response_model=List[SnapshotResponse])
 async def list_snapshots(
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("control_plane_snapshot_operations"))] = None
 ) -> List[SnapshotResponse]:
     """
     List all snapshots for current tenant (tenant-scoped).
@@ -162,7 +164,8 @@ async def list_snapshots(
 
 @router.get("/audit-log", tags=["audit"])
 async def get_snapshot_audit_log(
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("control_plane_snapshot_operations"))] = None
 ) -> Dict[str, Any]:
     """
     Get snapshot audit trail for current tenant (read-only, tenant-scoped, immutable).
@@ -192,7 +195,8 @@ async def get_snapshot_audit_log(
 @router.get("/{snapshot_id}", response_model=SnapshotResponse)
 async def get_snapshot_detail(
     snapshot_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("control_plane_snapshot_operations"))] = None
 ) -> SnapshotResponse:
     """
     Get snapshot details (tenant-scoped).
@@ -221,7 +225,8 @@ async def get_snapshot_detail(
 async def restore_snapshot(
     snapshot_id: str,
     req: SnapshotRestoreRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("control_plane_snapshot_operations"))] = None
 ) -> SnapshotOperationResponse:
     """
     Restore a snapshot (atomic, with audit seaming, CSRF+auth protected).
@@ -260,7 +265,8 @@ async def restore_snapshot(
 @router.post("/{snapshot_id}/diff", response_model=Dict[str, Any])
 async def diff_snapshot(
     snapshot_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("control_plane_snapshot_operations"))] = None
 ) -> Dict[str, Any]:
     """
     Compare snapshot with current state (diff view, tenant-scoped).
@@ -294,7 +300,8 @@ async def diff_snapshot(
 @router.delete("/{snapshot_id}", response_model=SnapshotOperationResponse)
 async def delete_snapshot(
     snapshot_id: str,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[None, Depends(consent_required("control_plane_snapshot_operations"))] = None
 ) -> SnapshotOperationResponse:
     """
     Delete a snapshot (audit logged, CSRF-protected, tenant-scoped).

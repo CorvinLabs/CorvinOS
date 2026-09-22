@@ -18,6 +18,7 @@ from typing import Annotated
 from fastapi import Cookie, Header, HTTPException, status
 
 from . import auth as session_auth
+from core.compliance.consent import consent_required
 
 
 def require_session(
