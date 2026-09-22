@@ -372,3 +372,124 @@ class OverrideAuthority:
             True if authorized approver, False otherwise
         """
         return user_id in self.approvers
+
+    async def deny_override(
+        self, override_id: str, approver_id: str, reason: str, tenant_id: str
+    ) -> Dict:
+        """Deny an override request (alias for reject_override).
+
+        Args:
+            override_id: ID of override request
+            approver_id: User ID of approver
+            reason: Reason for denial
+            tenant_id: Tenant scope
+
+        Returns:
+            Status dict with denial confirmation
+        """
+        return await self.reject_override(override_id, approver_id, reason, tenant_id)
+
+    def list_pending_approvals(self, tenant_id: str) -> List[Dict]:
+        """List all pending approval requests (alias for list_pending_overrides).
+
+        Args:
+            tenant_id: Tenant scope
+
+        Returns:
+            List of pending approval dicts
+        """
+        return self.list_pending_overrides(tenant_id)
+
+    def get_approval_detail(self, override_id: str, tenant_id: str) -> Dict:
+        """Get approval detail (alias for get_override_status).
+
+        Args:
+            override_id: ID of override request
+            tenant_id: Tenant scope
+
+        Returns:
+            Approval details dict
+        """
+        return self.get_override_status(override_id, tenant_id)
+
+    async def interrupt_override(self, override_id: str, tenant_id: str) -> Dict:
+        """Interrupt/cancel a pending override.
+
+        Args:
+            override_id: ID of override request
+            tenant_id: Tenant scope
+
+        Returns:
+            Status dict with interruption confirmation
+
+        Raises:
+            ValueError: If override not found
+        """
+        if override_id not in self.overrides:
+            raise ValueError(f"Override {override_id} not found")
+
+        override = self.overrides[override_id]
+
+        # Verify tenant access
+        if override.tenant_id != tenant_id:
+            raise ValueError(f"Access denied to override {override_id}")
+
+        # Check if can be interrupted (only pending requests)
+        if override.approval_status != ApprovalStatus.PENDING.value:
+            raise ValueError(
+                f"Cannot interrupt override in {override.approval_status} state"
+            )
+
+        # Create new immutable record with expired status
+        interrupted_request = OverrideRequest(
+            override_id=override.override_id,
+            override_type=override.override_type,
+            target_id=override.target_id,
+            reason=override.reason,
+            requestor_id=override.requestor_id,
+            approval_status=ApprovalStatus.EXPIRED.value,
+            tenant_id=override.tenant_id,
+            created_at=override.created_at,
+            approved_at=datetime.utcnow().isoformat() + "Z",
+            approver_id=None,
+        )
+
+        self.overrides[override_id] = interrupted_request
+
+        # Log audit event
+        await self.audit.log_event(
+            "override_interrupted",
+            {
+                "override_id": override_id,
+                "tenant_id": tenant_id,
+                "original_status": override.approval_status,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            },
+        )
+
+        logger.info(f"Override {override_id} interrupted")
+        return {
+            "override_id": override_id,
+            "status": "interrupted",
+            "previous_status": override.approval_status,
+        }
+
+    async def get_audit_log(self, tenant_id: str) -> List[Dict]:
+        """Get audit trail for all overrides in a tenant.
+
+        Args:
+            tenant_id: Tenant scope
+
+        Returns:
+            List of audit events for the tenant
+        """
+        if not hasattr(self.audit, "events"):
+            return []
+
+        # Filter events by tenant_id
+        tenant_events = [
+            event for event in self.audit.events
+            if event.get("payload", {}).get("tenant_id") == tenant_id
+        ]
+
+        return tenant_events

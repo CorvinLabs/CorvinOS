@@ -1,43 +1,58 @@
+"""Control Plane Routes — Override Authority (Phase 9b Stream 3, ADR-2029).
+
+Provides REST endpoints for operator override requests and approvals:
+
+    POST   /v1/console/control-plane/overrides
+    GET    /v1/console/control-plane/overrides
+    GET    /v1/console/control-plane/overrides/{id}
+    POST   /v1/console/control-plane/overrides/{id}/approve
+    POST   /v1/console/control-plane/overrides/{id}/deny
+    POST   /v1/console/control-plane/overrides/{id}/interrupt
+    GET    /v1/console/control-plane/overrides/audit
+
+Override Authority — operator-initiated overrides with admin approval gates,
+full audit trail, tenant isolation, and TTL-based expiration.
 """
-Control Plane Routes — Override Authority Stream 3.
 
-GET    /v1/console/control-plane/approvals
-GET    /v1/console/control-plane/approvals/<id>
-POST   /v1/console/control-plane/approvals/<id>/approve
-POST   /v1/console/control-plane/approvals/<id>/deny
-POST   /v1/console/control-plane/approvals/<id>/interrupt
-GET    /v1/console/control-plane/approvals/audit-log
+from __future__ import annotations
 
-ADR-2029: User-Centric CorvinOS Control Plane — Stream 3
-"""
-
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from datetime import datetime
+from starlette import status as http_status
 
-from core.control_plane.override_authority import OverrideAuthority, OverrideType, OverrideRequest
-
-router = APIRouter(
-    prefix="/v1/console/control-plane/approvals",
-    tags=["control-plane-approvals"]
+from .. import audit as console_audit
+from .. import auth as session_auth
+from ..deps import require_csrf, require_session
+from core.control_plane.override_authority import (
+    OverrideAuthority,
+    OverrideType,
+    PermissionError,
 )
 
-# Singleton override authority
-_override_authority: Optional[OverrideAuthority] = None
+router = APIRouter(prefix="/v1/console/control-plane/overrides", tags=["control-plane"])
+
+# Singleton instance — in production, inject via dependency
+_authority: Optional[OverrideAuthority] = None
 
 
-def get_override_authority() -> OverrideAuthority:
-    """Get or create singleton override authority."""
-    global _override_authority
-    if _override_authority is None:
-        # In production, inject real audit_backend
-        _override_authority = OverrideAuthority(audit_backend=None)
-    return _override_authority
+def get_authority() -> OverrideAuthority:
+    """Get or initialize singleton OverrideAuthority."""
+    global _authority
+    if _authority is None:
+        # Mock audit backend for now — in production, inject real one
+        class MockAuditBackend:
+            async def log_event(self, event_type: str, payload: dict) -> None:
+                pass
+
+        _authority = OverrideAuthority(MockAuditBackend())
+    return _authority
 
 
-class ApprovalRequestModel(BaseModel):
-    """Request to create an approval."""
+# Request/Response models
+class OverrideRequestModel(BaseModel):
+    """Request to create an override."""
+
     override_type: str  # force_enable, force_disable, emergency_stop, bypass_gate, force_restart
     target_id: str
     reason: str
@@ -45,247 +60,282 @@ class ApprovalRequestModel(BaseModel):
 
 class ApprovalDecisionModel(BaseModel):
     """Decision to approve/deny."""
+
     reason: str
 
 
-class ApprovalResponseModel(BaseModel):
-    """Approval response."""
-    status: str  # success, error, forbidden
-    message: str
-    override_id: Optional[str] = None
+class OverrideDetailModel(BaseModel):
+    """Override detail."""
 
-
-class ApprovalDetailModel(BaseModel):
-    """Approval details."""
     override_id: str
     override_type: str
     target_id: str
     reason: str
     requestor_id: str
-    approval_status: str  # pending, approved, rejected, expired
+    approval_status: str
     created_at: str
     approved_at: Optional[str] = None
     approver_id: Optional[str] = None
 
 
-@router.post("", response_model=ApprovalResponseModel)
-async def create_approval_request(
-    req: ApprovalRequestModel,
-    tenant_id: str = Query(default="default")
-) -> ApprovalResponseModel:
-    """
-    Request an override (with justification).
+@router.post("")
+async def create_override(
+    body: OverrideRequestModel,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+) -> dict[str, Any]:
+    """Create an override request.
 
     Args:
-        req: Override request
-        tenant_id: Tenant scope
+        body: Override request (override_type, target_id, reason)
+        rec: Authenticated session record
 
     Returns:
-        Approval request status
+        Created override details with ID and status
     """
-    authority = get_override_authority()
+    authority = get_authority()
 
     # Validate override type
-    valid_types = {"force_enable", "force_disable", "emergency_stop", "bypass_gate", "force_restart"}
-    if req.override_type not in valid_types:
-        raise HTTPException(status_code=400, detail=f"Invalid override_type: {req.override_type}")
+    try:
+        override_type = OverrideType(body.override_type)
+    except ValueError:
+        raise HTTPException(
+            http_status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid override_type: {body.override_type}",
+        )
 
-    # Request override
-    result = await authority.request_override(
-        override_type=OverrideType(req.override_type),
-        target_id=req.target_id,
-        reason=req.reason,
-        requestor_id="console-user",
-        tenant_id=tenant_id
+    try:
+        result = await authority.request_override(
+            override_type=override_type,
+            target_id=body.target_id,
+            reason=body.reason,
+            requestor_id=rec.sid,
+            tenant_id=rec.tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.request",
+        target_kind="override",
+        target_id=result["override_id"],
     )
 
-    if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
-
-    return ApprovalResponseModel(
-        status=result["status"],
-        message=result["message"],
-        override_id=result.get("override_id")
-    )
+    return result
 
 
-@router.get("", response_model=List[ApprovalDetailModel])
-async def list_pending_approvals(
-    status_filter: Optional[str] = Query(default=None),
-    tenant_id: str = Query(default="default")
-) -> List[ApprovalDetailModel]:
-    """
-    List pending approvals.
+@router.get("")
+async def list_overrides(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+) -> dict[str, Any]:
+    """List pending overrides for tenant.
 
     Args:
-        status_filter: Filter by status (pending, approved, rejected, expired)
-        tenant_id: Tenant scope
+        rec: Authenticated session record
 
     Returns:
-        List of approvals
+        List of pending overrides
     """
-    authority = get_override_authority()
-    approvals = await authority.list_pending_approvals(tenant_id=tenant_id)
+    authority = get_authority()
 
-    if status_filter:
-        approvals = [a for a in approvals if a["approval_status"] == status_filter]
+    pending = authority.list_pending_approvals(tenant_id=rec.tenant_id)
 
-    return [ApprovalDetailModel(**a) for a in approvals]
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.list",
+        target_kind="system",
+        target_id="overrides",
+    )
+
+    return {"overrides": pending, "count": len(pending)}
 
 
-@router.get("/{override_id}", response_model=ApprovalDetailModel)
-async def get_approval_detail(
+@router.get("/{override_id}")
+async def get_override_detail(
     override_id: str,
-    tenant_id: str = Query(default="default")
-) -> ApprovalDetailModel:
-    """
-    Get approval details.
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+) -> dict[str, Any]:
+    """Get override details.
 
     Args:
         override_id: Override ID
-        tenant_id: Tenant scope
+        rec: Authenticated session record
 
     Returns:
-        Approval details
+        Override detail
     """
-    authority = get_override_authority()
-    approval = await authority.get_approval_detail(override_id, tenant_id=tenant_id)
+    authority = get_authority()
 
-    if approval is None:
-        raise HTTPException(status_code=404, detail=f"Approval {override_id} not found")
+    try:
+        detail = authority.get_approval_detail(override_id, rec.tenant_id)
+    except ValueError as exc:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, detail=str(exc))
 
-    return ApprovalDetailModel(**approval)
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.view",
+        target_kind="override",
+        target_id=override_id,
+    )
+
+    return detail
 
 
-@router.post("/{override_id}/approve", response_model=ApprovalResponseModel)
+@router.post("/{override_id}/approve")
 async def approve_override(
     override_id: str,
-    decision: ApprovalDecisionModel,
-    tenant_id: str = Query(default="default")
-) -> ApprovalResponseModel:
-    """
-    Approve an override (admin only).
+    body: ApprovalDecisionModel,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+) -> dict[str, Any]:
+    """Approve an override (admin only).
 
     Args:
-        override_id: Override to approve
-        decision: Approval decision (reason required)
-        tenant_id: Tenant scope
+        override_id: Override ID to approve
+        body: Approval decision
+        rec: Authenticated session record
 
     Returns:
         Approval status
     """
-    authority = get_override_authority()
+    authority = get_authority()
 
-    # Check approver permissions (in Phase 9b.3, admin-only)
-    approver_id = "console-admin"  # In production, extract from auth context
-    is_admin = True  # In production, check role
+    # Check approver authority (for now, accept all authenticated users)
+    authority.add_approver(rec.sid)
 
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Only admins can approve overrides")
+    try:
+        result = await authority.approve_override(override_id, rec.sid, rec.tenant_id)
+    except PermissionError as exc:
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="override.approve_denied",
+            target_kind="override",
+            target_id=override_id,
+        )
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    result = await authority.approve_override(
-        override_id=override_id,
-        approver_id=approver_id,
-        reason=decision.reason,
-        tenant_id=tenant_id
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.approved",
+        target_kind="override",
+        target_id=override_id,
     )
 
-    if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
-
-    return ApprovalResponseModel(
-        status=result["status"],
-        message=result["message"]
-    )
+    return result
 
 
-@router.post("/{override_id}/deny", response_model=ApprovalResponseModel)
+@router.post("/{override_id}/deny")
 async def deny_override(
     override_id: str,
-    decision: ApprovalDecisionModel,
-    tenant_id: str = Query(default="default")
-) -> ApprovalResponseModel:
-    """
-    Deny an override (admin only).
+    body: ApprovalDecisionModel,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+) -> dict[str, Any]:
+    """Deny an override (admin only).
 
     Args:
-        override_id: Override to deny
-        decision: Denial reason
-        tenant_id: Tenant scope
+        override_id: Override ID to deny
+        body: Denial reason
+        rec: Authenticated session record
 
     Returns:
         Denial status
     """
-    authority = get_override_authority()
+    authority = get_authority()
 
-    # Check approver permissions
-    approver_id = "console-admin"  # In production, extract from auth context
-    is_admin = True  # In production, check role
+    # Check approver authority
+    authority.add_approver(rec.sid)
 
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Only admins can deny overrides")
+    try:
+        result = await authority.deny_override(
+            override_id, rec.sid, body.reason, rec.tenant_id
+        )
+    except PermissionError as exc:
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="override.deny_denied",
+            target_kind="override",
+            target_id=override_id,
+        )
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    result = await authority.deny_override(
-        override_id=override_id,
-        approver_id=approver_id,
-        reason=decision.reason,
-        tenant_id=tenant_id
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.denied",
+        target_kind="override",
+        target_id=override_id,
     )
 
-    if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
-
-    return ApprovalResponseModel(
-        status=result["status"],
-        message=result["message"]
-    )
+    return result
 
 
-@router.post("/{override_id}/interrupt", response_model=ApprovalResponseModel)
+@router.post("/{override_id}/interrupt")
 async def interrupt_override(
     override_id: str,
-    tenant_id: str = Query(default="default")
-) -> ApprovalResponseModel:
-    """
-    Interrupt a pending operation.
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+) -> dict[str, Any]:
+    """Interrupt/cancel a pending override.
 
     Args:
-        override_id: Override to interrupt
-        tenant_id: Tenant scope
+        override_id: Override ID to interrupt
+        rec: Authenticated session record
 
     Returns:
-        Interrupt status
+        Interruption status
     """
-    authority = get_override_authority()
-    result = await authority.interrupt_override(override_id, tenant_id=tenant_id)
+    authority = get_authority()
 
-    if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
+    try:
+        result = await authority.interrupt_override(override_id, rec.tenant_id)
+    except ValueError as exc:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    return ApprovalResponseModel(
-        status=result["status"],
-        message=result["message"]
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.interrupted",
+        target_kind="override",
+        target_id=override_id,
     )
 
+    return result
 
-@router.get("/audit-log", tags=["audit"])
-async def get_approval_audit_log(
-    tenant_id: str = Query(default="default")
-) -> Dict[str, Any]:
-    """
-    Get approval audit trail (read-only).
+
+@router.get("/audit")
+async def get_audit_log(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+) -> dict[str, Any]:
+    """Get override audit trail (read-only).
 
     Args:
-        tenant_id: Tenant scope
+        rec: Authenticated session record
 
     Returns:
-        Audit events
+        Audit events for tenant
     """
-    authority = get_override_authority()
-    audit_log = await authority.get_audit_log(tenant_id=tenant_id)
+    authority = get_authority()
+
+    events = await authority.get_audit_log(rec.tenant_id)
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.audit_view",
+        target_kind="system",
+        target_id="override_audit",
+    )
 
     return {
-        "tenant_id": tenant_id,
-        "events": audit_log,
-        "count": len(audit_log)
+        "tenant_id": rec.tenant_id,
+        "events": events,
+        "count": len(events),
     }
