@@ -32,20 +32,20 @@ class FeedbackEvent:
     Base feedback event — immutable, audit-logged.
 
     Attributes:
-        feedback_id: UUID, unique per feedback event
         skill_id: e.g., "os.delegation_router"
         tenant_id: Tenant scope (fail-closed: raises if None)
         feedback_type: One of FeedbackType
         signal: Feedback signal (bool for outcome, float for confidence, str for preference)
+        feedback_id: UUID, unique per feedback event
         reason: Optional human-readable reason (100-char max, no PII)
         timestamp: UTC timestamp when feedback was recorded
         prev_hash: SHA256 of previous audit event (for chain verification)
     """
-    feedback_id: str = field(default_factory=lambda: str(uuid4()))
     skill_id: str = field()  # e.g., "os.delegation_router"
     tenant_id: str = field()
     feedback_type: FeedbackType = field()
     signal: float | bool | str = field()  # Type varies by feedback_type
+    feedback_id: str = field(default_factory=lambda: str(uuid4()))
     reason: Optional[str] = field(default=None)
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z")
     prev_hash: Optional[str] = field(default=None)  # Filled by audit backend
