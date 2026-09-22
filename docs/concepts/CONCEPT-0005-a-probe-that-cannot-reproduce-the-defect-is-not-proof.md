@@ -4,12 +4,14 @@ title: A probe that cannot reproduce the defect is not proof
 status: ACTIVE
 created: 2026-09-20
 skills: [assistant_corvinOS_discriminating_probe]
-relates_to: [CONCEPT-0004]
+relates_to: [CONCEPT-0004, CONCEPT-0006, CONCEPT-0007]
 paths:
   - corvin_operator/voice/scripts/say.py
   - core/console/corvin_console/routes/voice.py
+  - core/gateway/corvin_gateway/app.py
   - tests/test_voice_subprocess_encoding.py
   - tests/test_voice_tts_budget.py
+  - tests/test_voice_tls_trust_store.py
 docs:
   - docs/claude-ref/layer-voice-ldd.md
 ---
@@ -140,6 +142,86 @@ Each of those was found separately. They are one concept.
 - **When the hostile payload would cost real money or side effects.** Then say
   explicitly which axis is unverified rather than substituting a green probe for
   it; an named gap beats a false proof.
+
+## Amendment 2026-09-22 — a process-wide property needs its provider blocked, not just observed
+
+A second instance, on a different axis than the two above, and it extends step 4
+rather than repeating it.
+
+The property under test was **process-wide**: `ssl.SSLContext` swapped for
+truststore's, so outbound TLS verifies against the OS trust store instead of
+certifi. `corvin_gateway/app.py` is the host `corvin-service` runs and the one
+`corvinOS/installer/core.py` registers on every fresh install, and it had **no
+`_use_os_trust_store()` of its own**. The obvious probe —
+
+```python
+import corvin_gateway.app, ssl
+assert ssl.SSLContext.__module__.startswith("truststore")   # green. before the fix.
+```
+
+— passed anyway, and would have passed for years, because the ADR-0015 opt-in
+console mount (`try: from corvin_console import app`) transitively imports
+`corvin_console.standalone` and `say`, each of which injects at its own module
+import. The property held; **nothing the module under test did made it hold.** That
+mount is deliberately failure-tolerant (an ImportError in any of ~120 route modules
+drops `/console` and every `/v1/console/*` route while the gateway keeps serving —
+it happened: 9433de4b, 2026-09-17), so on that path the gateway's own egress — A2A
+pairing, marketplace index, run dispatcher, outbound webhooks — silently reverted to
+certifi-only.
+
+This is the same failure as the ASCII curl, one level up. There the payload did not
+vary along the defect's axis. Here the *environment* did not: the probe held
+"somebody already injected" constant, which is the only condition under which the
+absence of the gateway's own call is invisible.
+
+**The operable addition — for a property installed by an import side effect, name
+every module that could install it, block all of them, and then require the
+property anyway:**
+
+```python
+class _Block:
+    def find_spec(self, name, target=None, path=None):
+        if name in ("say", "corvin_console.standalone", "adapter"):
+            raise ImportError("blocked by probe: " + name)
+sys.meta_path.insert(0, _Block())
+import corvin_gateway.app
+print("SSLCTX=" + ssl.SSLContext.__module__)
+for m in _BLOCKED:
+    print("LOADED[%s]=%s" % (m, m in sys.modules))   # ← the positive control
+```
+
+Three things this shape gets right, each of which was necessary:
+
+1. **A fresh interpreter per probe.** `inject_into_ssl()` mutates `ssl` globally, so
+   an in-process assertion passes if *anything* earlier in the pytest session
+   injected. Subprocess, always.
+2. **`LOADED[...]=False` printed and asserted BEFORE the property.** A blocker that
+   silently misses its target (module renamed, imported under an alias, already in
+   `sys.modules`) turns the whole test green for the wrong reason — the exact defect
+   being tested for, recreated inside its own test. Assert the block landed first.
+3. **A separate source-order assertion.** The behavioural probe samples the *end
+   state* and cannot see that the anchor ran before the console mount. An injection
+   that lands after a client built its context is a no-op for that client. Ordering
+   is only expressible over source.
+
+Measured: pre-fix the probe printed `SSLCTX=ssl` with all three injectors provably
+unloaded; post-fix `SSLCTX=truststore._api`. Both guards were run red before the fix
+and green after.
+
+**Also learned, and worth writing down because it is the reason not to just inject
+everywhere:** truststore's patched context verifies peer certificates as a *client*
+would, so `ctx.wrap_socket(sock, server_side=True)` raises `AttributeError: 'NoneType'
+object has no attribute 'get_unverified_chain'`. Harmless today — nothing in CorvinOS
+terminates TLS; the only two `server_side=True` sites are stub servers in
+`core/gateway/tests/test_{smoke,webhooks}.py`, which fail this way with *and* without
+the fix. But the fourth site is now on the very host an operator would put TLS on, so
+the constraint is live for whoever does.
+
+**Generalises to:** anything whose correctness is a global installed by an import —
+`sys.path` bootstrapping, audit-chain wiring, ContextVar defaults, warning filters,
+locale and encoding setup, signal handlers. For all of these, "I observed the property
+after importing X" is not evidence that X provides it. A "blocked, and still true"
+probe is.
 
 ## Operator Notes
 

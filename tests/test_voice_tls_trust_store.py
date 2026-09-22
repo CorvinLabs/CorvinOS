@@ -20,16 +20,18 @@ Note that ``SSL_CERT_FILE`` / ``REQUESTS_CA_BUNDLE`` cannot fix this: an explici
 ``cafile=`` argument overrides both. Injection is the only lever that reaches a
 dependency pinning certifi in its own module scope.
 
-THREE SITES, ALL REQUIRED — they are not redundant. The anchor is process-wide and
-these three processes share no import: ``standalone.py`` anchors the console/uvicorn
+FOUR SITES, ALL REQUIRED — they are not redundant. The anchor is process-wide and
+these four processes share no import: ``standalone.py`` anchors the console/uvicorn
 PROCESS; ``say.py`` runs as a separate SUBPROCESS and inherits no Python-level
 monkeypatch; ``bridges/shared/adapter.py`` is the bridge daemon, which synthesises
 IN-PROCESS (``_try_edge_tts`` / ``synthesize_voice_note``) and is also what
-``corvin-voice doctor`` exercises. "Console healthy, TTS silent" is exactly the shape
-of such a gap, and the bridge half of it was still open after the console half was
-fixed — visible on 2026-09-20 as ``edge TTS: synthesis failed: ...
-CERTIFICATE_VERIFY_FAILED`` in ``test_adapter_progress.py``'s own log output while
-the console spoke fine. Hence the parity assertion below.
+``corvin-voice doctor`` exercises; ``corvin_gateway/app.py`` is the host that
+``corvin-service`` runs and that the installer registers on every fresh install.
+"Console healthy, TTS silent" is exactly the shape of such a gap, and the bridge half
+of it was still open after the console half was fixed — visible on 2026-09-20 as
+``edge TTS: synthesis failed: ... CERTIFICATE_VERIFY_FAILED`` in
+``test_adapter_progress.py``'s own log output while the console spoke fine. Hence the
+parity assertions below.
 
 This guard exists because the fix was silently reverted once: commit c7ea7449
 (2026-09-15) added it under the then-current ``operator/`` tree, which was later
@@ -152,6 +154,101 @@ def test_the_bridge_daemon_anchors_tls_too() -> None:
         "`corvin-voice doctor` TTS round-trip — will fail the handshake behind a "
         "TLS-inspecting proxy while the console itself works, which is the most "
         "misleading shape this bug has."
+    )
+
+
+def test_the_gateway_host_anchors_tls_without_help_from_the_console() -> None:
+    """``corvin_gateway.app`` must anchor TLS BY ITSELF, not as a side effect.
+
+    That host is what ``corvin-service`` runs and what ``corvinOS/installer/core.py``
+    registers as the persistent WebUI service on every fresh install, so its own
+    egress — A2A pairing, the marketplace index, the run dispatcher, outbound
+    webhooks — depends on this anchor.
+
+    WHY THE OBVIOUS TEST IS VACUOUS. A bare ``import corvin_gateway.app`` followed by
+    an ``ssl.SSLContext`` check passed LONG BEFORE the gateway had a
+    ``_use_os_trust_store()`` of its own: the ADR-0015 opt-in console mount
+    (``try: from corvin_console import app``) transitively imports
+    ``corvin_console.standalone`` and ``say``, and each injects at its own module
+    import. That mount is deliberately failure-tolerant — an ImportError anywhere in
+    the console's ~120 route modules drops ``/console`` and every ``/v1/console/*``
+    route while the gateway keeps serving (it happened: 9433de4b, 2026-09-17) — so
+    the naive assertion cannot distinguish "the gateway is anchored" from "the
+    gateway is anchored only for as long as the console happens to import".
+
+    So this probe BLOCKS all three accidental injectors and then requires the anchor
+    anyway. The ``LOADED[...]=False`` lines are the positive control: without them a
+    blocker that silently failed to reach its targets would make this test green for
+    the wrong reason. Measured 2026-09-22: pre-fix this probe printed ``SSLCTX=ssl``,
+    post-fix ``SSLCTX=truststore._api``.
+    """
+    gateway_path = _REPO / "core" / "gateway" / "corvin_gateway" / "app.py"
+    assert gateway_path.is_file(), (
+        f"{gateway_path.relative_to(_REPO)} is missing. If it MOVED, update this "
+        "test AND verify the moved copy still calls _use_os_trust_store()."
+    )
+    blocked = ("say", "corvin_console.standalone", "adapter")
+    out = _probe(
+        "import sys, ssl\n"
+        "_BLOCKED = %r\n"
+        "class _Block:\n"
+        "    def find_spec(self, name, target=None, path=None):\n"
+        "        if name in _BLOCKED:\n"
+        "            raise ImportError('blocked by probe: ' + name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _Block())\n"
+        "sys.path.insert(0, r'%s')\n"
+        "import corvin_gateway.app  # noqa: F401\n"
+        "print('SSLCTX=' + ssl.SSLContext.__module__)\n"
+        "for _m in _BLOCKED:\n"
+        "    print('LOADED[%%s]=%%s' %% (_m, _m in sys.modules))\n"
+        % (blocked, _REPO / "core" / "gateway")
+    )
+    lines = dict(
+        l.split("=", 1) for l in out.splitlines() if "=" in l and l.startswith(("SSLCTX", "LOADED"))
+    )
+    # Positive control FIRST: prove the blocker actually reached every injector,
+    # so a green result below cannot come from one of them sneaking in.
+    for name in blocked:
+        assert lines.get(f"LOADED[{name}]") == "False", (
+            f"probe failed to block {name!r} (sys.modules says it loaded), so the "
+            "anchor assertion below would prove nothing about the gateway's own "
+            f"call. Probe output:\n{out[-2000:]}"
+        )
+    module = lines.get("SSLCTX", "")
+    assert module.startswith("truststore"), (
+        f"corvin_gateway.app does not anchor TLS on its own (ssl.SSLContext came "
+        f"from {module!r}). With the console mount failing — which it survives by "
+        "design — every outbound HTTPS call this host makes reverts to certifi-only "
+        "and fails CERTIFICATE_VERIFY_FAILED behind a TLS-inspecting proxy."
+    )
+
+
+def test_the_gateway_anchors_before_it_mounts_the_console() -> None:
+    """Order matters, and only source order can express it.
+
+    ``_use_os_trust_store()`` has to run before the module-level console mount and
+    before anything that could open a socket; an injection that lands after a client
+    built its SSL context is a no-op for that client. The behavioural test above
+    cannot see ordering — it only samples the end state.
+    """
+    src = (_REPO / "core" / "gateway" / "corvin_gateway" / "app.py").read_text(
+        encoding="utf-8", errors="replace")
+    call = src.find("\n_use_os_trust_store()")
+    mount = src.find("from corvin_console import app as _console_app")
+    assert call != -1, (
+        "corvin_gateway/app.py no longer calls _use_os_trust_store() at module "
+        "level — see test_the_gateway_host_anchors_tls_without_help_from_the_console."
+    )
+    assert mount != -1, (
+        "the console-mount line moved; re-point this ordering assertion at whatever "
+        "now performs the ADR-0015 opt-in console import."
+    )
+    assert call < mount, (
+        "_use_os_trust_store() runs AFTER the console mount. The mount imports "
+        "route modules that open no socket today, but the ordering is the whole "
+        "point: the anchor must be in force before anything can build an SSL "
+        "context, not merely present somewhere in the file."
     )
 
 

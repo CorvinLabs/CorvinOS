@@ -1752,7 +1752,7 @@ NOT a workaround — every edge-tts call dies with
 `truststore.inject_into_ssl()`, which swaps `ssl.SSLContext` for a backend that
 reads the OS trust store. Verification stays ON; only the anchor set changes.
 
-**Three sites, all required.** The anchor is process-wide and these three
+**Four sites, all required.** The anchor is process-wide and these four
 processes share no import:
 
 | Process | File | Opens the TLS socket via |
@@ -1760,6 +1760,31 @@ processes share no import:
 | console / uvicorn | `core/console/corvin_console/standalone.py` | in-process providers on the console side |
 | TTS subprocess | `corvin_operator/voice/scripts/say.py` | spawned per `/voice/tts` call — inherits no Python-level monkeypatch |
 | bridge daemon | `corvin_operator/bridges/shared/adapter.py` | `_try_edge_tts` / `synthesize_voice_note`, in-process — also what `corvin-voice doctor` exercises |
+| gateway / `corvin-service` | `core/gateway/corvin_gateway/app.py` | its own egress — A2A pairing, marketplace index, run dispatcher, outbound webhooks |
+
+**The fourth site was an ACCIDENT until 2026-09-22, and that is the interesting
+part.** `uvicorn corvin_gateway.app:app` is what `corvin-service` runs and what
+`corvinOS/installer/core.py` registers as the persistent WebUI service on every
+fresh install, pip and source-tree alike — and it had no `_use_os_trust_store()`
+of its own. It was nevertheless anchored, because the ADR-0015 opt-in console
+mount (`try: from corvin_console import app`) transitively imports
+`corvin_console.standalone` and `say`, each of which injects at its own module
+import. That mount is deliberately failure-tolerant: an ImportError anywhere in
+the console's ~120 route modules drops `/console` and every `/v1/console/*` route
+while the gateway keeps serving (it has happened — 9433de4b, 2026-09-17). On that
+path the gateway's own egress silently reverted to certifi-only. **A load-bearing
+trust anchor must not be a side effect of an optional import.** Measured with all
+three accidental injectors blocked: pre-fix `ssl.SSLContext.__module__ == "ssl"`,
+post-fix `"truststore._api"`.
+
+**Do not inject where a socket is wrapped `server_side=True`.** `truststore`'s
+patched context verifies peer certificates as a client would, so a server-side
+`wrap_socket` raises `AttributeError: 'NoneType' object has no attribute
+'get_unverified_chain'`. Nothing in CorvinOS serves TLS today — the only two
+occurrences are stub servers in `core/gateway/tests/test_{smoke,webhooks}.py`,
+which fail for this reason with or without the gateway's own call. If CorvinOS
+ever terminates TLS itself (a `--ssl-certfile` uvicorn), the injection has to be
+scoped to client contexts rather than installed process-wide.
 
 Anchoring a subset produces the most misleading shape this bug has: the half you
 fixed answers 200 and speaks, the half you missed fails every handshake. Both
@@ -1781,6 +1806,21 @@ deleting the call site and watching the assertion go red. A missing `say.py`
 FAILS the suite rather than skipping it, so the next rename cannot quietly
 re-open this. The live end-to-end synthesis case is opt-in via
 `CORVIN_LIVE_VOICE_E2E=1`.
+
+**The gateway's guard needed a different shape, and the reason generalises.** The
+obvious test — import `corvin_gateway.app`, check `ssl.SSLContext` — was green
+for two years before the call existed, because the console import chain injected
+for it. So the probe BLOCKS `say`, `corvin_console.standalone` and `adapter` via a
+`sys.meta_path` hook and then demands the anchor anyway, printing
+`LOADED[<name>]=False` for each as its positive control: a blocker that silently
+failed to reach a target would otherwise turn the test green for the wrong reason.
+A second, source-level test pins the ORDER (`_use_os_trust_store()` before the
+console mount), because the behavioural probe only samples the end state and
+cannot see that an injection landing after a client built its context is a no-op
+for that client. Blocking `corvin_console` *itself* is not viable — the gateway
+depends on its `sys.path` bootstrap side effect and the module then fails to
+import at all with `No module named 'forge'`, which is a checkout-layout artefact
+rather than a scenario worth asserting.
 
 ### 2. Interpreter selection for the `say.py` subprocess
 
@@ -1939,6 +1979,54 @@ Live before/after on the running console, same emoji-carrying payload:
 Three consecutive runs, deliberately: the failure was intermittent, so a single
 green run proves nothing.
 
+### 7. The OpenAI tier on a fresh install — measured, not assumed (2026-09-22)
+
+Goal as stated: *OpenAI TTS runs, and runs for every new user who installs
+CorvinOS, on all platforms.* The investigation that produced §§1–6 had never
+actually measured the OpenAI tier from a fresh install — it had only ever been
+observed on a box where the corporate proxy refuses `api.openai.com` with 403,
+which tells you nothing about the code path. So it was measured: a simulated fresh
+install (empty `CORVIN_HOME`, a `VOICE_CONFIG_DIR` that does not exist, no secrets
+store, no pin, no endpoint override) with exactly ONE thing configured — a plain
+`OPENAI_API_KEY`.
+
+Result: **the path is already correct.** The key resolves, TLS anchors to the OS
+store, the plain (non-Azure) client is built against the SDK's own default host,
+the request leaves the process, and the returned bytes are labelled by sniffing.
+The 403 observed on this box comes from the proxy, after everything Corvin owns
+has done its job.
+
+That is a fine outcome and a bad place to stop, because "it works on a fresh
+install" was still an *unmeasured claim* — the failure class CONCEPT-0007 names.
+Five ingredients each ship green while making a new user's voice silent:
+
+| Ingredient | How it fails silently |
+|---|---|
+| `openai` / `truststore` are **core** deps, not extras | `_try_openai_tts` returns `None` on ImportError → falls through to say.py; `_use_os_trust_store` is a guarded no-op |
+| `_resolve_tts_provider()` is `None` on a fresh install | the in-process tier is gated on `provider in (None, "openai")`; any non-None default routes a keyed user to edge-tts forever |
+| `base_url` resolves to `""` | a non-empty default aims every install at a baked-in host — and at the *Azure* client branch if it carries the Azure suffix |
+| a plain `OPENAI_API_KEY` is a key candidate | rename it and a new user's only configured credential stops being seen |
+| the response is **MP3**, sniffed | `audio.speech.create` is called with no `response_format`, so the SDK default applies — while say.py's own OpenAI tier emits OGG-Opus and nothing transcodes. A hard-coded container guess hands the browser a mislabelled file and it plays nothing, with no error anywhere |
+
+Guard: `core/console/tests/test_voice_tts_fresh_install.py`. Hermetic —
+`openai.OpenAI` is replaced with a recording fake **before**
+`CORVIN_TTS_LOCAL_ONLY` is cleared, so no window exists in which a real client
+could be built; `AzureOpenAI` is replaced with a stub that raises, so taking the
+Azure branch from an unconfigured install is a test failure rather than a silent
+401. `conftest.py`'s autouse local-only guard exists because a route-level test
+without stubbed key resolution once made a LIVE billable synthesis call from
+pytest (2026-07-19) — it stays, and the test works around it inside its own
+fixture scope. Mutation-checked: leaving the local-only guard in force, or moving
+the key to a renamed env var, each turns the suite red (the rename also trips the
+`_say_env` hand-over assertion, which is the point of having it).
+
+The last assertion is the subtle one: `_say_env()` must hand say.py both the
+resolved key and the endpoint, because say.py re-derives its own configuration in
+a child process and reads only the process env plus `service.env` — it has **no**
+access to the encrypted secrets store. A key entered through the console UI
+therefore works in-process and would be invisible to the subprocess fallback, so
+the two tiers would contradict each other, silently, until the first fallback.
+
 ### Verifying a fresh install actually speaks
 
 Run the checks over the real transport, not against the functions:
@@ -1947,6 +2035,9 @@ Run the checks over the real transport, not against the functions:
 # 1. anchor + dependency + encoding + budget guards (offline, fast)
 pytest tests/test_voice_tls_trust_store.py tests/test_claude_auth_probe_parity.py \
        tests/test_voice_subprocess_encoding.py tests/test_voice_tts_budget.py -q
+
+# 1b. the OpenAI tier as a NEW user gets it — one env var, no network (§7)
+pytest core/console/tests/test_voice_tts_fresh_install.py -q
 
 # 2. real synthesis through say.py (opt-in, hits the network)
 CORVIN_LIVE_VOICE_E2E=1 pytest tests/test_voice_tls_trust_store.py -q -k live
