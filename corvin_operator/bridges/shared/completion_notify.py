@@ -882,3 +882,63 @@ def purge_user(uid: str) -> int:
             path.unlink(missing_ok=True)
             removed += 1
     return removed
+
+
+def get_recently_completed(clear: bool = True) -> list[dict]:
+    """Return recently-delivered completion records for orchestration aggregator.
+
+    ADR-XXXX: orchestration aggregator feeds on completed tasks to group them into
+    batches. This function returns records marked as delivered (state == DELIVERED)
+    and flags them so they are not re-reported in future calls.
+
+    Args:
+        clear: if True, mark returned records with a '_aggregated' flag so they
+               are skipped on next call. Default True.
+
+    Returns:
+        list of dicts with keys: task_id, status, error, duration_secs, created_at,
+        chat_id, task_type (if available).
+    """
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return []
+
+    results = []
+    now = time.time()
+
+    for path in sorted(qdir.glob("*.json")):
+        rec = _read(path)
+        if rec is None:
+            continue
+
+        # Skip already-aggregated records
+        if rec.get("_aggregated"):
+            continue
+
+        # Only include delivered records (state == "delivered")
+        if rec.get("state") != "delivered":
+            continue
+
+        # Skip very old records (older than 24h)
+        ready_at = rec.get("ready_at") or rec.get("created_at") or 0
+        if now - float(ready_at) > 24 * 3600:
+            continue
+
+        # Prepare result with orchestration aggregator's expected schema
+        result = {
+            "task_id": rec.get("id", "unknown"),
+            "status": rec.get("state"),
+            "error": rec.get("error") if not rec.get("ok") else None,
+            "duration_secs": (rec.get("delivered_at") or 0) - (rec.get("created_at") or 0),
+            "created_at": rec.get("created_at"),
+            "chat_id": rec.get("chat_id"),
+            "task_type": rec.get("label", "unknown"),
+        }
+        results.append(result)
+
+        # Mark as aggregated (so next call skips it)
+        if clear:
+            rec["_aggregated"] = True
+            _atomic_write(path, rec)
+
+    return results

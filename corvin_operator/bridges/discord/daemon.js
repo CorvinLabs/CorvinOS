@@ -221,6 +221,9 @@ const activeChannels = new Map(); // channel-id → ts (last user activity)
 // real reply ships (heartbeats don't count). Keeps the user's chat clean of
 // "still working" markers as soon as the answer is in.
 const pendingReactions = new Map();
+// batch_id → { message_id, chat_id, timestamp, retryCount }
+// Used to track orchestration_complete messages for live edits.
+const orchestrationMessages = new Map();
 // channel-id → { msg: Message, msgId: string }: the current sticky progress
 // message. _progress / _heartbeat payloads edit this message in-place instead
 // of flooding the chat with individual tool-call updates. Cleared when the
@@ -908,6 +911,18 @@ setInterval(async () => {
   }
 }, 8000);
 
+// Cleanup orchestrationMessages every 5 minutes (remove entries older than 30 minutes).
+setInterval(() => {
+  const now = Date.now();
+  const CLEANUP_AGE_MS = 30 * 60 * 1000; // 30 minutes
+  for (const [batchId, tracked] of orchestrationMessages.entries()) {
+    if (now - tracked.timestamp > CLEANUP_AGE_MS) {
+      orchestrationMessages.delete(batchId);
+      log(`orchestration cleanup: removed stale batch=${batchId}`);
+    }
+  }
+}, 5 * 60 * 1000);
+
 // ─── Outbox processing ──────────────────────────────────────────────────────
 /**
  * Render execution context as a Discord embed.
@@ -973,6 +988,94 @@ function renderExecutionContextEmbed(context) {
   return embed;
 }
 
+// Handle orchestration_complete envelopes with voice attachments and live edits.
+// Supports exponential backoff retry on rate limits (5s, 15s, 45s).
+async function handleOrchestrationComplete(payload, chId) {
+  const batchId = payload.batch_id || payload.msg_id;
+  const voicePath = payload.voice_attachment_path;
+  const text = payload.text || '';
+  const embed = payload.embed ? payload.embed : null;
+
+  // Retry delays for webhook rate limits: [5s, 15s, 45s]
+  const RETRY_DELAYS_MS = [5000, 15000, 45000];
+
+  const ch = await client.channels.fetch(chId);
+  if (!ch) throw new Error(`channel ${chId} not found`);
+
+  // Check if this batch already has a message (update case)
+  const tracked = orchestrationMessages.get(batchId);
+  if (tracked && tracked.message_id) {
+    // Edit existing message
+    const existingMsg = await ch.messages.fetch(tracked.message_id).catch(() => null);
+    if (existingMsg) {
+      const embeds = embed ? [embed] : [];
+      let retryCount = 0;
+      let lastErr = null;
+
+      // Exponential retry on rate limit (429 or webhook rate limit)
+      while (retryCount < RETRY_DELAYS_MS.length) {
+        try {
+          await existingMsg.edit({
+            content: text,
+            embeds: embeds,
+          });
+          log(`orchestration edit: batch=${batchId} msg=${tracked.message_id}`);
+          tracked.retryCount = 0;
+          return;
+        } catch (e) {
+          lastErr = e;
+          // Check for rate limit (429) or generic failure
+          if (e?.status === 429 || e?.code === 50035) {
+            const delay = RETRY_DELAYS_MS[retryCount];
+            log(`orchestration edit rate limit: batch=${batchId} retry in ${delay/1000}s (attempt ${retryCount + 1}/${RETRY_DELAYS_MS.length})`);
+            await new Promise(r => setTimeout(r, delay));
+            retryCount++;
+            continue;
+          }
+          // Non-recoverable error
+          log(`orchestration edit failed (non-recoverable): ${e.message}, sending new message`);
+          orchestrationMessages.delete(batchId);
+          break;
+        }
+      }
+
+      // If we exhausted retries, fall through to send new message
+      if (lastErr && retryCount >= RETRY_DELAYS_MS.length) {
+        log(`orchestration edit: exhausted retries after ${retryCount} attempts`);
+        orchestrationMessages.delete(batchId);
+      }
+    }
+  }
+
+  // Send new message with optional voice attachment
+  let message = null;
+  const embeds = embed ? [embed] : [];
+
+  if (voicePath && fs.existsSync(voicePath)) {
+    const attachment = new AttachmentBuilder(voicePath, { name: 'voice.ogg' });
+    message = await ch.send({
+      content: text,
+      embeds: embeds,
+      files: [attachment],
+    });
+  } else {
+    message = await ch.send({
+      content: text || '✓',
+      embeds: embeds,
+    });
+  }
+
+  if (message) {
+    orchestrationMessages.set(batchId, {
+      message_id: message.id,
+      chat_id: chId,
+      timestamp: Date.now(),
+      retryCount: 0,
+    });
+    log(`orchestration complete: batch=${batchId} msg=${message.id} voice=${!!voicePath}`);
+  }
+}
+
 async function sendDiscord(payload, _fpath) {
   const chId = payload.chat_id;
   if (!chId) { log(`no chat_id, skipping`); return; }
@@ -989,6 +1092,12 @@ async function sendDiscord(payload, _fpath) {
     const err = new Error(`chat_id ${JSON.stringify(chId)} is not a snowflake`);
     err.code = 50035;
     throw err;
+  }
+
+  // Handle orchestration_complete with voice attachments and live edits
+  if (payload.message_type === 'orchestration_complete') {
+    await handleOrchestrationComplete(payload, chId);
+    return;
   }
 
   // Stale-finalize gate. The outbox dir is processed in alphabetical order,

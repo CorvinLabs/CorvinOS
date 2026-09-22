@@ -13216,6 +13216,35 @@ def main() -> int:
                             log(f"completion_notify: delivered {sent} notification(s)")
                     except Exception as e:
                         log(f"completion_notify tick failed: {e}")
+                    # ADR-XXXX: orchestration aggregator — batch-level completion
+                    # events for multiple background tasks. Implicit time-window grouping
+                    # ensures N tasks spawned within 5 min belong to same batch.
+                    # Runs AFTER completion_notify to consume recently-delivered tasks.
+                    try:
+                        try:
+                            from . import orchestration_aggregator as _oa  # type: ignore
+                        except ImportError:
+                            import orchestration_aggregator as _oa  # type: ignore[no-redef]
+                        # Sync completed tasks from completion_notify into aggregator
+                        for task in _cn.get_recently_completed(clear=True):
+                            _oa.on_task_complete(
+                                task_id=task.task_id,
+                                success=task.status == "delivered" and not task.error,
+                                error=task.error,
+                                duration_secs=task.duration_secs,
+                                task_metadata={
+                                    "channel_id": task.chat_id,
+                                    "task_type": getattr(task, "task_type", "unknown"),
+                                    "start_time": task.created_at,
+                                }
+                            )
+                        # Emit orchestration events when batches complete
+                        delivered = _oa.deliver_ready(OUTBOX)
+                        if delivered:
+                            log(f"orchestration_aggregator: delivered {delivered} "
+                                f"orchestration event(s)")
+                    except Exception as e:
+                        log(f"orchestration_aggregator tick failed: {e}")
                     # Same tick, same reasoning, for a run that is still going:
                     # heal whatever stopped, then flush its intermediate updates.
                     # Healing first so a budget-exhausted verdict or a resume
