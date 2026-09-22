@@ -1,0 +1,526 @@
+/**
+ * HelpMenu.css
+ *
+ * Styling for the Help Menu component with documentation and resources.
+ */
+
+.help-button {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #667eea;
+  color: white;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  transition: all 0.2s ease;
+  z-index: 998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.help-button:hover {
+  background: #5568d3;
+  transform: scale(1.1);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+}
+
+.help-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  z-index: 999;
+  animation: fadeIn 0.2s ease;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.help-panel {
+  background: white;
+  width: 100%;
+  max-width: 500px;
+  height: 80vh;
+  max-height: 600px;
+  border-radius: 12px 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 -20px 60px rgba(0, 0, 0, 0.3);
+  margin-left: auto;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Header */
+.help-header {
+  padding: 20px 16px;
+  border-bottom: 1px solid #e9ecef;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.help-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #212529;
+}
+
+.close-button {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #6c757d;
+  transition: color 0.2s ease;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-button:hover {
+  color: #212529;
+}
+
+/* Search Section */
+.search-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.search-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* Categories Section */
+.categories-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.categories-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.category-button {
+  padding: 12px 8px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #495057;
+  font-weight: 500;
+}
+
+.category-button:hover {
+  border-color: #667eea;
+  background: #f8f9ff;
+}
+
+.category-button.active {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.category-button .icon {
+  font-size: 18px;
+}
+
+.category-button .label {
+  text-align: center;
+}
+
+/* Resources List */
+.resources-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 8px;
+}
+
+.no-results {
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.no-results p {
+  margin: 8px 0;
+  color: #6c757d;
+  font-size: 13px;
+}
+
+.hint {
+  color: #adb5bd;
+  font-size: 12px;
+}
+
+/* Resource Card */
+.resource-card {
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.resource-card:hover {
+  border-color: #667eea;
+  background: #f8f9ff;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+}
+
+.resource-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.resource-icon-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+}
+
+.resource-icon-title .icon {
+  font-size: 18px;
+  margin-top: 2px;
+}
+
+.resource-icon-title h3 {
+  margin: 0;
+  font-size: 13px;
+  color: #212529;
+  font-weight: 600;
+}
+
+.difficulty-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-beginner {
+  background: #d4edda;
+  color: #155724;
+}
+
+.badge-intermediate {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.badge-advanced {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.resource-description {
+  margin: 0 0 8px 26px;
+  font-size: 12px;
+  color: #6c757d;
+  line-height: 1.4;
+}
+
+.resource-duration {
+  margin: 4px 0 8px 26px;
+  font-size: 11px;
+  color: #adb5bd;
+}
+
+.resource-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  margin-left: 26px;
+}
+
+.btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary {
+  background: white;
+  color: #667eea;
+  border: 1px solid #667eea;
+}
+
+.btn-secondary:hover {
+  background: #f8f9ff;
+}
+
+.btn-primary {
+  background: #667eea;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #5568d3;
+}
+
+/* Quick Links */
+.quick-links-section {
+  padding: 12px 16px;
+  border-top: 1px solid #e9ecef;
+  background: #f8f9fa;
+}
+
+.quick-links-section h3 {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  color: #495057;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.quick-links-section a {
+  display: block;
+  padding: 6px 0;
+  color: #667eea;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.quick-links-section a:hover {
+  color: #5568d3;
+}
+
+/* Resource Detail View */
+.resource-detail-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.detail-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e9ecef;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.back-button {
+  background: none;
+  border: none;
+  color: #667eea;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+  transition: color 0.2s ease;
+}
+
+.back-button:hover {
+  color: #5568d3;
+}
+
+.detail-header h2 {
+  margin: 0;
+  font-size: 16px;
+  color: #212529;
+}
+
+/* Video Player */
+.video-player {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.video-placeholder {
+  text-align: center;
+  width: 100%;
+}
+
+.video-placeholder h3 {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  color: #212529;
+}
+
+.video-placeholder p {
+  margin: 6px 0;
+  font-size: 12px;
+  color: #6c757d;
+}
+
+.video-stub {
+  background: #f8f9fa;
+  border: 2px dashed #dee2e6;
+  border-radius: 6px;
+  padding: 32px;
+  margin: 16px 0;
+  color: #adb5bd;
+  font-size: 12px;
+}
+
+/* Document View */
+.document-view {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.document-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.category {
+  display: inline-block;
+  padding: 4px 8px;
+  background: #e7f5ff;
+  color: #0c5460;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.difficulty {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.difficulty-beginner {
+  background: #d4edda;
+  color: #155724;
+}
+
+.difficulty-intermediate {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.difficulty-advanced {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.document-description {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  color: #495057;
+  line-height: 1.6;
+}
+
+.document-actions {
+  margin-bottom: 20px;
+}
+
+.document-content {
+  font-size: 12px;
+  color: #495057;
+  line-height: 1.6;
+}
+
+.placeholder {
+  background: #f8f9fa;
+  padding: 16px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.placeholder p {
+  margin: 8px 0;
+  color: #6c757d;
+  font-size: 12px;
+}
+
+.placeholder code {
+  display: inline-block;
+  background: #e9ecef;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 11px;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .help-panel {
+    max-width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+
+  .categories-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .help-button {
+    bottom: 16px;
+    right: 16px;
+  }
+}
