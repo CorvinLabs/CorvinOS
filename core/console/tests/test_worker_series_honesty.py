@@ -211,6 +211,34 @@ class TestWorkerSpanReader:
         assert res.acs_total_actual_usd == 0.0
 
 
+class TestScanReachesPricedHistory:
+    """Live finding 2026-09-22: the readers took only the last 64 MiB of a
+    187 MB chain. ~54k ``console.session_denied`` records filled that tail, so
+    it reached back three days — every priced worker span (2026-09-15) sat
+    before it, and the panel read "267 runs, none with token data"."""
+
+    def test_priced_span_behind_more_noise_than_the_old_cap_is_read(self, tmp_path):
+        chain = tmp_path / "audit.jsonl"
+        noise = json.dumps({"ts": 1_800_000_100.0, "event_type": "console.session_denied",
+                            "details": {"pad": "x" * 900}}) + "\n"
+        old_cap = 64 * 1024 * 1024
+        with chain.open("w") as fh:
+            fh.write(json.dumps(_end("old-priced", model="claude-sonnet-5",
+                                     ts=1_800_000_000.0, tokens=(100, 50, 0, 0))) + "\n")
+            fh.write(noise * (old_cap // len(noise) + 1024))
+        assert chain.stat().st_size > old_cap
+        spans = MSL._read_worker_spans(chain, MSL._MAX_SCAN_BYTES)
+        assert [s["span_id"] for s in spans] == ["old-priced"]
+
+    def test_a_bounded_read_drops_the_partial_first_line(self, tmp_path):
+        chain = tmp_path / "audit.jsonl"
+        first = json.dumps(_end("cut", model="claude-sonnet-5", ts=1.0, tokens=(1, 1, 0, 0)))
+        last = json.dumps(_end("kept", model="claude-sonnet-5", ts=2.0, tokens=(1, 1, 0, 0)))
+        chain.write_text(first + "\n" + last + "\n")
+        spans = MSL._read_worker_spans(chain, len(last) + 10)
+        assert [s["span_id"] for s in spans] == ["kept"]
+
+
 # ── 3. the audit floor: the static allowlist carries every END field ──
 
 

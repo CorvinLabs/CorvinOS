@@ -3005,6 +3005,24 @@ facet's empty state now names which of the two cases it is ("N delegated worker
 runs in this window, none with token data" vs. "no delegated worker run
 recorded"), because "no worker data" is wrong for the first one.
 
+### The scan reaches the whole chain (2026-09-22)
+
+Operator report: the panel still read "267 delegated worker runs in this
+window, none with token data" two days after the A2A span fix. Measured:
+
+| Source | Runs | Priced | Why |
+|---|---|---|---|
+| legacy `<global>/audit.jsonl`, `acs.engine_completed` 2026-07-09 → 09-06 | 267 | 0 | carry only the lump `tokens_used`; the split was dropped by the audit floor at write time — unrecoverable, never estimated |
+| canonical chain, `engine.span.end` role=worker, 2026-09-15 | 9 | 9 | **never read**: every reader took only the last `_MAX_SCAN_BYTES` = 64 MiB of a 187 MB chain, and ~54k `console.session_denied` in three days pushed that tail's start to 2026-09-19 |
+
+The same cap hid 885 of 1 205 OS turns. `model_selection_learner` now reads
+through one helper, `_iter_chain_records()`: it streams line by line, JSON-
+decodes only lines matching the reader's event types, and keeps a 4 GiB bound
+purely as a latency backstop (full 187 MB `compute_cost_efficiency`: 0.77 s,
+vs. 0.95 s for the old 64 MiB tail). Result on the live tenant: 9 of 276
+worker runs priced, $1.79. Pinned by `test_worker_series_honesty.py::
+TestScanReachesPricedHistory`.
+
 ## Three-tier OS-model routing (ADR-0952, 2026-09-20)
 
 Operator report: *"wieso wird hier immer haiku verwendet — sollte nicht medium

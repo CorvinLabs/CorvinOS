@@ -53,16 +53,23 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from core.learning.learned_threshold_store import LearnedThresholdStore, StoredThreshold, get_store
 
 logger = logging.getLogger(__name__)
 
-# Bound worst-case scan latency as the chain grows (today's canonical
-# per-tenant chain is ~15MB / ~25k lines / ~80ms full parse — see
-# investigation note in Corvin-ADR ADR-TBD-model-selection-learner).
-_MAX_SCAN_BYTES = 64 * 1024 * 1024
+# Upper bound on how much of a chain one read walks, as a latency backstop
+# only — it must stay far above any real chain, because every byte it cuts
+# off is history the console silently stops counting. It was 64 MiB until
+# 2026-09-22, sized when the chain was ~15 MB; by then the live _default chain
+# was 187 MB (~54k ``console.session_denied`` in three days), so the tail
+# reached back only to 2026-09-19: 885 of 1 205 OS turns and every PRICED
+# worker span (2026-09-15) fell outside it, and the worker panel read
+# "267 runs, none with token data". Reads now stream line by line with a
+# byte-level prefilter (~0.3 s for 187 MB, constant memory), so a large bound
+# costs nothing until a chain actually reaches it.
+_MAX_SCAN_BYTES = 4 * 1024 * 1024 * 1024
 
 # "Sample size is large enough to trust the average" — matches the same
 # threshold LearnedThresholdStore.get_threshold() already uses to decide
@@ -93,38 +100,46 @@ class _Bucket:
     priced_turns: int = 0
 
 
+def _iter_chain_records(
+    chain_path: Path, max_bytes: int, needles: tuple[bytes, ...]
+) -> Iterator[dict[str, Any]]:
+    """Stream the last ``max_bytes`` of a chain, yielding decoded records.
+
+    Only lines containing one of ``needles`` are JSON-decoded: the chain is
+    dominated by event types no cost reader wants, and decoding them was the
+    whole cost of a scan. Streams instead of reading the tail into memory, so
+    the bound can sit far above any real chain (see ``_MAX_SCAN_BYTES``).
+    """
+    if not chain_path.exists():
+        return
+    try:
+        size = chain_path.stat().st_size
+        start = max(0, size - max_bytes)
+        with chain_path.open("rb") as fh:
+            fh.seek(start)
+            if start > 0:
+                fh.readline()  # drop the partial first line from the seek
+            for raw in fh:
+                if not any(n in raw for n in needles):
+                    continue
+                try:
+                    rec = json.loads(raw.decode("utf-8", errors="replace"))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict):
+                    yield rec
+    except OSError:
+        return
+
+
 def _read_completed_turns(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]:
     """Join os_turn.started + os_turn.completed by turn_id from the real chain.
 
     Returns one dict per turn that has BOTH a started and completed event
     (a started-only turn is still running and carries no outcome yet).
     """
-    if not chain_path.exists():
-        return []
-
-    size = chain_path.stat().st_size
-    start = max(0, size - max_bytes)
-    try:
-        with chain_path.open("rb") as fh:
-            fh.seek(start)
-            buf = fh.read()
-    except OSError:
-        return []
-
-    text = buf.decode("utf-8", errors="replace")
-    lines = text.splitlines()
-    if start > 0 and lines:
-        lines = lines[1:]  # drop a partial first line from the seek
-
     turns: dict[str, dict[str, Any]] = {}
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for rec in _iter_chain_records(chain_path, max_bytes, (b'"os_turn.started"', b'"os_turn.completed"')):
         et = rec.get("event_type", "")
         if et not in ("os_turn.started", "os_turn.completed"):
             continue
@@ -176,32 +191,8 @@ def _read_acs_completions(chain_path: Path, max_bytes: int) -> list[dict[str, An
     writes is the correct fix for THIS dashboard, not a chain consolidation
     (that requires the documented seam mechanism, out of scope here).
     """
-    if not chain_path.exists():
-        return []
-
-    size = chain_path.stat().st_size
-    start = max(0, size - max_bytes)
-    try:
-        with chain_path.open("rb") as fh:
-            fh.seek(start)
-            buf = fh.read()
-    except OSError:
-        return []
-
-    text = buf.decode("utf-8", errors="replace")
-    lines = text.splitlines()
-    if start > 0 and lines:
-        lines = lines[1:]  # drop a partial first line from the seek
-
     completions: list[dict[str, Any]] = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for rec in _iter_chain_records(chain_path, max_bytes, (b'"acs.engine_completed"',)):
         if rec.get("event_type") != "acs.engine_completed":
             continue
         det = rec.get("details") or {}
@@ -262,24 +253,8 @@ def _read_worker_spans(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]
     * neither → not attributable to any model turn (a stub engine, an
       aborted spawn) — skipped, never estimated.
     """
-    if not chain_path.exists():
-        return []
-    try:
-        size = chain_path.stat().st_size
-        with chain_path.open("rb") as fh:
-            fh.seek(max(0, size - max_bytes))
-            buf = fh.read()
-    except OSError:
-        return []
-
     out: list[dict[str, Any]] = []
-    for line in buf.decode("utf-8", errors="replace").splitlines():
-        if '"engine.span.end"' not in line:
-            continue
-        try:
-            record = json.loads(line)
-        except Exception:  # noqa: BLE001
-            continue
+    for record in _iter_chain_records(chain_path, max_bytes, (b'"engine.span.end"',)):
         details = record.get("details")
         if not isinstance(details, dict) or details.get("role") != "worker":
             continue
