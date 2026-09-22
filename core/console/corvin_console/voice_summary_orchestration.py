@@ -34,13 +34,28 @@ class TaskResult:
 
 @dataclass
 class OrchestrationCompleteEvent:
-    """Multi-task orchestration completion event."""
+    """Multi-task orchestration completion event (tenant-scoped).
+
+    Attributes:
+        event_type: Type of orchestration event (required)
+        tenant_id: Tenant identifier (required, fail-closed if missing)
+        tasks: List of task results
+        timestamp: Event timestamp (ISO-8601 UTC)
+        voice_attachment_path: Optional path to synthesized voice file
+    """
 
     event_type: str  # "orchestration.completed" | "orchestration.mixed_failure"
+    tenant_id: str  # REQUIRED: Tenant scope (fail-closed if missing)
     tasks: list[TaskResult] = field(default_factory=list)
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
-    tenant_id: str = "default"
     voice_attachment_path: Optional[str] = None
+
+    def __post_init__(self):
+        """Validate tenant_id after initialization (fail-closed)."""
+        if not self.tenant_id or not isinstance(self.tenant_id, str):
+            raise ValueError("tenant_id must be a non-empty string")
+        if not self.event_type or not isinstance(self.event_type, str):
+            raise ValueError("event_type must be a non-empty string")
 
 
 # Templates for deterministic summary generation (no LLM call)

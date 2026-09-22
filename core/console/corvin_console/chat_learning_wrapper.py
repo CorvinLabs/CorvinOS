@@ -14,8 +14,19 @@ _logger = logging.getLogger(__name__)
 
 class ChatLearningWrapper:
     """Wraps chat execution with learning event tracking."""
-    
-    def __init__(self, tenant_id: str = "default"):
+
+    def __init__(self, tenant_id: str):
+        """Initialize wrapper with explicit tenant_id (fail-closed).
+
+        Args:
+            tenant_id: Tenant identifier (required, no default)
+
+        Raises:
+            ValueError: If tenant_id is None or empty
+        """
+        if not tenant_id or not isinstance(tenant_id, str):
+            raise ValueError("tenant_id must be a non-empty string")
+
         self.tenant_id = tenant_id
         store_path = Path.home() / ".corvin" / "tenants" / tenant_id / "learning"
         self.integration = LearningIntegration(store_path)
@@ -96,8 +107,21 @@ class ChatLearningWrapper:
 _wrappers: dict[str, ChatLearningWrapper] = {}
 
 
-def get_chat_learning_wrapper(tenant_id: str = "default") -> ChatLearningWrapper:
-    """Get or create a wrapper for this tenant."""
+def get_chat_learning_wrapper(tenant_id: str) -> ChatLearningWrapper:
+    """Get or create a wrapper for this tenant (fail-closed).
+
+    Args:
+        tenant_id: Tenant identifier (required, no default)
+
+    Returns:
+        ChatLearningWrapper instance for this tenant
+
+    Raises:
+        ValueError: If tenant_id is None or empty
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        raise ValueError("tenant_id must be a non-empty string")
+
     if tenant_id not in _wrappers:
         _wrappers[tenant_id] = ChatLearningWrapper(tenant_id)
     return _wrappers[tenant_id]
