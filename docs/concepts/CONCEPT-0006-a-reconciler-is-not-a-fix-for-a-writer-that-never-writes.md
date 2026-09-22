@@ -4,7 +4,7 @@ title: A reconciler is not a fix for a writer that never writes
 status: ACTIVE
 created: 2026-09-21
 skills: []  # none — see "Note on location" below: skill minting is license-gated off on this box
-relates_to: [CONCEPT-0005]
+relates_to: [CONCEPT-0005, CONCEPT-0007]
 paths:
   - core/console/corvin_console/chat_runtime.py
   - core/console/corvin_core/task_manager.py
@@ -155,7 +155,10 @@ host that runs for weeks.
 
 - **When the field really is derived on read.** Then drift is impossible and a
   stuck value means the derivation is wrong; this concept sends you hunting for a
-  writer that does not exist.
+  writer that does not exist. That excluded case has its own concept —
+  [[CONCEPT-0007]], where the derivation was sound but ran on inputs that could
+  not see the property being claimed. Answer **stored or derived** first, then
+  pick between the two.
 - **When the writer is outside your control** (a third-party system, a crashed
   kernel, a `SIGKILL`). Then a reconciler *is* the fix, and its correctness rests
   entirely on its staleness gate — the property to invest in is the gate, not the
