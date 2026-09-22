@@ -1,10 +1,20 @@
-"""Subsystem Registry — Central management of CorvinOS subsystems (ADR-2029)."""
+"""Subsystem Registry — Central management of CorvinOS subsystems (ADR-2029).
+
+Audit Trail Integration (ADR-0232/0233):
+- All subsystem operations (register, unregister, health check) are logged to
+  the immutable core audit chain via AuditChainWriter
+- Audit events are hash-chained and tamper-resistant
+- Fail-closed: write errors to audit chain raise exceptions
+"""
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable
 from enum import Enum
 from datetime import datetime
 import logging
+
+from core.compliance.audit_chain_writer import AuditEvent
+from core.compliance.audit_chain_provider import get_audit_chain_writer
 
 logger = logging.getLogger(__name__)
 
@@ -60,19 +70,31 @@ class SubsystemRegistry:
     Responsibilities:
     - Register/unregister subsystems with metadata
     - Track subsystem dependencies and ordering
-    - Emit immutable audit events for all operations
+    - Emit immutable audit events for all operations (ADR-0232/0233)
     - Enforce tenant isolation
     - Provide health check status aggregation
     - Fail-closed error handling
+
+    Audit Integration (ADR-0232/0233):
+    - All operations logged to core audit chain (AuditChainWriter)
+    - Fail-closed: write failures raise exceptions
+    - Thread-safe: underlying chain writer handles synchronization
     """
 
-    def __init__(self, audit_backend):
-        """Initialize registry with audit backend.
+    def __init__(self, tenant_id: str = "_default", audit_backend=None):
+        """Initialize registry with audit chain writer.
 
         Args:
-            audit_backend: Backend for immutable audit event logging
+            tenant_id: Tenant scope for audit isolation
+            audit_backend: Optional backend (for testing); defaults to core chain writer
         """
-        self.audit = audit_backend
+        self.tenant_id = tenant_id
+        # Use provided backend (tests) or get real core audit chain writer
+        if audit_backend is not None:
+            self.audit_chain = audit_backend
+        else:
+            self.audit_chain = get_audit_chain_writer(tenant_id)
+
         self.subsystems: Dict[str, SubsystemInstance] = {}
         self.health_checks: Dict[str, Callable] = {}
 
@@ -135,17 +157,17 @@ class SubsystemRegistry:
 
         self.subsystems[key] = instance
 
-        # Emit immutable audit event
-        await self.audit.log_event(
-            "subsystem_registered",
-            {
+        # Emit immutable audit event to core chain (fail-closed)
+        self.audit_chain.write_event_dict(
+            event_type="subsystem_registered",
+            tenant_id=tenant_id,
+            details={
                 "subsystem_id": subsystem_id,
                 "subsystem_type": subsystem_type.value,
                 "version": version,
-                "tenant_id": tenant_id,
                 "dependencies": dependencies or [],
-                "timestamp": now,
-            }
+            },
+            severity="info",
         )
 
         logger.info(f"Registered subsystem {subsystem_id} ({subsystem_type.value})")
@@ -180,15 +202,15 @@ class SubsystemRegistry:
 
         instance = self.subsystems.pop(key)
 
-        # Emit immutable audit event
-        await self.audit.log_event(
-            "subsystem_unregistered",
-            {
+        # Emit immutable audit event to core chain (fail-closed)
+        self.audit_chain.write_event_dict(
+            event_type="subsystem_unregistered",
+            tenant_id=tenant_id,
+            details={
                 "subsystem_id": subsystem_id,
                 "subsystem_type": instance.subsystem_type.value,
-                "tenant_id": tenant_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-            }
+            },
+            severity="info",
         )
 
         logger.info(f"Unregistered subsystem {subsystem_id}")
@@ -259,15 +281,15 @@ class SubsystemRegistry:
         )
         self.subsystems[key] = updated
 
-        # Emit immutable audit event
-        await self.audit.log_event(
-            "subsystem_health_checked",
-            {
+        # Emit immutable audit event to core chain (fail-closed)
+        self.audit_chain.write_event_dict(
+            event_type="subsystem_health_checked",
+            tenant_id=tenant_id,
+            details={
                 "subsystem_id": subsystem_id,
                 "health_status": health_status,
-                "tenant_id": tenant_id,
-                "timestamp": now,
-            }
+            },
+            severity="info",
         )
 
         return {

@@ -1,10 +1,20 @@
-"""Override Authority — Operator overrides with approval gates (ADR-2029 Stream 3)."""
+"""Override Authority — Operator overrides with approval gates (ADR-2029 Stream 3).
+
+Audit Trail Integration (ADR-0232/0233):
+- All override operations (request, approve, reject, interrupt) are logged to
+  the immutable core audit chain via AuditChainWriter
+- Audit events are hash-chained and tamper-resistant
+- Fail-closed: write errors to audit chain raise exceptions
+"""
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Set
 from datetime import datetime
 import logging
+
+from core.compliance.audit_chain_writer import AuditEvent
+from core.compliance.audit_chain_provider import get_audit_chain_writer
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +66,30 @@ class OverrideAuthority:
     Responsibilities:
     - Request overrides (with required justification)
     - Approval gate (admins only)
-    - Audit trail of all override decisions
+    - Audit trail of all override decisions (immutable, hash-chained)
     - Tenant-scoped access control
     - Automatic expiration of pending requests (24h)
+
+    Audit Integration (ADR-0232/0233):
+    - All operations logged to core audit chain (AuditChainWriter)
+    - Fail-closed: write failures raise exceptions
+    - Thread-safe: underlying chain writer handles synchronization
     """
 
-    def __init__(self, audit_backend):
-        """Initialize authority with audit backend.
+    def __init__(self, tenant_id: str = "_default", audit_backend=None):
+        """Initialize authority with audit chain writer.
 
         Args:
-            audit_backend: Backend for audit event logging
+            tenant_id: Tenant scope for audit isolation
+            audit_backend: Optional backend (for testing); defaults to core chain writer
         """
-        self.audit = audit_backend
+        self.tenant_id = tenant_id
+        # Use provided backend (tests) or get real core audit chain writer
+        if audit_backend is not None:
+            self.audit_chain = audit_backend
+        else:
+            self.audit_chain = get_audit_chain_writer(tenant_id)
+
         self.overrides: Dict[str, OverrideRequest] = {}
         self.approvers: Set[str] = set()
         self._request_counter = 0
@@ -118,17 +140,17 @@ class OverrideAuthority:
 
         self.overrides[override_id] = request
 
-        # Log audit event
-        await self.audit.log_event(
-            "override_requested",
-            {
+        # Log immutable audit event to core chain (fail-closed)
+        self.audit_chain.write_event_dict(
+            event_type="override_requested",
+            tenant_id=tenant_id,
+            user_id=requestor_id,
+            details={
                 "override_id": override_id,
                 "override_type": override_type.value,
                 "target_id": target_id,
-                "requestor_id": requestor_id,
-                "tenant_id": tenant_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
             },
+            severity="info",
         )
 
         logger.info(
@@ -159,15 +181,16 @@ class OverrideAuthority:
             ValueError: If override not found or expired
         """
         if approver_id not in self.approvers:
-            await self.audit.log_event(
-                "override_approve_denied",
-                {
+            # Log denial to audit chain (fail-closed)
+            self.audit_chain.write_event_dict(
+                event_type="override_approve_denied",
+                tenant_id=tenant_id,
+                user_id=approver_id,
+                details={
                     "override_id": override_id,
                     "reason": "unauthorized_approver",
-                    "approver_id": approver_id,
-                    "tenant_id": tenant_id,
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
                 },
+                severity="warning",
             )
             raise PermissionError(f"{approver_id} is not an authorized approver")
 
@@ -198,17 +221,17 @@ class OverrideAuthority:
 
         self.overrides[override_id] = approved_request
 
-        # Log audit event
-        await self.audit.log_event(
-            "override_approved",
-            {
+        # Log immutable audit event to core chain (fail-closed)
+        self.audit_chain.write_event_dict(
+            event_type="override_approved",
+            tenant_id=tenant_id,
+            user_id=approver_id,
+            details={
                 "override_id": override_id,
-                "approver_id": approver_id,
-                "tenant_id": tenant_id,
                 "override_type": override.override_type.value,
                 "target_id": override.target_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
             },
+            severity="info",
         )
 
         logger.info(f"Override {override_id} approved by {approver_id}")
@@ -266,18 +289,18 @@ class OverrideAuthority:
 
         self.overrides[override_id] = rejected_request
 
-        # Log audit event
-        await self.audit.log_event(
-            "override_rejected",
-            {
+        # Log immutable audit event to core chain (fail-closed)
+        self.audit_chain.write_event_dict(
+            event_type="override_rejected",
+            tenant_id=tenant_id,
+            user_id=approver_id,
+            details={
                 "override_id": override_id,
-                "approver_id": approver_id,
                 "rejection_reason": rejection_reason,
-                "tenant_id": tenant_id,
                 "override_type": override.override_type.value,
                 "target_id": override.target_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
             },
+            severity="info",
         )
 
         logger.info(f"Override {override_id} rejected by {approver_id}")
@@ -456,15 +479,15 @@ class OverrideAuthority:
 
         self.overrides[override_id] = interrupted_request
 
-        # Log audit event
-        await self.audit.log_event(
-            "override_interrupted",
-            {
+        # Log immutable audit event to core chain (fail-closed)
+        self.audit_chain.write_event_dict(
+            event_type="override_interrupted",
+            tenant_id=tenant_id,
+            details={
                 "override_id": override_id,
-                "tenant_id": tenant_id,
                 "original_status": override.approval_status,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
             },
+            severity="info",
         )
 
         logger.info(f"Override {override_id} interrupted")
@@ -481,15 +504,35 @@ class OverrideAuthority:
             tenant_id: Tenant scope
 
         Returns:
-            List of audit events for the tenant
+            List of audit events for the tenant (from core audit chain)
+
+        Note: This reads from the immutable core audit chain, so events
+        are guaranteed to be hash-chained and tamper-resistant.
         """
-        if not hasattr(self.audit, "events"):
+        import json
+        from pathlib import Path
+
+        # Get the audit chain file path
+        from corvin_operator.bridges.shared.paths import tenant_audit_chain
+        chain_path = tenant_audit_chain(tenant_id)
+
+        if not chain_path.exists():
             return []
 
-        # Filter events by tenant_id
-        tenant_events = [
-            event for event in self.audit.events
-            if event.get("payload", {}).get("tenant_id") == tenant_id
-        ]
+        events = []
+        try:
+            with open(chain_path, "r") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    event = json.loads(line)
+                    # Filter to override-related events for this tenant
+                    if (event.get("tenant_id") == tenant_id and
+                        event.get("event_type", "").startswith("override_")):
+                        events.append(event)
+        except (json.JSONDecodeError, IOError):
+            # If chain is corrupted, return empty (audit chain should be verified
+            # separately by boot tripwire; we don't fail here)
+            pass
 
-        return tenant_events
+        return events

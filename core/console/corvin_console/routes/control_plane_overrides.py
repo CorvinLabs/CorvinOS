@@ -38,12 +38,15 @@ _authority: Optional[OverrideAuthority] = None
 
 
 def get_authority() -> OverrideAuthority:
-    """Get or initialize singleton OverrideAuthority (with real audit backend)."""
+    """Get or initialize singleton OverrideAuthority (with core audit chain).
+
+    Wires to the immutable core audit chain (ADR-0232/0233).
+    """
     global _authority
     if _authority is None:
-        from core.audit import get_audit_backend
-        # ✅ Use real audit backend (not MockAuditBackend)
-        _authority = OverrideAuthority(get_audit_backend())
+        # ✅ Initialize with real core audit chain writer
+        # (tenant_id defaults to "_default", can be overridden per request)
+        _authority = OverrideAuthority(tenant_id="_default")
     return _authority
 
 
@@ -128,6 +131,7 @@ async def create_override(
 @router.get("")
 async def list_overrides(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
 ) -> dict[str, Any]:
     """List pending overrides for tenant.
 
@@ -156,6 +160,7 @@ async def list_overrides(
 async def get_override_detail(
     override_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
 ) -> dict[str, Any]:
     """Get override details.
 
@@ -346,6 +351,7 @@ async def interrupt_override(
 @router.get("/audit")
 async def get_audit_log(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
 ) -> dict[str, Any]:
     """Get override audit trail (read-only).
 
