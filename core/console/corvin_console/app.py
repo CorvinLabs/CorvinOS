@@ -133,6 +133,9 @@ from .routes import (
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
     learning_analytics as learning_analytics_route,
+    feedback_portal_routes as feedback_portal_routes_route,
+    learning_optimizer_routes_stream2 as learning_optimizer_stream2_route,
+    skill_learning_routes as skill_learning_routes_route,
     deprecated_api_metrics as deprecated_api_metrics_route,
     world_map as world_map_route,
     infinite_session_api as infinite_session_route,
@@ -221,6 +224,8 @@ from .routes import (
     control_plane_snapshots as control_plane_snapshots_route,
     # Media System — video/audio/image distribution via Console + Discord + Telegram
     media_routes,
+    # Cost Insights Stream 3 — Daily spend, breakdown, guardrails
+    cost_insights_routes as cost_insights_route,
 )
 
 
@@ -265,6 +270,9 @@ router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
 router.include_router(learning_analytics_route.router, tags=["console-learning-analytics"])
+router.include_router(feedback_portal_routes_route.router, tags=["console-feedback-portal"])
+router.include_router(learning_optimizer_stream2_route.router, tags=["console-learning-optimizer"])
+router.include_router(skill_learning_routes_route.router, tags=["console-skill-learning"])
 # TRACK I — DataHub Creator (6-phase project workspace with skill metrics + learning visualization)
 router.include_router(datahub_creator_route.router, tags=["console-datahub-creator"])
 router.include_router(features_phase2_route.router, tags=["console-phase2-features"])
@@ -299,6 +307,8 @@ router.include_router(engine_api_route.router, tags=["console-engine-api"])
 router.include_router(model_selection_analytics_route.router, tags=["console-model-selection-analytics"])
 # ADR-0377 Phase 2b, renamed ADR-0696 — Learned threshold persistence and console UI
 router.include_router(model_cost_optimizer_api_route.router, tags=["console-model-cost-optimizer"])
+# Cost Insights Stream 3 — Daily spend, breakdown, guardrails (Stories 4-10)
+router.include_router(cost_insights_route.router, tags=["console-cost-insights"])
 # GitHub Cross-Device-Learning integration
 router.include_router(github_route.router, tags=["console-github"])
 # MUST precede settings_route: its `PUT /settings/{label}` (config-file writer)
