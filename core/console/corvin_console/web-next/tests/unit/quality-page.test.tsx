@@ -28,14 +28,14 @@ import QualityGatesPanel, { MARKER_QUALITY } from "@/pages/quality";
 
 const B = "/v1/console/api/quality/gates";
 const win = (p: number, w: number, f: number) => ({ pass: p, warn: w, fail: f, total: p + w + f, pass_percentage: p + w + f ? Math.round((p / (p + w + f)) * 1000) / 10 : null });
-const gate = (a: ReturnType<typeof win>, b = a) => ({ last_24h: a, last_7d: b, last_verdict: a.total ? (a.fail ? "fail" : "pass") : null, last_timestamp: null });
+const gate = (a: ReturnType<typeof win>, b = a, c = a) => ({ current: c, last_24h: a, last_7d: b, last_verdict: a.total ? (a.fail ? "fail" : "pass") : null, last_timestamp: null });
 
 const EMPTY = {
-  tenant_id: "_default", timestamp: "2026-09-20T10:00:00.000000Z", gates_total: 4, events_24h: 0, events_total: 0, source_root: "/srv/Corvin-ADR", last_run: null,
+  tenant_id: "_default", timestamp: "2026-09-20T10:00:00.000000Z", gates_total: 4, events_24h: 0, events_total: 0, as_of: null, source_root: "/srv/Corvin-ADR", last_run: null,
   summary: { ADRGate: gate(win(0, 0, 0)), ConceptGate: gate(win(0, 0, 0)), ImplementationPlanGate: gate(win(0, 0, 0)), IdeaGate: gate(win(0, 0, 0)) },
 };
 const AFTER = {
-  ...EMPTY, events_24h: 1091, events_total: 1091,
+  ...EMPTY, events_24h: 1091, events_total: 1091, as_of: "2026-09-20T10:00:03.000000Z",
   last_run: { run_id: "r1", status: "completed", started_at: "2026-09-20T10:00:00.000000Z", completed_at: "2026-09-20T10:00:03.000000Z", artifacts_total: 1091, artifacts_done: 1091, error: null },
   summary: { ADRGate: gate(win(267, 0, 738)), ConceptGate: gate(win(1, 0, 66)), ImplementationPlanGate: gate(win(11, 0, 7)), IdeaGate: gate(win(0, 0, 1)) },
 };
@@ -63,7 +63,8 @@ describe("Quality Gates page", () => {
     expect(screen.getByTestId("gate-row-ADRGate").textContent).toContain("—");
     expect(screen.getByTestId("gate-row-ADRGate").textContent).not.toMatch(/0\.0 %/);
     expect(screen.getByTestId("trend-caption").textContent).toMatch(/nothing to draw/);
-    expect(screen.getByText("No gate run in the last 24 hours.")).toBeInTheDocument();
+    expect(screen.getByText("No gate has run yet.")).toBeInTheDocument();
+    expect(screen.getByTestId("as-of").textContent).toMatch(/no gate run yet/);
     expect(screen.getByText("/srv/Corvin-ADR")).toBeInTheDocument();
   });
 
@@ -106,7 +107,35 @@ describe("Quality Gates page", () => {
     expect(screen.getByTestId("trend-caption").textContent).toMatch(/One day with a run \(2026-09-20, UTC\) — shown as a bar, not a trend/);
     await screen.findByTestId("failure-row");
     expect(screen.getByTestId("failure-row").textContent).toMatch(/ADRGate.*ADR: ADR-0002.*ADR frontmatter incomplete · 3 findings/);
-    expect(screen.getByTestId("failures-caption").textContent).toMatch(/812 verdicts below pass — newest 1 shown/);
+    expect(screen.getByTestId("failures-caption").textContent).toMatch(/812 artifacts whose newest verdict is below pass — newest 1 shown/);
+  });
+
+  it("a run older than 24 h still shows the current verdicts, not zeros", async () => {
+    // Live 2026-09-22: last run three days old → every tile 0, every gate "not run".
+    const STALE = {
+      ...AFTER, events_24h: 0,
+      summary: {
+        ADRGate: gate(win(0, 0, 0), win(0, 0, 0), win(267, 0, 738)), ConceptGate: gate(win(0, 0, 0), win(0, 0, 0), win(1, 0, 66)),
+        ImplementationPlanGate: gate(win(0, 0, 0), win(0, 0, 0), win(11, 0, 7)), IdeaGate: gate(win(0, 0, 0), win(0, 0, 0), win(0, 0, 1)),
+      },
+    };
+    let failuresUrl = "";
+    server.use(
+      http.get(`${B}/status`, () => HttpResponse.json(STALE)),
+      http.get(`${B}/trend`, () => HttpResponse.json({ points: [] })),
+      http.get(`${B}/failures`, ({ request }) => {
+        failuresUrl = request.url;
+        return HttpResponse.json({ total: 812, failures: [{ gate_name: "ADRGate", artifact_id: "ADR-0002", verdict: "fail", confidence: 1, reason: "ADR frontmatter incomplete", timestamp: "2026-09-19T22:04:00.000000Z", findings_count: 3, artifact_type: "ADR" }] });
+      }),
+    );
+    renderIt();
+    await screen.findByTestId("quality-gates");
+    expect(screen.queryAllByText("not run")).toHaveLength(0);
+    expect(screen.getByText("Artifacts judged").previousElementSibling?.textContent).toBe("1091");
+    expect(screen.getByText("Failing").previousElementSibling?.textContent).toBe("812");
+    expect(screen.getByTestId("gate-row-ADRGate").textContent).toContain("26.6 %");
+    await screen.findByTestId("failure-row");
+    expect(new URL(failuresUrl).searchParams.get("scope")).toBe("current");
   });
 
   it("a 404 build says so instead of showing zeros", async () => {

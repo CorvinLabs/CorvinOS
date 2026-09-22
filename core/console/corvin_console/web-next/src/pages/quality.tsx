@@ -15,6 +15,11 @@
  *    have events (bars below two points, ADR-0761), and says "no trend yet"
  *    instead of computing a direction from one point;
  *  - failures list the validator's own reason, with the artifact id.
+ *
+ * Until 2026-09-22 tiles, table and failure list read only the last 24 h, so
+ * three days after a run the page showed zeros and "not run" over 2 184
+ * recorded verdicts. They now show the CURRENT state — the newest verdict per
+ * artifact, dated by its run; the 24 h / 7 d windows stay as columns.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -34,11 +39,11 @@ import { useAuth } from "@/lib/auth";
 // ── Types (the backend's shapes, routes/quality_gates.py) ─────────────────
 
 export interface GateWindow { pass: number; warn: number; fail: number; total: number; pass_percentage: number | null }
-export interface GateSummary { last_24h: GateWindow; last_7d: GateWindow; last_verdict: string | null; last_timestamp: string | null }
+export interface GateSummary { current: GateWindow; last_24h: GateWindow; last_7d: GateWindow; last_verdict: string | null; last_timestamp: string | null }
 export interface LastRun { run_id: string; status: string; started_at: string; completed_at: string | null; artifacts_total: number; artifacts_done: number; error: string | null }
 export interface GatesStatus {
   tenant_id: string; timestamp: string; summary: Record<string, GateSummary>; gates_total: number;
-  events_24h: number; events_total: number; source_root: string; last_run: LastRun | null;
+  events_24h: number; events_total: number; as_of: string | null; source_root: string; last_run: LastRun | null;
 }
 export interface TrendPoint { date: string; pass: number; warn: number; fail: number; total: number; pass_percentage: number | null }
 export interface GateFailure { gate_name: string; artifact_id: string; verdict: string; confidence: number; reason: string; timestamp: string; findings_count: number; artifact_type: string }
@@ -100,7 +105,7 @@ export default function QualityGatesPanel() {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: [...KEY, "status"], queryFn: ({ signal }) => api<GatesStatus>(`${BASE}/status`, { signal }), refetchInterval: 60_000, retry: false });
   const trend = useQuery({ queryKey: [...KEY, "trend"], queryFn: ({ signal }) => api<{ points: TrendPoint[] }>(`${BASE}/trend?days=14`, { signal }), refetchInterval: 60_000, retry: false });
-  const failures = useQuery({ queryKey: [...KEY, "failures"], queryFn: ({ signal }) => api<{ failures: GateFailure[]; total: number }>(`${BASE}/failures?hours=24&limit=50`, { signal }), refetchInterval: 60_000, retry: false });
+  const failures = useQuery({ queryKey: [...KEY, "failures"], queryFn: ({ signal }) => api<{ failures: GateFailure[]; total: number }>(`${BASE}/failures?scope=current&limit=50`, { signal }), refetchInterval: 60_000, retry: false });
 
   const [runId, setRunId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -140,10 +145,11 @@ export default function QualityGatesPanel() {
 
   const s = status.data;
   const gates = Object.entries(s.summary);
-  const judged24 = gates.reduce((n, [, g]) => n + g.last_24h.total, 0);
-  const passed24 = gates.reduce((n, [, g]) => n + g.last_24h.pass, 0);
-  const failed24 = gates.reduce((n, [, g]) => n + g.last_24h.fail, 0);
-  const warned24 = gates.reduce((n, [, g]) => n + g.last_24h.warn, 0);
+  const judged = gates.reduce((n, [, g]) => n + g.current.total, 0);
+  const passed = gates.reduce((n, [, g]) => n + g.current.pass, 0);
+  const failed = gates.reduce((n, [, g]) => n + g.current.fail, 0);
+  const warned = gates.reduce((n, [, g]) => n + g.current.warn, 0);
+  const asOf = s.as_of ? new Date(s.as_of).toLocaleString("en-US") : null;
   const points = (trend.data?.points ?? []).filter((p) => p.pass_percentage !== null);
   const running = run !== null && run.status === "running";
 
@@ -167,6 +173,7 @@ export default function QualityGatesPanel() {
           <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
             <span><span className="text-muted-foreground">Source:</span> <span className="font-mono text-xs">{s.source_root || "no Corvin-ADR checkout found"}</span></span>
             <span><span className="text-muted-foreground">Events recorded:</span> <span className="font-mono tabular-nums">{s.events_total}</span></span>
+            <span data-testid="as-of"><span className="text-muted-foreground">Newest verdict:</span> {asOf ?? "no gate run yet"}</span>
             {s.last_run && (
               <span className="text-xs text-muted-foreground">
                 Last run {s.last_run.run_id}: {s.last_run.status}{s.last_run.completed_at ? ` at ${new Date(s.last_run.completed_at).toLocaleTimeString("en-US")}` : ""}
@@ -188,13 +195,13 @@ export default function QualityGatesPanel() {
         </CardContent>
       </Card>
 
-      {/* KPI tiles — over the last 24 h, denominators named */}
+      {/* KPI tiles — current state: one verdict per artifact and gate */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          ["Verdicts (24 h)", String(judged24)],
-          ["Passed", String(passed24)],
-          ["Warnings", String(warned24)],
-          ["Failed", String(failed24)],
+          ["Artifacts judged", String(judged)],
+          ["Passing", String(passed)],
+          ["Warnings", String(warned)],
+          ["Failing", String(failed)],
         ].map(([label, value]) => (
           <Card key={label}><CardContent className="pt-6 text-center">
             <div className="text-3xl font-bold tabular-nums">{value}</div>
@@ -205,8 +212,8 @@ export default function QualityGatesPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Gate status (last 24 h)</CardTitle>
-          <CardDescription>Per gate: verdicts recorded in the window — two runs judge every artifact twice. A gate nobody ran shows no share.</CardDescription>
+          <CardTitle className="text-lg">Gate status</CardTitle>
+          <CardDescription>Per gate: the newest verdict of every artifact{asOf ? ` (newest run ${asOf})` : ""}. The 24 h / 7 d columns count verdicts recorded in that window — two runs judge every artifact twice. A gate nobody ran shows no share.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="rounded-lg border border-border overflow-x-auto">
@@ -215,11 +222,12 @@ export default function QualityGatesPanel() {
                 <tr>
                   <th className="text-left px-4 py-3 font-semibold">Gate</th>
                   <th className="text-center px-4 py-3 font-semibold">Status</th>
-                  <th className="text-center px-4 py-3 font-semibold">Verdicts</th>
+                  <th className="text-center px-4 py-3 font-semibold">Artifacts</th>
                   <th className="text-center px-4 py-3 font-semibold">Pass</th>
                   <th className="text-center px-4 py-3 font-semibold">Warn</th>
                   <th className="text-center px-4 py-3 font-semibold">Fail</th>
                   <th className="text-right px-4 py-3 font-semibold">Pass share</th>
+                  <th className="text-right px-4 py-3 font-semibold">24 h</th>
                   <th className="text-right px-4 py-3 font-semibold">7 d</th>
                 </tr>
               </thead>
@@ -227,12 +235,13 @@ export default function QualityGatesPanel() {
                 {gates.map(([name, g]) => (
                   <tr key={name} className="border-b border-border last:border-b-0" data-testid={`gate-row-${name}`}>
                     <td className="px-4 py-3"><div className="font-medium">{name}</div><div className="text-xs text-muted-foreground">{GATE_LABEL[name] ?? ""}</div></td>
-                    <td className="text-center px-4 py-3"><VerdictBadge v={verdictOf(g.last_24h)} /></td>
-                    <td className="text-center px-4 py-3 tabular-nums">{g.last_24h.total}</td>
-                    <td className="text-center px-4 py-3 tabular-nums text-emerald-600 dark:text-emerald-400">{g.last_24h.pass}</td>
-                    <td className="text-center px-4 py-3 tabular-nums text-amber-600 dark:text-amber-400">{g.last_24h.warn}</td>
-                    <td className="text-center px-4 py-3 tabular-nums text-destructive">{g.last_24h.fail}</td>
-                    <td className="text-right px-4 py-3 font-semibold tabular-nums">{pct(g.last_24h.pass_percentage)}</td>
+                    <td className="text-center px-4 py-3"><VerdictBadge v={verdictOf(g.current)} /></td>
+                    <td className="text-center px-4 py-3 tabular-nums">{g.current.total}</td>
+                    <td className="text-center px-4 py-3 tabular-nums text-emerald-600 dark:text-emerald-400">{g.current.pass}</td>
+                    <td className="text-center px-4 py-3 tabular-nums text-amber-600 dark:text-amber-400">{g.current.warn}</td>
+                    <td className="text-center px-4 py-3 tabular-nums text-destructive">{g.current.fail}</td>
+                    <td className="text-right px-4 py-3 font-semibold tabular-nums">{pct(g.current.pass_percentage)}</td>
+                    <td className="text-right px-4 py-3 tabular-nums text-muted-foreground">{pct(g.last_24h.pass_percentage)} <span className="text-xs">of {g.last_24h.total}</span></td>
                     <td className="text-right px-4 py-3 tabular-nums text-muted-foreground">{pct(g.last_7d.pass_percentage)} <span className="text-xs">of {g.last_7d.total}</span></td>
                   </tr>
                 ))}
@@ -280,15 +289,15 @@ export default function QualityGatesPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Failures and warnings (last 24 h)</CardTitle>
+          <CardTitle className="text-lg">Failing and warning artifacts</CardTitle>
           <CardDescription data-testid="failures-caption">
-            {failures.isError ? "could not be loaded" : `${failures.data?.total ?? 0} verdicts below pass${(failures.data?.total ?? 0) > (failures.data?.failures.length ?? 0) ? ` — newest ${failures.data?.failures.length} shown` : ""}`}
+            {failures.isError ? "could not be loaded" : `${failures.data?.total ?? 0} artifacts whose newest verdict is below pass${(failures.data?.total ?? 0) > (failures.data?.failures.length ?? 0) ? ` — newest ${failures.data?.failures.length} shown` : ""}`}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {(failures.data?.failures.length ?? 0) === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              {judged24 === 0 ? "No gate run in the last 24 hours." : "Every judged artifact passed."}
+              {judged === 0 ? "No gate has run yet." : "Every judged artifact passes."}
             </div>
           ) : (
             <div className="space-y-2">

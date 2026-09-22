@@ -337,13 +337,19 @@ file. The declared id travels as `declared_id`.
 
 | Route | Renders as |
 |---|---|
-| `GET gates/status` | per-gate 24 h / 7 d verdict counts aggregated in SQL (never a row limit — the old "last 1000 rows" cut the gates that ran first), `pass_percentage` **null** when a gate has no event in the window, `events_24h`, `events_total`, `source_root`, `last_run` |
+| `GET gates/status` | per-gate `current` (the NEWEST verdict per artifact, however old — one per artifact, so a second run does not double it), plus 24 h / 7 d verdict counts aggregated in SQL (never a row limit — the old "last 1000 rows" cut the gates that ran first), `pass_percentage` **null** when a gate has no event in the window, `events_24h`, `events_total`, `as_of` (newest verdict timestamp), `source_root`, `last_run` |
 | `GET gates/trend?days=` | one point per **UTC day that has events**; a day without a run is a gap, not 0 % |
-| `GET gates/failures?hours=&limit=` | fail/warn rows with the validator's own `reason`, `findings_count`, `artifact_type` |
+| `GET gates/failures?scope=window\|current&hours=&limit=` | `window` (default): fail/warn verdicts of the last `hours`; `current`: artifacts whose newest verdict is fail/warn (`hours` ignored). Rows carry the validator's own `reason`, `findings_count`, `artifact_type` |
 | `POST gates/run/all` → `GET gates/results/{id}` | the job above; a checkout that cannot be found is a `failed` run that says so |
 
-**Page rules (ADR-0761/0763).** Tiles and the table say "Verdicts", because a
-second run judges every artifact again. Below two trend points the chart is a
+**Page rules (ADR-0761/0763).** Tiles, the table's main columns and the
+failure list show the **current state** (`current`, `scope=current`), dated by
+"Newest verdict". Until 2026-09-22 they read only the 24 h window, so three
+days after the last run the page showed zeros and "not run" over 2 184
+recorded verdicts — nothing runs the gates on a schedule, and an unchanged
+artifact does not stop failing because a day passed. The 24 h / 7 d windows
+remain as columns, counted in verdicts (a second run judges every artifact
+again). Below two trend points the chart is a
 bar and the caption says it is not a trend. A 404 build says "not available
 on this build" instead of zeros. Deploy marker: the page caption string in
 `src/pages/quality.tsx` (`MARKER_QUALITY`).

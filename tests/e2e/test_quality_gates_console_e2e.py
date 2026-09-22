@@ -225,3 +225,36 @@ def test_a_foreign_tenants_run_is_403(client, adr_root):
     with qg._runs_lock:
         qg._run_cache[run_id]["tenant_id"] = "other"
     assert client.get(f"{BASE}/results/{run_id}").status_code == 403
+
+
+def test_current_state_survives_the_24h_window_and_counts_each_artifact_once(client, adr_root, home):
+    """The page reads the CURRENT verdict per artifact, not a 24h window.
+
+    Live 2026-09-22: the last run was 3 days old, every tile read 0, every gate
+    "not run" and the failure list was empty — over 2 184 recorded verdicts,
+    1 624 of them fails. An artifact nobody touched does not stop failing
+    because a day passed.
+    """
+    _wait(client, client.post(f"{BASE}/run/all").json()["run_id"])
+    _wait(client, client.post(f"{BASE}/run/all").json()["run_id"])
+
+    from core.quality_gates.graph import KnowledgeGraph
+
+    g = KnowledgeGraph(str(home / "tenants" / "_default" / "global" / "quality_gates.db"), "_default")
+    # age every verdict past both windows (breaks the chain — test DB only)
+    g.conn.execute("UPDATE gate_events SET timestamp = '2020-01-0' || CAST(1 + (rowid % 2) AS VARCHAR) || 'T00:00:00.000000Z'")
+    g.close()
+
+    status = client.get(f"{BASE}/status").json()
+    assert status["events_24h"] == 0
+    adr = status["summary"]["ADRGate"]
+    assert adr["last_24h"]["total"] == 0
+    # two runs, two ADRs → two current verdicts, not four
+    assert adr["current"] == {"pass": 1, "warn": 0, "fail": 1, "total": 2, "pass_percentage": 50.0}
+    assert status["summary"]["IdeaGate"]["current"]["pass_percentage"] is None
+    assert status["as_of"].startswith("2020-01-0")
+
+    assert client.get(f"{BASE}/failures").json()["total"] == 0  # the window scope is unchanged
+    cur = client.get(f"{BASE}/failures?scope=current").json()
+    assert cur["total"] == 2
+    assert {f["artifact_id"] for f in cur["failures"]} == {"ADR-9002-bad", "CONCEPT-9001"}

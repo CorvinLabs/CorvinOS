@@ -24,7 +24,7 @@ import logging
 import threading
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -131,10 +131,27 @@ async def get_gates_status(
         events_total = int(graph.conn.execute(
             "SELECT COUNT(*) FROM gate_events WHERE tenant_id = ?", [tenant_id]
         ).fetchall()[0][0])
+        # The CURRENT state: the newest verdict per (gate, artifact). Until
+        # 2026-09-22 the page knew only the 24h window, so three days after the
+        # last run every tile read 0 and every gate "not run" over 1 624
+        # recorded fails — an unchanged artifact does not stop failing because
+        # a day passed. Counting per artifact also keeps two runs from judging
+        # every artifact twice.
+        current_rows = graph.conn.execute(
+            "SELECT gate_name, verdict, COUNT(*) FROM ("
+            " SELECT gate_name, lower(arg_max(verdict, timestamp)) AS verdict"
+            " FROM gate_events WHERE tenant_id = ? GROUP BY gate_name, artifact_id"
+            ") GROUP BY gate_name, verdict",
+            [tenant_id],
+        ).fetchall()
+        as_of = graph.conn.execute(
+            "SELECT max(timestamp) FROM gate_events WHERE tenant_id = ?", [tenant_id]
+        ).fetchall()[0][0]
 
         gate_summaries = {}
         for gate_name in list_gates():
             gate_summaries[gate_name] = {
+                "current": {"pass": 0, "warn": 0, "fail": 0},
                 "last_24h": {"pass": 0, "warn": 0, "fail": 0},
                 "last_7d": {"pass": 0, "warn": 0, "fail": 0},
                 "last_verdict": None,
@@ -145,6 +162,9 @@ async def get_gates_status(
                 continue
             gate_summaries[gate_name]["last_24h"][verdict] += int(n_24h or 0)
             gate_summaries[gate_name]["last_7d"][verdict] += int(n_7d or 0)
+        for gate_name, verdict, n in current_rows:
+            if gate_name in gate_summaries and verdict in ("pass", "warn", "fail"):
+                gate_summaries[gate_name]["current"][verdict] += int(n or 0)
         for gate_name, verdict, ts in last_rows:
             if gate_name in gate_summaries:
                 gate_summaries[gate_name]["last_verdict"] = verdict
@@ -156,7 +176,7 @@ async def get_gates_status(
         # never 0.
         events_24h = 0
         for gs in gate_summaries.values():
-            for window in ("last_24h", "last_7d"):
+            for window in ("current", "last_24h", "last_7d"):
                 w = gs[window]
                 judged = w["pass"] + w["warn"] + w["fail"]
                 w["total"] = judged
@@ -174,6 +194,7 @@ async def get_gates_status(
             "gates_total": len(list_gates()),
             "events_24h": events_24h,
             "events_total": events_total,
+            "as_of": as_of,
             "source_root": str(resolve_adr_root() or ""),
             "last_run": last_run,
         }
@@ -226,20 +247,31 @@ async def get_gates_failures(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     hours: Annotated[int, Query(ge=1, le=24 * 30)] = 24,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    scope: Annotated[Literal["window", "current"], Query()] = "window",
 ) -> Dict[str, Any]:
+    """``scope=window``: every fail/warn verdict recorded in the last ``hours``.
+    ``scope=current``: the artifacts whose NEWEST verdict per gate is fail/warn,
+    however old that verdict is (``hours`` is ignored)."""
     tenant_id = rec.tenant_id
     try:
         graph = _get_graph(tenant_id)
-        since = _iso(datetime.now(timezone.utc) - timedelta(hours=hours))
+        if scope == "current":
+            source = (
+                "(SELECT * FROM gate_events WHERE tenant_id = ? "
+                "QUALIFY row_number() OVER (PARTITION BY gate_name, artifact_id ORDER BY timestamp DESC) = 1)"
+            )
+            where, params = "lower(verdict) IN ('fail', 'warn')", [tenant_id]
+        else:
+            since = _iso(datetime.now(timezone.utc) - timedelta(hours=hours))
+            source = "gate_events"
+            where, params = "tenant_id = ? AND timestamp >= ? AND verdict IN ('fail', 'warn')", [tenant_id, since]
         rows = graph.conn.execute(
             "SELECT gate_name, artifact_id, verdict, confidence, reason, timestamp, findings_count "
-            "FROM gate_events WHERE tenant_id = ? AND timestamp >= ? AND verdict IN ('fail', 'warn') "
-            "ORDER BY timestamp DESC LIMIT ?",
-            [tenant_id, since, limit],
+            f"FROM {source} WHERE {where} ORDER BY timestamp DESC LIMIT ?",
+            [*params, limit],
         ).fetchall()
         total = graph.conn.execute(
-            "SELECT COUNT(*) FROM gate_events WHERE tenant_id = ? AND timestamp >= ? AND verdict IN ('fail', 'warn')",
-            [tenant_id, since],
+            f"SELECT COUNT(*) FROM {source} WHERE {where}", params,
         ).fetchall()[0][0]
         failures = [
             {"gate_name": g, "artifact_id": a, "verdict": v, "confidence": float(c or 0.0),
@@ -247,7 +279,7 @@ async def get_gates_failures(
              "artifact_type": KINDS.get(g, {}).get("node_type", "")}
             for g, a, v, c, r, ts, fc in rows
         ]
-        return {"tenant_id": tenant_id, "hours": hours, "failures": failures, "total": int(total), "timestamp": _now()}
+        return {"tenant_id": tenant_id, "hours": hours, "scope": scope, "failures": failures, "total": int(total), "timestamp": _now()}
     except Exception as exc:  # noqa: BLE001
         logger.error(f"Failed to get gates failures: {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to get failures: {type(exc).__name__}")
