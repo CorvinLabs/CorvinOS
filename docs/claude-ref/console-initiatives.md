@@ -1,6 +1,6 @@
 # Console — Initiatives board
 
-Live status of running and finished initiative tasks. Sidebar: **Initiatives**,
+Live status of running and finished initiative tasks. Sidebar: **Tasks**,
 directly below **Learnings** (`/app/initiatives`). ADR-2035.
 
 ## Data

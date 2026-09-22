@@ -170,8 +170,8 @@ const NAV_GROUPS: NavGroup[] = [
       // this list makes it reachable. tests/unit/panel-nav-wiring.test.ts verifies
       // the two stay in sync.
       { to: "/app/vibe-engineering", label: "Learnings", icon: Brain },
-      // Initiatives board (routes/initiatives.py) — directly below Learnings.
-      { to: "/app/initiatives", label: "Initiatives", icon: ListChecks },
+      // "Tasks": every task type + the initiatives board (routes/initiatives.py) — directly below Learnings. Sidebar label per operator request 2026-09-22; the route stays /app/initiatives for existing links.
+      { to: "/app/initiatives", label: "Tasks", icon: ListChecks },
     ],
   },
   // ONE marketplace (ADR-0892): plugins (browse + install + manage), skill

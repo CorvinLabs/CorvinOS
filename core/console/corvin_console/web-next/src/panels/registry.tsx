@@ -91,7 +91,7 @@ export const PANELS: ConsolePanel[] = [
   rc("vibe-engineering", "Learnings", VibeEngineeringPage as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain", group: "primary" } }),
   // Initiatives board: live status of running/finished initiative tasks, directly
   // below Learnings in the sidebar (operator request 2026-09-22).
-  rc("initiatives", "Initiatives", InitiativesPage, { nav: { label: "Initiatives", icon: "ListChecks", group: "primary" } }),
+  rc("initiatives", "Tasks", InitiativesPage, { nav: { label: "Tasks", icon: "ListChecks", group: "primary" } }),
   rc("dashboard", "Dashboard", DashboardPage, { nav: { label: "Dashboard", icon: "LayoutDashboard", group: "primary" } }),
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
   rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),
