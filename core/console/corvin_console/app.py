@@ -134,6 +134,7 @@ from .routes import (
     learning_metrics as learning_metrics_route,
     learning_analytics as learning_analytics_route,
     feedback_portal_routes as feedback_portal_routes_route,
+    stream4_skill_feedback as stream4_skill_feedback_route,
     learning_optimizer_routes_stream2 as learning_optimizer_stream2_route,
     skill_learning_routes as skill_learning_routes_route,
     deprecated_api_metrics as deprecated_api_metrics_route,
@@ -269,6 +270,7 @@ router.include_router(learning_dashboard_route.router, tags=["console-learning-d
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
 router.include_router(learning_analytics_route.router, tags=["console-learning-analytics"])
 router.include_router(feedback_portal_routes_route.router, tags=["console-feedback-portal"])
+router.include_router(stream4_skill_feedback_route.router, tags=["console-stream4-skill-feedback"])
 router.include_router(learning_optimizer_stream2_route.router, tags=["console-learning-optimizer"])
 router.include_router(skill_learning_routes_route.router, tags=["console-skill-learning"])
 # TRACK I — DataHub Creator (6-phase project workspace with skill metrics + learning visualization)
