@@ -758,11 +758,13 @@ the TLS proxy (all of `openai.com` is policy-blocked), the console logs
 `in-process OpenAI TTS failed (will try say.py): PermissionDeniedError
 status=403` — content-free, `type(e).__name__` + `status_code` only, never
 `str(e)`, which can embed the spoken text — and the header reads
-`say.py:edge`. The doomed attempt costs ~0.1 s (the proxy rejects immediately),
-which is why it is **not** cached or short-circuited: retrying every turn is
-what makes voice recover by itself the moment `api.openai.com` is allowlisted,
-and a cached "blocked" verdict would keep the preferred tier off after the
-network was fixed.
+`say.py:edge`. Retrying every turn is what makes voice recover by itself the
+moment `api.openai.com` is allowlisted, and a permanently cached "blocked"
+verdict would keep the preferred tier off after the network was fixed — so the
+tier is never pinned off. The cost estimate in this paragraph was wrong,
+though ("~0.1 s, the proxy rejects immediately"): measured 2026-09-22 the
+doomed attempt costs **~2.6 s**, and it was paid TWICE per call. See the next
+section.
 
 **The OpenAI tier is endpoint-configurable, because "OpenAI TTS" is not the same
 thing as `api.openai.com` (2026-09-21).** Both tiers hardcoded the public
@@ -826,6 +828,81 @@ setting put the header straight back to `say.py:edge`. What this does **not**
 change: `api.openai.com` itself stays policy-blocked there, so reaching OpenAI's
 own cloud still needs either that network exception or an approved deployment —
 the code is no longer what blocks it.
+
+**A tier that cannot work must not report `ready`, and must not be asked twice
+(2026-09-22).** The operator's question was "why does Corvin not use OpenAI TTS"
+— and the honest answer took a live investigation, because every observable the
+console offered pointed the wrong way. Three separate defects, one cause: the
+outcome of a synthesis attempt was *logged and then thrown away*, so nothing
+downstream could see it.
+
+| Symptom | Why | Fix |
+|---|---|---|
+| `/voice/status` reported `openai: {ready: true, detail: "ready"}` on a box where every request is refused | `say.py::provider_status()` is documented **cheap introspection** that never synthesizes — it can only see "key resolvable + package importable", which is true. Configuration cannot observe an egress block. | `_openai_status_apply_verdict()` overrides the row from the last real attempt |
+| The reason was in the log exactly **once per process**, then gone | `_openai_tts_warned_once` demotes the WARNING to DEBUG after the first hit (right — it would otherwise log on every turn), leaving a bare `httpx … 403` line with no explanation | the observation is now **stored**, so the reason stays retrievable long after the log line goes quiet |
+| The blocked round-trip was paid **twice** per call — once in-process, then again inside say.py | say.py re-derives its own configuration in a child process and had no way to learn what the parent had just measured | `_say_env()` forwards `CORVIN_TTS_OPENAI_UNREACHABLE=1`; `say.py::_try_openai` skips the tier *before* key resolution and says so on stderr |
+
+The mechanism is one frozen `_OpenAITTSVerdict` in `routes/voice.py`
+(`at`/`wall`/`host`/`model`/`exc_type`/`status`/`definitive`), written by
+`_try_openai_tts` on **both** outcomes — `_openai_tts_record_failure()` in the
+handler, `_openai_tts_record_success()` on the way out. What is load-bearing:
+
+- **It is evidence, not configuration.** It expires
+  (`_OPENAI_TTS_VERDICT_TTL_S`, default 600 s, `CORVIN_TTS_OPENAI_VERDICT_TTL_S`)
+  and a success clears it, so a granted proxy exception or a switch to an
+  approved endpoint takes effect on the **next call**, with no restart and no
+  setting to remember. This is what keeps the paragraph above true while still
+  saving the second round-trip. A verdict that never expired would be a pin
+  wearing a hint's name — `test_the_ttl_is_bounded` fails if it ever becomes one.
+- **Only `{401, 403, 404}` is definitive.** A `429` or a dropped connection says
+  nothing about whether the tier works, and suppressing a working paid tier on
+  one blip is a worse bug than the one being fixed. A transient failure is
+  recorded but changes neither the status row nor the subprocess hint.
+- **No evidence means no claim.** With no verdict the status row is passed
+  through untouched: the repair is to stop asserting `ready` without proof, not
+  to start asserting failure without proof. `key_configured` stays `true` even
+  in the failure row — the key IS configured, and that is precisely the
+  confusing part worth showing.
+- **Record the outcome; never probe from the status route.** Synthesizing inside
+  `/voice/status` would put a blocking network call on a page poll and re-measure
+  what the synthesis path already knows — and it would break
+  `provider_status()`'s own contract.
+- **The `detail` line is content-free**, under the same rule as the log line it
+  replaces: host, HTTP status, exception class, model/deployment name and a
+  clock time — never the key, never the spoken text, never `str(e)` (which can
+  embed the request payload). `test_the_detail_line_stays_content_free` asserts it.
+- **The hint is opt-in per call and never clobbers an operator's export**, like
+  every other name `_say_env()` fills. In say.py it returns `False` (a fallback
+  decision) rather than raising, so a **pinned** provider under
+  `CORVIN_SAY_NO_FALLBACK=1` still fails loudly instead of being masked.
+
+Guard: `core/console/tests/test_voice_tts_openai_verdict.py` (13 cases). Its
+subprocess half is deliberately hermetic — `conftest`'s autouse
+`CORVIN_TTS_LOCAL_ONLY=1` exists because a route test once made a live billable
+OpenAI call out of pytest, and the openai tier cannot run while it is set, so
+instead of just dropping that guard the runs remove every path to a real key
+(empty `VOICE_CONFIG_DIR`, all three candidate vars cleared) and pin the tier
+with `CORVIN_SAY_NO_FALLBACK`. With no key resolvable there is no request to
+make; the observable difference between the two cases is *how far into the tier
+say.py got*, which is exactly what the hint changes.
+
+Proven live on the same box (2026-09-22, after a console restart):
+`/voice/status` → `openai: ready=true, detail="ready"`; one
+`POST /v1/console/voice/tts` → `200`, `x-corvin-tts-provider: say.py:edge`;
+`/voice/status` again → `openai: ready=false, detail="not reachable:
+api.openai.com returned HTTP 403 (PermissionDeniedError) at 12:48 —
+model/deployment 'tts-1'"`, with exactly one `api.openai.com` 403 in the console
+log for that call. And the eliminated round-trip, measured by running say.py
+with the console's real `_say_env()` both ways: **5.71 s → 3.14 s**, stderr going
+from `OpenAI TTS failed: PermissionDeniedError status=403` to
+`skipping OpenAI TTS — caller reports the endpoint is unreachable`.
+
+What this does **not** do: it does not make OpenAI TTS work. The block is a
+deliberate data-protection control on that network (category "Generative AI and
+ML Applications"), and the two legitimate ways through it are an approved
+OpenAI-compatible endpoint via the three settings above, or the documented
+network-exception process. This pass only makes the mechanism honest about which
+of those is missing.
 
 The redundant `core/console/corvin_console/voice_bootstrap.py` was deleted
 in the same pass: never imported anywhere, its `urlretrieve(..., context=)`

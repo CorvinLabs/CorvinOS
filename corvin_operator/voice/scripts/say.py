@@ -309,6 +309,22 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         # caller (test, voice-doctor) must get the same budget main() computes,
         # or it measures a tier that behaves differently in production.
         timeout_s = provider_timeout_for(text)
+
+    # The parent already tried this endpoint on this very call and was refused
+    # definitively (401/403/404 — the twin of routes/voice.py's verdict, injected
+    # by _say_env). Repeating it would pay a second blocked round-trip and delay
+    # the tier that can actually speak, for an outcome that is already known.
+    # This is a PER-CALL hint, never a pin: the parent's observation expires, so
+    # a granted egress exception or an approved endpoint is picked up on the next
+    # call with no restart. Skipping is only ever a fallback decision — a
+    # PINNED provider must still fail loudly (see _CANDIDATES/CORVIN_SAY_NO_FALLBACK
+    # in main()), which is why this returns False rather than raising.
+    if (os.environ.get("CORVIN_TTS_OPENAI_UNREACHABLE") or "").strip() == "1":
+        sys.stderr.write(
+            "say.py: skipping OpenAI TTS — caller reports the endpoint is "
+            "unreachable (refused this call; not retried in this subprocess)\n")
+        return False
+
     key = _resolve_key()
     if not key:
         sys.stderr.write("say.py: no OPENAI_API_KEY — skipping OpenAI TTS\n")

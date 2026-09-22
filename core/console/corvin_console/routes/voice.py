@@ -30,6 +30,7 @@ import tempfile
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -441,7 +442,9 @@ def voice_status(
 
     Cheap introspection only (package-import checks, model-file
     existence, API-key presence) — never triggers a transcription or a
-    speech synthesis call.
+    speech synthesis call. Where a PAST synthesis already settled the question
+    (``_openai_status_apply_verdict``), that observation is preferred over the
+    configuration guess, because configuration cannot see an egress block.
     """
     stt_raw: dict[str, dict] = {}
     if _STT_OK:
@@ -458,10 +461,41 @@ def voice_status(
         except Exception:  # noqa: BLE001
             _log.warning("TTS status probe failed", exc_info=True)
 
+    tts = {name: _safe_provider_status(name, info) for name, info in tts_raw.items()}
+    _openai_status_apply_verdict(tts)
     return VoiceStatusResponse(
         stt={name: _safe_provider_status(name, info) for name, info in stt_raw.items()},
-        tts={name: _safe_provider_status(name, info) for name, info in tts_raw.items()},
+        tts=tts,
     )
+
+
+def _openai_status_apply_verdict(tts: dict[str, ProviderStatus]) -> None:
+    """Correct the ``openai`` row with what synthesis actually observed.
+
+    ``say.py::provider_status()`` can only see configuration (key resolvable,
+    package importable) and is contractually forbidden from synthesizing, so on
+    an install where the endpoint is unreachable it reports ``ready: "ready"``
+    forever. That claim is what made a blocked paid tier look like a Corvin bug.
+
+    Only a DEFINITIVE, still-fresh observation overrides the row: no evidence
+    means the row is passed through untouched (do not invent a failure), and a
+    transient error means the tier may well work on the next call. ``ready``
+    drops to false because the field's own contract is "usable right now", which
+    a 403 settles; ``key_configured`` is left alone, because the key IS
+    configured — that is precisely the confusing part worth showing.
+    """
+    row = tts.get("openai")
+    if row is None:
+        return
+    v = _openai_tts_fresh_verdict()
+    if v is None or not v.definitive:
+        return
+    when = time.strftime("%H:%M", time.localtime(v.wall))
+    tts["openai"] = row.model_copy(update={
+        "ready": False,
+        "detail": (f"not reachable: {v.host} returned HTTP {v.status} "
+                   f"({v.exc_type}) at {when} — model/deployment {v.model!r}"),
+    })
 
 
 # ── STT ───────────────────────────────────────────────────────────────
@@ -997,6 +1031,89 @@ _OPENAI_TTS_VOICES = frozenset({
 _openai_tts_warned_once = False
 
 
+# ── What the console last OBSERVED about the OpenAI tier ────────────────────
+#
+# ``say.py::provider_status()`` is documented cheap introspection — key present
+# plus package importable, "NEVER synthesizes audio" — which is the right
+# contract for a status poll and the reason the Voice panel reported
+# ``openai: {"ready": true, "detail": "ready"}`` on an install where the tier
+# cannot produce a single byte. Measured 2026-09-22: every
+# ``api.openai.com/v1/audio/speech`` request returns 403 from the corporate TLS
+# proxy (category "Generative AI and ML Applications"), the console spoke with
+# edge, and the panel still claimed the paid tier was usable.
+#
+# Adding a network probe to the status route is the wrong repair: it would put a
+# blocking call on a page poll and re-measure what the synthesis path already
+# knows. So the synthesis path RECORDS its outcome here and the status route
+# READS it. Nothing else changes.
+#
+# This is evidence, never configuration — hence ``_OPENAI_TTS_VERDICT_TTL_S``.
+# A granted proxy exception, a fixed deployment name or a restored network must
+# take effect on the next call without an operator restarting anything, so an
+# observation that stops being current stops counting. Benign data race under
+# the threadpool, exactly like ``_openai_tts_warned_once``: the value is a
+# single immutable reference, worst case is one stale read.
+_OPENAI_TTS_VERDICT_TTL_S = float(
+    os.environ.get("CORVIN_TTS_OPENAI_VERDICT_TTL_S", "600"))
+
+# HTTP statuses that will NOT fix themselves on the next attempt: a policy
+# block, a rejected key, a wrong endpoint/deployment. 429 and 5xx are
+# deliberately absent — retrying those is correct, and suppressing a paid tier
+# because it was busy once would be a silent downgrade.
+_OPENAI_TTS_DEFINITIVE_STATUSES = frozenset({"401", "403", "404"})
+
+
+@dataclass(frozen=True)
+class _OpenAITTSVerdict:
+    """One observation of the in-process OpenAI TTS tier. Content-free by
+    construction: only a hostname, a model/deployment name, an exception class
+    and an HTTP status — never the key and never ``str(e)``, which can embed the
+    request payload, i.e. the text being spoken."""
+    at: float          # time.monotonic() — freshness
+    wall: float        # time.time()      — display
+    host: str
+    model: str
+    exc_type: str
+    status: str        # HTTP status as a string; "" when there was none
+    definitive: bool
+
+
+_openai_tts_verdict: "_OpenAITTSVerdict | None" = None
+
+
+def _openai_tts_record_failure(*, exc_type: str, status: str,
+                               host: str, model: str) -> None:
+    """Remember that the tier just failed, and whether that is a verdict."""
+    global _openai_tts_verdict
+    _openai_tts_verdict = _OpenAITTSVerdict(
+        at=time.monotonic(), wall=time.time(), host=host, model=model,
+        exc_type=exc_type, status=str(status or ""),
+        definitive=str(status or "") in _OPENAI_TTS_DEFINITIVE_STATUSES,
+    )
+
+
+def _openai_tts_record_success() -> None:
+    """The tier worked — drop any recorded failure so the panel recovers."""
+    global _openai_tts_verdict
+    _openai_tts_verdict = None
+
+
+def _openai_tts_forget_verdict() -> None:
+    """Test seam: start from "nothing observed"."""
+    global _openai_tts_verdict
+    _openai_tts_verdict = None
+
+
+def _openai_tts_fresh_verdict() -> "_OpenAITTSVerdict | None":
+    """The current observation, or None when there is none or it has expired."""
+    v = _openai_tts_verdict
+    if v is None:
+        return None
+    if (time.monotonic() - v.at) > _OPENAI_TTS_VERDICT_TTL_S:
+        return None
+    return v
+
+
 # ── OpenAI TTS endpoint resolution (ADR-less setting, like every other
 #    CORVIN_TTS_* knob) ──────────────────────────────────────────────────────
 #
@@ -1177,6 +1294,7 @@ def _try_openai_tts(text: str, lang: str, voice: "str | None",
             input=text[:_TTS_PROVIDER_CHAR_LIMIT],  # OpenAI TTS-1 hard cap 4096
             speed=1.0,
         )
+        _openai_tts_record_success()
         return response.content
     except Exception as e:  # noqa: BLE001
         # WARNING once per process, DEBUG afterwards (V6). CONTENT-FREE:
@@ -1195,6 +1313,16 @@ def _try_openai_tts(text: str, lang: str, voice: "str | None",
         _log.log(level, "in-process OpenAI TTS failed (will try say.py): "
                  "%s status=%s endpoint=%s model=%s",
                  type(e).__name__, getattr(e, "status_code", ""), _host, model)
+        # Record it so the two surfaces that need this outcome can read it
+        # instead of re-measuring: /voice/status (stop reporting "ready") and
+        # _say_env (stop asking the subprocess to repeat a blocked round-trip).
+        # The WARNING above is deduped once-per-process; this is not, so the
+        # reason stays retrievable long after the log line went quiet.
+        _openai_tts_record_failure(
+            exc_type=type(e).__name__,
+            status=str(getattr(e, "status_code", "") or ""),
+            host=_host, model=model,
+        )
         return None
 
 
@@ -1248,6 +1376,19 @@ def _say_env() -> dict[str, str]:
                          ("CORVIN_TTS_OPENAI_MODEL", _model)):
         if val and not (env.get(env_var) or "").strip():
             env[env_var] = val
+
+    # Hand over what the in-process tier JUST measured, so the child does not
+    # repeat a round-trip that is already known to be refused. Before this, a
+    # single console TTS call paid the blocked request TWICE — once here, then
+    # again in say.py, which re-derives its configuration and had no way to
+    # learn the outcome. Per-call and expiring by construction (a fresh verdict
+    # only, and only a definitive one): the tier is never pinned off, so a
+    # granted egress exception or a switch to an approved endpoint takes effect
+    # on the next call with no restart and no config change.
+    _v = _openai_tts_fresh_verdict()
+    if (_v is not None and _v.definitive
+            and not (env.get("CORVIN_TTS_OPENAI_UNREACHABLE") or "").strip()):
+        env["CORVIN_TTS_OPENAI_UNREACHABLE"] = "1"
     return env
 
 

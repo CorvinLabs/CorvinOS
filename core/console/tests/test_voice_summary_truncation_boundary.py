@@ -101,7 +101,7 @@ def test_voice_tts_sync_cuts_an_oversized_summary_at_a_sentence_boundary(monkeyp
 
     captured = {}
 
-    def _fake_try_openai_tts(text, lang, voice):
+    def _fake_try_openai_tts(text, lang, voice, tenant_id=None):
         captured["text"] = text
         return b"OggS" + b"\x00" * 16
 
