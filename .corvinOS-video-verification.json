@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "description": "Video Verification System Configuration",
+  "enabled": true,
+  "checks": {
+    "audio_track": {
+      "enabled": true,
+      "required": true,
+      "description": "Must have at least one audio stream"
+    },
+    "bitrate": {
+      "enabled": true,
+      "min_kbps": 500,
+      "description": "Indicates real video content (not single-color)"
+    },
+    "file_size": {
+      "enabled": true,
+      "min_mb_per_minute": 5,
+      "description": "File size should correlate with duration"
+    },
+    "duration": {
+      "enabled": true,
+      "min_seconds": 60,
+      "description": "Minimum demo video length"
+    },
+    "video_stream": {
+      "enabled": true,
+      "required": true,
+      "description": "Must have valid video stream"
+    }
+  },
+  "enforcement": {
+    "pre_commit": true,
+    "ci_cd": true,
+    "require_validation_pass": true
+  },
+  "documentation": {
+    "guide": "outputs/VIDEO_PRODUCTION_GUIDE.md",
+    "validator": "outputs/video_quality_validator.py",
+    "gate": "outputs/video_production_gate.sh"
+  }
+}

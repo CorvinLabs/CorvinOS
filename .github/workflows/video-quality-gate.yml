@@ -1,0 +1,119 @@
+name: Video Quality Gate
+
+on:
+  pull_request:
+    paths:
+      - '**.mp4'
+      - '**.mkv'
+      - '**.webm'
+      - '**.mov'
+      - 'outputs/video_quality_validator.py'
+  push:
+    paths:
+      - '**.mp4'
+      - '**.mkv'
+      - '**.webm'
+      - '**.mov'
+    branches:
+      - main
+
+jobs:
+  validate-videos:
+    runs-on: ubuntu-latest
+    name: Validate Video Quality
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Find video files
+        id: find-videos
+        run: |
+          # Find all video files in the repo
+          VIDEOS=$(find . -type f \( -name "*.mp4" -o -name "*.mkv" -o -name "*.webm" -o -name "*.mov" \) | grep -v ".git/" || true)
+          echo "videos<<EOF" >> $GITHUB_OUTPUT
+          echo "$VIDEOS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Count videos
+          VIDEO_COUNT=$(echo "$VIDEOS" | grep -c "." || echo 0)
+          echo "count=$VIDEO_COUNT" >> $GITHUB_OUTPUT
+
+          echo "Found $VIDEO_COUNT video file(s)"
+
+      - name: Validate videos
+        if: steps.find-videos.outputs.count > 0
+        run: |
+          VALIDATOR_SCRIPT="outputs/video_quality_validator.py"
+
+          if [ ! -f "$VALIDATOR_SCRIPT" ]; then
+            echo "❌ Validator script not found at $VALIDATOR_SCRIPT"
+            exit 1
+          fi
+
+          FAILED_VIDEOS=""
+          PASSED_COUNT=0
+          FAILED_COUNT=0
+
+          while IFS= read -r video; do
+            if [ -z "$video" ] || [ ! -f "$video" ]; then
+              continue
+            fi
+
+            echo ""
+            echo "📹 Validating: $video"
+            echo "=================================================="
+
+            if python3 "$VALIDATOR_SCRIPT" "$video"; then
+              echo "✅ PASS: $video"
+              PASSED_COUNT=$((PASSED_COUNT + 1))
+            else
+              echo "❌ FAIL: $video"
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              FAILED_VIDEOS="$FAILED_VIDEOS\n  • $video"
+            fi
+          done <<< "${{ steps.find-videos.outputs.videos }}"
+
+          echo ""
+          echo "=================================================="
+          echo "SUMMARY: $PASSED_COUNT passed, $FAILED_COUNT failed"
+          echo "=================================================="
+
+          if [ $FAILED_COUNT -gt 0 ]; then
+            echo ""
+            echo "❌ FAILED VIDEOS:"
+            echo -e "$FAILED_VIDEOS"
+            echo ""
+            exit 1
+          fi
+
+      - name: Comment PR on failure
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `❌ **Video Quality Gate Failed**\n\nOne or more videos failed validation:\n\n- No audio track\n- Low bitrate (<500 kbps)\n- File size too small\n- Other quality issues\n\n**Action Required:**\n1. Run: \`python3 outputs/video_quality_validator.py <video.mp4>\`\n2. Fix the issues (add audio, increase bitrate, etc.)\n3. Regenerate and re-upload\n4. Re-push to trigger validation again\n\nSee [VIDEO_PRODUCTION_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/outputs/VIDEO_PRODUCTION_GUIDE.md) for details.`
+            })
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: video-validation-report
+          path: |
+            outputs/video_quality_validator.py

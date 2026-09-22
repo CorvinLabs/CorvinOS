@@ -99,7 +99,7 @@ from .routes import (
     skill_creator_api as skill_creator_route,
     chat as chat_route,
     voice as voice_route,
-    workflows as workflows_route,
+    # workflows_route replaced by PluginLoader (ADR-0039 Phase 6)
     connectors as connectors_route,
     setup as setup_route,
     forge_unified as forge_unified_route,
@@ -127,6 +127,7 @@ from .routes import (
     plugins as plugins_route,
     marketplace as marketplace_route,
     marketplace_custom_repos as marketplace_custom_repos_route,
+    plugins_loader,
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
@@ -324,8 +325,19 @@ router.include_router(video_learning_api_route.router, tags=["console-video-lear
 # ADR-0037 (web-next) — web-bridge chat + voice (Iter 3a/b).
 router.include_router(chat_route.router, tags=["console-chat"])
 router.include_router(voice_route.router, tags=["console-voice"])
-# ADR-0039 — Workflow Builder (Phases 1-3).
-router.include_router(workflows_route.router, tags=["console-workflows"])
+# ADR-0039 — Workflow Builder (Phases 1-7, Phase 6: plugin migration).
+# Load workflows router from marketplace plugin with console adapters (fallback: console routes).
+workflows_router = plugins_loader.get_workflows_router(
+    session_auth_module=None,  # Injected by plugin with console session auth
+    audit_backend=None,         # Console audit backend (injected by plugin)
+    storage_backend=None,       # Console storage backend (injected by plugin)
+    license_backend=None,       # Console license backend (injected by plugin)
+    prompt_guard=None,          # Console prompt guard (injected by plugin)
+    scheduler_backend=None,     # Console scheduler backend (injected by plugin)
+    forge_paths=None,           # Console forge paths (injected by plugin)
+    spawn_gates=None,           # Console spawn gates (injected by plugin)
+)
+router.include_router(workflows_router, tags=["console-workflows"])
 router.include_router(connectors_route.router, tags=["console-connectors"])
 router.include_router(setup_route.router, tags=["console-setup"])
 # Phase D extension — settings file watcher SSE stream.
