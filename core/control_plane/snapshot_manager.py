@@ -230,7 +230,7 @@ class SnapshotManager:
             },
         }
 
-    def list_snapshots(self, tenant_id: str) -> List[Dict]:
+    async def list_snapshots(self, tenant_id: str) -> List[Dict]:
         """List all snapshots for a tenant.
 
         Args:
@@ -380,6 +380,43 @@ class SnapshotManager:
         except IOError as e:
             logger.error(f"Failed to delete snapshot {snapshot_id}: {e}")
             raise
+
+    async def get_snapshot(self, snapshot_id: str, tenant_id: str) -> Optional[Dict]:
+        """Get snapshot details (alias for get_snapshot_details).
+
+        Args:
+            snapshot_id: ID of snapshot
+            tenant_id: Tenant scope
+
+        Returns:
+            Snapshot dict or None if not found
+
+        Raises:
+            ValueError: If access denied
+        """
+        if snapshot_id not in self.snapshots:
+            return None
+
+        snapshot = self.snapshots[snapshot_id]
+
+        # Verify tenant access
+        if snapshot.tenant_id != tenant_id:
+            raise ValueError(f"Access denied to snapshot {snapshot_id}")
+
+        return asdict(snapshot)
+
+    async def get_audit_log(self, tenant_id: str) -> List[Dict]:
+        """Get audit log for snapshots (returns empty list - audit events are logged separately).
+
+        Args:
+            tenant_id: Tenant scope
+
+        Returns:
+            List of audit events (currently empty - real implementation would query audit backend)
+        """
+        # In a real implementation, this would query the audit backend
+        # For now, return empty list (audit events are logged to audit_backend directly)
+        return []
 
     def load_snapshots_from_disk(self):
         """Load all snapshots from disk into memory (on startup).

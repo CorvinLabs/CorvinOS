@@ -4,6 +4,7 @@ from .subsystem_controller import SubsystemController, SubsystemState, Subsystem
 from .subsystems import SubsystemRegistry, SubsystemInstance, SubsystemType
 from .override_authority import OverrideAuthority, OverrideType, OverrideRequest
 from .snapshot_manager import SnapshotManager, Snapshot
+from .state_capture import StateCapture
 
 __all__ = [
     "SubsystemController",
@@ -17,4 +18,5 @@ __all__ = [
     "OverrideRequest",
     "SnapshotManager",
     "Snapshot",
+    "StateCapture",
 ]
