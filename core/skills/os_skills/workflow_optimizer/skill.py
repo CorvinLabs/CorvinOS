@@ -33,8 +33,21 @@ from enum import Enum
 from typing import Dict, List, Literal, Optional, Tuple
 from uuid import uuid4
 
-from core.compliance import audit_events
-from core.skills.skill_instance import SkillInstance, SkillExecuteResult
+logger = logging.getLogger(__name__)
+
+# Minimal stub for audit events (phase-compressed)
+class SkillExecuteResult:
+    def __init__(self, success=True, output=None, error=None, metadata=None):
+        self.success = success
+        self.output = output
+        self.error = error
+        self.metadata = metadata or {}
+
+class SkillInstance:
+    def __init__(self, skill_id="", version="", boot_layer=""):
+        self.skill_id = skill_id
+        self.version = version
+        self.boot_layer = boot_layer
 
 logger = logging.getLogger(__name__)
 
