@@ -1,0 +1,294 @@
+================================================================================
+PHASE 9 CRITICAL ISSUES — ORGANIZED BY FILE
+================================================================================
+
+File: core/console/corvin_console/routes/control_plane_overrides.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+43-48     CRITICAL   MockAuditBackend used in production          [ ] Fix
+206       CRITICAL   Privilege escalation: unconditional add_approver [ ] Fix
+252       CRITICAL   Privilege escalation: unconditional add_approver [ ] Fix
+101-104   HIGH       Error message leakage                        [ ] Fix
+114-115   HIGH       Error message leakage                        [ ] Fix
+
+Dependency: Must have real audit_backend to fix
+Import fix: Line 24 is OK (from .. import audit as console_audit)
+
+
+File: core/console/corvin_console/routes/control_plane_snapshots.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+38        CRITICAL   audit_backend=None → AttributeError          [ ] Fix
+44-45     CRITICAL   Unbounded name/description (DoS)            [ ] Fix
+71        CRITICAL   POST create: missing @require_csrf           [ ] Fix
+71        CRITICAL   POST create: missing auth                    [ ] Fix
+71        CRITICAL   POST create: hardcoded tenant_id             [ ] Fix
+71        CRITICAL   POST create: hardcoded creator_id            [ ] Fix
+71        CRITICAL   POST create: missing @consent_required       [ ] Fix
+74        CRITICAL   tenant_id from Query (should be session)     [ ] Fix
+114       CRITICAL   GET list: missing @require_session           [ ] Fix
+116       CRITICAL   tenant_id from Query (should be session)     [ ] Fix
+133       CRITICAL   GET audit: missing @require_session          [ ] Fix
+135       CRITICAL   tenant_id from Query (should be session)     [ ] Fix
+159       CRITICAL   GET detail: missing @require_session         [ ] Fix
+162       CRITICAL   tenant_id from Query (should be session)     [ ] Fix
+186       CRITICAL   POST restore: missing @require_csrf          [ ] Fix
+186       CRITICAL   POST restore: missing auth                   [ ] Fix
+186       CRITICAL   POST restore: hardcoded approver_id          [ ] Fix
+186       CRITICAL   POST restore: hardcoded tenant_id            [ ] Fix
+186       CRITICAL   POST restore: missing @consent_required      [ ] Fix
+190       CRITICAL   tenant_id from Query (should be session)     [ ] Fix
+223       CRITICAL   POST diff: missing @require_csrf             [ ] Fix
+223       CRITICAL   POST diff: missing auth                      [ ] Fix
+223       CRITICAL   POST diff: missing @consent_required         [ ] Fix
+226       CRITICAL   tenant_id from Query (should be session)     [ ] Fix
+256       CRITICAL   DELETE: missing @require_csrf                [ ] Fix
+256       CRITICAL   DELETE: missing auth                         [ ] Fix
+256       CRITICAL   DELETE: hardcoded approver_id                [ ] Fix
+256       CRITICAL   DELETE: hardcoded tenant_id                  [ ] Fix
+256       CRITICAL   DELETE: missing @consent_required            [ ] Fix
+259       CRITICAL   tenant_id from Query (should be session)     [ ] Fix
+269       CRITICAL   GET audit: tenant_id from Query              [ ] Fix
+
+Count: 30 issues in this file (many are variants of same pattern)
+Key fix: Inject audit_backend dependency + extract session for auth/tenant
+
+
+File: core/console/corvin_console/routes/control_plane_plugins.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+54        CRITICAL   PUT install: missing @require_csrf           [ ] Fix
+54        CRITICAL   PUT install: missing auth                    [ ] Fix
+54        CRITICAL   PUT install: missing @consent_required       [ ] Fix
+69        HIGH       No boot_layer validation                     [ ] Fix
+70        CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+71        CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+84        CRITICAL   GET list: missing @require_session           [ ] Fix
+111       CRITICAL   GET detail: missing @require_session         [ ] Fix
+141       CRITICAL   PATCH enable: missing @require_csrf          [ ] Fix
+141       CRITICAL   PATCH enable: missing auth                   [ ] Fix
+141       CRITICAL   PATCH enable: missing @consent_required      [ ] Fix
+154       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+155       CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+168       CRITICAL   PATCH disable: missing @require_csrf         [ ] Fix
+168       CRITICAL   PATCH disable: missing auth                  [ ] Fix
+168       CRITICAL   PATCH disable: missing @consent_required     [ ] Fix
+184       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+185       CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+199       CRITICAL   DELETE uninstall: missing @require_csrf      [ ] Fix
+199       CRITICAL   DELETE uninstall: missing auth               [ ] Fix
+199       CRITICAL   DELETE uninstall: missing @consent_required  [ ] Fix
+214       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+215       CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+229       CRITICAL   GET audit: missing @require_session          [ ] Fix
+68        HIGH       audit_events volatile (in-memory only)       [ ] Fix
+
+Count: 25 issues in this file
+Pattern: Every endpoint missing auth/CSRF/consent + hardcoded user/tenant
+Key fix: Add @require_session/@require_csrf/@consent_required + extract session
+
+
+File: core/console/corvin_console/routes/control_plane_subsystems.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+42        CRITICAL   Unbounded timeout_s (no min/max)            [ ] Fix
+60        CRITICAL   PATCH start: missing @require_csrf          [ ] Fix
+60        CRITICAL   PATCH start: missing auth                   [ ] Fix
+60        CRITICAL   PATCH start: missing @consent_required      [ ] Fix
+63        CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+79        CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+91        CRITICAL   PATCH pause: missing @require_csrf          [ ] Fix
+91        CRITICAL   PATCH pause: missing auth                   [ ] Fix
+91        CRITICAL   PATCH pause: missing @consent_required      [ ] Fix
+95        CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+111       CRITICAL   Unbounded timeout_s (no min/max)            [ ] Fix
+113       CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+125       CRITICAL   PATCH resume: missing @require_csrf         [ ] Fix
+125       CRITICAL   PATCH resume: missing auth                  [ ] Fix
+125       CRITICAL   PATCH resume: missing @consent_required     [ ] Fix
+128       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+144       CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+156       CRITICAL   PATCH stop: missing @require_csrf           [ ] Fix
+156       CRITICAL   PATCH stop: missing auth                    [ ] Fix
+156       CRITICAL   PATCH stop: missing @consent_required       [ ] Fix
+160       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+177       CRITICAL   Unbounded timeout_s (no min/max)            [ ] Fix
+179       CRITICAL   Hardcoded operator_id="console-user"        [ ] Fix
+191       CRITICAL   GET status: missing @require_session         [ ] Fix
+194       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+215       CRITICAL   GET list: missing @require_session           [ ] Fix
+217       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+234       CRITICAL   GET logs: missing @require_session           [ ] Fix
+238       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+267       CRITICAL   GET audit: missing @require_session          [ ] Fix
+269       CRITICAL   Hardcoded tenant_id="default"               [ ] Fix
+
+Count: 31 issues in this file
+Key fixes: Add auth/CSRF/consent + extract session + validate timeout_s
+
+
+File: core/console/corvin_console/routes/intents.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+22        CRITICAL   Import error: from core.audit import audit_backend [ ] Fix
+
+Details: Module doesn't export audit_backend
+Fix: Change to: from core.plugins.corvin_plugins.providers import audit_backend
+
+Blocks: Console startup (import error at app boot)
+
+
+File: core/control_plane/override_authority.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+347-354   CRITICAL   add_approver() called unconditionally         [ ] Note
+122, 162  CRITICAL   Calls self.audit.log_event() to Mock backend [ ] Fix (via route fix)
+202, 270  CRITICAL   Calls self.audit.log_event() to Mock backend [ ] Fix (via route fix)
+
+Notes: This is the core class. Issues are in how it's called from routes.
+The audit backend issue is fixed when routes wire real backend.
+
+
+File: core/console/corvin_console/control_plane/plugin_manager.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+68        HIGH       audit_events volatile (in-memory only)       [ ] Fix
+
+Consequence: Audit trail lost on process restart (doesn't survive)
+Fix: Wire to core audit chain instead
+
+
+File: core/control_plane/snapshot_manager.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Line(s)   Severity   Issue                                        Status
+─────────────────────────────────────────────────────────────────────────────
+129       CRITICAL   Calls self.audit.log_event() to None backend [ ] Fix (via route)
+HIGH       Snapshot restore doesn't actually restore            [ ] Fix
+
+Notes: Issue at line 129 is cascading from snapshots.py line 38.
+Second issue is functional (silent failure on restore).
+
+
+File: core/plugins/corvin_plugins/providers/audit_backend.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Status: ✓ CORRECT — This file is fine
+Used by: core/console/corvin_console/routes/intents.py line 22 (wrong import)
+
+
+Files: core/compliance/consent.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Status: MISSING — MUST CREATE
+Imported by: core/console/corvin_console/routes/intents.py line 23
+Needed for: consent_required decorator on all mutation endpoints
+
+Blocking: Can't implement consent gates until this module exists
+Priority: HIGH — blocking consent gate implementation
+
+
+Files: core/audit/__init__.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Status: NEEDS UPDATE
+Current: Doesn't export audit_backend
+Issue: intents.py line 22 tries: from core.audit import audit_backend
+Fix: Either:
+  1. Add export: from core.plugins.corvin_plugins.providers import audit_backend
+  2. Or fix intents.py import (RECOMMENDED)
+
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+
+File                                        Critical   High   Total   Status
+──────────────────────────────────────────────────────────────────────────────
+control_plane_overrides.py                     5        2       7     P0
+control_plane_snapshots.py                    26        1      27     P0
+control_plane_plugins.py                      23        2      25     P0
+control_plane_subsystems.py                   29        2      31     P0
+intents.py                                     1        0       1     P0
+override_authority.py                          3        0       3     P0 (via routes)
+plugin_manager.py                              0        1       1     P1
+snapshot_manager.py                            1        1       2     P1
+audit_backend.py                               0        0       0     ✓ OK
+compliance/consent.py                          0        1       1     CREATE
+audit/__init__.py                              0        0       0     UPDATE
+
+TOTALS:                                       88       10      98
+
+Wait! That count seems high. Let me recount deduplicated issues...
+
+UNIQUE CRITICAL ISSUES: 13
+UNIQUE HIGH ISSUES: 8
+TOTAL: 21 unique issues
+(Some issues listed multiple times per file/line due to pattern repetition)
+
+Most common patterns:
+  - Missing auth (22 instances across routes)
+  - Missing CSRF (11 instances across routes)
+  - Missing consent (11 instances across routes)
+  - Hardcoded tenant_id (8 instances across routes)
+  - Hardcoded user_id (8 instances across routes)
+
+
+================================================================================
+FIX PRIORITY ROADMAP
+================================================================================
+
+PHASE 0: BLOCKING DEPENDENCIES (1-2 hours)
+  [ ] 1. Fix intents.py import (line 22)
+  [ ] 2. Create core/compliance/consent.py
+  [ ] 3. Export consent_required from deps.py
+
+PHASE 1: CRITICAL AUTH/CSRF (3 hours)
+  [ ] 1. control_plane_snapshots.py (add 7 auth/CSRF/consent decorators)
+  [ ] 2. control_plane_plugins.py (add 7 auth/CSRF/consent decorators)
+  [ ] 3. control_plane_subsystems.py (add 8 auth/CSRF/consent decorators)
+
+PHASE 2: CRITICAL SESSION EXTRACTION (2 hours)
+  [ ] 1. control_plane_snapshots.py (extract tenant_id + user_id from session)
+  [ ] 2. control_plane_plugins.py (extract tenant_id + user_id from session)
+  [ ] 3. control_plane_subsystems.py (extract tenant_id + user_id from session)
+
+PHASE 3: CRITICAL AUDIT/VALIDATION (2 hours)
+  [ ] 1. control_plane_overrides.py (wire real audit_backend, fix privilege escalation)
+  [ ] 2. control_plane_snapshots.py (wire real audit_backend, bound inputs)
+  [ ] 3. control_plane_subsystems.py (validate timeout_s bounds)
+  [ ] 4. control_plane_plugins.py (validate boot_layer)
+
+PHASE 4: TESTING & VERIFICATION (2 hours)
+  [ ] 1. Auth tests (all endpoints)
+  [ ] 2. CSRF tests (all mutations)
+  [ ] 3. Consent tests (all mutations)
+  [ ] 4. Tenant isolation tests
+  [ ] 5. Audit chain tests
+  [ ] 6. Adversarial tests
+
+
+================================================================================
+GO/NO-GO DECISION
+================================================================================
+
+VERDICT: 🔴 NO-GO FOR PRODUCTION
+
+Status: 13 CRITICAL issues + 8 HIGH issues block merge
+Timeline: 6-8 hours remediation + testing required
+Next: Begin Phase 0 (dependency fixes) immediately
+

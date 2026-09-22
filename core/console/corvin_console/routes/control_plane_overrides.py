@@ -38,15 +38,12 @@ _authority: Optional[OverrideAuthority] = None
 
 
 def get_authority() -> OverrideAuthority:
-    """Get or initialize singleton OverrideAuthority."""
+    """Get or initialize singleton OverrideAuthority (with real audit backend)."""
     global _authority
     if _authority is None:
-        # Mock audit backend for now — in production, inject real one
-        class MockAuditBackend:
-            async def log_event(self, event_type: str, payload: dict) -> None:
-                pass
-
-        _authority = OverrideAuthority(MockAuditBackend())
+        from core.audit import get_audit_backend
+        # ✅ Use real audit backend (not MockAuditBackend)
+        _authority = OverrideAuthority(get_audit_backend())
     return _authority
 
 
@@ -193,7 +190,7 @@ async def approve_override(
     body: ApprovalDecisionModel,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
 ) -> dict[str, Any]:
-    """Approve an override (admin only).
+    """Approve an override (admin only, authorization checked).
 
     Args:
         override_id: Override ID to approve
@@ -205,8 +202,20 @@ async def approve_override(
     """
     authority = get_authority()
 
-    # Check approver authority (for now, accept all authenticated users)
-    authority.add_approver(rec.sid)
+    # ✅ CRITICAL FIX: Check approver authority BEFORE attempting approval
+    # Never unconditionally add_approver — that's privilege escalation!
+    if not authority.is_approver(rec.sid):
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="override.approve_unauthorized",
+            target_kind="override",
+            target_id=override_id,
+        )
+        raise HTTPException(
+            http_status.HTTP_403_FORBIDDEN,
+            detail="Only admins can approve overrides"
+        )
 
     try:
         result = await authority.approve_override(override_id, rec.sid, rec.tenant_id)
@@ -241,7 +250,7 @@ async def deny_override(
     body: ApprovalDecisionModel,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
 ) -> dict[str, Any]:
-    """Deny an override (admin only).
+    """Deny an override (admin only, authorization checked).
 
     Args:
         override_id: Override ID to deny
@@ -253,8 +262,20 @@ async def deny_override(
     """
     authority = get_authority()
 
-    # Check approver authority
-    authority.add_approver(rec.sid)
+    # ✅ CRITICAL FIX: Check approver authority BEFORE attempting denial
+    # Never unconditionally add_approver — that's privilege escalation!
+    if not authority.is_approver(rec.sid):
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="override.deny_unauthorized",
+            target_kind="override",
+            target_id=override_id,
+        )
+        raise HTTPException(
+            http_status.HTTP_403_FORBIDDEN,
+            detail="Only admins can deny overrides"
+        )
 
     try:
         result = await authority.deny_override(

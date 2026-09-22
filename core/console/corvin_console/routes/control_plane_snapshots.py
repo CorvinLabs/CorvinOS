@@ -294,14 +294,14 @@ async def diff_snapshot(
 @router.delete("/{snapshot_id}", response_model=SnapshotOperationResponse)
 async def delete_snapshot(
     snapshot_id: str,
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
 ) -> SnapshotOperationResponse:
     """
-    Delete a snapshot (audit logged).
+    Delete a snapshot (audit logged, CSRF-protected, tenant-scoped).
 
     Args:
         snapshot_id: Snapshot to delete
-        tenant_id: Tenant scope
+        session: Session record (CSRF + auth validated)
 
     Returns:
         Deletion status
@@ -310,8 +310,8 @@ async def delete_snapshot(
     try:
         result = await manager.delete_snapshot(
             snapshot_id=snapshot_id,
-            approver_id="console-user",
-            tenant_id=tenant_id
+            approver_id=session.sid,
+            tenant_id=session.tenant_id
         )
 
         return SnapshotOperationResponse(
