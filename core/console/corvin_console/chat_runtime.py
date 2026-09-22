@@ -108,6 +108,7 @@ except ImportError:
         pass  # No-op fallback
 
 import asyncio
+import contextlib
 import json
 import mimetypes
 import os
@@ -564,6 +565,14 @@ class WebChatSession:
     # Set by web API when context is task-scoped; used by _infinite_session_context_block()
     # to load prior session state via SessionBridger.resume_from_bridge().
     task_id: str | None = field(default=None, repr=False)
+    # ADR-0080 — the task of the turn currently IN FLIGHT, as (tasks_dir, task_id).
+    # Transient per-turn state exactly like language_context above, never persisted
+    # (_session_from_meta rebuilds every field explicitly). Written once per turn by
+    # _stream_turn_impl right after create_task and read ONLY by
+    # _finalize_in_flight_task(), the seam that guarantees a terminal event when the
+    # turn ends without one. One turn per session at a time (_session_turn_lock in
+    # routes/chat.py), so a single slot is sufficient.
+    in_flight_task: tuple[Path, str] | None = field(default=None, repr=False)
 
     @property
     def chat_key(self) -> str:
@@ -4832,7 +4841,110 @@ def _emit_execution_context_event(
         pass
 
 
+def _finalize_in_flight_task(sess: WebChatSession) -> str | None:
+    """Write a terminal event for the in-flight task if it never got one.
+
+    ADR-0080's quota counter reads ``status`` out of the on-disk task meta, and
+    nothing reconciles that field against reality: a task only leaves ``running``
+    when some code path records a terminal event. Every ORDINARY exit of
+    ``_stream_turn_impl`` does (task.completed / task.failed, ~25 call sites) —
+    but an INTERRUPTED turn did not. The impl catches
+    ``(CancelledError, GeneratorExit)`` in three places, and each one emits the
+    paired ADR-0171 audit end and re-raises without touching the task lifecycle;
+    an interruption earlier than that (pre-spawn gates, model resolution, context
+    build) reached no handler at all. So a client that vanished mid-turn — a
+    browser refresh, a closed tab, a dropped WiFi link — left the task ``running``
+    forever, and the FIFTH one reached ``max_concurrent=5`` and made every further
+    turn on that chat raise ``QuotaExceededError`` permanently. Measured
+    2026-09-21: one mid-turn disconnect, then ``running=1`` at t+30s with the event
+    log holding only ``['task.created', 'task.started']``.
+
+    The ADR-0232 boot sweep (``corvin_plugins.bootstrap._reap_stale_tasks``) cleans
+    such orphans up, but only at boot — which is the wrong half of the problem: the
+    console here keeps running for days, so the leak accumulates while nothing
+    sweeps. This is the producer-side other half.
+
+    Two properties are load-bearing:
+
+    * **Idempotent by status, not by bookkeeping.** It writes only while the task
+      is still ``running``/``pending``, so the ~25 normal terminal writes are never
+      followed by a second one (which would double-count the turn and re-emit its
+      ADR-0314 outcome). That check is the whole safety argument — deliberately NOT
+      a "did we already finalize" flag, which would drift from the meta it guards.
+    * **No pid liveness probe here, unlike the boot sweep.** The sweep infers from
+      outside that a turn is over and needs ``_task_pid_alive`` to avoid finalizing
+      a reparented engine that is still streaming (incident 2026-06-17). This runs
+      *because* the generator is closing: the consumer is gone, the impl's own
+      ``finally`` has already killed the subprocess, and no further event can ever
+      be written to this task. There is nothing live to false-positive on.
+
+    Fully synchronous on purpose: it runs inside a ``finally`` during cancellation,
+    where any ``await`` would immediately re-raise ``CancelledError`` and skip the
+    write. Best-effort — a chat turn must never fail because its bookkeeping did.
+
+    Returns the finalized task_id, or None when there was nothing to finalize.
+    """
+    slot, sess.in_flight_task = sess.in_flight_task, None
+    if slot is None:
+        return None
+    tasks_dir, task_id = slot
+    try:
+        tm = _task_manager.TaskManager(tasks_dir)
+        task = tm.get_task(task_id)
+        if task is None or task.status not in (
+            _task_manager.TaskStatus.RUNNING, _task_manager.TaskStatus.PENDING
+        ):
+            return None
+        # task.cancelled, not task.failed: the turn was abandoned, not broken.
+        # record_event() maps it to a terminal status (freeing the quota) and
+        # deliberately emits NO ADR-0314 outcome — an abandoned turn is not a
+        # signal about whether the engine did well.
+        tm.record_event(
+            task_id,
+            {"event": "task.cancelled", "reason": "client_disconnected_mid_turn"},
+            reason="turn interrupted before any terminal event",
+            tenant_id=sess.tenant_id,
+        )
+    except Exception:  # noqa: BLE001 — bookkeeping must never break a turn
+        _log.debug("could not finalize in-flight task %s", task_id, exc_info=True)
+        return None
+    _log.info(
+        "finalized interrupted task %s (chat=%s) as cancelled — quota freed",
+        task_id, sess.chat_key,
+    )
+    return task_id
+
+
 async def stream_turn(
+    sess: WebChatSession,
+    prompt: str,
+    *,
+    sid_fingerprint: str = "",
+) -> AsyncIterator[dict[str, Any]]:
+    """Public entry point: ``_stream_turn_impl`` plus a guaranteed task finalizer.
+
+    The only reason this wrapper exists is the ``finally`` below. The impl is a
+    ~2200-line async generator with ~25 terminal-event call sites, and the one
+    thing none of them can cover is the generator being CLOSED rather than run to
+    completion. ``contextlib.aclosing`` around the impl makes that close
+    deterministic (a bare ``async for`` delegation would leave it to the garbage
+    collector, so the finalizer could run before the impl's own cleanup) and
+    orders it first, so a terminal event the impl still manages to write wins over
+    ours. See ``_finalize_in_flight_task`` for why this is not solved by the boot
+    sweep.
+    """
+    sess.in_flight_task = None
+    try:
+        async with contextlib.aclosing(
+            _stream_turn_impl(sess, prompt, sid_fingerprint=sid_fingerprint)
+        ) as gen:
+            async for event in gen:
+                yield event
+    finally:
+        _finalize_in_flight_task(sess)
+
+
+async def _stream_turn_impl(
     sess: WebChatSession,
     prompt: str,
     *,
@@ -4894,6 +5006,10 @@ async def stream_turn(
         turn_number=sess.turn_count,
         tenant_id=sess.tenant_id,  # ADR-0314 outcome sink: the task's own tenant, never env
     )
+    # Hand the task to stream_turn's finalizer: from here on an interrupted turn
+    # gets a terminal event instead of leaking a permanently-``running`` task
+    # against this chat's max_concurrent quota. See _finalize_in_flight_task.
+    sess.in_flight_task = (tasks_dir, task_id)
 
     # Phase 2a: Instantiate ExecutionContext builder — tracks engine, model,
     # delegation, tokens, duration for the entire turn lifecycle.

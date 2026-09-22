@@ -47,6 +47,54 @@ import sys
 from pathlib import Path
 
 
+def _use_os_trust_store() -> None:
+    """Anchor this process's outbound-TLS verification to the OPERATING-SYSTEM
+    trust store instead of Python's bundled ``certifi`` CA list.
+
+    FOURTH SITE of the same fix — see ``tests/test_voice_tls_trust_store.py`` for
+    the other three (``corvin_console.standalone`` = the console/uvicorn process,
+    ``corvin_operator/voice/scripts/say.py`` = the TTS subprocess,
+    ``corvin_operator/bridges/shared/adapter.py`` = the bridge daemon). They share
+    no import, so the process-wide ``ssl`` patch one of them installs cannot reach
+    the others.
+
+    WHY THIS HOST NEEDS ITS OWN. ``uvicorn corvin_gateway.app:app`` is what
+    ``corvin-service`` runs, and what ``corvinOS/installer/core.py`` registers as
+    the persistent WebUI service on EVERY fresh install (pip and source-tree
+    alike). Measured 2026-09-22 on ALLIANZDE: with only certifi on the path, both
+    ``api.anthropic.com`` and ``api.openai.com`` fail with ``CERTIFICATE_VERIFY_FAILED:
+    unable to get local issuer certificate``; with the OS store injected they answer
+    404 and 403 respectively — i.e. verification succeeds and the request is
+    actually delivered.
+
+    This process WAS anchored before this call existed, but only by accident: the
+    ADR-0015 opt-in console mount below (``try: from corvin_console import app``)
+    transitively imports ``corvin_console.standalone`` and ``say``, each of which
+    injects at its own module import. That mount is deliberately failure-tolerant —
+    an ImportError anywhere in the console's ~120 route modules removes ``/console``
+    and every ``/v1/console/*`` route while the gateway keeps serving (it has
+    happened: 9433de4b, 2026-09-17). On that path the gateway's OWN egress —
+    A2A pairing, the marketplace index, the run dispatcher, outbound webhooks —
+    silently reverted to certifi-only and failed every handshake behind a
+    TLS-inspecting proxy. A load-bearing trust anchor must not be a side effect of
+    an optional import.
+
+    Verification stays fully ON: ``truststore`` reads the OS store, which HAS the
+    corporate root, so this only ever ADDS a working trust path. Guarded — a missing
+    ``truststore`` or any injection error leaves the default ``certifi`` behaviour
+    exactly as before, so it can never break boot. Runs at module import, before
+    uvicorn instantiates the app and before any socket opens.
+    """
+    try:
+        import truststore  # type: ignore[import-not-found]
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001 — trust-store setup must never break gateway boot
+        pass
+
+
+_use_os_trust_store()
+
+
 def _tripwire_assert_all() -> None:
     """Run the ADR-0232/0233 boot tripwires from ``corvin_compliance_reports``.
 

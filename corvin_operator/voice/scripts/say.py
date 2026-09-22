@@ -309,6 +309,22 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         # caller (test, voice-doctor) must get the same budget main() computes,
         # or it measures a tier that behaves differently in production.
         timeout_s = provider_timeout_for(text)
+
+    # The parent already tried this endpoint on this very call and was refused
+    # definitively (401/403/404 — the twin of routes/voice.py's verdict, injected
+    # by _say_env). Repeating it would pay a second blocked round-trip and delay
+    # the tier that can actually speak, for an outcome that is already known.
+    # This is a PER-CALL hint, never a pin: the parent's observation expires, so
+    # a granted egress exception or an approved endpoint is picked up on the next
+    # call with no restart. Skipping is only ever a fallback decision — a
+    # PINNED provider must still fail loudly (see _CANDIDATES/CORVIN_SAY_NO_FALLBACK
+    # in main()), which is why this returns False rather than raising.
+    if (os.environ.get("CORVIN_TTS_OPENAI_UNREACHABLE") or "").strip() == "1":
+        sys.stderr.write(
+            "say.py: skipping OpenAI TTS — caller reports the endpoint is "
+            "unreachable (refused this call; not retried in this subprocess)\n")
+        return False
+
     key = _resolve_key()
     if not key:
         sys.stderr.write("say.py: no OPENAI_API_KEY — skipping OpenAI TTS\n")
@@ -319,15 +335,53 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         sys.stderr.write("say.py: openai package not installed — skipping\n")
         return False
 
+    # Endpoint override — the twin of routes/voice.py::_openai_tts_endpoint,
+    # which is also what INJECTS these three vars into this process's env
+    # (_say_env). Without it this tier would keep aiming at api.openai.com
+    # while the console's in-process tier aims at the operator's approved
+    # endpoint: the subprocess fallback would silently contradict the branch it
+    # is supposed to back up. Empty base_url → the SDK default, unchanged.
+    base_url = (os.environ.get("CORVIN_TTS_OPENAI_BASE_URL")
+                or os.environ.get("OPENAI_BASE_URL") or "").strip()
+    api_version = (os.environ.get("CORVIN_TTS_OPENAI_API_VERSION")
+                   or "2024-05-01-preview").strip()
+    model = (os.environ.get("CORVIN_TTS_OPENAI_MODEL") or "tts-1").strip()
+    # https-only, loopback excepted — a base URL is where the API KEY is sent.
+    # The console validates this too (and additionally asks the L35 egress
+    # gate, which this standalone script has no access to), but say.py is also
+    # run directly by voice-doctor and by hand, so it cannot rely on that.
+    if base_url:
+        from urllib.parse import urlparse
+        _p = urlparse(base_url)
+        if _p.scheme != "https" and (_p.hostname or "") not in (
+                "127.0.0.1", "::1", "localhost"):
+            sys.stderr.write(
+                f"say.py: refusing OpenAI base URL with scheme "
+                f"'{_p.scheme or 'none'}' — https required (the API key would "
+                "travel in clear text)\n")
+            return False
+
     # Retry with exponential backoff on RateLimitError (429)
     max_retries = 2
     for attempt in range(max_retries + 1):
         try:
             # max_retries=0: disable SDK retries to protect the outer 25s route
             # budget (VOICE-10). We handle RateLimitError with manual backoff.
-            client = OpenAI(api_key=key, timeout=timeout_s, max_retries=0)
+            if base_url and ".openai.azure.com" in base_url.lower():
+                # Azure authenticates with an api-key header, needs an
+                # api-version, and addresses the model by DEPLOYMENT name — a
+                # plain OpenAI client on the same URL 401s every request.
+                from openai import AzureOpenAI  # type: ignore[import-not-found]
+                client = AzureOpenAI(
+                    api_key=key, azure_endpoint=base_url,
+                    api_version=api_version,
+                    timeout=timeout_s, max_retries=0,
+                )
+            else:
+                client = OpenAI(api_key=key, timeout=timeout_s, max_retries=0,
+                                **({"base_url": base_url} if base_url else {}))
             resp = client.audio.speech.create(
-                model="tts-1",
+                model=model,
                 voice=_openai_voice_for(lang, voice),
                 input=text,
                 response_format="opus",
@@ -352,9 +406,17 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         except Exception as e:  # noqa: BLE001
             # CONTENT-FREE: SDK exception str()s can embed the request payload —
             # i.e. the text being spoken. Type + HTTP status only (2026-07-17).
+            # The endpoint belongs in the diagnosis: the same
+            # PermissionDeniedError means "bad key" against OpenAI and "your
+            # proxy blocks this category" against a corporate egress path. A
+            # hostname is neither PII nor a secret; the key and str(e) stay out.
+            from urllib.parse import urlparse
+            _host = (urlparse(base_url).hostname if base_url else None) \
+                or "api.openai.com"
             sys.stderr.write(
                 f"say.py: OpenAI TTS failed: {type(e).__name__} "
-                f"status={getattr(e, 'status_code', '')}\n"
+                f"status={getattr(e, 'status_code', '')} "
+                f"endpoint={_host} model={model}\n"
             )
             return False
 
@@ -921,6 +983,25 @@ def main() -> int:
             return _try_piper(out_path, text, lang, timeout_s)
         return False
 
+    def _succeeded(name: str) -> int:
+        """Hand the path to the caller, naming the tier that actually spoke.
+
+        The tier goes to STDERR on purpose: stdout is the contract — the
+        out-path and nothing else — and both callers (routes/voice.py::
+        _voice_tts_sync, daemon.js) read it as a bare path, so a second stdout
+        line would be parsed as part of the filename. stderr is already
+        captured by every caller for the per-provider failure reasons.
+
+        Without this marker the chain was unobservable from outside: the
+        console could only label a subprocess synthesis "say.py", so an
+        operator who configured openai → edge → piper had no way to see which
+        tier served — X-Corvin-TTS-Provider named the mechanism, not the
+        provider (found 2026-09-21 while proving the chain end-to-end).
+        """
+        sys.stderr.write(f"say.py: provider={name}\n")
+        sys.stdout.write(str(out_path))
+        return 0
+
     strict = os.environ.get("CORVIN_SAY_NO_FALLBACK", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -930,8 +1011,7 @@ def main() -> int:
         # voice always works even if the configured provider is temporarily broken
         # (e.g. missing API key, network outage, not installed).
         if _run(provider):
-            sys.stdout.write(str(out_path))
-            return 0
+            return _succeeded(provider)
         if strict:
             # No-fallback (VOICE-1 isolation): a pinned provider must hard-fail
             # instead of masking a dead tier behind the auto-chain. Silent skip
@@ -949,8 +1029,7 @@ def main() -> int:
     # Auto chain: openai → edge → piper → silent.
     for name in _AUTO_CHAIN:
         if _run(name):
-            sys.stdout.write(str(out_path))
-            return 0
+            return _succeeded(name)
 
     # All providers failed — caller falls back to text-only delivery.
     return 0

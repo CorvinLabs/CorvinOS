@@ -1940,7 +1940,92 @@ def boot_platform() -> list[str]:
     # every plugin and never polled one (finding A6).
     start_health_monitoring(loaded)
 
+    # 5. ADR-0080 stale-task reaper. Same defect class as 2b and 4 above: the
+    # mechanism was sound, well-tested and had exactly one caller —
+    # ``adapter.py``'s boot, i.e. the messenger bridges. A console-only install
+    # (corvinos-serve / corvin-service, no bridge ever started) therefore NEVER
+    # reaped, so every console restart mid-turn leaked a task stuck on
+    # ``running``, and the fifth leak hit ``max_concurrent`` and killed that chat
+    # PERMANENTLY with QuotaExceededError — no restart, no cache clear and no
+    # amount of waiting could recover it, because nothing ever transitions a
+    # task out of ``running`` except a terminal event or this sweep. Measured
+    # 2026-09-21 on a console-only Windows install: 5/5 orphans on one web chat,
+    # the oldest 9.7 h old, chat dead.
+    _reap_stale_tasks()
+
     return loaded
+
+
+# ── ADR-0080 — stale-task reaper, shared by every host ───────────────────────
+
+#: Where every host's per-chat task metadata lives, relative to ``corvin_home``.
+#: Identical glob to ``adapter.py``'s boot sweep — the console writes its task
+#: dirs to ``sess.workdir / "tasks"`` under the same tenants/sessions tree, so
+#: one pattern covers web, CLI and every bridge type.
+_TASKS_DIR_GLOB = "tenants/*/sessions/**/tasks"
+
+
+def _reap_stale_tasks() -> int:
+    """Finalize tasks left on ``running``/``pending`` by a dead process.
+
+    Boot-only, by contract: ``reap_stale_running()`` must never run concurrently
+    with active workers (that is how a live task gets a second terminal event),
+    and :func:`boot_platform` is called once per process before it serves.
+
+    The safety of doing this at boot rests entirely on the reaper's OWN liveness
+    gate: an engine subprocess can be reparented and outlive the host that
+    spawned it, so a task whose recorded pid is still alive is skipped (the
+    2026-06-17 false-positive). This function must therefore never "improve" on
+    the reaper by finalizing anything the reaper declined.
+
+    Best-effort and never fatal: a platform that cannot reap must still boot and
+    serve. The cost is a quota that stays blocked, not a dead install — so this
+    is the one step in :func:`boot_platform` that swallows everything.
+
+    Returns the number of tasks finalized (0 when there was nothing to do, or
+    when the sweep could not run at all).
+    """
+    try:
+        from corvin_core.task_manager import TaskManager  # noqa: PLC0415
+        from corvin_operator.forge.forge.paths import (  # noqa: PLC0415
+            corvin_home as _corvin_home,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("task-reaper: unavailable (%s)", type(exc).__name__)
+        return 0
+
+    reaped_total = 0
+    reaped_chats = 0
+    try:
+        # corvin_home() honours CORVIN_HOME (ADR-0007) — never hard-wire
+        # ~/.corvin here, or a non-default install reaps the wrong tree and
+        # reports success while its own chats stay starved.
+        for tasks_dir in sorted(_corvin_home().glob(_TASKS_DIR_GLOB)):
+            if not tasks_dir.is_dir():
+                continue
+            try:
+                reaped = TaskManager(tasks_dir).reap_stale_running()
+            except Exception:  # noqa: BLE001
+                # One unreadable/locked chat must not abort the whole sweep.
+                continue
+            if reaped:
+                reaped_total += len(reaped)
+                reaped_chats += 1
+    except Exception as exc:  # noqa: BLE001
+        log.warning("task-reaper: skipped (%s)", type(exc).__name__)
+        return reaped_total
+
+    if reaped_total:
+        # Logged unconditionally, at INFO: this is the line that tells an
+        # operator why their chat started working again, and it is the only
+        # external evidence the sweep ran at all.
+        log.info(
+            "task-reaper: finalized %d orphaned running task(s) across %d chat(s)",
+            reaped_total, reaped_chats,
+        )
+    else:
+        log.info("task-reaper: no orphaned running tasks")
+    return reaped_total
 
 
 # ── ADR-0231 Stage 2/3 — health monitoring, shared by every host ─────────────
