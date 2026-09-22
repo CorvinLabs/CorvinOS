@@ -77,6 +77,17 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "compute.batch_fallback": frozenset({
         "run_id", "tenant_id", "reason", "candidate_count",
     }),
+    # PHASE 1: Critical safety events (2026-09-24)
+    # job_id, error_message (sanitized), recovery_attempted: no param values
+    "compute.checkpoint_corrupted": frozenset({
+        "run_id", "tenant_id", "job_id", "error_message", "recovery_attempted",
+    }),
+    "compute.deadlock_detected": frozenset({
+        "run_id", "tenant_id", "job_id", "component", "timeout_ms",
+    }),
+    "compute.iteration_diverged": frozenset({
+        "run_id", "tenant_id", "job_id", "prev_loss", "new_loss", "delta_pct",
+    }),
 }
 
 

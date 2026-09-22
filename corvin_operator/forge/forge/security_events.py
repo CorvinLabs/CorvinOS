@@ -800,6 +800,30 @@ EVENT_SEVERITY: dict[str, str] = {
     # Emitted by the provider-chain wrapper; details are metadata-only.
     "house_rules.provider_fallback":    "INFO",    # M3: Hermes failed, cloud Haiku used
     "house_rules.classifier_degraded":  "WARNING", # M4: N errors in sliding window
+    # PHASE 1: Critical Audit 100% Completeness (2026-09-24)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Layer 10 — Context Engineering (context_snapshots.py)
+    # Metadata only: snapshot_id, user_id, tenant_id, preserved/added field counts.
+    # NEVER: field values, cleared context state, user PII.
+    "context.snapshot_created":         "INFO",    # Layer 10: snapshot taken
+    "context.snapshot_restored":        "INFO",    # Layer 10: snapshot applied
+    "context.field_preserved":          "INFO",    # Layer 10: field marked preserved
+    "context.field_added":              "INFO",    # Layer 10: field added to snapshot
+    # Layer 22 — Compute Safety (corvin_compute/audit.py)
+    # Metadata only: job_id, error_message (sanitized), recovery_attempted.
+    # NEVER: computation params, intermediate results, user instructions.
+    "compute.checkpoint_corrupted":     "WARNING", # L22: checkpoint verification failed
+    "compute.deadlock_detected":        "WARNING", # L22: iteration timeout / deadlock
+    "compute.iteration_diverged":       "WARNING", # L22: loss regression detected
+    # Layer 25 — ACS L34 Flow Guard (acs_runtime/acs.py)
+    # Metadata only: acs_id, classification labels, gate_enforcement, bypassed flag.
+    # NEVER: input data, output, classified content.
+    "acs.l34_gate_passed":              "INFO",    # L25: data flow gate passed
+    # Layer 36 — GDPR Art. 17 Erasure (bridges/shared/erasure_orchestrator.py)
+    # Metadata only: erasure_id, tenant_id, isolation_valid boolean.
+    # NEVER: subject_id (subject_id is pseudonymised in chain as-is).
+    "erasure.tenant_boundary_checked":  "INFO",    # L36: cross-tenant isolation verified
+    "erasure.cross_tenant_detected":    "WARNING", # L36: cross-tenant request attempted
 }
 
 
@@ -2669,6 +2693,51 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "seam", "seam_reason", "superseded_key", "superseded_genesis",
         "superseded_tail", "superseded_size_bytes", "superseded_records",
         "canonical_key", "tenant_id",
+    }),
+    # PHASE 1: Critical Audit 100% Completeness (2026-09-24)
+    # ──────────────────────────────────────────────────────
+    # Layer 10 — Context Engineering. Metadata only: snapshot_id, user_id,
+    # tenant_id, field counts. NEVER: field values, context state, PII.
+    "context.snapshot_created": frozenset({
+        "snapshot_id", "user_id", "tenant_id", "preserved_fields_count",
+        "added_fields_count",
+    }),
+    "context.snapshot_restored": frozenset({
+        "snapshot_id", "restoration_success", "tenant_id",
+    }),
+    "context.field_preserved": frozenset({
+        "snapshot_id", "field_name", "reason", "tenant_id",
+    }),
+    "context.field_added": frozenset({
+        "snapshot_id", "field_name", "source", "tenant_id",
+    }),
+    # Layer 22 — Compute Safety. Metadata only: job_id, sanitized error message,
+    # recovery_attempted, timeout_ms, loss deltas. NEVER: computation params,
+    # intermediate results, user instructions.
+    "compute.checkpoint_corrupted": frozenset({
+        "run_id", "tenant_id", "job_id", "error_message", "recovery_attempted",
+    }),
+    "compute.deadlock_detected": frozenset({
+        "run_id", "tenant_id", "job_id", "component", "timeout_ms",
+    }),
+    "compute.iteration_diverged": frozenset({
+        "run_id", "tenant_id", "job_id", "prev_loss", "new_loss", "delta_pct",
+    }),
+    # Layer 25 — ACS L34 Flow Guard. Metadata only: acs_id, classification
+    # labels, gate_enforcement flag, bypassed boolean. NEVER: input data,
+    # output, classified content.
+    "acs.l34_gate_passed": frozenset({
+        "run_id", "tenant_id", "acs_id", "input_classification",
+        "output_classification", "gate_enforcement", "bypassed",
+    }),
+    # Layer 36 — GDPR Art. 17 Erasure. Metadata only: erasure_id, tenant_id,
+    # isolation_valid boolean. NEVER: subject_id (pseudonymised in chain as-is),
+    # PII, identity mappings.
+    "erasure.tenant_boundary_checked": frozenset({
+        "erasure_id", "tenant_id", "isolation_valid",
+    }),
+    "erasure.cross_tenant_detected": frozenset({
+        "erasure_id", "source_tenant", "target_tenant", "tenant_id",
     }),
 }
 
