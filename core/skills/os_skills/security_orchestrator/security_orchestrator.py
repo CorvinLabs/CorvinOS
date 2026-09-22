@@ -227,7 +227,7 @@ class SecurityOrchestratorSkill:
         """
         return self.policy_engine.tighten_policy(
             threat_signal={
-                "pattern": threat_signal.pattern.value,
+                "pattern": threat_signal.pattern,
                 "confidence": threat_signal.confidence,
                 "severity": threat_signal.severity,
                 "affected_users": threat_signal.affected_users,
