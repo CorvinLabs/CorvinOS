@@ -48,3 +48,4 @@ export * from "./api/custom_registry";
 export * from "./api/agents";
 export * from "./api/browser";
 export * from "./api/plugins";
+export * from "./api/initiatives";

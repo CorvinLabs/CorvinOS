@@ -96,6 +96,7 @@ from .routes import (
     quality_gates as quality_gates_route,
     quality_health_monitor as quality_health_monitor_route,
     telemetry_overview as telemetry_overview_route,
+    initiatives as initiatives_route,
     skill_creator_api as skill_creator_route,
     chat as chat_route,
     voice as voice_route,
@@ -336,6 +337,8 @@ router.include_router(quality_gates_route.router, tags=["console-quality-gates"]
 router.include_router(quality_health_monitor_route.router, tags=["console-quality-health"])
 # Telemetry transparency — what this install collects and sends (compliance-baseline § Mechanisms).
 router.include_router(telemetry_overview_route.router, tags=["console-telemetry"])
+# Initiatives board — live status of running/finished initiative tasks (initiatives.py).
+router.include_router(initiatives_route.router, tags=["console-initiatives"])
 # Skill-Creator (autonomous 6-phase skill builder) — main quality subsystem.
 router.include_router(skill_creator_route.router, tags=["console-skill-creator"])
 # ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI + orchestration)

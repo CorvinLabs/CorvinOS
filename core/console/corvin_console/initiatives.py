@@ -1,0 +1,341 @@
+"""Initiatives board — live status of running and finished initiative tasks.
+
+What it is
+----------
+An operator runs a handful of time-boxed initiatives ("loops") at once — a PoC,
+a fix sprint that gates the next phase, a multi-week production phase. Each has
+a window, a task queue, preconditions and decision gates. Until now that status
+lived in hand-edited markdown whose numbers ("7% — 1/14 days", "13 days, 8 h
+left") were stale the moment they were typed.
+
+This module keeps the operator-authored FACTS in one tenant-scoped file and
+derives every time-dependent number on read:
+
+    <tenant_home>/global/initiatives.json
+
+Stored (operator-authored): titles, windows, deadlines, task status + progress,
+precondition states, gate criteria + decisions.
+Derived (never stored): elapsed-time share, time left, task completion share,
+overdue flags, blocked-by-gate state, the initiative status and the next
+checkpoint. So a number on the board is either something a person wrote down or
+arithmetic over it — nothing is estimated and nothing is invented. A missing
+file is an empty board, not sample data (ADR-0763).
+
+Writes go through :func:`update_task` / :func:`set_gate_decision` only, which
+validate, write atomically at 0o600 and return the fresh board. The console
+route layer audits each mutation.
+"""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+_FILENAME = "initiatives.json"
+SCHEMA_VERSION = 1
+
+TASK_STATUSES = ("pending", "running", "done", "blocked")
+CHECK_STATES = ("ok", "pending", "fail")
+GATE_DECISIONS = ("pending", "go", "no_go")
+
+
+class InitiativeError(ValueError):
+    """Invalid board file or invalid mutation (maps to HTTP 400/404)."""
+
+
+class NotFound(InitiativeError):
+    pass
+
+
+# ── Path ─────────────────────────────────────────────────────────────────────
+
+def board_path(tenant_id: str) -> Path | None:
+    """``<tenant_home>/global/initiatives.json`` via the shared tenant resolver.
+
+    Same rule as ``usage_epoch``: an unresolvable tenant root means "no board",
+    never a guessed path.
+    """
+    try:
+        from core.paths import tenant_home  # noqa: PLC0415
+
+        return Path(tenant_home(tenant_id)) / "global" / _FILENAME
+    except Exception:  # noqa: BLE001
+        try:
+            from forge import paths as _forge_paths  # type: ignore  # noqa: PLC0415
+
+            return Path(_forge_paths.tenant_global_dir(tenant_id)) / _FILENAME
+        except Exception:  # noqa: BLE001
+            return None
+
+
+# ── Time helpers ─────────────────────────────────────────────────────────────
+
+def _parse_ts(value: Any, field: str) -> float | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise InitiativeError(f"{field}: expected ISO-8601 string")
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise InitiativeError(f"{field}: not ISO-8601 ({value!r})") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# ── Read + derive ────────────────────────────────────────────────────────────
+
+def _load_raw(tenant_id: str) -> tuple[dict[str, Any], Path | None]:
+    path = board_path(tenant_id)
+    if path is None or not path.is_file():
+        return {"version": SCHEMA_VERSION, "initiatives": []}, path
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InitiativeError(f"{_FILENAME} is unreadable: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("initiatives"), list):
+        raise InitiativeError(f"{_FILENAME} must be an object with an 'initiatives' list")
+    return data, path
+
+
+def _derive_task(task: dict[str, Any], now: float) -> dict[str, Any]:
+    status = task.get("status", "pending")
+    if status not in TASK_STATUSES:
+        raise InitiativeError(f"task {task.get('id')!r}: unknown status {status!r}")
+    progress = 100 if status == "done" else int(task.get("progress") or 0)
+    progress = max(0, min(100, progress))
+    due_ts = _parse_ts(task.get("due"), f"task {task.get('id')!r}.due")
+    overdue = due_ts is not None and status != "done" and now > due_ts
+    return {
+        "id": str(task.get("id", "")),
+        "title": str(task.get("title", "")),
+        "group": task.get("group") or None,
+        "status": status,
+        "progress": progress,
+        "due": task.get("due") or None,
+        "overdue": overdue,
+        "completed_at": task.get("completed_at") or None,
+        "note": task.get("note") or None,
+    }
+
+
+def _derive_checks(items: Any, where: str) -> list[dict[str, Any]]:
+    out = []
+    for c in items or []:
+        state = c.get("state", "pending")
+        if state not in CHECK_STATES:
+            raise InitiativeError(f"{where}: unknown state {state!r}")
+        out.append({"label": str(c.get("label", "")), "state": state,
+                    "detail": c.get("detail") or None})
+    return out
+
+
+def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: float) -> dict[str, Any]:
+    iid = str(ini.get("id", ""))
+    start = _parse_ts(ini.get("start"), f"{iid}.start")
+    deadline = _parse_ts(ini.get("deadline"), f"{iid}.deadline")
+    tasks = [_derive_task(t, now) for t in ini.get("tasks") or []]
+
+    counts = {s: 0 for s in TASK_STATUSES}
+    for t in tasks:
+        counts[t["status"]] += 1
+    overdue = sum(1 for t in tasks if t["overdue"])
+    task_pct = round(sum(t["progress"] for t in tasks) / len(tasks)) if tasks else None
+
+    time_pct = None
+    if start is not None and deadline is not None and deadline > start:
+        time_pct = round(max(0.0, min(1.0, (now - start) / (deadline - start))) * 100)
+
+    gates = []
+    for g in ini.get("gates") or []:
+        decision = g.get("decision", "pending")
+        if decision not in GATE_DECISIONS:
+            raise InitiativeError(f"{iid} gate {g.get('id')!r}: unknown decision {decision!r}")
+        gates.append({
+            "id": str(g.get("id", "")),
+            "title": str(g.get("title", "")),
+            "at": g.get("at") or None,
+            "decision": decision,
+            "on_go": g.get("on_go") or None,
+            "on_no_go": g.get("on_no_go") or None,
+            "criteria": _derive_checks(g.get("criteria"), f"{iid} gate {g.get('id')!r}"),
+        })
+
+    # Blocked by another initiative's gate until that gate says "go".
+    blocker = None
+    ref = ini.get("blocked_by")
+    if isinstance(ref, dict):
+        key = f"{ref.get('initiative')}/{ref.get('gate')}"
+        gate = gates_by_ref.get(key)
+        decision = gate.get("decision", "pending") if gate else "unknown"
+        if decision != "go":
+            blocker = {"initiative": ref.get("initiative"), "gate": ref.get("gate"),
+                       "gate_title": (gate or {}).get("title"), "decision": decision}
+
+    # Status precedence: an explicit operator override, then facts.
+    if ini.get("status_override"):
+        status = str(ini["status_override"])
+    elif tasks and counts["done"] == len(tasks):
+        status = "done"
+    elif blocker is not None:
+        status = "blocked"
+    elif start is not None and now < start:
+        status = "scheduled"
+    elif overdue or (deadline is not None and now > deadline):
+        status = "at_risk"
+    else:
+        status = "running"
+
+    # Next checkpoint: earliest future timestamp among explicit checkpoints,
+    # open task due dates and pending gates.
+    candidates: list[tuple[float, str]] = []
+    for cp in ini.get("checkpoints") or []:
+        ts = _parse_ts(cp.get("at"), f"{iid}.checkpoints")
+        if ts is not None and ts >= now:
+            candidates.append((ts, str(cp.get("label", "Checkpoint"))))
+    for t in tasks:
+        ts = _parse_ts(t["due"], "due")
+        if ts is not None and ts >= now and t["status"] != "done":
+            candidates.append((ts, f"Task due: {t['title']}"))
+    for g in gates:
+        ts = _parse_ts(g["at"], "gate.at")
+        if ts is not None and ts >= now and g["decision"] == "pending":
+            candidates.append((ts, f"Gate: {g['title']}"))
+    next_cp = None
+    if candidates:
+        ts, label = min(candidates)
+        next_cp = {"at": _iso(ts), "label": label}
+
+    return {
+        "id": iid,
+        "label": ini.get("label") or None,
+        "title": str(ini.get("title", "")),
+        "description": ini.get("description") or None,
+        "cadence": ini.get("cadence") or None,
+        "start": ini.get("start") or None,
+        "deadline": ini.get("deadline") or None,
+        "status": status,
+        "blocked_by": blocker,
+        "time_progress_pct": time_pct,
+        "task_progress_pct": task_pct,
+        "task_counts": {**counts, "total": len(tasks), "overdue": overdue},
+        "tasks": tasks,
+        "preconditions": _derive_checks(ini.get("preconditions"), f"{iid}.preconditions"),
+        "gates": gates,
+        "next_checkpoint": next_cp,
+    }
+
+
+def board(tenant_id: str, *, now: float | None = None) -> dict[str, Any]:
+    """The derived board for *tenant_id*. Raises InitiativeError on a bad file."""
+    now = time.time() if now is None else now
+    raw, path = _load_raw(tenant_id)
+    gates_by_ref = {
+        f"{ini.get('id')}/{g.get('id')}": g
+        for ini in raw["initiatives"] for g in (ini.get("gates") or [])
+    }
+    initiatives = [_derive_initiative(i, gates_by_ref, now) for i in raw["initiatives"]]
+
+    totals = {s: 0 for s in TASK_STATUSES}
+    overdue = 0
+    for ini in initiatives:
+        for s in TASK_STATUSES:
+            totals[s] += ini["task_counts"][s]
+        overdue += ini["task_counts"]["overdue"]
+
+    revision = None
+    if path is not None and path.is_file():
+        st = path.stat()
+        revision = f"{st.st_mtime_ns}-{st.st_size}"
+
+    return {
+        "server_time": _iso(now),
+        "revision": revision,
+        "source": _FILENAME if revision else None,
+        "initiatives": initiatives,
+        "totals": {**totals, "overdue": overdue,
+                   "total": sum(totals.values()),
+                   "initiatives_blocked": sum(1 for i in initiatives if i["status"] == "blocked")},
+    }
+
+
+# ── Mutations ────────────────────────────────────────────────────────────────
+
+def _write_raw(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".initiatives.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.chmod(tmp, 0o600)  # before replace: replace carries the temp's mode
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _find(raw: dict[str, Any], iid: str) -> dict[str, Any]:
+    for ini in raw["initiatives"]:
+        if str(ini.get("id")) == iid:
+            return ini
+    raise NotFound(f"initiative {iid!r} not found")
+
+
+def update_task(tenant_id: str, iid: str, tid: str, *,
+                status: str | None = None, progress: int | None = None,
+                now: float | None = None) -> dict[str, Any]:
+    """Set a task's status and/or progress. Returns the fresh board."""
+    now = time.time() if now is None else now
+    if status is None and progress is None:
+        raise InitiativeError("nothing to update")
+    if status is not None and status not in TASK_STATUSES:
+        raise InitiativeError(f"status must be one of {TASK_STATUSES}")
+    if progress is not None and not (0 <= int(progress) <= 100):
+        raise InitiativeError("progress must be 0..100")
+    raw, path = _load_raw(tenant_id)
+    if path is None:
+        raise InitiativeError("tenant home unresolvable")
+    ini = _find(raw, iid)
+    task = next((t for t in ini.get("tasks") or [] if str(t.get("id")) == tid), None)
+    if task is None:
+        raise NotFound(f"task {tid!r} not found in {iid!r}")
+    if status is not None:
+        if status == "done" and task.get("status") != "done":
+            task["completed_at"] = _iso(now)
+        elif status != "done":
+            task.pop("completed_at", None)
+        task["status"] = status
+    if progress is not None:
+        task["progress"] = int(progress)
+    _write_raw(path, raw)
+    return board(tenant_id, now=now)
+
+
+def set_gate_decision(tenant_id: str, iid: str, gid: str, decision: str,
+                      *, now: float | None = None) -> dict[str, Any]:
+    """Record a gate decision (pending/go/no_go). Returns the fresh board."""
+    if decision not in GATE_DECISIONS:
+        raise InitiativeError(f"decision must be one of {GATE_DECISIONS}")
+    raw, path = _load_raw(tenant_id)
+    if path is None:
+        raise InitiativeError("tenant home unresolvable")
+    ini = _find(raw, iid)
+    gate = next((g for g in ini.get("gates") or [] if str(g.get("id")) == gid), None)
+    if gate is None:
+        raise NotFound(f"gate {gid!r} not found in {iid!r}")
+    gate["decision"] = decision
+    _write_raw(path, raw)
+    return board(tenant_id, now=now)

@@ -17,10 +17,9 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field, validator
 
-from core.skills.feedback.schema import FeedbackEvent, FeedbackType
+from core.skills.feedback.schema import FeedbackEvent, FeedbackType, validate_feedback
 from core.paths.tenant import tenant_home
 from core.learning.feedback_processor import FeedbackProcessor, create_feedback_processor
-from core.learning.feedback_validator import validate_feedback_event
 
 from .. import auth as session_auth
 from ..deps import require_session
@@ -200,8 +199,12 @@ async def submit_skill_feedback(
             reason=req.reasoning,  # Optional free-text reason (scrubbed)
         )
 
-        # Validate feedback event (fail-closed)
-        validate_feedback_event(feedback_event)
+        # Validate feedback event (fail-closed). core.learning.feedback_validator
+        # never exported validate_feedback_event; importing it made the whole
+        # console router unimportable (bare 404 on /console after a restart).
+        ok, err = validate_feedback(feedback_event)
+        if not ok:
+            raise HTTPException(status_code=400, detail=err or "invalid feedback")
 
         # Process feedback (audit-first, config delta applied)
         # In production, this would:

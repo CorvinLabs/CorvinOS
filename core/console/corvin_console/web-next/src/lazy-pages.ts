@@ -147,6 +147,11 @@ export const VibeEngineeringPage = React.lazy(() =>
   import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
 );
 
+// Initiatives board — live running/finished initiative tasks (routes/initiatives.py).
+export const InitiativesPage = React.lazy(() =>
+  import("@/pages/initiatives").then((m) => ({ default: m.default }))
+);
+
 
 
 

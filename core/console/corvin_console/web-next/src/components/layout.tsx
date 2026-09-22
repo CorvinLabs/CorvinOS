@@ -19,6 +19,7 @@ import {
   Hammer,
   KeyRound,
   LayoutDashboard,
+  ListChecks,
   Lock,
   LogOut,
   MessagesSquare,
@@ -127,6 +128,7 @@ interface NavGroup {
 // Matches icon names from ConsolePanel.nav.icon to lucide-react components
 const _ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Brain,                  // vibe-engineering, models (ADR-0885)
+  ListChecks,             // initiatives
   CheckCircle,            // quality gates
   Settings,               // settings
   Network,                // bridges
@@ -168,6 +170,8 @@ const NAV_GROUPS: NavGroup[] = [
       // this list makes it reachable. tests/unit/panel-nav-wiring.test.ts verifies
       // the two stay in sync.
       { to: "/app/vibe-engineering", label: "Learnings", icon: Brain },
+      // Initiatives board (routes/initiatives.py) — directly below Learnings.
+      { to: "/app/initiatives", label: "Initiatives", icon: ListChecks },
     ],
   },
   // ONE marketplace (ADR-0892): plugins (browse + install + manage), skill

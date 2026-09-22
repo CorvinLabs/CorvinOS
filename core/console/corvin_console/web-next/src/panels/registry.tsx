@@ -23,7 +23,7 @@ import {
   GitHubPage, SyncMonitorPage,
   QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
   DataHubUnifiedPage,
-  OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
+  OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
@@ -89,6 +89,9 @@ export const PANELS: ConsolePanel[] = [
   // directory — file beats directory in module resolution — so this import
   // silently loaded the old page and the Dashboard was unreachable.
   rc("vibe-engineering", "Learnings", VibeEngineeringPage as unknown as typeof DashboardPage, { nav: { label: "Learnings", icon: "Brain", group: "primary" } }),
+  // Initiatives board: live status of running/finished initiative tasks, directly
+  // below Learnings in the sidebar (operator request 2026-09-22).
+  rc("initiatives", "Initiatives", InitiativesPage, { nav: { label: "Initiatives", icon: "ListChecks", group: "primary" } }),
   rc("dashboard", "Dashboard", DashboardPage, { nav: { label: "Dashboard", icon: "LayoutDashboard", group: "primary" } }),
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
   rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),
