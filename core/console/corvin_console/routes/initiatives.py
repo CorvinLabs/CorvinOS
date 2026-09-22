@@ -4,6 +4,8 @@ Endpoints (all under /v1/console):
   GET   /initiatives                                  → derived board (session)
   PATCH /initiatives/{iid}/tasks/{tid}                → set status/progress (CSRF, audited)
   PUT   /initiatives/{iid}/gates/{gid}                → set gate decision (CSRF, audited)
+  POST  /initiatives/verify                           → start an evidence verification run in
+                                                        the background (CSRF, audited; 202)
   PUT   /initiatives/{iid}/close                      → close run (completed/cancelled) or
                                                         reopen it (outcome=null) (CSRF, audited)
 
@@ -118,3 +120,26 @@ async def put_close(
         target_id=iid,
     )
     return result
+
+
+@router.post("/verify", status_code=202)
+async def post_verify(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict:
+    """Re-check every task's evidence now instead of waiting for the timer.
+
+    Runs detached (tests can take minutes); the board shows
+    ``verification.running`` until it finishes and picks the results up on
+    the next poll.
+    """
+    from .. import initiatives_verify  # noqa: PLC0415
+
+    started = initiatives_verify.start_background(rec.tenant_id)
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="initiative.verify.start" if started else "initiative.verify.already_running",
+        target_kind="initiatives",
+        target_id="evidence",
+    )
+    return {"started": started, "running": True}

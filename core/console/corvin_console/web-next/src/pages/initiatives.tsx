@@ -6,14 +6,16 @@
  * and derives every time-dependent number on each read; between polls the
  * page only ticks countdowns against the server clock. Runs are split into
  * RUNNING (phase "active") and FINISHED (closed, or every task done); finished
- * runs stay in the file and form the history. A missing file renders
+ * runs stay in the file and form the history. Tasks with evidence (tests,
+ * paths) get status + progress from the last verification run, not from a
+ * hand-typed number; "Verify now" re-runs it. A missing file renders
  * an empty state with the file location — never sample data.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock, Flag, History, Loader2,
-  Lock, PlayCircle, RotateCcw, XCircle,
+  Lock, PlayCircle, RefreshCw, RotateCcw, ShieldCheck, XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,12 +24,13 @@ import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api/client";
 import {
-  closeInitiativeRun, getInitiatives, patchInitiativeTask, setInitiativeGate,
+  closeInitiativeRun, getInitiatives, patchInitiativeTask, setInitiativeGate, startInitiativesVerify,
+  type Verification,
   type RunOutcome, type Check, type Gate, type GateDecision, type Initiative, type InitiativesBoard,
   type InitiativeTask, type TaskStatus,
 } from "@/lib/api/initiatives";
 import {
-  STATUS_LABEL, clockSkewMs, formatCountdown, formatDuration, formatUtc, scheduleLabel,
+  STATUS_LABEL, clockSkewMs, evidenceText, formatAgo, formatCountdown, formatDuration, formatUtc, scheduleLabel,
 } from "./initiatives-format";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +53,22 @@ function TaskIcon({ status }: { status: TaskStatus }) {
   return <CircleDashed className="h-4 w-4 text-muted-foreground" />;
 }
 
+function EvidenceLine({ v }: { v: Verification }) {
+  const tone = v.state === "ok"
+    ? "text-emerald-700 dark:text-emerald-400"
+    : v.state === "unverified" ? "text-muted-foreground" : "text-destructive";
+  return (
+    <div className={cn("flex flex-wrap items-center gap-x-2 text-xs", tone)} title={v.summary}>
+      <ShieldCheck className="h-3.5 w-3.5" />
+      <span>{evidenceText(v)}</span>
+      {v.missing_paths.length > 0 && <span className="text-muted-foreground">missing: {v.missing_paths.join(", ")}</span>}
+      <span className={cn("text-muted-foreground", v.stale && v.state !== "unverified" && "text-amber-700 dark:text-amber-400")}>
+        · checked {formatAgo(v.age_s)}{v.stale && v.state !== "unverified" ? " (stale)" : ""}
+      </span>
+    </div>
+  );
+}
+
 function CheckRow({ c }: { c: Check }) {
   const icon = c.state === "ok"
     ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
@@ -59,7 +78,11 @@ function CheckRow({ c }: { c: Check }) {
   return (
     <li className="flex items-start gap-2 text-sm">
       <span className="mt-0.5">{icon}</span>
-      <span>{c.label}{c.detail && <span className="text-muted-foreground"> — {c.detail}</span>}</span>
+      <span>
+        {c.label}{c.detail && <span className="text-muted-foreground"> — {c.detail}</span>}
+        {c.source === "tasks" && <span className="text-muted-foreground"> · from task status</span>}
+        {c.verification && <EvidenceLine v={c.verification} />}
+      </span>
     </li>
   );
 }
@@ -80,6 +103,7 @@ function TaskRow({
   ini: Initiative; task: InitiativeTask; now: number; busy: boolean;
   onPatch: (iid: string, tid: string, body: { status?: TaskStatus; progress?: number }) => void;
 }) {
+  const derived = task.progress_source === "evidence";
   const [progress, setProgress] = useState(String(task.progress));
   useEffect(() => setProgress(String(task.progress)), [task.progress]);
   const commitProgress = () => {
@@ -100,8 +124,10 @@ function TaskRow({
           {task.due && task.status !== "done" && ini.phase !== "finished" && <span>{formatCountdown(task.due, now)}</span>}
           {task.completed_at && <span>Completed {formatUtc(task.completed_at)}</span>}
           {task.overdue && <Badge variant="danger">Overdue</Badge>}
+          {task.claim_conflict && <Badge variant="danger">Marked done — evidence disagrees</Badge>}
           {task.note && <span>{task.note}</span>}
         </div>
+        {task.verification && <EvidenceLine v={task.verification} />}
       </div>
       <div className="col-start-2 flex items-center gap-2 sm:col-start-auto">
         <Progress value={task.progress} className="h-1.5 flex-1" aria-label={`${task.title} progress`} />
@@ -112,7 +138,8 @@ function TaskRow({
           aria-label={`${task.title} status`}
           className="h-7 rounded-md border bg-background px-1.5 text-xs"
           value={task.status}
-          disabled={busy}
+          disabled={busy || derived}
+          title={derived ? "Derived from evidence — change the tests or paths, not this value" : undefined}
           onChange={(e) => onPatch(ini.id, task.id, { status: e.target.value as TaskStatus })}
         >
           <option value="pending">Pending</option>
@@ -125,7 +152,7 @@ function TaskRow({
           className="h-7 w-14 rounded-md border bg-background px-1.5 text-xs tabular-nums"
           type="number" min={0} max={100}
           value={progress}
-          disabled={busy || task.status === "done"}
+          disabled={busy || derived || task.status === "done"}
           onChange={(e) => setProgress(e.target.value)}
           onBlur={commitProgress}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
@@ -400,8 +427,12 @@ export default function InitiativesPage() {
     mutationFn: (v: { iid: string; outcome: RunOutcome | null }) => closeInitiativeRun(v.iid, v.outcome, csrf),
     onSuccess,
   });
+  const verify = useMutation({
+    mutationFn: () => startInitiativesVerify(csrf),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [...KEY] }),
+  });
   const busy = patch.isPending || gate.isPending || close.isPending;
-  const mutErr = (patch.error ?? gate.error ?? close.error) as Error | null;
+  const mutErr = (patch.error ?? gate.error ?? close.error ?? verify.error) as Error | null;
 
   const board = q.data;
   const activeRuns = board?.initiatives.filter((i) => i.phase === "active") ?? [];
@@ -459,6 +490,24 @@ export default function InitiativesPage() {
 
       {board && board.initiatives.length > 0 && (
         <>
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              {board.verification.running
+                ? <span className="flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Verifying evidence…</span>
+                : board.verification.last_at
+                  ? <span>Evidence verified {formatAgo(Math.max(0, Math.round((now - Date.parse(board.verification.last_at)) / 1000)))}</span>
+                  : <span className="text-muted-foreground">Evidence not verified yet</span>}
+              {board.verification.stale_tasks > 0 && <Badge variant="warn">{board.verification.stale_tasks} stale</Badge>}
+              {board.verification.claim_conflicts > 0 && <Badge variant="danger">{board.verification.claim_conflicts} done-claims contradicted</Badge>}
+              <span className="text-xs text-muted-foreground">Re-checked every 30 min</span>
+            </div>
+            <Button size="sm" variant="outline" disabled={verify.isPending || board.verification.running}
+              onClick={() => verify.mutate()}>
+              <RefreshCw className={cn("mr-1 h-3.5 w-3.5", board.verification.running && "animate-spin")} /> Verify now
+            </Button>
+          </div>
+
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Tile label="Running runs" value={board.totals.runs_active} />
             <Tile label="Finished runs" value={board.totals.runs_finished} />

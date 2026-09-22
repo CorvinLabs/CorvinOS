@@ -30,6 +30,24 @@ history: their clock freezes at ``finished_at`` and the board reports how they
 landed against the deadline (``schedule``). Nothing is ever deleted to "clean
 up" — reopening a run removes only its ``closed`` record.
 
+Evidence (keeping the facts themselves current)
+----------------------------------------------
+A task — or a precondition — may declare ``evidence``: repo-relative pytest
+targets and/or filesystem paths that must exist. ``initiatives_verify`` (run by
+the ``corvin-initiatives-verify`` timer and on demand) executes them and stores
+the result under ``verification``. For a task WITH evidence, the board derives
+from that result instead of trusting a hand-typed number:
+
+* ``progress`` = share of passing tests + present paths;
+* ``status``   = ``done`` when everything passes, else ``running`` once
+  anything passes (the operator's ``blocked`` is kept);
+* a hand-set ``done`` that the evidence contradicts is flagged
+  ``claim_conflict`` and shown as running;
+* a result older than :data:`VERIFICATION_STALE_S` is flagged stale.
+
+Gate criteria may name ``requires_tasks``; their state is then derived (ok when
+all named tasks are done, fail once the gate time passed without that).
+
 Writes go through :func:`update_task` / :func:`set_gate_decision` /
 :func:`close_run` only, which
 validate, write atomically at 0o600 and return the fresh board. The console
@@ -55,6 +73,8 @@ GATE_DECISIONS = ("pending", "go", "no_go")
 #: finished as "completed" without being closed explicitly.
 CLOSE_OUTCOMES = ("completed", "cancelled")
 FINISHED_STATUSES = ("done", "cancelled")
+#: A verification older than this is shown as stale (timer runs every 30 min).
+VERIFICATION_STALE_S = 2 * 3600
 
 
 class InitiativeError(ValueError):
@@ -121,12 +141,59 @@ def _load_raw(tenant_id: str) -> tuple[dict[str, Any], Path | None]:
     return data, path
 
 
+def _derive_verification(item: dict[str, Any], now: float) -> dict[str, Any] | None:
+    """Public view of an item's evidence + last verification, or None."""
+    ev = item.get("evidence")
+    if not isinstance(ev, dict) or not (ev.get("tests") or ev.get("paths")):
+        return None
+    v = item.get("verification") if isinstance(item.get("verification"), dict) else None
+    if v is None:
+        return {"state": "unverified", "at": None, "age_s": None, "stale": True,
+                "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
+                "paths_present": 0, "paths_total": len(ev.get("paths") or []),
+                "missing_paths": [], "summary": "not verified yet", "score_pct": None}
+    at = _parse_ts(v.get("at"), "verification.at")
+    age = None if at is None else max(0, round(now - at))
+    passed, failed, errors = int(v.get("passed", 0)), int(v.get("failed", 0)), int(v.get("errors", 0))
+    p_ok, p_tot = int(v.get("paths_present", 0)), int(v.get("paths_total", 0))
+    units = passed + failed + errors + p_tot
+    score = round((passed + p_ok) / units * 100) if units else None
+    ok = units > 0 and failed == 0 and errors == 0 and p_ok == p_tot
+    return {
+        "state": "ok" if ok else ("partial" if (passed + p_ok) > 0 else "failing"),
+        "at": v.get("at"), "age_s": age,
+        "stale": age is None or age > VERIFICATION_STALE_S,
+        "passed": passed, "failed": failed, "errors": errors, "skipped": int(v.get("skipped", 0)),
+        "paths_present": p_ok, "paths_total": p_tot,
+        "missing_paths": list(v.get("missing_paths") or []),
+        "summary": str(v.get("summary") or ""),
+        "score_pct": score,
+        "first_ok_at": v.get("first_ok_at"),
+    }
+
+
 def _derive_task(task: dict[str, Any], now: float) -> dict[str, Any]:
     status = task.get("status", "pending")
     if status not in TASK_STATUSES:
         raise InitiativeError(f"task {task.get('id')!r}: unknown status {status!r}")
     progress = 100 if status == "done" else int(task.get("progress") or 0)
     progress = max(0, min(100, progress))
+    completed_at = task.get("completed_at") or None
+    verification = _derive_verification(task, now)
+    claim_conflict = False
+    progress_source = "manual"
+    if verification is not None and verification["state"] != "unverified":
+        progress_source = "evidence"
+        if verification["state"] == "ok":
+            status, progress = "done", 100
+            completed_at = completed_at or verification.get("first_ok_at") or verification["at"]
+        else:
+            claim_conflict = status == "done"
+            if status != "blocked":
+                status = "running" if verification["state"] == "partial" else (
+                    "running" if claim_conflict else status)
+            progress = verification["score_pct"] or 0
+            completed_at = None
     due_ts = _parse_ts(task.get("due"), f"task {task.get('id')!r}.due")
     overdue = due_ts is not None and status != "done" and now > due_ts
     return {
@@ -137,19 +204,42 @@ def _derive_task(task: dict[str, Any], now: float) -> dict[str, Any]:
         "progress": progress,
         "due": task.get("due") or None,
         "overdue": overdue,
-        "completed_at": task.get("completed_at") or None,
+        "completed_at": completed_at,
         "note": task.get("note") or None,
+        "progress_source": progress_source,
+        "verification": verification,
+        "claim_conflict": claim_conflict,
     }
 
 
-def _derive_checks(items: Any, where: str) -> list[dict[str, Any]]:
+def _derive_checks(items: Any, where: str, *, now: float | None = None,
+                   tasks: list[dict[str, Any]] | None = None,
+                   due: float | None = None) -> list[dict[str, Any]]:
+    by_id = {t["id"]: t for t in tasks or []}
     out = []
     for c in items or []:
         state = c.get("state", "pending")
         if state not in CHECK_STATES:
             raise InitiativeError(f"{where}: unknown state {state!r}")
+        source = "manual"
+        verification = _derive_verification(c, now) if now is not None else None
+        if verification is not None and verification["state"] != "unverified":
+            state, source = ("ok" if verification["state"] == "ok" else "fail"), "evidence"
+        req = c.get("requires_tasks")
+        if isinstance(req, list) and req:
+            missing = [r for r in req if r not in by_id]
+            if missing:
+                raise InitiativeError(f"{where}: requires_tasks names unknown tasks {missing}")
+            if all(by_id[r]["status"] == "done" for r in req):
+                state = "ok"
+            elif due is not None and now is not None and now > due:
+                state = "fail"
+            else:
+                state = "pending"
+            source = "tasks"
         out.append({"label": str(c.get("label", "")), "state": state,
-                    "detail": c.get("detail") or None})
+                    "detail": c.get("detail") or None, "source": source,
+                    "verification": verification})
     return out
 
 
@@ -201,7 +291,8 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
             "decision": decision,
             "on_go": g.get("on_go") or None,
             "on_no_go": g.get("on_no_go") or None,
-            "criteria": _derive_checks(g.get("criteria"), f"{iid} gate {g.get('id')!r}"),
+            "criteria": _derive_checks(g.get("criteria"), f"{iid} gate {g.get('id')!r}", now=now,
+                                       tasks=tasks, due=_parse_ts(g.get("at"), f"{iid} gate.at")),
         })
 
     # Blocked by another initiative's gate until that gate says "go".
@@ -263,7 +354,7 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
         "task_progress_pct": task_pct,
         "task_counts": {**counts, "total": len(tasks), "overdue": overdue},
         "tasks": tasks,
-        "preconditions": _derive_checks(ini.get("preconditions"), f"{iid}.preconditions"),
+        "preconditions": _derive_checks(ini.get("preconditions"), f"{iid}.preconditions", now=now),
         "gates": gates,
         "next_checkpoint": next_cp,
         "phase": "finished" if finished else "active",
@@ -275,6 +366,15 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
         "schedule_delta_s": (round(deadline - finished_ts)
                              if finished and finished_ts is not None and deadline is not None else None),
     }
+
+
+def _verify_running(tenant_id: str) -> bool:
+    try:
+        from . import initiatives_verify  # noqa: PLC0415
+
+        return initiatives_verify.is_running(tenant_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def board(tenant_id: str, *, now: float | None = None) -> dict[str, Any]:
@@ -294,6 +394,13 @@ def board(tenant_id: str, *, now: float | None = None) -> dict[str, Any]:
             totals[s] += ini["task_counts"][s]
         overdue += ini["task_counts"]["overdue"]
 
+    ver_ats = [v["at"] for i in initiatives for v in
+               [t["verification"] for t in i["tasks"]] + [c["verification"] for c in i["preconditions"]]
+               if v and v.get("at")]
+    stale_count = sum(1 for i in initiatives for t in i["tasks"]
+                      if t["verification"] and t["verification"]["stale"])
+    conflicts = sum(1 for i in initiatives for t in i["tasks"] if t["claim_conflict"])
+
     revision = None
     if path is not None and path.is_file():
         st = path.stat()
@@ -304,6 +411,10 @@ def board(tenant_id: str, *, now: float | None = None) -> dict[str, Any]:
         "revision": revision,
         "source": _FILENAME if revision else None,
         "initiatives": initiatives,
+        "verification": {"last_at": max(ver_ats) if ver_ats else None,
+                         "running": _verify_running(tenant_id),
+                         "stale_tasks": stale_count, "claim_conflicts": conflicts,
+                         "stale_after_s": VERIFICATION_STALE_S},
         "totals": {**totals, "overdue": overdue,
                    "total": sum(totals.values()),
                    "initiatives_blocked": sum(1 for i in initiatives if i["status"] == "blocked"),

@@ -165,6 +165,71 @@ class InitiativesRouteTest(unittest.TestCase):
             self.assertIn("initiative.close.cancelled", actions)
             self.assertIn("initiative.reopen", actions)
 
+    def test_evidence_drives_status_progress_and_gate(self):
+        now = datetime.now(timezone.utc)
+        at = _iso(now - timedelta(minutes=5))
+        data = _fixture(now)
+        b = data["initiatives"][0]
+        b["tasks"][0].update(evidence={"tests": ["x"]},
+                             verification={"at": at, "passed": 10, "failed": 0, "errors": 0,
+                                           "paths_total": 0, "paths_present": 0, "first_ok_at": at})
+        b["tasks"][1].update(status="done", evidence={"tests": ["y"], "paths": ["a", "b"]},
+                             verification={"at": _iso(now - timedelta(hours=3)), "passed": 6, "failed": 1,
+                                           "errors": 1, "paths_total": 2, "paths_present": 1})
+        b["gates"][0]["criteria"] = [{"label": "P0", "requires_tasks": ["p0-a", "p0-b"]}]
+        with _sandbox(self._tmp) as (client, _csrf, home, _):
+            self._write(home, data)
+            body = client.get(_URL).json()
+            t0, t1 = body["initiatives"][0]["tasks"]
+            self.assertEqual((t0["status"], t0["progress"], t0["progress_source"]), ("done", 100, "evidence"))
+            self.assertEqual(t0["completed_at"], at)
+            # 6 passed + 1 path of 6+1+1 tests + 2 paths = 7/10
+            self.assertEqual((t1["status"], t1["progress"], t1["claim_conflict"]), ("running", 70, True))
+            self.assertTrue(t1["verification"]["stale"])
+            self.assertEqual(body["initiatives"][0]["gates"][0]["criteria"][0]["state"], "pending")
+            self.assertEqual(body["verification"]["claim_conflicts"], 1)
+            self.assertEqual(body["verification"]["stale_tasks"], 1)
+
+    def test_verifier_runs_repo_tests_in_sandbox_and_records_results(self):
+        from unittest import mock
+        repo = self._tmp / "repo"
+        (repo / "t").mkdir(parents=True)
+        (repo / "t" / "test_ok.py").write_text("def test_a():\n    assert True\n")
+        (repo / "t" / "test_bad.py").write_text(
+            "import os\ndef test_b():\n    assert False\n"
+            "def test_home_is_sandboxed():\n    assert 'corvin-initiatives-verify-' in os.environ['CORVIN_HOME']\n")
+        (repo / "present.txt").write_text("x")
+        now = datetime.now(timezone.utc)
+        data = _fixture(now)
+        tasks = data["initiatives"][0]["tasks"]
+        tasks[0]["evidence"] = {"tests": ["t/test_ok.py"], "paths": ["present.txt"]}
+        tasks[1]["evidence"] = {"tests": ["t/test_bad.py", "../escape.py"], "paths": ["missing.txt"]}
+        with _sandbox(self._tmp) as (client, csrf, home, _):
+            path = self._write(home, data)
+            from corvin_console import initiatives_verify as iv
+            with mock.patch.object(iv, "REPO", repo):
+                summary = iv.verify("_default")
+            self.assertEqual((summary["verified"], summary["green"], summary["red"]), (2, 1, 1))
+            stored = json.loads(path.read_text())["initiatives"][0]["tasks"]
+            ok, bad = stored[0]["verification"], stored[1]["verification"]
+            self.assertEqual((ok["passed"], ok["paths_present"]), (1, 1))
+            self.assertIsNotNone(ok["first_ok_at"])
+            self.assertEqual((bad["passed"], bad["failed"]), (1, 1))  # sandbox check passed
+            self.assertEqual(bad["errors"], 1)                         # ../escape.py refused
+            self.assertEqual(bad["missing_paths"], ["missing.txt"])
+            self.assertIsNone(bad["first_ok_at"])
+            events = [e.get("event_type") for e in _audit_events(home)]
+            self.assertIn("initiatives.verified", events)
+
+            body = client.get(_URL).json()
+            self.assertEqual(body["initiatives"][0]["tasks"][0]["status"], "done")
+
+            with mock.patch.object(iv, "start_background", return_value=True) as sb:
+                self.assertIn(client.post(f"{_URL}/verify").status_code, (401, 403))
+                r = client.post(f"{_URL}/verify", headers={"X-CSRF-Token": csrf})
+                self.assertEqual(r.status_code, 202, r.text)
+                sb.assert_called_once_with("_default")
+
     def test_tenant_comes_from_session(self):
         now = datetime.now(timezone.utc)
         with _sandbox(self._tmp, tenants=("_default", "acme")) as (_c, _s, home, clients):

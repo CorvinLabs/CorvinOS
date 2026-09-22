@@ -1,0 +1,17 @@
+[Unit]
+Description=CorvinOS Initiatives — verify task evidence (tests + paths) and record results
+Documentation=file:///home/shumway/projects/CorvinOS/docs/claude-ref/console-initiatives.md
+
+[Service]
+Type=oneshot
+# Same interpreter + PYTHONPATH + CORVIN_HOME as corvin-webui, so the board it
+# writes is the one the console reads. Tests themselves run in a throwaway
+# CORVIN_HOME (initiatives_verify.run_tests), never against the live install.
+ExecStart=/home/shumway/projects/CorvinOS/core/console/.venv/bin/python -m corvin_console.initiatives_verify --tenant _default
+WorkingDirectory=/home/shumway/projects/CorvinOS
+Environment=PYTHONUNBUFFERED=1
+Environment=CORVIN_HOME=/home/shumway/projects/CorvinOS/.corvin
+Environment=PYTHONPATH=%h/projects/CorvinOS/core/console:%h/projects/CorvinOS/core/gateway:%h/projects/CorvinOS/core/license:%h/projects/CorvinOS/core/compliance:%h/projects/CorvinOS/corvin_operator/forge:%h/projects/CorvinOS/corvin_operator/skill-forge:%h/projects/CorvinOS/corvin_operator/bridges/shared:%h/projects/CorvinOS/core/plugins:%h/projects/CorvinOS
+TimeoutStartSec=1800
+Nice=10
+SyslogIdentifier=corvin-initiatives-verify

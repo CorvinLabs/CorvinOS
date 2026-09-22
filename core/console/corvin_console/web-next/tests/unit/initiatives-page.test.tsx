@@ -15,7 +15,7 @@ import { server } from "../fixtures/server";
 vi.mock("@/lib/auth", () => ({ useAuth: () => ({ session: { csrf_token: "csrf-1" } }) }));
 
 import InitiativesPage from "@/pages/initiatives";
-import { clockSkewMs, formatCountdown, scheduleLabel } from "@/pages/initiatives-format";
+import { clockSkewMs, evidenceText, formatCountdown, scheduleLabel } from "@/pages/initiatives-format";
 
 const task = (id: string, title: string, status: string, progress = 0, extra = {}) => ({
   id, title, group: null, status, progress, due: null, overdue: false, completed_at: null, note: null, ...extra,
@@ -29,11 +29,15 @@ const ini = (over: Record<string, unknown>) => ({
 });
 const BOARD = {
   server_time: "2026-09-22T15:30:00Z", revision: "1-2", source: "initiatives.json",
+  verification: { last_at: "2026-09-22T15:25:00Z", running: false, stale_tasks: 0, claim_conflicts: 1, stale_after_s: 7200 },
   totals: { pending: 1, running: 1, done: 3, blocked: 0, total: 5, overdue: 0, initiatives_blocked: 1, runs_active: 2, runs_finished: 2 },
   initiatives: [
     ini({ id: "loop-a", label: "Loop A", title: "3D PoC",
       task_counts: { pending: 1, running: 1, done: 1, blocked: 0, total: 3, overdue: 0 },
-      tasks: [task("1", "Blender Setup", "running", 50), task("2", "YAML + TTS", "pending"), task("0", "Kickoff", "done", 100)],
+      tasks: [task("1", "Blender Setup", "running", 50, { progress_source: "evidence", claim_conflict: true,
+                verification: { state: "partial", at: "2026-09-22T15:25:00Z", age_s: 300, stale: false, passed: 8, failed: 0,
+                  errors: 2, skipped: 1, paths_present: 1, paths_total: 2, missing_paths: ["tools/gen.py"], summary: "", score_pct: 80 } }),
+              task("2", "YAML + TTS", "pending"), task("0", "Kickoff", "done", 100)],
       preconditions: [{ label: "GPU cluster access", state: "ok", detail: null }] }),
     ini({ id: "loop-c", label: "Loop C", title: "Phase 10 Production", status: "blocked",
       blocked_by: { initiative: "loop-b", gate: "blocker", gate_title: "Blocker Gate", decision: "pending" } }),
@@ -62,6 +66,8 @@ describe("initiatives-format", () => {
     expect(scheduleLabel(30).text).toBe("On time");
     expect(scheduleLabel(-90000)).toEqual({ text: "1d 1h late", tone: "danger" });
     expect(scheduleLabel(null).tone).toBe("secondary");
+    expect(evidenceText({ passed: 3, failed: 0, errors: 0, paths_present: 0, paths_total: 0, state: "ok" })).toBe("3/3 tests passing");
+    expect(evidenceText({ passed: 0, failed: 0, errors: 0, paths_present: 0, paths_total: 1, state: "unverified" })).toBe("Evidence not verified yet");
   });
 });
 
@@ -120,17 +126,37 @@ describe("Initiatives page", () => {
     ]);
   });
 
+  it("shows evidence, freezes derived controls and starts a verification run", async () => {
+    let posted: string | null = null;
+    server.use(
+      http.get("/v1/console/initiatives", () => HttpResponse.json(BOARD)),
+      http.post("/v1/console/initiatives/verify", ({ request }) => {
+        posted = request.headers.get("X-CSRF-Token");
+        return HttpResponse.json({ started: true, running: true }, { status: 202 });
+      }),
+    );
+    renderIt();
+    expect(await screen.findByText("8/10 tests passing (2 errors) · 1/2 paths present")).toBeTruthy();
+    expect(screen.getByText(/missing: tools\/gen.py/)).toBeTruthy();
+    expect(screen.getByText("Marked done — evidence disagrees")).toBeTruthy();
+    expect((screen.getByLabelText("Blender Setup status") as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("YAML + TTS status") as HTMLSelectElement).disabled).toBe(false);
+    expect(screen.getByText("1 done-claims contradicted")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Verify now/ }));
+    await waitFor(() => expect(posted).toBe("csrf-1"));
+  });
+
   it("PATCHes a status change with the CSRF token", async () => {
     let seen: { body: unknown; csrf: string | null } | null = null;
     server.use(
       http.get("/v1/console/initiatives", () => HttpResponse.json(BOARD)),
-      http.patch("/v1/console/initiatives/loop-a/tasks/1", async ({ request }) => {
+      http.patch("/v1/console/initiatives/loop-a/tasks/2", async ({ request }) => {
         seen = { body: await request.json(), csrf: request.headers.get("X-CSRF-Token") };
         return HttpResponse.json(BOARD);
       }),
     );
     renderIt();
-    const sel = await screen.findByLabelText("Blender Setup status");
+    const sel = await screen.findByLabelText("YAML + TTS status");
     fireEvent.change(sel, { target: { value: "done" } });
     await waitFor(() => expect(seen).not.toBeNull());
     expect(seen).toEqual({ body: { status: "done" }, csrf: "csrf-1" });
@@ -139,6 +165,7 @@ describe("Initiatives page", () => {
   it("shows the empty state for a missing file, never sample data", async () => {
     server.use(http.get("/v1/console/initiatives", () => HttpResponse.json({
       ...BOARD, revision: null, source: null, initiatives: [],
+      verification: { last_at: null, running: false, stale_tasks: 0, claim_conflicts: 0, stale_after_s: 7200 },
       totals: { pending: 0, running: 0, done: 0, blocked: 0, total: 0, overdue: 0, initiatives_blocked: 0, runs_active: 0, runs_finished: 0 },
     })));
     renderIt();

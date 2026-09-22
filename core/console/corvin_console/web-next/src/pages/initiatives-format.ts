@@ -58,6 +58,30 @@ export function scheduleLabel(deltaS: number | null): { text: string; tone: "ok"
     : { text: `${formatDuration(deltaS)} late`, tone: "danger" };
 }
 
+/** "3m ago", "2h 5m ago", "just now". */
+export function formatAgo(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return "never";
+  if (seconds < 60) return "just now";
+  return `${formatDuration(seconds)} ago`;
+}
+
+/** One-line evidence text: "70/72 tests passing · 1/2 paths present". */
+export function evidenceText(v: {
+  passed: number; failed: number; errors: number; paths_present: number; paths_total: number; state: string;
+}): string {
+  if (v.state === "unverified") return "Evidence not verified yet";
+  const parts: string[] = [];
+  const tests = v.passed + v.failed + v.errors;
+  if (tests > 0) {
+    let t = `${v.passed}/${tests} tests passing`;
+    const bad = [v.failed && `${v.failed} failed`, v.errors && `${v.errors} errors`].filter(Boolean);
+    if (bad.length) t += ` (${bad.join(", ")})`;
+    parts.push(t);
+  }
+  if (v.paths_total > 0) parts.push(`${v.paths_present}/${v.paths_total} paths present`);
+  return parts.join(" · ");
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   running: "Running",
   at_risk: "At risk",

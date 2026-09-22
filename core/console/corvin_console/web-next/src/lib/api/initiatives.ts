@@ -13,6 +13,24 @@ export type GateDecision = "pending" | "go" | "no_go";
 export type InitiativeStatus = "running" | "at_risk" | "blocked" | "scheduled" | "done" | "cancelled" | string;
 export type RunOutcome = "completed" | "cancelled";
 
+/** Last evidence run for a task/precondition (initiatives_verify). */
+export interface Verification {
+  state: "ok" | "partial" | "failing" | "unverified";
+  at: string | null;
+  age_s: number | null;
+  stale: boolean;
+  passed: number;
+  failed: number;
+  errors: number;
+  skipped: number;
+  paths_present: number;
+  paths_total: number;
+  missing_paths: string[];
+  summary: string;
+  score_pct: number | null;
+  first_ok_at?: string | null;
+}
+
 export interface InitiativeTask {
   id: string;
   title: string;
@@ -23,12 +41,19 @@ export interface InitiativeTask {
   overdue: boolean;
   completed_at: string | null;
   note: string | null;
+  /** "evidence": status + progress are derived from the last verification. */
+  progress_source: "manual" | "evidence";
+  verification: Verification | null;
+  /** Hand-marked done, but the evidence says otherwise. */
+  claim_conflict: boolean;
 }
 
 export interface Check {
   label: string;
   state: CheckState;
   detail: string | null;
+  source?: "manual" | "evidence" | "tasks";
+  verification?: Verification | null;
 }
 
 export interface Gate {
@@ -73,6 +98,13 @@ export interface InitiativesBoard {
   revision: string | null;
   source: string | null;
   initiatives: Initiative[];
+  verification: {
+    last_at: string | null;
+    running: boolean;
+    stale_tasks: number;
+    claim_conflicts: number;
+    stale_after_s: number;
+  };
   totals: Record<TaskStatus, number> & {
     total: number; overdue: number; initiatives_blocked: number; runs_active: number; runs_finished: number;
   };
@@ -116,4 +148,9 @@ export function closeInitiativeRun(
     `/initiatives/${encodeURIComponent(iid)}/close`,
     { method: "PUT", body: { outcome }, csrf },
   );
+}
+
+/** Start an evidence verification run in the background (202). */
+export function startInitiativesVerify(csrf: string): Promise<{ started: boolean; running: boolean }> {
+  return api("/initiatives/verify", { method: "POST", csrf });
 }
