@@ -4187,7 +4187,10 @@ def verify_chain_incremental(path: Path, *,
     """``(ok, problems, total_lines)`` — the SAME verdict as :func:`verify_chain`,
     with the already-proven prefix of an append-only chain not re-walked.
 
-    ADR-0640 R4. This is the BOOT path only (``tripwire._verify_chain``).
+    ADR-0640 R4. Callers: the boot tripwire (``tripwire._verify_chain``) and,
+    since ADR-2036, the recurring ACO integrity monitor
+    (``integrity_monitor.check_audit_chain_integrity``), which re-parsed a
+    187 MB chain up to 25x per heal cycle and stalled the console process.
     ``voice-audit verify`` / the daily ``verify --all`` unit keep calling
     :func:`verify_chain`, which is an unconditional full walk with no reliance on
     any witness — so a full, independent verification still happens on the

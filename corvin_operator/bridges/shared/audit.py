@@ -489,9 +489,10 @@ def verify_audit_incremental(path: Path | None = None) -> tuple[bool, list[dict]
     Same verdict as :func:`verify_audit`, but the already-proven prefix of the
     append-only chain is not re-walked (a SHA-256 over the prefix bytes proves it
     unchanged first; any mismatch falls back to a full walk). Used by the boot
-    tripwire only — ``voice-audit verify`` and the daily ``verify --all`` unit
-    keep doing an unconditional full walk. ``writer_unavailable`` is reported
-    exactly as :func:`verify_audit` does: an absent writer is not a healthy one.
+    tripwire and the recurring ACO integrity monitor (ADR-2036) only —
+    ``voice-audit verify`` and the daily ``verify --all`` unit keep doing an
+    unconditional full walk. ``writer_unavailable`` is reported exactly as
+    :func:`verify_audit` does: an absent writer is not a healthy one.
     """
     if _se is None:
         return False, [{"reason": "writer_unavailable"}], 0

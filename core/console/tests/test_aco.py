@@ -751,6 +751,47 @@ class TestAuditChainVerifyMemoization(unittest.TestCase):
             self.assertEqual(len(im._chain_verify_cache), 1)
 
 
+class TestAuditChainIncrementalInMonitor(unittest.TestCase):
+    """ADR-2036: the recurring monitor uses the incremental verifier (same
+    verdict, proven prefix confirmed by SHA-256 instead of re-parsed) — which
+    was re-parsing a 187 MB chain up to 25x per heal cycle and stalling the
+    console. It must still catch an edit INSIDE the already-proven prefix."""
+
+    def setUp(self):
+        from corvin_console.aco import integrity_monitor as im
+        im._chain_verify_cache.clear()
+
+    def test_prefix_tamper_is_still_detected(self):
+        import os
+        from unittest import mock
+        from corvin_console.aco import integrity_monitor as im
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+            chain.parent.mkdir(parents=True)
+            env = {"CORVIN_HOME": str(home), "VOICE_AUDIT_PATH": str(chain),
+                   "CORVIN_AUDIT_VERIFY_NO_KEY_OK": "1"}
+            with mock.patch.dict(os.environ, env):
+                import audit as _audit  # bridges/shared, on sys.path via the monitor
+                self.assertTrue(hasattr(_audit, "verify_audit_incremental"))
+                from forge import security_events as se
+                for i in range(50):
+                    se.write_event(chain, "test.event", details={"n": i, "tenant_id": "_default"})
+                self.assertEqual(im.check_audit_chain_integrity("_default"), [])  # writes witness
+                im._chain_verify_cache.clear()
+                self.assertEqual(im.check_audit_chain_integrity("_default"), [])  # resumed
+                # Tamper with a record deep inside the proven prefix.
+                lines = chain.read_text().splitlines(keepends=True)
+                lines[10] = lines[10].replace('"test.event"', '"test.evil"')
+                self.assertIn('"test.evil"', lines[10])
+                chain.write_text("".join(lines))
+                im._chain_verify_cache.clear()
+                findings = im.check_audit_chain_integrity("_default")
+                self.assertEqual([f.check_name for f in findings], ["audit_chain_integrity"])
+                self.assertEqual(findings[0].severity, "CRITICAL")
+
+
 class TestIntegrityMonitor(unittest.TestCase):
     """Tests für den ACO Integrity Monitor (Immunsystem)."""
 

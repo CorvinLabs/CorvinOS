@@ -137,6 +137,14 @@ def _save_checksum_state(tenant_id: str, state: dict) -> None:
 # performs a real verification — detection latency does not grow. The check
 # itself is unchanged: the whole chain is still walked, just not 36 times over
 # the same unmodified file.
+#
+# ADR-2036: the memo alone did not hold on a live install — the console appends
+# to the chain continuously, so its identity changed between the ~25 tenant
+# scans of one cycle and nearly every scan missed: 187 MB re-parsed in Python up
+# to 25x per cycle in an executor thread, starving the event loop (console
+# requests measured at up to 17 s). check_audit_chain_integrity now calls the
+# incremental verifier (ADR-0640 R4, same verdict, proven prefix confirmed by
+# SHA-256): 3.3 s → 0.09 s per scan on that chain, 5 ms max main-thread stall.
 _CHAIN_VERIFY_TTL_SECONDS = 60.0
 _chain_verify_lock = threading.Lock()
 _chain_verify_cache: dict[tuple, tuple[float, bool, list]] = {}
@@ -192,6 +200,20 @@ def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
         if str(bridge_shared) not in sys.path:
             sys.path.insert(0, str(bridge_shared))
         from audit import verify_audit, audit_path  # type: ignore
+        try:
+            # ADR-0640 R4 / ADR-2036: SAME verdict as verify_audit, but the
+            # already-proven prefix is confirmed by a SHA-256 over its bytes
+            # (hashlib releases the GIL) instead of re-parsing every record in
+            # Python. Any edit inside the prefix fails the digest and forces a
+            # full walk. The unconditional full walk still runs daily
+            # (corvin-audit-verify.timer → voice_audit.py verify).
+            from audit import verify_audit_incremental  # type: ignore
+
+            def verify_audit(path, _inc=verify_audit_incremental):  # noqa: F811
+                ok, problems, _total = _inc(path)
+                return ok, problems
+        except ImportError:
+            pass  # older bridge stack: full walk every time, never a free pass
     except ImportError:
         logger.debug("[ACO-Integrity] verify_audit not importable — skipping chain check")
         return findings
