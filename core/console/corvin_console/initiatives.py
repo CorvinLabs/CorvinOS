@@ -21,7 +21,17 @@ checkpoint. So a number on the board is either something a person wrote down or
 arithmetic over it — nothing is estimated and nothing is invented. A missing
 file is an empty board, not sample data (ADR-0763).
 
-Writes go through :func:`update_task` / :func:`set_gate_decision` only, which
+Runs and history
+----------------
+Each initiative is a *run*. A run is **finished** when the operator closes it
+(``closed: {at, outcome}`` — completed or cancelled) or when every task is
+done; it is **active** otherwise. Finished runs stay in the file and form the
+history: their clock freezes at ``finished_at`` and the board reports how they
+landed against the deadline (``schedule``). Nothing is ever deleted to "clean
+up" — reopening a run removes only its ``closed`` record.
+
+Writes go through :func:`update_task` / :func:`set_gate_decision` /
+:func:`close_run` only, which
 validate, write atomically at 0o600 and return the fresh board. The console
 route layer audits each mutation.
 """
@@ -41,6 +51,10 @@ SCHEMA_VERSION = 1
 TASK_STATUSES = ("pending", "running", "done", "blocked")
 CHECK_STATES = ("ok", "pending", "fail")
 GATE_DECISIONS = ("pending", "go", "no_go")
+#: How a run was closed by the operator. A run whose tasks are all done is
+#: finished as "completed" without being closed explicitly.
+CLOSE_OUTCOMES = ("completed", "cancelled")
+FINISHED_STATUSES = ("done", "cancelled")
 
 
 class InitiativeError(ValueError):
@@ -145,6 +159,26 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
     deadline = _parse_ts(ini.get("deadline"), f"{iid}.deadline")
     tasks = [_derive_task(t, now) for t in ini.get("tasks") or []]
 
+    # Finished? An explicit close wins; otherwise all tasks done.
+    closed = ini.get("closed") if isinstance(ini.get("closed"), dict) else None
+    outcome: str | None = None
+    finished_ts: float | None = None
+    if closed is not None:
+        outcome = closed.get("outcome")
+        if outcome not in CLOSE_OUTCOMES:
+            raise InitiativeError(f"{iid}.closed.outcome must be one of {CLOSE_OUTCOMES}")
+        finished_ts = _parse_ts(closed.get("at"), f"{iid}.closed.at")
+    elif tasks and all(t["status"] == "done" for t in tasks):
+        outcome = "completed"
+        done_ts = [_parse_ts(t["completed_at"], "completed_at") for t in tasks if t["completed_at"]]
+        finished_ts = max((x for x in done_ts if x is not None), default=None)
+    finished = outcome is not None
+    if finished:
+        # A finished run has nothing left to be late for.
+        for t in tasks:
+            t["overdue"] = False
+    clock = min(now, finished_ts) if finished and finished_ts is not None else now
+
     counts = {s: 0 for s in TASK_STATUSES}
     for t in tasks:
         counts[t["status"]] += 1
@@ -153,7 +187,7 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
 
     time_pct = None
     if start is not None and deadline is not None and deadline > start:
-        time_pct = round(max(0.0, min(1.0, (now - start) / (deadline - start))) * 100)
+        time_pct = round(max(0.0, min(1.0, (clock - start) / (deadline - start))) * 100)
 
     gates = []
     for g in ini.get("gates") or []:
@@ -182,10 +216,10 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
                        "gate_title": (gate or {}).get("title"), "decision": decision}
 
     # Status precedence: an explicit operator override, then facts.
-    if ini.get("status_override"):
+    if finished:
+        status = "cancelled" if outcome == "cancelled" else "done"
+    elif ini.get("status_override"):
         status = str(ini["status_override"])
-    elif tasks and counts["done"] == len(tasks):
-        status = "done"
     elif blocker is not None:
         status = "blocked"
     elif start is not None and now < start:
@@ -211,7 +245,7 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
         if ts is not None and ts >= now and g["decision"] == "pending":
             candidates.append((ts, f"Gate: {g['title']}"))
     next_cp = None
-    if candidates:
+    if candidates and not finished:
         ts, label = min(candidates)
         next_cp = {"at": _iso(ts), "label": label}
 
@@ -232,6 +266,14 @@ def _derive_initiative(ini: dict[str, Any], gates_by_ref: dict[str, dict], now: 
         "preconditions": _derive_checks(ini.get("preconditions"), f"{iid}.preconditions"),
         "gates": gates,
         "next_checkpoint": next_cp,
+        "phase": "finished" if finished else "active",
+        "outcome": outcome,
+        "finished_at": _iso(finished_ts) if finished_ts is not None else None,
+        "duration_s": (round(finished_ts - start) if finished and finished_ts is not None and start is not None
+                       else round(max(0.0, now - start)) if start is not None and not finished else None),
+        # Signed seconds finished before (+) / after (-) the deadline; None while active.
+        "schedule_delta_s": (round(deadline - finished_ts)
+                             if finished and finished_ts is not None and deadline is not None else None),
     }
 
 
@@ -264,7 +306,9 @@ def board(tenant_id: str, *, now: float | None = None) -> dict[str, Any]:
         "initiatives": initiatives,
         "totals": {**totals, "overdue": overdue,
                    "total": sum(totals.values()),
-                   "initiatives_blocked": sum(1 for i in initiatives if i["status"] == "blocked")},
+                   "initiatives_blocked": sum(1 for i in initiatives if i["status"] == "blocked"),
+                   "runs_active": sum(1 for i in initiatives if i["phase"] == "active"),
+                   "runs_finished": sum(1 for i in initiatives if i["phase"] == "finished")},
     }
 
 
@@ -337,5 +381,27 @@ def set_gate_decision(tenant_id: str, iid: str, gid: str, decision: str,
     if gate is None:
         raise NotFound(f"gate {gid!r} not found in {iid!r}")
     gate["decision"] = decision
+    _write_raw(path, raw)
+    return board(tenant_id, now=now)
+
+
+def close_run(tenant_id: str, iid: str, outcome: str | None,
+              *, now: float | None = None) -> dict[str, Any]:
+    """Close a run as completed/cancelled, or reopen it with ``outcome=None``.
+
+    Closing records ``closed: {at, outcome}``; reopening removes only that
+    record — tasks, gates and their history are untouched.
+    """
+    now = time.time() if now is None else now
+    if outcome is not None and outcome not in CLOSE_OUTCOMES:
+        raise InitiativeError(f"outcome must be one of {CLOSE_OUTCOMES} or null")
+    raw, path = _load_raw(tenant_id)
+    if path is None:
+        raise InitiativeError("tenant home unresolvable")
+    ini = _find(raw, iid)
+    if outcome is None:
+        ini.pop("closed", None)
+    else:
+        ini["closed"] = {"at": _iso(now), "outcome": outcome}
     _write_raw(path, raw)
     return board(tenant_id, now=now)

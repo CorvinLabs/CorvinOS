@@ -39,11 +39,31 @@ export function formatUtc(iso: string | null): string {
   }) + " UTC";
 }
 
+/** Compact duration: "9d 4h", "5h 12m", "42m". */
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return "—";
+  const s = Math.abs(Math.round(seconds));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** How a finished run landed against its deadline. Within one minute = on time. */
+export function scheduleLabel(deltaS: number | null): { text: string; tone: "ok" | "danger" | "secondary" } {
+  if (deltaS === null) return { text: "No deadline data", tone: "secondary" };
+  if (Math.abs(deltaS) < 60) return { text: "On time", tone: "ok" };
+  return deltaS > 0
+    ? { text: `${formatDuration(deltaS)} early`, tone: "ok" }
+    : { text: `${formatDuration(deltaS)} late`, tone: "danger" };
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   running: "Running",
   at_risk: "At risk",
   blocked: "Blocked",
   scheduled: "Scheduled",
-  done: "Done",
+  done: "Completed",
+  cancelled: "Cancelled",
   pending: "Pending",
 };

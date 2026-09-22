@@ -10,7 +10,8 @@ import { api } from "./client";
 export type TaskStatus = "pending" | "running" | "done" | "blocked";
 export type CheckState = "ok" | "pending" | "fail";
 export type GateDecision = "pending" | "go" | "no_go";
-export type InitiativeStatus = "running" | "at_risk" | "blocked" | "scheduled" | "done" | string;
+export type InitiativeStatus = "running" | "at_risk" | "blocked" | "scheduled" | "done" | "cancelled" | string;
+export type RunOutcome = "completed" | "cancelled";
 
 export interface InitiativeTask {
   id: string;
@@ -57,6 +58,14 @@ export interface Initiative {
   preconditions: Check[];
   gates: Gate[];
   next_checkpoint: { at: string; label: string } | null;
+  /** "finished" = closed by the operator, or every task done. */
+  phase: "active" | "finished";
+  outcome: RunOutcome | null;
+  finished_at: string | null;
+  /** Finished: start → finished_at. Active: start → now. */
+  duration_s: number | null;
+  /** Finished only: seconds before (+) / after (−) the deadline. */
+  schedule_delta_s: number | null;
 }
 
 export interface InitiativesBoard {
@@ -64,7 +73,9 @@ export interface InitiativesBoard {
   revision: string | null;
   source: string | null;
   initiatives: Initiative[];
-  totals: Record<TaskStatus, number> & { total: number; overdue: number; initiatives_blocked: number };
+  totals: Record<TaskStatus, number> & {
+    total: number; overdue: number; initiatives_blocked: number; runs_active: number; runs_finished: number;
+  };
 }
 
 export function getInitiatives(signal?: AbortSignal): Promise<InitiativesBoard> {
@@ -92,5 +103,17 @@ export function setInitiativeGate(
   return api<InitiativesBoard>(
     `/initiatives/${encodeURIComponent(iid)}/gates/${encodeURIComponent(gid)}`,
     { method: "PUT", body: { decision }, csrf },
+  );
+}
+
+/** Close a run (completed/cancelled) or reopen it with `null`. */
+export function closeInitiativeRun(
+  iid: string,
+  outcome: RunOutcome | null,
+  csrf: string,
+): Promise<InitiativesBoard> {
+  return api<InitiativesBoard>(
+    `/initiatives/${encodeURIComponent(iid)}/close`,
+    { method: "PUT", body: { outcome }, csrf },
   );
 }

@@ -123,6 +123,48 @@ class InitiativesRouteTest(unittest.TestCase):
             self.assertIn("initiative.task.update", actions)
             self.assertIn("initiative.gate.go", actions)
 
+    def test_runs_split_into_active_and_finished_history(self):
+        now = datetime.now(timezone.utc)
+        data = _fixture(now)
+        data["initiatives"].append({
+            "id": "old", "label": "Loop 0", "title": "Past run",
+            "start": _iso(now - timedelta(days=30)), "deadline": _iso(now - timedelta(days=20)),
+            "tasks": [{"id": "t", "title": "T", "status": "done",
+                       "completed_at": _iso(now - timedelta(days=21))}],
+        })
+        with _sandbox(self._tmp) as (client, _csrf, home, _):
+            self._write(home, data)
+            body = client.get(_URL).json()
+            old = body["initiatives"][2]
+            self.assertEqual((old["phase"], old["outcome"], old["status"]), ("finished", "completed", "done"))
+            self.assertAlmostEqual(old["schedule_delta_s"], 86400, delta=2)  # one day early
+            self.assertAlmostEqual(old["duration_s"], 9 * 86400, delta=2)
+            self.assertEqual(old["time_progress_pct"], 90)  # frozen at finished_at, not now
+            self.assertIsNone(old["next_checkpoint"])
+            self.assertEqual((body["totals"]["runs_active"], body["totals"]["runs_finished"]), (2, 1))
+
+    def test_close_and_reopen_run(self):
+        now = datetime.now(timezone.utc)
+        with _sandbox(self._tmp) as (client, csrf, home, _):
+            path = self._write(home, _fixture(now))
+            h = {"X-CSRF-Token": csrf}
+            self.assertIn(client.put(f"{_URL}/loop-b/close", json={"outcome": "cancelled"}).status_code, (401, 403))
+            r = client.put(f"{_URL}/loop-b/close", json={"outcome": "cancelled"}, headers=h)
+            self.assertEqual(r.status_code, 200, r.text)
+            b = r.json()["initiatives"][0]
+            self.assertEqual((b["phase"], b["status"], b["task_counts"]["overdue"]), ("finished", "cancelled", 0))
+            self.assertIsNotNone(b["finished_at"])
+            self.assertEqual(json.loads(path.read_text())["initiatives"][0]["closed"]["outcome"], "cancelled")
+
+            r = client.put(f"{_URL}/loop-b/close", json={"outcome": None}, headers=h)
+            self.assertEqual(r.json()["initiatives"][0]["phase"], "active")
+            self.assertNotIn("closed", json.loads(path.read_text())["initiatives"][0])
+            self.assertEqual(client.put(f"{_URL}/loop-b/close", json={"outcome": "bogus"}, headers=h).status_code, 422)
+
+            actions = [e.get("details", {}).get("action") for e in _audit_events(home)]
+            self.assertIn("initiative.close.cancelled", actions)
+            self.assertIn("initiative.reopen", actions)
+
     def test_tenant_comes_from_session(self):
         now = datetime.now(timezone.utc)
         with _sandbox(self._tmp, tenants=("_default", "acme")) as (_c, _s, home, clients):

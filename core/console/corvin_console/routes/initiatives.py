@@ -4,6 +4,8 @@ Endpoints (all under /v1/console):
   GET   /initiatives                                  → derived board (session)
   PATCH /initiatives/{iid}/tasks/{tid}                → set status/progress (CSRF, audited)
   PUT   /initiatives/{iid}/gates/{gid}                → set gate decision (CSRF, audited)
+  PUT   /initiatives/{iid}/close                      → close run (completed/cancelled) or
+                                                        reopen it (outcome=null) (CSRF, audited)
 
 The tenant comes from the authenticated session only. Data model and
 derivation rules: ``corvin_console/initiatives.py``.
@@ -89,5 +91,30 @@ async def put_gate(
         action=f"initiative.gate.{body.decision}",
         target_kind="initiative_gate",
         target_id=f"{iid}/{gid}",
+    )
+    return result
+
+
+class CloseBody(BaseModel):
+    outcome: Literal["completed", "cancelled"] | None
+
+
+@router.put("/{iid}/close")
+async def put_close(
+    iid: str,
+    body: CloseBody,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict:
+    try:
+        result = board_mod.close_run(rec.tenant_id, iid, body.outcome)
+    except board_mod.InitiativeError as exc:
+        _raise(exc)
+        raise
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=f"initiative.close.{body.outcome}" if body.outcome else "initiative.reopen",
+        target_kind="initiative",
+        target_id=iid,
     )
     return result
