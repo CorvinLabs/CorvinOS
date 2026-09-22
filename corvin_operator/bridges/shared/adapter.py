@@ -258,6 +258,35 @@ def _budget_account_turn(chat_key: str, msg_id: str,
     try:
         tokens = _estimate_tokens(prompt) + _estimate_tokens(reply)
         _context_budget.account_turn(chat_key, msg_id, tokens)
+
+        # NEW: Auto-session renewal hook (ADR-0407, ADR-0668)
+        # Check if we should split the session due to token budget
+        try:
+            from session_auto_renewal_hook import get_renewal_hook  # type: ignore
+            hook = get_renewal_hook()
+            # Map chat_key to session_id (simple: use chat_key as session_id for now)
+            session_id = f"session_{chat_key}"
+            action, new_session_id = asyncio.run(
+                hook.check_and_maybe_split_session(
+                    chat_key=chat_key,
+                    tokens_used=tokens,
+                    session_id=session_id,
+                    goal="",
+                    turn_id=msg_id
+                )
+            )
+            if action == "split" and new_session_id:
+                log(f"[SessionRenewal] Auto-split triggered: {session_id} → {new_session_id}")
+            elif action == "warn":
+                log(f"[SessionRenewal] Token warning: chat {chat_key} at 85%+")
+            elif action == "critical":
+                log(f"[SessionRenewal] Token critical: chat {chat_key} at 95%+, will split next turn")
+        except ImportError:
+            # session_auto_renewal_hook not available; skip
+            pass
+        except Exception as renewal_exc:
+            log(f"session_auto_renewal_hook failed (non-fatal): {renewal_exc}")
+
     except Exception as exc:
         log(f"budget account_turn failed: {exc}")
 
