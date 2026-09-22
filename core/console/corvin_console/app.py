@@ -218,6 +218,8 @@ from .routes import (
     control_plane_subsystems as control_plane_subsystems_route,
     control_plane_overrides as control_plane_overrides_route,
     control_plane_snapshots as control_plane_snapshots_route,
+    # Media System — video/audio/image distribution via Console + Discord + Telegram
+    media_routes,
 )
 
 
@@ -458,6 +460,9 @@ router.include_router(panels_route.router, tags=["console-panels"])
 router.include_router(multi_instance_route.router, tags=["console-multi-instance"])
 # DataHub Phase 3 — Console UI + HTTP Wiring (Artifact creation + CRUD)
 router.include_router(datahub_route.router, tags=["console-datahub"])
+# Media System — video/audio/image distribution via Console + Discord + Telegram
+if media_routes.router:
+    router.include_router(media_routes.router, tags=["console-media"])
 
 
 @router.get("/version")
