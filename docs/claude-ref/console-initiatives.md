@@ -61,6 +61,46 @@ A missing file is an empty board — the page shows an empty state, never sample
 | `schedule_delta_s` | finished only: seconds before (+) / after (−) the deadline |
 | `next_checkpoint` | earliest future checkpoint, open-task due date or pending gate |
 
+## All tasks — every type, one list
+
+The page also lists **every task, run or job on the install**, marked by type,
+split into **Running** and **Finished**, filterable by type chips. Source:
+`corvin_console/task_sources.py`, served by `GET /v1/console/initiatives/tasks`.
+Each source is read where its subsystem writes it — nothing is copied.
+
+| Type | Store (under the tenant home unless noted) |
+|---|---|
+| Initiative | `global/initiatives.json` (this board) |
+| Chat | `sessions/<chat>/tasks/<id>.json` — web, CLI, Discord, Telegram turns |
+| Background task | `sessions/voice/<bridge>/bgtask*/tasks/` — background `/task` runs |
+| ACS | `global/acs/runs/*/manifest.json` + session run dirs without an index entry |
+| Workflow | `workflows/<wid>/runs/*.meta.json` (marketplace plugin) + `workflow_runs/*.json` (paused AWP) |
+| Flow | `global/flows/runs/*.manifest.jsonl` |
+| Gateway run | `global/gateway/runs/run_*.json` |
+| Forge tool | `global/forge/runs/` (tenant) + host-level forge run dirs — host-level ones for `_default` only |
+| Compute | `compute/runs/`, `compute/pipelines/`, `compute/hac/`, `global/compute/jobs/` |
+| Scheduled | `voice/schedule.json` |
+| Skill creator | in memory of the console process |
+
+**One status vocabulary:** active = queued · running · paused · scheduled;
+finished = done · failed · cancelled; **stale** = claims to be active but
+shows no sign of life (no end record, no heartbeat, no worker) for > 2 h. A
+stale record is counted apart ("Running (11 · 80 stale)") and carries its
+reason; it is never shown as running.
+
+**Privacy:** a bridge chat task's instruction is another person's message —
+bridge tasks are titled by channel and persona only; web/CLI turns (the
+operator's own) show a preview. Scheduled reminders show their schedule, not
+their text.
+
+**Cost:** files are re-parsed only when (mtime, size) changed; the aggregate
+is cached 2 s; the route is sync (threadpool) so the scan never blocks the
+event loop. Measured on this install: 5 140 records, cold 260 ms, warm
+~116 ms, cached 5 ms.
+
+A source that is empty for a reason says so under the table (e.g. the
+workflow plugin does not load on this build).
+
 ## Evidence — keeping the facts current
 
 Hand-typed status and percentages go stale. A task (or precondition) that
@@ -115,6 +155,7 @@ Finished runs stay in the file; nothing is deleted. Reopening removes only the
 | Method | Path | Auth | Effect |
 |---|---|---|---|
 | GET | `/v1/console/initiatives` | session | derived board + `server_time` + `revision` |
+| GET | `/v1/console/initiatives/tasks?types=&finished_limit=&finished_offset=` | session | every task type, normalised (see "All tasks") |
 | PATCH | `/v1/console/initiatives/{iid}/tasks/{tid}` | session + CSRF | `{status?, progress?}`; audited `initiative.task.update` |
 | PUT | `/v1/console/initiatives/{iid}/gates/{gid}` | session + CSRF | `{decision}`; audited `initiative.gate.<decision>` |
 | POST | `/v1/console/initiatives/verify` | session + CSRF | start evidence verification in the background (202); audited `initiative.verify.start` |
@@ -131,6 +172,25 @@ Tenant comes from the session only. Writes are atomic, mode `0o600`.
 | Change from another session/operator | next poll, ≤ 5 s | poll |
 | Tab was in the background | a fetch is issued on return (measured 6–7 ms) | `refetchOnWindowFocus: "always"` (polling pauses while hidden) |
 | Code / test / file change in the repo | ≤ 5 min + test runtime (~30 s); immediately via **Verify now** | timer `--if-changed` |
+
+**On open** the page always fetches (`refetchOnMount: "always"`,
+`staleTime: 0`) — numbers cached from an earlier visit are never shown as
+current — and asks the server to re-check the evidence if the repo changed
+since the last run (`POST /initiatives/verify?if_changed=true`; a no-op
+without an audit record when nothing changed).
+
+**Robustness.** Each poll has an 8 s budget (`POLL_TIMEOUT_MS`): a request
+the server does not answer is aborted instead of blocking every poll queued
+behind it. A failed poll is retried twice after 1 s; while polls keep failing
+the last good data stays on screen and the indicator reads "Reconnecting…
+showing data from N s ago" — the full error card appears only when there has
+never been data. A 404 (route absent on this build) is not retried.
+
+**Server stalls (fixed, ADR-2036).** The console process used to stall for
+seconds every heal cycle because the ACO integrity monitor re-parsed the
+187 MB audit chain up to 25x per cycle; it now verifies incrementally (same
+verdict). This panel's latency depended on that more than on anything in the
+panel itself.
 
 All of that assumes the console answers promptly. When the last successful
 update is older than 15 s the live indicator turns amber ("Delayed · last

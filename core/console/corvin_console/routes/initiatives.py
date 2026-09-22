@@ -2,10 +2,20 @@
 
 Endpoints (all under /v1/console):
   GET   /initiatives                                  → derived board (session)
+  GET   /initiatives/tasks?types=&finished_limit=&finished_offset=
+                                                      → EVERY task/run/job on this install
+                                                        (chat, background, ACS, workflow, flow,
+                                                        gateway, forge, compute, scheduled,
+                                                        skill creator, initiative), normalised;
+                                                        see ``task_sources.py`` (session)
   PATCH /initiatives/{iid}/tasks/{tid}                → set status/progress (CSRF, audited)
   PUT   /initiatives/{iid}/gates/{gid}                → set gate decision (CSRF, audited)
-  POST  /initiatives/verify                           → start an evidence verification run in
-                                                        the background (CSRF, audited; 202)
+  POST  /initiatives/verify[?if_changed=true]         → start an evidence verification run in
+                                                        the background (CSRF; 202). With
+                                                        if_changed only when the repo/evidence
+                                                        changed or the last run is > 30 min old
+                                                        (the page calls this on open). Audited
+                                                        only when a run actually starts.
   PUT   /initiatives/{iid}/close                      → close run (completed/cancelled) or
                                                         reopen it (outcome=null) (CSRF, audited)
 
@@ -16,7 +26,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .. import audit as console_audit
@@ -41,6 +51,25 @@ async def get_board(
     except board_mod.InitiativeError as exc:
         _raise(exc)
         raise  # unreachable
+
+
+@router.get("/tasks")
+def get_all_tasks(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    types: str = "",
+    finished_limit: int = Query(default=100, ge=1, le=1000),
+    finished_offset: int = Query(default=0, ge=0),
+) -> dict:
+    """Sync on purpose: FastAPI runs it in the threadpool, so the file scan
+    (thousands of stats) never blocks the event loop."""
+    from .. import task_sources  # noqa: PLC0415
+
+    wanted = {t for t in (x.strip() for x in types.split(",")) if t} or None
+    unknown = (wanted or set()) - set(task_sources.TYPE_LABELS)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown task types: {sorted(unknown)}")
+    return task_sources.query(rec.tenant_id, types=wanted, finished_limit=finished_limit,
+                              finished_offset=finished_offset)
 
 
 class TaskPatch(BaseModel):
@@ -125,6 +154,7 @@ async def put_close(
 @router.post("/verify", status_code=202)
 async def post_verify(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    if_changed: bool = False,
 ) -> dict:
     """Re-check every task's evidence now instead of waiting for the timer.
 
@@ -132,9 +162,19 @@ async def post_verify(
     ``verification.running`` until it finishes and picks the results up on
     the next poll.
     """
+    from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
+
     from .. import initiatives_verify  # noqa: PLC0415
 
+    if if_changed:
+        # git status/diff + stat calls: off the event loop.
+        needed, reason = await run_in_threadpool(initiatives_verify.needs_run, rec.tenant_id)
+        if not needed:
+            return {"started": False, "running": initiatives_verify.is_running(rec.tenant_id),
+                    "reason": reason}
     started = initiatives_verify.start_background(rec.tenant_id)
+    if not started and if_changed:
+        return {"started": False, "running": True, "reason": "already running"}
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,

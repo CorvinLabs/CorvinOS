@@ -224,6 +224,16 @@ class InitiativesRouteTest(unittest.TestCase):
             body = client.get(_URL).json()
             self.assertEqual(body["initiatives"][0]["tasks"][0]["status"], "done")
 
+            with mock.patch.object(iv, "needs_run", return_value=(False, "unchanged")), \
+                 mock.patch.object(iv, "start_background", return_value=True) as sb:
+                r = client.post(f"{_URL}/verify?if_changed=true", headers={"X-CSRF-Token": csrf})
+                self.assertEqual((r.status_code, r.json()["started"], r.json()["reason"]), (202, False, "unchanged"))
+                sb.assert_not_called()   # nothing changed → no run, no audit record
+            with mock.patch.object(iv, "needs_run", return_value=(True, "repo or evidence changed")), \
+                 mock.patch.object(iv, "start_background", return_value=True) as sb:
+                r = client.post(f"{_URL}/verify?if_changed=true", headers={"X-CSRF-Token": csrf})
+                self.assertEqual(r.json()["started"], True)
+                sb.assert_called_once_with("_default")
             with mock.patch.object(iv, "start_background", return_value=True) as sb:
                 self.assertIn(client.post(f"{_URL}/verify").status_code, (401, 403))
                 r = client.post(f"{_URL}/verify", headers={"X-CSRF-Token": csrf})

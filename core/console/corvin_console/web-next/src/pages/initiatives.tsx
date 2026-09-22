@@ -11,7 +11,7 @@
  * hand-typed number; "Verify now" re-runs it. A missing file renders
  * an empty state with the file location — never sample data.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock, Flag, History, Loader2,
@@ -24,8 +24,8 @@ import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api/client";
 import {
-  closeInitiativeRun, getInitiatives, patchInitiativeTask, setInitiativeGate, startInitiativesVerify,
-  type Verification,
+  closeInitiativeRun, getAllTasks, getInitiatives, patchInitiativeTask, setInitiativeGate, startInitiativesVerify,
+  type TaskType, type Verification,
   type RunOutcome, type Check, type Gate, type GateDecision, type Initiative, type InitiativesBoard,
   type InitiativeTask, type TaskStatus,
 } from "@/lib/api/initiatives";
@@ -33,6 +33,7 @@ import {
   STATUS_LABEL, clockSkewMs, evidenceText, formatAgo, formatCountdown, formatDuration, formatUtc, scheduleLabel,
 } from "./initiatives-format";
 import { cn } from "@/lib/utils";
+import { SourceNotes, TaskTable, TypeChips } from "./initiatives-tasks";
 
 const KEY = ["initiatives", "board"] as const;
 type Filter = "all" | "active" | "done";
@@ -412,9 +413,40 @@ export default function InitiativesPage() {
     // The console-wide default is false; this board must catch up the moment a
     // hidden tab becomes visible again instead of waiting for the next tick.
     refetchOnWindowFocus: "always",
-    retry: false,
+    // Opening the page always fetches — cached numbers from an earlier visit
+    // are never presented as current (the indicator shows their age meanwhile).
+    refetchOnMount: "always",
+    staleTime: 0,
+    // A single slow/failed poll is retried quickly instead of flashing an error;
+    // the last good data stays on screen, labelled with its age.
+    retry: (n, err) => !(err instanceof ApiError && err.status === 404) && n < 2,
+    retryDelay: 1_000,
   });
   const now = useNow(skew);
+
+  // Every task on the install (chat, ACS, workflows, …), typed.
+  const [selected, setSelected] = useState<Set<TaskType>>(new Set());
+  const [finishedLimit, setFinishedLimit] = useState(100);
+  const typeList = [...selected].sort();
+  const tasksQ = useQuery({
+    queryKey: ["initiatives", "tasks", typeList.join(","), finishedLimit],
+    queryFn: ({ signal }) => getAllTasks({ types: typeList as TaskType[], finishedLimit }, signal),
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: "always",
+    refetchOnMount: "always",
+    staleTime: 0,
+    placeholderData: (prev) => prev, // keep rows while a new filter loads
+    retry: (n, err) => !(err instanceof ApiError && err.status === 404) && n < 2,
+    retryDelay: 1_000,
+  });
+  const all = tasksQ.data;
+  const toggleType = (t: TaskType) => setSelected((cur) => {
+    const next = new Set(cur);
+    if (next.has(t)) next.delete(t); else next.add(t);
+    return next;
+  });
+  const showInitiatives = selected.size === 0 || selected.has("initiative");
 
   const onSuccess = (b: InitiativesBoard) => qc.setQueryData([...KEY], b);
   const patch = useMutation({
@@ -439,6 +471,16 @@ export default function InitiativesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: [...KEY] }),
     onError: () => setVerifyRequestedAt(null),
   });
+  // On open: re-check the evidence if the repo changed since the last run
+  // (server decides; cheap when nothing changed). Once per page visit.
+  const openCheckDone = useRef(false);
+  useEffect(() => {
+    if (openCheckDone.current || !csrf) return;
+    openCheckDone.current = true;
+    startInitiativesVerify(csrf, true)
+      .then((r) => { if (r.started) { setVerifyRequestedAt(Date.now()); void qc.invalidateQueries({ queryKey: [...KEY] }); } })
+      .catch(() => { /* the timer still covers it; never block the page */ });
+  }, [csrf, qc]);
   const busy = patch.isPending || gate.isPending || close.isPending;
   const mutErr = (patch.error ?? gate.error ?? close.error ?? verify.error) as Error | null;
 
@@ -451,12 +493,18 @@ export default function InitiativesPage() {
   const finishedRuns = (board?.initiatives.filter((i) => i.phase === "finished") ?? [])
     .slice()
     .sort((a, b) => (Date.parse(b.finished_at ?? "") || 0) - (Date.parse(a.finished_at ?? "") || 0));
+  const inView = (all?.types ?? []).filter((t) => selected.size === 0 || selected.has(t.type));
+  const activeCount = inView.reduce((n, t) => n + t.active, 0);
+  // Stale records claim to be active but show no sign of life — counted apart.
+  const staleCount = inView.reduce((n, t) => n + t.stale, 0);
+  const finishedCount = inView.reduce((n, t) => n + t.finished, 0);
   const handlers = {
     onPatch: (iid: string, tid: string, body: { status?: TaskStatus; progress?: number }) => patch.mutate({ iid, tid, body }),
     onDecide: (iid: string, gid: string, d: GateDecision) => gate.mutate({ iid, gid, d }),
     onClose: (iid: string, outcome: RunOutcome | null) => close.mutate({ iid, outcome }),
   };
-  const updatedAgo = q.dataUpdatedAt ? Math.max(0, Math.round((Date.now() - q.dataUpdatedAt) / 1000)) : null;
+  const lastUpdate = Math.min(q.dataUpdatedAt || Infinity, tasksQ.dataUpdatedAt || Infinity);
+  const updatedAgo = Number.isFinite(lastUpdate) ? Math.max(0, Math.round((Date.now() - lastUpdate) / 1000)) : null;
   // Polls every 5 s; anything beyond three missed polls is shown as delayed —
   // the numbers on screen are then older than they look.
   const delayed = updatedAgo !== null && updatedAgo > 15;
@@ -465,14 +513,19 @@ export default function InitiativesPage() {
     <div className="mx-auto max-w-6xl space-y-4 p-4 sm:p-6">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold">Initiatives</h1>
-          <p className="text-sm text-muted-foreground">Live status of running and finished runs and their tasks.</p>
+          <h1 className="text-xl font-semibold">Initiatives &amp; tasks</h1>
+          <p className="text-sm text-muted-foreground">
+            Every task on this install — initiatives, chat, background tasks, ACS, workflows, flows, gateway, forge,
+            compute — live, marked by type.
+          </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
           <span className={cn("inline-block h-2 w-2 rounded-full",
-            q.isError ? "bg-destructive" : delayed ? "bg-amber-500" : "bg-emerald-500 animate-pulse")} />
-          <span data-testid="live-indicator" className={cn(delayed && !q.isError && "text-amber-700 dark:text-amber-400")}>
-            {q.isError ? "Connection lost" : updatedAgo === null ? "Loading…"
+            q.isError && !q.data ? "bg-destructive" : (delayed || q.isError) ? "bg-amber-500" : "bg-emerald-500 animate-pulse")} />
+          <span data-testid="live-indicator" className={cn((delayed || (q.isError && q.data)) && "text-amber-700 dark:text-amber-400")}>
+            {q.isError && !q.data ? "Connection lost"
+              : q.isError ? `Reconnecting… showing data from ${updatedAgo}s ago`
+              : updatedAgo === null ? "Loading…"
               : delayed ? `Delayed · last update ${updatedAgo}s ago — the server is responding slowly`
               : `Live · updated ${updatedAgo}s ago`}
           </span>
@@ -482,7 +535,7 @@ export default function InitiativesPage() {
 
       {q.isLoading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>}
 
-      {q.isError && (
+      {q.isError && !q.data && (
         <Card><CardContent className="flex items-center gap-2 py-4 text-sm text-destructive">
           <AlertTriangle className="h-4 w-4" />
           {q.error instanceof ApiError && q.error.status === 404
@@ -495,19 +548,7 @@ export default function InitiativesPage() {
         <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">Update failed: {mutErr.message}</div>
       )}
 
-      {board && board.initiatives.length === 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">No initiatives yet</CardTitle>
-            <CardDescription>
-              This board reads <code>&lt;tenant&gt;/global/initiatives.json</code>. The file does not exist on this install yet —
-              create it and the board picks it up within five seconds.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      )}
-
-      {board && board.initiatives.length > 0 && (
+      {board && (
         <>
           <div data-testid="verification-bar" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
             <div className="flex flex-wrap items-center gap-2">
@@ -528,26 +569,26 @@ export default function InitiativesPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <Tile label="Running tasks" value={all?.totals.running ?? 0} />
+            <Tile label="Active tasks" value={all?.totals.active ?? 0} />
+            <Tile label="Stale tasks" value={all?.totals.stale ?? 0} tone={all?.totals.stale ? "text-amber-700 dark:text-amber-400" : undefined} />
+            <Tile label="Finished (24 h)" value={all?.totals.finished_24h ?? 0} />
+            <Tile label="Failed (24 h)" value={all?.totals.failed_24h ?? 0} tone={all?.totals.failed_24h ? "text-destructive" : undefined} />
             <Tile label="Running runs" value={board.totals.runs_active} />
-            <Tile label="Finished runs" value={board.totals.runs_finished} />
-            <Tile label="Running tasks" value={board.totals.running} />
-            <Tile label="Finished tasks" value={board.totals.done} />
-            <Tile label="Overdue tasks" value={board.totals.overdue} tone={board.totals.overdue ? "text-destructive" : undefined} />
-            <Tile label="Blocked runs" value={board.totals.initiatives_blocked} />
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
             <div className="flex gap-1" role="tablist" aria-label="Runs">
               <Button role="tab" aria-selected={view === "active"} size="sm"
                 variant={view === "active" ? "default" : "ghost"} onClick={() => setView("active")}>
-                <PlayCircle className="mr-1 h-4 w-4" /> Running ({activeRuns.length})
+                <PlayCircle className="mr-1 h-4 w-4" /> Running ({activeCount}{staleCount ? ` · ${staleCount} stale` : ""})
               </Button>
               <Button role="tab" aria-selected={view === "finished"} size="sm"
                 variant={view === "finished" ? "default" : "ghost"} onClick={() => setView("finished")}>
-                <History className="mr-1 h-4 w-4" /> Finished ({finishedRuns.length})
+                <History className="mr-1 h-4 w-4" /> Finished ({finishedCount})
               </Button>
             </div>
-            {view === "active" && (
+            {view === "active" && showInitiatives && activeRuns.length > 0 && (
               <div className="flex gap-1" role="tablist" aria-label="Task filter">
                 {([["all", "All"], ["active", "Open"], ["done", "Done"]] as [Filter, string][]).map(([f, l]) => (
                   <Button key={f} role="tab" aria-selected={filter === f} size="sm"
@@ -557,28 +598,61 @@ export default function InitiativesPage() {
             )}
           </div>
 
-          {view === "active" && (activeRuns.length > 0 ? (
+          {all && (
+            <TypeChips types={all.types} view={view} selected={selected}
+              onToggle={toggleType} onAll={() => setSelected(new Set())} />
+          )}
+
+          {view === "active" && showInitiatives && (activeRuns.length > 0 ? (
             <div className="space-y-4">
               {activeRuns.map((ini) => (
                 <InitiativeCard key={ini.id} ini={ini} now={now} filter={filter} busy={busy} {...handlers} />
               ))}
             </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">No running runs — every run in the file is finished.</p>
-          ))}
-
-          {view === "finished" && (finishedRuns.length > 0 ? (
-            <ul className="space-y-2">
-              {finishedRuns.map((ini) => (
-                <FinishedRunRow key={ini.id} ini={ini} now={now} busy={busy} {...handlers} />
-              ))}
-            </ul>
-          ) : (
+          ) : board.initiatives.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No finished runs yet. A run moves here when every task is done or when it is closed with
-              “Mark completed” or “Cancel run”.
+              No initiatives on this install — the board reads <code>&lt;tenant&gt;/global/initiatives.json</code>.
             </p>
-          ))}
+          ) : null)}
+
+          {view === "active" && (
+            <section className="space-y-2" aria-label="Active tasks">
+              <h2 className="text-sm font-semibold">Active tasks{showInitiatives ? " (besides initiatives)" : ""}</h2>
+              {tasksQ.isError && !all
+                ? <p className="text-sm text-destructive">Could not load tasks: {(tasksQ.error as Error).message}</p>
+                : <TaskTable now={now}
+                    tasks={(all?.active ?? []).filter((t) => !(showInitiatives && t.type === "initiative"))}
+                    emptyText={all ? "Nothing is running right now." : "Loading…"} />}
+            </section>
+          )}
+
+          {view === "finished" && showInitiatives && finishedRuns.length > 0 && (
+            <section className="space-y-2" aria-label="Finished initiative runs">
+              <h2 className="text-sm font-semibold">Finished initiative runs</h2>
+              <ul className="space-y-2">
+                {finishedRuns.map((ini) => (
+                  <FinishedRunRow key={ini.id} ini={ini} now={now} busy={busy} {...handlers} />
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {view === "finished" && (
+            <section className="space-y-2" aria-label="Finished tasks">
+              <h2 className="text-sm font-semibold">Finished tasks <span className="font-normal text-muted-foreground">— newest first</span></h2>
+              <TaskTable now={now} tasks={all?.finished ?? []}
+                emptyText={all ? "No finished tasks." : "Loading…"} />
+              {all && all.finished.length < all.finished_total && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  Showing {all.finished.length} of {all.finished_total}
+                  <Button size="sm" variant="outline" onClick={() => setFinishedLimit((n) => Math.min(1000, n + 200))}
+                    disabled={finishedLimit >= 1000}>Load more</Button>
+                </div>
+              )}
+            </section>
+          )}
+
+          {all && <SourceNotes types={all.types} />}
         </>
       )}
     </div>

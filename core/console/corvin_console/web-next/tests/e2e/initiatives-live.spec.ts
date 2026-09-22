@@ -186,3 +186,64 @@ test("board values stay current without a reload", async ({ page }) => {
     await api.dispose();
   }
 });
+
+test("opening the page shows the real current data and survives outages", async ({ page }) => {
+  const { api } = await secondSession();
+  try {
+    // ── On open: fresh, and identical to what the API says right now ──────────
+    const opened = Date.now();
+    await login(page);
+    const indicator = page.getByTestId("live-indicator");
+    await expect(indicator).toHaveText(/^Live · updated [0-5]s ago/, { timeout: 10_000 });
+    console.log(`first live data after ${Date.now() - opened} ms`);
+
+    const truth = await (await api.get("/v1/console/initiatives")).json();
+    for (const ini of truth.initiatives.filter((i: any) => i.phase === "active")) {
+      for (const t of ini.tasks) {
+        const row = page.getByTestId(`task-${ini.id}-${t.id}`);
+        await expect(row, `${ini.id}/${t.id}`).toContainText(`${t.progress}%`);
+        await expect(row.getByRole("combobox"), `${ini.id}/${t.id}`).toHaveValue(t.status);
+      }
+    }
+
+    // ── Every task type: each active/stale record the API reports is on screen,
+    //    marked with its type; the finished tab lists the newest finished ones.
+    const all = await (await api.get("/v1/console/initiatives/tasks")).json();
+    expect(all.totals.all, "the install has tasks from several sources").toBeGreaterThan(0);
+    for (const t of all.active.filter((x: any) => x.type !== "initiative")) {
+      const row = page.getByTestId(`utask-${t.id}`);
+      await expect(row, t.id).toBeVisible();
+      await expect(row.getByTestId("type-badge"), t.id).toHaveText(t.type_label);
+    }
+    await page.getByRole("tab", { name: /Finished \(/ }).click();
+    const newest = all.finished[0];
+    await expect(page.getByTestId(`utask-${newest.id}`).getByTestId("type-badge")).toHaveText(newest.type_label);
+    console.log(`types on this install: ${all.types.filter((x: any) => x.active + x.finished + x.stale > 0).map((x: any) => `${x.label}=${x.active + x.finished + x.stale}`).join(", ")}`);
+    await page.getByRole("tab", { name: /Running \(/ }).click();
+
+    // ── Outage: every poll fails for ~15 s — data stays, state is labelled ────
+    await page.route("**/v1/console/initiatives", (r) =>
+      r.request().method() === "GET" ? r.abort("connectionfailed") : r.continue());
+    await expect(indicator).toContainText(/Reconnecting… showing data from \d+s ago/, { timeout: 20_000 });
+    await expect(page.getByTestId("run-loop-a")).toBeVisible(); // last good data still on screen
+    await page.unroute("**/v1/console/initiatives");
+    const healed = Date.now();
+    await expect(indicator).toHaveText(/^Live · updated [0-5]s ago/, { timeout: 15_000 });
+    console.log(`recovered from outage after ${Date.now() - healed} ms`);
+
+    // ── Hung request: the server never answers — aborted after 8 s, retried ───
+    let hung = 0;
+    await page.route("**/v1/console/initiatives", async (r) => {
+      if (r.request().method() === "GET" && hung++ === 0) return; // never fulfilled
+      await r.continue();
+    });
+    const t0 = Date.now();
+    await expect.poll(() => hung, { timeout: 10_000 }).toBeGreaterThan(0);
+    await expect.poll(() => hung, { timeout: 20_000, message: "a follow-up request after the hung one" }).toBeGreaterThan(1);
+    console.log(`hung request abandoned and retried after ${Date.now() - t0} ms`);
+    await expect(indicator).toHaveText(/^Live · updated [0-9]+s ago/, { timeout: 15_000 });
+    await page.unroute("**/v1/console/initiatives");
+  } finally {
+    await api.dispose();
+  }
+});
