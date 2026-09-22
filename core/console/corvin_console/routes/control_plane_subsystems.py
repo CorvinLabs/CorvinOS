@@ -13,11 +13,13 @@ GET    /v1/console/control-plane/subsystems/audit-log
 ADR-2029: User-Centric CorvinOS Control Plane — Stream 2
 """
 
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Query
+from typing import Optional, List, Dict, Any, Annotated
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
 from corvin_console.control_plane.subsystem_manager import SubsystemManager, SubsystemState
+from corvin_console.deps import require_session, require_csrf
+from corvin_console import auth as session_auth
 
 router = APIRouter(
     prefix="/v1/console/control-plane/subsystems",
@@ -60,24 +62,27 @@ class SubsystemStatusResponse(BaseModel):
 @router.patch("/{subsystem_id}/start")
 async def start_subsystem(
     subsystem_id: str,
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
 ) -> SubsystemOperationResponse:
     """
-    Start a subsystem.
+    Start a subsystem (tenant-scoped, CSRF-protected).
 
     Args:
         subsystem_id: Subsystem to start
-        tenant_id: Tenant scope
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Operation result
     """
     manager = get_subsystem_manager()
-    result = await manager.start_subsystem(
-        subsystem_id=subsystem_id,
-        tenant_id=tenant_id,
-        operator_id="console-user"
-    )
+    try:
+        result = await manager.start_subsystem(
+            subsystem_id=subsystem_id,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
@@ -92,26 +97,31 @@ async def start_subsystem(
 async def pause_subsystem(
     subsystem_id: str,
     req: SubsystemOperationRequest,
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
 ) -> SubsystemOperationResponse:
     """
-    Pause a subsystem (graceful shutdown, 30s timeout).
+    Pause a subsystem (tenant-scoped, CSRF-protected, graceful shutdown with timeout bounds).
 
     Args:
         subsystem_id: Subsystem to pause
-        req: Request with timeout_s
-        tenant_id: Tenant scope
+        req: Request with timeout_s (1-3600 seconds, fail-closed)
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Operation result
     """
     manager = get_subsystem_manager()
-    result = await manager.pause_subsystem(
-        subsystem_id=subsystem_id,
-        timeout_s=req.timeout_s or 30,
-        tenant_id=tenant_id,
-        operator_id="console-user"
-    )
+    try:
+        # Use provided timeout or default to 30
+        timeout_s = req.timeout_s or 30
+        result = await manager.pause_subsystem(
+            subsystem_id=subsystem_id,
+            timeout_s=timeout_s,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
@@ -125,24 +135,27 @@ async def pause_subsystem(
 @router.patch("/{subsystem_id}/resume")
 async def resume_subsystem(
     subsystem_id: str,
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
 ) -> SubsystemOperationResponse:
     """
-    Resume a paused subsystem.
+    Resume a paused subsystem (tenant-scoped, CSRF-protected).
 
     Args:
         subsystem_id: Subsystem to resume
-        tenant_id: Tenant scope
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Operation result
     """
     manager = get_subsystem_manager()
-    result = await manager.resume_subsystem(
-        subsystem_id=subsystem_id,
-        tenant_id=tenant_id,
-        operator_id="console-user"
-    )
+    try:
+        result = await manager.resume_subsystem(
+            subsystem_id=subsystem_id,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
@@ -157,27 +170,32 @@ async def resume_subsystem(
 async def stop_subsystem(
     subsystem_id: str,
     req: SubsystemOperationRequest,
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
 ) -> SubsystemOperationResponse:
     """
-    Stop a subsystem (graceful or force).
+    Stop a subsystem (tenant-scoped, CSRF-protected, graceful or force).
 
     Args:
         subsystem_id: Subsystem to stop
-        req: Request with force and timeout_s
-        tenant_id: Tenant scope
+        req: Request with force and timeout_s (1-3600 seconds if graceful, fail-closed)
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Operation result
     """
     manager = get_subsystem_manager()
-    result = await manager.stop_subsystem(
-        subsystem_id=subsystem_id,
-        force=req.force or False,
-        timeout_s=req.timeout_s or 30,
-        tenant_id=tenant_id,
-        operator_id="console-user"
-    )
+    try:
+        # Use provided timeout or default to 30
+        timeout_s = req.timeout_s or 30
+        result = await manager.stop_subsystem(
+            subsystem_id=subsystem_id,
+            force=req.force or False,
+            timeout_s=timeout_s,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
@@ -191,42 +209,51 @@ async def stop_subsystem(
 @router.get("/{subsystem_id}")
 async def get_subsystem_status(
     subsystem_id: str,
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
 ) -> SubsystemStatusResponse:
     """
-    Get subsystem status.
+    Get subsystem status (tenant-scoped).
 
     Args:
         subsystem_id: Subsystem to get
-        tenant_id: Tenant scope
+        session: Session record (extracted from session cookie)
 
     Returns:
-        Subsystem status
+        Subsystem status (only if it belongs to this tenant)
     """
     manager = get_subsystem_manager()
-    status = await manager.get_subsystem_status(subsystem_id)
+    try:
+        status = await manager.get_subsystem_status(
+            subsystem_id=subsystem_id,
+            tenant_id=session.tenant_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if status is None:
-        raise HTTPException(status_code=404, detail=f"Subsystem {subsystem_id} not found")
+        raise HTTPException(status_code=404, detail=f"Subsystem {subsystem_id} not found for tenant {session.tenant_id}")
 
     return SubsystemStatusResponse(**status)
 
 
 @router.get("")
 async def list_subsystems(
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
 ) -> List[SubsystemStatusResponse]:
     """
-    List all subsystems.
+    List all subsystems for the current tenant (tenant-scoped).
 
     Args:
-        tenant_id: Tenant scope
+        session: Session record (extracted from session cookie)
 
     Returns:
-        List of subsystem statuses
+        List of subsystem statuses for this tenant only
     """
     manager = get_subsystem_manager()
-    subsystems = await manager.list_subsystems()
+    try:
+        subsystems = await manager.list_subsystems(tenant_id=session.tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     return [SubsystemStatusResponse(**sub) for sub in subsystems]
 
@@ -235,24 +262,30 @@ async def list_subsystems(
 async def get_subsystem_logs(
     subsystem_id: str,
     lines: int = Query(default=100, ge=1, le=1000),
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None
 ) -> Dict[str, Any]:
     """
-    Get subsystem logs (last N lines).
+    Get subsystem logs (last N lines, tenant-scoped).
 
     Args:
         subsystem_id: Subsystem to get logs for
         lines: Number of lines to return
-        tenant_id: Tenant scope
+        session: Session record (extracted from session cookie)
 
     Returns:
-        Log lines
+        Log lines (only if subsystem belongs to this tenant)
     """
     manager = get_subsystem_manager()
-    status = await manager.get_subsystem_status(subsystem_id)
+    try:
+        status = await manager.get_subsystem_status(
+            subsystem_id=subsystem_id,
+            tenant_id=session.tenant_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if status is None:
-        raise HTTPException(status_code=404, detail=f"Subsystem {subsystem_id} not found")
+        raise HTTPException(status_code=404, detail=f"Subsystem {subsystem_id} not found for tenant {session.tenant_id}")
 
     # In Phase 9b.2, logs are mock. Real implementation connects to actual subsystem output.
     return {
@@ -266,25 +299,25 @@ async def get_subsystem_logs(
 
 @router.get("/audit-log", tags=["audit"])
 async def get_subsystem_audit_log(
-    tenant_id: str = Query(default="default")
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
 ) -> Dict[str, Any]:
     """
-    Get subsystem audit trail (read-only).
+    Get subsystem audit trail for a tenant (read-only, immutable, tenant-scoped).
 
     Args:
-        tenant_id: Tenant scope
+        session: Session record (extracted from session cookie)
 
     Returns:
-        Audit events
+        Audit events for this tenant only
     """
     manager = get_subsystem_manager()
-    audit_log = manager.get_audit_log()
-
-    # Filter by tenant_id
-    filtered = [evt for evt in audit_log if evt.get("tenant_id") == tenant_id]
+    try:
+        audit_log = manager.get_audit_log(tenant_id=session.tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     return {
-        "tenant_id": tenant_id,
-        "events": filtered,
-        "count": len(filtered)
+        "tenant_id": session.tenant_id,
+        "events": audit_log,
+        "count": len(audit_log)
     }

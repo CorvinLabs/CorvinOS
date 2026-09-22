@@ -24,6 +24,7 @@ from starlette import status as http_status
 from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
+from ..error_handling import safe_error_response, safe_override_error
 from core.control_plane.override_authority import (
     OverrideAuthority,
     OverrideType,
@@ -112,7 +113,8 @@ async def create_override(
             tenant_id=rec.tenant_id,
         )
     except ValueError as exc:
-        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        safe_msg = safe_error_response(exc, "Failed to create override request")
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -171,7 +173,8 @@ async def get_override_detail(
     try:
         detail = authority.get_approval_detail(override_id, rec.tenant_id)
     except ValueError as exc:
-        raise HTTPException(http_status.HTTP_404_NOT_FOUND, detail=str(exc))
+        safe_msg = safe_error_response(exc, "Override request not found or access denied")
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, detail=safe_msg)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -215,9 +218,11 @@ async def approve_override(
             target_kind="override",
             target_id=override_id,
         )
-        raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail=str(exc))
+        safe_msg = safe_error_response(exc, "Not authorized to approve this override")
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail=safe_msg)
     except ValueError as exc:
-        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        safe_msg = safe_error_response(exc, "Failed to approve override")
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -263,9 +268,11 @@ async def deny_override(
             target_kind="override",
             target_id=override_id,
         )
-        raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail=str(exc))
+        safe_msg = safe_error_response(exc, "Not authorized to deny this override")
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail=safe_msg)
     except ValueError as exc:
-        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        safe_msg = safe_error_response(exc, "Failed to deny override")
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -297,7 +304,8 @@ async def interrupt_override(
     try:
         result = await authority.interrupt_override(override_id, rec.tenant_id)
     except ValueError as exc:
-        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        safe_msg = safe_error_response(exc, "Failed to interrupt override")
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,

@@ -12,11 +12,13 @@ GET    /v1/console/control-plane/plugins/audit-log
 ADR-2029: User-Centric CorvinOS Control Plane — Stream 1
 """
 
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Query
+from typing import Optional, List, Dict, Any, Annotated
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
 from corvin_console.control_plane.plugin_manager import PluginManager, PluginInfo
+from corvin_console.deps import require_session, require_csrf
+from corvin_console import auth as session_auth
 
 router = APIRouter(
     prefix="/v1/console/control-plane/plugins",
@@ -51,28 +53,40 @@ class PluginOperationResponse(BaseModel):
 
 
 @router.put("/install")
-async def install_plugin(req: PluginInstallRequest) -> PluginOperationResponse:
+async def install_plugin(
+    req: PluginInstallRequest,
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+) -> PluginOperationResponse:
     """
-    Install a plugin from marketplace.
+    Install a plugin from marketplace (tenant-scoped, CSRF-protected).
 
     Args:
         req: PluginInstallRequest
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Installation result
+
+    Raises:
+        HTTPException: If plugin installation fails
     """
     manager = get_plugin_manager()
-    result = await manager.install_plugin(
-        plugin_id=req.plugin_id,
-        name=req.name,
-        version=req.version,
-        boot_layer=req.boot_layer,
-        tenant_id="default",
-        operator_id="console-user"
-    )
+    try:
+        result = await manager.install_plugin(
+            plugin_id=req.plugin_id,
+            name=req.name,
+            version=req.version,
+            boot_layer=req.boot_layer,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        # Validation error (invalid boot_layer, tenant_id, etc)
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
+        status_code = result.get("code", 400)
+        raise HTTPException(status_code=status_code, detail=result["message"])
 
     return PluginOperationResponse(
         status=result["status"],
@@ -81,15 +95,23 @@ async def install_plugin(req: PluginInstallRequest) -> PluginOperationResponse:
 
 
 @router.get("")
-async def list_plugins() -> List[Dict[str, Any]]:
+async def list_plugins(
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+) -> List[Dict[str, Any]]:
     """
-    List all plugins.
+    List all plugins for the current tenant (tenant-scoped).
+
+    Args:
+        session: Session record (extracted from session cookie)
 
     Returns:
-        List of plugin info
+        List of plugin info for this tenant only
     """
     manager = get_plugin_manager()
-    plugins = await manager.list_plugins()
+    try:
+        plugins = await manager.list_plugins(tenant_id=session.tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     return [
         {
@@ -102,27 +124,38 @@ async def list_plugins() -> List[Dict[str, Any]]:
             "dependents": p.dependents,
             "installed_at": p.installed_at,
             "updated_at": p.updated_at,
+            "tenant_id": p.tenant_id,
         }
         for p in plugins
     ]
 
 
 @router.get("/{plugin_id}")
-async def get_plugin(plugin_id: str) -> Dict[str, Any]:
+async def get_plugin(
+    plugin_id: str,
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)]
+) -> Dict[str, Any]:
     """
-    Get plugin info by ID.
+    Get plugin info by ID (tenant-scoped).
 
     Args:
         plugin_id: Plugin identifier
+        session: Session record (extracted from session cookie)
 
     Returns:
-        Plugin info
+        Plugin info (only if it belongs to this tenant)
+
+    Raises:
+        HTTPException: If plugin not found or doesn't belong to tenant
     """
     manager = get_plugin_manager()
-    plugin = await manager.get_plugin(plugin_id)
+    try:
+        plugin = await manager.get_plugin(plugin_id=plugin_id, tenant_id=session.tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if not plugin:
-        raise HTTPException(status_code=404, detail=f"Plugin {plugin_id} not found")
+        raise HTTPException(status_code=404, detail=f"Plugin {plugin_id} not found for tenant {session.tenant_id}")
 
     return {
         "plugin_id": plugin.plugin_id,
@@ -134,29 +167,41 @@ async def get_plugin(plugin_id: str) -> Dict[str, Any]:
         "dependents": plugin.dependents,
         "installed_at": plugin.installed_at,
         "updated_at": plugin.updated_at,
+        "tenant_id": plugin.tenant_id,
     }
 
 
 @router.patch("/{plugin_id}/enable")
-async def enable_plugin(plugin_id: str) -> PluginOperationResponse:
+async def enable_plugin(
+    plugin_id: str,
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+) -> PluginOperationResponse:
     """
-    Enable an installed plugin.
+    Enable an installed plugin (tenant-scoped, CSRF-protected).
 
     Args:
         plugin_id: Plugin identifier
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Operation result
+
+    Raises:
+        HTTPException: If plugin enable fails
     """
     manager = get_plugin_manager()
-    result = await manager.enable_plugin(
-        plugin_id=plugin_id,
-        tenant_id="default",
-        operator_id="console-user"
-    )
+    try:
+        result = await manager.enable_plugin(
+            plugin_id=plugin_id,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
+        status_code = result.get("code", 400)
+        raise HTTPException(status_code=status_code, detail=result["message"])
 
     return PluginOperationResponse(
         status=result["status"],
@@ -165,25 +210,35 @@ async def enable_plugin(plugin_id: str) -> PluginOperationResponse:
 
 
 @router.patch("/{plugin_id}/disable")
-async def disable_plugin(plugin_id: str) -> PluginOperationResponse:
+async def disable_plugin(
+    plugin_id: str,
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+) -> PluginOperationResponse:
     """
-    Disable an enabled plugin.
+    Disable an enabled plugin (tenant-scoped, CSRF-protected).
 
-    Graceful shutdown: 30s timeout to flush state.
+    Graceful shutdown: flushes state before disabling.
     Blocked if dependents exist (403 Forbidden).
 
     Args:
         plugin_id: Plugin identifier
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Operation result
+
+    Raises:
+        HTTPException: If plugin disable fails or dependents exist
     """
     manager = get_plugin_manager()
-    result = await manager.disable_plugin(
-        plugin_id=plugin_id,
-        tenant_id="default",
-        operator_id="console-user"
-    )
+    try:
+        result = await manager.disable_plugin(
+            plugin_id=plugin_id,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
         code = result.get("code", 400)
@@ -196,24 +251,34 @@ async def disable_plugin(plugin_id: str) -> PluginOperationResponse:
 
 
 @router.delete("/{plugin_id}")
-async def uninstall_plugin(plugin_id: str) -> PluginOperationResponse:
+async def uninstall_plugin(
+    plugin_id: str,
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+) -> PluginOperationResponse:
     """
-    Uninstall a plugin.
+    Uninstall a plugin (tenant-scoped, CSRF-protected).
 
     Must be disabled first (403 if enabled).
 
     Args:
         plugin_id: Plugin identifier
+        session: Session record (extracted from CSRF-protected cookie)
 
     Returns:
         Operation result
+
+    Raises:
+        HTTPException: If plugin uninstall fails
     """
     manager = get_plugin_manager()
-    result = await manager.uninstall_plugin(
-        plugin_id=plugin_id,
-        tenant_id="default",
-        operator_id="console-user"
-    )
+    try:
+        result = await manager.uninstall_plugin(
+            plugin_id=plugin_id,
+            tenant_id=session.tenant_id,
+            operator_id=session.sid
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if result["status"] == "error":
         code = result.get("code", 400)
@@ -226,17 +291,24 @@ async def uninstall_plugin(plugin_id: str) -> PluginOperationResponse:
 
 
 @router.get("/audit-log")
-async def get_audit_log(limit: int = Query(10, ge=1, le=100)) -> List[Dict[str, Any]]:
+async def get_audit_log(
+    limit: int = Query(10, ge=1, le=100),
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None
+) -> List[Dict[str, Any]]:
     """
-    Get plugin operation audit log (read-only, immutable).
+    Get plugin operation audit log for a tenant (read-only, immutable, tenant-scoped).
 
     Args:
         limit: Max results (1-100)
+        session: Session record (extracted from session cookie)
 
     Returns:
-        List of audit events
+        List of audit events for this tenant only
     """
     manager = get_plugin_manager()
-    events = manager.get_audit_log()
+    try:
+        events = manager.get_audit_log(tenant_id=session.tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     return events[-limit:]  # Return last N events
