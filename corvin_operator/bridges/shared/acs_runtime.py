@@ -2190,6 +2190,20 @@ async def _dispatch_workers(
                           "refusing to spawn without security gates",
                 )
 
+            # AUDIT: acs.l34_gate_passed (Layer 25, Phase 1)
+            # Emit when L34 gate is passed (no blockers detected)
+            try:
+                _write_audit(ctx.tenant_id, "acs.l34_gate_passed", {
+                    "run_id": ctx.run_id,
+                    "acs_id": ctx.run_id,  # ACS ID matches run_id
+                    "input_classification": _cls,
+                    "output_classification": _cls,  # Same classification for input/output in this context
+                    "gate_enforcement": "passed",
+                    "bypassed": False,
+                })
+            except Exception:
+                pass  # Best-effort: audit failure should not block execution
+
             # M4: workers with can_delegate at max_depth get it stripped
             can_delegate = bool(st.get("can_delegate")) and depth < ctx.budget.max_depth
 

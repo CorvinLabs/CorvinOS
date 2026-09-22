@@ -498,6 +498,17 @@ class ErasureOrchestrator:
         # request through a single orchestrator instance.
         req_tenant = getattr(request, "tenant_id", None)
         if req_tenant is not None and req_tenant != self.tenant_id:
+            # AUDIT: erasure.cross_tenant_detected (Layer 36, Phase 1)
+            try:
+                self._emit("erasure.cross_tenant_detected", "WARNING", {
+                    "erasure_id": request.request_id,
+                    "source_tenant": req_tenant,
+                    "target_tenant": self.tenant_id,
+                    "tenant_id": self.tenant_id,  # Always use orchestrator's tenant
+                })
+            except Exception:
+                pass  # Best-effort: audit failure should not prevent the error
+
             raise ErasureScopeError(
                 f"Request tenant_id={req_tenant!r} does not match "
                 f"orchestrator tenant_id={self.tenant_id!r}. "
@@ -505,6 +516,17 @@ class ErasureOrchestrator:
             )
 
         started_at = time.time()
+
+        # AUDIT: erasure.tenant_boundary_checked (Layer 36, Phase 1)
+        # Emitted when tenant isolation is verified
+        try:
+            self._emit("erasure.tenant_boundary_checked", "INFO", {
+                "erasure_id": request.request_id,
+                "tenant_id": self.tenant_id,
+                "isolation_valid": True,
+            })
+        except Exception:
+            pass  # Best-effort: audit failure should not prevent continuation
 
         # Audit emission: BEFORE any handler runs.
         self._emit("erasure.requested", "WARNING", {
