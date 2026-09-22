@@ -76,7 +76,8 @@ const HelpMenu: React.FC = () => {
       title: 'Installing Your First Skill',
       category: 'video',
       description: 'Learn how to install and configure a skill',
-      duration: '2:15',
+      url: '/videos/intro_installing_skills.mp4',
+      duration: '2:00',
       difficulty: 'beginner',
     },
     {
@@ -84,7 +85,8 @@ const HelpMenu: React.FC = () => {
       title: 'Understanding Cost Insights',
       category: 'video',
       description: 'Understand cost tracking and optimization',
-      duration: '2:30',
+      url: '/videos/cost_insights_explained.mp4',
+      duration: '2:00',
       difficulty: 'intermediate',
     },
     {
@@ -92,8 +94,63 @@ const HelpMenu: React.FC = () => {
       title: 'Using the Learning Loop',
       category: 'video',
       description: 'How feedback improves skill performance',
-      duration: '2:45',
+      url: '/videos/learning_loop_demo.mp4',
+      duration: '2:00',
       difficulty: 'beginner',
+    },
+
+    // Videos - Extended
+    {
+      id: 'video-hotfix',
+      title: 'Creating a Quick Fix',
+      category: 'video',
+      description: 'Emergency hotfixes and recovery procedures',
+      url: '/videos/emergency_hotfix.mp4',
+      duration: '2:00',
+      difficulty: 'intermediate',
+    },
+    {
+      id: 'video-monitoring',
+      title: 'Monitoring Production',
+      category: 'video',
+      description: 'Production monitoring and alerting setup',
+      url: '/videos/production_monitoring.mp4',
+      duration: '2:00',
+      difficulty: 'intermediate',
+    },
+
+    // Training Materials (PDFs)
+    {
+      id: 'pdf-training-slides',
+      title: 'Training Slides (20-Slide Outline)',
+      category: 'guide',
+      description: 'Comprehensive training presentation for operators',
+      url: '/docs/pdfs/training_slides.pdf',
+      difficulty: 'beginner',
+    },
+    {
+      id: 'pdf-daily-checklist',
+      title: 'Daily Checklist (Printable)',
+      category: 'guide',
+      description: '12-item daily operational checklist',
+      url: '/docs/pdfs/daily_checklist.pdf',
+      difficulty: 'beginner',
+    },
+    {
+      id: 'pdf-weekly-checklist',
+      title: 'Weekly Checklist (Printable)',
+      category: 'guide',
+      description: '14-item weekly maintenance checklist',
+      url: '/docs/pdfs/weekly_checklist.pdf',
+      difficulty: 'intermediate',
+    },
+    {
+      id: 'pdf-monthly-checklist',
+      title: 'Monthly Checklist (Printable)',
+      category: 'guide',
+      description: '14-item monthly compliance and optimization checklist',
+      url: '/docs/pdfs/monthly_checklist.pdf',
+      difficulty: 'advanced',
     },
 
     // Incident Response
@@ -381,17 +438,26 @@ const ResourceDetailView: React.FC<ResourceDetailViewProps> = ({ resource, onBac
 
       {resource.category === 'video' ? (
         <div className="video-player">
-          <div className="video-placeholder">
-            <h3>📹 Video: {resource.title}</h3>
-            <p>{resource.description}</p>
-            <p>Duration: {resource.duration}</p>
-            <div className="video-stub">
-              [Video player would display here: {resource.id}]
-            </div>
-            <p className="hint">
-              This video tutorial is available in the full release.
-              For now, see the setup guide and API reference above.
-            </p>
+          <div className="video-container">
+            <video controls width="100%" style={{ maxWidth: '800px', marginBottom: '1rem' }}>
+              <source src={resource.url} type="video/mp4" />
+              Your browser does not support the video tag.
+            </video>
+          </div>
+          <div className="video-details">
+            <h3>{resource.title}</h3>
+            <p><strong>Description:</strong> {resource.description}</p>
+            <p><strong>Duration:</strong> {resource.duration}</p>
+            {resource.url && (
+              <div className="video-actions">
+                <a href={resource.url} download className="btn btn-secondary">
+                  ⬇️ Download Video
+                </a>
+                <a href={resource.url} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
+                  🔗 Open in New Tab
+                </a>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -409,9 +475,20 @@ const ResourceDetailView: React.FC<ResourceDetailViewProps> = ({ resource, onBac
 
           {resource.url && (
             <div className="document-actions">
-              <a href={resource.url} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
-                📖 Open Full Document
-              </a>
+              {resource.url.endsWith('.pdf') ? (
+                <>
+                  <a href={resource.url} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
+                    📄 View PDF
+                  </a>
+                  <a href={resource.url} download className="btn btn-secondary">
+                    ⬇️ Download PDF
+                  </a>
+                </>
+              ) : (
+                <a href={resource.url} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
+                  📖 Open Full Document
+                </a>
+              )}
             </div>
           )}
 

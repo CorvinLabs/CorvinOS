@@ -201,16 +201,20 @@ export const ControlIntentRouterPage = React.lazy(() =>
   import("@/pages/control-intent-router").then((m) => ({ default: m.default }))
 );
 
+export const ControlPlanePluginsPage = React.lazy(() =>
+  import("@/pages/control-plane-plugins").then((m) => ({ default: m.default }))
+);
+
 export const ControlSubsystemsPage = React.lazy(() =>
-  import("@/pages/control-subsystems").then((m) => ({ default: m.default }))
+  import("@/pages/control-plane-subsystems").then((m) => ({ default: m.default }))
 );
 
 export const ControlOverridesPage = React.lazy(() =>
-  import("@/pages/control-overrides").then((m) => ({ default: m.default }))
+  import("@/pages/control-plane-overrides").then((m) => ({ default: m.default }))
 );
 
 export const ControlSnapshotsPage = React.lazy(() =>
-  import("@/pages/control-snapshots").then((m) => ({ default: m.default }))
+  import("@/pages/control-plane-snapshots").then((m) => ({ default: m.default }))
 );
 
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)

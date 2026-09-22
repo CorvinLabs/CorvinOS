@@ -24,7 +24,7 @@ import {
   QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, ModelsPage,
-  ControlIntentRouterPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
+  ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -70,6 +70,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   OTELTelemetryPage,
   ModelsPage,
   ControlIntentRouterPage,
+  ControlPlanePluginsPage,
   ControlSubsystemsPage,
   ControlOverridesPage,
   ControlSnapshotsPage,
@@ -167,9 +168,10 @@ export const PANELS: ConsolePanel[] = [
   // Brain Status and Debug Panel had already been folded in before that.
   // Control Plane UI Panels (ADR-2029 Phase 9b) — Operator Control Plane
   rc("control-intent-router", "Intent Router", ControlIntentRouterPage, { nav: { label: "Intent Router", icon: "Zap", group: "system" } }),
-  rc("control-subsystems", "Subsystems", ControlSubsystemsPage, { nav: { label: "Subsystems", icon: "Layers", group: "system" } }),
-  rc("control-overrides", "Overrides", ControlOverridesPage, { nav: { label: "Overrides", icon: "Lock", group: "system" } }),
-  rc("control-snapshots", "Snapshots", ControlSnapshotsPage, { nav: { label: "Snapshots", icon: "Archive", group: "system" } }),
+  rc("control-plane-plugins", "Plugins", ControlPlanePluginsPage, { nav: { label: "Plugins", icon: "Puzzle", group: "system" } }),
+  rc("control-plane-subsystems", "Subsystems", ControlSubsystemsPage, { nav: { label: "Subsystems", icon: "Layers", group: "system" } }),
+  rc("control-plane-overrides", "Overrides", ControlOverridesPage, { nav: { label: "Overrides", icon: "Lock", group: "system" } }),
+  rc("control-plane-snapshots", "Snapshots", ControlSnapshotsPage, { nav: { label: "Snapshots", icon: "Archive", group: "system" } }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {
