@@ -82,29 +82,51 @@ def consent_required(consent_scope: str = "default") -> Callable:
         # LOAD-BEARING: Actual consent store check (GDPR Art. 6 compliance)
         # Default: assume NO consent unless explicitly granted in store
         try:
-            from core.compliance.consent_store import get_consent_store
-            consent_store = get_consent_store()
+            from core.compliance.consent_store import get_consent_store, TenantIsolationError
 
-            has_consent = consent_store.check_consent(
-                tenant_id=rec.tenant_id,
+            # Fail-closed: require valid tenant_id + user_id
+            if not rec.tenant_id or not rec.sid:
+                logger.warning(
+                    f"Consent check failed: missing tenant_id or user_id (fail-closed)"
+                )
+                raise HTTPException(
+                    status_code=http_status.HTTP_403_FORBIDDEN,
+                    detail="Invalid session context for consent check"
+                )
+
+            # Get tenant-scoped consent store
+            consent_store = get_consent_store(tenant_id=rec.tenant_id)
+
+            # Check if user has active consent for this scope
+            # Fail-closed: any exception or missing consent = deny
+            has_consent = consent_store.get_consent(
                 user_id=rec.sid,
-                scope=consent_scope,
-                ttl_hours=24
+                scope=consent_scope
             )
 
             if not has_consent:
                 logger.warning(
-                    f"Consent denied for user={rec.sid} tenant={rec.tenant_id} scope={consent_scope}"
+                    f"Consent denied: user={rec.sid} tenant={rec.tenant_id} scope={consent_scope}"
                 )
                 raise HTTPException(
                     status_code=http_status.HTTP_403_FORBIDDEN,
                     detail=f"Consent required for: {CONSENT_SCOPES.get(consent_scope, consent_scope)}. "
                            f"Please grant consent at /consent-manager"
                 )
-        except ImportError:
+
+        except TenantIsolationError as e:
+            # Tenant isolation violation — fail-closed
+            logger.error(
+                f"SECURITY: Tenant isolation violation in consent check: {e}"
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="Consent verification failed due to security constraint"
+            )
+        except ImportError as e:
             # Consent store not available — fail-closed
             logger.error(
-                f"CRITICAL: Consent store unavailable for scope={consent_scope}. "
+                f"CRITICAL: Consent store unavailable for scope={consent_scope}: {e}. "
                 f"This is a security failure — cannot proceed without consent verification."
             )
             raise HTTPException(
