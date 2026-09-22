@@ -16,8 +16,8 @@ import {
 } from 'lucide-react';
 import {
   TIER_VAR, usd, savingLabel,
-  dailyFacetShape, dayGapNote,
-  type ModelCostRow,
+  dailyFacetShape, dayGapNote, fillActivityDays,
+  type ActivityDay, type ActivityBar, type ModelCostRow,
 } from '@/panels/cost-viz';
 
 
@@ -84,6 +84,8 @@ export interface DashboardStatus {
   // ADR-0760 — the worker half, in the same shape as the OS half above.
   acs_counted_turns?: number;
   acs_total_turns?: number;
+  /** Worker runs per recorded UTC day, priced or not — sparse. */
+  acs_activity?: ActivityDay[];
   acs_savings_percent?: number;
   acs_worker_model_pin?: string | null;
   /** ADR-0761 — {model_id: {actual_usd, baseline_usd, turns}} per source. */
@@ -378,6 +380,99 @@ export const DailyTooltip = ({ active, payload, prefix, noun }: {
           <div className="text-muted-foreground mt-1">
             {counted}/{total} {noun}s with token data
           </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+/** Worker runs over time — a COUNT per day, stacked priced / unpriced.
+ *  The cost facet has a point only where a run was priced, so on an install
+ *  whose delegated runs mostly predate token capture it shows one day and
+ *  says nothing about WHEN delegation happened. A run count is measured
+ *  whether or not the run carried tokens, so this chart can span the whole
+ *  window. Its own axis (runs, not USD) — it is never overlaid on a cost
+ *  series. Unpriced runs are the recessive baseline grey: recorded, not
+ *  measured, and deliberately not a second series colour. */
+export const WorkerActivityChart: React.FC<{
+  days: ActivityDay[];
+  endDate: string;
+  color: string;
+}> = ({ days, endDate, color }) => {
+  const bars = fillActivityDays(days, endDate);
+  if (bars.length === 0) {
+    return (
+      <div className="py-8 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
+        No delegated worker run recorded in this window.
+      </div>
+    );
+  }
+  const total = bars.reduce((n, b) => n + b.priced + b.unpriced, 0);
+  const priced = bars.reduce((n, b) => n + b.priced, 0);
+  const activeDays = bars.filter((b) => b.priced + b.unpriced > 0).length;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3 flex-wrap mb-2">
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: color }} />
+          Worker runs per day
+        </div>
+        <span className="text-xs text-muted-foreground" data-testid="worker-activity-summary">
+          {total} run{total === 1 ? '' : 's'} on {activeDays} of {bars.length} days · {priced} priced
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={170}>
+        <BarChart data={bars} margin={{ top: 4, right: 8, bottom: 4, left: 0 }} barCategoryGap={1}>
+          <CartesianGrid strokeDasharray="0" stroke="var(--viz-grid)" vertical={false} />
+          <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                 stroke="var(--viz-grid)" interval="preserveStartEnd" minTickGap={24} />
+          <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                 stroke="var(--viz-grid)" width={72} />
+          <Tooltip content={<ActivityTooltip />} cursor={{ fill: 'hsl(var(--muted) / 0.4)' }} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          {/* Texture, not only hue: the recessive grey sits under the ΔE 15
+              normal-vision floor against the worker teal (validator, both
+              themes), so the unpriced segment also carries a 45° hatch. */}
+          <defs>
+            <pattern id="worker-unpriced-hatch" width="6" height="6" patternUnits="userSpaceOnUse"
+                     patternTransform="rotate(45)">
+              <rect width="6" height="6" fill="var(--viz-baseline)" />
+              <line x1="0" y1="0" x2="0" y2="6" stroke="hsl(var(--card))" strokeWidth="2" />
+            </pattern>
+          </defs>
+          <Bar dataKey="priced" stackId="a" name="priced" fill={color} isAnimationActive={false}
+               stroke="hsl(var(--card))" strokeWidth={1} />
+          <Bar dataKey="unpriced" stackId="a" name="no token data" fill="url(#worker-unpriced-hatch)"
+               radius={[4, 4, 0, 0]} isAnimationActive={false} stroke="hsl(var(--card))" strokeWidth={1} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+const ActivityTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: ActivityBar }> }) => {
+  if (!active || !payload?.length) return null;
+  const r = payload[0]?.payload;
+  if (!r) return null;
+  const n = r.priced + r.unpriced;
+  return (
+    <div className="rounded-md border border-border bg-background p-3 text-xs shadow-md">
+      <div className="font-semibold mb-1">{r.date}</div>
+      {n === 0 ? (
+        <div className="text-muted-foreground">no run recorded</div>
+      ) : (
+        <>
+          <div className="flex justify-between gap-4">
+            <span className="text-muted-foreground">runs:</span>
+            <span className="font-mono tabular-nums">{n}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span className="text-muted-foreground">priced:</span>
+            <span className="font-mono tabular-nums">{r.priced}</span>
+          </div>
+          {r.unpriced > 0 && (
+            <div className="text-muted-foreground mt-1">{r.unpriced} without token data — not measured</div>
+          )}
         </>
       )}
     </div>

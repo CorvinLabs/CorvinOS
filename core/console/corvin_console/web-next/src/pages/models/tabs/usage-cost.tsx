@@ -14,7 +14,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TIER_VAR, savingLabel, usd } from "@/panels/cost-viz";
-import { CoverageMeter, DailySource, ModelCostChart } from "../components/cost-charts";
+import { CoverageMeter, DailySource, ModelCostChart, WorkerActivityChart } from "../components/cost-charts";
 import { ModelUsagePanel } from "../components/engine-parts";
 import { useCostOptimizerStatus } from "../hooks/use-cost-status";
 import { MIN_SAMPLES_FOR_ADVICE, deriveCost, modelMixLabel } from "../hooks/use-cost-derived";
@@ -284,6 +284,20 @@ export function UsageCostTab() {
                 No cost data in this window yet.
               </div>
             )}
+          </div>
+
+          <div>
+            <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+              <h3 className="text-sm font-semibold">Worker activity over time</h3>
+              <span className="text-xs text-muted-foreground">
+                Runs, not dollars — its own axis · a run is counted whether or not it carried token data
+              </span>
+            </div>
+            <div className="mt-3">
+              <WorkerActivityChart days={status.acs_activity ?? []}
+                                   endDate={status.last_updated.slice(0, 10)}
+                                   color="var(--viz-role-worker)" />
+            </div>
           </div>
 
           <div>

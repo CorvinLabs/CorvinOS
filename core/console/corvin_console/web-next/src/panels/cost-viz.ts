@@ -191,3 +191,44 @@ export function dayGapNote(counted: number, total: number, noun = 'run'): string
   if (total === 0) return `no ${noun} recorded`;
   return `${total} ${total === 1 ? noun : noun + 's'}, none with token data — not measured`;
 }
+
+/** One recorded day of delegated worker activity, as the route sends it. */
+export interface ActivityDay {
+  date: string;
+  priced_runs: number;
+  total_runs: number;
+}
+
+/** One bar of the worker activity chart: `priced` + `unpriced` = runs that day. */
+export interface ActivityBar {
+  date: string;
+  priced: number;
+  unpriced: number;
+}
+
+/**
+ * The route sends only days on which a run was RECORDED. A timeline needs
+ * every day from the first recorded one to `endDate`, or a two-month pause
+ * collapses into adjacent bars and reads as steady use. A filled day is 0
+ * runs — honest here, unlike the cost series: a run count is measured whether
+ * or not the run carried tokens, so "no run recorded" IS zero runs.
+ * Dates are UTC `YYYY-MM-DD`, matching the route's bucketing.
+ */
+export function fillActivityDays(days: ActivityDay[], endDate: string): ActivityBar[] {
+  if (days.length === 0) return [];
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  const sorted = [...days].map((d) => d.date).sort();
+  const last = sorted[sorted.length - 1] > endDate ? sorted[sorted.length - 1] : endDate;
+  const out: ActivityBar[] = [];
+  const cur = new Date(`${sorted[0]}T00:00:00Z`);
+  const stop = new Date(`${last}T00:00:00Z`);
+  while (cur <= stop) {
+    const key = cur.toISOString().slice(0, 10);
+    const d = byDate.get(key);
+    const priced = d ? Math.max(0, d.priced_runs) : 0;
+    const total = d ? Math.max(priced, d.total_runs) : 0;
+    out.push({ date: key, priced, unpriced: total - priced });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}

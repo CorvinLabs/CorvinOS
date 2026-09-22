@@ -3023,6 +3023,21 @@ vs. 0.95 s for the old 64 MiB tail). Result on the live tenant: 9 of 276
 worker runs priced, $1.79. Pinned by `test_worker_series_honesty.py::
 TestScanReachesPricedHistory`.
 
+### Worker activity over time (2026-09-22)
+
+The worker cost facet has a point only on a day where a run was PRICED — one
+day on the live tenant — so it cannot say WHEN delegation happened. The status
+route therefore also carries `acs_activity: [{date, priced_runs, total_runs}]`
+(sparse, one row per UTC day with a recorded run, same counting window), and the
+Usage & Cost tab renders it as "Worker activity over time": runs per day,
+stacked priced (worker teal) / no token data (baseline grey + 45° hatch —
+the grey is below the ΔE 15 normal-vision floor against the teal in both
+themes, so texture carries the distinction). The axis is RUNS, never dollars,
+and it is its own chart. `fillActivityDays()` (`cost-viz.ts`) fills every day
+from the first recorded one to today with 0: unlike a cost, a run count IS
+measured on a day with no run, and without the fill a two-month pause collapses
+into adjacent bars.
+
 ## Three-tier OS-model routing (ADR-0952, 2026-09-20)
 
 Operator report: *"wieso wird hier immer haiku verwendet — sollte nicht medium

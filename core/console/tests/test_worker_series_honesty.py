@@ -142,6 +142,15 @@ class TestStatusRouteNeverZeroFillsASeries:
         assert body["acs_total_turns"] == 12
         assert body["acs_counted_turns"] == 9
 
+    def test_worker_activity_lists_every_recorded_day_priced_or_not(self, client, lopsided):
+        """The cost series can only show a day where a run was PRICED; the
+        activity series shows when delegation happened at all (2026-09-22)."""
+        body = client.get("/v1/console/learning/model-cost-optimizer/status").json()
+        assert body["acs_activity"] == [
+            {"date": "2026-09-15", "priced_runs": 9, "total_runs": 9},
+            {"date": "2026-09-17", "priced_runs": 0, "total_runs": 3},
+        ]
+
     def test_the_os_series_gets_the_same_treatment(self, client, monkeypatch):
         def _worker_only_day(tenant_id, chain_path=None):
             return MSL.CostEfficiencyResult(

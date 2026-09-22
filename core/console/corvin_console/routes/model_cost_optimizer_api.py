@@ -127,6 +127,13 @@ class DashboardStatusResponse(BaseModel):
     # for.
     acs_counted_turns: int = 0
     acs_total_turns: int = 0
+    # Worker runs per UTC day over the whole window — every day a run was
+    # RECORDED, priced or not: [{date, priced_runs, total_runs}]. The cost
+    # series above only has a point where something was priced (one day on the
+    # live tenant), so it cannot show WHEN delegation happened; this can,
+    # because a run count is measured even when its tokens were not. Sparse:
+    # a day absent here had no recorded run.
+    acs_activity: List[Dict[str, Any]] = []
     acs_savings_percent: float = 0.0
     acs_worker_model_pin: Optional[str] = None
     # ADR-0761 — per-model dollars for both sources:
@@ -453,6 +460,10 @@ async def get_learning_status(
             "acs_data_available": acs_data_available,
             "acs_counted_turns": acs_counted_turns,
             "acs_total_turns": acs_total_turns,
+            "acs_activity": [
+                {"date": p.date, "priced_runs": p.counted_turns, "total_runs": p.total_turns}
+                for p in (cost_result.acs_daily if cost_result else [])
+            ],
             "acs_savings_percent": acs_savings_pct,
             "acs_worker_model_pin": worker_model_pin,
             "cost_model_cost": cost_result.model_cost if cost_data_available else {},
