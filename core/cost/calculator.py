@@ -30,15 +30,17 @@ class CallCost:
     # Token counts
     input_tokens: int
     output_tokens: int
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
 
     # Pricing (in EUR, as strings to preserve precision)
     input_cost: str  # Decimal stringified
     output_cost: str
+    total_cost: str  # Sum of all costs
+
+    # Optional cache components (defaulted fields must follow required ones)
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     cache_read_cost: str = "0"
     cache_write_cost: str = "0"
-    total_cost: str  # Sum of all costs
 
     # Metadata
     skill_id: Optional[str] = None  # Which skill invoked this call (Story 2)

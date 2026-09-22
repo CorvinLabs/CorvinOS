@@ -315,11 +315,47 @@ async def aggregate_metrics(peer_ids: Optional[str] = None, session=Depends(requ
 
 
 def _is_valid_peer_id(peer_id: str) -> bool:
-    """Validate peer_id is in known peer list (fixes input injection)."""
-    # TODO: Query actual A2A registry via forge.a2a.list_peers()
-    # For now: accept any non-empty peer_id (will be validated by A2A layer)
-    # CRITICAL: This is a temporary workaround pending A2A registry implementation
-    return bool(peer_id and peer_id.strip())
+    """Validate peer_id is in known peer list (CRITICAL FIX 2026-09-22).
+
+    SECURITY FIX:
+    - Previous: accepted ANY non-empty string (authorization bypass)
+    - Now: queries actual A2A registry to validate peer_id is known + authorized
+    - Fail-closed: deny if registry unavailable or peer not found
+    """
+    if not peer_id or not peer_id.strip():
+        return False
+
+    try:
+        # Query actual A2A registry
+        from core.bridges.shared.a2a_registry import get_registered_peers
+
+        registered_peers = get_registered_peers()
+
+        # Check if peer_id is in registry
+        if peer_id not in registered_peers:
+            logger.warning(f"A2A peer validation failed: peer_id={peer_id} not in registry")
+            return False
+
+        # Optionally: check if peer has required authorization
+        peer_info = registered_peers[peer_id]
+        if not peer_info.get("authorized", False):
+            logger.warning(f"A2A peer validation failed: peer_id={peer_id} not authorized")
+            return False
+
+        logger.info(f"A2A peer validated: peer_id={peer_id}")
+        return True
+
+    except ImportError:
+        # A2A registry not available — fail-closed to prevent data leakage
+        logger.error(
+            f"CRITICAL: A2A registry unavailable. Cannot validate peer_id={peer_id}. "
+            f"Defaulting to deny (fail-closed)."
+        )
+        return False
+    except Exception as e:
+        # Any other error — fail-closed
+        logger.error(f"A2A peer validation error: {str(e)}. Defaulting to deny (fail-closed).")
+        return False
 
 
 @router.post("/sync-config")

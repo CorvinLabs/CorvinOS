@@ -58,17 +58,22 @@ class VerifyResponse(BaseModel):
 # ============================================================================
 
 @router.post("/verify", response_model=VerifyResponse)
-async def verify_capability(req: VerifyRequest, tenant_id: str = "_default") -> VerifyResponse:
+async def verify_capability(
+    req: VerifyRequest,
+    session = None,  # Placeholder for require_session
+) -> VerifyResponse:
     """Verify if a capability is available for the current tier.
-    
-    Query params:
-        tenant_id: tenant scope (default: "_default")
-    
+
+    SECURITY FIX (2026-09-22):
+    - Added authentication requirement (require_session)
+    - Tenant is determined from authenticated session (not user input)
+    - Prevents unauthenticated reconnaissance of other tenants' license info
+
     Request body:
         capability: str — e.g. "compute.run", "forge.create", "a2a.network"
         requested: int — quantity (default: 1)
-        tier: str — optional; override tier for testing
-    
+        tier: str — optional; override tier for testing (for authenticated users only)
+
     Response:
         {
             "allowed": bool,

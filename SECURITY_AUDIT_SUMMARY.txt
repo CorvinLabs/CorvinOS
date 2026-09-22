@@ -1,0 +1,237 @@
+================================================================================
+                     CorvinOS SECURITY AUDIT SUMMARY
+                        2026-09-22 (Haiku 4.5)
+================================================================================
+
+VULNERABILITY SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Critical Issues Found:     4
+High Severity Issues:      3
+Medium Severity Issues:    2
+────────────────────────────
+Total:                     9
+
+Status: ⛔ REQUIRES IMMEDIATE ATTENTION
+
+================================================================================
+CRITICAL VULNERABILITIES (Fix Within 24 Hours)
+================================================================================
+
+[CRITICAL #1] Consent Gate Bypass — Permits All Users
+─────────────────────────────────────────────────────
+  Location: core/compliance/consent.py:68-102
+  Issue:    @consent_required decorator is a stub implementation
+            - Comment says "For now, permit all authenticated users (temporary)"
+            - Real consent check is commented out (TODO)
+            - Users can perform state-changing operations without explicit consent
+  Impact:   GDPR Art. 6 violation - affirmative consent requirement bypassed
+  Exploit:  Any authenticated user can bypass consent requirements
+  Fix:      Replace stub with actual consent_store.check_consent() call
+
+[CRITICAL #2] Unauthenticated Audit Writing — Cross-Tenant Leakage
+──────────────────────────────────────────────────────────────────
+  Location: core/console/corvin_console/routes/intents.py:57,138
+  Issue:    POST /v1/console/intents/classify and GET /recent
+            - NO require_session authentication
+            - tenant_id taken directly from user input
+            - Any user can write/read audit events for ANY tenant
+  Impact:   Attacker can pollute other tenants' audit chains
+            Attacker can exfiltrate other tenants' audit events
+            Violates ADR-0007 (tenant isolation) + GDPR Art. 32
+  Exploit:  curl -X POST http://localhost:8765/v1/console/intents/classify \
+              -d '{"text":"...", "tenant_id":"victim-tenant"}'
+  Fix:      Add Depends(require_session) + validate tenant_id matches user
+
+[CRITICAL #3] A2A Peer Validation Bypass
+─────────────────────────────────────────
+  Location: core/console/corvin_console/api/multi_instance_sync.py:317-322
+  Issue:    _is_valid_peer_id() only checks if string is non-empty
+            - Comment: "TODO: Query actual A2A registry"
+            - "CRITICAL: This is a temporary workaround pending A2A registry"
+            - Route accepts any peer_id and returns success
+  Impact:   Configuration (with secrets/credentials) sent to attacker-controlled peers
+            Man-in-the-middle attacks enabled on config sync
+  Exploit:  Attacker specifies own server as peer_id, receives all config
+  Fix:      Replace stub with actual call to forge.a2a.list_peers()
+            Fail-closed on unknown peers
+
+[CRITICAL #4] Licensing Endpoint Unauthenticated
+────────────────────────────────────────────────
+  Location: core/console/corvin_console/routes/licensing_verify.py:60-61
+  Issue:    POST /v1/licensing/verify has NO authentication
+            - No Depends(require_session)
+            - Accepts arbitrary tenant_id parameter
+            - Returns license tier, quota, upgrade URLs
+  Impact:   Information disclosure: attacker learns other tenants' license tiers
+            Attacker can determine quota exhaustion for DoS planning
+  Exploit:  curl -X POST http://localhost:8765/v1/licensing/verify \
+              -d '{"capability":"compute.run"}' \
+              -G --data-urlencode 'tenant_id=victim-tenant'
+  Fix:      Add Depends(require_session) authentication
+
+================================================================================
+HIGH SEVERITY VULNERABILITIES (Fix Within 1 Week)
+================================================================================
+
+[HIGH #1] L5 Metrics Cross-Tenant Query
+  File:     core/console/corvin_console/routes/l5_metrics_api.py:142,194,227
+  Issue:    tenant_id query parameters not validated against authenticated user
+  Impact:   Attacker can query metrics for other tenants
+
+[HIGH #2] Orchestration Events Unauthenticated Access
+  File:     core/console/corvin_console/routes/orchestration_events.py:119
+  Issue:    No authentication required, accepts arbitrary tenant_id
+  Impact:   Audit trail disclosure across all tenants
+
+[HIGH #3] Audit Chain Integrity Verification Incomplete
+  File:     core/compliance/corvin_compliance_reports/tripwire.py
+  Issue:    Hash-chain verification marked with TODOs
+  Impact:   Audit trail may be tampered with undetected
+
+================================================================================
+MEDIUM SEVERITY VULNERABILITIES
+================================================================================
+
+[MEDIUM #1] Skill Feedback Missing Consent Check
+  File:     core/skills/os_skills/feedback_loop.py:173-183
+  Issue:    Silently skips consent check if consent_manager unavailable
+  Fix:      Fail-closed behavior (raise error instead of silent skip)
+
+[MEDIUM #2] A2A Task Input Validation Incomplete
+  File:     core/bridges/shared/remote_trigger_receiver.py:1024
+  Issue:    Consent validation marked as incomplete (TODO)
+  Fix:      Complete consent validation for A2A tasks
+
+================================================================================
+IMMEDIATE ACTION ITEMS (Do These First)
+================================================================================
+
+1. [ ] Audit Path: core/compliance/consent.py
+   - Replace lines 68-97 with real consent store implementation
+   - Must call consent_store.check_consent() and actually deny if not granted
+   - Test: Ensure unauthenticated user is denied access
+
+2. [ ] Audit Path: core/console/corvin_console/routes/intents.py
+   - Add Depends(require_session) to lines 59 and 138
+   - Remove user-controlled tenant_id parameter (use rec.tenant_id instead)
+   - Test: Verify unauthenticated requests return 401
+
+3. [ ] Audit Path: core/console/corvin_console/api/multi_instance_sync.py
+   - Replace _is_valid_peer_id() stub with actual registry check
+   - Fail-closed: return False for unknown peers
+   - Test: Verify invalid peers are rejected
+
+4. [ ] Audit Path: core/console/corvin_console/routes/licensing_verify.py
+   - Add Depends(require_session) parameter to line 61
+   - Test: Verify unauthenticated requests return 401
+
+5. [ ] Search Codebase for Similar Patterns:
+   - Find all @router decorators without require_session
+   - Find all Query/Path parameters that accept tenant_id
+   - Find all audit.write() calls that don't validate tenant_id
+   - Command: git grep -n "@router\." core/console/corvin_console/routes/
+
+================================================================================
+COMPLIANCE IMPACT
+================================================================================
+
+GDPR Violations Found:
+  - Art. 6: Consent bypass (consent_required is stub)
+  - Art. 30/32: Audit chain can be written by unauthorized users
+  - Art. 5: Tenant isolation violated (cross-tenant data access)
+
+EU AI Act Violations:
+  - Art. 50: Transparency/disclosure can be bypassed
+
+Regulatory Status:
+  ⛔ COMPLIANCE AUDIT WOULD FAIL
+  ⛔ These must be fixed before production release
+
+================================================================================
+TESTING RECOMMENDATIONS
+================================================================================
+
+Add to CI/CD pipeline:
+
+  pytest tests/security/test_consent_gate_real_check.py
+  pytest tests/security/test_intents_requires_auth.py
+  pytest tests/security/test_a2a_peer_validation.py
+  pytest tests/security/test_licensing_requires_auth.py
+  pytest tests/security/test_cross_tenant_isolation.py
+
+Test Case Template:
+
+  def test_intents_classify_requires_authentication():
+      # Unauthenticated request should be rejected
+      response = client.post("/v1/console/intents/classify",
+                            json={"text": "test", "tenant_id": "any"})
+      assert response.status_code == 401
+
+  def test_intents_cannot_write_cross_tenant():
+      # Authenticated user with tenant A should not be able to
+      # write events to tenant B's audit chain
+      response = client.post("/v1/console/intents/classify",
+                            json={"text": "test", "tenant_id": "tenant-b"},
+                            headers={"Authorization": f"Bearer {token_for_tenant_a}"})
+      assert response.status_code == 403  # Forbidden
+
+================================================================================
+FULL AUDIT REPORT
+================================================================================
+
+Detailed findings have been written to:
+  SECURITY_AUDIT_REPORT_2026_09_22.md
+
+This file contains:
+  - Full vulnerability descriptions
+  - Vulnerable code snippets
+  - Exploitation examples
+  - Remediation guidance
+  - ADR references
+
+================================================================================
+ESTIMATED REMEDIATION TIME
+================================================================================
+
+  CRITICAL fixes:   2-3 hours (if resources available)
+  HIGH fixes:       1 day
+  MEDIUM fixes:     2-3 days
+  ────────────────────────────
+  Total:            4-5 days
+
+Phase 10 Kickoff: DO NOT PROCEED until CRITICAL fixes are deployed
+                  These are load-bearing compliance issues
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Create security hotfix branch from main
+2. Fix CRITICAL #1-4 (estimated 3 hours)
+3. Add security tests to CI/CD
+4. Code review with security team
+5. Deploy to staging
+6. Run compliance audit before merge to main
+7. Create ADR documenting security issues + fixes
+
+Blockers for Phase 10:
+  ⛔ All CRITICAL vulnerabilities must be fixed
+  ⛔ All security tests must pass
+  ⛔ Compliance audit must pass
+
+================================================================================
+Questions or Concerns?
+================================================================================
+
+This audit was performed using comprehensive git grep, file analysis, and
+pattern matching against known vulnerability signatures.
+
+For clarification on any finding, refer to:
+  - SECURITY_AUDIT_REPORT_2026_09_22.md (full details)
+  - The vulnerable code files listed above
+  - ADR-0232, ADR-0233, ADR-0007 (compliance references)
+
+Status: Ready for remediation
+Report Date: 2026-09-22
+Tool: Claude Code Security Audit (Haiku 4.5)

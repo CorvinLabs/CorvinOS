@@ -222,8 +222,6 @@ from .routes import (
     control_plane_subsystems as control_plane_subsystems_route,
     control_plane_overrides as control_plane_overrides_route,
     control_plane_snapshots as control_plane_snapshots_route,
-    # Media System — video/audio/image distribution via Console + Discord + Telegram
-    media_routes,
     # Cost Insights Stream 3 — Daily spend, breakdown, guardrails
     cost_insights_routes as cost_insights_route,
 )
@@ -472,9 +470,9 @@ router.include_router(panels_route.router, tags=["console-panels"])
 router.include_router(multi_instance_route.router, tags=["console-multi-instance"])
 # DataHub Phase 3 — Console UI + HTTP Wiring (Artifact creation + CRUD)
 router.include_router(datahub_route.router, tags=["console-datahub"])
-# Media System — video/audio/image distribution via Console + Discord + Telegram
-if media_routes.router:
-    router.include_router(media_routes.router, tags=["console-media"])
+# Media System (30087270) is NOT mounted: its module was committed outside this
+# package (core/console/routes/media_routes.py), has no require_session / tenant
+# scoping on upload/delete/send-to-bridge, and its own fastapi import fails.
 
 
 @router.get("/version")

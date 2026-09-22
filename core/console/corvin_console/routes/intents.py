@@ -11,7 +11,7 @@ import asyncio
 import json
 from typing import Optional, Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from corvin_console.intent_router import (
@@ -22,6 +22,9 @@ from corvin_console.intent_router import (
 from core.plugins.corvin_plugins.providers import audit_backend
 from core.compliance.consent import consent_required
 from core.paths import tenant_audit_chain
+
+from .. import auth as session_auth
+from ..deps import require_session
 
 router = APIRouter(prefix="/v1/console/intents", tags=["intents"])
 
@@ -55,8 +58,10 @@ class IntentAuditEvent(BaseModel):
 
 
 @router.post("/classify")
-@consent_required("intent_classification")  # User must consent to intent analysis
-async def classify_user_intent(req: IntentClassifyRequest) -> IntentClassifyResponse:
+async def classify_user_intent(
+    req: IntentClassifyRequest,
+    rec: session_auth.SessionRecord = Depends(require_session),
+) -> IntentClassifyResponse:
     """
     Classify a user intent using two-stage pipeline.
 
@@ -72,6 +77,11 @@ async def classify_user_intent(req: IntentClassifyRequest) -> IntentClassifyResp
     Raises:
         HTTPException: On classification error
     """
+    # User must consent to intent analysis. Called with the session record
+    # rather than wired via Depends(), so ``rec`` cannot be query-supplied.
+    await consent_required("intent_classification")(rec)
+    tenant_id = rec.tenant_id
+
     try:
         # Classify intent
         result: IntentClassification = await classify_intent(req.text)
@@ -86,7 +96,7 @@ async def classify_user_intent(req: IntentClassifyRequest) -> IntentClassifyResp
 
         # Emit audit event (immutable, hash-chained)
         audit_event = {
-            "tenant_id": req.tenant_id or "default",
+            "tenant_id": tenant_id,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "event_type": result.audit_event_type,
             "input_text": req.text[:100],  # Truncate for privacy
@@ -98,11 +108,11 @@ async def classify_user_intent(req: IntentClassifyRequest) -> IntentClassifyResp
         }
 
         # Write to audit chain (FAIL-CLOSED if chain fails)
-        audit_chain_path = tenant_audit_chain(req.tenant_id or "default")
+        audit_chain_path = tenant_audit_chain(tenant_id)
         audit_backend.write_event(
             event_type=result.audit_event_type,
             payload=audit_event,
-            tenant_id=req.tenant_id or "default"
+            tenant_id=tenant_id
         )
 
         return IntentClassifyResponse(
@@ -120,7 +130,7 @@ async def classify_user_intent(req: IntentClassifyRequest) -> IntentClassifyResp
         traceback.print_exc()
 
         audit_event = {
-            "tenant_id": req.tenant_id or "default",
+            "tenant_id": tenant_id,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "event_type": "intent_classification_error",
             "error": str(e),
@@ -129,7 +139,7 @@ async def classify_user_intent(req: IntentClassifyRequest) -> IntentClassifyResp
         audit_backend.write_event(
             event_type="intent_classification_error",
             payload=audit_event,
-            tenant_id=req.tenant_id or "default"
+            tenant_id=tenant_id
         )
 
         raise HTTPException(status_code=500, detail=logger_msg)
@@ -137,33 +147,43 @@ async def classify_user_intent(req: IntentClassifyRequest) -> IntentClassifyResp
 
 @router.get("/recent")
 async def get_recent_intents(
-    tenant_id: Optional[str] = Query(None),
-    limit: int = Query(10, ge=1, le=100)
+    limit: int = Query(10, ge=1, le=100),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ) -> list[IntentAuditEvent]:
     """
     Get recent intent classifications (read-only audit trail).
 
+    SECURITY FIX (2026-09-22):
+    - Added require_session authentication
+    - Tenant is determined from authenticated session (not user input)
+    - Users can only read their own tenant's audit trail
+
     Args:
-        tenant_id: Tenant to query (required)
         limit: Max results (1-100)
+        rec: Authenticated session record
 
     Returns:
-        List of recent intent audit events
+        List of recent intent audit events for authenticated user's tenant
     """
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="tenant_id required")
+    # CRITICAL FIX: tenant_id comes from authenticated session, NOT user input
+    tenant_id = rec.tenant_id
 
     try:
-        # Read audit chain (tenant-scoped)
+        # Read audit chain (tenant-scoped, authenticated)
         audit_chain_path = tenant_audit_chain(tenant_id)
         events = []
 
         # Placeholder: in production, read from audit.jsonl
         # For now, return empty list (E2E tests will mock this)
 
+        logger = __import__('logging').getLogger(__name__)
+        logger.info(f"Recent intents query: user={rec.sid} tenant={tenant_id} limit={limit}")
+
         return events[:limit]
 
     except Exception as e:
+        logger = __import__('logging').getLogger(__name__)
+        logger.error(f"Failed to read audit trail for tenant={tenant_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to read audit trail: {str(e)}")
 
 

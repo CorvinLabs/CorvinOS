@@ -64,9 +64,9 @@ def consent_required(consent_scope: str = "default") -> Callable:
         Returns:
             None (only used for dependency injection)
         """
-        # In Phase 9.5, consent is checked against persistent storage
-        # For now: minimal implementation — always allow (TODO: wire to consent_store)
-        # Production: Check rec.tenant_id + rec.sid against consent store
+        # CRITICAL FIX (2026-09-22): Implement fail-closed consent checking
+        # Violation of GDPR Art. 6 was: commenting out real consent check and permitting all
+        # Fix: Fail-closed — deny by default unless explicitly granted
 
         if rec is None:
             # No session record = no context for consent check
@@ -79,25 +79,41 @@ def consent_required(consent_scope: str = "default") -> Callable:
                 detail=f"Consent required for: {CONSENT_SCOPES.get(consent_scope, consent_scope)}",
             )
 
-        # TODO: Replace with real consent store check
-        # For now, permit all authenticated users (temporary)
-        # Real implementation:
-        #   consent_store = get_consent_store()
-        #   has_consent = consent_store.check_consent(
-        #       tenant_id=rec.tenant_id,
-        #       user_id=rec.sid,
-        #       scope=consent_scope,
-        #       ttl_hours=24
-        #   )
-        #   if not has_consent:
-        #       logger.warning(f"Consent denied for {rec.sid} in {consent_scope}")
-        #       raise HTTPException(
-        #           status_code=http_status.HTTP_403_FORBIDDEN,
-        #           detail=f"Consent required: {CONSENT_SCOPES.get(consent_scope)}"
-        #       )
+        # LOAD-BEARING: Actual consent store check (GDPR Art. 6 compliance)
+        # Default: assume NO consent unless explicitly granted in store
+        try:
+            from core.compliance.consent_store import get_consent_store
+            consent_store = get_consent_store()
+
+            has_consent = consent_store.check_consent(
+                tenant_id=rec.tenant_id,
+                user_id=rec.sid,
+                scope=consent_scope,
+                ttl_hours=24
+            )
+
+            if not has_consent:
+                logger.warning(
+                    f"Consent denied for user={rec.sid} tenant={rec.tenant_id} scope={consent_scope}"
+                )
+                raise HTTPException(
+                    status_code=http_status.HTTP_403_FORBIDDEN,
+                    detail=f"Consent required for: {CONSENT_SCOPES.get(consent_scope, consent_scope)}. "
+                           f"Please grant consent at /consent-manager"
+                )
+        except ImportError:
+            # Consent store not available — fail-closed
+            logger.error(
+                f"CRITICAL: Consent store unavailable for scope={consent_scope}. "
+                f"This is a security failure — cannot proceed without consent verification."
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Consent verification system unavailable. Please try again."
+            )
 
         logger.info(
-            f"Consent verified: user={getattr(rec, 'sid', 'unknown')} scope={consent_scope}"
+            f"Consent verified: user={getattr(rec, 'sid', 'unknown')} tenant={rec.tenant_id} scope={consent_scope}"
         )
 
     return verify_consent
