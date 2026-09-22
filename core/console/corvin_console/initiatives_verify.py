@@ -18,11 +18,16 @@ atomic write, keyed by initiative/item id, so an operator edit made while the
 tests ran is not lost. One content-free audit record per run
 (``initiatives.verified``: counts only).
 
-Run by ``corvin-initiatives-verify.timer`` (every 30 min); safe to run by hand.
+Run by ``corvin-initiatives-verify.timer`` every 5 min with ``--if-changed``:
+the run is skipped unless the repo state or the evidence spec changed since the
+last run, or that run is older than :data:`MAX_AGE_S` (30 min). So evidence
+follows a code change within ~5 min without re-running the suites every tick.
+Safe to run by hand.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -38,6 +43,8 @@ from . import initiatives as board_mod
 
 REPO = Path(__file__).resolve().parents[3]
 _TIMEOUT_S = 900
+#: Even with nothing changed, re-verify at least this often.
+MAX_AGE_S = 30 * 60
 _SUMMARY_RE = re.compile(r"(\d+) (passed|failed|errors?|skipped)")
 
 
@@ -140,6 +147,63 @@ def _items(ini: dict[str, Any]):
         yield "pre", c
 
 
+def _git(*args: str) -> str:
+    try:
+        return subprocess.run(["git", *args], cwd=str(REPO), capture_output=True,
+                              text=True, timeout=30).stdout
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def fingerprint(raw: dict[str, Any]) -> str:
+    """Hash of everything a verification result depends on.
+
+    Git HEAD + working-tree status (tracked changes AND untracked files) +
+    the evidence specs + existence/mtime of every evidence path. Any change
+    → new fingerprint → the next ``--if-changed`` tick re-verifies.
+    """
+    h = hashlib.sha256()
+    h.update(_git("rev-parse", "HEAD").encode())
+    h.update(_git("status", "--porcelain", "--untracked-files=all").encode())
+    h.update(_git("diff", "HEAD").encode())
+    for ini in raw.get("initiatives", []):
+        for _kind, item in _items(ini):
+            ev = item.get("evidence")
+            if not isinstance(ev, dict):
+                continue
+            h.update(json.dumps(ev, sort_keys=True).encode())
+            for p in ev.get("paths") or []:
+                path = Path(p) if os.path.isabs(p) else REPO / p
+                try:
+                    h.update(f"{p}:{path.stat().st_mtime_ns}".encode())
+                except OSError:
+                    h.update(f"{p}:missing".encode())
+    return h.hexdigest()
+
+
+def _state_path(tenant_id: str) -> Path | None:
+    p = board_mod.board_path(tenant_id)
+    return None if p is None else p.parent / ".initiatives_verify.state.json"
+
+
+def needs_run(tenant_id: str, now: float | None = None) -> tuple[bool, str]:
+    """(run?, reason) for ``--if-changed``."""
+    now = time.time() if now is None else now
+    raw, path = board_mod._load_raw(tenant_id)
+    if path is None or not path.is_file():
+        return False, "no initiatives file"
+    sp = _state_path(tenant_id)
+    try:
+        state = json.loads(sp.read_text()) if sp and sp.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    if now - float(state.get("at", 0)) > MAX_AGE_S:
+        return True, "last run older than max age"
+    if state.get("fingerprint") != fingerprint(raw):
+        return True, "repo or evidence changed"
+    return False, "unchanged"
+
+
 def lock_path(tenant_id: str) -> Path | None:
     p = board_mod.board_path(tenant_id)
     return None if p is None else p.parent / ".initiatives_verify.lock"
@@ -212,6 +276,9 @@ def _verify(tenant_id: str) -> dict[str, Any]:
                 item["verification"] = results[key]
     board_mod._write_raw(path, fresh)
 
+    sp = _state_path(tenant_id)
+    if sp is not None:
+        sp.write_text(json.dumps({"at": time.time(), "fingerprint": fingerprint(fresh)}))
     green = sum(1 for v in results.values() if v["first_ok_at"])
     summary = {"verified": len(results), "green": green, "red": len(results) - green,
                "test_runs": len(cache)}
@@ -236,8 +303,15 @@ def _audit(tenant_id: str, summary: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--tenant", default=os.environ.get("CORVIN_TENANT_ID", "_default"))
+    ap.add_argument("--if-changed", action="store_true",
+                    help="skip unless repo/evidence changed or the last run is older than 30 min")
     args = ap.parse_args(argv)
     try:
+        if args.if_changed:
+            run, reason = needs_run(args.tenant)
+            if not run:
+                print(json.dumps({"skipped": True, "reason": reason}))
+                return 0
         summary = verify(args.tenant)
     except board_mod.InitiativeError as exc:
         print(f"initiatives_verify: {exc}", file=sys.stderr)

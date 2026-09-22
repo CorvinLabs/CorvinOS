@@ -73,8 +73,9 @@ GATE_DECISIONS = ("pending", "go", "no_go")
 #: finished as "completed" without being closed explicitly.
 CLOSE_OUTCOMES = ("completed", "cancelled")
 FINISHED_STATUSES = ("done", "cancelled")
-#: A verification older than this is shown as stale (timer runs every 30 min).
-VERIFICATION_STALE_S = 2 * 3600
+#: A verification older than this is shown as stale (timer: on repo change within
+#: 5 min, otherwise every 30 min — so 40 min means the timer is not running).
+VERIFICATION_STALE_S = 40 * 60
 
 
 class InitiativeError(ValueError):

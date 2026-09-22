@@ -112,7 +112,7 @@ function TaskRow({
     else setProgress(String(task.progress));
   };
   return (
-    <li className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 py-2 sm:grid-cols-[auto_1fr_8rem_auto]">
+    <li data-testid={`task-${ini.id}-${task.id}`} className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 py-2 sm:grid-cols-[auto_1fr_8rem_auto]">
       <span className="mt-0.5"><TaskIcon status={task.status} /></span>
       <div className="min-w-0">
         <div className={cn("text-sm font-medium", task.status === "done" && "text-muted-foreground line-through")}>
@@ -269,7 +269,7 @@ function InitiativeCard({
             <>
               <div>
                 <div className="text-xs text-muted-foreground">Time left</div>
-                <div className="tabular-nums">{formatCountdown(ini.deadline, now)}</div>
+                <div className="tabular-nums" data-testid={`time-left-${ini.id}`}>{formatCountdown(ini.deadline, now)}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Next checkpoint</div>
@@ -325,7 +325,7 @@ function InitiativeCard({
   );
   if (flat) return body;
   return (
-    <Card>
+    <Card data-testid={`run-${ini.id}`}>
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -409,6 +409,9 @@ export default function InitiativesPage() {
     },
     refetchInterval: 5_000,
     refetchIntervalInBackground: false,
+    // The console-wide default is false; this board must catch up the moment a
+    // hidden tab becomes visible again instead of waiting for the next tick.
+    refetchOnWindowFocus: "always",
     retry: false,
   });
   const now = useNow(skew);
@@ -427,14 +430,22 @@ export default function InitiativesPage() {
     mutationFn: (v: { iid: string; outcome: RunOutcome | null }) => closeInitiativeRun(v.iid, v.outcome, csrf),
     onSuccess,
   });
+  // When the operator clicked "Verify now": show the run as in progress from
+  // the click until a result NEWER than the click arrives — not only once a
+  // (possibly slow) poll reports `running`.
+  const [verifyRequestedAt, setVerifyRequestedAt] = useState<number | null>(null);
   const verify = useMutation({
-    mutationFn: () => startInitiativesVerify(csrf),
+    mutationFn: () => { setVerifyRequestedAt(Date.now()); return startInitiativesVerify(csrf); },
     onSuccess: () => qc.invalidateQueries({ queryKey: [...KEY] }),
+    onError: () => setVerifyRequestedAt(null),
   });
   const busy = patch.isPending || gate.isPending || close.isPending;
   const mutErr = (patch.error ?? gate.error ?? close.error ?? verify.error) as Error | null;
 
   const board = q.data;
+  const lastVerifiedMs = board?.verification.last_at ? Date.parse(board.verification.last_at) : 0;
+  const verifying = !!board && (board.verification.running || verify.isPending ||
+    (verifyRequestedAt !== null && lastVerifiedMs < verifyRequestedAt - 1_000 && now - verifyRequestedAt < 15 * 60_000));
   const activeRuns = board?.initiatives.filter((i) => i.phase === "active") ?? [];
   // History: most recently finished first; runs without a finish time last.
   const finishedRuns = (board?.initiatives.filter((i) => i.phase === "finished") ?? [])
@@ -446,6 +457,9 @@ export default function InitiativesPage() {
     onClose: (iid: string, outcome: RunOutcome | null) => close.mutate({ iid, outcome }),
   };
   const updatedAgo = q.dataUpdatedAt ? Math.max(0, Math.round((Date.now() - q.dataUpdatedAt) / 1000)) : null;
+  // Polls every 5 s; anything beyond three missed polls is shown as delayed —
+  // the numbers on screen are then older than they look.
+  const delayed = updatedAgo !== null && updatedAgo > 15;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4 p-4 sm:p-6">
@@ -455,8 +469,13 @@ export default function InitiativesPage() {
           <p className="text-sm text-muted-foreground">Live status of running and finished runs and their tasks.</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
-          <span className={cn("inline-block h-2 w-2 rounded-full", q.isError ? "bg-destructive" : "bg-emerald-500 animate-pulse")} />
-          {q.isError ? "Connection lost" : updatedAgo === null ? "Loading…" : `Live · updated ${updatedAgo}s ago`}
+          <span className={cn("inline-block h-2 w-2 rounded-full",
+            q.isError ? "bg-destructive" : delayed ? "bg-amber-500" : "bg-emerald-500 animate-pulse")} />
+          <span data-testid="live-indicator" className={cn(delayed && !q.isError && "text-amber-700 dark:text-amber-400")}>
+            {q.isError ? "Connection lost" : updatedAgo === null ? "Loading…"
+              : delayed ? `Delayed · last update ${updatedAgo}s ago — the server is responding slowly`
+              : `Live · updated ${updatedAgo}s ago`}
+          </span>
           {board && <span>· {formatUtc(new Date(now).toISOString())}</span>}
         </div>
       </div>
@@ -490,21 +509,21 @@ export default function InitiativesPage() {
 
       {board && board.initiatives.length > 0 && (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
+          <div data-testid="verification-bar" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <ShieldCheck className="h-4 w-4" />
-              {board.verification.running
+              {verifying
                 ? <span className="flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Verifying evidence…</span>
                 : board.verification.last_at
                   ? <span>Evidence verified {formatAgo(Math.max(0, Math.round((now - Date.parse(board.verification.last_at)) / 1000)))}</span>
                   : <span className="text-muted-foreground">Evidence not verified yet</span>}
               {board.verification.stale_tasks > 0 && <Badge variant="warn">{board.verification.stale_tasks} stale</Badge>}
               {board.verification.claim_conflicts > 0 && <Badge variant="danger">{board.verification.claim_conflicts} done-claims contradicted</Badge>}
-              <span className="text-xs text-muted-foreground">Re-checked every 30 min</span>
+              <span className="text-xs text-muted-foreground">Re-checked within 5 min of a repo change, at least every 30 min</span>
             </div>
-            <Button size="sm" variant="outline" disabled={verify.isPending || board.verification.running}
+            <Button size="sm" variant="outline" disabled={verifying}
               onClick={() => verify.mutate()}>
-              <RefreshCw className={cn("mr-1 h-3.5 w-3.5", board.verification.running && "animate-spin")} /> Verify now
+              <RefreshCw className={cn("mr-1 h-3.5 w-3.5", verifying && "animate-spin")} /> Verify now
             </Button>
           </div>
 

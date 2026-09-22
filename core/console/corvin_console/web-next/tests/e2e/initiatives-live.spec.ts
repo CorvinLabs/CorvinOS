@@ -1,0 +1,188 @@
+/**
+ * Initiatives board — LIVE freshness E2E against the running console.
+ *
+ *   CONSOLE_BASE_URL=http://127.0.0.1:8765/console \
+ *     npx playwright test -c playwright.live.config.ts
+ *
+ * One page, NEVER reloaded. Every way a value on the board can change is
+ * driven for real and must appear on screen without a reload:
+ *
+ *   1. time          — countdowns tick every second
+ *   2. file edit     — a hand edit of initiatives.json (another tool/editor)
+ *   3. other session — a PATCH from a second login (another operator/tab)
+ *   4. background    — while the tab is hidden polling pauses; on return a
+ *                      fetch is issued at once and the change appears
+ *   5. evidence      — the repo changes (the missing scene generator appears),
+ *                      "Verify now" re-runs the evidence, the task flips to done
+ *   6. timer         — the file is removed again and the REAL timer service
+ *                      (`--if-changed`) detects the repo change and flips it back
+ *
+ * Latency budgets include server stalls: the console process currently stalls
+ * for up to ~17 s at a time for reasons outside this panel (see the delay
+ * indicator). Measured latencies are logged.
+ *
+ * Every mutation is reverted in `finally`, byte-for-byte for the board file.
+ * Runs serially: it edits shared live state.
+ */
+import { test, expect, request as pwRequest, type Page, type APIRequestContext } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.resolve(here, "../../../../../..");
+const BOARD = path.join(REPO, ".corvin/tenants/_default/global/initiatives.json");
+const GENERATOR = path.join(REPO, "tools/blender_3d_scene_generator.py");
+const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
+const PAGE_URL = `${ORIGIN}/console/app/initiatives`;
+
+test.describe.configure({ mode: "serial" });
+test.use({ storageState: { cookies: [], origins: [] } });
+test.setTimeout(6 * 60_000);
+
+/** "14d 3h 34m" / "5h 2m 7s" / "3m 9s" → seconds. */
+function parseCountdown(text: string): number {
+  const n = (u: string) => Number((new RegExp(`(\\d+)${u}`).exec(text) ?? [0, 0])[1]);
+  return n("d") * 86400 + n("h") * 3600 + n("m") * 60 + n("s");
+}
+
+async function login(page: Page) {
+  await page.goto(`${ORIGIN}/v1/console/auth/local-login`);
+  await page.goto(PAGE_URL);
+  await expect(page.getByTestId("run-loop-a")).toBeVisible({ timeout: 30_000 });
+}
+
+async function secondSession(): Promise<{ api: APIRequestContext; csrf: string }> {
+  const api = await pwRequest.newContext({ baseURL: ORIGIN });
+  await api.get("/v1/console/auth/local-login");
+  const who = await (await api.get("/v1/console/auth/whoami")).json();
+  return { api, csrf: who.csrf_token };
+}
+
+function editBoard(mut: (d: any) => void) {
+  const d = JSON.parse(fs.readFileSync(BOARD, "utf8"));
+  mut(d);
+  const tmp = BOARD + ".e2e-tmp";
+  fs.writeFileSync(tmp, JSON.stringify(d, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, BOARD);
+}
+
+function restoreBoard(original: Buffer) {
+  const tmp = BOARD + ".e2e-tmp";
+  fs.writeFileSync(tmp, original, { mode: 0o600 });
+  fs.renameSync(tmp, BOARD);
+}
+
+async function verifyNowAndWait(page: Page) {
+  const bar = page.getByTestId("verification-bar");
+  await bar.getByRole("button", { name: /Verify now/ }).click();
+  await expect(bar).toContainText("Verifying evidence", { timeout: 2_000 }); // immediate, not after a poll
+  await expect(bar).toContainText(/Evidence verified just now/, { timeout: 180_000 });
+}
+
+test("board values stay current without a reload", async ({ page }) => {
+  expect(fs.existsSync(GENERATOR), "scene generator must not exist before the test").toBe(false);
+  const original = fs.readFileSync(BOARD);
+  const { api, csrf } = await secondSession();
+  const marker = `e2e-freshness-${Date.now()}`;
+  let navigations = 0;
+  let createdToolsDir = false;
+
+  try {
+    await login(page);
+    page.on("framenavigated", (f) => { if (f === page.mainFrame()) navigations++; });
+
+    // 1. Time: the countdown is CORRECT (matches the real remaining time to the
+    //    minute it displays) and advances on its own. Above one day it shows
+    //    minutes, so a change needs up to 60 s.
+    const timeLeft = page.getByTestId("time-left-loop-a");
+    const deadline = Date.parse(JSON.parse(original.toString("utf8")).initiatives[0].deadline);
+    const shownS = parseCountdown((await timeLeft.textContent()) ?? "");
+    const realS = (deadline - Date.now()) / 1000;
+    expect(Math.abs(shownS - realS), `shown ${shownS}s vs real ${realS}s`).toBeLessThan(61);
+    const t0 = await timeLeft.textContent();
+    await expect.poll(async () => timeLeft.textContent(), { timeout: 65_000, intervals: [1_000] }).not.toBe(t0);
+
+    // 2. File edit: a hand edit of the board file appears within one poll.
+    const task2 = page.getByTestId("task-loop-a-2");
+    const edited = Date.now();
+    editBoard((d) => { d.initiatives[0].tasks.find((t: any) => t.id === "2").note = marker; });
+    await expect(task2).toContainText(marker, { timeout: 30_000 });
+    console.log(`file edit visible after ${Date.now() - edited} ms`);
+
+    // 3. Other session: a PATCH from a second login appears here.
+    const patched = Date.now();
+    const r = await api.patch("/v1/console/initiatives/loop-a/tasks/2",
+      { data: { progress: 7 }, headers: { "X-CSRF-Token": csrf } });
+    expect(r.status()).toBe(200);
+    await expect(task2).toContainText("7%", { timeout: 30_000 });
+    console.log(`other-session change visible after ${Date.now() - patched} ms`);
+
+    // 4. Background tab: hidden → polling pauses; visible again → fetched at once.
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); // as real browsers fire it
+    });
+    await api.patch("/v1/console/initiatives/loop-a/tasks/2",
+      { data: { progress: 9 }, headers: { "X-CSRF-Token": csrf } });
+    await page.waitForTimeout(7_000);
+    await expect(task2).toContainText("7%"); // paused while hidden — no wasted polling
+    const shown = Date.now();
+    const refetch = page.waitForRequest((r) => r.url().endsWith("/v1/console/initiatives"), { timeout: 1_500 });
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+      document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); // as real browsers fire it
+      window.dispatchEvent(new Event("focus"));
+    });
+    await refetch; // issued immediately on return, not at the next 5 s tick
+    console.log(`on return to the tab: fetch issued after ${Date.now() - shown} ms`);
+    await expect(task2).toContainText("9%", { timeout: 30_000 });
+    console.log(`on return to the tab: visible after ${Date.now() - shown} ms`);
+
+    // 5. Evidence: the repo changes, Verify now picks it up, the task flips.
+    const blender = page.getByTestId("task-loop-a-1");
+    await expect(blender).toContainText("1/2 paths present");
+    createdToolsDir = !fs.existsSync(path.dirname(GENERATOR));
+    fs.mkdirSync(path.dirname(GENERATOR), { recursive: true });
+    fs.writeFileSync(GENERATOR, "# e2e placeholder — removed by initiatives-live.spec.ts\n");
+    await verifyNowAndWait(page);
+    await expect(blender).toContainText("2/2 paths present", { timeout: 10_000 });
+    await expect(blender.getByRole("combobox")).toHaveValue("done");
+
+    // 6. Timer: remove it again; the real timer unit (--if-changed) notices the
+    //    repo change on its own — no button.
+    fs.rmSync(GENERATOR);
+    const ticked = Date.now();
+    const out = execFileSync("systemctl", ["--user", "start", "corvin-initiatives-verify.service"], { encoding: "utf8" });
+    const log = execFileSync("journalctl", ["--user", "-u", "corvin-initiatives-verify", "--since", `@${Math.floor(ticked / 1000)}`, "--no-pager", "-o", "cat"], { encoding: "utf8" });
+    expect(log, "the timer run must have verified, not skipped").toMatch(/"verified": 10/);
+    void out;
+    await expect(blender).toContainText("1/2 paths present", { timeout: 30_000 });
+    console.log(`timer tick → UI after ${Date.now() - ticked} ms`);
+    await expect(blender.getByRole("combobox")).toHaveValue("running");
+
+    expect(navigations, "the page must never have been reloaded").toBe(0);
+  } finally {
+    if (fs.existsSync(GENERATOR)) fs.rmSync(GENERATOR);
+    if (createdToolsDir) fs.rmdirSync(path.dirname(GENERATOR));
+    // Restore the manual fields byte-for-byte, but keep the latest verification
+    // results (the last Verify now ran against the restored repo state).
+    const latest = JSON.parse(fs.readFileSync(BOARD, "utf8"));
+    const orig = JSON.parse(original.toString("utf8"));
+    for (const ini of orig.initiatives) {
+      const li = latest.initiatives.find((x: any) => x.id === ini.id);
+      for (const kind of ["tasks", "preconditions"]) {
+        for (const item of ini[kind] ?? []) {
+          const key = item.id ?? item.label;
+          const l = (li?.[kind] ?? []).find((x: any) => (x.id ?? x.label) === key);
+          if (l?.verification) item.verification = l.verification;
+        }
+      }
+    }
+    restoreBoard(Buffer.from(JSON.stringify(orig, null, 2) + "\n"));
+    await api.dispose();
+  }
+});

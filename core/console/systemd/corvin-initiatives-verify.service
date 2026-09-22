@@ -7,7 +7,7 @@ Type=oneshot
 # Same interpreter + PYTHONPATH + CORVIN_HOME as corvin-webui, so the board it
 # writes is the one the console reads. Tests themselves run in a throwaway
 # CORVIN_HOME (initiatives_verify.run_tests), never against the live install.
-ExecStart=/home/shumway/projects/CorvinOS/core/console/.venv/bin/python -m corvin_console.initiatives_verify --tenant _default
+ExecStart=/home/shumway/projects/CorvinOS/core/console/.venv/bin/python -m corvin_console.initiatives_verify --tenant _default --if-changed
 WorkingDirectory=/home/shumway/projects/CorvinOS
 Environment=PYTHONUNBUFFERED=1
 Environment=CORVIN_HOME=/home/shumway/projects/CorvinOS/.corvin

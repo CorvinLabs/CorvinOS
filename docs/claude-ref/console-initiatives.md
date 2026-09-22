@@ -73,8 +73,11 @@ declares `evidence` is verified by `corvin_console.initiatives_verify`:
 - merges `verification` into a fresh read of the file (concurrent edits
   survive) and writes one content-free `initiatives.verified` audit record.
 
-Triggers: `corvin-initiatives-verify.timer` (every 30 min, units in
-`core/console/systemd/`, installed under `~/.config/systemd/user/`) and the
+Triggers: `corvin-initiatives-verify.timer` ticks every 5 min and runs
+`--if-changed`: it verifies only when the repo state (HEAD, working-tree
+status and diff, untracked files), an evidence spec or an evidence path
+changed since the last run — or that run is older than 30 min. Units in
+`core/console/systemd/`, installed under `~/.config/systemd/user/`. Plus the
 **Verify now** button (`POST /v1/console/initiatives/verify`, detached, lock
 file `.initiatives_verify.lock` prevents parallel runs).
 
@@ -86,7 +89,7 @@ For a task with a verification result the board derives:
 | `status` | `done` when everything passes; otherwise `running` once anything passes (operator `blocked` kept) |
 | `completed_at` | when the evidence FIRST went green (`first_ok_at`) |
 | `claim_conflict` | hand-marked `done`, evidence disagrees → shown as running with a red badge |
-| `verification.stale` | result older than 2 h |
+| `verification.stale` | result older than 40 min (the timer is then not running) |
 
 The console disables the status/progress controls of evidence-derived tasks.
 A gate criterion with `requires_tasks` is `ok` when all named tasks are done,
@@ -119,11 +122,25 @@ Finished runs stay in the file; nothing is deleted. Reopening removes only the
 
 Tenant comes from the session only. Writes are atomic, mode `0o600`.
 
-## Real-time
+## Real-time — what "up to date" means, per source
 
-The page polls every 5 s (paused in background tabs) and ticks countdowns every
-second against the server clock (`server_time` skew). Hand edits to the file
-appear within one poll.
+| Change | Reaches the open page | Mechanism |
+|---|---|---|
+| Time (countdowns, elapsed %) | every second, to the unit shown (minutes above one day) | client tick against server time |
+| Hand edit of the file | next poll, ≤ 5 s | poll |
+| Change from another session/operator | next poll, ≤ 5 s | poll |
+| Tab was in the background | a fetch is issued on return (measured 6–7 ms) | `refetchOnWindowFocus: "always"` (polling pauses while hidden) |
+| Code / test / file change in the repo | ≤ 5 min + test runtime (~30 s); immediately via **Verify now** | timer `--if-changed` |
+
+All of that assumes the console answers promptly. When the last successful
+update is older than 15 s the live indicator turns amber ("Delayed · last
+update N s ago") instead of implying the numbers are current. After
+**Verify now** the bar shows "Verifying evidence…" from the click until a
+result newer than the click arrives.
+
+Proven by `web-next/tests/e2e/initiatives-live.spec.ts` against the live
+console, one page never reloaded
+(`npx playwright test -c playwright.live.config.ts`); it reverts every change.
 
 ## Tests
 

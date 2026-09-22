@@ -1,9 +1,9 @@
 [Unit]
-Description=CorvinOS Initiatives — evidence verification every 30 minutes
+Description=CorvinOS Initiatives — evidence check every 5 min (runs only on repo change or after 30 min)
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=30min
+OnUnitActiveSec=5min
 Persistent=true
 
 [Install]

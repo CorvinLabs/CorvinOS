@@ -230,6 +230,27 @@ class InitiativesRouteTest(unittest.TestCase):
                 self.assertEqual(r.status_code, 202, r.text)
                 sb.assert_called_once_with("_default")
 
+    def test_if_changed_skips_until_repo_or_evidence_changes(self):
+        from unittest import mock
+        repo = self._tmp / "repo2"
+        repo.mkdir()
+        now = datetime.now(timezone.utc)
+        data = _fixture(now)
+        data["initiatives"][0]["tasks"][0]["evidence"] = {"paths": ["gen.py"]}
+        with _sandbox(self._tmp) as (_client, _csrf, home, _):
+            self._write(home, data)
+            from corvin_console import initiatives_verify as iv
+            with mock.patch.object(iv, "REPO", repo):
+                self.assertEqual(iv.needs_run("_default"), (True, "last run older than max age"))
+                iv.verify("_default")
+                self.assertEqual(iv.needs_run("_default"), (False, "unchanged"))
+                (repo / "gen.py").write_text("x")           # the evidence path appears
+                self.assertEqual(iv.needs_run("_default"), (True, "repo or evidence changed"))
+                iv.verify("_default")
+                self.assertEqual(iv.needs_run("_default")[0], False)
+                t = time.time() + iv.MAX_AGE_S + 1          # nothing changed, but too old
+                self.assertEqual(iv.needs_run("_default", now=t), (True, "last run older than max age"))
+
     def test_tenant_comes_from_session(self):
         now = datetime.now(timezone.utc)
         with _sandbox(self._tmp, tenants=("_default", "acme")) as (_c, _s, home, clients):
