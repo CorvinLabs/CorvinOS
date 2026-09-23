@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Feedback Integration API — ADR-2033
 
@@ -125,6 +126,7 @@ _telemetry = {
 # Endpoints
 # ============================================================================
 
+@require_csrf
 @router.post("/", response_model=FeedbackResponse)
 async def submit_feedback(
     request: FeedbackRequest,
@@ -259,6 +261,7 @@ async def get_feedback_history(
     )
 
 
+@require_csrf
 @router.put("/config", response_model=SkillConfigResponse)
 async def update_skill_config(
     request: SkillConfigUpdate,

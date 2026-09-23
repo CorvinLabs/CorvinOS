@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Control Plane Routes — Snapshots & Rollback Stream 4.
 
@@ -94,6 +95,7 @@ class SnapshotOperationResponse(BaseModel):
     snapshot_id: Optional[str] = None
 
 
+@require_csrf
 @router.post("", response_model=SnapshotOperationResponse)
 async def create_snapshot(
     req: SnapshotCreateRequest,
@@ -221,6 +223,7 @@ async def get_snapshot_detail(
         raise HTTPException(status_code=403, detail=safe_msg)
 
 
+@require_csrf
 @router.post("/{snapshot_id}/restore", response_model=SnapshotOperationResponse)
 async def restore_snapshot(
     snapshot_id: str,
@@ -262,6 +265,7 @@ async def restore_snapshot(
         raise HTTPException(status_code=400, detail=safe_msg)
 
 
+@require_csrf
 @router.post("/{snapshot_id}/diff", response_model=Dict[str, Any])
 async def diff_snapshot(
     snapshot_id: str,
@@ -297,6 +301,7 @@ async def diff_snapshot(
         raise HTTPException(status_code=403, detail=safe_msg)
 
 
+@require_csrf
 @router.delete("/{snapshot_id}", response_model=SnapshotOperationResponse)
 async def delete_snapshot(
     snapshot_id: str,

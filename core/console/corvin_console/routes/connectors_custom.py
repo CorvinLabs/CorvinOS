@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Custom Connector Registry (ADR-0124 M2).
 
 Operators register custom MCP connectors (stdio / SSE / HTTP) without
@@ -121,6 +122,7 @@ def list_custom_connectors(
     }
 
 
+@require_csrf
 @router.put("/connectors/custom/{connector_id}")
 def register_custom_connector(
     connector_id: str,
@@ -194,6 +196,7 @@ def register_custom_connector(
     return {"ok": True, "connector_id": connector_id, "updated": is_update}
 
 
+@require_csrf
 @router.delete("/connectors/custom/{connector_id}")
 def remove_custom_connector(
     connector_id: str,

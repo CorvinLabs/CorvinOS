@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """REST API wrapper for RAG Integration (Phase 4).
 
 Exposes Phase 3 RAG Orchestrator via FastAPI endpoints:
@@ -166,6 +167,7 @@ def create_rag_router() -> APIRouter:
             logger.error(f"Health check failed for {provider_id}: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    @require_csrf
     @router.post("/query")
     async def execute_query(
         query: str = Query(..., description="Search query"),

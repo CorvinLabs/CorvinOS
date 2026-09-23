@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Admin control plane — the UI-independent administration API (ADR-0239/0243).
 
 Six routes under ``/api/admin`` that expose plugin administration without going
@@ -715,6 +716,7 @@ async def aggregated_health(
 # ── Mutations (CSRF-protected) ────────────────────────────────────────────────
 
 
+@require_csrf
 @router.post("/api/admin/plugins/{plugin_id}/enable")
 async def enable_plugin(
     plugin_id: str,
@@ -747,6 +749,7 @@ async def enable_plugin(
     return _detail_after(rec.tenant_id, plugin_id, entry)
 
 
+@require_csrf
 @router.post("/api/admin/plugins/{plugin_id}/disable")
 async def disable_plugin(
     plugin_id: str,
@@ -823,6 +826,7 @@ async def disable_plugin(
     return _detail_after(rec.tenant_id, plugin_id, entry)
 
 
+@require_csrf
 @router.put("/api/admin/plugins/{plugin_id}/config")
 async def set_config(
     plugin_id: str,

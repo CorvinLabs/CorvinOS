@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Manual Skill Creation (ADR-0124 M5a).
 
 Operators author skills directly in the console with a Markdown editor.
@@ -267,6 +268,7 @@ def list_manual_skills(
     return {"tenant_id": rec.tenant_id, "count": len(skills), "skills": skills}
 
 
+@require_csrf
 @router.post("/skills/manual")
 def create_manual_skill(
     body: SkillCreateRequest,
@@ -298,6 +300,7 @@ def create_manual_skill(
     return {"ok": True, "name": spec.name, "scope": MANUAL_SCOPE, "sha256": spec.sha256}
 
 
+@require_csrf
 @router.put("/skills/manual/{name}")
 def update_manual_skill(
     name: str,
@@ -324,6 +327,7 @@ def update_manual_skill(
     return {"ok": True, "name": name, "scope": MANUAL_SCOPE, "sha256": spec.sha256}
 
 
+@require_csrf
 @router.delete("/skills/manual/{name}")
 def delete_manual_skill(
     name: str,

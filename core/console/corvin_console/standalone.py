@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Standalone FastAPI application for native (non-Docker) deployments.
 
 Usage
@@ -770,6 +771,7 @@ def create_app() -> FastAPI:
         _a2a_available = False
         _a2a_receiver = None
 
+    @require_csrf
     @app.post("/v1/a2a/receive", include_in_schema=False)
     async def _a2a_receive(request: Request) -> JSONResponse:
         """Layer 38 — A2A inbound receive.
@@ -787,6 +789,7 @@ def create_app() -> FastAPI:
         response = _a2a_receiver.receive(body)
         return JSONResponse(content=response.to_dict())
 
+    @require_csrf
     @app.post("/v1/a2a/ping", include_in_schema=False)
     async def _a2a_ping(request: Request) -> JSONResponse:
         """ADR-0199 — lightweight peer-liveness check (receiver side).
@@ -806,6 +809,7 @@ def create_app() -> FastAPI:
         status_code, payload = process_ping_request(body, _a2a_receiver)
         return JSONResponse(content=payload, status_code=status_code)
 
+    @require_csrf
     @app.post("/v1/a2a/friendship-ack", include_in_schema=False)
     async def _a2a_friendship_ack(request: Request) -> JSONResponse:
         """Reciprocal friendship handshake (2026-07-29) — the redeemer's

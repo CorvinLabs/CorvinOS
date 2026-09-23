@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Routing Disclosure Response Headers Middleware (CRITICAL — EU AI Act Art. 50).
 
 Adds HTTP response headers that disclose:
@@ -99,6 +100,7 @@ async def add_routing_disclosure_headers(
 
 # Example usage in a route handler:
 #
+@require_csrf
 # @router.post("/v1/run")
 # async def run_task(request: Request, task: TaskRequest):
 #     # Determine user tier

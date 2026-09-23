@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Voice Integration API Routes
 Provides TTS (Text-to-Speech), speech synthesis, and voice narration endpoints.
@@ -58,6 +59,7 @@ class NarrateResponse(BaseModel):
     voice_text: str
 
 
+@require_csrf
 @router.post("/synthesize", response_model=TtsResponse)
 async def synthesize_speech(request: TtsRequest):
     """
@@ -130,6 +132,7 @@ async def synthesize_speech(request: TtsRequest):
         raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
 
 
+@require_csrf
 @router.post("/narrate", response_model=NarrateResponse)
 async def narrate_task_outcome(request: NarrateRequest):
     """
@@ -187,6 +190,7 @@ async def check_tts_status():
 
 
 # Learning integration: Collect feedback on narration quality
+@require_csrf
 @router.post("/feedback")
 async def submit_narration_feedback(task_id: str, quality_score: float, notes: Optional[str] = None):
     """

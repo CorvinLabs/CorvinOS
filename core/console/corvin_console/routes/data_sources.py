@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Data Sources console routes (ADR-0106 DSI v1).
 
 Seven endpoints:
@@ -164,6 +165,7 @@ class RegisterRequest(BaseModel):
     manifest: dict[str, Any]
 
 
+@require_csrf
 @router.post("/data-sources", status_code=201)
 def register_connection(
     body: RegisterRequest,
@@ -290,6 +292,7 @@ def get_connection(
 # POST /data-sources/{name}/test
 # ---------------------------------------------------------------------------
 
+@require_csrf
 @router.post("/data-sources/{name}/test")
 def test_connection(
     name: str,
@@ -343,6 +346,7 @@ def test_connection(
 # DELETE /data-sources/{name}
 # ---------------------------------------------------------------------------
 
+@require_csrf
 @router.delete("/data-sources/{name}", status_code=204)
 def unregister_connection(
     name: str,

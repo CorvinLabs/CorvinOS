@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 #!/usr/bin/env python3
 """
 Token Efficiency Benchmarking Framework (Scientific Grade)
@@ -127,6 +128,7 @@ Explain: (1) mocking approach, (2) fixture design, (3) edge cases.""",
             "prompt": """Write clear API documentation for this endpoint:
 
 ```python
+@require_csrf
 @app.post("/api/users/{user_id}/orders")
 async def create_order(user_id: str, order_data: dict) -> dict:
     ...

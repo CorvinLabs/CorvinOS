@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """LDD (Loss-Driven-Development) layer-toggle config.
 
 Wraps the shared ``corvin_operator/bridges/shared/ldd.py`` module which owns
@@ -78,6 +79,7 @@ class MasterToggleRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+@require_csrf
 @router.put("/ldd/master")
 def put_master(
     body: MasterToggleRequest,
@@ -99,6 +101,7 @@ class LayerToggleRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+@require_csrf
 @router.put("/ldd/layers/{layer}")
 def put_layer(
     layer: str,
@@ -122,6 +125,7 @@ class PresetApplyRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+@require_csrf
 @router.post("/ldd/presets/{name}")
 def apply_preset(
     name: str,

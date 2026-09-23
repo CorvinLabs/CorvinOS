@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Control Plane Routes — Subsystem Management Stream 2.
 
@@ -59,6 +60,7 @@ class SubsystemStatusResponse(BaseModel):
     stopped_at: Optional[str]
 
 
+@require_csrf
 @router.patch("/{subsystem_id}/start")
 async def start_subsystem(
     subsystem_id: str,
@@ -94,6 +96,7 @@ async def start_subsystem(
     )
 
 
+@require_csrf
 @router.patch("/{subsystem_id}/pause")
 async def pause_subsystem(
     subsystem_id: str,
@@ -134,6 +137,7 @@ async def pause_subsystem(
     )
 
 
+@require_csrf
 @router.patch("/{subsystem_id}/resume")
 async def resume_subsystem(
     subsystem_id: str,
@@ -169,6 +173,7 @@ async def resume_subsystem(
     )
 
 
+@require_csrf
 @router.patch("/{subsystem_id}/stop")
 async def stop_subsystem(
     subsystem_id: str,

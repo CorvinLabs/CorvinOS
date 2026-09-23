@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """RAG Hub API Routes — Provider Marketplace.
 
 Endpoints:
@@ -154,6 +155,7 @@ async def get_provider(
 
 # ── Publishing ─────────────────────────────────────────────
 
+@require_csrf
 @router.post("/providers")
 async def publish_provider(
     req: dict[str, Any],
@@ -290,6 +292,7 @@ async def get_most_downloaded(
 
 # ── Reviews ────────────────────────────────────────────────
 
+@require_csrf
 @router.post("/reviews")
 async def add_review(
     req: dict[str, Any],
@@ -377,6 +380,7 @@ async def get_reviews(
 
 # ── Import / Export ────────────────────────────────────────
 
+@require_csrf
 @router.post("/import")
 async def import_provider(
     req: dict[str, Any],
@@ -486,6 +490,7 @@ async def import_provider(
         return {"status": "failed", "error": "import_error"}
 
 
+@require_csrf
 @router.post("/export")
 async def export_provider(
     req: dict[str, Any],

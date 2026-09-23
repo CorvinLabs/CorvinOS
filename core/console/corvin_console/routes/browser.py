@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Browser automation REST surface + live view (ADR-0182 M3/M4).
 
 This router is BOTH:
@@ -280,6 +281,7 @@ class CreateSessionReq(BaseModel):
 
 
 # ── session lifecycle ─────────────────────────────────────────────────────────
+@require_csrf
 @router.post("/browser/session")
 async def create_session(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
@@ -345,6 +347,7 @@ async def list_sessions(
     return {"sessions": _mgr().sessions_info(rec.tenant_id, owner_fingerprint=rec.sid_fingerprint)}
 
 
+@require_csrf
 @router.post("/browser/{sid}/close")
 async def close_session(
     sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
@@ -374,6 +377,7 @@ class AttachConsentReq(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+@require_csrf
 @router.post("/browser/attach/consent")
 async def grant_attach_consent(
     body: AttachConsentReq | None,
@@ -397,6 +401,7 @@ async def grant_attach_consent(
             "remaining_s": _ac.status(rec.tenant_id)["remaining_s"]}
 
 
+@require_csrf
 @router.delete("/browser/attach/consent")
 async def revoke_attach_consent(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
@@ -420,6 +425,7 @@ class ConfirmModeReq(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+@require_csrf
 @router.post("/browser/attach/confirm-mode")
 async def set_confirm_mode(
     body: ConfirmModeReq,
@@ -478,6 +484,7 @@ def _owned_session(rec: session_auth.SessionRecord, sid: str):
     return _mgr().session(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
 
 
+@require_csrf
 @router.post("/browser/{sid}/navigate")
 async def navigate(sid: str, body: NavigateReq,
                    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -494,6 +501,7 @@ async def navigate(sid: str, body: NavigateReq,
     obs = await _act(s.navigate(body.url, confirm_cross_host=rec.is_internal_tool))
     return obs.to_dict()
 
+@require_csrf
 @router.post("/browser/{sid}/observe")
 async def observe(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
@@ -543,6 +551,7 @@ async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(requ
 
 
 # ── ADR-0183 S2: expanded action surface ──────────────────────────────────────
+@require_csrf
 @router.post("/browser/{sid}/hover")
 async def hover(sid: str, body: IndexReq,
                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -636,6 +645,7 @@ async def actions(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(r
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"actions": items, "pending": pending, "next": nxt}
 
+@require_csrf
 @router.post("/browser/{sid}/confirm")
 async def confirm(sid: str, body: ConfirmReq,
                   rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -646,6 +656,7 @@ async def confirm(sid: str, body: ConfirmReq,
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"resolved": ok}
 
+@require_csrf
 @router.post("/browser/{sid}/pause")
 async def pause(sid: str, body: PauseReq,
                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -658,6 +669,7 @@ async def pause(sid: str, body: PauseReq,
 
 
 # ── agent loop (natural-language "give it a note", ADR-0182 Part A) ────────────
+@require_csrf
 @router.post("/browser/{sid}/agent")
 async def run_agent(sid: str, body: AgentReq,
                     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -679,6 +691,7 @@ async def run_agent(sid: str, body: AgentReq,
     return {"started": True}
 
 
+@require_csrf
 @router.post("/browser/{sid}/agent/stop")
 async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     try:
@@ -688,6 +701,7 @@ async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depend
     return {"stopped": True}
 
 
+@require_csrf
 @router.post("/browser/{sid}/agent/continue")
 async def continue_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     """ADR-0189: resume a session paused on needs_login/needs_approval — the

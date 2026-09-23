@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """DoD Verifier Dashboard API Routes (ADR-0XXX).
 
 Provides REST endpoints for Definition-of-Done verification:
@@ -93,6 +94,7 @@ def get_event_store(tenant_id: str) -> EventStore:
     return _event_stores[tenant_id]
 
 
+@require_csrf
 @router.post("/verify")
 async def run_dod_verification(
     payload: Dict[str, Any] = Body(...),
@@ -180,6 +182,7 @@ async def run_dod_verification(
         raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)[:100]}")
 
 
+@require_csrf
 @router.post("/feedback")
 async def submit_dod_feedback(
     payload: Dict[str, Any] = Body(...),

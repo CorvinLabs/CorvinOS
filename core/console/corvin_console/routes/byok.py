@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """BYOK (Bring-Your-Own-Key) console endpoints — ADR-0047.
 
 Routes:
@@ -161,6 +162,7 @@ class BYOKSecretRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+@require_csrf
 @router.post("/secrets/{key_name}", status_code=200)
 def post_secret(
     key_name: str,

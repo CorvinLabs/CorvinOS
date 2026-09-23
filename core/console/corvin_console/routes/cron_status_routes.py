@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Cron Service Status Routes — monitor and control scheduled polling.
 
 Endpoints:
@@ -52,6 +53,7 @@ def cron_status(
         )
 
 
+@require_csrf
 @router.post("/cron/trigger-now")
 def cron_trigger_now(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -85,6 +87,7 @@ def cron_trigger_now(
         )
 
 
+@require_csrf
 @router.post("/cron/trigger-now-all")
 def cron_trigger_now_all(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -112,6 +115,7 @@ def cron_trigger_now_all(
         )
 
 
+@require_csrf
 @router.post("/cron/pause")
 def cron_pause(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -141,6 +145,7 @@ def cron_pause(
         )
 
 
+@require_csrf
 @router.post("/cron/resume")
 def cron_resume(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

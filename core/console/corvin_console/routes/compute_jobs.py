@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Compute Job Creator (ADR-0124 M3).
 
 Allows submitting compute jobs (grid / pipeline / batch) from the console.
@@ -107,6 +108,7 @@ def list_compute_jobs(
     return {"tenant_id": rec.tenant_id, "count": len(jobs), "jobs": jobs}
 
 
+@require_csrf
 @router.post("/compute/jobs")
 def submit_compute_job(
     body: JobSubmitRequest,
@@ -163,6 +165,7 @@ def submit_compute_job(
     return {"ok": True, "job_id": job_id, "status": "queued"}
 
 
+@require_csrf
 @router.delete("/compute/jobs/{job_id}")
 def cancel_compute_job(
     job_id: str,

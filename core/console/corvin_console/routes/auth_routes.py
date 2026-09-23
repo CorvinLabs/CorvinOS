@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Login / logout / whoami for the console UI.
 
 Wire format
@@ -57,6 +58,7 @@ class WhoamiResponse(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────
 
 
+@require_csrf
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     request: Request,

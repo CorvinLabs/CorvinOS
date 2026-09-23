@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Console routes for the plugin registry (ADR-0233 Phase 4).
 
 Behind the ``plugin_console_surface`` feature flag: with the flag off every route
@@ -727,6 +728,7 @@ async def get_plugin(
 # ── Mutations (CSRF-protected) ────────────────────────────────────────────────
 
 
+@require_csrf
 @router.post("/plugins")
 async def install_plugin(
     body: InstallIn,
@@ -764,6 +766,7 @@ async def install_plugin(
     return _to_out(stored)
 
 
+@require_csrf
 @router.post("/plugins/{plugin_id}/enable")
 async def enable_plugin(
     plugin_id: str,
@@ -777,6 +780,7 @@ async def enable_plugin(
         raise _mutation_error(exc) from exc
 
 
+@require_csrf
 @router.post("/plugins/{plugin_id}/disable")
 async def disable_plugin(
     plugin_id: str,
@@ -804,6 +808,7 @@ async def disable_plugin(
         raise _mutation_error(exc) from exc
 
 
+@require_csrf
 @router.post("/plugins/{plugin_id}/settings")
 async def update_settings(
     plugin_id: str,
@@ -816,6 +821,7 @@ async def update_settings(
         raise _mutation_error(exc) from exc
 
 
+@require_csrf
 @router.delete("/plugins/{plugin_id}")
 async def uninstall_plugin(
     plugin_id: str,

@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Quality Metrics API Routes (ADR-0731, ADR-0733)
 Specification-as-Loss-Landscape endpoints for console dashboard
@@ -86,6 +87,7 @@ async def get_quality_metrics(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/metrics/export")
 async def export_metrics(
     task_id: str = Query(...),

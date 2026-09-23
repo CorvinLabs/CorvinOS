@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Corvin-Knowledge console routes (marketplace plugin panel backend).
 
@@ -191,6 +192,7 @@ async def get_config(session: Any = Depends(require_session)) -> Dict[str, Any]:
     return effective_config(getattr(session, "tenant_id", "_default"))
 
 
+@require_csrf
 @router.post("/config")
 async def update_config(
     body: ConfigUpdate, session: Any = Depends(require_csrf)
@@ -222,6 +224,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+@require_csrf
 @router.post("/sync")
 async def sync_repository(
     body: SyncRequest, session: Any = Depends(require_csrf)
@@ -269,6 +272,7 @@ async def sync_repository(
     return result
 
 
+@require_csrf
 @router.post("/init")
 async def init_plugin(session: Any = Depends(require_csrf)) -> Dict[str, Any]:
     """Called on plugin installation: default config + graph directory."""
@@ -284,6 +288,7 @@ async def init_plugin(session: Any = Depends(require_csrf)) -> Dict[str, Any]:
     }
 
 
+@require_csrf
 @router.post("/cleanup")
 async def cleanup_plugin(session: Any = Depends(require_csrf)) -> Dict[str, Any]:
     """Called on plugin uninstallation: remove the config file."""

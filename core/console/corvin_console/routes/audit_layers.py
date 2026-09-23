@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Custom Audit Layers (ADR-0124 M6).
 
 Operators define custom event-type namespaces with allowed field schemas.
@@ -137,6 +138,7 @@ def list_audit_layers(
     return {"tenant_id": rec.tenant_id, "count": len(layers), "layers": layers}
 
 
+@require_csrf
 @router.put("/audit/layers/{layer_id}")
 def register_audit_layer(
     layer_id: str,
@@ -211,6 +213,7 @@ def register_audit_layer(
     return {"ok": True, "layer_id": layer_id, "updated": is_update}
 
 
+@require_csrf
 @router.delete("/audit/layers/{layer_id}")
 def remove_audit_layer(
     layer_id: str,
@@ -244,6 +247,7 @@ def remove_audit_layer(
     return {"ok": True, "layer_id": layer_id}
 
 
+@require_csrf
 @router.post("/audit/emit")
 def emit_custom_event(
     body: AuditEmitRequest,

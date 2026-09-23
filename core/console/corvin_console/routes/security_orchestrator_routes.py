@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Security Orchestrator Console Routes (Week 5-7, ADR-2031).
 
@@ -193,6 +194,7 @@ async def get_threats(
 # ============================================================================
 
 
+@require_csrf
 @router.post("/feedback", response_model=FeedbackResponse)
 async def post_threat_feedback(feedback: FeedbackRequest) -> FeedbackResponse:
     """
@@ -318,6 +320,7 @@ async def get_audit_trail(
 # ============================================================================
 
 
+@require_csrf
 @router.put("/policy", response_model=PolicyOverrideResponse)
 async def put_policy_override(override: PolicyOverrideRequest) -> PolicyOverrideResponse:
     """

@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Model Cost Optimizer API — ADR-0377 Phase 2b, renamed ADR-0696
 
@@ -485,6 +486,7 @@ async def get_learning_status(
         )
 
 
+@require_csrf
 @router.post("/override")
 async def override_threshold(
     req: OverrideRequest,
@@ -555,6 +557,7 @@ async def override_threshold(
         )
 
 
+@require_csrf
 @router.post("/reset")
 async def reset_learning(
     req: ResetRequest,
@@ -599,6 +602,7 @@ async def reset_learning(
         )
 
 
+@require_csrf
 @router.post("/usage-epoch")
 async def reset_usage_window(
     req: UsageEpochRequest,
@@ -693,6 +697,7 @@ async def export_thresholds(
         )
 
 
+@require_csrf
 @router.post("/import")
 async def import_thresholds(
     data: Dict[str, Any],

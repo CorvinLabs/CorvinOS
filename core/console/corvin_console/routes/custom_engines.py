@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Custom Engine Registry (ADR-0124 M1).
 
 Operators register their own engines (OpenAI-compat, Anthropic-compat,
@@ -144,6 +145,7 @@ def list_custom_engines(
     return {"tenant_id": rec.tenant_id, "count": len(engines), "engines": engines}
 
 
+@require_csrf
 @router.put("/engines/custom/{engine_id}")
 def register_custom_engine(
     engine_id: str,
@@ -212,6 +214,7 @@ def register_custom_engine(
     return {"ok": True, "engine_id": engine_id, "updated": is_update}
 
 
+@require_csrf
 @router.delete("/engines/custom/{engine_id}")
 def remove_custom_engine(
     engine_id: str,
@@ -235,6 +238,7 @@ def remove_custom_engine(
     return {"ok": True, "engine_id": engine_id}
 
 
+@require_csrf
 @router.post("/engines/custom/{engine_id}/ping")
 def ping_custom_engine(
     engine_id: str,

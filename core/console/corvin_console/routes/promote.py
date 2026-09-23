@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Promote a forge tool / skill-forge skill to a higher scope.
 
 Wraps the existing ``MultiRegistry.promote`` (forge) and
@@ -63,6 +64,7 @@ def _audit_fail(rec: session_auth.SessionRecord, *, action: str,
     )
 
 
+@require_csrf
 @router.post("/tools/{name}/promote")
 def tool_promote(
     name: str,
@@ -112,6 +114,7 @@ def tool_promote(
             "promoted": True}
 
 
+@require_csrf
 @router.post("/skills/{name}/promote")
 def skill_promote(
     name: str,

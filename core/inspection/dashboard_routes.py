@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 FIXED: Dashboard Routes with tenant isolation + input validation + async fixes.
 
@@ -204,6 +205,7 @@ def register_inspection_routes(app, maestro: Maestro, learning_adapter: Learning
     """Register inspection routes on Flask/FastAPI app."""
     api = InspectionDashboardAPI(maestro, learning_adapter, tenant_id)
 
+    @require_csrf
     @app.post("/v1/inspection/analyze")
     async def analyze(request: Dict):
         # FIX: Validate request keys
@@ -223,6 +225,7 @@ def register_inspection_routes(app, maestro: Maestro, learning_adapter: Learning
         result = api.get_result(media_id)
         return result or {"error": "Not found"}
 
+    @require_csrf
     @app.post("/v1/inspection/feedback")
     def submit_feedback(request: Dict):
         # FIX: Validate required keys

@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Manual Tool Creation (ADR-0124 M5b).
 
 Operators author forge tools directly in the console. Tools are stored
@@ -170,6 +171,7 @@ def list_manual_tools(
     return {"tenant_id": rec.tenant_id, "count": len(tools), "tools": tools}
 
 
+@require_csrf
 @router.post("/tools/manual")
 def create_manual_tool(
     body: ToolCreateRequest,
@@ -201,6 +203,7 @@ def create_manual_tool(
     return {"ok": True, "name": body.name}
 
 
+@require_csrf
 @router.put("/tools/manual/{name}")
 def update_manual_tool(
     name: str,
@@ -235,6 +238,7 @@ def update_manual_tool(
     return {"ok": True, "name": name}
 
 
+@require_csrf
 @router.delete("/tools/manual/{name}")
 def delete_manual_tool(
     name: str,
@@ -263,6 +267,7 @@ def delete_manual_tool(
     return {"ok": True, "name": name}
 
 
+@require_csrf
 @router.post("/tools/preview")
 def preview_tool(
     body: ToolPreviewRequest,

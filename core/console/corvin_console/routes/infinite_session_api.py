@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Infinite Session Dashboard API (Phase D) — ADR-0545.
 
 Mounted under ``/v1/console`` (``app.py``), prefix ``/api/infinite-session``:
@@ -305,6 +306,7 @@ async def get_context_diff(
     )
 
 
+@require_csrf
 @router.post("/task/{task_id}/revert", response_model=RevertResult, summary="Revert to checkpoint")
 async def revert_to_checkpoint(
     task_id: Annotated[str, _TASK_ID],

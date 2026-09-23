@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Deprecated API Monitoring Dashboard — Week 5 Baseline Metrics
 
 ADR-0538 Phase B: Legacy Cleanup Monitoring
@@ -474,6 +475,7 @@ async def get_trend(
     )
 
 
+@require_csrf
 @router.post("/export")
 async def export_metrics(
     req: ExportRequest,

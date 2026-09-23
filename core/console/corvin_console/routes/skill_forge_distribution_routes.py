@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Skill Forge v2.0 Distribution Endpoints
 
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/skill-forge", tags=["skill-forge-v2"])
 
 
+@require_csrf
 @router.post("/package")
 async def package_skill(
     rec: Annotated[Any, Depends(require_csrf)],
@@ -206,6 +208,7 @@ async def download_package(filename: str, rec: Annotated[Any, Depends(require_se
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
+@require_csrf
 @router.post("/install")
 async def install_skill(
     rec: Annotated[Any, Depends(require_csrf)],

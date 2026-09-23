@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Routes for /btw Midstream Steering (ADR-0846, PRODUCTION READY)
 
 k=3 Complete Implementation:
@@ -17,6 +18,7 @@ class BtwRequest:
         self.instruction = instruction
 
 
+@require_csrf
 @router.post("/btw")
 async def handle_btw(request: BtwRequest) -> dict:
     """

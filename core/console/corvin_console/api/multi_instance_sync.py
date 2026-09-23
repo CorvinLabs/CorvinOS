@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Multi-instance metrics sync API (Phase 7b/9a, ADR-0277)."""
 
 import asyncio
@@ -358,6 +359,7 @@ def _is_valid_peer_id(peer_id: str) -> bool:
         return False
 
 
+@require_csrf
 @router.post("/sync-config")
 async def sync_config(req: SyncConfigRequest, session=Depends(require_session), csrf=Depends(require_csrf)):
     """Sync tenant config (including preset) to peer instances."""
@@ -410,6 +412,7 @@ async def sync_status(peer_id: str, session=Depends(require_session)):
 # New endpoints for cross-instance workflow execution
 
 
+@require_csrf
 @router.post("/send-task")
 async def send_task(
     req: SendTaskRequest,
@@ -532,6 +535,7 @@ async def list_instances(session=Depends(require_session)):
     }
 
 
+@require_csrf
 @router.delete("/tasks/{task_id}")
 async def cancel_task(
     task_id: str,

@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Voice Integration API v2 — Quality-First TTS with Fallback
 
@@ -60,6 +61,7 @@ class NarrateResponse(BaseModel):
     voice_text: str = ""
 
 
+@require_csrf
 @router.post("/synthesize", response_model=TtsResponse)
 async def synthesize_speech(request: TtsRequest) -> TtsResponse:
     """
@@ -149,6 +151,7 @@ async def synthesize_speech(request: TtsRequest) -> TtsResponse:
         )
 
 
+@require_csrf
 @router.post("/narrate", response_model=NarrateResponse)
 async def narrate_task_outcome(request: NarrateRequest) -> NarrateResponse:
     """
@@ -227,6 +230,7 @@ async def check_tts_status():
     }
 
 
+@require_csrf
 @router.post("/test")
 async def test_tts_providers():
     """

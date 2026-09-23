@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Console model registry API — ADR-0245 (Live Model Discovery).
 
 Endpoints
@@ -358,6 +359,7 @@ async def get_live_models(
     }
 
 
+@require_csrf
 @router.post("/models/live/refresh")
 async def trigger_live_refresh(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

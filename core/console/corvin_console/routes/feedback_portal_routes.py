@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Console API routes for Phase 9 Feedback Portal (ADR-2028, ADR-2029).
 
 Endpoints:
@@ -85,6 +86,7 @@ async def get_feedback_portal(
 # Routes
 # ============================================================================
 
+@require_csrf
 @router.post("/bug-report", response_model=FeedbackResponse)
 async def submit_bug_report(
     req: BugReportRequest,
@@ -142,6 +144,7 @@ async def submit_bug_report(
         raise HTTPException(status_code=500, detail="Failed to submit bug report")
 
 
+@require_csrf
 @router.post("/feature-request", response_model=FeedbackResponse)
 async def submit_feature_request(
     req: FeatureRequestRequest,
@@ -181,6 +184,7 @@ async def submit_feature_request(
         raise HTTPException(status_code=500, detail="Failed to submit feature request")
 
 
+@require_csrf
 @router.post("/nps-survey", response_model=FeedbackResponse)
 async def submit_nps_survey(
     req: NPSSurveyRequest,

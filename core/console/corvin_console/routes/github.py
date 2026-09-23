@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """FastAPI GitHub Integration routes for Cross-Device-Learning Sync.
 
 Full implementation with:
@@ -112,6 +113,7 @@ class AutoSyncRequest(BaseModel):
     enabled: bool
 
 
+@require_csrf
 @router.post("/verify")
 async def verify_github_connection(
     body: VerifyRequest,
@@ -209,6 +211,7 @@ async def get_github_config(
         raise HTTPException(status_code=500, detail="Failed to read config")
 
 
+@require_csrf
 @router.delete("/config")
 async def disconnect_github(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -239,6 +242,7 @@ async def get_worker_status(
     return get_worker(rec.tenant_id).get_status()
 
 
+@require_csrf
 @router.post("/worker/start")
 async def start_worker(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -250,6 +254,7 @@ async def start_worker(
     return result
 
 
+@require_csrf
 @router.post("/worker/stop")
 async def stop_worker(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -261,6 +266,7 @@ async def stop_worker(
     return result
 
 
+@require_csrf
 @router.post("/auto-sync")
 async def set_auto_sync(
     body: AutoSyncRequest,

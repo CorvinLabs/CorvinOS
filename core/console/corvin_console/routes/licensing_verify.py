@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Licensing Verification Endpoint (ADR-0700/0703)
 
 POST /v1/licensing/verify — Capability verification for E2E testing and client-side checks.
@@ -57,6 +58,7 @@ class VerifyResponse(BaseModel):
 # Endpoints
 # ============================================================================
 
+@require_csrf
 @router.post("/verify", response_model=VerifyResponse)
 async def verify_capability(
     req: VerifyRequest,

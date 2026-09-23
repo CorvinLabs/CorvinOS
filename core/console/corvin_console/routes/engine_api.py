@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Engine Configuration API — Model Selection Dashboard
 
@@ -678,6 +679,7 @@ async def get_engine_config(
     }
 
 
+@require_csrf
 @router.put("/v1/engine/config")
 async def update_engine_config(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -748,6 +750,7 @@ async def update_engine_config(
     return await get_engine_config(rec)
 
 
+@require_csrf
 @router.post(
     "/v1/engine/external-provider/test",
     response_model=ExternalProviderTestResponse,

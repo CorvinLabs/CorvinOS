@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Per-chat engine preference API — ADR-0067.
 
 Wraps engine_switch.py so the console SPA can read and write the
@@ -151,6 +152,7 @@ def get_engine_pref(
     )
 
 
+@require_csrf
 @router.put("/{chat_key}", response_model=EnginePrefResponse)
 def set_engine_pref(
     chat_key: str,
@@ -218,6 +220,7 @@ def set_engine_pref(
     )
 
 
+@require_csrf
 @router.delete("/{chat_key}", response_model=EnginePrefResponse)
 def clear_engine_pref(
     chat_key: str,

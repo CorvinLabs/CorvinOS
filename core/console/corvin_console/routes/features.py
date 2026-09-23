@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Feature Whitelist Management — operator controls which features are enabled.
 
 ADR-0XXX: Whitelist strategy allows operator to declare tested & verified features.
@@ -70,6 +71,7 @@ async def get_whitelist(session: SessionRecord = Depends(require_session)):
     )
 
 
+@require_csrf
 @router.post("/features/toggle")
 async def toggle_feature(
     request: ToggleRequest,

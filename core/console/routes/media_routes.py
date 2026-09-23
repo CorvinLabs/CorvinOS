@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """API routes for media management and distribution.
 
 Endpoints:
@@ -193,6 +194,7 @@ def create_media_router() -> Any:
     router = APIRouter(prefix="/v1/console/media", tags=["media"])
     media_mgr = get_media_manager()
 
+    @require_csrf
     @router.post("/upload", status_code=201)
     async def upload_media(
         file: UploadFile = File(...),
@@ -292,6 +294,7 @@ def create_media_router() -> Any:
             ]
         }
 
+    @require_csrf
     @router.post("/send-to-bridge", status_code=202)
     async def send_to_bridge(
         media_id: str = Body(...),
@@ -321,6 +324,7 @@ def create_media_router() -> Any:
             log.error(f"Send to bridge failed: {e}")
             raise HTTPException(status_code=500, detail={"error": "send_failed", "reason": str(e)})
 
+    @require_csrf
     @router.delete("/{media_id}", status_code=200)
     async def delete_media(media_id: str) -> dict:
         """Delete a media file"""

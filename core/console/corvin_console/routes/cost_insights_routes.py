@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Cost Insights API Routes for Stories 4-6 (Dashboard Backend).
 
 Endpoints:
@@ -340,6 +341,7 @@ async def get_guardrails() -> GuardrailsResponse:
     )
 
 
+@require_csrf
 @router.post("/guardrails", response_model=GuardrailsResponse)
 async def set_guardrails(request: GuardrailsRequest) -> GuardrailsResponse:
     """Set budget guardrails (Story 9).

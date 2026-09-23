@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Quality Layers (ADR Gate, docs-as-definition-of-done, etc.) configuration.
 
 Wraps the shared ``corvin_operator/bridges/shared/quality_layers.py`` module which owns
@@ -93,6 +94,7 @@ def get_quality_layers(
     return _snapshot()
 
 
+@require_csrf
 @router.put("/quality-layers/master")
 def put_master(
     body: MasterToggleRequest,
@@ -135,6 +137,7 @@ def put_master(
         )
 
 
+@require_csrf
 @router.put("/quality-layers/layers/{layer_name}")
 def put_layer(
     layer_name: str,

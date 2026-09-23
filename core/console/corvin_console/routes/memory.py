@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Auto-Memory browser — read-only view of the persistent memory store.
 
 Memory lives at ``~/.claude/projects/<project-slug>/memory/``. The
@@ -194,6 +195,7 @@ class MemoryWriteRequest(BaseModel):
 _MAX_BODY_BYTES = 256 * 1024   # 256 KiB cap; same order as memory file convention
 
 
+@require_csrf
 @router.put("/memory/{name}")
 def memory_write(
     name: str,
@@ -278,6 +280,7 @@ def memory_write(
     }
 
 
+@require_csrf
 @router.delete("/memory/{name}")
 def memory_delete(
     name: str,

@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Model Selection Analytics API — Phase 3, Component 3.
 
@@ -366,6 +367,7 @@ async def get_recent_classifications(
     return {"tenant_id": rec.tenant_id, "windowed": False, "items": items}
 
 
+@require_csrf
 @router.post("/feedback", response_model=FeedbackResponse)
 def post_feedback(  # sync on purpose: two file locks + a chain write run in the threadpool, not on the event loop
 
@@ -497,6 +499,7 @@ async def get_model_history(
         raise HTTPException(status_code=500, detail="Failed to get model history")
 
 
+@require_csrf
 @router.post("/reset", response_model=ResetResponse)
 def reset_learning(  # sync on purpose: two file locks off the event loop
     rec: session_auth.SessionRecord = Depends(require_session),

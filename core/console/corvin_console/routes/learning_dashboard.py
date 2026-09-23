@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Learning Dashboard API endpoints (ADR-0321).
 
 Provides REST API for observability:
@@ -193,6 +194,7 @@ async def get_user_metrics(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/subscribe", summary="Register for WebSocket updates")
 async def subscribe_for_updates(
     user_scoped: bool = Query(False, description="Subscribe to user-scoped metrics only"),
@@ -239,6 +241,7 @@ async def subscribe_for_updates(
     }
 
 
+@require_csrf
 @router.post("/unsubscribe", summary="Unregister WebSocket subscriber")
 async def unsubscribe(
     subscriber_id: str,

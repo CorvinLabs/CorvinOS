@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Intent Router Routes — HTTP endpoints for intent classification.
 
@@ -57,6 +58,7 @@ class IntentAuditEvent(BaseModel):
     status: str
 
 
+@require_csrf
 @router.post("/classify")
 async def classify_user_intent(
     req: IntentClassifyRequest,

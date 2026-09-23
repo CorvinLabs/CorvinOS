@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """API endpoints for feature status (preset + dashboard). Phase 5, ADR-0287/0288."""
 
 import os
@@ -68,6 +69,7 @@ async def get_preset(session=Depends(require_session)):
     return {"preset": preset}
 
 
+@require_csrf
 @router.post("/preset")
 async def set_preset(body: dict, session=Depends(require_session), csrf=Depends(require_csrf)):
     """Set installation preset. Requires restart to take effect."""

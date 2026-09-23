@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """License management — view, upload, revoke Enterprise license keys.
 
 Endpoints
@@ -265,6 +266,7 @@ async def get_license_status(
     return _compute_license_status()
 
 
+@require_csrf
 @router.post("/upload", response_model=LicenseUploadResponse)
 async def upload_license(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -472,6 +474,7 @@ async def upload_license(
     )
 
 
+@require_csrf
 @router.post("/revoke")
 async def revoke_license(
     req: LicenseRevokeRequest,
@@ -699,6 +702,7 @@ class LicenseKeyResponse(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+@require_csrf
 @router.post("/key", response_model=LicenseKeyResponse)
 async def apply_license_key(
     req: LicenseKeyRequest,

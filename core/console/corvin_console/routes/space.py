@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """CorvinSpace — personal profile + public domains (Layer 40).
 
 Endpoints
@@ -196,6 +197,7 @@ def space_profile_get(
     }
 
 
+@require_csrf
 @router.put("/profile")
 def space_profile_update(
     body: ProfileUpdateRequest,
@@ -257,6 +259,7 @@ def space_domains_list(
     }
 
 
+@require_csrf
 @router.post("/domains")
 def space_domains_create(
     body: DomainCreateRequest,
@@ -333,6 +336,7 @@ def space_domains_create(
     return {"ok": True, "domain": asdict(domain), "ts": time.time()}
 
 
+@require_csrf
 @router.put("/domains/{slug}")
 def space_domains_update(
     slug: str,
@@ -356,6 +360,7 @@ def space_domains_update(
     return {"ok": True, "domain": asdict(domain), "ts": time.time()}
 
 
+@require_csrf
 @router.delete("/domains/{slug}")
 def space_domains_delete(
     slug: str,
@@ -378,6 +383,7 @@ def space_domains_delete(
     return {"ok": True, "ts": time.time()}
 
 
+@require_csrf
 @router.post("/domains/{slug}/publish")
 def space_domains_publish(
     slug: str,
@@ -497,6 +503,7 @@ def space_social_status(
     }
 
 
+@require_csrf
 @router.post("/social/join")
 def space_social_join(
     body: SocialJoinRequest,
@@ -526,6 +533,7 @@ def space_social_join(
     return {"ok": True, "result": result, "ts": time.time()}
 
 
+@require_csrf
 @router.post("/social/leave")
 def space_social_leave(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -542,6 +550,7 @@ def space_social_leave(
     return {"ok": True, "result": result, "ts": time.time()}
 
 
+@require_csrf
 @router.post("/social/follow")
 def space_social_follow(
     body: SocialFollowRequest,

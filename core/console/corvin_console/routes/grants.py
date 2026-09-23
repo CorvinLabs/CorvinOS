@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Layer 41 Social Capability Grants — console REST routes.
 
 Endpoints (mounted at /v1/console/grants by app.py):
@@ -156,6 +157,7 @@ def list_grants(
         "ts": time.time(),
     }
 
+@require_csrf
 @router.post("")
 def create_grant(
     body: GrantCreateRequest,
@@ -196,6 +198,7 @@ def create_grant(
     )
     return {"ok": True, "grant": _sanitize_grant(doc), "ts": time.time()}
 
+@require_csrf
 @router.delete("/{grant_id}")
 def revoke_grant(
     grant_id: str,

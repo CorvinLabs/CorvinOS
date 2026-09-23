@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """DataHub Phase 3: Console API Routes
 
 Endpoints:
@@ -145,6 +146,7 @@ def _artifact_exists(tenant_id: str, name: str) -> bool:
 # Endpoints
 # ============================================================================
 
+@require_csrf
 @router.post("/datahub/create")
 def create_artifact(
     req: ArtifactCreateRequest,
@@ -276,6 +278,7 @@ def get_artifact(
     )
 
 
+@require_csrf
 @router.delete("/datahub/{artifact_id}")
 def delete_artifact(
     artifact_id: str,

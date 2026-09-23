@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Web-chat routes — REST session management + WebSocket streaming.
 
 See ``chat_runtime.py`` for the runtime contract and v1 scope notes
@@ -148,6 +149,7 @@ class CreateSessionRequest(BaseModel):
     re_auth_token: str | None = None  # Optional — sessions are cheap, no PIN required.
     model_config = {"extra": "forbid"}
 
+@require_csrf
 @router.post("/chat/sessions")
 def create_chat_session(
     body: CreateSessionRequest,
@@ -163,6 +165,7 @@ def create_chat_session(
     )
     return {"ok": True, "session": _project(sess)}
 
+@require_csrf
 @router.delete("/chat/sessions/{sid}")
 def delete_chat_session(
     sid: str,
@@ -183,6 +186,7 @@ class RenameSessionRequest(BaseModel):
     title: str = Field("", max_length=120)
     model_config = {"extra": "forbid"}
 
+@require_csrf
 @router.patch("/chat/sessions/{sid}")
 def rename_chat_session(
     sid: str,
@@ -424,6 +428,7 @@ def _safe_attach_name(raw: str) -> str:
     return clean or "file"
 
 
+@require_csrf
 @router.post("/chat/sessions/{sid}/attachments")
 async def upload_attachments(
     sid: str,
@@ -924,6 +929,7 @@ async def stream_task_events(
         },
     )
 
+@require_csrf
 @router.delete("/chat/sessions/{sid}/tasks/{task_id}")
 def cancel_session_task(
     sid: str,

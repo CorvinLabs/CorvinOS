@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """Consent Gate — GDPR Art. 6 Consent Enforcement (load-bearing).
 
 Provides @consent_required decorator for routes requiring user consent
@@ -42,6 +43,7 @@ def consent_required(consent_scope: str = "default") -> Callable:
         Dependency function for FastAPI routes
 
     Example:
+        @require_csrf
         @router.post("/overrides/{id}/approve")
         async def approve_override(
             override_id: str,

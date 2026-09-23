@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Unified Forge Panel API — consolidates Tools, Skills, OS-Skills management.
 
@@ -165,6 +166,7 @@ _TOOL_MUTATION_DETAIL = (
 )
 
 
+@require_csrf
 @router.post("/tools/{tool_id}/enable", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def enable_tool(
     tool_id: str,
@@ -175,6 +177,7 @@ async def enable_tool(
                         detail=_TOOL_MUTATION_DETAIL)
 
 
+@require_csrf
 @router.post("/tools/{tool_id}/disable", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def disable_tool(
     tool_id: str,
@@ -264,6 +267,7 @@ async def list_skills(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/skills/{skill_id}/rollback")
 async def rollback_skill(
     skill_id: str,
@@ -309,6 +313,7 @@ _SKILL_MUTATION_DETAIL = (
 )
 
 
+@require_csrf
 @router.post("/skills/{skill_id}/enable", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def enable_skill(
     skill_id: str,
@@ -319,6 +324,7 @@ async def enable_skill(
                         detail=_SKILL_MUTATION_DETAIL)
 
 
+@require_csrf
 @router.post("/skills/{skill_id}/disable", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def disable_skill(
     skill_id: str,
@@ -398,6 +404,7 @@ async def list_os_skills(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/os-skills/{os_skill_id}/config", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def update_os_skill_config(
     os_skill_id: str,
@@ -421,6 +428,7 @@ async def update_os_skill_config(
     )
 
 
+@require_csrf
 @router.post("/os-skills/{os_skill_id}/disable")
 async def disable_os_skill(
     os_skill_id: str,
@@ -475,6 +483,7 @@ async def disable_os_skill(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/os-skills/{os_skill_id}/enable")
 async def enable_os_skill(
     os_skill_id: str,

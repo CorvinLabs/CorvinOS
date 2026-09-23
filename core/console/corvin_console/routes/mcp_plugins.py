@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """MCP Plugin Manager — console REST endpoints (ADR-0096 M3).
 
 Endpoints
@@ -176,6 +177,7 @@ def _require_console_scope(scope: str) -> None:
         )
 
 
+@require_csrf
 @router.post("/install", response_model=ToolResponse)
 def install_tool(
     body: InstallRequest,
@@ -205,6 +207,7 @@ def install_tool(
     return {"ok": True, "tool": _tool_view(entry, active)}
 
 
+@require_csrf
 @router.post("/{tool_id}/activate", response_model=ToolResponse)
 def activate_tool(
     tool_id: str,
@@ -234,6 +237,7 @@ def activate_tool(
     return {"ok": True, "tool": _tool_view(entry or {"id": tool_id}, active)}
 
 
+@require_csrf
 @router.post("/{tool_id}/deactivate", response_model=ToolResponse)
 def deactivate_tool(
     tool_id: str,
@@ -263,6 +267,7 @@ def deactivate_tool(
     return {"ok": True, "tool": _tool_view(entry or {"id": tool_id}, active)}
 
 
+@require_csrf
 @router.delete("/{tool_id}")
 def remove_tool(
     tool_id: str,

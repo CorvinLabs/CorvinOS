@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Marketplace Skills API — OS-Skills Discovery, Installation & Rating (ADR-0535+).
 
@@ -418,6 +419,7 @@ async def get_skill_details(
     }
 
 
+@require_csrf
 @router.post("/{skill_id}/install")
 async def install_skill(
     skill_id: str,
@@ -484,6 +486,7 @@ async def install_skill(
     }
 
 
+@require_csrf
 @router.post("/{skill_id}/uninstall")
 async def uninstall_skill(
     skill_id: str,
@@ -523,6 +526,7 @@ async def uninstall_skill(
     }
 
 
+@require_csrf
 @router.post("/{skill_id}/rate")
 async def rate_skill(
     skill_id: str,

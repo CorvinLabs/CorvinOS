@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """
 Console API Routes: Integration Layer (Console UI ↔ Registry API).
 
@@ -150,6 +151,7 @@ async def list_plugins(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/plugins/{plugin_id}/install")
 async def install_plugin(
     plugin_id: str,
@@ -212,6 +214,7 @@ async def install_plugin(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/plugins/{plugin_id}/uninstall")
 async def uninstall_plugin(
     plugin_id: str,
@@ -238,6 +241,7 @@ async def uninstall_plugin(
     }
 
 
+@require_csrf
 @router.patch("/plugins/{plugin_id}/enable")
 async def enable_plugin(
     plugin_id: str,
@@ -258,6 +262,7 @@ async def enable_plugin(
     }
 
 
+@require_csrf
 @router.patch("/plugins/{plugin_id}/disable")
 async def disable_plugin(
     plugin_id: str,
@@ -301,6 +306,7 @@ async def list_skills(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/skills/promote")
 async def promote_skill(
     request: SkillPromoteRequest,
@@ -367,6 +373,7 @@ async def promote_skill(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/skills/{skill_id}/grade")
 async def record_skill_grade(
     skill_id: str,
@@ -528,6 +535,7 @@ async def get_data_flow_events(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@require_csrf
 @router.post("/data-flow/validate")
 async def validate_data_flow(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -563,6 +571,7 @@ async def validate_data_flow(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+@require_csrf
 @router.post("/deploy-plugin")
 async def deploy_generated_plugin(
     plugin_path: str = Query(..., description="Path to generated plugin"),

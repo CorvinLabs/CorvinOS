@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """FastAPI routes for Video Producer plugin."""
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
@@ -168,6 +169,7 @@ _settings = {
 }
 
 
+@require_csrf
 @router.post("/jobs")
 async def create_video_job(
     req: CreateJobRequest,
@@ -283,6 +285,7 @@ async def get_settings():
     return _settings
 
 
+@require_csrf
 @router.put("/settings")
 async def update_settings(
     req: SettingsRequest,
@@ -355,6 +358,7 @@ async def get_captions(job_id: str):
         return {"content": f.read()}
 
 
+@require_csrf
 @router.post("/jobs/{job_id}/youtube")
 async def upload_to_youtube(
     job_id: str,
@@ -545,6 +549,7 @@ async def get_scene_slide(job_id: str, index: int):
     return FileResponse(str(p), media_type="image/png")
 
 
+@require_csrf
 @router.post("/jobs/{job_id}/scenes/{scene_id}/feedback")
 async def submit_scene_feedback(
     job_id: str,

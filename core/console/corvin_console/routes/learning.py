@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """TreeOfThoughts Learning Dashboard API — /v1/console/learning
 
 Endpoints:
@@ -213,6 +214,7 @@ async def get_learning_nodes(
         raise HTTPException(status_code=500, detail=f"Failed to load nodes: {type(e).__name__}")
 
 
+@require_csrf
 @router.post("/learning/grade")
 async def grade_pattern(
     request: GradeRequest,
@@ -240,6 +242,7 @@ async def grade_pattern(
     }
 
 
+@require_csrf
 @router.post("/learning/note")
 async def add_operator_note(
     request: NoteRequest,
@@ -298,6 +301,7 @@ def _record_rating(kind: str, entity_id: str, request, handler, session) -> dict
     }
 
 
+@require_csrf
 @router.post("/tools/{tool_id}/rating", response_model=dict)
 async def rate_tool(
     tool_id: str,
@@ -309,6 +313,7 @@ async def rate_tool(
     return _record_rating("tool", tool_id, request, handler, session)
 
 
+@require_csrf
 @router.post("/skills/{skill_id}/rating", response_model=dict)
 async def rate_skill(
     skill_id: str,
@@ -457,6 +462,7 @@ async def get_method_patterns(session = Depends(require_session)):
         raise HTTPException(status_code=500, detail=f"Failed to retrieve method patterns: {e}")
 
 
+@require_csrf
 @router.post("/learning/patterns/{pattern_id}/confirm", response_model=dict)
 async def confirm_method_pattern(pattern_id: str, session = Depends(require_csrf)):
     """Record an explicit user confirmation of a pattern (CONCEPT-0029 C4).
@@ -776,6 +782,7 @@ async def get_audit_trail(
     return AuditResponse(events=events, count=len(events), chain_path=str(path))
 
 
+@require_csrf
 @router.post("/learning/override")
 async def override_learning_param(request: OverrideRequest, session = Depends(require_csrf)):
     """Not implemented: there is no live meta loop whose α/damping could be overridden.
@@ -794,6 +801,7 @@ async def override_learning_param(request: OverrideRequest, session = Depends(re
     )
 
 
+@require_csrf
 @router.post("/learning/rollback/{checkpoint_id}")
 async def rollback_checkpoint(checkpoint_id: str, session = Depends(require_csrf)):
     """Not implemented here — the real rollback is ``POST learning/config/rollback?to_version=``."""

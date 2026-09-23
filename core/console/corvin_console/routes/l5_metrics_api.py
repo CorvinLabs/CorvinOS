@@ -1,3 +1,4 @@
+from core.security.csrf import require_csrf
 """L5 Metrics API Endpoints — Phase 5: Live Deployment Monitoring
 
 REST endpoints for real-time L5 health status and alerting.
@@ -258,6 +259,7 @@ async def get_l5_alerts(
         raise HTTPException(status_code=500, detail="Failed to fetch alerts")
 
 
+@require_csrf
 @router.post("/alerts/{alert_id}/acknowledge")
 async def acknowledge_l5_alert(
     alert_id: str,
@@ -290,6 +292,7 @@ async def acknowledge_l5_alert(
         raise HTTPException(status_code=500, detail="Failed to acknowledge alert")
 
 
+@require_csrf
 @router.post("/alerts/{alert_id}/resolve")
 async def resolve_l5_alert(
     alert_id: str,
