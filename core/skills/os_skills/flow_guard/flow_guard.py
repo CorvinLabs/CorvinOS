@@ -190,13 +190,38 @@ class FlowGuard:
                 policy_confidence = rule.confidence
                 break
 
-        # Step 4: Check consent (if applicable)
-        if classification.data_class in [
+        # Step 4: Hard-fail for high-risk data classes (never allow, even with consent)
+        high_risk_classes = [
+            DataClassification.CREDENTIALS,
+            DataClassification.ENCRYPTION_KEY,
+            DataClassification.FINANCIAL_ACCOUNT,
+            DataClassification.HEALTH_RECORD,
+        ]
+        if classification.data_class in high_risk_classes:
+            return FlowEvaluation(
+                data_class=classification.data_class.value,
+                classification_confidence=classification.confidence,
+                destination_engine=destination_engine,
+                decision=FlowDecision.DENY,
+                policy_confidence=1.0,
+                reasoning="High-risk data — always blocked (no consent bypass)",
+                evidence=classification.evidence,
+                block_reason=FlowBlockReason.DENY_POLICY,
+                lom=self.__class__.__name__ + ".evaluate_flow:L119",
+            )
+
+        # Step 5: Check consent for medium-risk data (requires explicit consent)
+        # CRITICAL FIX (SEC-006): Include ALL medium-risk classifications, not just subset
+        medium_risk_requires_consent = [
             DataClassification.PERSONAL_EMAIL,
             DataClassification.PHONE_NUMBER,
+            DataClassification.SSN,
             DataClassification.HOME_ADDRESS,
-        ]:
-            # PII requires explicit consent
+            DataClassification.FINANCIAL_DATA,
+            DataClassification.BIOMETRIC_DATA,
+        ]
+        if classification.data_class in medium_risk_requires_consent:
+            # Medium-risk data requires explicit consent
             if not user_consent or not user_consent.get(classification.data_class.value, False):
                 return FlowEvaluation(
                     data_class=classification.data_class.value,
@@ -204,13 +229,13 @@ class FlowGuard:
                     destination_engine=destination_engine,
                     decision=FlowDecision.UNCERTAIN,
                     policy_confidence=0.0,
-                    reasoning="PII requires explicit user consent",
+                    reasoning="Sensitive data requires explicit user consent",
                     evidence=classification.evidence,
                     block_reason=FlowBlockReason.CONSENT_MISSING,
-                    lom=self.__class__.__name__ + ".evaluate_flow:L126",
+                    lom=self.__class__.__name__ + ".evaluate_flow:L148",
                 )
 
-        # Step 5: Make final decision
+        # Step 6: Make final decision based on policy
         final_decision = FlowDecision.ALLOW
         block_reason = None
 
