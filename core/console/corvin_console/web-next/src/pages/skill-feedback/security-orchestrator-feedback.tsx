@@ -1,0 +1,198 @@
+/**
+ * Stream 2: Security Orchestrator Feedback Form
+ * Question: "Was this a real security incident?" (yes/no/false-alarm)
+ * Wires to: POST /v1/console/learning/security-orchestrator/incident
+ */
+
+import React, { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { useSkillFeedbackAPI } from '@/hooks/useSkillFeedbackAPI';
+import { validateReason } from '@/lib/feedback-validators';
+import { OutcomeFeedbackRequest, OutcomeChoice } from '@/types/feedback';
+
+interface SecurityOrchestratorFormData {
+  incidentId?: string;
+  threatType: string;
+  outcome: OutcomeChoice;
+  severityOverride?: boolean;
+  notes?: string;
+}
+
+export function SecurityOrchestratorFeedbackForm() {
+  const { register, handleSubmit, formState: { errors }, reset, watch } =
+    useForm<SecurityOrchestratorFormData>({
+      defaultValues: {
+        outcome: 'yes',
+        severityOverride: false,
+      },
+    });
+
+  const { loading, error, success, submitOutcomeFeedback, reset: resetApi } = useSkillFeedbackAPI();
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const severityOverride = watch('severityOverride');
+
+  const onSubmit = async (data: SecurityOrchestratorFormData) => {
+    // Validate notes
+    if (data.notes) {
+      const validation = validateReason(data.notes);
+      if (!validation.valid) {
+        setNotesError(validation.error);
+        return;
+      }
+    }
+
+    const request: OutcomeFeedbackRequest = {
+      feedback_type: 'outcome_feedback',
+      skill_id: 'os.security_orchestrator',
+      outcome: data.outcome,
+      task_id: data.incidentId,
+      reason: data.notes,
+    };
+
+    await submitOutcomeFeedback(request, {
+      onSuccess: () => {
+        reset();
+        setNotesError(null);
+        setTimeout(() => resetApi(), 3000);
+      },
+      onError: (err) => {
+        console.error('Security feedback submission failed:', err);
+      },
+    });
+  };
+
+  return (
+    <div className="w-full max-w-md rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 p-6">
+      <h2 className="text-lg font-semibold mb-4">Security Orchestrator Feedback</h2>
+      <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-6">
+        Was this a real security threat?
+      </p>
+
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {/* Incident ID (optional) */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Incident ID (optional)</label>
+          <input
+            type="text"
+            {...register('incidentId', { maxLength: 200 })}
+            placeholder="auto-filled from incident context"
+            className="w-full px-3 py-2 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm"
+          />
+        </div>
+
+        {/* Threat Type (read-only) */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Detected Threat Type</label>
+          <select
+            {...register('threatType')}
+            className="w-full px-3 py-2 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm disabled:opacity-50"
+            disabled
+          >
+            <option value="">Select threat type...</option>
+            <option value="sql_injection">SQL Injection</option>
+            <option value="xss">Cross-Site Scripting (XSS)</option>
+            <option value="csrf">CSRF Attack</option>
+            <option value="brute_force">Brute Force</option>
+            <option value="privilege_escalation">Privilege Escalation</option>
+            <option value="data_exfiltration">Data Exfiltration</option>
+          </select>
+        </div>
+
+        {/* Outcome Feedback */}
+        <div>
+          <label className="block text-sm font-medium mb-3">Was this threat real?</label>
+          <div className="space-y-2">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                value="yes"
+                {...register('outcome')}
+                className="w-4 h-4"
+              />
+              <span className="text-sm">Yes, real threat</span>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                value="no"
+                {...register('outcome')}
+                className="w-4 h-4"
+              />
+              <span className="text-sm">No, false alarm</span>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                value="other"
+                {...register('outcome')}
+                className="w-4 h-4"
+              />
+              <span className="text-sm">Unsure/Mixed</span>
+            </label>
+          </div>
+        </div>
+
+        {/* Severity Override */}
+        <div>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              {...register('severityOverride')}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">Disagree with severity rating?</span>
+          </label>
+          {severityOverride && (
+            <p className="text-xs text-neutral-600 dark:text-neutral-400 mt-2">
+              Explain in the notes below why you disagree
+            </p>
+          )}
+        </div>
+
+        {/* Notes Text */}
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Notes (optional, max 500 chars)
+          </label>
+          <textarea
+            {...register('notes', { maxLength: 500 })}
+            placeholder="Additional context about this incident..."
+            rows={3}
+            maxLength={500}
+            className="w-full px-3 py-2 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm resize-none"
+          />
+          {notesError && (
+            <p className="text-sm text-red-600 dark:text-red-400 mt-1">{notesError}</p>
+          )}
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="flex gap-2 p-3 rounded bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
+            <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          </div>
+        )}
+
+        {/* Success Message */}
+        {success && (
+          <div className="flex gap-2 p-3 rounded bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-900">
+            <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-green-700 dark:text-green-300">Threat feedback recorded!</p>
+          </div>
+        )}
+
+        {/* Submit Button */}
+        <button
+          type="submit"
+          disabled={loading || success}
+          className="w-full py-2 px-4 rounded bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-sm flex items-center justify-center gap-2 transition-colors"
+        >
+          {loading && <Loader className="w-4 h-4 animate-spin" />}
+          {loading ? 'Submitting...' : 'Submit Feedback'}
+        </button>
+      </form>
+    </div>
+  );
+}
