@@ -118,6 +118,26 @@ class FeedbackProcessor:
                 delta.tenant_id,
                 type(e).__name__,
             )
+
+            # CRITICAL FIX (ARCH-004): Audit the failure so operator knows config update failed
+            # Without this, operator thinks feedback was processed but it wasn't
+            try:
+                from core.compliance.corvin_compliance_reports.audit import audit_backend
+                if audit_backend:
+                    audit_backend.write_event({
+                        "event_type": "skill_config_update_failed",
+                        "skill_id": delta.skill_id,
+                        "tenant_id": delta.tenant_id,
+                        "error": type(e).__name__,
+                        "error_details": str(e),
+                        "param_deltas": delta.param_deltas,
+                        "confidence_delta": delta.confidence_delta,
+                        "lom": "feedback_processor/process_optimizer_delta:114",
+                    }, lom="feedback_processor/process_optimizer_delta:114")
+            except Exception as audit_error:
+                # Even audit failed — log it but don't fail the error handler
+                logger.error("Failed to audit skill config update failure: %s", audit_error)
+
             return False
 
     def process_feedback_and_optimize(

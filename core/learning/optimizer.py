@@ -69,6 +69,19 @@ class LearningOptimizer:
         if feedback_history is None:
             feedback_history = []
 
+        # CRITICAL FIX (ARCH-003): Verify signature BEFORE processing
+        # Feedback without valid signature is rejected (fail-closed)
+        if not feedback.get("signature_verified", False):
+            if audit_logger:
+                audit_logger.log_event({
+                    "event_type": "optimizer_signature_unverified",
+                    "skill_id": skill_id,
+                    "reason": "feedback_signature_not_verified",
+                    "feedback_id": feedback.get("feedback_id"),
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
+            return None  # Reject unsigned feedback
+
         # Step 1: Validate feedback shape + scrub PII (fail-closed)
         try:
             feedback = await self._validate_and_scrub(feedback)
