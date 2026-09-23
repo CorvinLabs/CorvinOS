@@ -449,5 +449,18 @@ def bootstrap_rotation_daemon(
 
     except Exception as e:
         logger.error(f"Rotation daemon bootstrap failed: {e}")
-        # Return stub daemon (non-blocking failure)
-        return RotationDaemon(tenant_id=tenant_id, audit_backend=None)
+        # CRITICAL FIX (SEC-005): Fail-closed — do NOT proceed without audit backend
+        # Credential rotation without audit trail violates GDPR Art. 30, 32
+        if not audit_backend:
+            logger.critical(
+                f"CRITICAL: Rotation daemon bootstrap failed AND no audit_backend provided. "
+                f"Refusing to proceed (fail-closed). "
+                f"Credential rotation requires audit trail for compliance."
+            )
+            raise ValueError(
+                "audit_backend is REQUIRED for secret rotation daemon bootstrap "
+                "(GDPR Art. 30, 32 compliance — fail-closed)"
+            )
+        # If we have audit_backend, log the failure and return daemon
+        daemon = RotationDaemon(tenant_id=tenant_id, audit_backend=audit_backend, rotation_interval_days=90)
+        return daemon
