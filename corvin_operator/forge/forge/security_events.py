@@ -815,6 +815,12 @@ EVENT_SEVERITY: dict[str, str] = {
     "compute.checkpoint_corrupted":     "WARNING", # L22: checkpoint verification failed
     "compute.deadlock_detected":        "WARNING", # L22: iteration timeout / deadlock
     "compute.iteration_diverged":       "WARNING", # L22: loss regression detected
+    # Layer 22 — Extended Worker Lifecycle (corvin_compute/audit.py — Phase 2)
+    # Metadata only: worker_id, worker_type, cpu_cores, memory_mb, current_loss.
+    # NEVER: execution parameters, output, task data.
+    "compute.worker_spawn_initiated":   "INFO",    # L22: worker spawn started
+    "compute.worker_heartbeat":         "INFO",    # L22: worker status update
+    "compute.worker_terminated":        "INFO",    # L22: worker termination
     # Layer 25 — ACS L34 Flow Guard (acs_runtime/acs.py)
     # Metadata only: acs_id, classification labels, gate_enforcement, bypassed flag.
     # NEVER: input data, output, classified content.
@@ -824,6 +830,41 @@ EVENT_SEVERITY: dict[str, str] = {
     # NEVER: subject_id (subject_id is pseudonymised in chain as-is).
     "erasure.tenant_boundary_checked":  "INFO",    # L36: cross-tenant isolation verified
     "erasure.cross_tenant_detected":    "WARNING", # L36: cross-tenant request attempted
+    # PHASE 2: A2A & Plugin Audit Events (2026-09-26)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Layer 38 — A2A Nonce Block & Offline Pairing (corvin_operator/bridges/shared/a2a_audit.py)
+    # Metadata only: nonce_prefix, peer_id, task_id. NEVER: full nonce, payload content.
+    "a2a.genesis_block_created":        "INFO",    # L38: NBAC chain initialized
+    "a2a.offline_pair_initiated":       "INFO",    # L38: offline pairing started
+    "a2a.nonce_collision_detected":     "WARNING", # L38: nonce collision in validation
+    # Layer 4 — Plugin Lifecycle (core/plugins/corvin_plugins/lifecycle.py)
+    # Metadata only: plugin_id, error_class. NEVER: error text with sensitive content.
+    "plugin.initialization_failed":     "WARNING", # L4: plugin boot error
+    "plugin.execution_timeout":         "WARNING", # L4: plugin execution timeout
+    # PHASE 3 — Audit Completeness (ADR-2040–2044, 2026-09-24)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Layer 10 — Context Engineering Audit (corvin_operator/context_engineering/snapshot.py)
+    # Metadata only: size_bytes, field_count, tenant_id. NEVER: context values, PII.
+    "context.snapshot_generated":       "INFO",    # L10: context snapshot created
+    "context.edited":                   "INFO",    # L10: context field edited (hash prefix only)
+    "context.overflow":                 "WARNING", # L10: context size exceeded limit
+    "context.prompt_injection_detected":"CRITICAL",# L10: prompt injection detected in context
+    # Layer 22 — Compute Fabric Safety Audit (core/compute/compute_runtime.py)
+    # Metadata only: epoch, shard_id, layer_id, nan_count, process_id, wait_duration_ms.
+    # NEVER: checkpoint data, gradient values, process arguments.
+    "compute.checkpoint_corruption":    "CRITICAL",# L22: checkpoint hash mismatch (data corruption)
+    "compute.gradient_nan_detected":    "CRITICAL",# L22: NaN detected in gradient tensor
+    "compute.resource_deadlock":        "CRITICAL",# L22: worker process timeout (deadlock)
+    # Layer 25 — ACS L34 Bypass Detection (corvin_operator/bridges/shared/acs_runtime.py)
+    # Metadata only: worker_id, gate_id, reason. NEVER: task data, worker output.
+    "acs.worker_l34_bypass_attempt":    "CRITICAL",# L25: worker bypassed L34 data flow gate
+    "acs.l34_gate_unavailable":         "WARNING", # L25: L34 gate unavailable (fail-closed deny)
+    # Layer 36 — Erasure Cross-Tenant Isolation (core/gdpr/erasure_orchestrator.py)
+    # Metadata only: job_id, source_tenant, target_tenant, deleted_count, total_count.
+    # NEVER: record IDs, user data, erasure targets.
+    "erasure.cross_tenant_check_failed":"CRITICAL",# L36: erasure job cross-tenant violation
+    "erasure.partial_failure":          "WARNING", # L36: erasure partial failure (some records failed)
+    "erasure.record_delete_failed":     "ERROR",   # L36: single record deletion error
 }
 
 
@@ -2738,6 +2779,39 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "erasure.cross_tenant_detected": frozenset({
         "erasure_id", "source_tenant", "target_tenant", "tenant_id",
+    }),
+    # Layer 22 — Extended Worker Lifecycle (Phase 2).
+    # Metadata only: worker_id, worker_type, cpu_cores, memory_mb, current_loss.
+    # NEVER: execution parameters, task data, model outputs.
+    "compute.worker_spawn_initiated": frozenset({
+        "run_id", "tenant_id", "worker_id", "worker_type", "cpu_cores", "memory_mb",
+    }),
+    "compute.worker_heartbeat": frozenset({
+        "run_id", "tenant_id", "worker_id", "iteration", "current_loss",
+    }),
+    "compute.worker_terminated": frozenset({
+        "run_id", "tenant_id", "worker_id", "termination_reason",
+    }),
+    # Layer 38 — A2A Nonce Block & Offline Pairing (Phase 2).
+    # Metadata only: nonce_prefix (first 8 hex chars), peer_id, task_id, epoch.
+    # NEVER: full nonce, payload content, private keys.
+    "a2a.genesis_block_created": frozenset({
+        "tenant_id", "instance_id", "network_id", "nonce_prefix", "epoch",
+    }),
+    "a2a.offline_pair_initiated": frozenset({
+        "tenant_id", "task_id", "peer_id", "pairing_id", "ttl_s",
+    }),
+    "a2a.nonce_collision_detected": frozenset({
+        "tenant_id", "nonce_prefix", "epoch", "collision_count",
+    }),
+    # Layer 4 — Plugin Lifecycle (Phase 2).
+    # Metadata only: plugin_id, error_class (name only). NEVER: error messages
+    # with stack traces, plugin state, configuration.
+    "plugin.initialization_failed": frozenset({
+        "plugin_id", "boot_layer", "error_class", "tenant_id",
+    }),
+    "plugin.execution_timeout": frozenset({
+        "plugin_id", "boot_layer", "timeout_ms", "tenant_id",
     }),
 }
 
