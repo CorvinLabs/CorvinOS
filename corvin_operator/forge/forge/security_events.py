@@ -825,6 +825,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # Metadata only: acs_id, classification labels, gate_enforcement, bypassed flag.
     # NEVER: input data, output, classified content.
     "acs.l34_gate_passed":              "INFO",    # L25: data flow gate passed
+    # Phase 3 GAP-3: ACS Delegation Path L34 Data Flow Classification (ADR-0613)
+    "data_flow.classification_acs":     "INFO",    # L34: ACS delegation data flow classified
     # Layer 36 — GDPR Art. 17 Erasure (bridges/shared/erasure_orchestrator.py)
     # Metadata only: erasure_id, tenant_id, isolation_valid boolean.
     # NEVER: subject_id (subject_id is pseudonymised in chain as-is).
@@ -849,12 +851,21 @@ EVENT_SEVERITY: dict[str, str] = {
     "context.edited":                   "INFO",    # L10: context field edited (hash prefix only)
     "context.overflow":                 "WARNING", # L10: context size exceeded limit
     "context.prompt_injection_detected":"CRITICAL",# L10: prompt injection detected in context
+    "context.snapshot_taken":           "INFO",    # L10: context snapshot captured (Phase 3 GAP-1)
+    "context.adapted":                  "INFO",    # L10: context adapted for task/agent (Phase 3 GAP-1)
+    "context.cache_flushed":            "INFO",    # L10: context cache cleared (Phase 3 GAP-1)
+    "context.audit_validated":          "INFO",    # L10: context audit trail validated (Phase 3 GAP-1)
     # Layer 22 — Compute Fabric Safety Audit (core/compute/compute_runtime.py)
     # Metadata only: epoch, shard_id, layer_id, nan_count, process_id, wait_duration_ms.
     # NEVER: checkpoint data, gradient values, process arguments.
     "compute.checkpoint_corruption":    "CRITICAL",# L22: checkpoint hash mismatch (data corruption)
     "compute.gradient_nan_detected":    "CRITICAL",# L22: NaN detected in gradient tensor
     "compute.resource_deadlock":        "CRITICAL",# L22: worker process timeout (deadlock)
+    # Phase 3 GAP-2: Layer 22 Worker Model Resolution & Safety (ADR-0759)
+    "worker.model_resolved":            "INFO",    # L22: worker model resolved (provider + cost)
+    "worker.span_end_fields":           "INFO",    # L22: worker span end with token split
+    "worker.admission_checked":         "INFO",    # L22: worker admission checked (credential auth)
+    "worker.secret_stripped":           "INFO",    # L22: worker secrets stripped/restored
     # Layer 25 — ACS L34 Bypass Detection (corvin_operator/bridges/shared/acs_runtime.py)
     # Metadata only: worker_id, gate_id, reason. NEVER: task data, worker output.
     "acs.worker_l34_bypass_attempt":    "CRITICAL",# L25: worker bypassed L34 data flow gate
@@ -865,6 +876,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "erasure.cross_tenant_check_failed":"CRITICAL",# L36: erasure job cross-tenant violation
     "erasure.partial_failure":          "WARNING", # L36: erasure partial failure (some records failed)
     "erasure.record_delete_failed":     "ERROR",   # L36: single record deletion error
+    # Phase 3 GAP-4: L36 Erasure Cross-Tenant Isolation Verification (ADR-0563)
+    "erasure.cross_tenant_isolation_check": "INFO", # L36: cross-tenant isolation verified before erasure
 }
 
 
@@ -2752,6 +2765,34 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "context.field_added": frozenset({
         "snapshot_id", "field_name", "source", "tenant_id",
     }),
+    # Phase 3 GAP-1: New Layer 10 Context Events
+    "context.snapshot_taken": frozenset({
+        "context_id", "tenant_id", "preserved_fields_count", "added_fields_count",
+        "timestamp",
+    }),
+    "context.adapted": frozenset({
+        "context_id", "tenant_id", "adaptation_type", "delta_summary",
+        "user_model_updated",
+    }),
+    "context.cache_flushed": frozenset({
+        "context_id", "tenant_id", "reason", "retention_days_before_flush",
+    }),
+    "context.audit_validated": frozenset({
+        "context_id", "tenant_id", "validation_result", "gaps_found",
+    }),
+    # Phase 3 GAP-1: Existing Layer 10 Context Events (missing allowlists)
+    "context.snapshot_generated": frozenset({
+        "snapshot_id", "tenant_id", "size_bytes", "field_count",
+    }),
+    "context.edited": frozenset({
+        "snapshot_id", "tenant_id", "field_name", "edit_hash_prefix",
+    }),
+    "context.overflow": frozenset({
+        "snapshot_id", "tenant_id", "current_size_bytes", "limit_bytes", "overflow_bytes",
+    }),
+    "context.prompt_injection_detected": frozenset({
+        "snapshot_id", "tenant_id", "field_name", "pattern_detected", "remediation_applied",
+    }),
     # Layer 22 — Compute Safety. Metadata only: job_id, sanitized error message,
     # recovery_attempted, timeout_ms, loss deltas. NEVER: computation params,
     # intermediate results, user instructions.
@@ -2764,12 +2805,35 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "compute.iteration_diverged": frozenset({
         "run_id", "tenant_id", "job_id", "prev_loss", "new_loss", "delta_pct",
     }),
+    # Phase 3 GAP-2: Missing Layer 22 Compute Safety Audit Events
+    "compute.checkpoint_corruption": frozenset({
+        "run_id", "tenant_id", "job_id", "error_message", "recovery_attempted",
+    }),
+    "compute.gradient_nan_detected": frozenset({
+        "run_id", "tenant_id", "epoch", "shard_id", "nan_count", "process_id",
+    }),
+    "compute.resource_deadlock": frozenset({
+        "run_id", "tenant_id", "job_id", "component", "timeout_ms", "wait_duration_ms",
+    }),
+    "compute.quota_exceeded": frozenset({
+        "tenant_id", "resource_type", "requested", "limit", "current_usage",
+    }),
     # Layer 25 — ACS L34 Flow Guard. Metadata only: acs_id, classification
     # labels, gate_enforcement flag, bypassed boolean. NEVER: input data,
     # output, classified content.
     "acs.l34_gate_passed": frozenset({
         "run_id", "tenant_id", "acs_id", "input_classification",
         "output_classification", "gate_enforcement", "bypassed",
+    }),
+    # Phase 3 GAP-3: Missing ACS/L34 Data Flow Events
+    "acs.l34_gate_unavailable": frozenset({
+        "run_id", "tenant_id", "worker_id", "gate_id", "reason",
+    }),
+    "acs.worker_l34_bypass_attempt": frozenset({
+        "run_id", "tenant_id", "worker_id", "gate_id", "reason", "attempted_bypass",
+    }),
+    "acs.worker_l35_unavailable": frozenset({
+        "run_id", "tenant_id", "worker_id", "gate_id", "reason",
     }),
     # Layer 36 — GDPR Art. 17 Erasure. Metadata only: erasure_id, tenant_id,
     # isolation_valid boolean. NEVER: subject_id (pseudonymised in chain as-is),
@@ -2779,6 +2843,26 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "erasure.cross_tenant_detected": frozenset({
         "erasure_id", "source_tenant", "target_tenant", "tenant_id",
+    }),
+    # Phase 3 GAP-3: ACS L34 Data Flow Classification (ADR-0613)
+    "data_flow.classification_acs": frozenset({
+        "run_id", "tenant_id", "acs_id", "input_class", "engine", "destination",
+        "approval_verdict",
+    }),
+    # Phase 3 GAP-4: Missing Layer 36 Erasure Cross-Tenant Isolation Events
+    "erasure.cross_tenant_check_failed": frozenset({
+        "erasure_id", "tenant_id", "job_id", "source_tenant", "target_tenant",
+        "deleted_count", "total_count",
+    }),
+    "erasure.partial_failure": frozenset({
+        "erasure_id", "tenant_id", "job_id", "deleted_count", "failed_count",
+        "total_count", "retry_scheduled",
+    }),
+    "erasure.record_delete_failed": frozenset({
+        "erasure_id", "tenant_id", "record_id_hash", "error_class", "deletion_attempted",
+    }),
+    "erasure.cross_tenant_isolation_check": frozenset({
+        "erasure_id", "tenant_id", "isolation_check_passed", "other_tenant_ids_found",
     }),
     # Layer 22 — Extended Worker Lifecycle (Phase 2).
     # Metadata only: worker_id, worker_type, cpu_cores, memory_mb, current_loss.
@@ -2791,6 +2875,19 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "compute.worker_terminated": frozenset({
         "run_id", "tenant_id", "worker_id", "termination_reason",
+    }),
+    # Phase 3 GAP-2: Layer 22 Worker Model & Safety (ADR-0759)
+    "worker.model_resolved": frozenset({
+        "worker_id", "tenant_id", "model_id", "provider", "cost_per_1m_tokens",
+    }),
+    "worker.span_end_fields": frozenset({
+        "worker_id", "tenant_id", "input_tokens", "output_tokens", "cache_read", "cache_write",
+    }),
+    "worker.admission_checked": frozenset({
+        "worker_id", "tenant_id", "model_id", "credential_auth_mode", "verdict",
+    }),
+    "worker.secret_stripped": frozenset({
+        "worker_id", "tenant_id", "credential_names_removed", "restore_gate_check_passed",
     }),
     # Layer 38 — A2A Nonce Block & Offline Pairing (Phase 2).
     # Metadata only: nonce_prefix (first 8 hex chars), peer_id, task_id, epoch.
@@ -2873,6 +2970,10 @@ _VETTED_FORBIDDEN_ALLOWLIST_FIELDS: frozenset[tuple[str, str]] = frozenset({
     # fabric/datasources/audit_events.py). It trips the "secret" substring
     # denylist. Vetted, not claimable by a caller.
     ("datasource.registered", "auth_secret_key_names"),
+    # Phase 3 GAP-2 (2026-09-23): worker events carry credential metadata only
+    # (names/mode, never values). ADR-0759 § Worker-Engine Model Routing.
+    ("worker.admission_checked", "credential_auth_mode"),
+    ("worker.secret_stripped", "credential_names_removed"),
 })
 
 
