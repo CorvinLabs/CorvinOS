@@ -23,7 +23,7 @@ irm https://corvin-labs.com/install.ps1 | iex
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
-bash install.sh --editable .
+./install.sh .
 
 # or on Windows (PowerShell):
 install.ps1 -Editable .\
