@@ -1,0 +1,1068 @@
+CSRF PROTECTION TODO LIST (MAINLINE)
+================================================================================
+Generated: 2026-09-23T21:54:21.737883
+Total vulnerable endpoints: 422
+================================================================================
+
+
+📄 core/benchmarking/token_efficiency_benchmark.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  130: POST   create_order
+
+
+📄 core/compliance/consent.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   45: POST   approve_override
+
+
+📄 core/console/corvin_console/api/feature_status_endpoints.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   71: POST   set_preset
+
+
+📄 core/console/corvin_console/api/multi_instance_sync.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  361: POST   sync_config
+   Line  413: POST   send_task
+   Line  535: DELETE cancel_task
+
+
+📄 core/console/corvin_console/middleware/routing_disclosure_headers.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  102: POST   run_task
+
+
+📄 core/console/corvin_console/routes/a2a_licensing_gate_routes.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  163: POST   verify_signed_task
+   Line  216: POST   issue_credential
+   Line  299: POST   revoke_credential
+
+
+📄 core/console/corvin_console/routes/a2a_pair.py
+   (18 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  243: POST   pair_generate
+   Line  324: POST   pair_redeem
+   Line  475: POST   pair_accept
+   Line  594: POST   generate_cli_invite
+   Line  659: POST   accept_cli_invite
+   Line  765: DELETE revoke_invite
+   Line  890: POST   set_my_a2a_url
+   Line  957: POST   set_my_a2a_relay_url
+   Line  995: POST   friendship_create
+   Line 1094: POST   friendship_import
+   Line 1206: POST   friendship_set_url
+   Line 1247: DELETE friendship_revoke
+   Line 1429: POST   friendship_recheck
+   Line 1461: POST   friendship_enable_relay
+   Line 1588: PATCH  patch_origin
+   Line 1672: DELETE delete_origin
+   Line 1714: DELETE delete_endpoint
+   Line 1763: PATCH  patch_endpoint
+
+
+📄 core/console/corvin_console/routes/aco.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   74: POST   validate_replay
+   Line  221: POST   apply_repair
+   Line  310: POST   trigger_nerve_repair
+
+
+📄 core/console/corvin_console/routes/admin.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  718: POST   enable_plugin
+   Line  750: POST   disable_plugin
+   Line  826: PUT    set_config
+
+
+📄 core/console/corvin_console/routes/agents.py
+   (5 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  134: POST   create_charter
+   Line  218: PUT    renew_charter
+   Line  290: PUT    sign_charter
+   Line  346: DELETE revoke_sign_off
+   Line  382: POST   disable_agent
+
+
+📄 core/console/corvin_console/routes/assistant.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  214: POST   assistant_message
+
+
+📄 core/console/corvin_console/routes/audit_layers.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  140: PUT    register_audit_layer
+   Line  214: DELETE remove_audit_layer
+   Line  247: POST   emit_custom_event
+
+
+📄 core/console/corvin_console/routes/auth_routes.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   60: POST   logout
+
+
+📄 core/console/corvin_console/routes/autonomous_forge_routes.py
+   (5 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  371: POST   unknown
+   Line  503: POST   unknown
+   Line  593: POST   unknown
+   Line  660: POST   unknown
+   Line  724: POST   unknown
+
+
+📄 core/console/corvin_console/routes/bridges.py
+   (15 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  669: PUT    put_bridge_settings
+   Line  731: PUT    put_bridge_enabled
+   Line 1000: POST   post_bridge_disconnect
+   Line 1158: POST   validate_discord_token
+   Line 1188: POST   save_discord_token
+   Line 1340: POST   validate_telegram_token
+   Line 1365: POST   save_telegram_token
+   Line 1446: POST   generate_slack_oauth_url
+   Line 1466: POST   exchange_slack_code
+   Line 1512: POST   generate_teams_oauth_url
+   Line 1532: POST   exchange_teams_code
+   Line 1580: POST   generate_email_oauth_url
+   Line 1600: POST   exchange_email_code
+   Line 1653: POST   poll_signal_link
+   Line 1706: POST   poll_whatsapp_scan
+
+
+📄 core/console/corvin_console/routes/browser.py
+   (28 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  283: POST   create_session
+   Line  348: POST   close_session
+   Line  377: POST   grant_attach_consent
+   Line  400: DELETE revoke_attach_consent
+   Line  423: POST   set_confirm_mode
+   Line  481: POST   navigate
+   Line  497: POST   observe
+   Line  503: POST   click
+   Line  510: POST   fill
+   Line  517: POST   fill_secret
+   Line  524: POST   read
+   Line  531: POST   scroll
+   Line  538: POST   back
+   Line  546: POST   hover
+   Line  553: POST   key
+   Line  560: POST   select_option
+   Line  567: POST   upload_file
+   Line  574: POST   drag
+   Line  581: POST   tabs
+   Line  586: POST   switch_tab
+   Line  593: POST   extract_table
+   Line  599: POST   extract_form_schema
+   Line  605: POST   screenshot
+   Line  639: POST   confirm
+   Line  649: POST   pause
+   Line  661: POST   run_agent
+   Line  682: POST   stop_agent
+   Line  691: POST   continue_agent
+
+
+📄 core/console/corvin_console/routes/byok.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  164: POST   post_secret
+
+
+📄 core/console/corvin_console/routes/chat.py
+   (5 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  151: POST   create_chat_session
+   Line  166: DELETE delete_chat_session
+   Line  186: PATCH  rename_chat_session
+   Line  427: POST   upload_attachments
+   Line  927: DELETE cancel_session_task
+
+
+📄 core/console/corvin_console/routes/chat_settings.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  414: PATCH  chat_settings_patch
+
+
+📄 core/console/corvin_console/routes/compute.py
+   (15 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  840: PUT    update_compute_config
+   Line  959: PUT    update_compute_settings
+   Line  997: POST   submit_run
+   Line 1123: DELETE delete_run
+   Line 1185: POST   open_run_dir
+   Line 1197: POST   open_pipeline_dir
+   Line 1209: POST   open_hac_dir
+   Line 1221: POST   open_acs_run_dir
+   Line 1441: POST   create_experiment
+   Line 1482: PUT    update_experiment
+   Line 2223: POST   awpkg_export_download
+   Line 2315: POST   promote_champion
+   Line 2391: POST   awpkg_export_to_workflow
+   Line 2934: POST   submit_acs_workflow_run
+   Line 3116: POST   export_acs_workflow_run
+
+
+📄 core/console/corvin_console/routes/compute_jobs.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  110: POST   submit_compute_job
+   Line  166: DELETE cancel_compute_job
+
+
+📄 core/console/corvin_console/routes/connectors.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  293: PUT    update_connector
+
+
+📄 core/console/corvin_console/routes/connectors_custom.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  124: PUT    register_custom_connector
+   Line  197: DELETE remove_custom_connector
+
+
+📄 core/console/corvin_console/routes/control_plane_overrides.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   82: POST   create_override
+   Line  193: POST   approve_override
+   Line  254: POST   deny_override
+   Line  317: POST   interrupt_override
+
+
+📄 core/console/corvin_console/routes/control_plane_plugins.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   65: PUT    install_plugin
+   Line  187: PATCH  enable_plugin
+   Line  226: PATCH  disable_plugin
+   Line  268: DELETE uninstall_plugin
+
+
+📄 core/console/corvin_console/routes/control_plane_snapshots.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   97: POST   create_snapshot
+   Line  224: POST   restore_snapshot
+   Line  265: POST   diff_snapshot
+   Line  300: DELETE delete_snapshot
+
+
+📄 core/console/corvin_console/routes/control_plane_subsystems.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   62: PATCH  start_subsystem
+   Line   97: PATCH  pause_subsystem
+   Line  137: PATCH  resume_subsystem
+   Line  172: PATCH  stop_subsystem
+
+
+📄 core/console/corvin_console/routes/cost_insights_routes.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  343: POST   set_guardrails
+
+
+📄 core/console/corvin_console/routes/cron_status_routes.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   55: POST   cron_trigger_now
+   Line   88: POST   cron_trigger_now_all
+   Line  115: POST   cron_pause
+   Line  144: POST   cron_resume
+
+
+📄 core/console/corvin_console/routes/custom_engines.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  147: PUT    register_custom_engine
+   Line  215: DELETE remove_custom_engine
+   Line  238: POST   ping_custom_engine
+
+
+📄 core/console/corvin_console/routes/custom_provider.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  195: POST   test_api_connectivity
+   Line  323: POST   validate_form
+   Line  384: POST   create_custom_provider
+
+
+📄 core/console/corvin_console/routes/data_sources.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  167: POST   register_connection
+   Line  293: POST   test_connection
+   Line  346: DELETE unregister_connection
+
+
+📄 core/console/corvin_console/routes/datahub_api.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  148: POST   create_artifact
+   Line  279: DELETE delete_artifact
+
+
+📄 core/console/corvin_console/routes/datahub_creator_routes.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  160: POST   create_project
+   Line  284: PATCH  update_project
+   Line  370: POST   add_collaborator
+
+
+📄 core/console/corvin_console/routes/datasources_http.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  431: PUT    register_http_adapter
+   Line  545: DELETE remove_http_adapter
+   Line  571: POST   ping_http_adapter
+
+
+📄 core/console/corvin_console/routes/deprecated_api_metrics.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  477: POST   export_metrics
+
+
+📄 core/console/corvin_console/routes/dod_verifier_dashboard.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   96: POST   run_dod_verification
+   Line  183: POST   submit_dod_feedback
+
+
+📄 core/console/corvin_console/routes/engine.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  302: PUT    put_engine_setting
+
+
+📄 core/console/corvin_console/routes/engine_api.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  681: PUT    update_engine_config
+   Line  751: POST   unknown
+
+
+📄 core/console/corvin_console/routes/engine_pref.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  154: PUT    set_engine_pref
+   Line  221: DELETE clear_engine_pref
+
+
+📄 core/console/corvin_console/routes/extensions.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  109: POST   validate_manifest_post
+   Line  186: POST   install_extension
+   Line  277: PUT    set_extension_enabled
+   Line  344: DELETE remove_extension
+
+
+📄 core/console/corvin_console/routes/features.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   73: POST   toggle_feature
+
+
+📄 core/console/corvin_console/routes/features_phase2.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  330: POST   save_model_config
+   Line  385: POST   install_marketplace_skill
+
+
+📄 core/console/corvin_console/routes/feedback_portal_routes.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   88: POST   submit_bug_report
+   Line  145: POST   submit_feature_request
+   Line  184: POST   submit_nps_survey
+
+
+📄 core/console/corvin_console/routes/files.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  341: POST   files_upload
+   Line  422: DELETE files_delete
+   Line  466: POST   files_mkdir
+
+
+📄 core/console/corvin_console/routes/flows.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  198: POST   approve_checkpoint
+   Line  286: PUT    upsert_flow_definition
+   Line  498: DELETE delete_flow_definition
+   Line  541: POST   trigger_flow_run
+
+
+📄 core/console/corvin_console/routes/forge_unified.py
+   (8 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  168: POST   enable_tool
+   Line  178: POST   disable_tool
+   Line  267: POST   rollback_skill
+   Line  312: POST   enable_skill
+   Line  322: POST   disable_skill
+   Line  401: POST   update_os_skill_config
+   Line  424: POST   disable_os_skill
+   Line  478: POST   enable_os_skill
+
+
+📄 core/console/corvin_console/routes/github.py
+   (5 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  115: POST   verify_github_connection
+   Line  212: DELETE disconnect_github
+   Line  242: POST   start_worker
+   Line  253: POST   stop_worker
+   Line  264: POST   set_auto_sync
+
+
+📄 core/console/corvin_console/routes/grants.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  159: POST   create_grant
+   Line  199: DELETE revoke_grant
+
+
+📄 core/console/corvin_console/routes/healing_config.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  176: PATCH  patch_healing_config
+
+
+📄 core/console/corvin_console/routes/infinite_session_api.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  308: POST   revert_to_checkpoint
+
+
+📄 core/console/corvin_console/routes/initiatives.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   80: PATCH  patch_task
+   Line  107: PUT    put_gate
+   Line  133: PUT    put_close
+   Line  154: POST   post_verify
+
+
+📄 core/console/corvin_console/routes/integration_api.py
+   (8 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  153: POST   install_plugin
+   Line  215: POST   uninstall_plugin
+   Line  241: PATCH  enable_plugin
+   Line  261: PATCH  disable_plugin
+   Line  304: POST   promote_skill
+   Line  370: POST   record_skill_grade
+   Line  531: POST   validate_data_flow
+   Line  566: POST   deploy_generated_plugin
+
+
+📄 core/console/corvin_console/routes/intents.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   60: POST   classify_user_intent
+
+
+📄 core/console/corvin_console/routes/l5_metrics_api.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  261: POST   acknowledge_l5_alert
+   Line  293: POST   resolve_l5_alert
+
+
+📄 core/console/corvin_console/routes/ldd.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   81: PUT    put_master
+   Line  102: PUT    put_layer
+   Line  125: POST   apply_preset
+
+
+📄 core/console/corvin_console/routes/learning.py
+   (7 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  216: POST   grade_pattern
+   Line  243: POST   add_operator_note
+   Line  301: POST   rate_tool
+   Line  312: POST   rate_skill
+   Line  460: POST   confirm_method_pattern
+   Line  779: POST   override_learning_param
+   Line  797: POST   rollback_checkpoint
+
+
+📄 core/console/corvin_console/routes/learning_dashboard.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  196: POST   subscribe_for_updates
+   Line  242: POST   unsubscribe
+
+
+📄 core/console/corvin_console/routes/learning_metrics.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  148: POST   export_metrics
+
+
+📄 core/console/corvin_console/routes/learning_optimizer_routes_stream2.py
+   (6 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  102: POST   submit_feedback_signal
+   Line  146: POST   process_feedback_queue
+   Line  234: POST   create_ab_test
+   Line  296: POST   create_hotfix
+   Line  315: POST   approve_hotfix
+   Line  335: POST   deploy_hotfix
+
+
+📄 core/console/corvin_console/routes/license.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  268: POST   upload_license
+   Line  475: POST   revoke_license
+   Line  702: POST   apply_license_key
+
+
+📄 core/console/corvin_console/routes/licensing_verify.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   60: POST   verify_capability
+
+
+📄 core/console/corvin_console/routes/marketplace.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  372: POST   reload_index
+
+
+📄 core/console/corvin_console/routes/marketplace_custom_repos.py
+   (5 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  150: POST   add_repository
+   Line  175: POST   validate_repository
+   Line  194: PATCH  update_repository
+   Line  224: DELETE remove_repository
+   Line  242: POST   refresh_repository
+
+
+📄 core/console/corvin_console/routes/marketplace_install.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  375: POST   install_plugin
+   Line  470: POST   uninstall_plugin
+   Line  495: PATCH  enable_plugin
+   Line  516: PATCH  disable_plugin
+
+
+📄 core/console/corvin_console/routes/marketplace_skills_routes.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  421: POST   install_skill
+   Line  487: POST   uninstall_skill
+   Line  526: POST   rate_skill
+
+
+📄 core/console/corvin_console/routes/mcp_plugins.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  179: POST   install_tool
+   Line  208: POST   activate_tool
+   Line  237: POST   deactivate_tool
+   Line  266: DELETE remove_tool
+
+
+📄 core/console/corvin_console/routes/memory.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  197: PUT    memory_write
+   Line  281: DELETE memory_delete
+
+
+📄 core/console/corvin_console/routes/method_discovery_api.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  258: POST   submit_feedback
+   Line  345: POST   rollback_config
+   Line  445: POST   confirm_preference
+
+
+📄 core/console/corvin_console/routes/model_cost_optimizer_api.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  488: POST   override_threshold
+   Line  558: POST   reset_learning
+   Line  602: POST   reset_usage_window
+   Line  696: POST   import_thresholds
+
+
+📄 core/console/corvin_console/routes/model_selection_analytics.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  369: POST   post_feedback
+   Line  500: POST   reset_learning
+
+
+📄 core/console/corvin_console/routes/models.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  361: POST   trigger_live_refresh
+
+
+📄 core/console/corvin_console/routes/multi_instance.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  264: POST   trigger_manual_sync
+
+
+📄 core/console/corvin_console/routes/orgs.py
+   (8 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  137: POST   create_org_route
+   Line  211: DELETE dissolve_org
+   Line  233: POST   add_member
+   Line  257: DELETE remove_member
+   Line  282: POST   affiliate_agent_route
+   Line  305: DELETE deaffiliate_agent_route
+   Line  342: POST   create_org_grant
+   Line  395: DELETE revoke_org_grant
+
+
+📄 core/console/corvin_console/routes/packages.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  354: POST   upload_package
+   Line  546: DELETE uninstall_package
+
+
+📄 core/console/corvin_console/routes/panels.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  131: POST   create_panel
+   Line  181: DELETE delete_panel
+
+
+📄 core/console/corvin_console/routes/phase_10_skills.py
+   (7 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  106: POST   execute_workflow_optimizer
+   Line  179: POST   detect_threats
+   Line  246: POST   clear_threat
+   Line  383: POST   review_flow
+   Line  436: POST   submit_skill_feedback
+   Line  530: POST   enable_skill
+   Line  548: POST   disable_skill
+
+
+📄 core/console/corvin_console/routes/plugins.py
+   (5 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  730: POST   install_plugin
+   Line  767: POST   enable_plugin
+   Line  780: POST   disable_plugin
+   Line  807: POST   update_settings
+   Line  819: DELETE uninstall_plugin
+
+
+📄 core/console/corvin_console/routes/plugins_corvin_knowledge_api.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  194: POST   update_config
+   Line  225: POST   sync_repository
+   Line  272: POST   init_plugin
+   Line  287: POST   cleanup_plugin
+
+
+📄 core/console/corvin_console/routes/profile.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  252: PUT    profile_write
+   Line  339: POST   profile_reset
+   Line  365: POST   profile_preview
+   Line  397: POST   voice_test
+
+
+📄 core/console/corvin_console/routes/promote.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   66: POST   tool_promote
+   Line  115: POST   skill_promote
+
+
+📄 core/console/corvin_console/routes/quality_gates.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  416: POST   run_all_gates
+
+
+📄 core/console/corvin_console/routes/quality_layers.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   96: PUT    put_master
+   Line  138: PUT    put_layer
+
+
+📄 core/console/corvin_console/routes/quality_metrics.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   89: POST   export_metrics
+
+
+📄 core/console/corvin_console/routes/rag.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  303: POST   execute_rag_query
+
+
+📄 core/console/corvin_console/routes/rag_hub.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  157: POST   publish_provider
+   Line  293: POST   add_review
+   Line  380: POST   import_provider
+   Line  489: POST   export_provider
+
+
+📄 core/console/corvin_console/routes/security_orchestrator_routes.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  196: POST   post_threat_feedback
+   Line  321: PUT    put_policy_override
+
+
+📄 core/console/corvin_console/routes/settings.py
+   (6 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  263: PUT    put_auto_update
+   Line  336: PUT    put_service_tier
+   Line  517: PUT    put_delegation_budget
+   Line  609: PUT    set_worker_engine
+   Line  660: PUT    settings_write
+   Line  802: PUT    set_feature
+
+
+📄 core/console/corvin_console/routes/setup.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  708: POST   whatsapp_start
+   Line  942: PUT    update_engine_key
+
+
+📄 core/console/corvin_console/routes/skill_creator_api.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  203: POST   generate_skill
+   Line  399: DELETE delete_generated_skill
+
+
+📄 core/console/corvin_console/routes/skill_forge_distribution_routes.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   39: POST   package_skill
+   Line  209: POST   install_skill
+
+
+📄 core/console/corvin_console/routes/skill_learning_routes.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  130: POST   submit_skill_feedback
+   Line  298: POST   reset_learning_state
+
+
+📄 core/console/corvin_console/routes/skills_manual.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  270: POST   create_manual_skill
+   Line  301: PUT    update_manual_skill
+   Line  327: DELETE delete_manual_skill
+
+
+📄 core/console/corvin_console/routes/skills_monitoring.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  176: POST   clear_cache
+
+
+📄 core/console/corvin_console/routes/space.py
+   (8 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  199: PUT    space_profile_update
+   Line  260: POST   space_domains_create
+   Line  336: PUT    space_domains_update
+   Line  359: DELETE space_domains_delete
+   Line  381: POST   space_domains_publish
+   Line  500: POST   space_social_join
+   Line  529: POST   space_social_leave
+   Line  545: POST   space_social_follow
+
+
+📄 core/console/corvin_console/routes/stream4_skill_feedback.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  141: POST   submit_skill_feedback
+
+
+📄 core/console/corvin_console/routes/task_audit.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  104: POST   verify_audit_chain
+
+
+📄 core/console/corvin_console/routes/task_graph_api.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  288: POST   create_task_checkpoint
+   Line  632: POST   export_graph
+
+
+📄 core/console/corvin_console/routes/tasks.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   47: POST   create_task
+   Line  109: POST   abort_task
+
+
+📄 core/console/corvin_console/routes/tools_manual.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  173: POST   create_manual_tool
+   Line  204: PUT    update_manual_tool
+   Line  238: DELETE delete_manual_tool
+   Line  266: POST   preview_tool
+
+
+📄 core/console/corvin_console/routes/ulo.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  102: POST   add_objective
+   Line  138: PUT    update_objective
+   Line  224: DELETE delete_objective
+
+
+📄 core/console/corvin_console/routes/vibe_engineering.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  374: PUT    put_pipeline
+   Line  435: POST   post_stage_grade
+
+
+📄 core/console/corvin_console/routes/vibe_metrics_api.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  242: POST   export_session_metrics
+
+
+📄 core/console/corvin_console/routes/video_learning_api.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  108: POST   submit_feedback
+   Line  228: POST   select_model
+   Line  244: POST   report_video_quality
+
+
+📄 core/console/corvin_console/routes/video_producer_api.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  171: POST   create_video_job
+   Line  286: PUT    update_settings
+   Line  358: POST   upload_to_youtube
+   Line  548: POST   submit_scene_feedback
+
+
+📄 core/console/corvin_console/routes/voice.py
+   (5 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  504: POST   voice_transcribe
+   Line 1537: POST   voice_tts
+   Line 1799: POST   voice_session_summary
+   Line 1995: POST   voice_segment
+   Line 2128: POST   voice_summarize
+
+
+📄 core/console/corvin_console/routes/voice_integration.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   61: POST   synthesize_speech
+   Line  133: POST   narrate_task_outcome
+   Line  190: POST   submit_narration_feedback
+
+
+📄 core/console/corvin_console/routes/voice_integration_v2.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   63: POST   synthesize_speech
+   Line  152: POST   narrate_task_outcome
+   Line  230: POST   test_tts_providers
+
+
+📄 core/console/corvin_console/routes/webhooks.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  256: PUT    register_webhook_channel
+   Line  325: DELETE remove_webhook_channel
+   Line  353: POST   receive_webhook
+
+
+📄 core/console/corvin_console/standalone.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  773: POST   _a2a_receive
+   Line  790: POST   _a2a_ping
+   Line  809: POST   _a2a_friendship_ack
+
+
+📄 core/console/routes/engine_api.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  190: PUT    update_engine_config
+   Line  265: POST   unknown
+
+
+📄 core/console/routes/learning_dashboard.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  201: POST   submit_feedback
+   Line  247: POST   trigger_optimization
+
+
+📄 core/console/routes/media_routes.py
+   (3 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  196: POST   upload_media
+   Line  295: POST   send_to_bridge
+   Line  324: DELETE delete_media
+
+
+📄 core/console/routes/plugin_manager_api.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   35: POST   install_plugin
+   Line   86: PUT    enable_plugin
+   Line   94: PUT    disable_plugin
+   Line  102: DELETE uninstall_plugin
+
+
+📄 core/console/routes/subsystems.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  132: POST   control_subsystem
+   Line  204: POST   health_check_subsystem
+
+
+📄 core/gateway/corvin_gateway/app.py
+   (7 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  834: POST   a2a_receive
+   Line  858: POST   a2a_ping
+   Line  885: POST   a2a_friendship_ack
+   Line 1014: POST   unknown
+   Line 1219: POST   unknown
+   Line 1277: DELETE unknown
+   Line 1292: PATCH  scim_patch_user
+
+
+📄 core/gateway/routes/btw_routes.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   20: POST   handle_btw
+
+
+📄 core/inspection/dashboard_routes.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  207: POST   analyze
+   Line  226: POST   submit_feedback
+
+
+📄 core/inspection/dashboard_routes_fixed.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  207: POST   analyze
+   Line  226: POST   submit_feedback
+
+
+📄 core/skills/feedback/api.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  128: POST   submit_feedback
+   Line  262: PUT    update_skill_config
+
+
+📄 corvin_operator/agent/main.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  118: POST   post_secret
+   Line  208: POST   post_config_push
+
+
+📄 corvin_operator/bridges/shared/rag_rest_api.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line  169: POST   execute_query
+
+
+📄 tests/core/pipeline/test_e2e_entry_point_wiring.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   61: POST   test_write
+
+
+📄 venv_temp/lib/python3.12/site-packages/fastapi/applications.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line 2366: PUT    replace_item
+   Line 2744: POST   create_item
+   Line 3117: DELETE delete_item
+   Line 4241: PATCH  update_item
+
+
+📄 venv_temp/lib/python3.12/site-packages/fastapi/background.py
+   (1 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   33: POST   send_notification
+
+
+📄 venv_temp/lib/python3.12/site-packages/fastapi/datastructures.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   44: POST   create_file
+   Line   49: POST   create_upload_file
+
+
+📄 venv_temp/lib/python3.12/site-packages/fastapi/routing.py
+   (4 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line 4047: PUT    replace_item
+   Line 4429: POST   create_item
+   Line 4806: DELETE delete_item
+   Line 5947: PATCH  update_item
+
+
+📄 venv_temp/lib/python3.12/site-packages/fastapi/security/oauth2.py
+   (2 vulnerable endpoints)
+--------------------------------------------------------------------------------
+   Line   39: POST   login
+   Line  193: POST   login
+

@@ -36,6 +36,7 @@ from core.paths.tenant import tenant_home
 
 from .. import auth as session_auth
 from ..deps import require_session
+from ..models import SessionRecord
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/console/learning", tags=["learning-optimizer"])
@@ -321,11 +322,13 @@ async def create_hotfix(
 @router.post("/hotfix/{hotfix_id}/approve")
 async def approve_hotfix(
     hotfix_id: str,
-    approver: str,
     components: Dict = Depends(get_components),
+    session: SessionRecord = Depends(require_session),
 ) -> dict:
     """Approve hotfix (Story 18)."""
     try:
+        # Derive approver from authenticated session (no arbitrary input)
+        approver = session.user_id
         success = components["hotfix"].approve_hotfix(hotfix_id, approver)
         if not success:
             raise HTTPException(status_code=400, detail="Failed to approve")

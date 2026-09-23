@@ -1,0 +1,251 @@
+{
+  "dashboard": {
+    "title": "Stream 2: Security Orchestrator Soak Test",
+    "description": "Week 2–3 Staging Soak Test Monitoring (2026-09-27 to 2026-10-04)",
+    "tags": ["stream2", "security-orchestrator", "soak-test", "phase10"],
+    "timezone": "UTC",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Threat Detection Rate (per minute)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(security_orchestrator_threats_detected_total[1m])",
+            "legendFormat": "Threats/min"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Threats per Minute",
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "False Positive Rate (%)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "100 * rate(security_orchestrator_false_positives_total[5m]) / (rate(security_orchestrator_threats_detected_total[5m]) + 1)",
+            "legendFormat": "FP Rate %"
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [1], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "5m", "now"]}
+            }
+          ],
+          "message": "False positive rate >1%"
+        }
+      },
+      {
+        "id": 3,
+        "title": "Threat Detection Latency (P95)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(security_orchestrator_threat_latency_ms_bucket[5m]))",
+            "legendFormat": "P95 Latency (ms)"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Milliseconds",
+            "format": "ms"
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [50], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "5m", "now"]}
+            }
+          ],
+          "message": "Latency P95 >50ms"
+        }
+      },
+      {
+        "id": 4,
+        "title": "Policy Adjustments (cumulative)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "security_orchestrator_policy_adjustments_total",
+            "legendFormat": "Total Adjustments"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Audit Trail Integrity (events written)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "security_orchestrator_audit_events_written_total",
+            "legendFormat": "Audit Events"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Memory Usage (MB)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "security_orchestrator_memory_bytes / 1024 / 1024",
+            "legendFormat": "Memory (MB)"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Megabytes",
+            "format": "short"
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [2000], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "15m", "now"]}
+            }
+          ],
+          "message": "Memory usage >2GB"
+        }
+      },
+      {
+        "id": 7,
+        "title": "HTTP Request Latency by Endpoint",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_latency_ms_bucket{service='stream2'}[5m]))",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Error Rate (%)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "100 * rate(security_orchestrator_errors_total[5m]) / (rate(security_orchestrator_requests_total[5m]) + 1)",
+            "legendFormat": "Error Rate %"
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [0.1], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "5m", "now"]}
+            }
+          ],
+          "message": "Error rate >0.1%"
+        }
+      },
+      {
+        "id": 9,
+        "title": "Threat Severity Distribution",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "security_orchestrator_threats_by_severity",
+            "legendFormat": "{{severity}}"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Threat Type Distribution",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "security_orchestrator_threats_by_type",
+            "legendFormat": "{{threat_type}}"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Tenant-wise Threat Count",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "security_orchestrator_threats_by_tenant",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Policy Response Time (ms)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(security_orchestrator_policy_response_ms_bucket[5m]))",
+            "legendFormat": "P95 Response Time (ms)"
+          }
+        ]
+      }
+    ],
+    "refresh": "30s",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "datasourceRegex": "Prometheus",
+          "multi": false,
+          "query": "prometheus"
+        },
+        {
+          "name": "instance",
+          "type": "query",
+          "datasource": "Prometheus",
+          "query": "label_values(security_orchestrator_threats_detected_total, instance)",
+          "multi": true,
+          "includeAll": true
+        },
+        {
+          "name": "severity",
+          "type": "query",
+          "datasource": "Prometheus",
+          "query": "label_values(security_orchestrator_threats_detected_total, severity)",
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "ALERTS{alertname='StreamII_HighFalsePositiveRate'}",
+          "name": "High False Positive Events"
+        },
+        {
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "changes(security_orchestrator_policy_adjustments_total[1m])",
+          "name": "Policy Changes"
+        }
+      ]
+    },
+    "version": 1,
+    "weekStart": "Sunday"
+  },
+  "overwrite": true
+}

@@ -62,10 +62,7 @@ def _require_learning() -> None:
 def _get_event_store(session: SessionRecord) -> EventStore:
     """Get EventStore bound to session's tenant."""
     _require_learning()
-    if tenant_home is None:
-        raise HTTPException(status_code=503, detail="tenant_home unavailable")
-    th = tenant_home(session.tenant_id)
-    return EventStore(th, tenant_id=session.tenant_id)
+    return EventStore(tenant_id=session.tenant_id)
 
 
 @router.post(
@@ -104,7 +101,7 @@ async def feedback_workflow_optimizer(
         )
 
         # Write to EventStore (audit-first)
-        store.write_event(event)
+        await store.write_event(event, session.tenant_id)
 
         logger.info(
             f"Feedback recorded: {event.feedback_id} (skill={request.skill_id}, outcome={request.outcome})"
@@ -157,7 +154,7 @@ async def feedback_security_orchestrator(
             lom="feedback_integration.feedback_security_orchestrator",
         )
 
-        store.write_event(event)
+        await store.write_event(event, session.tenant_id)
 
         logger.info(
             f"Security feedback recorded: {event.feedback_id} (outcome={request.outcome})"
@@ -209,7 +206,7 @@ async def feedback_flow_guard(
             lom="feedback_integration.feedback_flow_guard",
         )
 
-        store.write_event(event)
+        await store.write_event(event, session.tenant_id)
 
         logger.info(
             f"Flow Guard feedback recorded: {event.feedback_id} (preference={request.preference})"
@@ -261,7 +258,7 @@ async def feedback_metrics(
             lom="feedback_integration.feedback_metrics",
         )
 
-        store.write_event(event)
+        await store.write_event(event, session.tenant_id)
 
         logger.info(
             f"Metric recorded: {event.feedback_id} ({request.metric_name}={request.metric_value})"

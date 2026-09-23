@@ -137,7 +137,7 @@ class EventStoreWriter:
                     break
                 time.sleep(1)
 
-    def write_feedback(
+    async def write_feedback(
         self,
         feedback: FeedbackEvent,
         lom: Optional[str] = None,
@@ -170,7 +170,7 @@ class EventStoreWriter:
 
         try:
             # Write to EventStore (audit-chain FIRST, fail-closed)
-            self.event_store.write_event(learning_event)
+            await self.event_store.write_event(learning_event, feedback.tenant_id)
             return learning_event.audit_ref or "unknown"
 
         except RuntimeError as e:
@@ -192,7 +192,7 @@ class EventStoreWriter:
             )
             raise
 
-    def flush_queue(self) -> int:
+    async def flush_queue(self) -> int:
         """Retry all queued feedback; return count of successful writes.
 
         Called by background flusher every QUEUE_FLUSH_INTERVAL, or manually.
@@ -222,8 +222,9 @@ class EventStoreWriter:
 
                 try:
                     # Retry the write
-                    self.event_store.write_event(
-                        self._feedback_to_learning_event(queued.feedback, lom=queued.feedback.lom)
+                    await self.event_store.write_event(
+                        self._feedback_to_learning_event(queued.feedback, lom=queued.feedback.lom),
+                        queued.feedback.tenant_id
                     )
                     logger.info(
                         f"Flushed queued feedback {queued.feedback.feedback_id} "
