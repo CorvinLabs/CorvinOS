@@ -21,10 +21,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import { ApiError } from "@/lib/api/client";
+import { KEY_INDEX, KEY_INSTALLED } from "../header";
+import { KEY_CAPABILITIES, KEY_MANIFEST } from "../tabs/browse";
 import type { TabId } from "../tabs";
 import type { IndexPlugin } from "../api";
 import {
-  getPluginDependencies, startInstallJob, getInstallProgress,
+  getPluginDependencies, startInstallJob, getInstallProgress, enablePlugin,
   type DependencyNode, type InstallPlan, type InstallJob,
 } from "../api";
 
@@ -49,7 +52,7 @@ function DependencyTree({ node, level = 0 }: { node: DependencyNode; level?: num
           {node.plugin_id || node.index_id}
         </span>
         {node.installed && <Badge variant="secondary" className="text-xs">already installed</Badge>}
-        {node.missing && <Badge variant="destructive" className="text-xs">missing</Badge>}
+        {node.missing && <Badge variant="danger" className="text-xs">missing</Badge>}
       </div>
       {node.reason && <div className="text-xs text-destructive ml-6">{node.reason}</div>}
       {node.children.map((child) => (
@@ -118,6 +121,41 @@ export function InstallFlowModal({ plugin, csrf, open, onOpenChange, onSuccess, 
     retry: false,
   });
 
+  // A plugin that declares a console panel puts it in the sidebar only once
+  // ENABLED (state.PluginLifecycle._sync_console_panel), and the sidebar reads
+  // the manifest, not the plugin registry directly — so every path that can
+  // change a plugin's enabled state must invalidate both.
+  const invalidateAfterEnableChange = () => {
+    qc.invalidateQueries({ queryKey: ["marketplace"] });
+    qc.invalidateQueries({ queryKey: [...KEY_INSTALLED] });
+    qc.invalidateQueries({ queryKey: [...KEY_INDEX] });
+    qc.invalidateQueries({ queryKey: [...KEY_MANIFEST] });
+    qc.invalidateQueries({ queryKey: [...KEY_CAPABILITIES] });
+  };
+
+  // Step 5: install always leaves the plugin disabled (ADR-0124 Inv. 6 — enable
+  // is its own deliberate, audited, hot-loading step, never implicit in
+  // install). This is the SAME one-click action as the Installed tab's
+  // "Enable" button, offered right here so the operator does not have to go
+  // find it — `consentGranted` mirrors `requires_consent` exactly like
+  // `installed.tsx`'s `Row` does, so a plugin that never needed consent does
+  // not get one recorded regardless.
+  const [enableMsg, setEnableMsg] = useState<string | null>(null);
+  const enableMutation = useMutation({
+    mutationFn: ({ registryId, consent }: { registryId: string; consent: boolean }) =>
+      enablePlugin(registryId, csrf, consent),
+    onSuccess: () => {
+      setEnableMsg("Enabled — the panel is now in the sidebar.");
+      invalidateAfterEnableChange();
+    },
+    onError: (e) =>
+      setEnableMsg(
+        e instanceof ApiError && e.status === 403
+          ? `Refused: ${e.message}`
+          : "Not enabled — see the Installed tab for details.",
+      ),
+  });
+
   // Auto-advance from dependencies to version selection
   useEffect(() => {
     if (step === "dependencies" && depQuery.isSuccess && depQuery.data) {
@@ -138,15 +176,18 @@ export function InstallFlowModal({ plugin, csrf, open, onOpenChange, onSuccess, 
     if (job && (job.status === "completed" || job.status === "failed")) {
       setStep("confirm");
       if (job.status === "completed") {
-        qc.invalidateQueries({ queryKey: ["marketplace"] });
+        invalidateAfterEnableChange();
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progressQuery.data, qc]);
 
   const handleClose = () => {
     onOpenChange(false);
     setStep("dependencies");
     setJobId(null);
+    setEnableMsg(null);
+    enableMutation.reset();
   };
 
   const handleSuccess = () => {
@@ -328,11 +369,30 @@ export function InstallFlowModal({ plugin, csrf, open, onOpenChange, onSuccess, 
                   <div>
                     <div className="font-semibold">Installation completed</div>
                     <div className="text-xs mt-1 opacity-80">
-                      The plugin is now installed and ready to use.
-                      {plan?.dependency_tree.missing === false ? " Enable it on the Installed tab." : ""}
+                      {enableMutation.isSuccess
+                        ? "Enabled — its panel, if it has one, is already in the sidebar."
+                        : "Installed, but not yet enabled. Enabling is a separate, audited step — the sidebar panel (if this plugin has one) appears only once enabled."}
                     </div>
                   </div>
                 </div>
+
+                {!enableMutation.isSuccess && job.registry_id && (
+                  <div className="p-3 rounded-lg bg-muted/30 border border-border space-y-2">
+                    <Button
+                      size="sm"
+                      onClick={() => enableMutation.mutate({
+                        registryId: job.registry_id as string,
+                        consent: job.requires_consent ?? false,
+                      })}
+                      disabled={enableMutation.isPending}
+                    >
+                      {enableMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                      {job.requires_consent ? "Enable now (grants consent)" : "Enable now"}
+                    </Button>
+                    {enableMsg && <p className="text-xs text-muted-foreground">{enableMsg}</p>}
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={handleClose}>Close</Button>
                   <Button onClick={() => { onGoTo?.("installed"); handleSuccess(); }}>

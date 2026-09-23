@@ -114,6 +114,13 @@ export interface InstallJob {
   created_at: string;
   updated_at: string;
   error: string | null;
+  /** The registry key to call enable/disable with — set once COMPLETED. */
+  registry_id: string | null;
+  /** Whether enabling needs an explicit operator consent click (community
+   *  origin, high PII risk, or an explicit manifest flag — ADR-0124). Install
+   *  always leaves the plugin disabled (ADR-0124 Inv. 6 — enable is its own
+   *  deliberate, audited, hot-loading step, never implicit in install). */
+  requires_consent: boolean | null;
 }
 
 export function startInstallJob(indexId: string, version: string, csrf: string): Promise<InstallJob> {

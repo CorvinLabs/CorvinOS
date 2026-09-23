@@ -121,6 +121,14 @@ class InstallJob:
     created_at: str
     updated_at: str
     error: Optional[str] = None
+    # Set once the job reaches COMPLETED, so a `wait: false` poller (the SPA's
+    # progress bar) sees the same outcome a synchronous caller gets from
+    # `_run_install`'s return value — without these, `registry_id` was only
+    # ever visible to a `wait: true` caller, and the async path (what the
+    # install-flow modal actually uses) had no way to know whether enabling
+    # needs consent.
+    registry_id: Optional[str] = None
+    requires_consent: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -282,6 +290,13 @@ def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: st
         job.progress = 100
         job.message = message
         job.updated_at = _now()
+        # Mirror onto the job itself (not just the returned dict): a `wait: false`
+        # caller — the install-flow modal — never sees this function's return
+        # value, only `job.to_dict()` via the progress-poll endpoint.
+        if "registry_id" in extra:
+            job.registry_id = extra["registry_id"]
+        if "requires_consent" in extra:
+            job.requires_consent = extra["requires_consent"]
         _remember(job)
         _audit(rec, "marketplace.install", plugin_id)
         return {"status": "completed", "job_id": job.job_id, "plugin_id": plugin_id, **extra}
@@ -358,11 +373,25 @@ def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: st
     except PluginError as exc:
         # "already installed" is idempotent success, not a failure.
         if "already installed" in str(exc):
-            return _done("Already installed", {"registry_id": record.plugin_id, "already_installed": True})
+            return _done("Already installed", {
+                "registry_id": record.plugin_id,
+                "already_installed": True,
+                "requires_consent": record.consent_required(),
+            })
         return _fail(str(exc))
     except Exception as exc:  # noqa: BLE001 - mapped to a failed job
         return _fail(f"install failed: {type(exc).__name__}")
 
+    # Install intentionally leaves the record disabled (ADR-0124 Inv. 6: enable
+    # is its own audited, hot-loading step — never implicit in install, even
+    # when no consent is required) — see
+    # test_install_registers_the_plugin_then_uninstall_removes_it. What WAS
+    # missing is `requires_consent` / `registry_id` reaching the operator: the
+    # install-flow modal polls this job with `wait: false`, and `InstallJob`
+    # carried neither field, only a `wait: true` caller ever saw them (in the
+    # dict `_done()` returns, which a poller never sees) — so the modal could
+    # not offer a same-flow "Enable now" action or know whether it needs
+    # consent. Mirroring them onto the job (see `_done`) closes that gap.
     return _done("Installation completed", {
         "registry_id": record.plugin_id,
         "version": version,
