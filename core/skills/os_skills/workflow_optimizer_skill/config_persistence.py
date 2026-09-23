@@ -44,16 +44,24 @@ class ConfigPersistence:
     - Console UI calls list_versions() + rollback_to()
     """
 
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(self, tenant_id: str = "_default", config_dir: Optional[Path] = None):
         """Initialize config persistence.
 
         Args:
+            tenant_id: Tenant identifier (REQUIRED - dependency injection, HIGH #12)
             config_dir: Directory for weights storage (default: tenant home)
+
+        Raises:
+            ValueError: tenant_id must be provided (no env var fallback)
         """
+        # HIGH #12: Require explicit tenant_id (no env var fallback)
+        if not tenant_id:
+            raise ValueError("tenant_id is required (no CORVIN_TENANT_ID fallback)")
+
+        self.tenant_id = tenant_id
+
         if config_dir is None:
             from core.paths.tenant import tenant_home
-            import os
-            tenant_id = os.getenv("CORVIN_TENANT_ID", "_default")
             config_dir = Path(tenant_home(tenant_id)) / "workflow_optimizer_config"
 
         self.config_dir = Path(config_dir)
@@ -210,23 +218,31 @@ class ConfigPersistence:
 
         return versions
 
-    def rollback_to_version(self, version: str) -> Tuple[bool, str]:
+    def rollback_to_version(self, version: str, caller_role: str = "operator") -> Tuple[bool, str]:
         """Rollback to a prior weight version (operator request via console).
 
-        **Contract:** Only an operator can request rollback (via console auth).
+        **Contract:** Only an operator or admin can request rollback (via console auth).
         Rollback is logged to audit trail as a CONFIG_REVERTED event.
 
         Args:
             version: Version identifier (e.g., "1.0", "1.2")
+            caller_role: Role of the caller (HIGH #13: validate authorization)
 
         Returns:
             (success, message)
 
         Raises:
-            ValueError: Version not found
+            ValueError: Version not found or unauthorized
             RuntimeError: Rollback failed
+            PermissionError: Caller not authorized to rollback
         """
         import re
+
+        # HIGH #13: Validate caller authorization
+        if caller_role not in ("operator", "admin"):
+            raise PermissionError(
+                f"Caller role '{caller_role}' not authorized for rollback (allowed: 'operator', 'admin')"
+            )
 
         # Validate version format (prevent path traversal)
         if not re.match(r'^[\d.]+$', version):

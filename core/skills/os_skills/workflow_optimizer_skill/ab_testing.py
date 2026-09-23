@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -125,6 +126,9 @@ class CanaryManager:
         self.routed_count = {"canary": 0, "control": 0}
         self.accuracy = {"canary": {}, "control": {}}  # task_id -> correct (bool)
 
+        # Lock for thread-safe access to routing counters (HIGH #8)
+        self._routing_lock = threading.RLock()
+
     def start_canary(self, stage: CanaryStage) -> CanaryConfig:
         """Start canary deployment at specified stage.
 
@@ -193,10 +197,15 @@ class CanaryManager:
         logger.info(f"Canary started: stage={stage.value}, percentage={canary_pct:.1%}")
         return new_config
 
-    def should_use_canary(self) -> bool:
+    def should_use_canary(self, task_id: str, tenant_id: str) -> bool:
         """Determine if next routing should use canary (learned) weights.
 
-        Uses deterministic random sampling based on canary percentage.
+        Uses deterministic hash-based sampling based on canary percentage.
+        Same task_id + tenant_id always routes the same way (deterministic).
+
+        Args:
+            task_id: Task identifier (for deterministic sampling)
+            tenant_id: Tenant identifier (for deterministic sampling)
 
         Returns:
             True if should use canary, False if should use control (baseline)
@@ -204,9 +213,13 @@ class CanaryManager:
         if not self.config.enabled or self.config.canary_percentage == 0:
             return False
 
-        # Deterministic sampling: use random() < percentage
-        import random
-        return random.random() < self.config.canary_percentage
+        # Deterministic sampling: hash(task_id + tenant_id) % 100 < canary_percentage
+        # HIGH #6 fix: Replace random.random() with deterministic hash-based sampling
+        import hashlib
+        sample_key = f"{tenant_id}:{task_id}".encode()
+        hash_val = int(hashlib.sha256(sample_key).hexdigest(), 16)
+        sample_pct = (hash_val % 100) / 100.0
+        return sample_pct < self.config.canary_percentage
 
     def record_routing(
         self,
@@ -214,6 +227,7 @@ class CanaryManager:
         used_canary: bool,
         predicted_model: str,
         correct_model: str,
+        tenant_id: str = "_default",
     ) -> None:
         """Record a routing decision for metrics.
 
@@ -222,14 +236,30 @@ class CanaryManager:
             used_canary: True if canary (learned) weights used, False if control
             predicted_model: Model we predicted
             correct_model: Ground-truth correct model
-        """
-        arm = "canary" if used_canary else "control"
-        self.routed_count[arm] += 1
+            tenant_id: Tenant identifier (HIGH #9: validate tenant isolation)
 
-        correct = predicted_model == correct_model
-        if arm not in self.accuracy:
-            self.accuracy[arm] = {}
-        self.accuracy[arm][task_id] = correct
+        Raises:
+            ValueError: Invalid task_id format or tenant mismatch
+        """
+        # HIGH #9: Validate tenant isolation and task_id format
+        if tenant_id != self.tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: request tenant={tenant_id}, manager tenant={self.tenant_id}"
+            )
+
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', task_id):
+            raise ValueError(f"Invalid task_id format: {task_id}")
+
+        # HIGH #8: Protect routing counters with lock (thread-safe)
+        with self._routing_lock:
+            arm = "canary" if used_canary else "control"
+            self.routed_count[arm] += 1
+
+            correct = predicted_model == correct_model
+            if arm not in self.accuracy:
+                self.accuracy[arm] = {}
+            self.accuracy[arm][task_id] = correct
 
     def compute_metrics(self) -> CanaryMetrics:
         """Compute current canary metrics.
@@ -237,18 +267,21 @@ class CanaryManager:
         Returns:
             CanaryMetrics with accuracy, improvement, recommendation
         """
-        canary_correct = sum(1 for v in self.accuracy.get("canary", {}).values() if v)
-        control_correct = sum(1 for v in self.accuracy.get("control", {}).values() if v)
+        # HIGH #8: Protect routing counters with lock (thread-safe)
+        with self._routing_lock:
+            canary_correct = sum(1 for v in self.accuracy.get("canary", {}).values() if v)
+            control_correct = sum(1 for v in self.accuracy.get("control", {}).values() if v)
 
-        canary_total = self.routed_count["canary"]
-        control_total = self.routed_count["control"]
+            canary_total = self.routed_count["canary"]
+            control_total = self.routed_count["control"]
 
-        canary_accuracy = (
-            canary_correct / canary_total if canary_total > 0 else 0.0
-        )
-        control_accuracy = (
-            control_correct / control_total if control_total > 0 else 0.0
-        )
+            # Compute metrics within lock to ensure consistency
+            canary_accuracy = (
+                canary_correct / canary_total if canary_total > 0 else 0.0
+            )
+            control_accuracy = (
+                control_correct / control_total if control_total > 0 else 0.0
+            )
 
         if control_accuracy == 0:
             improvement_pct = 0.0
@@ -306,6 +339,9 @@ class CanaryManager:
             ValueError: Cannot promote from current stage
             RuntimeError: Config write failed (audit-first)
         """
+        # HIGH #7 fix: Capture old_stage BEFORE updating config (race condition)
+        old_stage = self.config.stage
+
         promotion_map = {
             CanaryStage.STAGE_10: CanaryStage.STAGE_25,
             CanaryStage.STAGE_25: CanaryStage.STAGE_50,
@@ -331,21 +367,21 @@ class CanaryManager:
             canary_percentage=canary_pct,
             created_at=self.config.created_at,
             promoted_at=datetime.utcnow().isoformat() + "Z",
-            promotion_reason=f"Promoted from {self.config.stage.value}",
+            promotion_reason=f"Promoted from {old_stage.value}",
         )
 
         # Persist config
         self._save_config(new_config)
         self.config = new_config
 
-        # Emit audit event
+        # Emit audit event (HIGH #7: use old_stage captured BEFORE config update)
         promotion_event = LearningEvent.create(
             event_type=EventType.CONFIG,
             skill_id=self.skill_id,
             tenant_id=self.tenant_id,
             signal={
                 "action": "canary_promoted",
-                "from_stage": self.config.stage.value,
+                "from_stage": old_stage.value,
                 "to_stage": next_stage.value,
                 "new_canary_percentage": canary_pct,
             },

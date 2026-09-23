@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -63,7 +64,10 @@ class ExceptionRequest:
     expires_at: str = ""  # Auto-calculated: timestamp + ttl_hours
 
     def __post_init__(self):
-        """Validate exception (frozen dataclass, fail-closed)."""
+        """Validate exception (frozen dataclass, fail-closed).
+
+        MEDIUM #16: Scrub PII from reason field before storage.
+        """
         if not self.flow_id:
             raise ValueError("flow_id required")
         if not self.data_class:
@@ -80,12 +84,40 @@ class ExceptionRequest:
             raise ValueError("tenant_id required (GDPR Art. 32)")
         if not (1 <= self.ttl_hours <= 24):
             raise ValueError(f"ttl_hours must be 1–24, got {self.ttl_hours}")
+
+        # MEDIUM #16: Scrub PII from reason field
+        if self.reason:
+            scrubbed_reason = self._scrub_pii(self.reason)
+            object.__setattr__(self, "reason", scrubbed_reason)
+
         if not self.expires_at:
             # Auto-calculate expires_at
             import datetime as dt
             ts = datetime.fromisoformat(self.timestamp.replace("Z", "+00:00"))
             expires = ts + timedelta(hours=self.ttl_hours)
             object.__setattr__(self, "expires_at", expires.isoformat() + "Z")
+
+    @staticmethod
+    def _scrub_pii(text: str) -> str:
+        """Scrub PII patterns from reason text (MEDIUM #16).
+
+        Removes: email addresses, phone numbers, IP addresses, API keys.
+        """
+        import re
+
+        # Email addresses
+        text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL]', text)
+
+        # Phone numbers (various formats)
+        text = re.sub(r'\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b', '[PHONE]', text)
+
+        # IP addresses
+        text = re.sub(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', '[IP]', text)
+
+        # API keys / secrets (common patterns)
+        text = re.sub(r'(api[_-]?key|secret|token|password)\s*[:=]\s*\S+', r'\1=[REDACTED]', text, flags=re.IGNORECASE)
+
+        return text
 
 
 class ExceptionManager:
@@ -132,6 +164,9 @@ class ExceptionManager:
 
         # In-memory cache (reload from disk on init)
         self.exceptions: Dict[str, ExceptionRequest] = self._load_exceptions()
+
+        # Lock for thread-safe access to exceptions cache (HIGH #11)
+        self._exceptions_lock = threading.RLock()
 
     def create_exception(self, request: ExceptionRequest) -> str:
         """Create exception request (audit-first).
@@ -309,37 +344,40 @@ class ExceptionManager:
             RuntimeError: Audit write failed (audit-first fail-closed)
         """
         reaped = 0
-        expired_ids = []
 
-        for exc_id, exc in list(self.exceptions.items()):
-            if self._is_expired(exc):
-                expired_ids.append(exc_id)
+        # HIGH #11: Use lock to prevent race condition in exception reaping
+        with self._exceptions_lock:
+            expired_ids = []
 
-        # Emit audit events for each reaped exception
-        for exc_id in expired_ids:
-            exc = self.exceptions[exc_id]
+            for exc_id, exc in list(self.exceptions.items()):
+                if self._is_expired(exc):
+                    expired_ids.append(exc_id)
 
-            reap_event = LearningEvent.create(
-                event_type=EventType.PREFERENCE,
-                skill_id=self.skill_id,
-                tenant_id=self.tenant_id,
-                signal={
-                    "action": "exception_expired",
-                    "exception_id": exc_id,
-                    "expired_at": exc.expires_at,
-                },
-                skill_version=self.skill_version,
-                lom="flow_guard.exception_system:reap_expired_exceptions:L262",
-            )
+            # Emit audit events for each reaped exception (within lock)
+            for exc_id in expired_ids:
+                exc = self.exceptions[exc_id]
 
-            try:
-                self.event_store.write_event(reap_event)
-            except (RuntimeError, IOError) as e:
-                logger.error(f"Failed to write expiry event for {exc_id}: {e}")
-                raise RuntimeError(f"Expiry audit failed: {e}") from e
+                reap_event = LearningEvent.create(
+                    event_type=EventType.PREFERENCE,
+                    skill_id=self.skill_id,
+                    tenant_id=self.tenant_id,
+                    signal={
+                        "action": "exception_expired",
+                        "exception_id": exc_id,
+                        "expired_at": exc.expires_at,
+                    },
+                    skill_version=self.skill_version,
+                    lom="flow_guard.exception_system:reap_expired_exceptions:L262",
+                )
 
-            del self.exceptions[exc_id]
-            reaped += 1
+                try:
+                    self.event_store.write_event(reap_event)
+                except (RuntimeError, IOError) as e:
+                    logger.error(f"Failed to write expiry event for {exc_id}: {e}")
+                    raise RuntimeError(f"Expiry audit failed: {e}") from e
+
+                del self.exceptions[exc_id]
+                reaped += 1
 
         if reaped > 0:
             logger.info(f"Reaped {reaped} expired exceptions")
