@@ -1,0 +1,31 @@
+# Loop A — 3D PoC learning concept: "How the hash-chained audit log works".
+# Built by tools/blender_3d_scene_generator.py (ADR-2033). Narration is kept
+# here for the TTS step (Loop A task #2); the generator does not render it.
+name: audit_chain
+fps: 30
+render_settings:
+  device: AUTO            # GPU if Blender finds one, CPU fallback (recorded in report.json)
+  samples: 256
+  preview_samples: 64
+  use_denoiser: true
+  adaptive_sampling: true
+  resolution: [1920, 1080]
+scenes:
+  - name: chain
+    template: linked_chain
+    template_params: {num_items: 4, spacing: 3.0}
+    duration_s: 6
+    camera_angle: 90
+    narration: Every audit event is a block. Each block carries the hash of the one before it.
+  - name: hash
+    template: hash_transformation
+    template_params: {distance: 6.0, pulse_period_s: 1.0}
+    duration_s: 5
+    camera_angle: 45
+    narration: The event and the previous hash go into SHA-256. What comes out is the new link.
+  - name: verified
+    template: checkmark_sequence
+    template_params: {num_marks: 5, interval_frames: 30}
+    duration_s: 6
+    camera_angle: 30
+    narration: Verification walks the chain and recomputes every link. One changed byte breaks it.
