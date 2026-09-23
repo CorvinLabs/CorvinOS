@@ -226,8 +226,20 @@ class ConfigPersistence:
             ValueError: Version not found
             RuntimeError: Rollback failed
         """
+        import re
+
+        # Validate version format (prevent path traversal)
+        if not re.match(r'^[\d.]+$', version):
+            return False, f"Invalid version format: {version}"
+
         # Find target version in history
         target_file = self.history_dir / f"v{version}.json"
+
+        # Verify target file is within history_dir (prevent escape)
+        try:
+            target_file.resolve().relative_to(self.history_dir.resolve())
+        except ValueError:
+            return False, "Version path escape detected"
 
         if not target_file.exists():
             return False, f"Version {version} not found in history"
@@ -242,14 +254,33 @@ class ConfigPersistence:
             data["rollback_from"] = version  # Track the source
             data["rolled_back_at"] = datetime.utcnow().isoformat() + "Z"
 
-            # Write back to current file
-            with open(self.weights_file, "w") as f:
-                json.dump(data, f, indent=2)
+            # Write back to current file (atomic)
+            import tempfile
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=self.config_dir,
+                prefix="routing_weights_",
+                suffix=".json.tmp",
+                delete=False,
+            ) as tmp:
+                json.dump(data, tmp, indent=2)
+                tmp_path = Path(tmp.name)
 
-            # Also archive the rollback version
+            tmp_path.replace(self.weights_file)  # Atomic rename
+
+            # Also archive the rollback version (atomic)
             archive_file = self.history_dir / f"v{new_version}.json"
-            with open(archive_file, "w") as f:
-                json.dump(data, f, indent=2)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=self.history_dir,
+                prefix="routing_weights_",
+                suffix=".json.tmp",
+                delete=False,
+            ) as tmp:
+                json.dump(data, tmp, indent=2)
+                tmp_path = Path(tmp.name)
+
+            tmp_path.replace(archive_file)  # Atomic rename
 
             logger.info(f"Rolled back from v{version} to v{new_version}")
             return True, f"Rolled back to v{version} (now v{new_version})"

@@ -401,12 +401,14 @@ class ExceptionManager:
         Returns:
             True if expired, False if still active
         """
+        from datetime import timezone
+
         expires = datetime.fromisoformat(exc.expires_at.replace("Z", "+00:00"))
-        now = datetime.utcnow().replace(tzinfo=None)
-        return now > expires.replace(tzinfo=None)
+        now = datetime.now(timezone.utc)  # Timezone-aware UTC now
+        return now > expires
 
     def _persist_exception(self, exc: ExceptionRequest) -> None:
-        """Persist exception to disk (JSONL append).
+        """Persist exception to disk (JSONL append, atomic).
 
         Args:
             exc: ExceptionRequest to persist
@@ -414,6 +416,9 @@ class ExceptionManager:
         Raises:
             IOError: File write failed
         """
+        import tempfile
+        import fcntl
+
         data = {
             "exception_id": exc.exception_id,
             "flow_id": exc.flow_id,
@@ -430,8 +435,17 @@ class ExceptionManager:
         }
 
         try:
+            # Atomic append: write to temp, then append
+            line = json.dumps(data) + "\n"
+
+            # Use file lock to ensure atomic append
             with open(self.exceptions_file, "a") as f:
-                f.write(json.dumps(data) + "\n")
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # Exclusive lock
+                try:
+                    f.write(line)
+                    f.flush()
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         except IOError as e:
             logger.error(f"Failed to persist exception to {self.exceptions_file}: {e}")
             raise

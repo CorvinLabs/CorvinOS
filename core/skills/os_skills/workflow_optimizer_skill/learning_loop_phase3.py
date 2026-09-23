@@ -108,7 +108,7 @@ class WorkflowOptimizerLearningLoop:
             skill_version=skill_version,
         )
 
-    def run_learning_loop(
+    async def run_learning_loop(
         self,
         baseline_task_count: int = 100,
         feedback_sample_size: int = 50,
@@ -239,7 +239,7 @@ class WorkflowOptimizerLearningLoop:
         )
 
         try:
-            self.event_store.write_event(outcome_event)
+            await self.event_store.write_event(outcome_event, self.tenant_id)
         except (RuntimeError, IOError) as e:
             logger.error(f"Failed to write learning outcome: {e}")
             raise
