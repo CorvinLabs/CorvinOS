@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 
 from core.storage.savings_store import SavingsStore, MonthlySavingsReport
 from core.learning.token_savings_tracker import TokenSavingsTracker
+from corvin_console.deps import require_session
+from corvin_console import auth as session_auth
 
 router = APIRouter(prefix="/v1/console/billing", tags=["billing"])
 
@@ -73,11 +75,13 @@ def get_service() -> BillingSavingsService:
 @router.get("/savings")
 async def get_savings(
     month: Optional[str] = Query(None, description="Month in YYYY-MM format"),
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
 ) -> dict:
     """Get monthly savings report for current user.
 
     Args:
         month: Month in YYYY-MM format (default: current month)
+        session: Authenticated session (provides user_id)
 
     Returns:
         {
@@ -88,11 +92,14 @@ async def get_savings(
             "event_count": 25,
             "credit_usd": 150.0
         }
+
+    SECURITY FIX (Phase 9 P0, Issue #8): user_id extracted from authenticated session,
+    not hardcoded. Each user now sees their own billing data (fail-closed: 401 if unauthenticated).
     """
     service = get_service()
 
-    # TODO: Get user_id from session/auth
-    user_id = "demo_user"
+    # ✅ FIXED: Get user_id from authenticated session, not hardcoded
+    user_id = session.sid  # session.sid is the authenticated user ID
 
     # Parse month if provided
     year = None
@@ -109,11 +116,17 @@ async def get_savings(
 
 
 @router.get("/savings/all-time")
-async def get_all_time_savings() -> dict:
-    """Get all-time savings for current user."""
+async def get_all_time_savings(
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+) -> dict:
+    """Get all-time savings for current user.
+
+    SECURITY FIX (Phase 9 P0, Issue #8): user_id extracted from authenticated session,
+    not hardcoded. Each user now sees their own billing data (fail-closed: 401 if unauthenticated).
+    """
     service = get_service()
 
-    # TODO: Get user_id from session/auth
-    user_id = "demo_user"
+    # ✅ FIXED: Get user_id from authenticated session, not hardcoded
+    user_id = session.sid  # session.sid is the authenticated user ID
 
     return service.get_all_time_savings(user_id)

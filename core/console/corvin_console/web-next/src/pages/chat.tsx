@@ -83,6 +83,7 @@ import {
   type StreamEvent,
   type TdeProgress,
 } from "@/lib/chat-registry";
+import { loadPersistedMessages } from "@/lib/chat-message-persistence";
 import {
   markStreaming,
   markDone,
@@ -1089,15 +1090,36 @@ function ChatPane({
 
     // Load server-side history into the registry — only applied on first visit.
     let cancelled = false;
-    getChatTurns(sid)
-      .then((res) => {
-        if (cancelled) return;
-        const hydrated: ChatMessage[] = res.turns.map(
-          (t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid),
-        );
-        loadHistory(sid, hydrated);
-      })
-      .catch(() => { /* empty chat on first visit — expected */ });
+
+    // First, try to restore messages from sessionStorage (page refresh recovery).
+    const persistedMessages = loadPersistedMessages(sid);
+    if (persistedMessages && persistedMessages.length > 0) {
+      loadHistory(sid, persistedMessages);
+      // Still fetch from backend in background to pick up any new turns since the tab was closed.
+      getChatTurns(sid)
+        .then((res) => {
+          if (cancelled) return;
+          const hydrated: ChatMessage[] = res.turns.map(
+            (t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid),
+          );
+          // Only reload if the backend has MORE messages than what we recovered locally.
+          if (hydrated.length > persistedMessages.length) {
+            loadHistory(sid, hydrated);
+          }
+        })
+        .catch(() => { /* keep the persisted messages */ });
+    } else {
+      // No persisted messages — fetch from backend normally.
+      getChatTurns(sid)
+        .then((res) => {
+          if (cancelled) return;
+          const hydrated: ChatMessage[] = res.turns.map(
+            (t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid),
+          );
+          loadHistory(sid, hydrated);
+        })
+        .catch(() => { /* empty chat on first visit — expected */ });
+    }
 
     // Speak the text held back by an annotation_pending result (see the
     // pendingSpeakRef comment above for the three trigger paths). Clears the

@@ -8,6 +8,7 @@ import yaml
 
 from forge import paths as forge_paths
 from . import registry
+from . import audit as plugin_audit
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,18 @@ def load_plugins_for_tenant(tenant_id: str) -> dict[str, bool]:
                 results[plugin_id] = True
                 logger.info(f"Loaded plugin: {plugin_id}")
             except Exception as e:
+                # Emit plugin initialization failure audit event (audit-first)
+                try:
+                    audit_path = forge_paths.tenant_audit_chain(tenant_id)
+                    plugin_audit.emit_initialization_failed(
+                        path=audit_path,
+                        plugin_id=plugin_id,
+                        boot_layer=getattr(plugin, "boot_layer", "installed"),
+                        error_class=type(e).__name__,
+                        tenant_id=tenant_id,
+                    )
+                except Exception:
+                    pass
                 logger.error(f"Failed to load plugin {plugin_id}: {e}")
                 results[plugin_id] = False
         else:

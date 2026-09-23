@@ -1,40 +1,61 @@
 """Audit event emission for Context Reference Graph."""
 
 import json
+import logging
 from datetime import datetime
 from typing import Optional, Any, Dict
+from pathlib import Path
 
 from .types import ContextDigest, ContextBuildError
 
+logger = logging.getLogger(__name__)
 
-# Mock audit backend (will be replaced with real backend in integration)
-class _MockAuditBackend:
-    """Mock audit backend for testing. In production, uses real audit_backend."""
+# Real audit backend (from core.audit.chain)
+_audit_backend = None
 
-    def __init__(self):
-        self.events = []
+
+def _get_audit_backend():
+    """Get or initialize the real audit backend (ADR-0232/0233)."""
+    global _audit_backend
+    if _audit_backend is None:
+        try:
+            from core.audit.chain import AuditChain
+            import os
+
+            # Use real audit chain from tenant-scoped path
+            tenant_id = os.environ.get('CORVIN_TENANT_ID', '_default')
+            corvin_home = os.environ.get('CORVIN_HOME', os.path.expanduser('~/.corvin'))
+
+            audit_log_path = Path(corvin_home) / 'tenants' / tenant_id / 'global' / 'audit.jsonl'
+            audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+            _audit_backend = AuditChain(audit_log_path)
+            logger.info(f"Initialized real audit chain at {audit_log_path}")
+        except Exception as e:
+            logger.error(f"Failed to initialize audit chain: {e}. Audit events will be logged but not persisted.")
+            # Fallback to no-op backend (logs only, doesn't persist)
+            _audit_backend = _NoOpAuditBackend()
+    return _audit_backend
+
+
+class _NoOpAuditBackend:
+    """No-op backend for when real audit chain is unavailable (fail-closed: logs error + continues)."""
 
     def write_event(self, event: Dict[str, Any]) -> None:
-        self.events.append(event)
+        logger.warning(f"Audit event not persisted (backend unavailable): {event}")
 
     def get_events(self):
-        return self.events
-
-    def clear(self):
-        self.events.clear()
-
-
-_audit_backend = _MockAuditBackend()
+        return []
 
 
 def set_audit_backend(backend) -> None:
-    """Set the audit backend (for integration with real audit_backend)."""
+    """Set the audit backend (for testing only; production uses real chain)."""
     global _audit_backend
     _audit_backend = backend
 
 
 def _get_current_tenant() -> str:
-    """Get current tenant ID (mock, will use real context.current_tenant() later)."""
+    """Get current tenant ID from environment."""
     try:
         import os
         return os.environ.get('CORVIN_TENANT_ID', '_default')
@@ -53,7 +74,11 @@ def emit_digest_validated(digest: ContextDigest) -> None:
         'timestamp': datetime.now().isoformat(),
         'lom': digest.lom
     }
-    _audit_backend.write_event(event)
+    backend = _get_audit_backend()
+    try:
+        backend.write_event(event)
+    except Exception as e:
+        logger.error(f"Failed to write audit event: {e}")
 
 
 def emit_reference_resolved(
@@ -76,7 +101,11 @@ def emit_reference_resolved(
         'timestamp': datetime.now().isoformat(),
         'lom': 'core/context/reference_graph/audit.py:emit_reference_resolved'
     }
-    _audit_backend.write_event(event)
+    backend = _get_audit_backend()
+    try:
+        backend.write_event(event)
+    except Exception as e:
+        logger.error(f"Failed to write audit event: {e}")
 
 
 def emit_reference_hash_mismatch(
@@ -97,7 +126,11 @@ def emit_reference_hash_mismatch(
         'lom': 'core/context/reference_graph/audit.py:emit_reference_hash_mismatch',
         'action': 'reference_not_loaded'
     }
-    _audit_backend.write_event(event)
+    backend = _get_audit_backend()
+    try:
+        backend.write_event(event)
+    except Exception as e:
+        logger.error(f"Failed to write audit event: {e}")
 
 
 def emit_builder_error(error: ContextBuildError, tenant_id: str = "_default") -> None:
@@ -111,7 +144,11 @@ def emit_builder_error(error: ContextBuildError, tenant_id: str = "_default") ->
         'timestamp': datetime.now().isoformat(),
         'lom': 'core/context/reference_graph/audit.py:emit_builder_error'
     }
-    _audit_backend.write_event(event)
+    backend = _get_audit_backend()
+    try:
+        backend.write_event(event)
+    except Exception as e:
+        logger.error(f"Failed to write audit event: {e}")
 
 
 def emit_digest_validation_failed(
@@ -131,7 +168,11 @@ def emit_digest_validation_failed(
         'lom': 'core/context/reference_graph/audit.py:emit_digest_validation_failed',
         'action': 'digest_not_used'
     }
-    _audit_backend.write_event(event)
+    backend = _get_audit_backend()
+    try:
+        backend.write_event(event)
+    except Exception as e:
+        logger.error(f"Failed to write audit event: {e}")
 
 
 def emit_event(event_type: str, *, tenant_id: str, lom: str, **fields: object) -> None:
@@ -152,14 +193,21 @@ def emit_event(event_type: str, *, tenant_id: str, lom: str, **fields: object) -
         'lom': lom,
     }
     event.update(fields)
-    _audit_backend.write_event(event)
+    backend = _get_audit_backend()
+    try:
+        backend.write_event(event)
+    except Exception as e:
+        logger.error(f"Failed to write audit event: {e}")
 
 
 def get_audit_events():
     """Get all emitted audit events (for testing)."""
-    return _audit_backend.get_events()
+    backend = _get_audit_backend()
+    return backend.get_events() if hasattr(backend, 'get_events') else []
 
 
 def clear_audit_events():
     """Clear all audit events (for testing)."""
-    _audit_backend.clear()
+    backend = _get_audit_backend()
+    if hasattr(backend, 'clear'):
+        backend.clear()

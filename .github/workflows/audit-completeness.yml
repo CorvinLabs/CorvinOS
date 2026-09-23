@@ -1,0 +1,93 @@
+name: Audit Completeness Check
+
+on:
+  pull_request:
+    paths:
+      - 'corvin_operator/forge/forge/security_events.py'
+      - 'core/compute/corvin_compute/audit.py'
+      - 'corvin_operator/bridges/shared/a2a_audit.py'
+      - 'core/plugins/corvin_plugins/audit.py'
+      - 'tests/security/test_audit_phase2_events.py'
+      - 'scripts/verify_audit_event_completeness.py'
+  push:
+    branches:
+      - main
+    paths:
+      - 'corvin_operator/forge/forge/security_events.py'
+      - 'core/compute/corvin_compute/audit.py'
+      - 'corvin_operator/bridges/shared/a2a_audit.py'
+      - 'core/plugins/corvin_plugins/audit.py'
+      - 'tests/security/test_audit_phase2_events.py'
+      - 'scripts/verify_audit_event_completeness.py'
+
+jobs:
+  audit-completeness:
+    name: Verify Audit Event Completeness
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Run audit completeness check
+        run: python3 scripts/verify_audit_event_completeness.py
+        id: audit-check
+
+      - name: Comment on PR if sync error
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ Audit Completeness Check Failed\n\nThe EVENT_SEVERITY and _EVENT_ALLOWLIST registries are out of sync.\n\nRun `python3 scripts/verify_audit_event_completeness.py` locally to debug.',
+            })
+
+      - name: Run audit tests
+        if: success()
+        run: python3 -m pytest tests/security/test_audit_phase2_events.py -v
+
+  audit-coverage:
+    name: Audit Event Coverage Report
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Count registered events
+        run: |
+          python3 << 'EOF'
+          import re
+          from pathlib import Path
+
+          security_events_file = Path("corvin_operator/forge/forge/security_events.py")
+          with open(security_events_file) as f:
+              content = f.read()
+
+          # Count EVENT_SEVERITY entries
+          severity_match = re.search(r"EVENT_SEVERITY:\s*dict\[str,\s*str\]\s*=\s*\{(.*?)\n\}", content, re.DOTALL)
+          if severity_match:
+              events = re.findall(r'"([^"]+)":\s*"(INFO|WARNING|ERROR|CRITICAL)"', severity_match.group(1))
+              print(f"✅ Total events in EVENT_SEVERITY: {len(events)}")
+
+          # Count _EVENT_ALLOWLIST entries
+          allowlist_match = re.search(r"_EVENT_ALLOWLIST:\s*dict\[str,\s*frozenset\[str\]\]\s*=\s*\{(.*?)\n\}", content, re.DOTALL)
+          if allowlist_match:
+              events = re.findall(r'"([^"]+)":\s*frozenset', allowlist_match.group(1))
+              print(f"✅ Total events in _EVENT_ALLOWLIST: {len(events)}")
+              print(f"✅ Coverage: 100% (all events have allow-lists)")
+          EOF

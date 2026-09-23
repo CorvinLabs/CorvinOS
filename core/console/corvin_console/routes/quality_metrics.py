@@ -3,13 +3,17 @@ Quality Metrics API Routes (ADR-0731, ADR-0733)
 Specification-as-Loss-Landscape endpoints for console dashboard
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
+from typing import Optional, Annotated
 import json
 from pathlib import Path
-from typing import Optional
 import csv
 from io import StringIO
 from starlette.responses import StreamingResponse
+
+# Security imports for CSRF (Phase 9 P0 fix)
+from corvin_console.deps import require_csrf
+from corvin_console import auth as session_auth
 
 router = APIRouter(prefix="/v1/console/quality", tags=["quality"])
 
@@ -88,11 +92,15 @@ async def export_metrics(
     format: str = Query("csv", pattern="^(csv|json)$"),
     include_audit: bool = Query(True),
     include_spec_history: bool = Query(True),
+    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
 ):
     """
     POST /v1/console/quality/metrics/export
 
     Exports quality metrics as CSV or JSON with optional audit trail and spec history.
+
+    SECURITY FIX (Phase 9 P0, Issue #9): Added require_csrf + authentication.
+    Fail-closed: unauthenticated users get 401, CSRF mismatch gets 403.
     """
 
     # Fetch metrics

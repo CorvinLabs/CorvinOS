@@ -4,12 +4,14 @@ GET /v1/stats/ returns real-time telemetry for operator dashboard.
 Multi-tenant scoped, <200ms latency, audit-logged.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+from typing import Annotated, List, Dict, Any
 from datetime import datetime
-from typing import List, Dict, Any
 import logging
 
 from core.telemetry.metrics_collector import get_collector, MetricsQuery
+from corvin_console.deps import require_session
+from corvin_console import auth as session_auth
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["stats"])
@@ -19,7 +21,7 @@ router = APIRouter(prefix="/v1", tags=["stats"])
 async def get_stats(
     range: str = Query("1h", description="Time range: 1h, 24h, 7d"),
     skill_ids: str = Query("", description="Comma-separated skill IDs (empty=all)"),
-    tenant_id: str = Query("_default", description="Tenant scope"),
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> Dict[str, Any]:
     """Get real-time telemetry metrics.
 
@@ -30,6 +32,9 @@ async def get_stats(
 
     Latency: <200ms (p95)
     Compliance: ADR-0007 (multi-tenant), ADR-0297 (PII), ADR-0314 (audit)
+
+    SECURITY FIX (Phase 9 P0, Issue #5): tenant_id extracted from authenticated session,
+    not from query parameters. Fails-closed: unauthenticated users get 401, not cross-tenant leak.
     """
 
     # Parse range
@@ -39,10 +44,11 @@ async def get_stats(
     # Parse skill_ids
     skill_list = [s.strip() for s in skill_ids.split(",") if s.strip()]
 
-    # Query metrics
+    # Query metrics — use authenticated tenant_id from session (not from Query parameter)
+    # This prevents cross-tenant data leakage (fail-closed: 401 if unauthenticated)
     collector = get_collector()
     query = MetricsQuery(
-        tenant_id=tenant_id,
+        tenant_id=session.tenant_id,
         range_hours=range_hours,
         skill_ids=skill_list,
     )
@@ -50,7 +56,7 @@ async def get_stats(
     metrics = collector.query_metrics(query)
 
     # Emit audit event (ADR-0314)
-    logger.info(f"stats_query: tenant={tenant_id} range={range} skills={len(metrics)}")
+    logger.info(f"stats_query: tenant={session.tenant_id} range={range} skills={len(metrics)} user={session.sid}")
 
     # Compute alerts
     alerts = []
@@ -77,7 +83,7 @@ async def get_stats(
     return {
         "timestamp": datetime.utcnow().isoformat(),
         "range": range,
-        "tenant_id": tenant_id,
+        "tenant_id": session.tenant_id,
         "metrics": [
             {
                 "skill_id": m.skill_id,

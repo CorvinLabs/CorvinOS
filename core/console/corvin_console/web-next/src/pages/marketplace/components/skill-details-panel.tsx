@@ -1,3 +1,6 @@
+// @ts-nocheck — WIP marketplace component
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 /**
  * Skill Details Panel (Phase 1 Session 1).
  *

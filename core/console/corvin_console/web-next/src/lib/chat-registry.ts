@@ -12,6 +12,7 @@
 
 import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
+import { persistMessages } from "./chat-message-persistence";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -308,6 +309,8 @@ function notifyState(sid: string) {
   if (entry) {
     // Replace snapshot with a new object so Object.is detects the change.
     snapshots.set(sid, makeSnapshot(entry));
+    // Persist messages to sessionStorage so they survive a page refresh.
+    persistMessages(sid, entry.messages);
   }
   stateListeners.get(sid)?.forEach((fn) => fn());
 }
@@ -710,6 +713,7 @@ export function loadHistory(sid: string, messages: ChatMessage[]): void {
   if (entry.streaming || entry.messages.length > 0) return;
 
   entry.messages = messages;
+  persistMessages(sid, messages);
   notifyState(sid);
 }
 

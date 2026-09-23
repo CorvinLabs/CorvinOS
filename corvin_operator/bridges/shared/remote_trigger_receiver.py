@@ -73,6 +73,18 @@ except ImportError:
         sys.path.insert(0, str(_shared))
     from audit import audit_path  # type: ignore[import-not-found]
 
+# ── a2a_audit for emitting A2A security events ──────────────────────────────
+try:
+    from a2a_audit import emit_nonce_collision_detected as _emit_nonce_collision  # type: ignore[import-not-found]
+except ImportError:
+    _shared = Path(__file__).resolve().parent
+    if str(_shared) not in sys.path:
+        sys.path.insert(0, str(_shared))
+    try:
+        from a2a_audit import emit_nonce_collision_detected as _emit_nonce_collision  # type: ignore[import-not-found]
+    except ImportError:
+        _emit_nonce_collision = None  # type: ignore[assignment]
+
 # ── instance_identity (local UUID) ────────────────────────────────────────
 try:
     from instance_identity import get_instance_id  # type: ignore[import-not-found]
@@ -1662,6 +1674,18 @@ class RemoteTriggerReceiver:
         # nonce slots with invalid-HMAC envelopes (CRIT-02).
         # origin_id is passed so the per-origin quota (MED-IT4-07) is enforced.
         if not self._nonces.check_and_add(env.nonce, origin_id=env.origin_id):
+            # Emit nonce collision detection audit event (audit-first)
+            if _emit_nonce_collision is not None:
+                try:
+                    _emit_nonce_collision(
+                        path=audit_path(),
+                        nonce_prefix=env.nonce[:8],
+                        epoch=int(time.time()),
+                        collision_count=1,
+                        tenant_id=getattr(self, "_tenant_id", None),
+                    )
+                except Exception:
+                    pass
             raise ValidationError("replay", recv_key)
 
         # Step 6.5 (v5, ADR-0078): min_trust / attestation check.
