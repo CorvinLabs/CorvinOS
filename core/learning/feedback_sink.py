@@ -300,13 +300,19 @@ class FeedbackValidator:
             if feedback.confidence < 0.0 or feedback.confidence > 1.0:
                 return False, "confidence must be in [0, 1]"
 
-        # 8. Reason must be scrubbed (check for PII patterns)
-        if feedback.reason and "[REDACTED]" not in feedback.reason:
-            # Reason should have been pre-scrubbed; if not, fail
+        # 8. Reason must be scrubbed (check for PII patterns using regex detection)
+        if feedback.reason:
+            # Use proper regex-based PII detection, not string literal check
             scrubber = FeedbackScrubber()
             scrubbed = scrubber.scrub(feedback.reason)
             if scrubbed is None:
                 return False, "feedback reason too large or contains PII"
+            # Verify that all PII patterns have been replaced
+            # by checking if the scrubbed version differs from original
+            # (if they're identical, no PII was found and removed; if different, scrubbing occurred)
+            has_pii = any(pattern.search(feedback.reason) for pattern in scrubber.COMPILED_PATTERNS)
+            if has_pii:
+                return False, "feedback reason contains unscrubbable PII patterns"
 
         return True, None
 
@@ -388,10 +394,11 @@ class FeedbackBuffer:
         return avg_confidence >= self.confidence_threshold
 
     def get_and_clear(self, skill_id: str, task_id: str) -> List[FeedbackEvent]:
-        """Retrieve and clear buffer for a skill/task pair."""
+        """Retrieve and clear buffer for a skill/task pair (cleanup to prevent unbounded growth)."""
         key = (skill_id, task_id)
         samples = self.buffers.get(key, [])
-        self.buffers[key] = []
+        # Delete the key entirely to prevent unbounded dict growth (RESOURCE-EXHAUSTION fix)
+        self.buffers.pop(key, None)
         return samples
 
     def get_summary(self, skill_id: str, task_id: str) -> Dict[str, Any]:
