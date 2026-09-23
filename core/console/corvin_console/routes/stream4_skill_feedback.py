@@ -54,11 +54,7 @@ class SkillFeedbackRequest(BaseModel):
         ...,
         description="One of: os.workflow_optimizer, os.security_orchestrator, os.flow_guard"
     )
-    subject_id: str = Field(
-        ...,
-        max_length=100,
-        description="task_id, threat_id, or flow_id (alphanumeric + underscore/hyphen only)"
-    )
+    subject_id: str = Field(..., description="task_id, threat_id, or flow_id")
     rating: int = Field(..., ge=-2, le=2, description="-2 (bad) to +2 (excellent)")
     category: str = Field(..., description="accuracy, speed, safety, or other")
     reasoning: Optional[str] = Field(None, max_length=500, description="Free-text reason (scrubbed for PII)")
@@ -68,16 +64,6 @@ class SkillFeedbackRequest(BaseModel):
     def validate_skill_id(cls, v):
         if v not in VALID_SKILLS:
             raise ValueError(f"skill_id must be one of {VALID_SKILLS}")
-        return v
-
-    @validator("subject_id")
-    def validate_subject_id(cls, v):
-        """Validate subject_id format (alphanumeric + underscore/hyphen, max 100 chars)."""
-        import re
-        if not v or len(v) > 100:
-            raise ValueError("subject_id must be 1-100 characters")
-        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError("subject_id must contain only alphanumeric characters, underscores, and hyphens")
         return v
 
     @validator("category")

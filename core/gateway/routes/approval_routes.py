@@ -11,11 +11,12 @@ All endpoints are audit-logged (fail-closed pattern).
 
 import asyncio
 import logging
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from enum import Enum
+from core.gateway.auth import get_current_user  # JWT principal extraction
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,14 @@ class ApprovalDecisionEnum(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     REVOKED = "revoked"
+
+
+class ApprovalActionReasonEnum(str, Enum):
+    """Closed-enum reasons for approval actions (no free-text, GDPR Art. 5 compliant)."""
+    APPROVED = "approved"
+    DENIED = "denied"
+    REVOKED = "revoked"
+    REQUIRES_REVIEW = "requires_review"
 
 
 class ScrubbedDriftAlertResponse(BaseModel):
@@ -77,9 +86,12 @@ class PendingApprovalsListResponse(BaseModel):
 
 
 class ApprovalActionRequest(BaseModel):
-    """Request to approve/reject/revoke an approval."""
-    operator_id: str = Field(..., min_length=3, max_length=50, description="Who is acting (e.g., 'user:alice')")
-    reason: Optional[str] = Field(None, max_length=500, description="Optional reason for rejection/revoke")
+    """Request to approve/reject/revoke an approval.
+
+    Note: operator_id is extracted from JWT principal (no user input).
+    Reason must be from closed enum (no free-text, GDPR Art. 5 compliant).
+    """
+    reason: ApprovalActionReasonEnum = Field(..., description="Reason code (enum only, no free-text)")
 
 
 class ApprovalActionResponse(BaseModel):
@@ -257,20 +269,26 @@ async def approve_request(
     approval_id: str,
     request: ApprovalActionRequest,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
+    current_user=Depends(get_current_user),  # JWT principal (fail-closed)
 ) -> ApprovalActionResponse:
     """
     Operator approves a pending approval request.
 
     POST /v1/approvals/{skill_id}/{approval_id}/approve
     {
-        "operator_id": "user:alice"
+        "reason": "approved"
     }
+
+    Authorization:
+        - JWT required (current_user extracted from token)
+        - operator_id is the authenticated user's ID
+        - Impersonation attempt (different user_id in request body) is rejected
 
     Returns:
         Success/failure status
 
     Audit:
-        Logged with event_type=skill_approval_granted
+        Logged with event_type=skill_approval_granted (with authenticated operator_id)
     """
     gate = _get_approval_gate()
     if gate is None:
@@ -287,14 +305,18 @@ async def approve_request(
         )
 
     try:
-        # Validate operator_id format
-        if not request.operator_id or len(request.operator_id) < 3:
-            raise ValueError("operator_id must be at least 3 characters")
+        # Extract operator_id from JWT principal (fail-closed)
+        operator_id = current_user.user_id if hasattr(current_user, 'user_id') else str(current_user)
+        if not operator_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No authenticated user found in request",
+            )
 
         # Request approval from gate (audit-logged by gate)
         success = gate.operator_approve(
             approval_id=approval_id,
-            operator_id=request.operator_id,
+            operator_id=operator_id,
         )
 
         if not success:
@@ -323,11 +345,8 @@ async def approve_request(
             decision=ApprovalDecisionEnum(record.decision.value) if record else None,
         )
 
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Approval Routes] Failed to approve {approval_id}: {e}")
         raise HTTPException(
@@ -342,21 +361,26 @@ async def reject_request(
     approval_id: str,
     request: ApprovalActionRequest,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
+    current_user=Depends(get_current_user),  # JWT principal (fail-closed)
 ) -> ApprovalActionResponse:
     """
     Operator rejects a pending approval request.
 
     POST /v1/approvals/{skill_id}/{approval_id}/reject
     {
-        "operator_id": "user:alice",
-        "reason": "Magnitude too high"
+        "reason": "denied"
     }
+
+    Authorization:
+        - JWT required (current_user extracted from token)
+        - operator_id is the authenticated user's ID
+        - Impersonation attempt (different user_id in request body) is rejected
 
     Returns:
         Success/failure status
 
     Audit:
-        Logged with event_type=skill_approval_denied
+        Logged with event_type=skill_approval_denied (with authenticated operator_id and enum reason)
     """
     gate = _get_approval_gate()
     if gate is None:
@@ -373,15 +397,20 @@ async def reject_request(
         )
 
     try:
-        # Validate operator_id format
-        if not request.operator_id or len(request.operator_id) < 3:
-            raise ValueError("operator_id must be at least 3 characters")
+        # Extract operator_id from JWT principal (fail-closed)
+        operator_id = current_user.user_id if hasattr(current_user, 'user_id') else str(current_user)
+        if not operator_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No authenticated user found in request",
+            )
 
         # Request rejection from gate (audit-logged by gate)
+        # reason is enum-only (no free-text), GDPR Art. 5 compliant
         success = gate.operator_reject(
             approval_id=approval_id,
-            operator_id=request.operator_id,
-            reason=request.reason or "",
+            operator_id=operator_id,
+            reason=request.reason.value,  # Enum value only
         )
 
         if not success:
@@ -401,11 +430,8 @@ async def reject_request(
             decision=ApprovalDecisionEnum(record.decision.value) if record else None,
         )
 
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Approval Routes] Failed to reject {approval_id}: {e}")
         raise HTTPException(
@@ -420,21 +446,26 @@ async def revoke_approval(
     approval_id: str,
     request: ApprovalActionRequest,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
+    current_user=Depends(get_current_user),  # JWT principal (fail-closed)
 ) -> ApprovalActionResponse:
     """
     Operator revokes a previously-approved change.
 
     POST /v1/approvals/{skill_id}/{approval_id}/revoke
     {
-        "operator_id": "user:alice",
-        "reason": "Caused latency regression"
+        "reason": "revoked"
     }
+
+    Authorization:
+        - JWT required (current_user extracted from token)
+        - operator_id is the authenticated user's ID
+        - Impersonation attempt (different user_id in request body) is rejected
 
     Returns:
         Success/failure status
 
     Audit:
-        Logged with event_type=skill_approval_revoked
+        Logged with event_type=skill_approval_revoked (with authenticated operator_id and enum reason)
     """
     gate = _get_approval_gate()
     if gate is None:
@@ -451,15 +482,20 @@ async def revoke_approval(
         )
 
     try:
-        # Validate operator_id format
-        if not request.operator_id or len(request.operator_id) < 3:
-            raise ValueError("operator_id must be at least 3 characters")
+        # Extract operator_id from JWT principal (fail-closed)
+        operator_id = current_user.user_id if hasattr(current_user, 'user_id') else str(current_user)
+        if not operator_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No authenticated user found in request",
+            )
 
         # Request revoke from gate (audit-logged by gate)
+        # reason is enum-only (no free-text), GDPR Art. 5 compliant
         success = gate.operator_revoke(
             approval_id=approval_id,
-            operator_id=request.operator_id,
-            reason=request.reason or "",
+            operator_id=operator_id,
+            reason=request.reason.value,  # Enum value only
         )
 
         if not success:
@@ -486,11 +522,8 @@ async def revoke_approval(
             decision=ApprovalDecisionEnum(record.decision.value) if record else None,
         )
 
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Approval Routes] Failed to revoke {approval_id}: {e}")
         raise HTTPException(

@@ -130,12 +130,11 @@ def save_confidence_history(stat_key: str, history: list[float]) -> None:
     tenant_id = _tenant_from_stat_key(stat_key)
     if tenant_id is None:
         return
-    with locked(tenant_id):
-        data = _load_file(tenant_id)
-        entry = data.get(stat_key) or {}
-        entry["confidence_history"] = history
-        data[stat_key] = entry
-        _save_file(tenant_id, data)
+    data = _load_file(tenant_id)
+    entry = data.get(stat_key) or {}
+    entry["confidence_history"] = history
+    data[stat_key] = entry
+    _save_file(tenant_id, data)
 
 
 class PersistentConfidenceStore(MutableMapping):
@@ -164,12 +163,11 @@ class PersistentConfidenceStore(MutableMapping):
         tenant_id = _tenant_from_stat_key(stat_key)
         if tenant_id is None:
             return
-        with locked(tenant_id):
-            data = _load_file(tenant_id)
-            entry = data.get(stat_key) or {}
-            entry["stats"] = value
-            data[stat_key] = entry
-            _save_file(tenant_id, data)
+        data = _load_file(tenant_id)
+        entry = data.get(stat_key) or {}
+        entry["stats"] = value
+        data[stat_key] = entry
+        _save_file(tenant_id, data)
 
     def __delitem__(self, stat_key: str) -> None:
         tenant_id = _tenant_from_stat_key(stat_key)

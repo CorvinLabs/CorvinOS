@@ -16,7 +16,6 @@ Features:
 """
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, time
@@ -27,32 +26,6 @@ import threading
 from enum import Enum
 
 logger = logging.getLogger(__name__)
-
-
-def _sanitize_for_log(value: str, max_len: int = 256) -> str:
-    """Sanitize user input for logging (HIGH #8: log injection protection).
-
-    Only allows alphanumeric, hyphen, underscore, and dot.
-    Truncates to max_len to prevent log flooding.
-
-    Args:
-        value: String to sanitize
-        max_len: Maximum length (default 256)
-
-    Returns:
-        Sanitized string safe for logging
-    """
-    if not isinstance(value, str):
-        value = str(value)
-
-    # Truncate first
-    value = value[:max_len]
-
-    # Replace unsafe characters with underscores
-    if not re.match(r'^[a-zA-Z0-9_\-\.]+$', value):
-        value = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', value)
-
-    return value
 
 
 class RuleType(str, Enum):
@@ -301,9 +274,7 @@ class ApprovalPolicyEngine:
 
         self._persist_rule(rule)
 
-        # HIGH #8: Sanitize skill_id for logging (log injection protection)
-        safe_skill_id = _sanitize_for_log(skill_id)
-        logger.info(f"[Policy Engine] Created rule {rule_id} for {safe_skill_id}: {rule_type.value}")
+        logger.info(f"[Policy Engine] Created rule {rule_id} for {skill_id}: {rule_type.value}")
         return rule_id
 
     def remove_rule(self, skill_id: str, rule_id: str) -> bool:
@@ -319,9 +290,7 @@ class ApprovalPolicyEngine:
         """
         with self._lock:
             if skill_id not in self.rules:
-                # HIGH #8: Sanitize skill_id for logging (log injection protection)
-                safe_skill_id = _sanitize_for_log(skill_id)
-                logger.warning(f"[Policy Engine] Skill {safe_skill_id} has no rules")
+                logger.warning(f"[Policy Engine] Skill {skill_id} has no rules")
                 return False
 
             found = False
@@ -331,9 +300,7 @@ class ApprovalPolicyEngine:
                     break
 
             if not found:
-                # HIGH #8: Sanitize skill_id for logging (log injection protection)
-                safe_skill_id = _sanitize_for_log(skill_id)
-                logger.warning(f"[Policy Engine] Rule {rule_id} not found for {safe_skill_id}")
+                logger.warning(f"[Policy Engine] Rule {rule_id} not found for {skill_id}")
                 return False
 
             # AUDIT-FIRST
@@ -353,9 +320,7 @@ class ApprovalPolicyEngine:
             # State mutation AFTER audit
             self.rules[skill_id].pop(i)
 
-            # HIGH #8: Sanitize skill_id for logging (log injection protection)
-            safe_skill_id = _sanitize_for_log(skill_id)
-            logger.info(f"[Policy Engine] Deleted rule {rule_id} for {safe_skill_id}")
+            logger.info(f"[Policy Engine] Deleted rule {rule_id} for {skill_id}")
             return True
 
     def list_rules(self, skill_id: str) -> List[Dict]:

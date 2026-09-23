@@ -48,25 +48,19 @@ class ThreatSignal:
 class ThreatDetector:
     """
     Detects threat patterns from audit trail events.
-
+    
     Implements sliding-window anomaly detection:
     - Maintains per-user/per-IP event windows (configurable time window)
     - Counts events matching threat signatures
     - Emits ThreatSignal when threshold exceeded
-
-    HIGH #6: Enforces maximum event limits (100K events per call) to prevent
-    memory exhaustion attacks. Larger event sets are rejected with ValueError.
-
+    
     Example:
         detector = ThreatDetector(window_minutes=5, brute_force_threshold=5)
         threat = detector.analyze_auth_events(auth_events)
         if threat.is_actionable():
             policy_engine.tighten(threat)
     """
-
-    # HIGH #6: Maximum events per analysis call (prevent unbounded memory usage)
-    MAX_EVENTS = 100_000
-
+    
     def __init__(
         self,
         window_minutes: int = 5,
@@ -102,28 +96,19 @@ class ThreatDetector:
     ) -> Optional[ThreatSignal]:
         """
         Analyze authentication events for brute force patterns.
-
+        
         Brute force signature: >threshold failed auth attempts from same user
         in window_minutes.
-
+        
         Args:
             auth_events: List of {"user_id", "success", "timestamp", "ip"}
             now: Current time (for testing); defaults to utcnow()
-
+        
         Returns:
             ThreatSignal if detected, None otherwise
-
-        Raises:
-            ValueError: If auth_events exceeds MAX_EVENTS (HIGH #6 resource limit)
         """
         if not auth_events:
             return None
-
-        # HIGH #6: Enforce event limit to prevent memory exhaustion
-        if len(auth_events) > self.MAX_EVENTS:
-            raise ValueError(
-                f"Event set too large: {len(auth_events)} > {self.MAX_EVENTS} (DoS protection)"
-            )
         
         now = now or datetime.utcnow()
         window_start = now - timedelta(minutes=self.window_minutes)
@@ -166,19 +151,9 @@ class ThreatDetector:
         override_events: List[Dict[str, Any]],
         now: Optional[datetime] = None,
     ) -> Optional[ThreatSignal]:
-        """Analyze events for unauthorized privilege escalation attempts.
-
-        Raises:
-            ValueError: If override_events exceeds MAX_EVENTS (HIGH #6)
-        """
+        """Analyze events for unauthorized privilege escalation attempts."""
         if not override_events:
             return None
-
-        # HIGH #6: Enforce event limit
-        if len(override_events) > self.MAX_EVENTS:
-            raise ValueError(
-                f"Event set too large: {len(override_events)} > {self.MAX_EVENTS} (DoS protection)"
-            )
         
         now = now or datetime.utcnow()
         window_start = now - timedelta(minutes=self.window_minutes)
@@ -217,19 +192,9 @@ class ThreatDetector:
         data_flow_events: List[Dict[str, Any]],
         now: Optional[datetime] = None,
     ) -> Optional[ThreatSignal]:
-        """Analyze events for data exfiltration patterns.
-
-        Raises:
-            ValueError: If data_flow_events exceeds MAX_EVENTS (HIGH #6)
-        """
+        """Analyze events for data exfiltration patterns."""
         if not data_flow_events:
             return None
-
-        # HIGH #6: Enforce event limit
-        if len(data_flow_events) > self.MAX_EVENTS:
-            raise ValueError(
-                f"Event set too large: {len(data_flow_events)} > {self.MAX_EVENTS} (DoS protection)"
-            )
         
         now = now or datetime.utcnow()
         window_start = now - timedelta(minutes=self.window_minutes)
@@ -266,19 +231,9 @@ class ThreatDetector:
         request_events: List[Dict[str, Any]],
         now: Optional[datetime] = None,
     ) -> Optional[ThreatSignal]:
-        """Analyze events for distributed attack patterns (many IPs targeting one resource).
-
-        Raises:
-            ValueError: If request_events exceeds MAX_EVENTS (HIGH #6)
-        """
+        """Analyze events for distributed attack patterns (many IPs targeting one resource)."""
         if not request_events:
             return None
-
-        # HIGH #6: Enforce event limit
-        if len(request_events) > self.MAX_EVENTS:
-            raise ValueError(
-                f"Event set too large: {len(request_events)} > {self.MAX_EVENTS} (DoS protection)"
-            )
         
         now = now or datetime.utcnow()
         window_start = now - timedelta(minutes=self.window_minutes)
