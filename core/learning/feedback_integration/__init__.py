@@ -2,13 +2,15 @@
 
 Unified feedback API for all Streams (Workflow Optimizer, Security Orchestrator, Flow Guard).
 
-Exports:
+Phase 1 (EventStore Integration):
+  - EventStoreWriter: high-level writer with audit-first + queue/retry
   - FeedbackEvent: immutable feedback dataclass
   - FeedbackType, OutcomeChoice, PreferenceChoice: enums
   - Pydantic validators: request/response schemas
   - routes: FastAPI router for /v1/console/learning/
 """
 
+from .event_store_writer import EventStoreWriter, QueuedFeedback
 from .models.feedback_event import (
     FeedbackEvent,
     FeedbackType,
@@ -25,6 +27,8 @@ from .models.feedback_validator import (
 from .routes.feedback_integration import router
 
 __all__ = [
+    "EventStoreWriter",
+    "QueuedFeedback",
     "FeedbackEvent",
     "FeedbackType",
     "OutcomeChoice",
