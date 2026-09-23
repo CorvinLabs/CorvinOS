@@ -71,11 +71,38 @@ renders run on 16 CPU cores without denoising. A full 17 s concept at 1080p /
 256 samples is hours of CPU time; production renders belong on the GPU cluster
 (or an upstream Blender build with OpenImageDenoise).
 
+## Loop A runs itself — `tools/loop_a_pipeline.py`
+
+`corvin-loop-a.timer` (units in `tools/systemd/`, installed under
+`~/.config/systemd/user/`) starts the runner 10 min after the previous run
+ended. Each run works ≤ 8 min (`--budget-s 480`) and resumes where the last one
+stopped; one run at a time (lock file). It reports every step to the Tasks
+board (status, progress, note) and writes one content-free `loop_a.stage`
+audit record per stage transition.
+
+| Task | What the runner does | Output (`video_library/<slug>/`) |
+|---|---|---|
+| #2 YAML + TTS | narration per scene via OpenAI TTS (`core.voice.tts_providers`), espeak-ng if that fails; scene lengths fitted to the narration (+0.8 s), silent scenes unchanged | `audio/<scene>.mp3`, `audio/manifest.json`, `concept.resolved.yaml` |
+| #3 Render | full-quality frames (concept settings) in 12-frame chunks, Blender `nice 19`, 6 threads; valid frames are never rendered twice | `frames/<scene>/frame_####.exr` |
+| #4 Compose | per scene EXR → sRGB H.264 with its narration (padded/trimmed to the scene), scenes concatenated; ffprobe checks streams and duration | `segments/`, `<slug>.mp4` |
+| #5 Learning study, #6 Analysis | **not automatable** — need 45 participants and their data; marked `blocked` with that reason | — |
+
+```bash
+systemctl --user status corvin-loop-a.timer          # schedule
+journalctl --user -u corvin-loop-a -f                # each run's summary line
+python3 tools/loop_a_pipeline.py --budget-s 60       # one slice by hand
+```
+
+Measured 2026-09-23 for `audit_chain`: 544 frames at 1080p / 256 samples,
+~7 s per frame on 8 CPU threads → roughly 1–1.5 h of runner time. Console p50
+latency unchanged while rendering; tail latency rises (see the open CPU issue
+in the console process, `console-initiatives.md`).
+
 ## Not built yet (rest of ADR-2033)
 
-FFmpeg composition with narration audio (task #4), TTS (task #2), frame-hash
-cache, batch/parallel rendering, and the `plugins/video_producer/generators/`
-wrapper.
+Frame-hash cache, batch/parallel rendering across machines, and the
+`plugins/video_producer/generators/` wrapper. (TTS and FFmpeg composition are
+done by `loop_a_pipeline.py`.)
 
 Tests: `tests/video_producer/test_blender_automation.py` (real CLI + real
 Blender; skipped only when Blender is absent).

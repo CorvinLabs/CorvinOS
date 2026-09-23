@@ -454,6 +454,7 @@ def _inner(argv: list[str]) -> int:
     ap.add_argument("--frames", default="")
     ap.add_argument("--resolution", type=int, default=100)
     ap.add_argument("--samples", type=int, default=0)
+    ap.add_argument("--scene", default="", help="render only this scene (all are still built)")
     a = ap.parse_args(argv)
     concept = json.loads(Path(a.spec).read_text())
     out = Path(a.out)
@@ -488,7 +489,7 @@ def _inner(argv: list[str]) -> int:
             }
             if entry["pre_render_problems"]:
                 all_ok = False
-            elif a.render:
+            elif a.render and (not a.scene or a.scene == scene.name):
                 t = time.time()
                 paths = RenderOrchestrator.render(scene, frames)
                 size = (scene.render.resolution_x * scene.render.resolution_percentage // 100,
@@ -522,8 +523,11 @@ def default_out_dir(slug: str) -> Path:
 
 def build(concept_path: Path, *, out: Path | None = None, render: bool = False,
           preview: bool = False, frames: str = "", resolution: int = 100,
-          samples: int = 0, blender: str | None = None, timeout_s: int = 6 * 3600) -> dict[str, Any]:
+          samples: int = 0, blender: str | None = None, timeout_s: int = 6 * 3600,
+          scene: str = "", threads: int = 0, nice: int = 0) -> dict[str, Any]:
     concept = load_concept(concept_path)
+    if scene and scene not in {s["name"] for s in concept["scenes"]}:
+        raise ConceptError(f"no scene named {scene!r} in the concept")
     blender = blender or shutil.which("blender")
     if not blender:
         raise RuntimeError("blender not found on PATH")
@@ -532,7 +536,10 @@ def build(concept_path: Path, *, out: Path | None = None, render: bool = False,
     spec = out / "concept.json"
     spec.write_text(json.dumps(concept, indent=2))
     report_path = out / "report.json"
-    cmd = [blender, "--background", "--factory-startup", "--python", str(Path(__file__).resolve()),
+    cmd = [blender, "--background", "--factory-startup"]
+    if threads:
+        cmd += ["--threads", str(threads)]  # leave cores for the console
+    cmd += ["--python", str(Path(__file__).resolve()),
            "--", "inner", "--spec", str(spec), "--out", str(out), "--report", str(report_path),
            "--resolution", str(resolution)]
     if render:
@@ -543,6 +550,10 @@ def build(concept_path: Path, *, out: Path | None = None, render: bool = False,
         cmd += ["--frames", frames]
     if samples:
         cmd += ["--samples", str(samples)]
+    if scene:
+        cmd += ["--scene", scene]
+    if nice:
+        cmd = ["nice", "-n", str(nice), *cmd]
     attempts = MAX_RENDER_ATTEMPTS if render else 1
     report: dict[str, Any] = {}
     for attempt in range(1, attempts + 1):
@@ -576,6 +587,8 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--frames", default="", help="e.g. 1-2 (default: every frame)")
     b.add_argument("--resolution", type=int, default=100, help="resolution percentage")
     b.add_argument("--samples", type=int, default=0)
+    b.add_argument("--scene", default="", help="render only this scene")
+    b.add_argument("--threads", type=int, default=0, help="Blender render threads (0 = all cores)")
     v = sub.add_parser("validate")
     v.add_argument("concept", type=Path)
     a = ap.parse_args(argv)
@@ -584,7 +597,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(load_concept(a.concept), indent=2))
             return 0
         report = build(a.concept, out=a.out, render=a.render, preview=a.preview,
-                       frames=a.frames, resolution=a.resolution, samples=a.samples)
+                       frames=a.frames, resolution=a.resolution, samples=a.samples,
+                       scene=a.scene, threads=a.threads)
     except ConceptError as exc:
         print(f"concept error: {exc}", file=sys.stderr)
         return 2

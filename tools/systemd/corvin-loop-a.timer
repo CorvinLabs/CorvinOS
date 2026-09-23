@@ -1,0 +1,10 @@
+[Unit]
+Description=CorvinOS Loop A (3D PoC) — work on the next task every 10 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -452,10 +452,10 @@ def _find(raw: dict[str, Any], iid: str) -> dict[str, Any]:
 
 def update_task(tenant_id: str, iid: str, tid: str, *,
                 status: str | None = None, progress: int | None = None,
-                now: float | None = None) -> dict[str, Any]:
-    """Set a task's status and/or progress. Returns the fresh board."""
+                note: str | None = None, now: float | None = None) -> dict[str, Any]:
+    """Set a task's status, progress and/or note. Returns the fresh board."""
     now = time.time() if now is None else now
-    if status is None and progress is None:
+    if status is None and progress is None and note is None:
         raise InitiativeError("nothing to update")
     if status is not None and status not in TASK_STATUSES:
         raise InitiativeError(f"status must be one of {TASK_STATUSES}")
@@ -476,6 +476,10 @@ def update_task(tenant_id: str, iid: str, tid: str, *,
         task["status"] = status
     if progress is not None:
         task["progress"] = int(progress)
+    if note is not None:
+        task["note"] = str(note)[:300] or None
+        if task["note"] is None:
+            task.pop("note")
     _write_raw(path, raw)
     return board(tenant_id, now=now)
 

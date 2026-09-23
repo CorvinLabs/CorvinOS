@@ -1,0 +1,18 @@
+[Unit]
+Description=CorvinOS Loop A (3D PoC) — next time slice of TTS → render → compose
+Documentation=file://%h/projects/CorvinOS/docs/claude-ref/blender-automation.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/CorvinOS
+# OPENAI_API_KEY for the planned OpenAI TTS (espeak-ng is the local fallback).
+EnvironmentFile=-%h/.config/corvin-voice/service.env
+Environment=PYTHONUNBUFFERED=1
+Environment=CORVIN_HOME=%h/projects/CorvinOS/.corvin
+Environment=CORVIN_TENANT_ID=_default
+Environment=PYTHONPATH=%h/projects/CorvinOS/core/console:%h/projects/CorvinOS/core/gateway:%h/projects/CorvinOS/core/license:%h/projects/CorvinOS/core/compliance:%h/projects/CorvinOS/corvin_operator/forge:%h/projects/CorvinOS/corvin_operator/skill-forge:%h/projects/CorvinOS/corvin_operator/bridges/shared:%h/projects/CorvinOS/core/plugins:%h/projects/CorvinOS
+# 6 of 16 cores, and Blender itself runs at nice 19 — the console stays responsive.
+ExecStart=%h/projects/CorvinOS/core/console/.venv/bin/python tools/loop_a_pipeline.py --budget-s 480 --threads 6
+Nice=10
+TimeoutStartSec=1200
+SyslogIdentifier=corvin-loop-a
