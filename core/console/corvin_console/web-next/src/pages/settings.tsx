@@ -16,7 +16,6 @@ import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
-import { PluginManagerCard } from "@/components/plugin-manager-card";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -580,7 +579,7 @@ const BUDGET_LABELS: Record<string, { label: string; unit: string; description: 
   max_depth:         { label: "Max nesting depth",  unit: "levels",  description: "Maximum recursion depth for nested delegation calls." } };
 
 // FeatureFlagsCard DEPRECATED (ADR-0903)
-// Replaced by PluginManagerCard — see PluginManagerCard component
+// Plugin management lives in Marketplace → Installed (ADR-0892 D3), not Settings.
 
 function DelegationBudgetCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
@@ -788,11 +787,6 @@ export function SettingsPage() {
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-foreground">Telemetry &amp; Privacy</h2>
         <TelemetryCard csrf={session!.csrf_token} />
-      </div>
-
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-foreground">Plugins</h2>
-        <PluginManagerCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">
