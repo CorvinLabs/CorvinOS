@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Autonomous Skill Forge Console Integration Routes (ADR-0902).
 
 REST API endpoints for:
@@ -369,7 +368,6 @@ def get_canary_status(
     return state
 
 
-@require_csrf
 @router.post(
     "/approve",
     response_model=ApproveResponse,
@@ -502,7 +500,6 @@ def approve_skill(
     )
 
 
-@require_csrf
 @router.post(
     "/defer",
     response_model=DeferResponse,
@@ -593,7 +590,6 @@ def defer_skill(
     )
 
 
-@require_csrf
 @router.post(
     "/pause",
     response_model=PauseResponse,
@@ -661,7 +657,6 @@ def pause_autonomous(
     )
 
 
-@require_csrf
 @router.post(
     "/resume",
     response_model=ResumeResponse,
@@ -726,7 +721,6 @@ def resume_autonomous(
     )
 
 
-@require_csrf
 @router.post(
     "/rollback",
     response_model=RollbackResponse,

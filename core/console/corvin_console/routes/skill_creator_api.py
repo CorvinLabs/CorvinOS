@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """FastAPI routes for Skill-Creator (console integration).
 
 Endpoints:
@@ -201,7 +200,6 @@ class GeneratedSkill(BaseModel):
 # ENDPOINTS
 # ============================================================================
 
-@require_csrf
 @router.post("/generate", status_code=202)
 async def generate_skill(
     req: SkillGenerationRequest,
@@ -398,7 +396,6 @@ async def get_generated_skill(
     return detail
 
 
-@require_csrf
 @router.delete("/skills/{name}")
 async def delete_generated_skill(
     name: str,

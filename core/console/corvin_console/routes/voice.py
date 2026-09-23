@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Voice REST endpoints — STT + TTS for the web messenger (ADR-0037 Iter 3b).
 
 Endpoints
@@ -502,7 +501,6 @@ def _openai_status_apply_verdict(tts: dict[str, ProviderStatus]) -> None:
 # ── STT ───────────────────────────────────────────────────────────────
 
 
-@require_csrf
 @router.post("/voice/transcribe")
 async def voice_transcribe(
     audio: Annotated[UploadFile, File(description="Recorded audio blob")],
@@ -1536,7 +1534,6 @@ def _persist_turn_voice(tenant_id: str, sid: str, text: str,
         return None
 
 
-@require_csrf
 @router.post("/voice/tts")
 async def voice_tts(
     body: TtsRequest,
@@ -1799,7 +1796,6 @@ def _build_session_transcript(tenant_id: str, sid: str, *,
     return head_text + "\n\n[...]\n\n" + "\n\n".join(tail_lines)
 
 
-@require_csrf
 @router.post("/voice/session-summary")
 async def voice_session_summary(
     body: SessionSummaryRequest,
@@ -1996,7 +1992,6 @@ class VoiceSegmentRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.post("/voice/segment")
 async def voice_segment(
     body: VoiceSegmentRequest,
@@ -2130,7 +2125,6 @@ class SummarizeResponse(BaseModel):
     summary_len: int
 
 
-@require_csrf
 @router.post("/voice/summarize", response_model=SummarizeResponse)
 def voice_summarize(
     body: SummarizeRequest,

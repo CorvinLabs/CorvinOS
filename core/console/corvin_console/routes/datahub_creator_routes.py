@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """DataHub Creator Console API Routes (TRACK I).
 
 6 endpoints for 6-phase project management:
@@ -158,7 +157,6 @@ def get_metrics_aggregator_factory():
 # ENDPOINTS: 6-PHASE DASHBOARD
 # ============================================================================
 
-@require_csrf
 @router.post("/v1/console/datahub/projects", response_model=ProjectResponse, tags=["datahub-creator"])
 async def create_project(
     req: ProjectCreateRequest,
@@ -283,7 +281,6 @@ async def get_project_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@require_csrf
 @router.patch("/v1/console/datahub/projects/{project_id}", response_model=ProjectResponse, tags=["datahub-creator"])
 async def update_project(
     project_id: str,
@@ -370,7 +367,6 @@ async def export_project(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@require_csrf
 @router.post("/v1/console/datahub/projects/{project_id}/collaborate", response_model=CollaborationResponse, tags=["datahub-creator"])
 async def add_collaborator(
     project_id: str,

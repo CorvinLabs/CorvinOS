@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Login / logout / whoami for the console UI.
 
 Wire format
@@ -58,7 +57,6 @@ class WhoamiResponse(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────
 
 
-@require_csrf
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     request: Request,
@@ -101,12 +99,9 @@ def whoami(
         )
     rec = session_auth.load_session(corvin_console_sid)
     if rec is None:
-        # CRITICAL FIX (ARCH-005): Include tenant_id in audit event
-        # Without tenant_id, multi-tenant audit records are conflated
         console_audit.session_denied(
             reason="session-expired",
             user_agent=user_agent,
-            tenant_id="_default",  # Expired sessions default to _default; real tenant unknown
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

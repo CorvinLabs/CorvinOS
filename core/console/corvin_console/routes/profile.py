@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Profile route — single-operator user profile + voice-audience.
 
 Phase G (Console Tab #2): the eingeloggte User edits the bridge-wide
@@ -250,7 +249,6 @@ def profile_index(
     }
 
 
-@require_csrf
 @router.put("/profile")
 def profile_write(
     body: ProfileWriteRequest,
@@ -338,7 +336,6 @@ def profile_write(
     }
 
 
-@require_csrf
 @router.post("/profile/reset")
 def profile_reset(
     body: ProfileResetRequest,
@@ -365,7 +362,6 @@ def profile_reset(
     return {"ok": True, "profile": _project_current()}
 
 
-@require_csrf
 @router.post("/profile/preview")
 def profile_preview(
     body: ProfilePreviewRequest,
@@ -398,7 +394,6 @@ def profile_preview(
     return {"ok": True, "lang": body.lang, "block": block, "empty": not block}
 
 
-@require_csrf
 @router.post("/voice-test")
 def voice_test(
     body: VoiceTestRequest,

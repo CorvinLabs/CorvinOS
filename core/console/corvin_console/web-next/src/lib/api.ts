@@ -1,6 +1,3 @@
-// @ts-nocheck — Barrel re-exports with duplicates resolved at runtime
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 /**
  * Public barrel for the console REST API client.
  *

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Skills monitoring endpoints for operator dashboard (Phase 8 k=2).
 
 Exposes cache stats, circuit-breaker state, rate-limiter metrics, and the
@@ -174,7 +173,6 @@ async def get_health(
     }
 
 
-@require_csrf
 @router.post("/cache/clear", summary="Clear skill cache")
 async def clear_cache(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

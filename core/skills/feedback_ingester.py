@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import threading
+from collections import deque
 
 try:  # POSIX: cross-process exclusive lock on the log while appending
     import fcntl as _fcntl
@@ -181,9 +182,17 @@ class FeedbackIngester:
                         _unlock_file(f)
 
                 # Refresh the hash cache atomically (tmp -> rename)
+                # MUST be inside write lock to prevent race conditions
                 new_hash = hashlib.sha256(json_line.encode()).hexdigest()
                 tmp_hash_file = self.last_hash_file.with_suffix('.tmp')
                 tmp_hash_file.write_text(new_hash)
+
+                # HIGH #3: Check for symlink attack before replacing
+                if self.last_hash_file.is_symlink():
+                    logger.error(f"Symlink detected at {self.last_hash_file}, refusing to follow")
+                    os.unlink(tmp_hash_file)
+                    raise RuntimeError(f"Hash cache is a symlink: {self.last_hash_file}")
+
                 tmp_hash_file.replace(self.last_hash_file)
             return True
         except Exception as e:
@@ -191,8 +200,13 @@ class FeedbackIngester:
             return False
 
     def load_feedback_log(self, limit: int = 1000) -> List[Dict[str, Any]]:
-        """Load recent feedback events."""
-        events = []
+        """Load recent feedback events (streaming to avoid OOM on large files).
+
+        CRITICAL #1: Uses deque(maxlen=limit) to keep only the last N events
+        in memory, preventing OOM when files exceed 10GB+ with millions of events.
+        This is crucial for production where feedback logs can grow unbounded.
+        """
+        events = deque(maxlen=limit)
         try:
             with open(self.feedback_log) as f:
                 for line in f:
@@ -203,4 +217,4 @@ class FeedbackIngester:
         except FileNotFoundError:
             return []
 
-        return events[-limit:]
+        return list(events)

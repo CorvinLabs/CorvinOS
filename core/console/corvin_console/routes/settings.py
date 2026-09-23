@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Settings — read-only viewer for the configurable YAML / JSON files.
 
 Phase F: surfaces six known files so the operator can SEE what their
@@ -261,7 +260,6 @@ def get_auto_update(
     }
 
 
-@require_csrf
 @router.put("/settings/auto-update")
 def put_auto_update(
     body: AutoUpdateRequest,
@@ -335,7 +333,6 @@ def get_service_tier(
     return _read_service_tier_status()
 
 
-@require_csrf
 @router.put("/settings/service-tier")
 def put_service_tier(
     body: ServiceTierRequest,
@@ -517,7 +514,6 @@ def get_delegation_budget(
     }
 
 
-@require_csrf
 @router.put("/settings/delegation-budget")
 def put_delegation_budget(
     body: DelegationBudgetRequest,
@@ -610,7 +606,6 @@ async def get_worker_engine(
     }
 
 
-@require_csrf
 @router.put("/settings/worker-engine")
 async def set_worker_engine(
     body: WorkerEngineRequest,
@@ -662,7 +657,6 @@ async def set_worker_engine(
     return {"mode": mode, "ok": True}
 
 
-@require_csrf
 @router.put("/settings/{label}")
 def settings_write(
     label: str,
@@ -805,7 +799,6 @@ class FeatureToggleRequest(BaseModel):
     re_auth_token: str | None = None
 
 
-@require_csrf
 @router.put("/settings/features/{flag_id}")
 async def set_feature(
     flag_id: str,

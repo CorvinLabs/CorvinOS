@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 Console Marketplace API (ADR-0511) — FastAPI Edition.
 
@@ -370,7 +369,6 @@ async def marketplace_stats(
     }
 
 
-@require_csrf
 @router.post("/reload")
 async def reload_index(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Layer 42 CorvinOrg — console REST routes.
 
 Endpoints (mounted at /v1/console/orgs by app.py):
@@ -135,7 +134,6 @@ def list_orgs(
         "ts": time.time(),
     }
 
-@require_csrf
 @router.post("")
 def create_org_route(
     body: OrgCreateRequest,
@@ -210,7 +208,6 @@ def get_org(
         "ts": time.time(),
     }
 
-@require_csrf
 @router.delete("/{handle}")
 def dissolve_org(
     handle: str,
@@ -233,7 +230,6 @@ def dissolve_org(
 
 # ── Members ───────────────────────────────────────────────────────────────────
 
-@require_csrf
 @router.post("/{handle}/members")
 def add_member(
     handle: str,
@@ -258,7 +254,6 @@ def add_member(
     )
     return {"ok": True, "members": store.get_members(), "ts": time.time()}
 
-@require_csrf
 @router.delete("/{handle}/members")
 def remove_member(
     handle: str,
@@ -284,7 +279,6 @@ def remove_member(
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 
-@require_csrf
 @router.post("/{handle}/agents")
 def affiliate_agent_route(
     handle: str,
@@ -308,7 +302,6 @@ def affiliate_agent_route(
     )
     return {"ok": True, "endorsement": _sanitize_endorsement(end), "ts": time.time()}
 
-@require_csrf
 @router.delete("/{handle}/agents/{endorsement_id}")
 def deaffiliate_agent_route(
     handle: str,
@@ -346,7 +339,6 @@ def list_org_grants(
         "ts": time.time(),
     }
 
-@require_csrf
 @router.post("/{handle}/grants")
 def create_org_grant(
     handle: str,
@@ -400,7 +392,6 @@ def create_org_grant(
     )
     return {"ok": True, "grant": _sanitize_grant(doc), "ts": time.time()}
 
-@require_csrf
 @router.delete("/{handle}/grants/{grant_id}")
 def revoke_org_grant(
     handle: str,

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Connectors — MCP tool registry for workflow nodes (ADR-0039 Phase 8).
 
 Connectors describe external services (Gmail, GitHub, Brave, etc.) that
@@ -291,7 +290,6 @@ class ConnectorUpdateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.put("/connectors/{cid}")
 def update_connector(
     cid: str,

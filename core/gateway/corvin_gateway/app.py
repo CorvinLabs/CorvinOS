@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """FastAPI app for the Corvin Gateway.
 
 ADR-0007 Phase 2.2 + 2.3 — wires the bearer-token resolver, the run
@@ -832,7 +831,6 @@ except Exception:
     _a2a_receiver = None
 
 
-@require_csrf
 @app.post("/v1/a2a/receive")
 async def a2a_receive(request: Request) -> JSONResponse:
     """Layer 38 — A2A inbound receive.
@@ -857,7 +855,6 @@ async def a2a_receive(request: Request) -> JSONResponse:
     return JSONResponse(content=response.to_dict())
 
 
-@require_csrf
 @app.post("/v1/a2a/ping")
 async def a2a_ping(request: Request) -> JSONResponse:
     """ADR-0199 — lightweight peer-liveness check (receiver side).
@@ -885,7 +882,6 @@ async def a2a_ping(request: Request) -> JSONResponse:
     return JSONResponse(content=payload, status_code=status_code)
 
 
-@require_csrf
 @app.post("/v1/a2a/friendship-ack")
 async def a2a_friendship_ack(request: Request) -> JSONResponse:
     """Reciprocal friendship handshake (2026-07-29) — the redeemer's callback
@@ -1015,7 +1011,6 @@ def healthz() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
-@require_csrf
 @app.post(
     "/v1/tenants/{tid}/runs",
     status_code=status.HTTP_202_ACCEPTED,
@@ -1221,7 +1216,6 @@ def scim_list_users(
     }
 
 
-@require_csrf
 @app.post(
     "/v1/tenants/{tid}/scim/v2/Users",
     status_code=status.HTTP_201_CREATED,
@@ -1280,7 +1274,6 @@ def scim_get_user(
     )
 
 
-@require_csrf
 @app.delete(
     "/v1/tenants/{tid}/scim/v2/Users/{uid}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -1296,7 +1289,6 @@ def scim_delete_user(
     )
 
 
-@require_csrf
 @app.patch("/v1/tenants/{tid}/scim/v2/Users/{uid}")
 def scim_patch_user(
     tid: str,

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """VibeMetrics API Endpoints (Phase 2.K=4).
 
 REST API for token measurement dashboarding.
@@ -240,7 +239,6 @@ async def get_cluster_stats(rec: session_auth.SessionRecord = Depends(require_se
     }
 
 
-@require_csrf
 @router.post("/session/{session_id}/export", response_model=MetricsExportResponse)
 async def export_session_metrics(
     session_id: str,

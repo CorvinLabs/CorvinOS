@@ -77,17 +77,6 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "compute.batch_fallback": frozenset({
         "run_id", "tenant_id", "reason", "candidate_count",
     }),
-    # PHASE 1: Critical safety events (2026-09-24)
-    # job_id, error_message (sanitized), recovery_attempted: no param values
-    "compute.checkpoint_corrupted": frozenset({
-        "run_id", "tenant_id", "job_id", "error_message", "recovery_attempted",
-    }),
-    "compute.deadlock_detected": frozenset({
-        "run_id", "tenant_id", "job_id", "component", "timeout_ms",
-    }),
-    "compute.iteration_diverged": frozenset({
-        "run_id", "tenant_id", "job_id", "prev_loss", "new_loss", "delta_pct",
-    }),
 }
 
 
@@ -179,141 +168,8 @@ def redact_sensitive_fields(
     return redacted
 
 
-# ── PHASE 1: Safety Event Emitters (Layer 22) ────────────────────────────────────
-def emit_checkpoint_corrupted(
-    path: Path,
-    job_id: str,
-    error_message: str,
-    recovery_attempted: bool,
-    run_id: str | None = None,
-    tenant_id: str | None = None,
-) -> None:
-    """Emit checkpoint corruption detection event (Layer 22 safety)."""
-    emit(
-        "compute.checkpoint_corrupted",
-        path=path,
-        run_id=run_id,
-        tenant_id=tenant_id,
-        job_id=job_id,
-        error_message=error_message[:200],  # Sanitize: truncate for safety
-        recovery_attempted=bool(recovery_attempted),
-    )
-
-
-def emit_deadlock_detected(
-    path: Path,
-    job_id: str,
-    component: str,
-    timeout_ms: int,
-    run_id: str | None = None,
-    tenant_id: str | None = None,
-) -> None:
-    """Emit deadlock detection event (Layer 22 safety)."""
-    emit(
-        "compute.deadlock_detected",
-        path=path,
-        run_id=run_id,
-        tenant_id=tenant_id,
-        job_id=job_id,
-        component=component,
-        timeout_ms=int(timeout_ms),
-    )
-
-
-def emit_iteration_diverged(
-    path: Path,
-    job_id: str,
-    prev_loss: float,
-    new_loss: float,
-    run_id: str | None = None,
-    tenant_id: str | None = None,
-) -> None:
-    """Emit loss divergence detection event (Layer 22 safety)."""
-    delta_pct = 0.0
-    if prev_loss != 0:
-        delta_pct = ((new_loss - prev_loss) / abs(prev_loss)) * 100
-
-    emit(
-        "compute.iteration_diverged",
-        path=path,
-        run_id=run_id,
-        tenant_id=tenant_id,
-        job_id=job_id,
-        prev_loss=float(prev_loss),
-        new_loss=float(new_loss),
-        delta_pct=float(delta_pct),
-    )
-
-
-# ── PHASE 2: Extended Worker Lifecycle Events (Layer 22) ────────────────────────
-def emit_worker_spawn_initiated(
-    path: Path,
-    worker_id: str,
-    worker_type: str,
-    cpu_cores: int | None = None,
-    memory_mb: int | None = None,
-    run_id: str | None = None,
-    tenant_id: str | None = None,
-) -> None:
-    """Emit worker spawn initiation event (Layer 22 extended)."""
-    emit(
-        "compute.worker_spawn_initiated",
-        path=path,
-        run_id=run_id,
-        tenant_id=tenant_id,
-        worker_id=worker_id,
-        worker_type=worker_type,
-        cpu_cores=int(cpu_cores) if cpu_cores else 0,
-        memory_mb=int(memory_mb) if memory_mb else 0,
-    )
-
-
-def emit_worker_heartbeat(
-    path: Path,
-    worker_id: str,
-    iteration: int,
-    current_loss: float,
-    run_id: str | None = None,
-    tenant_id: str | None = None,
-) -> None:
-    """Emit worker heartbeat event (Layer 22 extended)."""
-    emit(
-        "compute.worker_heartbeat",
-        path=path,
-        run_id=run_id,
-        tenant_id=tenant_id,
-        worker_id=worker_id,
-        iteration=int(iteration),
-        current_loss=float(current_loss),
-    )
-
-
-def emit_worker_terminated(
-    path: Path,
-    worker_id: str,
-    termination_reason: str,
-    run_id: str | None = None,
-    tenant_id: str | None = None,
-) -> None:
-    """Emit worker termination event (Layer 22 extended)."""
-    emit(
-        "compute.worker_terminated",
-        path=path,
-        run_id=run_id,
-        tenant_id=tenant_id,
-        worker_id=worker_id,
-        termination_reason=termination_reason[:200],  # Sanitize
-    )
-
-
 __all__ = [
     "AuditFieldNotAllowed",
     "emit",
     "redact_sensitive_fields",
-    "emit_checkpoint_corrupted",
-    "emit_deadlock_detected",
-    "emit_iteration_diverged",
-    "emit_worker_spawn_initiated",
-    "emit_worker_heartbeat",
-    "emit_worker_terminated",
 ]

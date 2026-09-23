@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Phase 2 Feature APIs — licensing audit, monitoring metrics, model list.
 
 Every endpoint here answered with invented data until 2026-09-16 (ADR-0856).
@@ -328,7 +327,6 @@ async def get_model_config(
     }
 
 
-@require_csrf
 @router.post("/models/config", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def save_model_config(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -384,7 +382,6 @@ async def get_marketplace_skill(
                         detail=_MARKETPLACE_DETAIL)
 
 
-@require_csrf
 @router.post("/marketplace/install", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
 async def install_marketplace_skill(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],

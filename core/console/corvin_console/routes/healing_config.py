@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Healing configuration — structured toggles for the self-healing subsystem.
 
 Surfaces three tenant-policy flags in ``tenant.corvin.yaml`` as a small,
@@ -174,7 +173,6 @@ def get_healing_config(
     return flags
 
 
-@require_csrf
 @router.patch("/healing-config")
 def patch_healing_config(
     body: HealingConfigRequest,

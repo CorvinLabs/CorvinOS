@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Setup helpers — bridge connection guides, engine key management, and global commands.
 
 Routes:
@@ -706,7 +705,6 @@ def _run_wa_start_job() -> None:
                                     "result": {"error": f"Unexpected error: {exc}"}})
 
 
-@require_csrf
 @router.post("/setup/whatsapp/start")
 def whatsapp_start(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -941,7 +939,6 @@ class EngineKeyUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.put("/setup/engines/{engine_id}")
 def update_engine_key(
     engine_id: str,

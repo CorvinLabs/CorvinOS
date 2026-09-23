@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """RAG Integration routes — Retrieval-Augmented Generation endpoints.
 
 Wires the Phase 3 orchestrator (rag_orchestrator.py) per tenant. When no
@@ -301,7 +300,6 @@ class RAGQueryRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.post("/query")
 async def execute_rag_query(
     req: RAGQueryRequest,

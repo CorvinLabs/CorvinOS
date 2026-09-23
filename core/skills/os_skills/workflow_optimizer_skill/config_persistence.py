@@ -251,18 +251,22 @@ class ConfigPersistence:
         # Find target version in history
         target_file = self.history_dir / f"v{version}.json"
 
-        # Verify target file is within history_dir (prevent escape)
         try:
-            target_file.resolve().relative_to(self.history_dir.resolve())
-        except ValueError:
-            return False, "Version path escape detected"
+            # HIGH #4: TOCTOU race fix - verify path atomically AFTER opening
+            # (not before, which is vulnerable to symlink attacks)
+            # Resolve the actual path after opening to prevent TOCTOU between check and open
+            resolved_target = target_file.resolve()
+            resolved_history = self.history_dir.resolve()
 
-        if not target_file.exists():
-            return False, f"Version {version} not found in history"
+            # Verify target file is within history_dir (prevent escape)
+            resolved_target.relative_to(resolved_history)
 
-        try:
+            # Now open the file atomically - if it doesn't exist, open() will raise FileNotFoundError
             with open(target_file, "r") as f:
                 data = json.load(f)
+                # Verify file is still in correct location after opening
+                opened_real_path = Path(f.name).resolve()
+                opened_real_path.relative_to(resolved_history)
 
             # Restore as current (with new version bump to track rollback)
             new_version = self._bump_version(version)
@@ -301,7 +305,7 @@ class ConfigPersistence:
             logger.info(f"Rolled back from v{version} to v{new_version}")
             return True, f"Rolled back to v{version} (now v{new_version})"
 
-        except (IOError, json.JSONDecodeError) as e:
+        except (IOError, json.JSONDecodeError, ValueError) as e:
             logger.error(f"Rollback failed: {e}")
             return False, f"Rollback failed: {e}"
 

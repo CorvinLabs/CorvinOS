@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """``/v1/console/panels`` — AI-generated Console panels (ADR-0366).
 
 CorvinOS is an AI OS: the operator DESCRIBES the panel they want and the KI builds
@@ -129,7 +128,6 @@ async def list_panels(
     return {"panels": panels}
 
 
-@require_csrf
 @router.post("")
 async def create_panel(
     body: PanelCreate,
@@ -180,7 +178,6 @@ async def serve_panel(
     return HTMLResponse(html_file.read_text(encoding="utf-8"))
 
 
-@require_csrf
 @router.delete("/{panel_id}")
 async def delete_panel(
     panel_id: str,

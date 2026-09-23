@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Learning Dashboard API endpoints.
 
 Track B: Learning Loop integration (ADR-0676).
@@ -199,7 +198,6 @@ class LearningDashboardAPI:
 router = APIRouter(prefix="/api/v1/console/learning", tags=["console-learning"])
 
 
-@require_csrf
 @router.post("/feedback", response_model=FeedbackResponse)
 async def submit_feedback(
     req: FeedbackRequest,
@@ -246,7 +244,6 @@ async def submit_feedback(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@require_csrf
 @router.post("/optimize", response_model=OptimizeResponse)
 async def trigger_optimization(
     req: OptimizeRequest,

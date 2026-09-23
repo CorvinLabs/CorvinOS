@@ -18,11 +18,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-try:
-    from corvin_operator.forge.forge import security_events
-except ImportError:
-    from forge.forge import security_events
-
 logger = logging.getLogger(__name__)
 
 
@@ -229,23 +224,6 @@ class SessionContinuationManager:
             with open(history_path, "a") as f:
                 f.write(checkpoint.to_json() + "\n")
 
-            # AUDIT: context.snapshot_created (Layer 10)
-            try:
-                context_keys = set(context_state.keys()) if isinstance(context_state, dict) else set()
-                preserved_count = len([k for k in context_keys if k.startswith('_preserved_')])
-                added_count = len([k for k in context_keys if k.startswith('_added_')])
-
-                security_events.write_event({
-                    "event_type": "context.snapshot_created",
-                    "snapshot_id": checkpoint_id,
-                    "user_id": task_id,  # task_id proxies as identifier
-                    "tenant_id": tenant_id,
-                    "preserved_fields_count": preserved_count,
-                    "added_fields_count": added_count,
-                })
-            except Exception as e:
-                logger.warning(f"Failed to emit audit event for checkpoint: {e}")
-
             logger.info(
                 f"Saved checkpoint '{checkpoint_id}' for task '{task_id}' "
                 f"at turn {turn_number}"
@@ -315,17 +293,6 @@ class SessionContinuationManager:
                         f"Checkpoint '{checkpoint_id}' not found for task '{task_id}'"
                     )
 
-            # AUDIT: context.snapshot_restored (Layer 10)
-            try:
-                security_events.write_event({
-                    "event_type": "context.snapshot_restored",
-                    "snapshot_id": checkpoint.checkpoint_id,
-                    "restoration_success": True,
-                    "tenant_id": checkpoint.tenant_id,
-                })
-            except Exception as e:
-                logger.warning(f"Failed to emit audit event for checkpoint restoration: {e}")
-
             logger.info(
                 f"Loaded checkpoint '{checkpoint.checkpoint_id}' for task '{task_id}' "
                 f"from turn {checkpoint.turn_number}"
@@ -333,29 +300,9 @@ class SessionContinuationManager:
             return checkpoint
 
         except CheckpointNotFoundError:
-            # AUDIT: context.snapshot_restored (Layer 10) — failure case
-            try:
-                security_events.write_event({
-                    "event_type": "context.snapshot_restored",
-                    "snapshot_id": checkpoint_id or "unknown",
-                    "restoration_success": False,
-                    "tenant_id": self.tenant_id,
-                })
-            except Exception:
-                pass
             raise
         except Exception as e:
             logger.error(f"Failed to load checkpoint for task '{task_id}': {e}")
-            # AUDIT: context.snapshot_restored (Layer 10) — failure case
-            try:
-                security_events.write_event({
-                    "event_type": "context.snapshot_restored",
-                    "snapshot_id": checkpoint_id or "unknown",
-                    "restoration_success": False,
-                    "tenant_id": self.tenant_id,
-                })
-            except Exception:
-                pass
             raise CheckpointNotFoundError(
                 f"Failed to load checkpoint: {e}"
             ) from e

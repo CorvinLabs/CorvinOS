@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Layer 38 — A2A invite-code pairing (Console routes).
 
 One-step user-friendly pairing flow on top of the existing HMAC key exchange.
@@ -241,7 +240,6 @@ class GenerateRequest(BaseModel):
     ttl_minutes: int = Field(default=60, ge=5, le=2880)
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/generate")
 def pair_generate(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -323,7 +321,6 @@ class RedeemRequest(BaseModel):
     spawn_worker: bool = Field(default=False)
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/redeem")
 async def pair_redeem(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -475,7 +472,6 @@ class AcceptRequest(BaseModel):
     signature: str
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/accept")
 def pair_accept(body: AcceptRequest) -> dict[str, Any]:
     """Server-to-server: redeemer calls this so the issuer installs pairing files.
@@ -595,7 +591,6 @@ class CLIInviteResponse(BaseModel):
     exp: float | None
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/cli-invite")
 def generate_cli_invite(
     body: CLIInviteRequest,
@@ -661,7 +656,6 @@ class CLIAcceptResponse(BaseModel):
     exp: float | None
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/cli-accept")
 def accept_cli_invite(
     body: CLIAcceptRequest,
@@ -768,7 +762,6 @@ def list_invites(
     }
 
 
-@require_csrf
 @router.delete("/remote-trigger/pair/invites/{ikey}")
 def revoke_invite(
     ikey: str,
@@ -894,7 +887,6 @@ class MyUrlRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=512)
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/my-url")
 def set_my_a2a_url(
     body: MyUrlRequest,
@@ -962,7 +954,6 @@ class RelayUrlRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=512)
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/relay-url")
 def set_my_a2a_relay_url(
     body: RelayUrlRequest,
@@ -1001,7 +992,6 @@ class FriendshipCreateResponse(BaseModel):
     expires: float | None
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/friendship/create")
 def friendship_create(
     body: FriendshipCreateRequest,
@@ -1101,7 +1091,6 @@ class FriendshipImportResponse(BaseModel):
     peer_reports_reachable: bool = False
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/friendship/import")
 def friendship_import(
     body: FriendshipImportRequest,
@@ -1214,7 +1203,6 @@ class FriendshipSetUrlRequest(BaseModel):
     peer_url: str = Field(..., min_length=1, max_length=512)
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/friendship/set-url")
 def friendship_set_url(
     body: FriendshipSetUrlRequest,
@@ -1256,7 +1244,6 @@ def friendship_set_url(
 
 # ── DELETE /remote-trigger/pair/friendship/{kid} ──────────────────────
 
-@require_csrf
 @router.delete("/remote-trigger/pair/friendship/{kid}")
 def friendship_revoke(
     kid: str,
@@ -1439,7 +1426,6 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
     }
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/friendship/{kid}/recheck")
 def friendship_recheck(
     kid: str,
@@ -1472,7 +1458,6 @@ class EnableRelayRequest(BaseModel):
     relay_url: str = Field(default="", max_length=512)
 
 
-@require_csrf
 @router.post("/remote-trigger/pair/friendship/{kid}/enable-relay")
 def friendship_enable_relay(
     kid: str,
@@ -1600,7 +1585,6 @@ def _validate_endpoint_url(raw: str) -> str:
     return url
 
 
-@require_csrf
 @router.patch("/remote-trigger/origins/{origin_id}")
 def patch_origin(
     origin_id: str,
@@ -1685,7 +1669,6 @@ def patch_origin(
 # ── DELETE /remote-trigger/origins/{origin_id} ────────────────────────
 
 
-@require_csrf
 @router.delete("/remote-trigger/origins/{origin_id}")
 def delete_origin(
     origin_id: str,
@@ -1728,7 +1711,6 @@ def delete_origin(
 # ── DELETE /remote-trigger/endpoints/{endpoint_id} ───────────────────
 
 
-@require_csrf
 @router.delete("/remote-trigger/endpoints/{endpoint_id}")
 def delete_endpoint(
     endpoint_id: str,
@@ -1778,7 +1760,6 @@ class EndpointPatchRequest(BaseModel):
     default_ttl_s: int | None = Field(default=None, ge=10, le=86400)
 
 
-@require_csrf
 @router.patch("/remote-trigger/endpoints/{endpoint_id}")
 def patch_endpoint(
     endpoint_id: str,

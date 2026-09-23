@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Custom GitHub repositories for the Marketplace panel (ADR-0450..0453).
 
 The console is a FastAPI app. The first cut of these endpoints shipped as a
@@ -148,7 +147,6 @@ async def list_repositories(session: Any = Depends(require_session)) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@require_csrf
 @router.post("", status_code=201)
 async def add_repository(
     body: RepoAdd, session: Any = Depends(require_csrf)
@@ -174,7 +172,6 @@ async def add_repository(
     return result
 
 
-@require_csrf
 @router.post("/validate")
 async def validate_repository(
     body: RepoRef, session: Any = Depends(require_csrf)
@@ -194,7 +191,6 @@ async def validate_repository(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@require_csrf
 @router.patch("")
 async def update_repository(
     body: RepoPatch, session: Any = Depends(require_csrf)
@@ -225,7 +221,6 @@ async def update_repository(
     return result
 
 
-@require_csrf
 @router.delete("")
 async def remove_repository(
     body: RepoRef, session: Any = Depends(require_csrf)
@@ -244,7 +239,6 @@ async def remove_repository(
     return {"message": "Repository removed"}
 
 
-@require_csrf
 @router.post("/refresh")
 async def refresh_repository(
     body: RepoRef, session: Any = Depends(require_csrf)

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Bridges configuration — read + write per-channel settings.json.
 
 Channels: telegram / discord / slack / whatsapp / email / signal / teams.
@@ -667,7 +666,6 @@ class BridgeSettingsUpdate(BaseModel):
 _CHANNEL_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 
 
-@require_csrf
 @router.put("/bridges/{channel}/settings")
 def put_bridge_settings(
     channel: str,
@@ -730,7 +728,6 @@ class BridgeEnabledUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.put("/bridges/{channel}/enabled")
 def put_bridge_enabled(
     channel: str,
@@ -1000,7 +997,6 @@ class BridgeDisconnectRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.post("/bridges/{channel}/disconnect")
 def post_bridge_disconnect(
     channel: str,
@@ -1159,7 +1155,6 @@ gen.generateAuthorizationUrl(process.env.DISCORD_TOKEN).then(result => {
         return {"valid": False, "error": str(e)[:100]}
 
 
-@require_csrf
 @router.post("/discord/validate-token", response_model=ValidateTokenResponse)
 async def validate_discord_token(
     body: ValidateTokenRequest,
@@ -1190,7 +1185,6 @@ async def validate_discord_token(
     )
 
 
-@require_csrf
 @router.post("/discord/save-token", response_model=SaveTokenResponse)
 async def save_discord_token(
     body: SaveTokenRequest,
@@ -1343,7 +1337,6 @@ prov.validateAndProvision(process.env.TELEGRAM_TOKEN).then(result => {
         return {"valid": False, "error": str(e)[:100]}
 
 
-@require_csrf
 @router.post("/telegram/validate-token", response_model=ValidateTelegramTokenResponse)
 async def validate_telegram_token(
     body: ValidateTelegramTokenRequest,
@@ -1369,7 +1362,6 @@ async def validate_telegram_token(
     )
 
 
-@require_csrf
 @router.post("/telegram/save-token", response_model=SaveTelegramTokenResponse)
 async def save_telegram_token(
     body: SaveTelegramTokenRequest,
@@ -1451,7 +1443,6 @@ class ExchangeSlackCodeResponse(BaseModel):
     error: str | None = None
 
 
-@require_csrf
 @router.post("/slack/oauth/generate-url", response_model=GenerateSlackOAuthURLResponse)
 async def generate_slack_oauth_url(
     body: GenerateSlackOAuthURLRequest,
@@ -1472,7 +1463,6 @@ async def generate_slack_oauth_url(
     )
 
 
-@require_csrf
 @router.post("/slack/oauth/exchange-code", response_model=ExchangeSlackCodeResponse)
 async def exchange_slack_code(
     body: ExchangeSlackCodeRequest,
@@ -1519,7 +1509,6 @@ class ExchangeTeamsCodeResponse(BaseModel):
     error: str = Field(default="", description="Error message if any")
 
 
-@require_csrf
 @router.post("/teams/oauth/generate-url", response_model=GenerateTeamsOAuthURLResponse)
 async def generate_teams_oauth_url(
     body: GenerateTeamsOAuthURLRequest,
@@ -1540,7 +1529,6 @@ async def generate_teams_oauth_url(
     )
 
 
-@require_csrf
 @router.post("/teams/oauth/exchange-code", response_model=ExchangeTeamsCodeResponse)
 async def exchange_teams_code(
     body: ExchangeTeamsCodeRequest,
@@ -1589,7 +1577,6 @@ class EmailCodeExchangeResponse(BaseModel):
     error: str = Field(default="")
 
 
-@require_csrf
 @router.post("/email/oauth/generate-url", response_model=EmailOAuthResponse)
 async def generate_email_oauth_url(
     body: EmailOAuthRequest,
@@ -1610,7 +1597,6 @@ async def generate_email_oauth_url(
     )
 
 
-@require_csrf
 @router.post("/email/oauth/exchange-code", response_model=EmailCodeExchangeResponse)
 async def exchange_email_code(
     body: EmailCodeExchangeRequest,
@@ -1664,7 +1650,6 @@ class SignalPollResponse(BaseModel):
     error: str = Field(default="")
 
 
-@require_csrf
 @router.post("/signal/poll-link", response_model=SignalPollResponse)
 async def poll_signal_link(
     body: BaseModel,
@@ -1718,7 +1703,6 @@ class WhatsAppPollResponse(BaseModel):
     error: str = Field(default="")
 
 
-@require_csrf
 @router.post("/whatsapp/poll-scan", response_model=WhatsAppPollResponse)
 async def poll_whatsapp_scan(
     body: BaseModel,

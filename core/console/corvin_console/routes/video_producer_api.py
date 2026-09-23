@@ -1,9 +1,8 @@
-from core.security.csrf import require_csrf
 """FastAPI routes for Video Producer plugin."""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional, List, Annotated
+from typing import Optional, List
 from datetime import datetime
 import uuid
 import sys
@@ -11,10 +10,6 @@ import os
 import logging
 import importlib.util
 from pathlib import Path
-
-# Security imports for auth + CSRF (Phase 9 P0 fixes)
-from corvin_console.deps import require_csrf, require_session
-from corvin_console import auth as session_auth
 
 logger = logging.getLogger(__name__)
 
@@ -169,18 +164,9 @@ _settings = {
 }
 
 
-@require_csrf
 @router.post("/jobs")
-async def create_video_job(
-    req: CreateJobRequest,
-    background_tasks: BackgroundTasks,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
-):
-    """Create a new video job and start real production in the background (non-blocking).
-
-    SECURITY FIX (Phase 9 P0, Issue #9): Added require_csrf + authentication.
-    Fail-closed: unauthenticated users get 401, CSRF mismatch gets 403.
-    """
+async def create_video_job(req: CreateJobRequest, background_tasks: BackgroundTasks):
+    """Create a new video job and start real production in the background (non-blocking)."""
     if not req.task or not req.task.strip():
         raise HTTPException(status_code=400, detail="Task cannot be empty")
 
@@ -285,17 +271,9 @@ async def get_settings():
     return _settings
 
 
-@require_csrf
 @router.put("/settings")
-async def update_settings(
-    req: SettingsRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
-):
-    """Update plugin settings.
-
-    SECURITY FIX (Phase 9 P0, Issue #9): Added require_csrf + authentication.
-    Fail-closed: unauthenticated users get 401, CSRF mismatch gets 403.
-    """
+async def update_settings(req: SettingsRequest):
+    """Update plugin settings."""
     global _settings
 
     if req.output_folder is not None:
@@ -358,18 +336,9 @@ async def get_captions(job_id: str):
         return {"content": f.read()}
 
 
-@require_csrf
 @router.post("/jobs/{job_id}/youtube")
-async def upload_to_youtube(
-    job_id: str,
-    metadata: Optional[dict] = None,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
-):
-    """Enqueue video for YouTube upload (async, non-blocking).
-
-    SECURITY FIX (Phase 9 P0, Issue #9): Added require_csrf + authentication.
-    Fail-closed: unauthenticated users get 401, CSRF mismatch gets 403.
-    """
+async def upload_to_youtube(job_id: str, metadata: Optional[dict] = None):
+    """Enqueue video for YouTube upload (async, non-blocking)."""
     if not get_storage:
         raise HTTPException(status_code=503, detail="Video Producer plugin not available")
 
@@ -549,13 +518,9 @@ async def get_scene_slide(job_id: str, index: int):
     return FileResponse(str(p), media_type="image/png")
 
 
-@require_csrf
 @router.post("/jobs/{job_id}/scenes/{scene_id}/feedback")
 async def submit_scene_feedback(
-    job_id: str,
-    scene_id: str,
-    feedback: SceneFeedbackRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)] = ...,
+    job_id: str, scene_id: str, feedback: SceneFeedbackRequest
 ):
     """Submit operator feedback for a scene (approve/reject/reason).
 
@@ -568,10 +533,6 @@ async def submit_scene_feedback(
       3. Emit to EventStore (audit-first, non-blocking)
       4. Optimizer reads feedback → computes parameter delta
       5. Next execution uses updated config (closed-loop learning)
-
-    SECURITY FIX (Phase 9 P0, Issue #9 + #8):
-    - Added require_csrf + authentication (fail-closed: 401/403)
-    - Fixed hardcoded tenant_id="_default" → now extracted from session.tenant_id
     """
     if not get_storage:
         raise HTTPException(status_code=503, detail="Video Producer plugin not available")
@@ -599,7 +560,7 @@ async def submit_scene_feedback(
         emitted = await emit_feedback_event(
             skill_id="os.video_producer",
             task_id=job_id,
-            tenant_id=session.tenant_id,  # ✅ FIXED: extract from authenticated session
+            tenant_id="_default",  # TODO: extract from session context when auth is wired
             outcome_feedback=outcome_feedback,
             quality_rating=None,  # TODO: add quality_rating field to SceneFeedbackRequest
             reason=feedback.reason,

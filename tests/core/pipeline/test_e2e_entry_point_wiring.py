@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 E2E Tests for ADR-0301: Entry-Point Wiring Across All Transport Categories
 
@@ -59,7 +58,6 @@ def flask_test_app():
         """A simple test read endpoint."""
         return {"message": "read_ok"}
 
-    @require_csrf
     @app.post("/api/test/write")
     async def test_write(request: Request):
         """A simple test write endpoint."""

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """File Hub — browse, download, upload, delete files in the tenant tree.
 
 Extends the read-only workspaces endpoint with mutation endpoints:
@@ -339,7 +338,6 @@ def files_download(
 
 # ── Upload ──────────────────────────────────────────────────────────────
 
-@require_csrf
 @router.post("/upload")
 async def files_upload(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -421,7 +419,6 @@ async def files_upload(
 
 # ── Delete ──────────────────────────────────────────────────────────────
 
-@require_csrf
 @router.delete("")
 def files_delete(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -466,7 +463,6 @@ class _MkdirBody(BaseModel):
     path: str = Field(..., max_length=512)
 
 
-@require_csrf
 @router.post("/mkdir")
 def files_mkdir(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

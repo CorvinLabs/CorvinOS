@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """API routes for Subsystem Control — Operator authority & transparency (ADR-2029).
 
 Endpoints:
@@ -130,7 +129,6 @@ def create_subsystems_router(
             logger.error(f"Failed to get subsystem status for {subsystem_id}: {e}")
             raise HTTPException(status_code=500, detail={"error": "status_failed", "reason": str(e)})
 
-    @require_csrf
     @router.post("/{subsystem_id}/control", status_code=200)
     async def control_subsystem(
         subsystem_id: str,
@@ -203,7 +201,6 @@ def create_subsystems_router(
             logger.error(f"Failed to control subsystem {subsystem_id}: {e}")
             raise HTTPException(status_code=500, detail={"error": "control_failed", "reason": str(e)})
 
-    @require_csrf
     @router.post("/{subsystem_id}/health", status_code=200)
     async def health_check_subsystem(
         subsystem_id: str,

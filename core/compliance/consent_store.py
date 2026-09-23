@@ -54,7 +54,7 @@ class ConsentRecord:
         """Check if consent is currently valid"""
         now = datetime.utcnow()
         expires = datetime.fromisoformat(self.expires_at)
-        return self.revoked_at is None and now < expires
+        return revoked_at is None and now < expires
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for audit event payload"""
@@ -171,10 +171,6 @@ class ConsentStore:
         if not user_id or not scope:
             raise ConsentStoreError("user_id and scope must be non-empty")
 
-        # Validate scope (S-003: Input validation)
-        if scope not in [s.value for s in ConsentScope]:
-            raise ConsentStoreError(f"Invalid scope: {scope}. Must be one of {[s.value for s in ConsentScope]}")
-
         now = datetime.utcnow()
         expires = now + timedelta(days=ttl_days)
 
@@ -231,11 +227,6 @@ class ConsentStore:
             logger.warning(f"get_consent called with empty user_id or scope (fail-closed)")
             return False
 
-        # Validate scope (S-003: Input validation)
-        if scope not in [s.value for s in ConsentScope]:
-            logger.warning(f"get_consent called with invalid scope: {scope} (fail-closed)")
-            return False
-
         conn = self._get_connection()
         try:
             cursor = conn.execute("""
@@ -290,10 +281,6 @@ class ConsentStore:
         """
         if not user_id or not scope:
             raise ConsentStoreError("user_id and scope must be non-empty")
-
-        # Validate scope (S-003: Input validation)
-        if scope not in [s.value for s in ConsentScope]:
-            raise ConsentStoreError(f"Invalid scope: {scope}. Must be one of {[s.value for s in ConsentScope]}")
 
         now = datetime.utcnow()
 

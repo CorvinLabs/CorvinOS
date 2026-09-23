@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Browser automation REST surface + live view (ADR-0182 M3/M4).
 
 This router is BOTH:
@@ -281,7 +280,6 @@ class CreateSessionReq(BaseModel):
 
 
 # ── session lifecycle ─────────────────────────────────────────────────────────
-@require_csrf
 @router.post("/browser/session")
 async def create_session(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
@@ -347,7 +345,6 @@ async def list_sessions(
     return {"sessions": _mgr().sessions_info(rec.tenant_id, owner_fingerprint=rec.sid_fingerprint)}
 
 
-@require_csrf
 @router.post("/browser/{sid}/close")
 async def close_session(
     sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
@@ -377,7 +374,6 @@ class AttachConsentReq(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.post("/browser/attach/consent")
 async def grant_attach_consent(
     body: AttachConsentReq | None,
@@ -401,7 +397,6 @@ async def grant_attach_consent(
             "remaining_s": _ac.status(rec.tenant_id)["remaining_s"]}
 
 
-@require_csrf
 @router.delete("/browser/attach/consent")
 async def revoke_attach_consent(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
@@ -425,7 +420,6 @@ class ConfirmModeReq(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.post("/browser/attach/confirm-mode")
 async def set_confirm_mode(
     body: ConfirmModeReq,
@@ -484,7 +478,6 @@ def _owned_session(rec: session_auth.SessionRecord, sid: str):
     return _mgr().session(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
 
 
-@require_csrf
 @router.post("/browser/{sid}/navigate")
 async def navigate(sid: str, body: NavigateReq,
                    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -501,14 +494,12 @@ async def navigate(sid: str, body: NavigateReq,
     obs = await _act(s.navigate(body.url, confirm_cross_host=rec.is_internal_tool))
     return obs.to_dict()
 
-@require_csrf
 @router.post("/browser/{sid}/observe")
 async def observe(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     obs = await _act(s.observe())
     return obs.to_dict()
 
-@require_csrf
 @router.post("/browser/{sid}/click")
 async def click(sid: str, body: IndexReq,
                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -516,7 +507,6 @@ async def click(sid: str, body: IndexReq,
     await _act(s.click(body.index))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/fill")
 async def fill(sid: str, body: FillReq,
                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -524,7 +514,6 @@ async def fill(sid: str, body: FillReq,
     await _act(s.fill(body.index, body.text))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/fill_secret")
 async def fill_secret(sid: str, body: FillSecretReq,
                       rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -532,7 +521,6 @@ async def fill_secret(sid: str, body: FillSecretReq,
     await _act(s.fill_secret(body.index, body.vault_key))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/read")
 async def read(sid: str, body: ReadReq,
                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -540,7 +528,6 @@ async def read(sid: str, body: ReadReq,
     txt = await _act(s.read(body.index))
     return {"text": txt}
 
-@require_csrf
 @router.post("/browser/{sid}/scroll")
 async def scroll(sid: str, body: ScrollReq,
                  rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -548,7 +535,6 @@ async def scroll(sid: str, body: ScrollReq,
     await _act(s.scroll(body.direction))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/back")
 async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
@@ -557,7 +543,6 @@ async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(requ
 
 
 # ── ADR-0183 S2: expanded action surface ──────────────────────────────────────
-@require_csrf
 @router.post("/browser/{sid}/hover")
 async def hover(sid: str, body: IndexReq,
                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -565,7 +550,6 @@ async def hover(sid: str, body: IndexReq,
     await _act(s.hover(body.index))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/key")
 async def key(sid: str, body: KeyReq,
               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -573,7 +557,6 @@ async def key(sid: str, body: KeyReq,
     await _act(s.key(body.key))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/select_option")
 async def select_option(sid: str, body: SelectReq,
                         rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -581,7 +564,6 @@ async def select_option(sid: str, body: SelectReq,
     await _act(s.select_option(body.index, body.value))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/upload_file")
 async def upload_file(sid: str, body: UploadReq,
                       rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -589,7 +571,6 @@ async def upload_file(sid: str, body: UploadReq,
     await _act(s.upload_file(body.index, body.filename))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/drag")
 async def drag(sid: str, body: DragReq,
                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -597,13 +578,11 @@ async def drag(sid: str, body: DragReq,
     await _act(s.drag(body.from_index, body.to_index))
     return {"ok": True}
 
-@require_csrf
 @router.post("/browser/{sid}/tabs")
 async def tabs(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     return {"tabs": await _act(s.tabs())}
 
-@require_csrf
 @router.post("/browser/{sid}/switch_tab")
 async def switch_tab(sid: str, body: SwitchTabReq,
                      rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -611,21 +590,18 @@ async def switch_tab(sid: str, body: SwitchTabReq,
     obs = await _act(s.switch_tab(body.index))
     return obs.to_dict()
 
-@require_csrf
 @router.post("/browser/{sid}/extract_table")
 async def extract_table(sid: str, body: IndexReq,
                         rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     return await _act(s.extract_table(body.index))
 
-@require_csrf
 @router.post("/browser/{sid}/extract_form_schema")
 async def extract_form_schema(sid: str,
                               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     return {"forms": await _act(s.extract_form_schema())}
 
-@require_csrf
 @router.post("/browser/{sid}/screenshot")
 async def screenshot(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     """Return the current viewport as a base64 JPEG data URL (mark overlay
@@ -660,7 +636,6 @@ async def actions(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(r
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"actions": items, "pending": pending, "next": nxt}
 
-@require_csrf
 @router.post("/browser/{sid}/confirm")
 async def confirm(sid: str, body: ConfirmReq,
                   rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -671,7 +646,6 @@ async def confirm(sid: str, body: ConfirmReq,
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"resolved": ok}
 
-@require_csrf
 @router.post("/browser/{sid}/pause")
 async def pause(sid: str, body: PauseReq,
                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -684,7 +658,6 @@ async def pause(sid: str, body: PauseReq,
 
 
 # ── agent loop (natural-language "give it a note", ADR-0182 Part A) ────────────
-@require_csrf
 @router.post("/browser/{sid}/agent")
 async def run_agent(sid: str, body: AgentReq,
                     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
@@ -706,7 +679,6 @@ async def run_agent(sid: str, body: AgentReq,
     return {"started": True}
 
 
-@require_csrf
 @router.post("/browser/{sid}/agent/stop")
 async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     try:
@@ -716,7 +688,6 @@ async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depend
     return {"stopped": True}
 
 
-@require_csrf
 @router.post("/browser/{sid}/agent/continue")
 async def continue_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     """ADR-0189: resume a session paused on needs_login/needs_approval — the

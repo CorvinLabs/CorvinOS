@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -186,6 +187,10 @@ class ModelSelector:
     def select_model(self, video_duration_seconds: float) -> Model:
         """Select model for video using epsilon-greedy algorithm.
 
+        CRITICAL #2: Seeded determinism for epsilon-greedy exploration.
+        Same input always produces same exploration decision (reproducibility).
+        Uses hash of (duration, decision_count, tenant_id) for stable seeding.
+
         Args:
             video_duration_seconds: Duration in seconds
 
@@ -194,12 +199,21 @@ class ModelSelector:
         """
         duration = categorize_duration(video_duration_seconds)
 
-        # Epsilon-greedy decision
-        if random.random() < self.EPSILON:
-            # Exploration: random model
-            selected = random.choice(self.MODELS)
+        # CRITICAL #2: Deterministic seeding for reproducibility
+        # Seed based on (tenant, duration, decision_count) so same context always
+        # explores the same way, but different contexts explore differently
+        seed_input = f"{self.tenant_id}:{duration}:{self.state.total_decisions}"
+        seed_value = int(hashlib.md5(seed_input.encode()).hexdigest(), 16) % (2**31)
+
+        # Create a seeded RNG for this decision (don't alter global random)
+        decision_rng = random.Random(seed_value)
+
+        # Epsilon-greedy decision (now deterministic)
+        if decision_rng.random() < self.EPSILON:
+            # Exploration: deterministic random model (based on seed)
+            selected = decision_rng.choice(self.MODELS)
             self.state.exploration_count += 1
-            logger.info(f"Exploration: selected {selected} for {duration}")
+            logger.info(f"Exploration (seed={seed_value}): selected {selected} for {duration}")
         else:
             # Exploitation: best model
             selected = self.state.selected_models.get(duration, self.MODELS[0])

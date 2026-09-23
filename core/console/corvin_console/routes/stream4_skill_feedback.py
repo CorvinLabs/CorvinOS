@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Stream 4: Skill Feedback Integration Routes (ADR-2033).
 
 Unified feedback submission API for Phase 10 skills:
@@ -139,7 +138,6 @@ async def get_feedback_processor(
 # Routes
 # ============================================================================
 
-@require_csrf
 @router.post("", response_model=SkillFeedbackResponse)
 async def submit_skill_feedback(
     req: SkillFeedbackRequest,

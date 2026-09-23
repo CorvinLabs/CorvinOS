@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """A2A Licensing Gate Routes (Phase 2, ADR-0704)
 
 FastAPI endpoints for A2A delegation licensing:
@@ -161,7 +160,6 @@ def get_authority() -> AuthorityServer:
 # API Routes
 # ============================================================================
 
-@require_csrf
 @router.post("/a2a/verify")
 async def verify_signed_task(
     request: SignedTaskRequest = Body(...),
@@ -215,7 +213,6 @@ async def verify_signed_task(
         raise HTTPException(status_code=500, detail="Verification failed")
 
 
-@require_csrf
 @router.post("/a2a/credential/issue")
 async def issue_credential(
     request: CredentialIssueRequest = Body(...),
@@ -299,7 +296,6 @@ async def get_credential_info(
         raise HTTPException(status_code=500, detail="Failed to get credential info")
 
 
-@require_csrf
 @router.post("/a2a/credential/{credential_id}/revoke")
 async def revoke_credential(
     credential_id: str = PathParam(..., description="Credential ID"),

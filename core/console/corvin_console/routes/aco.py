@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """ACO REST endpoints — ADR-0174.
 
 GET  /chat/sessions/{sid}/aco/anomalies   — Layer 3 anomaly scan
@@ -72,7 +71,6 @@ def get_session_diagnosis(
 
 # ── Layer 2: Replay manifest validation ──────────────────────────────────────
 
-@require_csrf
 @router.post("/chat/sessions/{sid}/aco/replay")
 def validate_replay(
     sid: str,
@@ -220,7 +218,6 @@ def validate_replay(
 
 # ── Layer 5: Self-Repair ──────────────────────────────────────────────────────
 
-@require_csrf
 @router.post("/chat/sessions/{sid}/aco/repair")
 def apply_repair(
     sid: str,
@@ -310,7 +307,6 @@ def get_nerve_scan(
     }
 
 
-@require_csrf
 @router.post("/aco/nerve/repair")
 def trigger_nerve_repair(
     body: dict,

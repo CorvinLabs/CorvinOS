@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Vibe Engineering — read-only Context-Engineering pipeline view (ADR-0275/0278).
 
 Reads the DURABLE, hash-chained Decision Record (Layer A, ADR-0278) from the
@@ -372,7 +371,6 @@ def _validate_pipeline(pipeline: list) -> "list[str]":
     return errors
 
 
-@require_csrf
 @router.put("/pipeline")
 async def put_pipeline(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -434,7 +432,6 @@ async def get_stage_grades(
     return {"available": True, "grades": out}
 
 
-@require_csrf
 @router.post("/grades/{stage_id}")
 async def post_stage_grade(
     stage_id: str,

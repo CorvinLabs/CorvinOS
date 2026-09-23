@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Task Engine M2 routes — tenant-global task management (ADR-0081).
 
 Endpoints
@@ -45,7 +44,6 @@ class TaskCreateResponse(BaseModel):
     task_id: str
 
 
-@require_csrf
 @router.post("/tasks")
 async def create_task(
     body: TaskCreateRequest,
@@ -108,7 +106,6 @@ async def get_task(
     return await get_task_handler(tenant_id=rec.tenant_id, task_id=task_id)
 
 
-@require_csrf
 @router.post("/tasks/{task_id}/abort")
 async def abort_task(
     task_id: str,

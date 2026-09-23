@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """flows.py — CorvinFlow console REST routes (ADR-0121 M4).
 
 Exposes FlowRun manifests from the tenant's global/flows/runs/ directory.
@@ -196,7 +195,6 @@ def get_flow_run(
     return {"run_id": run_id, "events": safe_events}
 
 
-@require_csrf
 @router.post("/flows/runs/{run_id}/approve")
 def approve_checkpoint(
     run_id: str,
@@ -285,7 +283,6 @@ def list_flow_definitions(
     return {"definitions": definitions}
 
 
-@require_csrf
 @router.put("/flows/definition/{flow_id}")
 def upsert_flow_definition(
     flow_id: str,
@@ -498,7 +495,6 @@ def get_flow_run_outputs(
     return {"run_id": run_id, "outputs": outputs}
 
 
-@require_csrf
 @router.delete("/flows/definition/{flow_id}")
 def delete_flow_definition(
     flow_id: str,
@@ -542,7 +538,6 @@ def delete_flow_definition(
     return {"ok": "true", "flow_id": flow_id}
 
 
-@require_csrf
 @router.post("/flows/trigger/{flow_id}")
 def trigger_flow_run(
     flow_id: str,

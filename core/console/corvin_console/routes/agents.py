@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Agent Lifecycle Governance — ADR-0131 console REST endpoints.
 
 Endpoints
@@ -132,7 +131,6 @@ class CreateCharterRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.post("/agents", status_code=http_status.HTTP_201_CREATED)
 def create_charter(
     body: CreateCharterRequest,
@@ -217,7 +215,6 @@ class RenewCharterRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.put("/agents/{agent_id:path}", response_model=None)
 def renew_charter(
     agent_id: str,
@@ -290,7 +287,6 @@ class SignOffRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @router.put("/agents/{agent_id:path}/sign")
 def sign_charter(
     agent_id: str,
@@ -347,7 +343,6 @@ def sign_charter(
 
 # ── DELETE /agents/{agent_id}/sign/{role} ─────────────────────────────────────
 
-@require_csrf
 @router.delete("/agents/{agent_id:path}/sign/{role}")
 def revoke_sign_off(
     agent_id: str,
@@ -384,7 +379,6 @@ def revoke_sign_off(
 
 # ── POST /agents/{agent_id}/disable ──────────────────────────────────────────
 
-@require_csrf
 @router.post("/agents/{agent_id:path}/disable")
 def disable_agent(
     agent_id: str,

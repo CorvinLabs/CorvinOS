@@ -10,7 +10,6 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/e2e",
   testMatch: "initiatives-live.spec.ts",
-  grep: process.env.PLAYWRIGHT_GREP ? new RegExp(process.env.PLAYWRIGHT_GREP) : undefined,
   workers: 1,
   reporter: "line",
   use: { ...devices["Desktop Chrome"] },

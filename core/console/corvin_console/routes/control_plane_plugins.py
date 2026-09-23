@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 Control Plane Routes — Plugin Management Stream 1.
 
@@ -63,7 +62,6 @@ class PluginOperationResponse(BaseModel):
     code: Optional[int] = None
 
 
-@require_csrf
 @router.put("/install")
 async def install_plugin(
     req: PluginInstallRequest,
@@ -186,7 +184,6 @@ async def get_plugin(
     }
 
 
-@require_csrf
 @router.patch("/{plugin_id}/enable")
 async def enable_plugin(
     plugin_id: str,
@@ -226,7 +223,6 @@ async def enable_plugin(
     )
 
 
-@require_csrf
 @router.patch("/{plugin_id}/disable")
 async def disable_plugin(
     plugin_id: str,
@@ -269,7 +265,6 @@ async def disable_plugin(
     )
 
 
-@require_csrf
 @router.delete("/{plugin_id}")
 async def uninstall_plugin(
     plugin_id: str,

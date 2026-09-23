@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Layer Extensions console routes (ADR-0142 M5).
 
 Six endpoints:
@@ -107,7 +106,6 @@ def validate_manifest(
     return _validate_yaml(manifest_yaml, rec.tenant_id)
 
 
-@require_csrf
 @router.post("/extensions/validate")
 def validate_manifest_post(
     body: ValidateRequest,
@@ -185,7 +183,6 @@ class InstallRequest(BaseModel):
     enable: bool = False
 
 
-@require_csrf
 @router.post("/extensions", status_code=201)
 def install_extension(
     body: InstallRequest,
@@ -277,7 +274,6 @@ class EnabledRequest(BaseModel):
     enabled: bool
 
 
-@require_csrf
 @router.put("/extensions/{name}")
 def set_extension_enabled(
     name: str,
@@ -345,7 +341,6 @@ def set_extension_enabled(
 # DELETE /extensions/{name}
 # ---------------------------------------------------------------------------
 
-@require_csrf
 @router.delete("/extensions/{name}", status_code=204)
 def remove_extension(
     name: str,

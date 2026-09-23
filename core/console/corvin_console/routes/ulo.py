@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """User-Defined Learning Objectives (ULO) REST API — ADR-0163 M4.
 
 Thin REST surface over the shared ``ulo.py`` registry.
@@ -100,7 +99,6 @@ def list_objectives(
     }
 
 
-@require_csrf
 @router.post("/ulo/objectives", status_code=http_status.HTTP_201_CREATED)
 def add_objective(
     body: AddBody,
@@ -137,7 +135,6 @@ def add_objective(
     return {"objective": _to_out(obj)}
 
 
-@require_csrf
 @router.put("/ulo/objectives/{ulo_id}")
 def update_objective(
     ulo_id: str,
@@ -224,7 +221,6 @@ def update_objective(
                         detail=f"unknown action {body.action!r}")
 
 
-@require_csrf
 @router.delete("/ulo/objectives/{ulo_id}", status_code=http_status.HTTP_200_OK)
 def delete_objective(
     ulo_id: str,

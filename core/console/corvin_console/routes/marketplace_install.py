@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 Marketplace Installation API — real builtin installation (ADR-0511 / ADR-0247).
 
@@ -402,7 +401,6 @@ def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: st
     })
 
 
-@require_csrf
 @router.post("/plugins/{plugin_id}/install")
 async def install_plugin(
     plugin_id: str,
@@ -498,7 +496,6 @@ def _mutation_status(exc: Exception) -> int:
     return 500
 
 
-@require_csrf
 @router.post("/plugins/{plugin_id}/uninstall")
 async def uninstall_plugin(
     plugin_id: str,
@@ -524,7 +521,6 @@ async def uninstall_plugin(
     }
 
 
-@require_csrf
 @router.patch("/plugins/{plugin_id}/enable")
 async def enable_plugin(
     plugin_id: str,
@@ -546,7 +542,6 @@ async def enable_plugin(
             "enabled": rec_out.enabled}
 
 
-@require_csrf
 @router.patch("/plugins/{plugin_id}/disable")
 async def disable_plugin(
     plugin_id: str,

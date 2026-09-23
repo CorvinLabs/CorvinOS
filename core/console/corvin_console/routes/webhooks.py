@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Generic Webhook Bridge (ADR-0124 M7).
 
 Operators register inbound webhook channels. External systems POST
@@ -254,7 +253,6 @@ def list_webhook_channels(
     return {"tenant_id": rec.tenant_id, "count": len(channels), "channels": channels}
 
 
-@require_csrf
 @router.put("/bridges/custom/{channel_id}")
 def register_webhook_channel(
     channel_id: str,
@@ -324,7 +322,6 @@ def register_webhook_channel(
     }
 
 
-@require_csrf
 @router.delete("/bridges/custom/{channel_id}")
 def remove_webhook_channel(
     channel_id: str,
@@ -353,7 +350,6 @@ def remove_webhook_channel(
 
 # ── Inbound route ─────────────────────────────────────────────────────────────
 
-@require_csrf
 @router.post("/webhook/{tenant_id}/{channel_id}")
 async def receive_webhook(
     tenant_id: str,

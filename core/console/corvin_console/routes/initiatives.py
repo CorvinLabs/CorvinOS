@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Initiatives board routes — live status of running and finished initiative tasks.
 
 Endpoints (all under /v1/console):
@@ -78,7 +77,6 @@ class TaskPatch(BaseModel):
     progress: int | None = Field(default=None, ge=0, le=100)
 
 
-@require_csrf
 @router.patch("/{iid}/tasks/{tid}")
 async def patch_task(
     iid: str,
@@ -106,7 +104,6 @@ class GateBody(BaseModel):
     decision: Literal["pending", "go", "no_go"]
 
 
-@require_csrf
 @router.put("/{iid}/gates/{gid}")
 async def put_gate(
     iid: str,
@@ -133,7 +130,6 @@ class CloseBody(BaseModel):
     outcome: Literal["completed", "cancelled"] | None
 
 
-@require_csrf
 @router.put("/{iid}/close")
 async def put_close(
     iid: str,
@@ -155,7 +151,6 @@ async def put_close(
     return result
 
 
-@require_csrf
 @router.post("/verify", status_code=202)
 async def post_verify(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Quality Gates API endpoints for Console (Phase 2.1, ADR-0688).
 
 Exposes 7 API endpoints for quality gate status, execution, history, and graph queries.
@@ -414,7 +413,6 @@ async def get_artifact_history(
 # Endpoint 4: POST /api/quality/gates/run/all
 # ============================================================================
 
-@require_csrf
 @router.post("/gates/run/all", summary="Run all gate validators")
 async def run_all_gates(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

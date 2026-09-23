@@ -134,7 +134,6 @@ from .routes import (
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
     learning_analytics as learning_analytics_route,
-    learning_stream as learning_stream_route,
     feedback_portal_routes as feedback_portal_routes_route,
     stream4_skill_feedback as stream4_skill_feedback_route,
     learning_optimizer_routes_stream2 as learning_optimizer_stream2_route,
@@ -271,7 +270,6 @@ router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
 router.include_router(learning_analytics_route.router, tags=["console-learning-analytics"])
-router.include_router(learning_stream_route.router, tags=["console-learning-stream"])
 router.include_router(feedback_portal_routes_route.router, tags=["console-feedback-portal"])
 router.include_router(stream4_skill_feedback_route.router, tags=["console-stream4-skill-feedback"])
 router.include_router(learning_optimizer_stream2_route.router, tags=["console-learning-optimizer"])

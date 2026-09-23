@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Chat-settings route — per-(channel, chat) profile editor.
 
 Phase G companion to ``routes/profile.py``. Surfaces the chat_profiles
@@ -412,7 +411,6 @@ def chat_settings_detail(
     }
 
 
-@require_csrf
 @router.patch("/chat-settings/{channel}/{chat_key}")
 def chat_settings_patch(
     channel: str,

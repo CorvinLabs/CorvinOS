@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Console engine-selector settings — Claude Code only (v2.0).
 
 ADR-0067 M2.4 — simplified single-engine deployment.
@@ -300,7 +299,6 @@ def _engine_models_as_served(tenant_id: str, spec: dict) -> "dict[str, EngineMod
     return out
 
 
-@require_csrf
 @router.put("", response_model=EngineSettingResponse)
 def put_engine_setting(
     body: EngineSettingUpdate,

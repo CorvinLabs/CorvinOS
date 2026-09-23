@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Control Plane Routes — Override Authority (Phase 9b Stream 3, ADR-2029).
 
 Provides REST endpoints for operator override requests and approvals:
@@ -80,7 +79,6 @@ class OverrideDetailModel(BaseModel):
     approver_id: Optional[str] = None
 
 
-@require_csrf
 @router.post("")
 async def create_override(
     body: OverrideRequestModel,
@@ -192,7 +190,6 @@ async def get_override_detail(
     return detail
 
 
-@require_csrf
 @router.post("/{override_id}/approve")
 async def approve_override(
     override_id: str,
@@ -254,7 +251,6 @@ async def approve_override(
     return result
 
 
-@require_csrf
 @router.post("/{override_id}/deny")
 async def deny_override(
     override_id: str,
@@ -318,7 +314,6 @@ async def deny_override(
     return result
 
 
-@require_csrf
 @router.post("/{override_id}/interrupt")
 async def interrupt_override(
     override_id: str,

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Learning Metrics API Routes (ADR-0635)
 
 Phase 5: Dashboard Architecture — Real-Time Visualization + WebSocket
@@ -146,7 +145,6 @@ def _export_window(request: ExportRequest) -> tuple[datetime, datetime]:
     return start, end
 
 
-@require_csrf
 @router.post("/export")
 async def export_metrics(request: ExportRequest, session = Depends(require_csrf)) -> Response:
     """Export the tenant's learning events in the window as JSONL or CSV (GDPR Art. 20).

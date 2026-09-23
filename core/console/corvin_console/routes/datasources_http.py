@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """DSI v2 HTTP Adapter Registry (ADR-0124 M4).
 
 Any HTTP server implementing /ping, /schema, /query can be registered
@@ -429,7 +428,6 @@ def list_http_adapters(
     return {"tenant_id": rec.tenant_id, "count": len(adapters), "adapters": adapters}
 
 
-@require_csrf
 @router.put("/data-sources/adapters/http/{adapter_id}")
 def register_http_adapter(
     adapter_id: str,
@@ -544,7 +542,6 @@ def register_http_adapter(
     return {"ok": True, "adapter_id": adapter_id, "updated": is_update}
 
 
-@require_csrf
 @router.delete("/data-sources/adapters/http/{adapter_id}")
 def remove_http_adapter(
     adapter_id: str,
@@ -571,7 +568,6 @@ def remove_http_adapter(
     return {"ok": True, "adapter_id": adapter_id}
 
 
-@require_csrf
 @router.post("/data-sources/adapters/http/{adapter_id}/ping")
 def ping_http_adapter(
     adapter_id: str,

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Console floating assistant — stateless chat endpoint.
 
 Routes:
@@ -212,7 +211,6 @@ def assistant_ping(
     return {"available": available, "version": version}
 
 
-@require_csrf
 @router.post("/assistant/message")
 def assistant_message(
     body: AssistantMessageRequest,

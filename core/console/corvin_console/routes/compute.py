@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Compute Worker (Layer 25, ADR-0013) — read-only viewer.
 
 Worker socket: ``<corvin_home>/tenants/<tid>/compute/worker.sock``
@@ -838,7 +837,6 @@ class ComputeConfigUpdate(BaseModel):
     re_auth_token: str | None = None
     model_config = {"extra": "forbid"}
 
-@require_csrf
 @router.put("/compute/config")
 def update_compute_config(
     body: ComputeConfigUpdate,
@@ -958,7 +956,6 @@ class ComputeSettingsUpdate(BaseModel):
     show_corpus_banner: bool = True
     model_config = {"extra": "forbid"}
 
-@require_csrf
 @router.put("/compute/settings")
 def update_compute_settings(
     body: ComputeSettingsUpdate,
@@ -997,7 +994,6 @@ class SubmitRunRequest(BaseModel):
     re_auth_token: str | None = None
     model_config = {"extra": "forbid"}
 
-@require_csrf
 @router.post("/compute/runs")
 def submit_run(
     body: SubmitRunRequest,
@@ -1124,7 +1120,6 @@ def submit_run(
     )
     return {"ok": True, "run_id": run_id, "state": result.get("state")}
 
-@require_csrf
 @router.delete("/compute/runs/{run_id}")
 def delete_run(
     run_id: str,
@@ -1187,7 +1182,6 @@ def _safe_open_dir(target: Path, root: Path) -> dict[str, Any]:
 
     return {"ok": True, "path": path_str, "launched": launched}
 
-@require_csrf
 @router.post("/compute/runs/{run_id}/open-dir")
 def open_run_dir(
     run_id: str,
@@ -1200,7 +1194,6 @@ def open_run_dir(
     root_dir = _compute_dir(rec.tenant_id)
     return _safe_open_dir(run_dir, root_dir)
 
-@require_csrf
 @router.post("/compute/pipelines/{pipeline_id}/open-dir")
 def open_pipeline_dir(
     pipeline_id: str,
@@ -1213,7 +1206,6 @@ def open_pipeline_dir(
     root_dir = _compute_dir(rec.tenant_id)
     return _safe_open_dir(p_dir, root_dir)
 
-@require_csrf
 @router.post("/compute/hac/{hac_id}/open-dir")
 def open_hac_dir(
     hac_id: str,
@@ -1226,7 +1218,6 @@ def open_hac_dir(
     root_dir = _compute_dir(rec.tenant_id)
     return _safe_open_dir(h_dir, root_dir)
 
-@require_csrf
 @router.post("/compute/acs/{run_id}/open-dir")
 def open_acs_run_dir(
     run_id: str,
@@ -1447,7 +1438,6 @@ class ExperimentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     model_config = {"extra": "forbid"}
 
-@require_csrf
 @router.post("/compute/experiments")
 def create_experiment(
     body: ExperimentCreate,
@@ -1489,7 +1479,6 @@ class ExperimentUpdate(BaseModel):
     media_attachments: list[dict[str, Any]] | None = Field(None)
     model_config = {"extra": "forbid"}
 
-@require_csrf
 @router.put("/compute/experiments/{experiment_id}")
 def update_experiment(
     experiment_id: str,
@@ -2231,7 +2220,6 @@ def awpkg_export_preview(
         "mode_options": ["replay", "reoptimize"],
     }
 
-@require_csrf
 @router.post("/compute/pipelines/{pipeline_id}/export/awpkg")
 def awpkg_export_download(
     pipeline_id: str,
@@ -2324,7 +2312,6 @@ class PromoteChampionRequest(BaseModel):
     improvement_threshold_pct: float = Field(2.0, ge=0.0, le=100.0)
     model_config = {"extra": "forbid"}
 
-@require_csrf
 @router.post("/compute/pipelines/{pipeline_id}/promote-champion")
 def promote_champion(
     pipeline_id: str,
@@ -2401,7 +2388,6 @@ def promote_champion(
 
 # ── M2: Pipeline → awpkg → Workflow import ────────────────────────────────
 
-@require_csrf
 @router.post("/compute/pipelines/{pipeline_id}/export/awpkg/to-workflow")
 def awpkg_export_to_workflow(
     pipeline_id: str,
@@ -2945,7 +2931,6 @@ _acs_fb_active: dict[str, int] = {}
 _acs_fb_active_lock = threading.Lock()
 
 
-@require_csrf
 @router.post("/compute/acs/runs")
 def submit_acs_workflow_run(
     body: ACSRunRequest,
@@ -3128,7 +3113,6 @@ class ACSExportRequest(BaseModel):
     mode: str = Field("dag", description="Export mode: 'dag' for deterministic replay, 'template' for adaptive re-exploration")
     description: str = Field("", description="Optional description override for the generated workflow")
 
-@require_csrf
 @router.post("/compute/acs/{run_id}/export")
 def export_acs_workflow_run(
     run_id: str,

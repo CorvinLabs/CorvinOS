@@ -34,7 +34,7 @@ class TestThreatPatternDetection:
 
     def test_burst_detection_above_threshold(self):
         """Test: detects burst when denials exceed threshold."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         # Create 6 denial events in 10 minutes (threshold is 5)
         now = datetime.utcnow()
@@ -62,7 +62,7 @@ class TestThreatPatternDetection:
 
     def test_burst_detection_below_threshold(self):
         """Test: does NOT detect burst when denials below threshold."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         # Create 3 denial events (threshold is 5)
         now = datetime.utcnow()
@@ -83,7 +83,7 @@ class TestThreatPatternDetection:
 
     def test_creep_detection_slow_attack(self):
         """Test: detects stealthy creep (1 event/hour for 24 hours)."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         # Create 25 events spread over 25 hours (1 per hour, guaranteed creep)
         now = datetime.utcnow()
@@ -108,7 +108,7 @@ class TestThreatPatternDetection:
 
     def test_concentration_detection_single_source(self):
         """Test: detects when 60%+ of denials come from one source."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         # 7 from one IP, 3 from others = 70% concentration
@@ -134,7 +134,7 @@ class TestThreatPatternDetection:
 
     def test_context_shift_detection_geo_mismatch(self):
         """Test: detects geographic context shift."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         events = [
@@ -160,7 +160,7 @@ class TestThreatPatternDetection:
 
     def test_confidence_scoring_varies_with_evidence(self):
         """Test: confidence increases with more evidence."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
 
@@ -407,7 +407,7 @@ class TestSkillExecution:
 
     def test_skill_executes_and_returns_patterns(self):
         """Test: skill runs end-to-end and returns detected patterns."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         events = [
@@ -459,7 +459,7 @@ class TestSkillExecution:
 
     def test_skill_audit_event_emitted(self):
         """Test: skill execution emits audit event."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         events = [
@@ -484,7 +484,7 @@ class TestSkillExecution:
 
     def test_skill_audit_chain_integrity(self):
         """Test: audit chain is hash-linked and verifiable."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         events = [
@@ -508,7 +508,7 @@ class TestSkillExecution:
 
     def test_skill_detects_tampered_audit_event(self):
         """Test: audit chain verification detects tampering."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         events = [
@@ -538,7 +538,7 @@ class TestTenantIsolation:
 
     def test_patterns_filtered_by_tenant(self):
         """Test: skill only processes events for requested tenant."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         # Mix of events from two tenants
@@ -603,7 +603,7 @@ class TestAdversarialCases:
 
     def test_empty_audit_log_handled(self):
         """Test: skill gracefully handles empty event list."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         result = skill.execute([], "tenant_1")
 
@@ -613,7 +613,7 @@ class TestAdversarialCases:
 
     def test_evasion_resistant_to_threshold_spread(self):
         """Test: creep detection resists evasion (spread over time)."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         # Spread events evenly: 1 per hour for 24 hours (evades burst)
@@ -713,7 +713,7 @@ class TestE2EWiringProof:
         ]
 
         # Execute skill (this is the real wiring point)
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
         result = skill.execute(defender_audit_log, "production_tenant")
 
         # Verify: patterns detected
@@ -761,7 +761,7 @@ class TestE2EWiringProof:
 
     def test_skill_lifecycle_audit_trail_complete(self):
         """E2E Proof: Complete audit trail of skill operations."""
-        skill = SecurityOrchestratorSkill(tenant_id="_default")
+        skill = SecurityOrchestratorSkill()
 
         now = datetime.utcnow()
         events = [

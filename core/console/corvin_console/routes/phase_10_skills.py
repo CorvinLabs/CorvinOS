@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 Phase 10 Skills Console Routes — HTTP API for Workflow Optimizer, Security Orchestrator, Flow Guard
 
@@ -104,7 +103,6 @@ class SecurityOrchestratorStatus(BaseModel):
 # ============================================================================
 
 
-@require_csrf
 @router.post("/workflow-optimizer/execute")
 async def execute_workflow_optimizer(
     task_input: dict = None,
@@ -178,7 +176,6 @@ async def get_workflow_optimizer_metrics() -> WorkflowOptimizationMetrics:
 # ============================================================================
 
 
-@require_csrf
 @router.post("/security-orchestrator/threats/detect")
 async def detect_threats(
     audit_window_minutes: int = Query(60, ge=5, le=1440),
@@ -246,7 +243,6 @@ async def get_active_threats() -> dict:
     }
 
 
-@require_csrf
 @router.post("/security-orchestrator/threats/clear/{threat_id}")
 async def clear_threat(threat_id: str) -> dict:
     """
@@ -384,7 +380,6 @@ async def get_data_flows(
     }
 
 
-@require_csrf
 @router.post("/flow-guard/flows/review/{flow_id}")
 async def review_flow(
     flow_id: str,
@@ -438,7 +433,6 @@ async def get_flow_policy() -> dict:
 # ============================================================================
 
 
-@require_csrf
 @router.post("/learning/feedback")
 async def submit_skill_feedback(feedback: SkillFeedback) -> dict:
     """
@@ -533,7 +527,6 @@ async def get_skills_registry() -> dict:
     }
 
 
-@require_csrf
 @router.post("/skills/{skill_id}/enable")
 async def enable_skill(skill_id: str) -> dict:
     """
@@ -552,7 +545,6 @@ async def enable_skill(skill_id: str) -> dict:
     }
 
 
-@require_csrf
 @router.post("/skills/{skill_id}/disable")
 async def disable_skill(skill_id: str) -> dict:
     """

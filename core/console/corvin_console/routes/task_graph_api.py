@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 ADR-0400: Task Graph API Endpoints
 
@@ -286,7 +285,6 @@ async def list_tasks_with_graphs(
     tasks.sort(key=lambda t: t.timestamp, reverse=True)
     return TaskListResponse(tasks=tasks, count=len(tasks))
 
-@require_csrf
 @router.post("/{task_id}/graph/checkpoint", response_model=Dict[str, Any])
 async def create_task_checkpoint(
     task_id: str,
@@ -631,7 +629,6 @@ async def get_graph_snapshot(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@require_csrf
 @router.post("/{task_id}/graph/export")
 async def export_graph(
     task_id: str,

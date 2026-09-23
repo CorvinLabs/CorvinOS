@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 Multi-Instance Learning Routes (ADR-0275/0277)
 
@@ -262,7 +261,6 @@ async def get_merge_conflicts(
         raise HTTPException(status_code=500, detail="merge conflicts unavailable") from e
 
 
-@require_csrf
 @router.post("/sync")
 async def trigger_manual_sync(
     rec: "session_auth.SessionRecord" = Depends(require_csrf),

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Custom Provider Setup — Web-integrated provider creation.
 
 Endpoints:
@@ -193,7 +192,6 @@ def _validated_provider_pin(url: str) -> str | None:
 
 # ── API Connectivity Testing ───────────────────────────────
 
-@require_csrf
 @router.post("/test-api")
 async def test_api_connectivity(
     req: TestApiRequest,
@@ -322,7 +320,6 @@ async def test_api_connectivity(
 
 # ── Form Validation ────────────────────────────────────────
 
-@require_csrf
 @router.post("/validate")
 async def validate_form(
     req: ValidateProviderRequest,
@@ -384,7 +381,6 @@ async def validate_form(
 
 # ── Provider Creation ──────────────────────────────────────
 
-@require_csrf
 @router.post("/create")
 async def create_custom_provider(
     req: CreateProviderRequest,

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Skill Learning Routes — Phase 7 feedback API (ADR-0683).
 
 FastAPI routes for:
@@ -128,7 +127,6 @@ def _get_or_create_learning_loop(skill_id: str, tenant_id: str) -> Any:
 # API Routes
 # ============================================================================
 
-@require_csrf
 @router.post("/{skill_id}/feedback")
 async def submit_skill_feedback(
     skill_id: str,
@@ -297,7 +295,6 @@ async def get_learning_history(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@require_csrf
 @router.post("/{skill_id}/learning/reset")
 async def reset_learning_state(
     skill_id: str,

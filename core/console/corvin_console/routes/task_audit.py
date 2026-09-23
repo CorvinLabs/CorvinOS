@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Task Audit Trail API — Read-only access to task state transitions (ADR-0XXX).
 
 Endpoints:
@@ -102,7 +101,6 @@ async def get_audit_trail_status(
         ) from e
 
 
-@require_csrf
 @router.post("/tasks/{task_id}/audit-trail/verify")
 async def verify_audit_chain(
     task_id: str,

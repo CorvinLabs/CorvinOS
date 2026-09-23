@@ -25,25 +25,19 @@ class Creator20LearningBridge:
     @staticmethod
     def convert_phase_event_to_learning_event(
         phase_event: PhaseCompletedEvent,
-        tenant_id: str,
+        tenant_id: str = "_default",
         skill_version: str = "1.0",
     ) -> LearningEvent:
         """Convert Creator 2.0 PhaseCompletedEvent to ADR-0314 LearningEvent.
 
         Args:
             phase_event: PhaseCompletedEvent from Creator 2.0 phase execution
-            tenant_id: Tenant scope (GDPR Art. 32) — REQUIRED, no default
+            tenant_id: Tenant scope (GDPR Art. 32)
             skill_version: Version of the skill being created
 
         Returns:
             LearningEvent suitable for audit trail and event store
-
-        Raises:
-            ValueError: If tenant_id is empty (fail-closed for GDPR compliance)
         """
-        # Fail-closed: require tenant_id
-        if not tenant_id or not isinstance(tenant_id, str) or tenant_id.strip() == "":
-            raise ValueError("tenant_id is required for GDPR Art. 32 compliance (fail-closed)")
         # Map loss components to signal payload
         signal = {
             "phase_num": phase_event.phase_num,
@@ -77,17 +71,13 @@ class Creator20LearningBridge:
     @staticmethod
     def convert_phase_events_to_learning_events(
         phase_events: List[PhaseCompletedEvent],
-        tenant_id: str,
+        tenant_id: str = "_default",
         skill_version: str = "1.0",
     ) -> List[LearningEvent]:
         """Convert multiple PhaseCompletedEvents to LearningEvents.
 
         Args:
             phase_events: List of PhaseCompletedEvent from full skill generation
-            tenant_id: Tenant scope (GDPR Art. 32) — REQUIRED, no default
-
-        Raises:
-            ValueError: If tenant_id is empty (fail-closed for GDPR compliance)
             tenant_id: Tenant scope
             skill_version: Version of skill being created
 

@@ -11,30 +11,6 @@ interface AuthContextValue {
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
-/** Minimum gap between two silent renewal attempts (loop guard). */
-export const RENEW_COOLDOWN_MS = 30_000;
-
-/**
- * Re-open the session in place, without navigating away.
- *
- * Sessions end after ABSOLUTE_TIMEOUT_S (8 h) or an hour idle. The login page
- * then does exactly one thing: navigate to /v1/console/auth/local-login, which
- * (on loopback, unless CORVIN_LOCAL_AUTOLOGIN=0) mints a new session. Doing the
- * same request with fetch() gets the same cookie WITHOUT tearing down the page,
- * so an open panel keeps its state and simply continues. The server applies the
- * very same gates, so this grants nothing the login page would not.
- * Returns true only when a follow-up whoami proves the session is back.
- */
-export async function renewSessionSilently(): Promise<boolean> {
-  try {
-    await fetch("/v1/console/auth/local-login", { credentials: "include", redirect: "manual" });
-    await whoami();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
   const query = useQuery({
@@ -45,66 +21,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     staleTime: 60_000,
   });
 
-  // A 401 on whoami means the session is gone even though react-query still
-  // holds the last good whoami in `data`. Reading `data` alone kept status
-  // "authenticated" forever after the 8 h expiry (2026-09-23): no renewal, no
-  // redirect, every panel frozen on its last numbers while polls 401-ed.
-  const expired = query.error instanceof ApiError && query.error.status === 401;
-  const [renewing, setRenewing] = React.useState(false);
-  // Only a renewal that was TRIED and refused makes the session anonymous.
-  // Deciding "anonymous" on the first 401 render (before the effect below had
-  // started the renewal) let RequireAuth bounce the tab through the login page
-  // — a full navigation that dropped the operator on /app/chat.
-  const [renewFailed, setRenewFailed] = React.useState(false);
-  const lastRenew = React.useRef(0);
-  React.useEffect(() => {
-    if (!expired) {
-      if (renewFailed) setRenewFailed(false);
-      return;
-    }
-    if (renewing || renewFailed) return;
-    if (Date.now() - lastRenew.current < RENEW_COOLDOWN_MS) {
-      // Expired again right after a renewal: renewing cannot fix it.
-      setRenewFailed(true);
-      return;
-    }
-    lastRenew.current = Date.now();
-    setRenewing(true);
-    void renewSessionSilently().then(async (ok) => {
-      if (ok) {
-        await qc.invalidateQueries({ queryKey: ["auth"] });
-        // Everything that 401-ed meanwhile fetches again with the new session.
-        void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
-      } else {
-        setRenewFailed(true);
-      }
-      setRenewing(false);
-    });
-  }, [expired, renewing, renewFailed, qc]);
-
   const status: AuthContextValue["status"] = query.isLoading
     ? "loading"
-    : expired
-      // Keep the page mounted while the session is being re-opened; only a
-      // refused renewal sends the operator to the login page.
-      ? (renewFailed ? "anonymous" : query.data ? "authenticated" : "loading")
-      : query.data
-        ? "authenticated"
-        : "anonymous";
+    : query.data
+      ? "authenticated"
+      : "anonymous";
 
   // A 401 anywhere (not just this hook's own whoami poll) means the session
   // is gone — react immediately instead of waiting up to 5 minutes for
   // refetchInterval to notice, which used to leave every other open page's
   // query 401-ing independently in the meantime.
   React.useEffect(() => {
-    let last = 0;
-    setOn401Handler((path) => {
-      // whoami's own 401 is already the answer — re-asking loops forever.
-      if (path.startsWith("/auth/")) return;
-      // Many panels 401 at once after an expiry: one re-check is enough.
-      const now = Date.now();
-      if (now - last < 2_000) return;
-      last = now;
+    setOn401Handler(() => {
       void qc.invalidateQueries({ queryKey: ["auth"] });
     });
     // A 403 "invalid CSRF token" from any mutation (most visibly the automatic
@@ -124,9 +52,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Treat 401 as anonymous, surface anything else.
   const session = React.useMemo<WhoamiResponse | null>(() => {
-    if (expired && renewFailed) return null;
-    return query.data ?? null;
-  }, [query.data, expired, renewFailed]);
+    if (query.data) return query.data;
+    if (query.error instanceof ApiError && query.error.status === 401) return null;
+    return null;
+  }, [query.data, query.error]);
 
   const value: AuthContextValue = React.useMemo(
     () => ({

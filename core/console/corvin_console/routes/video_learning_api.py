@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Console API Extensions for Video Producer Learning (Phase 4b).
 
 Endpoints:
@@ -106,7 +105,6 @@ async def get_job_learning_metrics(job_id: str) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@require_csrf
 @router.post("/jobs/{job_id}/feedback")
 async def submit_feedback(job_id: str, feedback: FeedbackSubmissionRequest) -> Dict[str, Any]:
     """Submit operator feedback for a video job.
@@ -227,7 +225,6 @@ async def get_confidence_metrics() -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@require_csrf
 @router.post("/learning/select-model")
 async def select_model(data: Dict[str, int]) -> Dict[str, Any]:
     """Select model for a new video."""
@@ -244,7 +241,6 @@ async def select_model(data: Dict[str, int]) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@require_csrf
 @router.post("/learning/report-quality")
 async def report_video_quality(request: VideoQualityReportRequest) -> Dict[str, Any]:
     """Report video quality and update model selection."""

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """
 Learning-loop Console API (ADR-0549 Stages 1–4, CONCEPT-0029 Phase 2).
 
@@ -256,7 +255,6 @@ async def list_config_versions(
     return [_version_dto(v) for v in adapter.get_version_history()]
 
 
-@require_csrf
 @router.post("/feedback", response_model=FeedbackResponse)
 async def submit_feedback(
     request: UserFeedbackRequest,
@@ -344,7 +342,6 @@ async def submit_feedback(
     )
 
 
-@require_csrf
 @router.post("/config/rollback")
 async def rollback_config(
     skill_id: str = Query("os.delegation_router"),
@@ -445,7 +442,6 @@ async def get_preferences(
     return result
 
 
-@require_csrf
 @router.post("/preferences/confirm")
 async def confirm_preference(
     task_type: str = Query(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$"),

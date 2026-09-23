@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Console routes for Skill Package System (ADR-0268).
 
 Manages installation, listing, and deletion of marketplace-compatible
@@ -352,7 +351,6 @@ def _list_installed_packages(tenant_id: str) -> list[PackageListItem]:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
-@require_csrf
 @router.post("/upload")
 async def upload_package(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature_csrf)],
@@ -545,7 +543,6 @@ async def get_package_details(
         ) from exc
 
 
-@require_csrf
 @router.delete("/{package_id}")
 async def uninstall_package(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature_csrf)],

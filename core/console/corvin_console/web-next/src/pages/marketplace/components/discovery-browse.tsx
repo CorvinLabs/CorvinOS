@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-// @ts-nocheck — WIP phase 1 marketplace component; type bindings pending
-
 /**
  * Discovery Browse Component (Phase 1 Session 1).
  *
@@ -40,15 +37,15 @@ import {
   getCategories,
   getTags,
   searchSkills,
-  SortBy,
+  type SortBy,
 } from "../discovery-api";
 
 const SORT_OPTIONS: { value: SortBy; label: string }[] = [
-  { value: SortBy.RELEVANCE, label: "Relevance" },
-  { value: SortBy.RATING, label: "Rating" },
-  { value: SortBy.DOWNLOADS, label: "Most Downloaded" },
-  { value: SortBy.RECENCY, label: "Recently Updated" },
-  { value: SortBy.NAME, label: "Name (A-Z)" },
+  { value: "relevance", label: "Relevance" },
+  { value: "rating", label: "Rating" },
+  { value: "downloads", label: "Most Downloaded" },
+  { value: "recency", label: "Recently Updated" },
+  { value: "name", label: "Name (A-Z)" },
 ];
 
 const TIER_OPTIONS = [

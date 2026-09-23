@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """API routes for Plugin Manager v2 lifecycle.
 
 Endpoints:
@@ -33,7 +32,6 @@ def create_plugin_manager_router(plugin_manager: Any) -> Any:
 
     router = APIRouter(prefix="/v1/plugins", tags=["plugins"])
 
-    @require_csrf
     @router.post("/install", status_code=202)
     async def install_plugin(
         plugin_id: str = Body(...),
@@ -85,7 +83,6 @@ def create_plugin_manager_router(plugin_manager: Any) -> Any:
             raise HTTPException(status_code=404, detail={"error": "plugin_not_found"})
         return status
 
-    @require_csrf
     @router.put("/{plugin_id}/enable", status_code=200)
     async def enable_plugin(plugin_id: str, version: str = Body(...)) -> dict:
         """Enable a plugin."""
@@ -94,7 +91,6 @@ def create_plugin_manager_router(plugin_manager: Any) -> Any:
         except Exception as e:
             raise HTTPException(status_code=400, detail={"error": "enable_failed", "reason": str(e)})
 
-    @require_csrf
     @router.put("/{plugin_id}/disable", status_code=200)
     async def disable_plugin(plugin_id: str, version: str = Body(...)) -> dict:
         """Disable a plugin."""
@@ -103,7 +99,6 @@ def create_plugin_manager_router(plugin_manager: Any) -> Any:
         except Exception as e:
             raise HTTPException(status_code=400, detail={"error": "disable_failed", "reason": str(e)})
 
-    @require_csrf
     @router.delete("/{plugin_id}", status_code=200)
     async def uninstall_plugin(plugin_id: str, version: str = Body(...), force: bool = Body(False)) -> dict:
         """Uninstall a plugin."""

@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Stream 2: Learning Optimizer Routes (integrate all 18 stories).
 
 Endpoints:
@@ -36,7 +35,6 @@ from core.paths.tenant import tenant_home
 
 from .. import auth as session_auth
 from ..deps import require_session
-from ..models import SessionRecord
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/console/learning", tags=["learning-optimizer"])
@@ -101,7 +99,6 @@ async def get_components(
 # Feedback Collection Routes (Story 1-4)
 # ============================================================================
 
-@require_csrf
 @router.post("/feedback/submit")
 async def submit_feedback_signal(
     req: FeedbackSignalRequest,
@@ -146,7 +143,6 @@ async def get_processor_status(
         raise HTTPException(status_code=500, detail="Failed to get status")
 
 
-@require_csrf
 @router.post("/processor/process")
 async def process_feedback_queue(
     components: Dict = Depends(get_components),
@@ -235,7 +231,6 @@ async def get_optimizer_metrics(
 # A/B Test Routes (Story 11)
 # ============================================================================
 
-@require_csrf
 @router.post("/ab-test/create")
 async def create_ab_test(
     req: ABTestRequest,
@@ -298,7 +293,6 @@ async def get_recent_alerts(
 # Hotfix Routes (Story 18)
 # ============================================================================
 
-@require_csrf
 @router.post("/hotfix/create")
 async def create_hotfix(
     req: HotfixRequest,
@@ -318,17 +312,14 @@ async def create_hotfix(
         raise HTTPException(status_code=500, detail="Failed to create hotfix")
 
 
-@require_csrf
 @router.post("/hotfix/{hotfix_id}/approve")
 async def approve_hotfix(
     hotfix_id: str,
+    approver: str,
     components: Dict = Depends(get_components),
-    session: SessionRecord = Depends(require_session),
 ) -> dict:
     """Approve hotfix (Story 18)."""
     try:
-        # Derive approver from authenticated session (no arbitrary input)
-        approver = session.user_id
         success = components["hotfix"].approve_hotfix(hotfix_id, approver)
         if not success:
             raise HTTPException(status_code=400, detail="Failed to approve")
@@ -341,7 +332,6 @@ async def approve_hotfix(
         raise HTTPException(status_code=500, detail="Failed to approve")
 
 
-@require_csrf
 @router.post("/hotfix/{hotfix_id}/deploy")
 async def deploy_hotfix(
     hotfix_id: str,
