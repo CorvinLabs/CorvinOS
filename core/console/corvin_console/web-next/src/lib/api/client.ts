@@ -76,8 +76,11 @@ interface RequestOptions {
 // page-scattered errors before the user was ever told to sign in again.
 // AuthProvider registers a handler here so a 401 anywhere immediately
 // invalidates the shared session cache instead of waiting on that poll.
-let _on401: (() => void) | null = null;
-export function setOn401Handler(fn: (() => void) | null): void {
+// The handler receives the request path: a 401 from /auth/whoami ITSELF must
+// not trigger another whoami, or the two chase each other — measured
+// 2026-09-23: 2.72 M whoami 401s in under two hours (~30 000/min) from one tab.
+let _on401: ((path: string) => void) | null = null;
+export function setOn401Handler(fn: ((path: string) => void) | null): void {
   _on401 = fn;
 }
 
@@ -191,7 +194,7 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
 
   if (!res.ok) {
     if (res.status === 401) {
-      _on401?.();
+      _on401?.(path);
     } else if (isCsrfError(res.status, payload)) {
       _onCsrfError?.();
     }

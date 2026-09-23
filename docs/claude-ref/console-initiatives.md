@@ -186,6 +186,23 @@ the last good data stays on screen and the indicator reads "Reconnecting…
 showing data from N s ago" — the full error card appears only when there has
 never been data. A 404 (route absent on this build) is not retried.
 
+**Session expiry (fixed, ADR-2037).** Console sessions end after 8 h
+(`ABSOLUTE_TIMEOUT_S`) or 1 h idle. Until 2026-09-23 an open tab never
+noticed: react-query kept the last good whoami, `useAuth()` stayed
+"authenticated", and the global 401 handler re-requested whoami on whoami's
+own 401 — one tab sent 2.72 M 401s in under two hours while every panel froze
+on its last numbers. Now a 401 on whoami means *expired*; `AuthProvider`
+re-opens the session in place (`renewSessionSilently()` → the same
+`/auth/local-login` the login page navigates to, same server-side gates) and
+refetches every query; only a refused renewal sends the tab to the login page.
+The 401 handler ignores `/auth/*` and fires at most once per 2 s; panel
+queries do not retry a 401.
+
+**New builds reach open tabs.** `console_auto_reload` is ON on this install
+(enabled 2026-09-23 through `PUT /settings/features/console_auto_reload`): an
+open tab notices a new entry bundle within seconds and reloads itself (a
+banner instead, while the operator is typing).
+
 **Server stalls (fixed, ADR-2036).** The console process used to stall for
 seconds every heal cycle because the ACO integrity monitor re-parsed the
 187 MB audit chain up to 25x per cycle; it now verifies incrementally (same
@@ -199,7 +216,9 @@ update N s ago") instead of implying the numbers are current. After
 result newer than the click arrives.
 
 Proven by `web-next/tests/e2e/initiatives-live.spec.ts` against the live
-console, one page never reloaded
+console (4 scenarios: live values without reload, open + outages, expired
+session renews itself, open tab moves onto a new build), one page never
+reloaded except where the new build is the point
 (`npx playwright test -c playwright.live.config.ts`); it reverts every change.
 
 ## Tests

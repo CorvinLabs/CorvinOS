@@ -419,7 +419,9 @@ export default function InitiativesPage() {
     staleTime: 0,
     // A single slow/failed poll is retried quickly instead of flashing an error;
     // the last good data stays on screen, labelled with its age.
-    retry: (n, err) => !(err instanceof ApiError && err.status === 404) && n < 2,
+    // 401: the session is gone — AuthProvider renews it and refetches; retrying
+    // here only multiplied the 401s (3 000/h on 2026-09-23). 404: route absent.
+    retry: (n, err) => !(err instanceof ApiError && (err.status === 404 || err.status === 401)) && n < 2,
     retryDelay: 1_000,
   });
   const now = useNow(skew);
@@ -437,7 +439,9 @@ export default function InitiativesPage() {
     refetchOnMount: "always",
     staleTime: 0,
     placeholderData: (prev) => prev, // keep rows while a new filter loads
-    retry: (n, err) => !(err instanceof ApiError && err.status === 404) && n < 2,
+    // 401: the session is gone — AuthProvider renews it and refetches; retrying
+    // here only multiplied the 401s (3 000/h on 2026-09-23). 404: route absent.
+    retry: (n, err) => !(err instanceof ApiError && (err.status === 404 || err.status === 401)) && n < 2,
     retryDelay: 1_000,
   });
   const all = tasksQ.data;
