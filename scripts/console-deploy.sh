@@ -41,10 +41,41 @@ cd "$WEB_NEXT" || { echo "web-next not found: $WEB_NEXT" >&2; exit 1; }
 # service, the PostToolUse hook and a hand-run deploy all call this script,
 # and the hook's `pgrep` guard is itself a race. An exclusive lock makes the
 # second caller wait for the first instead of interleaving with it.
-exec 9>".console-deploy.lock"
-if ! flock -w 300 9; then
-  echo "another console-deploy is holding the lock (>300s) — giving up" >&2
-  exit 1
+#
+# `flock` is a util-linux binary that Git for Windows does NOT ship, and calling
+# it unconditionally fails in the worst possible direction: the command is
+# not-found, `! flock ...` is therefore TRUE, and every single deploy on Windows
+# exits 1 claiming another deploy holds a lock that was never taken. Fall back to
+# an atomic `mkdir`, which is portable to any POSIX-ish shell.
+LOCK_WAIT=300
+if command -v flock >/dev/null 2>&1; then
+  exec 9>".console-deploy.lock"
+  if ! flock -w "$LOCK_WAIT" 9; then
+    echo "another console-deploy is holding the lock (>${LOCK_WAIT}s) — giving up" >&2
+    exit 1
+  fi
+else
+  LOCK_DIR=".console-deploy.lock.d"
+  waited=0
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    # Reap a lock whose owner is gone. Without this, one crashed deploy wedges
+    # every later one for the full timeout — and unlike flock, a mkdir lock is
+    # not released automatically when the holder dies.
+    owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+      echo "clearing a stale deploy lock left by dead pid $owner" >&2
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    if [ "$waited" -ge "$LOCK_WAIT" ]; then
+      echo "another console-deploy is holding the lock (>${LOCK_WAIT}s) — giving up" >&2
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo $$ >"$LOCK_DIR/pid"
+  trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 fi
 
 if [ "$FAST" -eq 0 ]; then
