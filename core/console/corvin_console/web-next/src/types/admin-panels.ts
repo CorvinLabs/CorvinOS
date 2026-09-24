@@ -6,10 +6,18 @@
  * Stream 1: Workflow Optimizer Admin Data
  */
 export interface ConfidenceDataPoint {
-  feedback_count: number;
   confidence_score: number; // 0–1 (P(correct agent))
   timestamp: string;
-  trend: 'up' | 'down' | 'stable';
+  /**
+   * Optional because a point appended from the live WebSocket stream does not
+   * have them: `confidence_updated` carries only new_confidence, version and
+   * timestamp. Marking them required forced the stream handler either to fail
+   * type-checking or to invent a feedback count that was never observed — and
+   * an invented number on an observability panel is worse than an absent one.
+   * Present on points that came from the admin endpoint.
+   */
+  feedback_count?: number;
+  trend?: 'up' | 'down' | 'stable';
 }
 
 export interface RoutingDistribution {

@@ -49,3 +49,15 @@ export * from "./api/agents";
 export * from "./api/browser";
 export * from "./api/plugins";
 export * from "./api/initiatives";
+
+// ./api/engines and ./api/initiatives each export an unrelated `TaskType`: the
+// engines one is a model-routing complexity tier ("SIMPLE" | "MEDIUM" | ...),
+// the initiatives one is a task ORIGIN ("chat" | "acs" | "workflow" | ...).
+// Two `export *` carrying the same name make it ambiguous, which is TS2308 and
+// broke every build of this project. No caller imports TaskType from this
+// barrel — each imports it from the specific module — so expose both under
+// unambiguous aliases and bind the bare name explicitly to resolve the clash.
+// Prefer the aliases in new code; the bare name is kept only for compatibility.
+export type { TaskType as EngineTaskType } from "./api/engines";
+export type { TaskType as InitiativeTaskType } from "./api/initiatives";
+export type { TaskType } from "./api/engines";

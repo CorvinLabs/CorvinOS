@@ -25,6 +25,7 @@ import { useWorkflowOptimizerAdmin } from '@/hooks/useSkillAdminData';
 import { useSkillStream } from '@/hooks/useSkillWebSocket';
 import type { WebSocketEvent } from '@/types/websocket-events';
 import { isConfidenceUpdate, isConfigUpdate, isErrorEvent } from '@/types/websocket-events';
+import type { RoutingDistribution } from '@/types/admin-panels';
 
 const COLORS = ['#f59e0b', '#06b6d4', '#8b5cf6']; // Amber, cyan, purple
 
@@ -210,7 +211,15 @@ export function WorkflowOptimizerAdminPanel() {
                 cx="50%"
                 cy="50%"
                 outerRadius={80}
-                label={({ agent, percentage }) => `${agent}: ${percentage}%`}
+                label={(props) => {
+                  // recharts spreads the data row into the label props but
+                  // cannot type it (recharts#6380), so `agent`/`percentage` are
+                  // not on PieLabelRenderProps. `payload` carries the original
+                  // row; fall back to the spread props if a future version
+                  // stops populating it.
+                  const row = (props.payload ?? props) as Partial<RoutingDistribution>;
+                  return row.agent ? `${row.agent}: ${row.percentage}%` : '';
+                }}
               >
                 {data.routing_distribution.map((_, index) => (
                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />

@@ -23,13 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select } from "@/components/ui/select";
 import { SkillCard } from "./skill-card";
 import { SkillDetailsPanel } from "./skill-details-panel";
 import { SkillCollections } from "./skill-collections";
@@ -37,15 +31,18 @@ import {
   getCategories,
   getTags,
   searchSkills,
-  type SortBy,
+  SortBy,
+  type SearchResponse,
 } from "../discovery-api";
 
+// SortBy is a TS enum, not a string union, so its members are not
+// interchangeable with their own string values.
 const SORT_OPTIONS: { value: SortBy; label: string }[] = [
-  { value: "relevance", label: "Relevance" },
-  { value: "rating", label: "Rating" },
-  { value: "downloads", label: "Most Downloaded" },
-  { value: "recency", label: "Recently Updated" },
-  { value: "name", label: "Name (A-Z)" },
+  { value: SortBy.RELEVANCE, label: "Relevance" },
+  { value: SortBy.RATING, label: "Rating" },
+  { value: SortBy.DOWNLOADS, label: "Most Downloaded" },
+  { value: SortBy.RECENCY, label: "Recently Updated" },
+  { value: SortBy.NAME, label: "Name (A-Z)" },
 ];
 
 const TIER_OPTIONS = [
@@ -59,7 +56,7 @@ export function DiscoveryBrowse() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedTier, setSelectedTier] = useState<string | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [selectedSort, setSelectedSort] = useState<SortBy>("relevance");
+  const [selectedSort, setSelectedSort] = useState<SortBy>(SortBy.RELEVANCE);
   const [minRating, setMinRating] = useState(0);
   const [page, setPage] = useState(1);
 
@@ -101,7 +98,12 @@ export function DiscoveryBrowse() {
         limit: 12,
         offset: (page - 1) * 12,
       }),
-    keepPreviousData: true,
+    // react-query v5 dropped keepPreviousData; this is the idiom used elsewhere
+    // in this console (see pages/initiatives.tsx). The stale v4 option did not
+    // merely fail to hold rows across a filter change - an unknown key makes the
+    // overload resolution fail, which typed the whole query as `unknown` and is
+    // where every downstream `.total` / `.results` error came from.
+    placeholderData: (prev: SearchResponse | undefined) => prev,
   });
 
   // Calculate pagination
@@ -154,7 +156,7 @@ export function DiscoveryBrowse() {
     setSelectedTier(null);
     setSelectedTag(null);
     setMinRating(0);
-    setSelectedSort("relevance");
+    setSelectedSort(SortBy.RELEVANCE);
     setPage(1);
   };
 
@@ -174,67 +176,68 @@ export function DiscoveryBrowse() {
       {/* Filters */}
       <div className="space-y-3">
         <div className="flex items-center gap-2 flex-wrap">
+          {/*
+            components/ui/select.tsx is a native <select> wrapper, not Radix: it
+            takes value/onChange and plain <option> children. The Radix-shaped
+            composition these filters used (Select > SelectTrigger > SelectValue
+            + SelectContent > SelectItem) would have rendered a <select> nested
+            inside a <select> — so this was never only a type error.
+          */}
           {/* Category Filter */}
           <Select
+            className="w-40"
+            aria-label="Category"
             value={selectedCategory || ""}
-            onValueChange={(v) => handleCategoryChange(v || null)}
+            onChange={(e) => handleCategoryChange(e.target.value || null)}
           >
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Category" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">All Categories</SelectItem>
-              {Object.entries(categoriesData?.categories || {}).map(([cat, count]) => (
-                <SelectItem key={cat} value={cat}>
-                  {cat} ({count})
-                </SelectItem>
-              ))}
-            </SelectContent>
+            <option value="">All Categories</option>
+            {Object.entries(categoriesData?.categories || {}).map(([cat, count]) => (
+              <option key={cat} value={cat}>
+                {cat} ({count})
+              </option>
+            ))}
           </Select>
 
           {/* Tier Filter */}
           <Select
+            className="w-40"
+            aria-label="Tier"
             value={selectedTier || ""}
-            onValueChange={(v) => handleTierChange(v || null)}
+            onChange={(e) => handleTierChange(e.target.value || null)}
           >
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Tier" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">All Tiers</SelectItem>
-              {TIER_OPTIONS.map((tier) => (
-                <SelectItem key={tier.value} value={tier.value}>
-                  {tier.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
+            <option value="">All Tiers</option>
+            {TIER_OPTIONS.map((tier) => (
+              <option key={tier.value} value={tier.value}>
+                {tier.label}
+              </option>
+            ))}
           </Select>
 
           {/* Sort */}
-          <Select value={selectedSort} onValueChange={(v) => setSelectedSort(v as SortBy)}>
-            <SelectTrigger className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORT_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
+          <Select
+            className="w-40"
+            aria-label="Sort by"
+            value={selectedSort}
+            onChange={(e) => setSelectedSort(e.target.value as SortBy)}
+          >
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </Select>
 
           {/* Min Rating */}
-          <Select value={String(minRating)} onValueChange={(v) => handleRatingChange(Number(v))}>
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Min Rating" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="0">All Ratings</SelectItem>
-              <SelectItem value="3">3+ stars</SelectItem>
-              <SelectItem value="4">4+ stars</SelectItem>
-              <SelectItem value="4.5">4.5+ stars</SelectItem>
-            </SelectContent>
+          <Select
+            className="w-40"
+            aria-label="Minimum rating"
+            value={String(minRating)}
+            onChange={(e) => handleRatingChange(Number(e.target.value))}
+          >
+            <option value="0">All Ratings</option>
+            <option value="3">3+ stars</option>
+            <option value="4">4+ stars</option>
+            <option value="4.5">4.5+ stars</option>
           </Select>
 
           {/* Clear Filters */}

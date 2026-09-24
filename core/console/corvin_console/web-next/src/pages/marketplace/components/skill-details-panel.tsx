@@ -263,8 +263,14 @@ export function SkillDetailsPanel({
                         <CardTitle className="text-sm">
                           {String(review.author || "Anonymous")}
                         </CardTitle>
+                        {/*
+                          A review is typed Record<string, unknown>, so every
+                          field has to be narrowed before it can be rendered -
+                          same as the author/text fields above. `??` not `||`:
+                          a rating of 0 is a real rating, not a missing one.
+                        */}
                         <CardDescription className="text-xs">
-                          {review.date} · {review.rating} stars
+                          {String(review.date ?? "")} · {String(review.rating ?? "-")} stars
                         </CardDescription>
                       </CardHeader>
                       <CardContent>
