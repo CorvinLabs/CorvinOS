@@ -22,8 +22,10 @@ from core.control_plane.snapshot_manager import SnapshotManager, Snapshot
 from corvin_console.deps import require_session, require_csrf, consent_required
 from corvin_console import auth as session_auth
 from ..error_handling import safe_snapshot_error, safe_error_response
+from ..deps import require_session_csrf_on_mutation
 
 router = APIRouter(
+    dependencies=[Depends(require_session_csrf_on_mutation)],
     prefix="/v1/console/control-plane/snapshots",
     tags=["control-plane-snapshots"]
 )

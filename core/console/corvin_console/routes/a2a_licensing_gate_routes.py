@@ -32,10 +32,12 @@ from core.licensing.authority_server import (
     AuthorityServer,
     IssuanceResult,
 )
+from fastapi import Depends
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/licensing", tags=["licensing"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/licensing", tags=["licensing"])
 
 # Global service instances
 _verifier: Optional[A2ADelegationVerifier] = None

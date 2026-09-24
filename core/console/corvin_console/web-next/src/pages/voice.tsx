@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  Download,
   Eraser,
   FileText,
   KeyRound,
@@ -25,11 +26,13 @@ import {
   getProfile,
   getVoiceStatus,
   previewProfile,
+  provisionVoice,
   putProfile,
   resetProfile,
   testVoice,
   type AudienceFields,
   type IdentityFields,
+  type OfflineVoiceStatus,
   type VoiceProviderStatus,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -170,6 +173,8 @@ export function VoicePage() {
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
       await qc.invalidateQueries({ queryKey: ["profile"] });
+      // A saved language change starts an offline-voice download server-side.
+      await qc.invalidateQueries({ queryKey: ["voice-status"] });
     },
     onError: (e: Error) => {
       setErrorKind("save");
@@ -186,6 +191,8 @@ export function VoicePage() {
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
       await qc.invalidateQueries({ queryKey: ["profile"] });
+      // A saved language change starts an offline-voice download server-side.
+      await qc.invalidateQueries({ queryKey: ["voice-status"] });
     },
     onError: (e: Error) => {
       setErrorKind("reset");
@@ -808,11 +815,15 @@ const TTS_LABELS: Record<string, string> = {
   piper: "Piper (offline)",
 };
 
+const OFFLINE_BUSY = new Set(["queued", "downloading"]);
+
 export function VoiceStatusPanel() {
   const statusQ = useQuery({
     queryKey: ["voice-status"],
     queryFn: ({ signal }) => getVoiceStatus(signal),
-    refetchInterval: 30_000,
+    // Poll fast only while an offline voice is downloading.
+    refetchInterval: (q) =>
+      OFFLINE_BUSY.has(q.state.data?.offline_voice?.state ?? "") ? 2_000 : 30_000,
   });
 
   return (
@@ -845,6 +856,12 @@ export function VoiceStatusPanel() {
         )}
         {statusQ.data && (
           <>
+            {statusQ.data.offline_voice && (
+              <OfflineVoiceRow
+                status={statusQ.data.offline_voice}
+                onChanged={() => void statusQ.refetch()}
+              />
+            )}
             <ProviderStatusGroup title="Speech-to-text" labels={STT_LABELS} rows={statusQ.data.stt} />
             <ProviderStatusGroup title="Text-to-speech" labels={TTS_LABELS} rows={statusQ.data.tts} />
           </>
@@ -891,12 +908,10 @@ function ProviderStatusRow({
   label: string;
   status: VoiceProviderStatus;
 }) {
-  // The one obvious next action per ADR-0185 M4: "Add key" when a key is
-  // missing, a concrete CLI hint when a model file hasn't been downloaded
-  // yet (model downloads are handled by `corvin-install`, not a live
-  // console action — no backend endpoint exists to trigger one on demand).
+  // The one obvious next action: "Add key" when a key is missing. Missing
+  // local models need no action — the offline voice is fetched by the server
+  // (OfflineVoiceRow above shows it), the STT model on first use.
   const needsKey = status.key_configured === false;
-  const needsModel = !status.ready && status.package_installed && status.model_present === false;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
@@ -922,12 +937,74 @@ function ProviderStatusRow({
             </Link>
           </Button>
         )}
-        {needsModel && (
-          <span className="text-[10px] text-muted-foreground font-mono shrink-0">
-            run corvin-install
-          </span>
-        )}
       </div>
+    </div>
+  );
+}
+
+function offlineVoiceText(s: OfflineVoiceStatus): string {
+  const lang = s.lang || "your language";
+  switch (s.state) {
+    case "ready":
+      return `Offline voice for ${lang} is installed — speech works without internet.`;
+    case "queued":
+    case "downloading": {
+      const pct = s.done && s.total ? ` ${Math.floor((s.done * 100) / s.total)}%` : "";
+      return `Downloading the offline voice for ${lang}…${pct}`;
+    }
+    case "online_only":
+      return `There is no offline voice for ${lang}. The online voices speak it; without internet, replies stay text-only.`;
+    case "failed":
+      return `The offline voice for ${lang} could not be downloaded. Online voices still work.`;
+    case "engine_missing":
+      return "The offline speech engine is being reinstalled.";
+    case "missing":
+      return `The offline voice for ${lang} is not installed yet — it is fetched automatically.`;
+    default:
+      return "Offline voice status is not available on this build.";
+  }
+}
+
+function OfflineVoiceRow({
+  status,
+  onChanged,
+}: {
+  status: OfflineVoiceStatus;
+  onChanged: () => void;
+}) {
+  const { session } = useAuth();
+  const busy = OFFLINE_BUSY.has(status.state);
+  const retry = useMutation({
+    mutationFn: () => provisionVoice(status.lang || null, session!.csrf_token),
+    onSettled: onChanged,
+  });
+  const canRetry =
+    (status.state === "failed" || status.state === "missing") && !!session?.csrf_token;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+      <div className="flex items-center gap-2 min-w-0">
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+        ) : status.state === "ready" ? (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        ) : (
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+        )}
+        <span className="text-sm font-medium shrink-0">Offline voice</span>
+        <span className="text-xs text-muted-foreground">{offlineVoiceText(status)}</span>
+      </div>
+      {canRetry && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 shrink-0 gap-1 text-xs"
+          disabled={retry.isPending}
+          onClick={() => retry.mutate()}
+        >
+          <Download className="h-3 w-3" />
+          {status.state === "failed" ? "Retry download" : "Download now"}
+        </Button>
+      )}
     </div>
   );
 }

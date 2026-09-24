@@ -274,46 +274,69 @@ class TestPkgInstall:
         m_run.assert_not_called()
         assert "foo" in capsys.readouterr().out
 
-    def test_apt_runs_update_before_install(self):
-        info = PlatformInfo(pkg_mgr=PkgMgr.APT)
+    @staticmethod
+    def _install(info, *pkgs, euid=1000, sudo_cached=True, tty=False):
+        """Run pkg_install unattended; return the package-manager commands only.
+
+        The ``sudo -n true`` credential probe is answered from
+        ``sudo_cached`` and left out of the returned list.
+        """
         calls = []
 
         def _fake_run(cmd, **kwargs):
+            if cmd == ["sudo", "-n", "true"]:
+                return _run_result(0 if sudo_cached else 1)
             calls.append(cmd)
             return _run_result(0)
 
-        with mock.patch("subprocess.run", side_effect=_fake_run):
-            result = _platform.pkg_install(info, "curl", "git")
+        with mock.patch("subprocess.run", side_effect=_fake_run), \
+             mock.patch.object(_platform, "_cmd_exists", return_value=True), \
+             mock.patch.object(_platform.os, "geteuid", return_value=euid, create=True), \
+             mock.patch.object(_platform.sys.stdin, "isatty", return_value=tty):
+            result = _platform.pkg_install(info, *pkgs)
+        return result, calls
 
+    def test_apt_runs_update_before_install(self):
+        result, calls = self._install(PlatformInfo(pkg_mgr=PkgMgr.APT), "curl", "git")
         assert result is True
-        assert calls[0] == ["sudo", "apt", "update", "-qq"]
-        assert calls[1] == ["sudo", "apt", "install", "-y", "curl", "git"]
+        assert calls[0] == ["sudo", "-n", "apt-get", "update", "-qq"]
+        assert calls[1] == ["sudo", "-n", "apt-get", "install", "-y", "-q", "curl", "git"]
+
+    def test_apt_is_noninteractive(self):
+        seen_env = {}
+
+        def _fake_run(cmd, **kwargs):
+            if "apt-get" in cmd:
+                seen_env.update(kwargs.get("env") or {})
+            return _run_result(0)
+
+        with mock.patch("subprocess.run", side_effect=_fake_run), \
+             mock.patch.object(_platform, "_cmd_exists", return_value=True), \
+             mock.patch.object(_platform.os, "geteuid", return_value=1000, create=True):
+            _platform.pkg_install(PlatformInfo(pkg_mgr=PkgMgr.APT), "curl")
+        assert seen_env.get("DEBIAN_FRONTEND") == "noninteractive"
+
+    def test_root_needs_no_sudo(self):
+        _, calls = self._install(PlatformInfo(pkg_mgr=PkgMgr.APT), "curl", euid=0)
+        assert calls == [["apt-get", "update", "-qq"], ["apt-get", "install", "-y", "-q", "curl"]]
+
+    @pytest.mark.parametrize("tty", [False, True])
+    def test_password_needed_never_prompts(self, capsys, tty):
+        """Unattended install: no sudo password prompt, TTY or not."""
+        result, calls = self._install(
+            PlatformInfo(pkg_mgr=PkgMgr.APT), "curl", sudo_cached=False, tty=tty)
+        assert result is False
+        assert calls == []
+        out = capsys.readouterr().out
+        assert "sudo apt-get install -y curl" in out
 
     def test_dnf_does_not_run_update_first(self):
-        info = PlatformInfo(pkg_mgr=PkgMgr.DNF)
-        calls = []
-
-        def _fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _run_result(0)
-
-        with mock.patch("subprocess.run", side_effect=_fake_run):
-            _platform.pkg_install(info, "curl")
-
-        assert calls == [["sudo", "dnf", "install", "-y", "curl"]]
+        _, calls = self._install(PlatformInfo(pkg_mgr=PkgMgr.DNF), "curl")
+        assert calls == [["sudo", "-n", "dnf", "install", "-y", "curl"]]
 
     def test_pacman_uses_noconfirm_flag(self):
-        info = PlatformInfo(pkg_mgr=PkgMgr.PACMAN)
-        calls = []
-
-        def _fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _run_result(0)
-
-        with mock.patch("subprocess.run", side_effect=_fake_run):
-            _platform.pkg_install(info, "curl")
-
-        assert calls == [["sudo", "pacman", "-S", "--noconfirm", "curl"]]
+        _, calls = self._install(PlatformInfo(pkg_mgr=PkgMgr.PACMAN), "curl")
+        assert calls == [["sudo", "-n", "pacman", "-S", "--noconfirm", "--needed", "curl"]]
 
     def test_nonzero_returncode_propagates_as_failure(self):
         info = PlatformInfo(pkg_mgr=PkgMgr.APT)

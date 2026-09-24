@@ -1,6 +1,7 @@
 """Dependency installation: Claude Code, Node.js, system tools, Python packages."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -347,7 +348,7 @@ _LINUX_TOOLS: list[tuple[str, str]] = [
     ("pandoc",       "pandoc"),
     ("paplay",       "pulseaudio-utils"),
     ("curl",         "curl"),
-    ("gnupg",        "gnupg"),
+    ("gpg",          "gnupg"),
 ]
 
 _LINUX_TOOLS_DNF: dict[str, str] = {
@@ -363,6 +364,32 @@ _MACOS_TOOLS: list[tuple[str, str]] = [
 ]
 
 
+def _link_bundled_ffmpeg() -> None:
+    """Expose the bundled imageio-ffmpeg binary as ``ffmpeg`` on the user PATH.
+
+    The wheel ships a static ffmpeg, so no package manager (and no sudo) is
+    needed for it. Only links when no ffmpeg is on PATH; never overwrites.
+    """
+    if shutil.which("ffmpeg"):
+        return
+    try:
+        import imageio_ffmpeg
+        exe = Path(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        return
+    bin_dir = Path.home() / ".local" / "bin"
+    target = bin_dir / "ffmpeg"
+    if target.exists() or target.is_symlink():
+        return
+    try:
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(exe)
+        os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        print(f"✓ ffmpeg: using the bundled binary ({target} → {exe.name})")
+    except OSError:
+        pass
+
+
 def ensure_system_tools(info: PlatformInfo, interactive: bool = True) -> None:
     """Check and install required system tools."""
     if info.os_kind == OS.WINDOWS:
@@ -372,6 +399,8 @@ def ensure_system_tools(info: PlatformInfo, interactive: bool = True) -> None:
             "install jq manually only if you need it for shell scripts."
         )
         return
+
+    _link_bundled_ffmpeg()
 
     pairs = _LINUX_TOOLS if info.os_kind in (OS.LINUX, OS.WSL) else _MACOS_TOOLS
     missing_pkgs: list[str] = []

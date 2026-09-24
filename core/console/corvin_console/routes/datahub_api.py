@@ -29,8 +29,9 @@ from datahub_unified.models import (
 )
 from datahub_unified.datahub import DataHubSkill
 from datahub_unified.creator import UnifiedCreator
+from ..deps import require_session_csrf_on_mutation
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 
 
 # ============================================================================

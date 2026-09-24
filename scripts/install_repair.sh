@@ -26,7 +26,9 @@ DIAGNOSE_MODE=0
 REPAIR_MODE=0
 FORCE_MODE=0
 
-# Paths (relative to repo root)
+# Paths are relative to the repo root — resolve it from this script's location
+# so the checks work no matter which directory install.sh was started from.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRIDGES_DIR="corvin_operator/bridges/shared"
 VOICE_DIR="corvin_operator/voice"
 OPERATOR_LEGACY_DIR="operator"  # If this exists, rename failed/incomplete
@@ -112,8 +114,8 @@ diagnose_file_structure() {
 
   # Critical files check
   local critical_files=(
-    "$BRIDGES_DIR/audio_stream.py"
-    "$BRIDGES_DIR/consent_dispatcher.py"
+    "$BRIDGES_DIR/adapter.py"
+    "$BRIDGES_DIR/consent.py"
     "$BRIDGES_DIR/js/auth.js"
     "$BRIDGES_DIR/js/bridge_paths.js"
   )
@@ -121,7 +123,7 @@ diagnose_file_structure() {
   for file in "${critical_files[@]}"; do
     if [ ! -f "$file" ]; then
       log_error "  Missing critical file: $file"
-      ((bridges_missing++))
+      bridges_missing=$((bridges_missing + 1))
     fi
   done
 
@@ -146,7 +148,7 @@ diagnose_permissions() {
       while IFS= read -r file; do
         if [ ! -r "$file" ]; then
           log_warn "  Unreadable file: $file"
-          ((perm_issue++))
+          perm_issue=$((perm_issue + 1))
         fi
       done < <(find "$BRIDGES_DIR" -maxdepth 1 -name "*.py" 2>/dev/null)
     fi
@@ -164,14 +166,17 @@ diagnose_permissions() {
 diagnose_python_import() {
   log_info "Testing Python imports…"
 
-  # Try to import key modules
-  python3 -c "from corvin_operator.bridges.shared import audio_stream" 2>/dev/null && \
-    log_debug "  ✓ corvin_operator.bridges.shared" || \
-    { log_error "Failed to import corvin_operator.bridges.shared"; return 1; }
-
-  python3 -c "from corvin_operator.voice import scripts" 2>/dev/null && \
-    log_debug "  ✓ corvin_operator.voice" || \
-    { log_error "Failed to import corvin_operator.voice"; return 1; }
+  # Byte-compile the load-bearing bridge modules. A plain `import` from the
+  # system python3 cannot work here: the bridge modules resolve their siblings
+  # through the sys.path the adapter sets up, and the system interpreter lacks
+  # the tool venv's dependencies — so an import probe fails on every healthy
+  # checkout. Compiling proves the files are intact Python, which is what a
+  # half-applied rename or a truncated checkout would break.
+  local f
+  for f in "$BRIDGES_DIR/adapter.py" "$BRIDGES_DIR/consent.py"; do
+    python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' "$f" 2>/dev/null \
+      || { log_error "Failed to compile $f"; return 1; }
+  done
 
   log_info "Python imports: OK"
   return 0

@@ -12,6 +12,9 @@ import "./index.css";
 // Initialize console API routing (adds /console prefix to /api/* requests)
 import "./lib/api-utils";
 import { startTaskCleanupSchedule } from "./lib/task-lifecycle";
+import { installCsrfFetch } from "./lib/csrf-fetch";
+
+installCsrfFetch();
 import { ApiError } from "./lib/api";
 import {
   installPreloadErrorRecovery,

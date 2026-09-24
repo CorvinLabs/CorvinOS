@@ -91,7 +91,12 @@ def _sandbox(tenant_id: str = "_default"):
             client = TestClient(app)
             client.cookies.set("corvin_console_sid", rec.sid)
 
-            yield {"client": client, "rec": rec}
+            # /voice/status self-heals a missing offline voice by starting a
+            # real download — never from a unit test. Default: already there.
+            from corvin_console import voice_provision
+            with mock.patch.object(voice_provision, "self_heal",
+                                   return_value=dict(_OFFLINE_READY)) as heal:
+                yield {"client": client, "rec": rec, "self_heal": heal}
         finally:
             for k, v in prev.items():
                 if v is None:
@@ -111,6 +116,8 @@ _ALL_READY_STT = {
         "key_configured": True, "detail": "ready",
     },
 }
+_OFFLINE_READY = {"lang": "de", "state": "ready", "model": "de_DE-kerstin-low.onnx"}
+
 _ALL_READY_TTS = {
     "openai": {
         "ready": True, "package_installed": True, "model_present": None,
@@ -139,6 +146,45 @@ class VoiceStatusRouteTests(unittest.TestCase):
             self.assertTrue(body["stt"]["openai"]["ready"])
             self.assertTrue(body["tts"]["piper"]["ready"])
             self.assertTrue(body["tts"]["edge"]["ready"])
+
+    def test_piper_row_follows_the_display_language(self):
+        """A model for SOME language on disk is not "ready" for the language
+        the operator chose: the row reflects the offline voice actually in use."""
+        cases = [
+            ({"lang": "sv", "state": "downloading", "done": 50, "total": 100}, "downloading the sv voice 50%"),
+            ({"lang": "ja", "state": "online_only"}, "no offline voice exists for ja"),
+            ({"lang": "fr", "state": "failed", "error": "x"}, "fr voice download failed"),
+        ]
+        for offline, detail in cases:
+            with self.subTest(state=offline["state"]), _sandbox() as ctx:
+                ctx["self_heal"].return_value = offline
+                with mock.patch("stt.provider_status", return_value=_ALL_READY_STT), \
+                     mock.patch("say.provider_status", return_value=_ALL_READY_TTS):
+                    r = ctx["client"].get("/v1/console/voice/status")
+                self.assertEqual(r.status_code, 200, r.text)
+                body = r.json()
+                self.assertFalse(body["tts"]["piper"]["ready"])
+                self.assertIn(detail, body["tts"]["piper"]["detail"])
+                self.assertEqual(body["offline_voice"]["state"], offline["state"])
+                self.assertEqual(body["offline_voice"]["lang"], offline["lang"])
+                # the network tiers are untouched by the offline-voice state
+                self.assertTrue(body["tts"]["edge"]["ready"])
+
+    def test_provision_endpoint_requires_csrf_and_starts_a_download(self):
+        with _sandbox() as ctx:
+            from corvin_console import auth as console_session_auth
+            from corvin_console import voice_provision
+            r = ctx["client"].post("/v1/console/voice/provision", json={"lang": "sv"})
+            self.assertEqual(r.status_code, 403, r.text)
+            csrf = console_session_auth.derive_csrf_token(ctx["rec"].csrf_secret, ctx["rec"].sid)
+            with mock.patch.object(voice_provision, "provision",
+                                   return_value={"lang": "sv", "state": "queued"}) as prov:
+                r = ctx["client"].post("/v1/console/voice/provision", json={"lang": "sv"},
+                                       headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["state"], "queued")
+            self.assertEqual(prov.call_args.kwargs["trigger"], "manual")
+            self.assertEqual(prov.call_args.args[0], "sv")
 
     def test_package_missing_state(self):
         fake_stt = {

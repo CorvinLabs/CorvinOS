@@ -12,27 +12,37 @@ from pathlib import Path
 from .dependencies import pip_install as _pip_install
 
 
-# Supported languages and their HuggingFace model paths (relative to v1.0.0 root)
-# Default to FEMALE voices (project default — the user can change the voice any
-# time). edge-tts (the keyless cloud fallback) is already all-female; these Piper
-# picks keep the LOCAL default female too. Male defaults (Thorsten/Riccardo/
-# Darkman) were swapped for verified female voices (Kerstin/Paola/Gosia).
+# Languages → Piper voices: the table lives in corvinOS.shared.voice_models
+# (SSOT shared with the console's runtime provisioning and say.py/adapter.py).
+# Only the menu labels are installer-specific. Female voices by default.
+from corvinOS.shared import voice_models as _vm  # noqa: E402
+
+_LABELS: dict[str, str] = {
+    "de": "Deutsch     — Kerstin (female)",
+    "en": "English     — Lessac (female)",
+    "es": "Español     — Sharvard medium",
+    "fr": "Français    — SIWIS (female)",
+    "it": "Italiano    — Paola (female)",
+    "nl": "Nederlands  — MLS medium",
+    "pl": "Polski      — Gosia (female)",
+    "pt": "Português   — Faber medium (BR)",
+    "ru": "Русский     — Irina medium",
+    "tr": "Türkçe      — DFKI medium",
+    "uk": "Українська  — Lada x_low",
+    "zh": "中文         — Huayan x_low",
+    "sv": "Svenska     — NST medium",
+    "da": "Dansk       — Talesyntese medium",
+    "no": "Norsk       — Talesyntese medium",
+    "cs": "Čeština     — Jirka medium",
+    "fi": "Suomi       — Harri medium",
+    "el": "Ελληνικά    — Rapunzelina low",
+    "ar": "العربية     — Kareem medium",
+}
 _MODELS: dict[str, tuple[str, str]] = {
-    "de": ("Deutsch     — Kerstin (female)",   "de/de_DE/kerstin/low/de_DE-kerstin-low"),
-    "en": ("English     — Lessac (female)",    "en/en_US/lessac/medium/en_US-lessac-medium"),
-    "es": ("Español     — Sharvard medium",    "es/es_ES/sharvard/medium/es_ES-sharvard-medium"),
-    "fr": ("Français    — SIWIS (female)",     "fr/fr_FR/siwis/medium/fr_FR-siwis-medium"),
-    "it": ("Italiano    — Paola (female)",     "it/it_IT/paola/medium/it_IT-paola-medium"),
-    "nl": ("Nederlands  — MLS medium",         "nl/nl_NL/mls/medium/nl_NL-mls-medium"),
-    "pl": ("Polski      — Gosia (female)",     "pl/pl_PL/gosia/medium/pl_PL-gosia-medium"),
-    "pt": ("Português   — Faber medium (BR)",  "pt/pt_BR/faber/medium/pt_BR-faber-medium"),
-    "ru": ("Русский     — Irina medium",       "ru/ru_RU/irina/medium/ru_RU-irina-medium"),
-    "tr": ("Türkçe      — DFKI medium",        "tr/tr_TR/dfki/medium/tr_TR-dfki-medium"),
-    "uk": ("Українська  — Lada x_low",         "uk/uk_UA/lada/x_low/uk_UA-lada-x_low"),
-    "zh": ("中文         — Huayan x_low",       "zh/zh_CN/huayan/x_low/zh_CN-huayan-x_low"),
+    lang: (_LABELS.get(lang, lang), rel) for lang, rel in _vm.PIPER_VOICES.items()
 }
 
-_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
+_HF_BASE = _vm.HF_BASE
 
 
 def ensure_edge_tts() -> None:
@@ -217,6 +227,10 @@ def _setup_model(voice_config_dir: Path, interactive: bool) -> None:
         label, rel_path = _MODELS[sys_lang]
         print(f"  Non-interactive: downloading {label.strip()} model...")
         _download_model(sys_lang, rel_path, model_dir, config_file)
+        # English too: it is the language every fallback path speaks, so an
+        # offline install keeps a voice even for text the detector calls "en".
+        if sys_lang != "en":
+            _download_model("en", _MODELS["en"][1], model_dir, config_file)
         return
 
     # Build ordered menu: detected language first, rest alphabetically
@@ -326,9 +340,15 @@ def _download_model(lang: str, rel_path: str, model_dir: Path, config_file: Path
     onnx_path = model_dir / f"{name}.onnx"
     json_path = model_dir / f"{name}.onnx.json"
 
-    if onnx_path.exists() and onnx_path.stat().st_size > 0:
+    if onnx_path.exists() and onnx_path.stat().st_size >= _vm._MIN_MODEL_BYTES:
         print(f"  ✓ Model already present: {onnx_path.name}")
     else:
+        # Absent, or truncated by an interrupted earlier download (it used to
+        # count as "present" forever as long as it was non-empty).
+        try:
+            onnx_path.unlink()
+        except OSError:
+            pass
         print(f"  Downloading {onnx_path.name} (this may take a minute)...")
         # ROBUST (2026-07-28): On Windows, CDN connections reset for large files
         # (WinError 10054) even after successful transfer. Retry ONNX up to 3x.
@@ -375,101 +395,31 @@ def _download_model(lang: str, rel_path: str, model_dir: Path, config_file: Path
 
 
 def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
-    """Download url → dest. Returns True on success.
+    """Download url → dest. True only for a COMPLETE file.
 
-    Priority: httpx (best TLS, base dep) → curl → wget → urllib.
-    Every tool falls through to the next on failure — not just on absence —
-    so a Windows curl/urllib TLS or socket error never blocks the chain.
+    Delegates to ``voice_models.fetch``: httpx → curl → urllib, each into a
+    private ``.part`` file that must match Content-Length and is only then
+    renamed into place. The previous in-place writes left a truncated model
+    behind whenever a transfer broke (e.g. WinError 10054 mid-stream), and the
+    urllib branch even accepted any non-empty file as success.
     """
+    state = {"last": -1}
 
-    def _cleanup() -> None:
-        try:
-            if dest.exists() and dest.stat().st_size == 0:
-                dest.unlink()
-        except OSError:
-            pass
-
-    # 1. httpx — cross-platform, own TLS stack (no Windows Schannel issues),
-    #    already a base dependency. Handles streaming + progress natively.
-    try:
-        import httpx as _httpx
-        if not silent:
-            print("  ", end="", flush=True)
-        with _httpx.stream("GET", url, follow_redirects=True, timeout=120) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            done = 0
-            with open(dest, "wb") as fh:
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    fh.write(chunk)
-                    done += len(chunk)
-                    if not silent and total > 0:
-                        pct = done * 100 // total
-                        print(f"\r  {pct:3d}%  {done // 1024 // 1024} MB / {total // 1024 // 1024} MB",
-                              end="", flush=True)
-        if not silent:
-            print()
-        if dest.exists() and dest.stat().st_size > 0:
-            return True
-        _cleanup()
-    except Exception:
-        _cleanup()
-        # fall through to curl
-
-    # 2. curl — available on Windows 10+ and most Linux/macOS. Use POSIX path
-    #    on Windows to avoid backslash escape issues with curl's -o flag.
-    if shutil.which("curl"):
-        dest_str = dest.as_posix() if sys.platform == "win32" else str(dest)
-        # -f/--fail is load-bearing: without it, curl writes the HTTP error
-        # body (e.g. HuggingFace's non-empty "Entry not found" 404 page) to
-        # dest_str and still exits 0 — the size>0 check below would then
-        # treat that error page as a successfully downloaded model forever
-        # (verified: HF's 404 body is non-empty, so it isn't even caught by
-        # a naive "empty file" check). --fail makes curl exit non-zero on
-        # HTTP 4xx/5xx instead, matching wget's default behavior below.
-        flags = ["-L", "-f", "--silent" if silent else "--progress-bar", "-o", dest_str]
-        r = subprocess.run(["curl"] + flags + [url], check=False)
-        if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
-            return True
-        _cleanup()
-
-    # 3. wget — common on Linux.
-    if shutil.which("wget"):
-        flags = ["-q" if silent else "--show-progress", "-O", str(dest)]
-        r = subprocess.run(["wget"] + flags + [url], check=False)
-        if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
-            return True
-        _cleanup()
-
-    # 4. urllib — stdlib, always available. May raise WinError 10054 after a
-    #    complete transfer on Windows; treat any non-empty file as success.
-    try:
-        import urllib.request
-        if not silent:
-            print("  (retrying with urllib ...)")
-
-        def _report(block: int, block_size: int, total: int) -> None:
-            if silent or total <= 0:
-                return
-            done = min(block * block_size, total)
-            pct = done * 100 // total
+    def _progress(done: int, total: int) -> None:
+        if silent or total <= 0:
+            return
+        pct = done * 100 // total
+        if pct != state["last"]:
+            state["last"] = pct
             print(f"\r  {pct:3d}%  {done // 1024 // 1024} MB / {total // 1024 // 1024} MB",
                   end="", flush=True)
 
-        urllib.request.urlretrieve(url, str(dest), reporthook=_report)
-        if not silent:
-            print()
-        return dest.exists() and dest.stat().st_size > 0
-    except Exception as e:
-        if not silent:
-            print()
-            # Log the error for debugging (especially WinError 10054 on Windows)
-            if sys.platform == "win32":
-                print(f"  (urllib error: {type(e).__name__} — common on Windows, retrying next fetch)")
-        # WinError 10054: connection reset AFTER full transfer — file is valid.
-        if dest.exists() and dest.stat().st_size > 0:
-            return True
-        return False
+    ok = _vm.fetch(url, dest, attempts=1, progress=_progress)
+    if not silent and state["last"] >= 0:
+        print()
+    if not ok and not silent and sys.platform == "win32":
+        print("  (urllib error: download interrupted — common on Windows, retrying next fetch)")
+    return ok
 
 
 def _save_model_config(config_file: Path, lang: str, onnx_path: str) -> None:
@@ -480,7 +430,11 @@ def _save_model_config(config_file: Path, lang: str, onnx_path: str) -> None:
 
     cfg[f"piper_model_{lang}"] = str(onnx_path)
     cfg.setdefault("lang_default", lang)
-    config_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding='utf-8')
+    # tmp + replace: config.json is read on every TTS call; a torn write
+    # (Ctrl-C, AV lock, full disk) would disable every language at once.
+    tmp = config_file.with_name(f"{config_file.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding='utf-8')
+    os.replace(tmp, config_file)
     print(f"  ✓ Saved piper_model_{lang} in config.json")
 
     _seed_profile_display_language(lang)

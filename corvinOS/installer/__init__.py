@@ -22,7 +22,21 @@ def main_install():
 
 
 def main_uninstall():
-    """Entry point for 'corvin-uninstall' command."""
+    """Entry point for 'corvin-uninstall' command.
+
+    On Linux/macOS a source install hands over to ``uninstall.sh`` next to the
+    package: it is self-contained, backs up first, and can delete the very
+    tool venv this interpreter runs from (exec replaces this process).
+    Wheel installs and Windows use the Python implementation below.
+    """
+    import os
+    import shutil
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "uninstall.sh"
+    if sys.platform != "win32" and script.is_file() and shutil.which("bash"):
+        args = ["--yes" if a in ("--purge", "--force", "-y") else a for a in sys.argv[1:]]
+        os.execvp("bash", ["bash", str(script), *args])
     sys.argv = [sys.argv[0], "uninstall"] + sys.argv[1:]
     from corvinOS.installer.__main__ import main
     main()

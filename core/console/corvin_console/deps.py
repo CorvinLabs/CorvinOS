@@ -15,7 +15,7 @@ from __future__ import annotations
 import hmac
 from typing import Annotated
 
-from fastapi import Cookie, Header, HTTPException, status
+from fastapi import Cookie, Header, HTTPException, Request, status
 
 from . import auth as session_auth
 from core.compliance.consent import consent_required
@@ -56,6 +56,25 @@ def require_csrf(
             detail="invalid CSRF token",
         )
     return rec
+
+
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def require_session_csrf_on_mutation(
+    request: Request,
+    corvin_console_sid: Annotated[str | None, Cookie()] = None,
+    x_csrf_token: Annotated[str | None, Header(alias="x-csrf-token")] = None,
+) -> session_auth.SessionRecord:
+    """Router-level guard: a live session on EVERY route, plus the CSRF token
+    on every mutating method. Attach with
+    ``APIRouter(..., dependencies=[Depends(require_session_csrf_on_mutation)])``
+    so a route added to the module later cannot ship unauthenticated — the
+    failure mode of the ~80 routes this guard was introduced for (2026-09-24,
+    tests/test_route_auth_guard.py)."""
+    if request.method.upper() in _MUTATING_METHODS:
+        return require_csrf(corvin_console_sid=corvin_console_sid, x_csrf_token=x_csrf_token)
+    return require_session(corvin_console_sid=corvin_console_sid)
 
 
 def verify_reauth(rec: session_auth.SessionRecord, presented_token: str | None) -> bool:

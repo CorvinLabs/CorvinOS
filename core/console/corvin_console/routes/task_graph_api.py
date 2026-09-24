@@ -18,6 +18,7 @@ from pathlib import Path
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
 from .. import _bootstrap
+from ..deps import require_session_csrf_on_mutation
 
 _forge_paths = _bootstrap.forge_paths
 
@@ -140,7 +141,7 @@ class GraphExportResponse(BaseModel):
 
 # ===== Router Setup =====
 
-router = APIRouter(prefix="/api/tasks", tags=["task-graph"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/api/tasks", tags=["task-graph"])
 
 
 # ===== Utilities =====

@@ -10,6 +10,8 @@ import os
 import logging
 import importlib.util
 from pathlib import Path
+from fastapi import Depends
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ for rel_path, location_type in plugin_locations:
         except Exception as e:
             logger.debug(f"✗ Import failed from {location_type}: {e}")
 
-router = APIRouter(prefix="/video", tags=["video-producer"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/video", tags=["video-producer"])
 
 
 class CreateJobRequest(BaseModel):

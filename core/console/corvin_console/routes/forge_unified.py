@@ -25,6 +25,7 @@ from core.console.corvin_console.deps import require_session
 from core.console.corvin_console import audit as console_audit
 from core.console.corvin_console.routes.audit_tail import _parse_chain_file
 from core.console.corvin_console import _bootstrap
+from ..deps import require_session_csrf_on_mutation
 
 _forge_paths = _bootstrap.forge_paths
 
@@ -100,7 +101,7 @@ def _skill_records(tid: str) -> list[dict[str, Any]]:
 # Router Creation
 # ─────────────────────────────────────────────────────────────────────────────
 
-router = APIRouter(tags=["console-forge-unified"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], tags=["console-forge-unified"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

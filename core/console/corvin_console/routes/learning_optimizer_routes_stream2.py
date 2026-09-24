@@ -35,9 +35,10 @@ from core.paths.tenant import tenant_home
 
 from .. import auth as session_auth
 from ..deps import require_session
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/v1/console/learning", tags=["learning-optimizer"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/learning", tags=["learning-optimizer"])
 
 
 # ============================================================================

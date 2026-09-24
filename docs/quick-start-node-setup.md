@@ -13,9 +13,10 @@ bash install.sh
 Both installers automatically:
 1. **Phase 1a:** Bootstrap local Node.js to `~/.corvin/node/`
 2. **Phase 2:** Install CorvinOS via uv
-3. **Phase 3:** Setup wizard (optional)
+3. **Phase 3:** Unattended provisioning (`corvin-install --yes`) — every dependency decision is made automatically, no questions
+4. **Phase 4:** Build the console frontend if needed, start the console and open it in the browser
 
-No `sudo`, no system dependencies, no package manager.
+Node.js needs no `sudo`. The installer never prompts — not even for a `sudo` password. ffmpeg comes bundled (linked to `~/.local/bin/ffmpeg`); the other optional system tools (espeak-ng, pandoc, pulseaudio-utils) are installed only when that works without a password (root or passwordless sudo), otherwise skipped with the exact command printed for later.
 
 ## Manual Setup (Development)
 

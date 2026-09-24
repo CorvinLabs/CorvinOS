@@ -65,15 +65,20 @@ fi
 cat > "${SYSTEMD_DIR}/corvin-watchdog.service" <<'EOF'
 [Unit]
 Description=CorvinOS Watchdog Service
-After=corvin-console.service
-Wants=corvin-console.service
+After=corvin-webui.service
+Wants=corvin-webui.service
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'while true; do curl -fs -m 5 http://localhost:8765/v1/console/healthz >/dev/null 2>&1 || { systemctl --user restart corvin-console.service; sleep 10; }; sleep 30; done'
-Restart=on-failure
+# Restart the console only after 3 consecutive failed probes (~60 s): a single
+# miss during a cold boot or a long first plugin scan is not a crash, and
+# restarting then just restarts the boot. Stands down while an install/update
+# holds the setup lock (it restarts the console itself). 127.0.0.1, not
+# localhost: the console binds v4 loopback only. $$ is systemd's escape for $.
+# NO User=: in a --user unit it fails every start with 216/GROUP.
+ExecStart=/bin/bash -c 'f=0; while true; do if curl -fs -m 5 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || [ -d "$${TMPDIR:-/tmp}/corvinos-setup.lock" ]; then f=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
+Restart=always
 RestartSec=10
-User=%u
 StandardOutput=journal
 StandardError=journal
 
@@ -95,13 +100,8 @@ systemctl --user enable corvin-watchdog.service 2>/dev/null || {
 echo "  $(_green '✓') Watchdog service enabled"
 
 if [ "$AUTOSTART" -eq 1 ]; then
-    # Only start if console is already up
-    if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
-        systemctl --user start corvin-watchdog.service 2>/dev/null || true
-        echo "  $(_green '✓') Watchdog service started"
-    else
-        echo "  $(_dim 'ℹ') Console not yet responding; watchdog will start on next boot"
-    fi
+    # Safe to start before the console answers: the probe tolerates ~60 s.
+    systemctl --user restart corvin-watchdog.service 2>/dev/null || true
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -113,8 +113,18 @@ echo "  $(_green '✓') CorvinOS directories created: $CORVIN_HOME"
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5: Verify watchdog service is properly configured
 # ─────────────────────────────────────────────────────────────────────────────
-if systemctl --user list-unit-files | grep -q "corvin-watchdog.service"; then
-    echo "  $(_green '✓') Watchdog service verified in systemd"
+# "Enabled" is not "running": until 2026-09-24 the unit carried User=%u and
+# died on every start (216/GROUP) while this step printed a green tick.
+if [ "$AUTOSTART" -eq 1 ]; then
+    sleep 3
+    if systemctl --user is-active --quiet corvin-watchdog.service; then
+        echo "  $(_green '✓') Watchdog service running"
+    else
+        echo "  $(_red '✗') Watchdog service does not stay up — journalctl --user -u corvin-watchdog -n 20"
+        exit 1
+    fi
+elif systemctl --user list-unit-files | grep -q "corvin-watchdog.service"; then
+    echo "  $(_green '✓') Watchdog service enabled (starts at next login)"
 else
     echo "  $(_red '✗') Watchdog service not found in systemd unit files"
     exit 1

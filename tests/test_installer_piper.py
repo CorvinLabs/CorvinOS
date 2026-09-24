@@ -49,8 +49,9 @@ def test_setup_model_non_interactive_uses_detected_language(tmp_path: Path) -> N
          mock.patch.object(piper_mod, "_download_model", side_effect=fake_download):
         piper_mod._setup_model(voice_config_dir, interactive=False)
 
-    assert calls == [("de", piper_mod._MODELS["de"][1])], (
-        f"expected the German model to be downloaded for a de-locale "
+    # German first; English as the offline fallback language (2026-09-24).
+    assert calls == [("de", piper_mod._MODELS["de"][1]), ("en", piper_mod._MODELS["en"][1])], (
+        f"expected the German model (plus the English fallback) for a de-locale "
         f"non-interactive install, got {calls!r}"
     )
 

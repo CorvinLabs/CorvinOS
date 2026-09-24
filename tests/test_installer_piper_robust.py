@@ -83,7 +83,8 @@ def test_download_model_skips_existing():
 
         # Create existing model file
         onnx_path = model_dir / "de_DE-kerstin-low.onnx"
-        onnx_path.write_bytes(b"existing model")
+        # A complete model (a truncated one below the size floor is re-fetched).
+        onnx_path.write_bytes(b"\x00" * 1_200_000)
 
         call_count = {"fetch": 0}
 

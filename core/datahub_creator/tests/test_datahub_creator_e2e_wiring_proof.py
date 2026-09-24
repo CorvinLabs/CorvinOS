@@ -49,8 +49,16 @@ def fastapi_client():
     from fastapi.testclient import TestClient
     from core.console.corvin_console.routes import datahub_creator_routes
 
+    from core.console.corvin_console import deps as console_deps
+
     app = FastAPI()
     app.include_router(datahub_creator_routes.router)
+    # The router requires a console session (+ CSRF on mutations); this test
+    # proves the datahub wiring, so the guard is satisfied with a stub session.
+    # The guard itself is covered by core/console/tests/test_route_auth_guard.py.
+    app.dependency_overrides[console_deps.require_session_csrf_on_mutation] = (
+        lambda: Mock(tenant_id="_default", sid_fingerprint="test")
+    )
 
     return TestClient(app)
 

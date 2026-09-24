@@ -88,23 +88,49 @@ def pkg_install(info: PlatformInfo, *packages: str) -> bool:
         print(f"⚠ No package manager — install manually: {' '.join(packages)}")
         return False
 
+    # Unattended by design: the installer runs in one go and never prompts —
+    # not even for a sudo password. Every system tool it installs is optional
+    # (bundled or graceful fallbacks exist), so without root or passwordless
+    # sudo the step is skipped and the exact command is printed for later.
+    sudo: list[str] = []
+    if info.pkg_mgr != PkgMgr.BREW and info.pkg_mgr != PkgMgr.WINGET:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            sudo = []
+        elif _cmd_exists("sudo") and subprocess.run(
+                ["sudo", "-n", "true"], capture_output=True, check=False).returncode == 0:
+            sudo = ["sudo", "-n"]
+        else:
+            print(f"  ℹ Optional system tools skipped (no passwordless sudo): {' '.join(packages)}")
+            print(f"    Install later with: {' '.join(_manual_cmd(info.pkg_mgr, packages))}")
+            return False
+
     cmds: dict[PkgMgr, list[str]] = {
-        PkgMgr.APT:    ["sudo", "apt", "install", "-y"],
-        PkgMgr.DNF:    ["sudo", "dnf", "install", "-y"],
-        PkgMgr.PACMAN: ["sudo", "pacman", "-S", "--noconfirm"],
+        PkgMgr.APT:    [*sudo, "apt-get", "install", "-y", "-q"],
+        PkgMgr.DNF:    [*sudo, "dnf", "install", "-y"],
+        PkgMgr.PACMAN: [*sudo, "pacman", "-S", "--noconfirm", "--needed"],
         PkgMgr.BREW:   ["brew", "install"],
         PkgMgr.WINGET: ["winget", "install", "--silent"],
     }
     base = cmds[info.pkg_mgr]
+    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
 
     if info.pkg_mgr == PkgMgr.APT:
-        subprocess.run(["sudo", "apt", "update", "-qq"], check=False)
+        subprocess.run([*sudo, "apt-get", "update", "-qq"], check=False, env=env)
 
-    result = subprocess.run(base + list(packages), check=False)
+    result = subprocess.run(base + list(packages), check=False, env=env)
     return result.returncode == 0
 
 
 # ── internals ──────────────────────────────────────────────────────────────
+
+def _manual_cmd(pkg_mgr: PkgMgr, packages: tuple[str, ...]) -> list[str]:
+    base = {
+        PkgMgr.APT:    ["sudo", "apt-get", "install", "-y"],
+        PkgMgr.DNF:    ["sudo", "dnf", "install", "-y"],
+        PkgMgr.PACMAN: ["sudo", "pacman", "-S", "--needed"],
+    }.get(pkg_mgr, [])
+    return base + list(packages)
+
 
 def _cmd_exists(name: str) -> bool:
     try:

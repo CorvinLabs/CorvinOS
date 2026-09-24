@@ -23,9 +23,10 @@ from core.learning.feedback_processor import FeedbackProcessor, create_feedback_
 
 from .. import auth as session_auth
 from ..deps import require_session
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/v1/console/feedback/skill", tags=["skill_feedback"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/feedback/skill", tags=["skill_feedback"])
 
 # Valid skill IDs
 VALID_SKILLS = [

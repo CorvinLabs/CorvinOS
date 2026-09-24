@@ -18,6 +18,8 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from fastapi import Depends
+from ..deps import require_session_csrf_on_mutation
 
 try:
     from license.capability_api import require_capability, LicenseDenied, Decision
@@ -28,7 +30,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/licensing", tags=["licensing"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/licensing", tags=["licensing"])
 
 
 # ============================================================================

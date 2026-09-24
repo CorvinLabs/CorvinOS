@@ -100,6 +100,10 @@ def console_client():
     app.dependency_overrides[console_deps.require_session] = (
         lambda: _fake_session_record("_default")
     )
+    # engine_api's router-level guard (session + CSRF on mutation).
+    app.dependency_overrides[console_deps.require_session_csrf_on_mutation] = (
+        lambda: _fake_session_record("_default")
+    )
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()

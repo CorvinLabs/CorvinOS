@@ -25,8 +25,9 @@ from core.paths import tenant_audit_chain
 
 from .. import auth as session_auth
 from ..deps import require_session
+from ..deps import require_session_csrf_on_mutation
 
-router = APIRouter(prefix="/v1/console/intents", tags=["intents"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/intents", tags=["intents"])
 
 
 class IntentClassifyRequest(BaseModel):

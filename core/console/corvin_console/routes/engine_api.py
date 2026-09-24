@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
+from ..deps import require_session_csrf_on_mutation
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
@@ -49,7 +50,7 @@ _SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 
 TASK_TYPES = ("corvinOS", "SIMPLE", "MEDIUM", "COMPLEX")
 

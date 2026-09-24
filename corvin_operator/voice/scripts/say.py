@@ -165,6 +165,24 @@ _TOTAL_BUDGET_S = float(os.environ.get("CORVIN_TTS_TOTAL_BUDGET_S", "0") or 0) o
 _DEADLINE_MARGIN_S = 1.0  # reserved for our own teardown before the deadline
 _MIN_ATTEMPT_S = 1.0      # don't even start a provider with less than this
 
+# Seconds of the chain budget held back for the LOCAL Piper tier whenever it is
+# still ahead in the chain and has a model for the language. Without it, two
+# network tiers that hang (offline laptop with a stale DNS cache, a proxy that
+# blackholes instead of refusing — routine on Citrix/corporate desktops) spend
+# the whole budget and Piper is skipped with "<1 s left": the one tier that
+# needs no network never got to speak. Network tiers are clamped instead.
+_PIPER_RESERVE_S = float(os.environ.get("CORVIN_TTS_PIPER_RESERVE_S", "8"))
+
+
+def network_budget(remaining_s: "float | None", total_budget_s: float,
+                   piper_pending: bool) -> "float | None":
+    """Remaining seconds a NETWORK tier may use: the chain's remaining budget
+    minus Piper's reserve while Piper is still to come. Capped at a third of
+    the total so a tiny operator-pinned budget is not handed entirely to Piper."""
+    if remaining_s is None or not piper_pending:
+        return remaining_s
+    return remaining_s - min(_PIPER_RESERVE_S, total_budget_s / 3.0)
+
 
 def provider_timeout_for(text: str) -> float:
     """Per-attempt cap for a network provider synthesizing *text*.
@@ -528,7 +546,8 @@ def _try_edge(out_path: Path, text: str, lang: str,
 # installer/steps/piper.py::_MODELS. They previously disagreed for 8/12
 # languages (de: thorsten vs kerstin; en: amy vs lessac; es/fr/it/nl/pl/zh),
 # so corvin-install reported a successful download that say.py's fallback could
-# then never find. Keep this table == installer _MODELS for all 12 languages.
+# then never find. The SSOT is now corvinOS/shared/voice_models.py::PIPER_VOICES;
+# this table must hold the last path segment of every entry there.
 # Guard: test_say.sh + tests/test_installer_piper.py.
 _PIPER_MODELS: dict[str, str] = {
     "de":  "de_DE-kerstin-low",
@@ -543,6 +562,13 @@ _PIPER_MODELS: dict[str, str] = {
     "tr":  "tr_TR-dfki-medium",
     "uk":  "uk_UA-lada-x_low",
     "zh":  "zh_CN-huayan-x_low",
+    "sv":  "sv_SE-nst-medium",
+    "da":  "da_DK-talesyntese-medium",
+    "no":  "no_NO-talesyntese-medium",
+    "cs":  "cs_CZ-jirka-medium",
+    "fi":  "fi_FI-harri-medium",
+    "el":  "el_GR-rapunzelina-low",
+    "ar":  "ar_JO-kareem-medium",
 }
 
 _PIPER_MODEL_DIR = Path(
@@ -630,6 +656,25 @@ def _piper_model_for(lang: str) -> Path | None:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _piper_model_exact(lang: str) -> Path | None:
+    """A model for exactly *lang* (no wrong-language last resort) — what the
+    budget reservation keys on: reserving time for a Piper that would only
+    speak another language's voice is not worth starving a network tier."""
+    try:
+        lc = lang.lower()
+        env_path = os.environ.get(f"CORVIN_PIPER_MODEL_{lc.upper().replace('-', '_')}")
+        if env_path:
+            return Path(env_path) if Path(env_path).exists() else None
+        found = _piper_model_from_config(lc)
+        if found is not None:
+            return found
+        stem = _PIPER_MODELS.get(lc) or _PIPER_MODELS.get(lc.split("-")[0])
+        cand = _PIPER_MODEL_DIR / f"{stem}.onnx" if stem else None
+        return cand if cand is not None and cand.exists() else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _resolve_piper_binary() -> str | None:
@@ -960,6 +1005,11 @@ def main() -> int:
     total_budget_s = total_budget_for(text)
     deadline = _PROCESS_START_MONOTONIC + total_budget_s
 
+    # Piper still ahead of us with a usable model? Then the network tiers
+    # must leave it time (see _PIPER_RESERVE_S).
+    piper_ready = _piper_model_exact(lang) is not None
+    piper_done = {"ran": False}
+
     def _run(name: str) -> bool:
         if local_only and name in ("openai", "edge"):
             sys.stderr.write(
@@ -968,7 +1018,13 @@ def main() -> int:
             return False
         base_timeout = (_PIPER_TIMEOUT_S if name == "piper"
                         else provider_timeout_for(text))
-        timeout_s = _clamped_timeout(base_timeout, deadline - time.monotonic())
+        remaining = deadline - time.monotonic()
+        if name == "piper":
+            piper_done["ran"] = True
+        else:
+            remaining = network_budget(remaining, total_budget_s,
+                                       piper_ready and not piper_done["ran"])
+        timeout_s = _clamped_timeout(base_timeout, remaining)
         if timeout_s is None:
             sys.stderr.write(
                 f"say.py: skipping provider '{name}' — total TTS budget "

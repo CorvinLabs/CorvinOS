@@ -17,10 +17,11 @@ from pydantic import BaseModel, Field
 from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Depends
 import logging
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 
 
 # ============================================================================

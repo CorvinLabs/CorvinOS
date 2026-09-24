@@ -29,6 +29,7 @@ Compliance baseline mirrors ``routes/settings.py``:
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import sys
 import time
@@ -42,6 +43,7 @@ from .. import auth as session_auth
 from .. import audit as console_audit
 from ..deps import require_csrf, require_session, verify_reauth
 
+_log = logging.getLogger(__name__)
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
 _VOICE_SHARED = _REPO / "corvin_operator" / "bridges" / "shared"
@@ -280,6 +282,11 @@ def profile_write(
         )
 
     try:
+        _lang_before = str(_profile.load().get("display_language") or "")
+    except Exception:  # noqa: BLE001 — unreadable profile: treat as "unset"
+        _lang_before = ""
+
+    try:
         def _apply_write(d: dict[str, Any]) -> None:
             # `profile.mutate()` calls this with the freshly-loaded
             # (force=True), lock-held dict and only calls save() if we
@@ -327,6 +334,18 @@ def profile_write(
         target_id="self",
     )
     snapshot = _project_current()
+    # A new voice language needs its offline voice: fetch it now, in the
+    # background, so speech keeps working without the network (the installer
+    # only fetched the install-time language). Never blocks or fails the save.
+    _lang_after = str((snapshot.get("identity") or {}).get("display_language") or "")
+    if _lang_after and _lang_after != _lang_before:
+        try:
+            from .. import voice_provision  # noqa: PLC0415
+            voice_provision.provision(_lang_after, tenant_id=rec.tenant_id,
+                                      sid_fingerprint=rec.sid_fingerprint,
+                                      trigger="language_change")
+        except Exception:  # noqa: BLE001
+            _log.warning("offline voice provisioning could not start", exc_info=True)
     return {
         "ok":          True,
         "profile":     snapshot,

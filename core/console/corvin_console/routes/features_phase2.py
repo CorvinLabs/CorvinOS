@@ -38,10 +38,11 @@ from fastapi import APIRouter, Depends, HTTPException, status as http_status
 
 from .. import auth as session_auth
 from ..deps import require_session
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1", tags=["phase2-features"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1", tags=["phase2-features"])
 
 
 def _now() -> str:

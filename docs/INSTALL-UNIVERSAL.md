@@ -79,20 +79,45 @@ corvin-restore
 Force-rebuilds the web console frontend and restarts all services. Use this after
 pulling updates that include UI changes, or to recover a 503 console page.
 
+### Update
+
+```bash
+sh update.sh                # Linux / macOS / WSL
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File update.ps1   # Windows
+```
+
+Fetches `main`, reinstalls the package (repairing a broken tool venv on the
+way), builds the console into a staging directory and swaps it in atomically,
+restarts every CorvinOS service, re-checks the offline voice for your
+language, and verifies over HTTP that the console serves the new build and a
+local login works. A failed verification rolls back to the previous code and
+build. It shares a lock with the installer, and the watchdog stands down while
+it runs. Exit codes: 0 updated, 1 failed and rolled back, 2 rollback failed,
+3 another install/update is running.
+
 ### Uninstall
 
 ```bash
-corvin-uninstall
+bash uninstall.sh           # or: corvin-uninstall (same script on Linux/macOS)
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File uninstall.ps1   # Windows
 ```
 
-This will:
-- Stop all services
-- Unregister services from your OS
-- Reset onboarding and engine selection (always — so a subsequent
-  `corvin-install` goes through first-boot onboarding again, even if you
-  decline the prompts below)
-- Optionally remove Corvin data files, API keys/secrets, and audit logs
-  (asks separately for each — nothing sensitive is deleted without confirming)
+This will, in order:
+- Stop the watchdog, then every CorvinOS service and process
+- Archive every data and secrets directory, including the hash-chained audit
+  log, to `~/corvin-backup-<timestamp>.tar.gz` (mode 600) — a failed backup
+  aborts the uninstall and restarts the services
+- Export Docker container data before removing labelled volumes (ADR-0868)
+- Remove the service units / Scheduled Tasks, the Claude Code voice + cowork
+  plugins, the `corvinos` uv tool, its command shims and the data directories
+- Scan for leftovers and exit 1 naming anything still present
+
+Options: `--yes` (unattended), `--dry-run`, `--keep-data` (software only),
+`--no-backup`, `--backup-dir DIR`, `--verify-only`.
 
 ## Service Management
 

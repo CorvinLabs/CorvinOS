@@ -185,6 +185,18 @@ _SYSTEM_UNITS = [
 ]
 
 
+def _ask(prompt: str) -> str:
+    """input() that answers "" (the prompt's default) instead of raising
+    EOFError when stdin is closed or not a terminal — `corvin-uninstall`
+    run from a script, a service, or `curl | sh` used to crash mid-way,
+    after services were already removed but before data was handled."""
+    try:
+        return input(prompt)
+    except EOFError:
+        print()
+        return ""
+
+
 class CorvinInstaller:
     """Full installation orchestrator — driven by corvin-install / corvin-uninstall."""
 
@@ -1236,7 +1248,7 @@ class CorvinInstaller:
                     f.stat().st_size for f in plugin_cache.rglob("*") if f.is_file()
                 ) / (1024 * 1024)
                 print(f"  Path: {plugin_cache}  ({cache_size_mb:.1f} MB)")
-                if purge or input("  Delete plugin cache? [Y/n]: ").strip().lower() != "n":
+                if purge or _ask("  Delete plugin cache? [Y/n]: ").strip().lower() != "n":
                     leftover = _robust_rmtree(plugin_cache)
                     if not leftover:
                         print("  ✓ Removed plugin cache")
@@ -1415,7 +1427,7 @@ class CorvinInstaller:
                 pass
 
             confirmed = purge or (
-                input("  Delete voice config (API keys, secrets)? [y/N]: ").strip().lower() == "y"
+                _ask("  Delete voice config (API keys, secrets)? [y/N]: ").strip().lower() == "y"
             )
             if confirmed:
                 leftover = _robust_rmtree(self.voice_config)
@@ -1455,7 +1467,7 @@ class CorvinInstaller:
                 pass
 
             confirmed = purge or (
-                input("  Delete Corvin home (audit logs, sessions, models)? [y/N]: ")
+                _ask("  Delete Corvin home (audit logs, sessions, models)? [y/N]: ")
                 .strip().lower() == "y"
             )
             if confirmed:
@@ -1480,7 +1492,7 @@ class CorvinInstaller:
         if repo_corvin.exists():
             print(f"  Path: {repo_corvin}")
             confirmed = purge or (
-                input("  Delete in-repo Corvin directory? [y/N]: ").strip().lower() == "y"
+                _ask("  Delete in-repo Corvin directory? [y/N]: ").strip().lower() == "y"
             )
             if confirmed:
                 leftover = _robust_rmtree(repo_corvin)

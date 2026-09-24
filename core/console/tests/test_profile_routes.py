@@ -23,6 +23,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -118,16 +119,22 @@ def _sandbox(tenant_id: str = "_default"):
             client = TestClient(app)
             client.cookies.set("corvin_console_sid", rec.sid)
 
-            yield {
-                "home":         home,
-                "xdg":          xdg,
-                "tenant_id":    tenant_id,
-                "token":        token_plain,
-                "rec":          rec,
-                "csrf":         csrf,
-                "client":       client,
-                "bridges_dir":  bridges,
-            }
+            # A display-language change starts an offline-voice download —
+            # never a real one from a unit test.
+            from corvin_console import voice_provision
+            with mock.patch.object(voice_provision, "provision",
+                                   return_value={"lang": "", "state": "queued"}) as prov:
+                yield {
+                    "home":         home,
+                    "xdg":          xdg,
+                    "tenant_id":    tenant_id,
+                    "token":        token_plain,
+                    "rec":          rec,
+                    "csrf":         csrf,
+                    "client":       client,
+                    "bridges_dir":  bridges,
+                    "provision":    prov,
+                }
         finally:
             for k, v in prev.items():
                 if v is None:
@@ -197,6 +204,34 @@ class ProfileWriteIdentityTests(unittest.TestCase):
             # GET reflects the same state.
             r2 = ctx["client"].get("/v1/console/profile")
             self.assertEqual(r2.json()["profile"]["identity"]["name"], "Silvio")
+
+    def test_language_change_provisions_the_offline_voice_once(self):
+        """Settings → Voice → Display language must fetch that language's
+        offline voice (the installer only fetched the install-time one) — and
+        only on a CHANGE, not on every unrelated save."""
+        with _sandbox() as ctx:
+            def put(identity):
+                return ctx["client"].put("/v1/console/profile", headers=_auth_headers(ctx),
+                                         json={"identity": identity, "re_auth_token": ctx["token"]})
+            self.assertEqual(put({"display_language": "sv"}).status_code, 200)
+            self.assertEqual(ctx["provision"].call_count, 1)
+            call = ctx["provision"].call_args
+            self.assertEqual(call.args[0], "sv")
+            self.assertEqual(call.kwargs["trigger"], "language_change")
+            self.assertEqual(call.kwargs["tenant_id"], ctx["tenant_id"])
+            # unrelated save, same language → no new download
+            self.assertEqual(put({"name": "Ada"}).status_code, 200)
+            self.assertEqual(put({"display_language": "sv"}).status_code, 200)
+            self.assertEqual(ctx["provision"].call_count, 1)
+
+    def test_provisioning_failure_never_fails_the_save(self):
+        with _sandbox() as ctx:
+            ctx["provision"].side_effect = RuntimeError("disk full")
+            r = ctx["client"].put("/v1/console/profile", headers=_auth_headers(ctx),
+                                  json={"identity": {"display_language": "fi"},
+                                        "re_auth_token": ctx["token"]})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["profile"]["identity"]["display_language"], "fi")
 
     def test_display_language_is_normalised_through_bcp47(self):
         """Regression (2026-07-12): PUT /v1/console/profile used to store

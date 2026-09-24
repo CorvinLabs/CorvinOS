@@ -407,9 +407,22 @@ class ProviderStatus(BaseModel):
     detail: str = Field(description="Short, human-readable, non-leaky status line")
 
 
+class OfflineVoiceStatus(BaseModel):
+    """The offline (Piper) voice for the operator's display language."""
+    lang: str = ""
+    # ready · queued · downloading · missing · failed · engine_missing ·
+    # online_only (no Piper voice exists) · unavailable
+    state: str = "unavailable"
+    model: str | None = None
+    done: int | None = None
+    total: int | None = None
+    error: str | None = None
+
+
 class VoiceStatusResponse(BaseModel):
     stt: dict[str, ProviderStatus] = Field(default_factory=dict)
     tts: dict[str, ProviderStatus] = Field(default_factory=dict)
+    offline_voice: OfflineVoiceStatus | None = None
 
 
 def _safe_provider_status(name: str, info: dict) -> ProviderStatus:
@@ -463,10 +476,97 @@ def voice_status(
 
     tts = {name: _safe_provider_status(name, info) for name, info in tts_raw.items()}
     _openai_status_apply_verdict(tts)
+    offline = _offline_voice_status(_rec.tenant_id)
+    _piper_status_apply_language(tts, offline)
     return VoiceStatusResponse(
         stt={name: _safe_provider_status(name, info) for name, info in stt_raw.items()},
         tts=tts,
+        offline_voice=offline,
     )
+
+
+def _display_language() -> str:
+    """The operator's configured language, or "" when none is set."""
+    if _PROFILE_OK and _profile_module is not None:
+        try:
+            return str(_profile_module.load().get("display_language") or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return ""
+
+
+def _offline_voice_status(tenant_id: str) -> OfflineVoiceStatus:
+    """Status of the display language's offline voice — and, when it has no
+    usable model, start fetching it (self-healing, rate-limited in
+    voice_provision). English is kept too: it is the fallback language."""
+    from .. import voice_provision  # noqa: PLC0415
+    lang = _display_language() or "en"
+    st = voice_provision.self_heal(lang, tenant_id=tenant_id)
+    if voice_provision.normalise(lang) != "en":
+        voice_provision.self_heal("en", tenant_id=tenant_id)
+    keep = {k: st.get(k) for k in OfflineVoiceStatus.model_fields if k in st}
+    return OfflineVoiceStatus(**keep)
+
+
+def _piper_status_apply_language(tts: dict[str, ProviderStatus], offline: OfflineVoiceStatus) -> None:
+    """``say.provider_status()`` reports Piper "ready" when a model for ANY
+    language is on disk. For the operator that is a false "ready": a Swedish
+    display language with only the German model installed speaks Swedish text
+    through a German voice. Narrow the row to the language actually in use."""
+    row = tts.get("piper")
+    if row is None or offline.state == "unavailable":
+        return
+    lang = offline.lang or "?"
+    if offline.state == "ready":
+        upd = {"ready": row.package_installed, "model_present": True,
+               "detail": f"ready — {offline.model or lang} ({lang})"}
+    elif offline.state in ("queued", "downloading"):
+        pct = (f" {offline.done * 100 // offline.total}%"
+               if offline.done and offline.total else "")
+        upd = {"ready": False, "model_present": False,
+               "detail": f"downloading the {lang} voice{pct}…"}
+    elif offline.state == "online_only":
+        upd = {"ready": False, "model_present": None,
+               "detail": f"no offline voice exists for {lang} — the online voices speak it"}
+    elif offline.state == "engine_missing":
+        upd = {"ready": False, "package_installed": False,
+               "detail": "offline speech engine missing — reinstalling it"}
+    else:
+        upd = {"ready": False, "model_present": False,
+               "detail": (f"{lang} voice download failed — retry below"
+                          if offline.state == "failed" else f"no {lang} voice yet — fetching it")}
+    tts["piper"] = row.model_copy(update=upd)
+
+
+class VoiceProvisionRequest(BaseModel):
+    lang: str | None = Field(None, min_length=2, max_length=10,
+                             pattern=r"^[a-zA-Z]{2,8}(-[a-zA-Z0-9]{1,8})*$")
+    model_config = {"extra": "forbid"}
+
+
+@router.get("/voice/provision", response_model=OfflineVoiceStatus)
+def voice_provision_status(
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    lang: str | None = None,
+) -> OfflineVoiceStatus:
+    """Offline-voice state for *lang* (default: the display language). Read-only."""
+    from .. import voice_provision  # noqa: PLC0415
+    st = voice_provision.status(lang or _display_language() or "en")
+    return OfflineVoiceStatus(**{k: st.get(k) for k in OfflineVoiceStatus.model_fields if k in st})
+
+
+@router.post("/voice/provision", response_model=OfflineVoiceStatus)
+def voice_provision_start(
+    body: VoiceProvisionRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> OfflineVoiceStatus:
+    """Download the offline voice for *lang* now (default: the display
+    language). Returns at once; poll GET /voice/provision for progress."""
+    from .. import voice_provision  # noqa: PLC0415
+    st = voice_provision.provision(body.lang or _display_language() or "en",
+                                   tenant_id=rec.tenant_id,
+                                   sid_fingerprint=rec.sid_fingerprint, trigger="manual")
+    return OfflineVoiceStatus(**{k: st.get(k) for k in OfflineVoiceStatus.model_fields if k in st})
 
 
 def _openai_status_apply_verdict(tts: dict[str, ProviderStatus]) -> None:

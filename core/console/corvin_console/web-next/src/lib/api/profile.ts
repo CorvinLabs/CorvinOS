@@ -117,8 +117,39 @@ export interface VoiceProviderStatus {
 export interface VoiceStatusResponse {
   stt: Record<string, VoiceProviderStatus>;
   tts: Record<string, VoiceProviderStatus>;
+  offline_voice?: OfflineVoiceStatus | null;
 }
 
 export async function getVoiceStatus(signal?: AbortSignal): Promise<VoiceStatusResponse> {
   return api<VoiceStatusResponse>("/voice/status", { signal });
+}
+
+// ── Offline voice (Piper) for the display language ───────────────────
+// Changing the display language starts the download on the server; the
+// Voice page polls this while it runs and offers a retry when it failed.
+
+export type OfflineVoiceState =
+  | "ready"
+  | "queued"
+  | "downloading"
+  | "missing"
+  | "failed"
+  | "engine_missing"
+  | "online_only"
+  | "unavailable";
+
+export interface OfflineVoiceStatus {
+  lang: string;
+  state: OfflineVoiceState;
+  model?: string | null;
+  done?: number | null;
+  total?: number | null;
+  error?: string | null;
+}
+
+export async function provisionVoice(
+  lang: string | null,
+  csrf: string,
+): Promise<OfflineVoiceStatus> {
+  return api("/voice/provision", { method: "POST", csrf, body: lang ? { lang } : {} });
 }

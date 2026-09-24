@@ -30,8 +30,9 @@ from core.control_plane.override_authority import (
     OverrideType,
     PermissionError,
 )
+from ..deps import require_session_csrf_on_mutation
 
-router = APIRouter(prefix="/v1/console/control-plane/overrides", tags=["control-plane"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/control-plane/overrides", tags=["control-plane"])
 
 # Singleton instance — in production, inject via dependency
 _authority: Optional[OverrideAuthority] = None

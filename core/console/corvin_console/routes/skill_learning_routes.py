@@ -15,10 +15,12 @@ from typing import Dict, List, Optional, Any
 
 from fastapi import APIRouter, HTTPException, Header, Query
 from pydantic import BaseModel, Field
+from fastapi import Depends
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/skills", tags=["console-skill-learning"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/skills", tags=["console-skill-learning"])
 
 # In-memory registry of learning loops (keyed by skill_id)
 # In production, use a persistent store or load from disk

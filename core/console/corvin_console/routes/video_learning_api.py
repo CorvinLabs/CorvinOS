@@ -17,12 +17,14 @@ from typing import Any, Optional, List, Dict
 from datetime import datetime
 import sys
 from pathlib import Path
+from fastapi import Depends
+from ..deps import require_session_csrf_on_mutation
 
 # Add parent dirs to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent))
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/video", tags=["video-learning"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/video", tags=["video-learning"])
 
 
 

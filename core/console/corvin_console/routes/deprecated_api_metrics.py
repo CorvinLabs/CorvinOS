@@ -35,9 +35,10 @@ from .. import auth as session_auth
 from ..deps import require_csrf, require_session
 from core.learning.event_persistence import _resolve_core_audit
 from forge import paths as _fp
+from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/deprecated-apis", tags=["deprecated-apis"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/deprecated-apis", tags=["deprecated-apis"])
 
 # Seconds between WebSocket pushes
 STREAM_INTERVAL_S = 30.0

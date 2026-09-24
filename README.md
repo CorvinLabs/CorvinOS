@@ -11,19 +11,24 @@
 **All platforms (macOS, Linux, Windows):**
 
 ```bash
-# macOS / Linux
-curl -fsSL https://corvin-labs.com/install.sh | sh
+# macOS / Linux / WSL — always the current main
+curl -fsSL https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.sh | sh
 
 # Windows (PowerShell)
-irm https://corvin-labs.com/install.ps1 | iex
+irm https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.ps1 | iex
 ```
 
-**From a local checkout:**
+Without a checkout the installer fetches `main` into a managed source tree
+(`~/.local/share/corvinos/src`, Windows `%LOCALAPPDATA%\corvinos\src`) — with
+git when present, as a tarball otherwise — so `update.sh` can refresh it in
+place. PyPI lags `main`; `--pypi` installs the published wheel instead.
+
+**From a local checkout** (detected automatically — no arguments needed):
 
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
-./install.sh .
+./install.sh
 
 # or on Windows (PowerShell):
 install.ps1 -Editable .\
@@ -57,6 +62,56 @@ bash install.sh --preset minimal         # Lightweight setup (console only)
 ```
 
 Full Windows reference: [docs/windows-installation-guide.md](docs/windows-installation-guide.md)
+
+### Update
+
+```bash
+sh update.sh                  # latest main → reinstall → clean console build → restart → verify
+sh update.sh --rebuild-only   # no download: rebuild + restart the code you have
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File update.ps1
+```
+
+The update is proven, not assumed: it restarts the services, waits until the
+console serves the bundle it just built, logs in and checks the API
+(`scripts/verify_install.py`). If that fails it rolls back to the previous
+code and build automatically (exit 1 = rolled back, 2 = rollback failed too).
+A developer checkout never loses work: local changes are stashed and
+re-applied, and if `main` was force-pushed the old HEAD is kept as branch
+`corvin-update-backup-<timestamp>`. After an update, reload the console tab
+with Ctrl+Shift+R.
+
+### Uninstall
+
+```bash
+bash uninstall.sh             # asks once, backs up, removes everything, verifies
+bash uninstall.sh --dry-run   # show what would be removed
+bash uninstall.sh --verify-only
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File uninstall.ps1
+```
+
+Services are stopped first. Then everything you cannot re-download (secrets,
+bridge pairings, the audit chain, sessions, voice models) is archived to
+`~/corvin-backup-<timestamp>.tar.gz` (mode 600; restore with
+`tar -xzf <file> -C /`) before anything is deleted. Docker deployments export
+each container's data before their volumes are removed. The run ends with a
+leftover scan and exits 1 if anything remains. A git checkout you cloned is
+kept (only its generated state directory is removed). `corvin-uninstall`
+runs the same script.
+
+### Voice languages
+
+Changing **Settings → Voice → Display language** downloads that language's
+offline voice (Piper) in the background — progress and a retry button are on
+the same page — so speech keeps working without internet. Offline voices
+exist for de, en, es, fr, it, nl, pl, pt, ru, tr, uk, zh, sv, da, no, cs, fi,
+el and ar; ja and ko are spoken by the online voices only. Speech recognition
+needs no per-language download.
 
 ---
 

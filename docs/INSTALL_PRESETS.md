@@ -25,7 +25,7 @@ sh ./install.sh
 
 ## Preset Selection Wizard (Interactive Mode)
 
-When running `./install.sh` interactively with a TTY (not piped), you can also configure the preset through the **setup wizard** after installation:
+`./install.sh` itself is unattended — it never asks a question and provisions everything with `corvin-install --yes`. To pick a preset interactively afterwards, run the **setup wizard**:
 
 ```bash
 corvin-install

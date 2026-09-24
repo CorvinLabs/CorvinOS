@@ -25,3 +25,4 @@ tests/e2e/auth-state.json
 dist.next/
 dist.prev/
 .console-deploy.lock
+.tsc-failed

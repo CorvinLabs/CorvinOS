@@ -9545,6 +9545,13 @@ _PIPER_MODELS: dict[str, str] = {
     "tr":  "tr_TR-dfki-medium",
     "uk":  "uk_UA-lada-x_low",
     "zh":  "zh_CN-huayan-x_low",
+    "sv":  "sv_SE-nst-medium",
+    "da":  "da_DK-talesyntese-medium",
+    "no":  "no_NO-talesyntese-medium",
+    "cs":  "cs_CZ-jirka-medium",
+    "fi":  "fi_FI-harri-medium",
+    "el":  "el_GR-rapunzelina-low",
+    "ar":  "ar_JO-kareem-medium",
 }
 
 

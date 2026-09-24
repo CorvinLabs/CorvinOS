@@ -41,7 +41,33 @@ def cmd_set(raw: str) -> int:
         return _emit({"ok": False, "reason": "unknown", "raw": raw})
     name = i18n.native_name(code)
     profile.set_value("display_language", code)
-    return _emit({"ok": True, "code": code, "name": name})
+    return _emit({"ok": True, "code": code, "name": name,
+                  "voice_download": _provision_voice(code)})
+
+
+def _provision_voice(code: str) -> str:
+    """Fetch the offline voice for the new language in a DETACHED process —
+    this CLI exits right away, a thread would die with it. Same code path the
+    console uses on a Settings change (corvinOS.shared.voice_models)."""
+    import importlib.util  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    try:
+        if importlib.util.find_spec("corvinOS.shared.voice_models") is None:
+            return "unavailable"
+    except (ImportError, ValueError):
+        return "unavailable"
+    kw: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL, "close_fds": True}
+    if os.name == "nt":
+        kw["creationflags"] = 0x00000008 | 0x08000000  # DETACHED_PROCESS | CREATE_NO_WINDOW
+    else:
+        kw["start_new_session"] = True
+    try:
+        subprocess.Popen([sys.executable, "-m", "corvinOS.shared.voice_models", code], **kw)
+        return "started"
+    except OSError:
+        return "failed"
 
 
 def cmd_show() -> int:

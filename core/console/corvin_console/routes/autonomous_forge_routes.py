@@ -86,10 +86,11 @@ from ..api_schemas.autonomous_forge import (
 )
 
 from ..validation.input_validator import validate_skill_id, validate_version
+from ..deps import require_session_csrf_on_mutation
 
 log = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers: Import autonomous forge components

@@ -78,6 +78,9 @@ def client():
         lambda: _fake_session_record("_default")
     )
     app.dependency_overrides[console_deps.require_csrf] = lambda: None
+    app.dependency_overrides[console_deps.require_session_csrf_on_mutation] = (
+        lambda: _fake_session_record("_default")
+    )
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

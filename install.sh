@@ -39,6 +39,13 @@ SKIP_CLAUDE=0
 FORCE_AUTOSTART=0
 ALWAYS_ON=0
 PRESET=""
+USE_PYPI=0
+# Where the source comes from when this script is NOT run from a checkout
+# (`curl … | sh`). PyPI lags main by months, so the default is main itself,
+# kept as an installer-managed tree that update.sh refreshes in place.
+CORVIN_REPO_URL="${CORVIN_REPO_URL:-https://github.com/CorvinLabs/CorvinOS}"
+CORVIN_BRANCH="${CORVIN_BRANCH:-main}"
+MANAGED_SRC="${CORVIN_SRC_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/corvinos/src}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Styling utilities
@@ -87,9 +94,11 @@ while [ $# -gt 0 ]; do
             OPEN_LAN=1; shift ;;
         --no-claude-code)
             SKIP_CLAUDE=1; shift ;;
+        --pypi)
+            USE_PYPI=1; shift ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}] [--no-claude-code]" ;;
+Usage: $0 [--editable|-e <path>] [--pypi] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}] [--no-claude-code]" ;;
     esac
 done
 
@@ -106,6 +115,24 @@ if [ -n "$PRESET" ]; then
 fi
 
 printf '\n%s — self-hosted, local-first AI operating system\n\n' "$(_bold 'CorvinOS installer')"
+
+# One installer/updater at a time: two concurrent `uv tool install --force`
+# runs corrupt the tool venv, two SPA builds race on dist/. mkdir is atomic on
+# every filesystem (flock is not on macOS). A lock older than 2 h is stale.
+LOCK_DIR="${TMPDIR:-/tmp}/corvinos-setup.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    if [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
+        rm -rf "$LOCK_DIR"; mkdir "$LOCK_DIR" 2>/dev/null || die "cannot take $LOCK_DIR"
+    else
+        die "another CorvinOS install/update is running (lock: $LOCK_DIR). Wait for it, or remove the lock if it crashed."
+    fi
+fi
+trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+
+# Corporate networks (Citrix, Zscaler, TLS-inspecting proxies) re-sign HTTPS
+# with a company CA that only the OS trust store knows. uv and git honour the
+# system store with these; harmless where no proxy exists.
+export UV_NATIVE_TLS="${UV_NATIVE_TLS:-1}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 0: Ensure curl/wget for downloads
@@ -168,64 +195,121 @@ if [ "$SKIP_CLAUDE" != "1" ]; then
         CLAUDE_CODE_PATH="$(command -v claude)"
         echo "  Claude Code found at $CLAUDE_CODE_PATH — $(_green OK)"
     else
-        # Offer to install Claude Code (optional)
-        if [ -t 0 ]; then
-            printf '  %s Claude Code not found. Install it now? (y/n) ' "$(_yellow '?')"
-            read -r _install_claude
-            if [ "$_install_claude" = "y" ] || [ "$_install_claude" = "Y" ]; then
-                echo "  Installing Claude Code ..."
-                if command -v curl >/dev/null 2>&1; then
-                    _claude_install_sh="$(mktemp "${TMPDIR:-/tmp}/claude-install.XXXXXX")" || die "mktemp failed"
-                    if curl -fsSL --max-time 60 -o "$_claude_install_sh" "https://claude.ai/install.sh" 2>/dev/null; then
-                        chmod +x "$_claude_install_sh"
-                        if sh "$_claude_install_sh"; then
-                            CLAUDE_CODE_PATH="$(command -v claude 2>/dev/null || true)"
-                            if [ -n "$CLAUDE_CODE_PATH" ]; then
-                                echo "  Claude Code installed — $(_green OK)"
-                            else
-                                echo "  Claude Code installed but path not found — $(_yellow 'continuing anyway')"
-                            fi
-                        else
-                            echo "  Claude Code install failed — $(_yellow 'continuing without it')"
-                        fi
-                    else
-                        echo "  Could not download Claude Code installer — $(_yellow 'continuing without it')"
-                    fi
-                    rm -f "$_claude_install_sh"
-                fi
-            fi
+        # Install it without asking — the console chat runs on it, and the
+        # installer is unattended by design (one run, no questions).
+        echo "  Claude Code not found — installing it ..."
+        _claude_install_sh="$(mktemp "${TMPDIR:-/tmp}/claude-install.XXXXXX")" || die "mktemp failed"
+        if curl -fsSL --max-time 60 -o "$_claude_install_sh" "https://claude.ai/install.sh" 2>/dev/null \
+           && _await "Installing Claude Code" sh "$_claude_install_sh"; then
+            export PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
+            CLAUDE_CODE_PATH="$(command -v claude 2>/dev/null || true)"
+            [ -n "$CLAUDE_CODE_PATH" ] || printf '  %s Claude Code installed but not on PATH yet — open a new terminal later.\n' "$(_yellow '⚠')"
         else
-            # Non-interactive: skip Claude Code install offer
-            echo "  Claude Code not found (non-interactive mode) — $(_dim 'skipped')"
+            printf '  %s Claude Code install failed — continuing; chat needs it (https://claude.ai/install.sh).\n' "$(_yellow '⚠')"
         fi
+        rm -f "$_claude_install_sh"
     fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 1a: Bootstrap local Node.js runtime (self-contained, no sudo)
+# Phase 1a: Resolve the source tree
 # ─────────────────────────────────────────────────────────────────────────────
-if [ -n "$EDITABLE" ]; then
-    REPO_DIR="$EDITABLE"
-else
-    REPO_DIR="$(pwd)"
-fi
+# Three cases, decided once:
+#   * --editable PATH, or this script sits in a checkout → install from it.
+#   * --pypi → the published wheel (lags main; kept for pinned deployments).
+#   * otherwise (`curl … | sh`) → fetch main into MANAGED_SRC and install that.
+_retry() {  # _retry N cmd… — exponential backoff 2,4,8 s
+    _rt_n="$1"; shift; _rt_i=1; _rt_wait=2
+    while :; do
+        "$@" && return 0
+        [ "$_rt_i" -ge "$_rt_n" ] && return 1
+        printf '  %s attempt %s/%s failed — retrying in %ss\n' "$(_yellow '↻')" "$_rt_i" "$_rt_n" "$_rt_wait" >&2
+        sleep "$_rt_wait"; _rt_i=$((_rt_i + 1)); _rt_wait=$((_rt_wait * 2))
+    done
+}
 
+_download() {  # _download URL FILE
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 20 --max-time 600 -o "$2" "$1"
+    else
+        wget -q -T 60 -O "$2" "$1"
+    fi
+}
+
+# fetch_source DEST — make DEST a current copy of $CORVIN_BRANCH. Git when
+# available (cheap updates, exact commit); a tarball otherwise (Citrix and
+# locked-down desktops often have no git). Generated state inside the tree
+# (.corvin/, web-next/node_modules) is carried across a tarball swap.
+fetch_source() {
+    _fs_dest="$1"
+    mkdir -p "$(dirname "$_fs_dest")" || return 1
+    if [ -d "$_fs_dest/.git" ] && command -v git >/dev/null 2>&1; then
+        # Installer-managed tree: local edits are not ours to keep — reset.
+        _retry 3 git -C "$_fs_dest" fetch --depth 1 origin "$CORVIN_BRANCH" >>"$INSTALL_LOG" 2>&1 || return 1
+        git -C "$_fs_dest" reset --hard -q FETCH_HEAD >>"$INSTALL_LOG" 2>&1 || return 1
+    elif command -v git >/dev/null 2>&1 && [ ! -e "$_fs_dest" ]; then
+        rm -rf "$_fs_dest.tmp"
+        _retry 3 git clone -q --depth 1 --branch "$CORVIN_BRANCH" "$CORVIN_REPO_URL.git" "$_fs_dest.tmp" >>"$INSTALL_LOG" 2>&1 \
+            || { rm -rf "$_fs_dest.tmp"; return 1; }
+        mv "$_fs_dest.tmp" "$_fs_dest" || return 1
+    else
+        _fs_tgz="$(mktemp "${TMPDIR:-/tmp}/corvinos-src.XXXXXX")" || return 1
+        _fs_url="$(printf '%s' "$CORVIN_REPO_URL" | sed 's#^https://github.com/#https://codeload.github.com/#')/tar.gz/refs/heads/$CORVIN_BRANCH"
+        _retry 3 _download "$_fs_url" "$_fs_tgz" || { rm -f "$_fs_tgz"; return 1; }
+        rm -rf "$_fs_dest.new"; mkdir -p "$_fs_dest.new"
+        tar -xzf "$_fs_tgz" -C "$_fs_dest.new" --strip-components=1 || { rm -rf "$_fs_tgz" "$_fs_dest.new"; return 1; }
+        rm -f "$_fs_tgz"
+        [ -f "$_fs_dest.new/pyproject.toml" ] || { rm -rf "$_fs_dest.new"; return 1; }
+        if [ -d "$_fs_dest" ]; then
+            for _keep in .corvin core/console/corvin_console/web-next/node_modules; do
+                [ -e "$_fs_dest/$_keep" ] && mkdir -p "$(dirname "$_fs_dest.new/$_keep")" && mv "$_fs_dest/$_keep" "$_fs_dest.new/$_keep"
+            done
+            rm -rf "$_fs_dest.prev"; mv "$_fs_dest" "$_fs_dest.prev"
+        fi
+        mv "$_fs_dest.new" "$_fs_dest" || return 1
+        rm -rf "$_fs_dest.prev"
+    fi
+    : >"$_fs_dest/.corvin-managed"
+}
+
+_script_dir=""
+case "$0" in
+    */install.sh|install.sh) _script_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)" ;;
+esac
+if [ -z "$EDITABLE" ] && [ "$USE_PYPI" != "1" ] && [ -n "$_script_dir" ] \
+   && [ -f "$_script_dir/.corvin_repo" ] && [ -f "$_script_dir/pyproject.toml" ]; then
+    EDITABLE="$_script_dir"
+    echo "  Source: this checkout ($EDITABLE)"
+fi
+if [ -z "$EDITABLE" ] && [ "$USE_PYPI" != "1" ]; then
+    printf '  Fetching CorvinOS %s from %s ...\n' "$CORVIN_BRANCH" "$CORVIN_REPO_URL"
+    fetch_source "$MANAGED_SRC" \
+        || die "could not download the CorvinOS source (network/proxy?) — details: $INSTALL_LOG. Behind a proxy set HTTPS_PROXY and re-run."
+    EDITABLE="$MANAGED_SRC"
+    echo "  Source: $EDITABLE ($(git -C "$EDITABLE" rev-parse --short HEAD 2>/dev/null || echo tarball)) — $(_green OK)"
+fi
+REPO_DIR="${EDITABLE:-$(pwd)}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1b: Bootstrap local Node.js runtime (self-contained, no sudo)
+# ─────────────────────────────────────────────────────────────────────────────
 if [ -f "${REPO_DIR}/scripts/ensure-node.sh" ]; then
     echo "  Bootstrapping local Node.js runtime ..."
-    if ! bash "${REPO_DIR}/scripts/ensure-node.sh"; then
+    if ! _retry 2 bash "${REPO_DIR}/scripts/ensure-node.sh"; then
         echo "  Node.js bootstrap failed — falling back to system Node.js"
     fi
+fi
+# ensure-node.sh runs in a child process, so its PATH export dies with it.
+# Export the local runtime here, or corvin-install's console step reports
+# "npm not found", skips the SPA build and the console serves a 503 page.
+_corvin_node_bin="${CORVIN_HOME:-$HOME/.corvin}/node/bin"
+if [ -x "${_corvin_node_bin}/npm" ]; then
+    export PATH="${_corvin_node_bin}:$PATH"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1c: Cross-platform compatibility check (ADR-0666 supplement)
 # ─────────────────────────────────────────────────────────────────────────────
-if [ -n "$EDITABLE" ]; then
-    REPO_DIR="$EDITABLE"
-else
-    REPO_DIR="$(pwd)"
-fi
-
 REPAIR_SCRIPT="$REPO_DIR/scripts/install_repair.sh"
 if [ -f "$REPAIR_SCRIPT" ]; then
     echo "  Checking cross-platform compatibility (operator→corvin_operator rename) ..."
@@ -237,50 +321,56 @@ if [ -f "$REPAIR_SCRIPT" ]; then
             die "Platform compatibility repair failed. Please run manually: bash $REPAIR_SCRIPT --repair --force"
         fi
     fi
-else
-    printf '  %s Repair script not found at %s (skipping compatibility check)\n' "$(_dim 'ℹ')" "$REPAIR_SCRIPT"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 2: Install CorvinOS via uv
 # ─────────────────────────────────────────────────────────────────────────────
-if [ -n "$EDITABLE" ]; then
-    echo "  Installing CorvinOS (editable) from $EDITABLE ..."
-    uv tool install --force --editable "${EDITABLE}[browser]"
-else
-    LATEST=""
-    if command -v curl >/dev/null 2>&1; then
-        LATEST=$(curl -fsSL --max-time 10 "https://pypi.org/pypi/${PKG}/json" 2>/dev/null \
-                 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
-    fi
-    if [ -n "$LATEST" ]; then
-        echo "  Installing ${PKG} (latest on PyPI: ${LATEST}) ..."
-    else
-        echo "  Installing $PKG (first run can take a minute) ..."
-    fi
-    if [ "$PKG" = "corvinos" ]; then
+# Self-healing: a half-written tool venv (killed install, AV lock, full disk)
+# makes every later `uv tool install` fail on the broken receipt — the second
+# attempt removes the venv first; the third also drops uv's cache.
+_uv_install() {
+    if [ -n "$EDITABLE" ]; then
+        uv tool install --force --editable "${EDITABLE}[browser]"
+    elif [ "$PKG" = "corvinos" ]; then
         uv tool install --force --refresh "${PKG}[browser]>=${CORVIN_MIN_VERSION}"
     else
         uv tool install --force --refresh "${PKG}[browser]"
     fi
+}
+_uv_install_healing() {
+    _uv_install && return 0
+    printf '  %s install failed — removing the tool environment and retrying\n' "$(_yellow '↻')"
+    uv tool uninstall "$PKG" >/dev/null 2>&1 || rm -rf "$(uv tool dir 2>/dev/null)/$PKG"
+    _uv_install && return 0
+    printf '  %s retrying once more with a clean uv cache\n' "$(_yellow '↻')"
+    uv cache clean "$PKG" >/dev/null 2>&1 || true
+    _uv_install
+}
+if [ -n "$EDITABLE" ]; then
+    _await "Installing CorvinOS from $EDITABLE" _uv_install_healing \
+        || die "uv tool install failed — details: $INSTALL_LOG"
+else
+    _await "Installing ${PKG} from PyPI" _uv_install_healing \
+        || die "uv tool install failed (PyPI may not carry >=${CORVIN_MIN_VERSION} yet — re-run without --pypi) — details: $INSTALL_LOG"
 fi
 uv tool update-shell >/dev/null 2>&1 || true
+export PATH="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin"):$PATH"
 
 command -v corvinos-serve >/dev/null 2>&1 \
     || die "install succeeded but 'corvinos-serve' is not on PATH — open a new terminal and retry"
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 3: Setup voice & services (STT/TTS provisioning)
 # ─────────────────────────────────────────────────────────────────────────────
+# Always unattended (--yes): every dependency decision is made automatically.
+# Bridges, tokens and API keys are configured afterwards in the console
+# (Settings → Bridges) or by re-running `corvin-install` as a wizard.
 if command -v corvin-install >/dev/null 2>&1; then
-    if [ -t 0 ] && [ "$FORCE_AUTOSTART" != "1" ]; then
-        echo "  Launching setup wizard ..."; echo ""
-        corvin-install || true
-    else
-        echo "  Provisioning voice (STT + TTS) and services non-interactively ..."; echo ""
-        corvin-install --yes || printf '  %s Voice/setup provisioning did not fully complete — re-run later with: %s\n' \
-            "$(_yellow '⚠')" "$(_bold 'corvin-install')"
-    fi
+    echo "  Provisioning dependencies, voice (STT + TTS) and services ..."; echo ""
+    corvin-install --yes || printf '  %s Provisioning did not fully complete — re-run later with: %s\n' \
+        "$(_yellow '⚠')" "$(_bold 'corvin-install --yes')"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,8 +398,10 @@ else
 fi
 
 if [ -f "$SETUP_SCRIPT" ]; then
-    if bash "$SETUP_SCRIPT" --no-autostart; then
-        printf '  %s Watchdog service installed and enabled.\n' "$(_green '✓')"
+    # Started now, not "at next login": it stands down while this script holds
+    # the setup lock, then guards the console from the first minute on.
+    if bash "$SETUP_SCRIPT"; then
+        printf '  %s Watchdog service installed and running.\n' "$(_green '✓')"
     else
         printf '  %s Watchdog setup encountered an error — continuing anyway.\n' "$(_yellow '⚠')"
     fi
@@ -358,93 +450,104 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 4: Start console server & launch browser
 # ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
-# Health Check Probe with Exponential Backoff (ADR-0867)
-# ─────────────────────────────────────────────────────────────────────────────
-healthz_check_probe() {
-    local endpoint="$1"
-    local label="$2"
-    local retry_count=0
-    local backoff=1
-    local max_retries=60
+# "Up" means the SPA answers 200 on /console/ — not merely /healthz. A console
+# that booted while web-next/dist/ was empty keeps serving the 503 "build
+# failed" fallback until it is restarted, even after the build lands, and its
+# healthz stays green the whole time.
+CONSOLE_URL="http://localhost:8765/console/"
+HEALTHZ_URL="http://localhost:8765/v1/console/healthz"
+SERVER_PID=""
+USE_SYSTEMD=0
+if [ "$(uname -s 2>/dev/null)" = "Linux" ] && command -v systemctl >/dev/null 2>&1 \
+   && systemctl --user cat corvin-webui.service >/dev/null 2>&1; then
+    USE_SYSTEMD=1
+fi
 
-    printf '  %s Checking %s... ' "$(_dim '⏳')" "$label"
+_console_code() { curl -s -o /dev/null -m 3 -w '%{http_code}' "$CONSOLE_URL" 2>/dev/null || true; }
 
-    while [ $retry_count -lt $max_retries ]; do
-        if curl -fs -m 2 "$endpoint" >/dev/null 2>&1; then
-            printf '%s\n' "$(_green '✓')"
-            return 0
-        fi
-        retry_count=$((retry_count + 1))
-        printf '.'
-        sleep "$backoff"
-        # Exponential backoff: 1s → 2s → 4s → 8s (capped at 8s)
-        if [ $backoff -lt 8 ]; then
-            backoff=$((backoff * 2))
-        fi
+_wait_console() {
+    _wc_i=0
+    printf '  %s waiting for the console ' "$(_dim '⏳')"
+    while [ "$_wc_i" -lt "$1" ]; do
+        _wc_code="$(_console_code)"
+        if [ "$_wc_code" = "200" ]; then printf ' %s (%ss)\n' "$(_green '✓')" "$_wc_i"; return 0; fi
+        _wc_i=$((_wc_i + 1)); printf '.'; sleep 1
     done
-
-    printf '%s (timeout after %ds)\n' "$(_red '✗')" "$((max_retries))"
+    printf ' %s (last HTTP status: %s)\n' "$(_red '✗')" "${_wc_code:-none}"
     return 1
 }
 
+_start_console() {
+    if [ "$USE_SYSTEMD" = "1" ]; then
+        systemctl --user restart corvin-webui.service
+    else
+        pkill -f corvinos-serve 2>/dev/null || true
+        # --no-browser: this script opens the tab itself below; without it the
+        # operator gets two tabs.
+        nohup corvinos-serve --no-browser >>"$INSTALL_LOG" 2>&1 &
+        SERVER_PID=$!
+    fi
+}
+
+# The SPA must be built before the console boots. corvin-install builds it;
+# if that step was skipped (no npm, build error), build it here once.
+_tool_py="$(uv tool dir 2>/dev/null)/${PKG}/bin/python"
+SPA_DIR=""
+if [ -x "$_tool_py" ]; then
+    SPA_DIR="$("$_tool_py" -c 'import corvin_console, os; print(os.path.join(os.path.dirname(corvin_console.__file__), "web-next"))' 2>/dev/null || true)"
+fi
+if [ -n "$SPA_DIR" ] && [ -f "$SPA_DIR/package.json" ] && [ ! -f "$SPA_DIR/dist/index.html" ]; then
+    if command -v npm >/dev/null 2>&1; then
+        _await "Building the console frontend (one-time, ~1-2 min)" \
+            sh -c "cd '$SPA_DIR' && rm -rf node_modules/.vite && npm install --no-audit --no-fund && npm run build" \
+            || die "console frontend build failed — see $INSTALL_LOG"
+    else
+        die "the console frontend is not built and npm is unavailable. Install Node.js 20+ and re-run."
+    fi
+fi
+
 echo ""
 echo "  Starting CorvinOS console server ..."
-
-CONSOLE_URL="http://localhost:8765/console/"
-MAX_RETRIES=60
-RETRY_COUNT=0
-SERVER_READY=0
-
-if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
-    printf '  %s Console already running (started by the setup wizard).\n' "$(_green '✓')"
-    SERVER_PID="$(pgrep -f corvinos-serve 2>/dev/null | head -1 || true)"
+if [ "$(_console_code)" = "200" ]; then
+    printf '  %s Console already running.\n' "$(_green '✓')"
 else
-    nohup corvinos-serve >/dev/null 2>&1 &
-    SERVER_PID=$!
+    _start_console
 fi
 
-printf '  %s waiting for server to come up ' "$(_dim '⏳')"
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
-        printf ' %s Server is ready! (%ss)\n' "$(_green '✓')" "$RETRY_COUNT"
-        SERVER_READY=1
-        break
+if ! _wait_console 90; then
+    # One restart covers the "booted before dist/ existed" case.
+    printf '  %s Console not serving the UI yet — restarting it once ...\n' "$(_yellow '⚠')"
+    _start_console
+    if ! _wait_console 90; then
+        printf '%s — the console did not come up at %s\n' "$(_red 'Error')" "$CONSOLE_URL"
+        if [ "$USE_SYSTEMD" = "1" ]; then
+            printf '  Logs: %s\n' "$(_bold 'journalctl --user -u corvin-webui -n 100')"
+        else
+            printf '  Logs: %s\n' "$(_bold "$INSTALL_LOG")"
+        fi
+        exit 2
     fi
-    RETRY_COUNT=$((RETRY_COUNT + 1))
-    printf '.'
-    sleep 1
-done
-[ "$SERVER_READY" -ne 1 ] && printf '\n'
-
-if [ "$SERVER_READY" -ne 1 ]; then
-    printf '  %s Server is taking longer than expected — opening the console anyway; reload the tab if it does not connect immediately: %s\n' "$(_yellow '⚠')" "$CONSOLE_URL"
-    exit 2
 fi
+curl -fs -m 3 "$HEALTHZ_URL" >/dev/null 2>&1 \
+    || printf '  %s %s did not answer — the UI loads, but check the console logs.\n' "$(_yellow '⚠')" "$HEALTHZ_URL"
 
-# Health Check Phase (ADR-0867: Two-layer verification)
-printf '\n'
-HEALTHZ_PASS=0
-if healthz_check_probe "http://localhost:8765/v1/console/healthz" "console endpoint" && \
-   healthz_check_probe "http://localhost:8765/v1/gateway/healthz" "gateway endpoint"; then
-    HEALTHZ_PASS=1
-fi
-
-if [ "$HEALTHZ_PASS" -ne 1 ]; then
-    printf '%s — daemon health check failed.\n' "$(_red 'Error')"
-    printf 'Try: kill %s && corvinos-serve && corvin-install\n' "$SERVER_PID"
-    exit 2
-fi
-
-if [ -t 1 ]; then
-    [ "$SERVER_READY" -eq 1 ] && echo "  Launching CorvinOS console in your browser ..."
-    if command -v open >/dev/null 2>&1; then
+if [ -t 1 ] || [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    echo "  Launching CorvinOS console in your browser ..."
+    if command -v open >/dev/null 2>&1 && [ "$(uname -s)" = "Darwin" ]; then
         open "$CONSOLE_URL" 2>/dev/null || true
     elif command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "$CONSOLE_URL" 2>/dev/null || true
+        xdg-open "$CONSOLE_URL" >/dev/null 2>&1 || true
     elif command -v wslview >/dev/null 2>&1; then
         wslview "$CONSOLE_URL" 2>/dev/null || true
     fi
+fi
+
+if [ "$USE_SYSTEMD" = "1" ]; then
+    RUN_INFO="systemd user service corvin-webui"
+    STOP_CMD="systemctl --user stop corvin-webui"
+else
+    RUN_INFO="background PID ${SERVER_PID:-$(pgrep -f corvinos-serve 2>/dev/null | head -1)}"
+    STOP_CMD="pkill -f corvinos-serve"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -459,11 +562,11 @@ $(_bold "━━━━━━━━━━━━━━━━━━━━━━━�
  $(_bold 'Your console is running:')
 
      $(_dim '→ http://localhost:8765/console/')
-     $(_dim '→ Background PID: '"$SERVER_PID")
+     $(_dim "→ $RUN_INFO")
 
  $(_dim 'To stop the server:')
 
-     $(_bold 'kill '"$SERVER_PID"' || killall corvinos-serve')
+     $(_bold "$STOP_CMD")
 
 $(_bold "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
  $(_bold 'Commands')
