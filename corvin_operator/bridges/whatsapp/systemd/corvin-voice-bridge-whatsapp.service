@@ -7,7 +7,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory=__REPO_ROOT__/operator/bridges/whatsapp
+WorkingDirectory=__REPO_ROOT__/corvin_operator/bridges/whatsapp
 ExecStart=__NODE_BIN__ daemon.js
 Restart=always
 RestartSec=5

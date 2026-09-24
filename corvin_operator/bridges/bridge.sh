@@ -138,6 +138,11 @@ _resolve_npm() {
 }
 _resolve_python() {
   if [[ -n "${PY_BIN:-}" && -x "$PY_BIN" ]]; then printf '%s' "$PY_BIN"; return; fi
+  # The repo venv carries the adapter's dependencies; a bare `python3` from
+  # PATH (e.g. ~/.local/bin) does not, and an adapter unit installed against it
+  # crash-loops on the first import (found 2026-09-24 re-running install-units).
+  local repo_py="$BRIDGES_DIR/../../.venv/bin/python3"
+  if [[ -x "$repo_py" ]]; then (cd "$(dirname "$repo_py")" && printf '%s/python3' "$(pwd)"); return; fi
   command -v python3 2>/dev/null || true
 }
 NODE_BIN="$(_resolve_node)"

@@ -3,7 +3,7 @@ Description=Corvin-OS daily user-style learner sweep (Layer 26)
 
 [Service]
 Type=oneshot
-ExecStart=__PYTHON_BIN__ __REPO_ROOT__/operator/bridges/shared/user_style.py sweep
+ExecStart=__PYTHON_BIN__ __REPO_ROOT__/corvin_operator/bridges/shared/user_style.py sweep
 StandardOutput=journal
 StandardError=journal
 EnvironmentFile=-%h/.config/corvin-voice/service.env

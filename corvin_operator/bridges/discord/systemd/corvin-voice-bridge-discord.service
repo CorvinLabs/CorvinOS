@@ -7,7 +7,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-WorkingDirectory=__REPO_ROOT__/operator/bridges/discord
+WorkingDirectory=__REPO_ROOT__/corvin_operator/bridges/discord
 ExecStart=__NODE_BIN__ daemon.js
 Restart=on-failure
 RestartSec=60

@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=__REPO_ROOT__/operator/bridges/slack
+WorkingDirectory=__REPO_ROOT__/corvin_operator/bridges/slack
 ExecStart=__NODE_BIN__ daemon.js
 Restart=on-failure
 RestartSec=5
