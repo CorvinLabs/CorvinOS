@@ -48,10 +48,10 @@ from that result instead of trusting a hand-typed number:
 Gate criteria may name ``requires_tasks``; their state is then derived (ok when
 all named tasks are done, fail once the gate time passed without that).
 
-Writes go through :func:`update_task` / :func:`set_gate_decision` /
-:func:`close_run` only, which
-validate, write atomically at 0o600 and return the fresh board. The console
-route layer audits each mutation.
+Authoring writes were retired by the Task-Tracking SSOT cutover (ADR-2056):
+the file is frozen, its items were imported into ``core/task_tracking`` and the
+console routes answer 410. The only remaining writer is the evidence verifier
+(``initiatives_verify.py``) via :func:`_write_raw`.
 """
 from __future__ import annotations
 
@@ -442,78 +442,3 @@ def _write_raw(path: Path, data: dict[str, Any]) -> None:
             pass
         raise
 
-
-def _find(raw: dict[str, Any], iid: str) -> dict[str, Any]:
-    for ini in raw["initiatives"]:
-        if str(ini.get("id")) == iid:
-            return ini
-    raise NotFound(f"initiative {iid!r} not found")
-
-
-def update_task(tenant_id: str, iid: str, tid: str, *,
-                status: str | None = None, progress: int | None = None,
-                now: float | None = None) -> dict[str, Any]:
-    """Set a task's status and/or progress. Returns the fresh board."""
-    now = time.time() if now is None else now
-    if status is None and progress is None:
-        raise InitiativeError("nothing to update")
-    if status is not None and status not in TASK_STATUSES:
-        raise InitiativeError(f"status must be one of {TASK_STATUSES}")
-    if progress is not None and not (0 <= int(progress) <= 100):
-        raise InitiativeError("progress must be 0..100")
-    raw, path = _load_raw(tenant_id)
-    if path is None:
-        raise InitiativeError("tenant home unresolvable")
-    ini = _find(raw, iid)
-    task = next((t for t in ini.get("tasks") or [] if str(t.get("id")) == tid), None)
-    if task is None:
-        raise NotFound(f"task {tid!r} not found in {iid!r}")
-    if status is not None:
-        if status == "done" and task.get("status") != "done":
-            task["completed_at"] = _iso(now)
-        elif status != "done":
-            task.pop("completed_at", None)
-        task["status"] = status
-    if progress is not None:
-        task["progress"] = int(progress)
-    _write_raw(path, raw)
-    return board(tenant_id, now=now)
-
-
-def set_gate_decision(tenant_id: str, iid: str, gid: str, decision: str,
-                      *, now: float | None = None) -> dict[str, Any]:
-    """Record a gate decision (pending/go/no_go). Returns the fresh board."""
-    if decision not in GATE_DECISIONS:
-        raise InitiativeError(f"decision must be one of {GATE_DECISIONS}")
-    raw, path = _load_raw(tenant_id)
-    if path is None:
-        raise InitiativeError("tenant home unresolvable")
-    ini = _find(raw, iid)
-    gate = next((g for g in ini.get("gates") or [] if str(g.get("id")) == gid), None)
-    if gate is None:
-        raise NotFound(f"gate {gid!r} not found in {iid!r}")
-    gate["decision"] = decision
-    _write_raw(path, raw)
-    return board(tenant_id, now=now)
-
-
-def close_run(tenant_id: str, iid: str, outcome: str | None,
-              *, now: float | None = None) -> dict[str, Any]:
-    """Close a run as completed/cancelled, or reopen it with ``outcome=None``.
-
-    Closing records ``closed: {at, outcome}``; reopening removes only that
-    record — tasks, gates and their history are untouched.
-    """
-    now = time.time() if now is None else now
-    if outcome is not None and outcome not in CLOSE_OUTCOMES:
-        raise InitiativeError(f"outcome must be one of {CLOSE_OUTCOMES} or null")
-    raw, path = _load_raw(tenant_id)
-    if path is None:
-        raise InitiativeError("tenant home unresolvable")
-    ini = _find(raw, iid)
-    if outcome is None:
-        ini.pop("closed", None)
-    else:
-        ini["closed"] = {"at": _iso(now), "outcome": outcome}
-    _write_raw(path, raw)
-    return board(tenant_id, now=now)

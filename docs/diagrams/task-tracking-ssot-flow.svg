@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Task-Tracking SSOT — write path, read path, runs and the initiatives.json cutover</title>
+  <desc>The Tasks panel calls /v1/console/task-tracking. Writes go through the service: apply in a SQLite transaction, append a task_item record to the tenant audit chain, then commit; a chain failure rolls back and answers 503. Reads derive rollups and attach evidence from the frozen initiatives.json by external_ref. Runtime runs stay in their own stores and are only linked. initiatives.json was imported once and its write routes now answer 410.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+    </marker>
+    <style>
+      .box{fill:#fff;stroke:#555;stroke-width:1.5}
+      .core{fill:#fbf4e6;stroke:#a67a2c;stroke-width:1.5}
+      .chain{fill:#eef4fb;stroke:#2a78c6;stroke-width:1.5}
+      .frozen{fill:#f4f4f2;stroke:#999;stroke-width:1.5;stroke-dasharray:5 4}
+      .t{font-size:14px;font-weight:600;fill:#222}
+      .s{font-size:12px;fill:#444}
+      .l{font-size:11px;fill:#555}
+      .ln{stroke:#555;stroke-width:1.5;fill:none}
+    </style>
+  </defs>
+
+  <rect class="box" x="20" y="20" width="250" height="110" rx="8"/>
+  <text class="t" x="36" y="46">Tasks panel  /app/initiatives</text>
+  <text class="s" x="36" y="68">Tree · Board · Timeline · Table</text>
+  <text class="s" x="36" y="86">Activity (runs, read-only)</text>
+  <text class="s" x="36" y="104">detail drawer — PATCH with version</text>
+  <text class="l" x="36" y="122">web-next/src/pages/tasks/</text>
+
+  <rect class="box" x="330" y="20" width="270" height="110" rx="8"/>
+  <text class="t" x="346" y="46">/v1/console/task-tracking/*</text>
+  <text class="s" x="346" y="68">tenant = session (rec.tenant_id)</text>
+  <text class="s" x="346" y="86">writes need CSRF · 409 stale version</text>
+  <text class="s" x="346" y="104">503 when the chain does not commit</text>
+  <text class="l" x="346" y="122">routes/task_tracking.py</text>
+
+  <path class="ln" d="M270,75 L330,75" marker-end="url(#a)"/>
+
+  <rect class="core" x="330" y="180" width="270" height="150" rx="8"/>
+  <text class="t" x="346" y="206">service.py — one transaction</text>
+  <text class="s" x="346" y="230">1  apply change (items, deps, runs)</text>
+  <text class="s" x="346" y="250">2  append task_item.* to the chain</text>
+  <text class="s" x="346" y="270">3  insert reference row (events)</text>
+  <text class="s" x="346" y="290">4  COMMIT — chain failure → ROLLBACK</text>
+  <text class="l" x="346" y="314">reads: rollups + overdue derived</text>
+
+  <path class="ln" d="M465,130 L465,180" marker-end="url(#a)"/>
+
+  <rect class="chain" x="660" y="160" width="240" height="90" rx="8"/>
+  <text class="t" x="676" y="186">Tenant audit chain</text>
+  <text class="s" x="676" y="208">global/forge/audit.jsonl</text>
+  <text class="l" x="676" y="228">ids, enums, field names — no text</text>
+
+  <path class="ln" d="M600,240 L660,215" marker-end="url(#a)"/>
+  <text class="l" x="606" y="222">2</text>
+
+  <rect class="core" x="660" y="280" width="240" height="90" rx="8"/>
+  <text class="t" x="676" y="306">tasks.db (SQLite, 0o600)</text>
+  <text class="s" x="676" y="328">global/task_tracking/</text>
+  <text class="l" x="676" y="348">items · dependencies · runs · events</text>
+
+  <path class="ln" d="M600,300 L660,318" marker-end="url(#a)"/>
+  <text class="l" x="610" y="298">1 3 4</text>
+
+  <rect class="box" x="20" y="200" width="250" height="110" rx="8"/>
+  <text class="t" x="36" y="226">Run stores (unchanged)</text>
+  <text class="s" x="36" y="248">chat · background · ACS · forge</text>
+  <text class="s" x="36" y="266">gateway · compute · workflow …</text>
+  <text class="l" x="36" y="288">task_sources.py — linked, never copied</text>
+
+  <path class="ln" d="M270,255 L330,255" marker-end="url(#a)"/>
+  <text class="l" x="276" y="248">resolve links</text>
+
+  <rect class="frozen" x="20" y="370" width="580" height="120" rx="8"/>
+  <text class="t" x="36" y="396">initiatives.json — frozen for authoring</text>
+  <text class="s" x="36" y="418">imported once (idempotent on external_ref) → initiative / epic / task / gate …</text>
+  <text class="s" x="36" y="438">old PATCH / PUT routes answer 410 · file is not deleted</text>
+  <text class="s" x="36" y="458">evidence verifier (timer) still writes verification → attached on read by external_ref</text>
+  <text class="l" x="36" y="478">task_tracking_import.py · initiatives_verify.py</text>
+
+  <path class="ln" d="M465,370 L465,330" marker-end="url(#a)"/>
+  <text class="l" x="472" y="356">import + evidence</text>
+</svg>

@@ -9,7 +9,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: "initiatives-live.spec.ts",
+  testMatch: "tasks-live.spec.ts",
   workers: 1,
   reporter: "line",
   use: { ...devices["Desktop Chrome"] },

@@ -94,34 +94,25 @@ class InitiativesRouteTest(unittest.TestCase):
             self.assertEqual(body["totals"]["running"], 2)
             self.assertEqual(body["totals"]["initiatives_blocked"], 1)
 
-    def test_mutations_need_csrf_persist_and_audit(self):
+    def test_authoring_writes_are_retired_and_the_file_stays_frozen(self):
+        """ADR-2056 cutover: the three authoring writes answer 410 and touch nothing."""
         now = datetime.now(timezone.utc)
         with _sandbox(self._tmp) as (client, csrf, home, _):
             path = self._write(home, _fixture(now))
-            r = client.patch(f"{_URL}/loop-b/tasks/p0-a", json={"status": "done"})
-            self.assertIn(r.status_code, (401, 403))
-
-            r = client.patch(f"{_URL}/loop-b/tasks/p0-a", json={"status": "done"},
-                             headers={"X-CSRF-Token": csrf})
-            self.assertEqual(r.status_code, 200, r.text)
-            task = r.json()["initiatives"][0]["tasks"][0]
-            self.assertEqual((task["status"], task["progress"]), ("done", 100))
-            self.assertIsNotNone(task["completed_at"])
-            self.assertEqual(json.loads(path.read_text())["initiatives"][0]["tasks"][0]["status"], "done")
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-
-            r = client.put(f"{_URL}/loop-b/gates/blocker", json={"decision": "go"},
-                           headers={"X-CSRF-Token": csrf})
-            self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(r.json()["initiatives"][1]["status"], "running")  # unblocked
-
-            r = client.patch(f"{_URL}/nope/tasks/x", json={"progress": 5},
-                             headers={"X-CSRF-Token": csrf})
-            self.assertEqual(r.status_code, 404)
-
-            actions = [e.get("details", {}).get("action") for e in _audit_events(home)]
-            self.assertIn("initiative.task.update", actions)
-            self.assertIn("initiative.gate.go", actions)
+            before = path.read_bytes()
+            h = {"X-CSRF-Token": csrf}
+            # CSRF is still checked first — an unauthenticated probe gets no new signal.
+            self.assertIn(client.patch(f"{_URL}/loop-b/tasks/p0-a", json={"status": "done"}).status_code,
+                          (401, 403))
+            for method, url, body in (
+                ("patch", f"{_URL}/loop-b/tasks/p0-a", {"status": "done"}),
+                ("put", f"{_URL}/loop-b/gates/blocker", {"decision": "go"}),
+                ("put", f"{_URL}/loop-b/close", {"outcome": "cancelled"}),
+            ):
+                r = getattr(client, method)(url, json=body, headers=h)
+                self.assertEqual(r.status_code, 410, (url, r.text))
+                self.assertIn("task-tracking", r.json()["detail"])
+            self.assertEqual(path.read_bytes(), before)
 
     def test_runs_split_into_active_and_finished_history(self):
         now = datetime.now(timezone.utc)
@@ -142,28 +133,6 @@ class InitiativesRouteTest(unittest.TestCase):
             self.assertEqual(old["time_progress_pct"], 90)  # frozen at finished_at, not now
             self.assertIsNone(old["next_checkpoint"])
             self.assertEqual((body["totals"]["runs_active"], body["totals"]["runs_finished"]), (2, 1))
-
-    def test_close_and_reopen_run(self):
-        now = datetime.now(timezone.utc)
-        with _sandbox(self._tmp) as (client, csrf, home, _):
-            path = self._write(home, _fixture(now))
-            h = {"X-CSRF-Token": csrf}
-            self.assertIn(client.put(f"{_URL}/loop-b/close", json={"outcome": "cancelled"}).status_code, (401, 403))
-            r = client.put(f"{_URL}/loop-b/close", json={"outcome": "cancelled"}, headers=h)
-            self.assertEqual(r.status_code, 200, r.text)
-            b = r.json()["initiatives"][0]
-            self.assertEqual((b["phase"], b["status"], b["task_counts"]["overdue"]), ("finished", "cancelled", 0))
-            self.assertIsNotNone(b["finished_at"])
-            self.assertEqual(json.loads(path.read_text())["initiatives"][0]["closed"]["outcome"], "cancelled")
-
-            r = client.put(f"{_URL}/loop-b/close", json={"outcome": None}, headers=h)
-            self.assertEqual(r.json()["initiatives"][0]["phase"], "active")
-            self.assertNotIn("closed", json.loads(path.read_text())["initiatives"][0])
-            self.assertEqual(client.put(f"{_URL}/loop-b/close", json={"outcome": "bogus"}, headers=h).status_code, 422)
-
-            actions = [e.get("details", {}).get("action") for e in _audit_events(home)]
-            self.assertIn("initiative.close.cancelled", actions)
-            self.assertIn("initiative.reopen", actions)
 
     def test_evidence_drives_status_progress_and_gate(self):
         now = datetime.now(timezone.utc)

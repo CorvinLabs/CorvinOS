@@ -1,6 +1,6 @@
 /**
- * Pure helpers for the Initiatives board — kept out of the component so the
- * number→text mappings are unit-testable (ADR-0761 rule).
+ * Pure time/text helpers for the Tasks panel — kept out of the components so
+ * the number→text mappings are unit-testable (ADR-0761 rule).
  */
 
 /** Countdown text for `targetIso` at `nowMs`. Past targets read "overdue by …". */
@@ -49,15 +49,6 @@ export function formatDuration(seconds: number | null): string {
   return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m` : `${s}s`;
 }
 
-/** How a finished run landed against its deadline. Within one minute = on time. */
-export function scheduleLabel(deltaS: number | null): { text: string; tone: "ok" | "danger" | "secondary" } {
-  if (deltaS === null) return { text: "No deadline data", tone: "secondary" };
-  if (Math.abs(deltaS) < 60) return { text: "On time", tone: "ok" };
-  return deltaS > 0
-    ? { text: `${formatDuration(deltaS)} early`, tone: "ok" }
-    : { text: `${formatDuration(deltaS)} late`, tone: "danger" };
-}
-
 /** "3m ago", "2h 5m ago", "just now". */
 export function formatAgo(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds)) return "never";
@@ -81,16 +72,6 @@ export function evidenceText(v: {
   if (v.paths_total > 0) parts.push(`${v.paths_present}/${v.paths_total} paths present`);
   return parts.join(" · ");
 }
-
-export const STATUS_LABEL: Record<string, string> = {
-  running: "Running",
-  at_risk: "At risk",
-  blocked: "Blocked",
-  scheduled: "Scheduled",
-  done: "Completed",
-  cancelled: "Cancelled",
-  pending: "Pending",
-};
 
 /** One fixed colour per task TYPE (nominal → identity, never by value).
  *  Full class names so Tailwind keeps them. */

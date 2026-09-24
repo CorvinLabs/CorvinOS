@@ -66,6 +66,12 @@
     --viz-tier-3: #775822;
     --viz-baseline: #9b9a9480;
     --viz-grid: #e3e1dc;
+    /* Tasks-panel status marks (timeline/board). Validated with the dataviz
+       validator against #ffffff, all pairs: band, chroma, CVD, normal-vision,
+       contrast all pass. "open" is deliberately NOT a fill — a hollow mark. */
+    --viz-status-progress: #c08a1e;
+    --viz-status-blocked: #b0306a;
+    --viz-status-complete: #2a78c6;
   }
 
   [data-theme="dark"] {
@@ -99,6 +105,10 @@
     --viz-tier-3: #ae8132;
     --viz-baseline: #6b6a6580;
     --viz-grid: #1e2636;
+    /* Same three statuses, dark steps — validated against #0e1320, all pairs. */
+    --viz-status-progress: #b88422;
+    --viz-status-blocked: #d05a9c;
+    --viz-status-complete: #2a8fd6;
   }
 
   * {

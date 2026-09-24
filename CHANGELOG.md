@@ -1,5 +1,16 @@
 # CorvinOS Changelog
 
+## [Unreleased]
+
+### Tasks panel on the Task-Tracking SSOT (ADR-2056)
+- `core/task_tracking/` is now a working store: per-tenant SQLite, audit-first
+  `task_item.*` events in the core chain, hierarchy + dependency rules,
+  optimistic locking, soft delete with cascade/restore.
+- Console API `/v1/console/task-tracking/*`; the Tasks panel (`/app/initiatives`)
+  shows Tree, Board, Timeline, Table and Activity views with a detail drawer.
+- `initiatives.json` imported once and frozen: its write routes answer 410; the
+  evidence verifier keeps running and is attached by `external_ref`.
+
 ## [1.0.0] — 2026-09-10
 
 ### 🎉 Release Candidate — Production Ready

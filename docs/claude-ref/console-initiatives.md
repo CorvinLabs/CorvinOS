@@ -1,7 +1,15 @@
-# Console — Initiatives board
+# Console — Initiatives board (superseded as a panel)
 
-Live status of running and finished initiative tasks. Sidebar: **Tasks**,
-directly below **Learnings** (`/app/initiatives`). ADR-2035.
+> **2026-09-24 — ADR-2056 cutover.** The **Tasks** panel (`/app/initiatives`) now
+> renders the Task-Tracking SSOT — see [task-tracking-ssot.md](task-tracking-ssot.md).
+> This file's contents were imported once; `initiatives.json` is **frozen for
+> authoring** (the PATCH/PUT routes below answer **410**). What still runs: the
+> board `GET /initiatives` (read-only), the evidence verifier and its timer
+> (which keep writing `verification` into the file — the SSOT reads it by
+> `external_ref`), and `GET /initiatives/tasks` (runtime runs, the panel's
+> Activity view). The schema below documents the frozen file.
+
+Originally: live status of running and finished initiative tasks. ADR-2035.
 
 ## Data
 

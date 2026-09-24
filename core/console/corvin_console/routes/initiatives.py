@@ -8,26 +8,26 @@ Endpoints (all under /v1/console):
                                                         gateway, forge, compute, scheduled,
                                                         skill creator, initiative), normalised;
                                                         see ``task_sources.py`` (session)
-  PATCH /initiatives/{iid}/tasks/{tid}                → set status/progress (CSRF, audited)
-  PUT   /initiatives/{iid}/gates/{gid}                → set gate decision (CSRF, audited)
+  PATCH /initiatives/{iid}/tasks/{tid}                → 410 — retired by the SSOT cutover
+  PUT   /initiatives/{iid}/gates/{gid}                → 410 — (ADR-2056); authoring happens in
+  PUT   /initiatives/{iid}/close                      → 410 — /v1/console/task-tracking/*
   POST  /initiatives/verify[?if_changed=true]         → start an evidence verification run in
                                                         the background (CSRF; 202). With
                                                         if_changed only when the repo/evidence
                                                         changed or the last run is > 30 min old
                                                         (the page calls this on open). Audited
                                                         only when a run actually starts.
-  PUT   /initiatives/{iid}/close                      → close run (completed/cancelled) or
-                                                        reopen it (outcome=null) (CSRF, audited)
 
-The tenant comes from the authenticated session only. Data model and
+The board GET and the verifier stay: the evidence verifier still writes its
+results into the (otherwise frozen) file, and the Task-Tracking route reads
+them by ``external_ref``. The tenant comes from the authenticated session only. Data model and
 derivation rules: ``corvin_console/initiatives.py``.
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 
 from .. import audit as console_audit
 from .. import auth as session_auth
@@ -72,83 +72,22 @@ def get_all_tasks(
                               finished_offset=finished_offset)
 
 
-class TaskPatch(BaseModel):
-    status: Literal["pending", "running", "done", "blocked"] | None = None
-    progress: int | None = Field(default=None, ge=0, le=100)
+_RETIRED = (
+    "initiatives.json is frozen: work items live in the Task-Tracking store now "
+    "— use /v1/console/task-tracking/items"
+)
 
 
 @router.patch("/{iid}/tasks/{tid}")
-async def patch_task(
-    iid: str,
-    tid: str,
-    body: TaskPatch,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> dict:
-    try:
-        result = board_mod.update_task(rec.tenant_id, iid, tid,
-                                       status=body.status, progress=body.progress)
-    except board_mod.InitiativeError as exc:
-        _raise(exc)
-        raise
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="initiative.task.update",
-        target_kind="initiative_task",
-        target_id=f"{iid}/{tid}",
-    )
-    return result
-
-
-class GateBody(BaseModel):
-    decision: Literal["pending", "go", "no_go"]
-
-
 @router.put("/{iid}/gates/{gid}")
-async def put_gate(
-    iid: str,
-    gid: str,
-    body: GateBody,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> dict:
-    try:
-        result = board_mod.set_gate_decision(rec.tenant_id, iid, gid, body.decision)
-    except board_mod.InitiativeError as exc:
-        _raise(exc)
-        raise
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action=f"initiative.gate.{body.decision}",
-        target_kind="initiative_gate",
-        target_id=f"{iid}/{gid}",
-    )
-    return result
-
-
-class CloseBody(BaseModel):
-    outcome: Literal["completed", "cancelled"] | None
-
-
 @router.put("/{iid}/close")
-async def put_close(
-    iid: str,
-    body: CloseBody,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> dict:
-    try:
-        result = board_mod.close_run(rec.tenant_id, iid, body.outcome)
-    except board_mod.InitiativeError as exc:
-        _raise(exc)
-        raise
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action=f"initiative.close.{body.outcome}" if body.outcome else "initiative.reopen",
-        target_kind="initiative",
-        target_id=iid,
-    )
-    return result
+async def retired_write(rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """The authoring writes into initiatives.json were retired by the SSOT cutover (ADR-2056 §6).
+
+    410, not 404: the path existed, and a stale client should say why it stopped
+    working. CSRF still applies, so an unauthenticated probe learns nothing new.
+    """
+    raise HTTPException(status_code=410, detail=_RETIRED)
 
 
 @router.post("/verify", status_code=202)

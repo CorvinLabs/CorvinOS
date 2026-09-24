@@ -1,15 +1,17 @@
 /**
- * Every task on this install, typed — the "All tasks" part of the
- * Initiatives page. Data: GET /v1/console/initiatives/tasks (task_sources.py),
- * which reads each subsystem's own store (chat, background, ACS, workflow,
- * flow, gateway, forge, compute, scheduled, skill creator, initiative).
+ * Every runtime run on this install, typed — the "Activity" view of the Tasks
+ * panel. Data: GET /v1/console/initiatives/tasks (task_sources.py), which reads
+ * each subsystem's own store (chat, background, ACS, workflow, flow, gateway,
+ * forge, compute, scheduled, skill creator). Runs are never copied into the
+ * Task-Tracking store — a run can only be LINKED to a work item.
  */
+import type { ReactNode } from "react";
 import { AlertTriangle, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { TaskType, TaskTypeSummary, UnifiedTask } from "@/lib/api/initiatives";
 import { cn } from "@/lib/utils";
-import { TYPE_CLASS, UNIFIED_STATUS, formatUtc, taskDuration } from "./initiatives-format";
+import { TYPE_CLASS, UNIFIED_STATUS, formatUtc, taskDuration } from "./format";
 
 export function TypeBadge({ type, label }: { type: string; label: string }) {
   return (
@@ -47,7 +49,9 @@ export function TypeChips({ types, view, selected, onToggle, onAll }: {
   );
 }
 
-export function TaskTable({ tasks, now, emptyText }: { tasks: UnifiedTask[]; now: number; emptyText: string }) {
+export function TaskTable({ tasks, now, emptyText, action }: {
+  tasks: UnifiedTask[]; now: number; emptyText: string; action?: (t: UnifiedTask) => ReactNode;
+}) {
   if (tasks.length === 0) return <p className="text-sm text-muted-foreground">{emptyText}</p>;
   return (
     <div className="overflow-x-auto rounded-lg border">
@@ -60,6 +64,7 @@ export function TaskTable({ tasks, now, emptyText }: { tasks: UnifiedTask[]; now
             <th className="px-3 py-2 font-medium">Started</th>
             <th className="px-3 py-2 font-medium">Ended</th>
             <th className="px-3 py-2 text-right font-medium">Duration</th>
+            {action && <th className="px-3 py-2"><span className="sr-only">Actions</span></th>}
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -81,6 +86,7 @@ export function TaskTable({ tasks, now, emptyText }: { tasks: UnifiedTask[]; now
                 <td className="whitespace-nowrap px-3 py-2 align-top text-xs">{formatUtc(t.started_at ?? t.created_at)}</td>
                 <td className="whitespace-nowrap px-3 py-2 align-top text-xs">{formatUtc(t.ended_at)}</td>
                 <td className="whitespace-nowrap px-3 py-2 text-right align-top tabular-nums">{taskDuration(t, now)}</td>
+                {action && <td className="px-3 py-2 text-right align-top">{action(t)}</td>}
               </tr>
             );
           })}

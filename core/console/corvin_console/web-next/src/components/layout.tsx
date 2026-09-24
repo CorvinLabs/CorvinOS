@@ -170,7 +170,7 @@ const NAV_GROUPS: NavGroup[] = [
       // this list makes it reachable. tests/unit/panel-nav-wiring.test.ts verifies
       // the two stay in sync.
       { to: "/app/vibe-engineering", label: "Learnings", icon: Brain },
-      // "Tasks": every task type + the initiatives board (routes/initiatives.py) — directly below Learnings. Sidebar label per operator request 2026-09-22; the route stays /app/initiatives for existing links.
+      // "Tasks": the Task-Tracking SSOT (routes/task_tracking.py) + runtime activity — directly below Learnings. Sidebar label per operator request 2026-09-22; the route stays /app/initiatives for existing links.
       { to: "/app/initiatives", label: "Tasks", icon: ListChecks },
     ],
   },

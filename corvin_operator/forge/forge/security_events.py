@@ -573,6 +573,19 @@ EVENT_SEVERITY: dict[str, str] = {
     "task.spawn_started":   "INFO",
     "task.spawn_terminal":  "INFO",
     "task.spawn_denied":    "WARNING",
+    # ADR-2056 — Task-Tracking SSOT work items (core/task_tracking/service.py).
+    # ids, enums and field NAMES only — never title/description/assignee/run_ref.
+    "task_item.created":            "INFO",
+    "task_item.updated":            "INFO",
+    "task_item.deleted":            "WARNING",
+    "task_item.restored":           "INFO",
+    "task_item.decision_recorded":  "INFO",
+    "task_item.dependency_added":   "INFO",
+    "task_item.dependency_removed": "INFO",
+    "task_item.run_linked":         "INFO",
+    "task_item.run_unlinked":       "INFO",
+    "task_item.imported":           "INFO",
+    "task_item.rolled_back":        "WARNING",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
     # Allow-list: instance_id, sest_fp_prefix (16 hex chars), pairing_id,
@@ -2244,6 +2257,25 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # Canonical here so the allowlist is load-bearing regardless of import order;
     # engine_span._register_allowlists() unions the same set (idempotent).
     # NEVER: prompt/output/transcript text, raw uid/email (GDPR Art. 5).
+    # ADR-2056 — Task-Tracking SSOT. NEVER: title, description, assignee,
+    # owner, run_ref (a chat run's ref names a conversation) — they stay in the
+    # tenant's local store. Emitted by core/task_tracking/service.py::_record.
+    **{
+        _et: frozenset({
+            "item_id", "kind", "parent_id", "status", "priority", "category", "source",
+            "fields", "old_status", "new_status", "old_priority", "new_priority",
+            "version", "cascade_count", "decision", "previous", "depends_on_id",
+            "dep_type", "run_type", "count", "actor_kind", "sid_fingerprint", "tenant_id",
+            "old_approval", "new_approval", "error_class",
+        })
+        for _et in (
+            "task_item.created", "task_item.updated", "task_item.deleted",
+            "task_item.restored", "task_item.decision_recorded",
+            "task_item.dependency_added", "task_item.dependency_removed",
+            "task_item.run_linked", "task_item.run_unlinked", "task_item.imported",
+            "task_item.rolled_back",
+        )
+    },
     "engine.span.start": frozenset({
         "span_id", "parent_span_id", "role", "engine_id", "model_id",
         "run_id", "turn_id", "started_at",

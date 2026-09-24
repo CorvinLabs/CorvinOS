@@ -147,9 +147,10 @@ export const VibeEngineeringPage = React.lazy(() =>
   import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
 );
 
-// Initiatives board — live running/finished initiative tasks (routes/initiatives.py).
+// Tasks — the Task-Tracking SSOT (routes/task_tracking.py): tree, board, timeline,
+// table + runtime activity. Route id stays "initiatives" (/app/initiatives) for existing links.
 export const InitiativesPage = React.lazy(() =>
-  import("@/pages/initiatives").then((m) => ({ default: m.default }))
+  import("@/pages/tasks").then((m) => ({ default: m.default }))
 );
 
 
