@@ -54,6 +54,23 @@ jq '.tasks | length' docs/reference/task_registry_snapshots/$(ls docs/reference/
 git log --oneline --grep='Task Registry Snapshot' | head -5
 ```
 
+### corvin-task-tracking-sync.service / .timer
+
+**Purpose:** Keep the Tasks panel (Task-Tracking SSOT) current from this host's
+git history and Claude Code sessions — one work item per ADR referenced in the
+last 7 days of commits, status from the ADR, commits and sessions linked as
+runs (ADR-2060, `docs/claude-ref/task-tracking-ssot.md`).
+
+**Runs:** every 5 min, `python -m corvin_console.task_tracking_git_sync --tenant _default`.
+A run that changes nothing writes nothing; operator edits are never overwritten.
+
+```bash
+cp systemd/corvin-task-tracking-sync.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now corvin-task-tracking-sync.timer
+journalctl --user -u corvin-task-tracking-sync.service -n 5   # one JSON summary line per run
+```
+
 ## References
 
 - **ADR-0864:** Git-Tracked Registry Snapshots

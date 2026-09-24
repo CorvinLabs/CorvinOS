@@ -272,6 +272,40 @@ def has_any_rows(tenant_id: str) -> bool:
         return conn.execute("SELECT 1 FROM items WHERE tenant_id=? LIMIT 1", (tenant_id,)).fetchone() is not None
 
 
+#: Events that mean someone decided about an item's fields or existence.
+_OWNERSHIP_EVENTS = ("task_item.updated", "task_item.decision_recorded", "task_item.deleted",
+                     "task_item.restored")
+
+
+def synced_items(tenant_id: str, ref_prefix: str, *, actor: str) -> dict[str, dict[str, Any]]:
+    """Items whose ``external_ref`` starts with *ref_prefix*, deleted ones included,
+    keyed by ref — for a sync writer (ADR-2060). Each carries ``run_refs``
+    (``{(run_type, run_ref)}`` already linked) and ``foreign_edit``: True once
+    anyone but *actor* updated, decided, deleted or restored it — from then on
+    the item is the operator's and a sync must not patch its fields."""
+    if not store.exists(tenant_id):
+        return {}
+    like = ref_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    with store.connect(tenant_id) as conn:
+        rows = [_row(r) for r in conn.execute(
+            "SELECT * FROM items WHERE tenant_id=? AND external_ref LIKE ? ESCAPE '\\'", (tenant_id, like))]
+        if not rows:
+            return {}
+        ids = [r["id"] for r in rows]
+        marks = ",".join("?" * len(ids))
+        runs = conn.execute(f"SELECT item_id, run_type, run_ref FROM runs WHERE tenant_id=? AND item_id IN ({marks})",
+                            (tenant_id, *ids)).fetchall()
+        foreign = {r["item_id"] for r in conn.execute(
+            f"SELECT DISTINCT item_id FROM events WHERE tenant_id=? AND item_id IN ({marks})"
+            f" AND actor != ? AND event_type IN ({','.join('?' * len(_OWNERSHIP_EVENTS))})",
+            (tenant_id, *ids, actor, *_OWNERSHIP_EVENTS))}
+    by_item: dict[str, set[tuple[str, str]]] = {}
+    for r in runs:
+        by_item.setdefault(r["item_id"], set()).add((r["run_type"], r["run_ref"]))
+    return {r["external_ref"]: {**r, "run_refs": by_item.get(r["id"], set()), "foreign_edit": r["id"] in foreign}
+            for r in rows}
+
+
 #: Categories that mark a date rather than a piece of work: never overdue,
 #: never in the KPI counts.
 MARKER_CATEGORIES = ("checkpoint",)

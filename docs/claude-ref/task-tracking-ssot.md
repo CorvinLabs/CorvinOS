@@ -3,7 +3,8 @@
 Work items — initiatives, epics, stories, tasks, subtasks, issues, proposals —
 live in ONE per-tenant store. The console's **Tasks** panel (`/app/initiatives`,
 sidebar below Learnings) renders it. ADR-2051 (model), amended by **ADR-2056**
-(storage, kinds, console surface, cutover). Diagram:
+(storage, kinds, console surface, cutover) and **ADR-2060** (host activity:
+agent sessions, commits, ADR-derived items kept current by a sync). Diagram:
 [`docs/diagrams/task-tracking-ssot-flow.svg`](../diagrams/task-tracking-ssot-flow.svg).
 
 ## Where things live
@@ -16,6 +17,8 @@ sidebar below Learnings) renders it. ADR-2051 (model), amended by **ADR-2056**
 | Reads (derived rollups) + audited mutations | `core/task_tracking/service.py` |
 | Console routes `/v1/console/task-tracking/*` | `core/console/corvin_console/routes/task_tracking.py` |
 | `initiatives.json` importer (CLI + route) | `core/console/corvin_console/task_tracking_import.py` |
+| Host activity readers (Claude Code sessions, git) | `core/console/corvin_console/host_activity.py` |
+| Git/ADR sync writer (CLI, timer every 5 min) | `core/console/corvin_console/task_tracking_git_sync.py`, `systemd/corvin-task-tracking-sync.{service,timer}` |
 | Panel | `web-next/src/pages/tasks/` (encodings in `encodings.ts`) |
 | API client | `web-next/src/lib/api/task-tracking.ts` |
 
@@ -96,6 +99,45 @@ Chat turns, background/ACS/gateway/forge/compute runs stay in their own stores
 (`task_sources.py`). The panel's **Activity** view lists them read-only; "Link"
 attaches one to a work item (`runs` table). Bridge chat text never enters the
 store.
+
+## Host activity: agent sessions, commits, ADR-derived items (ADR-2060)
+
+Until 2026-09-24 nothing wrote to the store after the one-time import, so the
+panel showed a frozen plan while the real work — and the Claude Code sessions
+doing it — was invisible. Two run sources and one writer close that:
+
+- **`agent`** (Activity type "Agent session") — interactive Claude Code sessions
+  on this host. Live: `<claude_home>/sessions/<pid>.json` (pid checked against
+  `/proc/<pid>/stat` start time; `busy` → running, `idle` → paused "waiting for
+  input"). Finished: transcripts under `<claude_home>/projects/` touched in the
+  last 7 days. `claude_home` = `CLAUDE_CONFIG_DIR` or `~/.claude`. **Only
+  `entrypoint: cli`** — `sdk-cli` transcripts are CorvinOS's own bridge/ACS
+  workers and carry other people's messages (the `chat` source covers them);
+  sessions with a cwd under `CORVIN_HOME` are excluded too. Titled by the
+  session's `ai-title`, never by prompt text.
+- **`commit`** — non-merge commits of the console's own checkout, last 7 days;
+  id `commit:<repo>:<sha12>` (fixed length — it is stored in run links).
+- Both are **host-level**: shown to tenant `_default` only; any other tenant
+  gets an empty source with a note.
+- **Sync writer** `python -m corvin_console.task_tracking_git_sync [--dry-run]`
+  (timer `corvin-task-tracking-sync.timer`, every 5 min, actor `sync:git`):
+  one initiative per repository (`git:<repo>`), one task per decision record
+  referenced in a commit subject in the window (`git:<repo>#ADR-NNNN`, title
+  from the record's heading, `category: adr`). **Status follows the record's
+  frontmatter status** (accepted/implemented/… → complete,
+  rejected/superseded/… → archived, else or no file → in progress). The ADR
+  checkout is `resolve_adr_root()` (`CORVIN_ADR_ROOT` → sibling `Corvin-ADR` →
+  submodule); both naming schemes (`ADR-NNNN-slug.md`, `NNNN-slug.md`) resolve.
+  Every such commit is linked as a run, and so is each agent session whose
+  transcript ran a `git commit` carrying that commit's subject within the
+  session's lifetime.
+- **Operator edits win.** Insert-only via `import_items`; fields are patched only
+  while no one but `sync:git` has updated, decided, deleted or restored the item
+  (`service.synced_items(..., actor=)` → `foreign_edit`). After that only new run
+  links are added. A deleted item is never re-created or linked. A sync that
+  changes nothing writes nothing to the chain.
+- The panel shows a **Running now** strip above the work views (live agent
+  sessions; "Open activity" filters Activity to them).
 
 ## The `initiatives.json` cutover
 

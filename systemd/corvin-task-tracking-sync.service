@@ -1,0 +1,14 @@
+[Unit]
+Description=CorvinOS Task-Tracking sync — ADR-derived work items, commits and agent sessions from this host
+Documentation=file:///home/shumway/projects/CorvinOS/docs/claude-ref/task-tracking-ssot.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shumway/projects/CorvinOS
+Environment=PYTHONUNBUFFERED=1
+Environment=CORVIN_HOME=/home/shumway/projects/CorvinOS/.corvin
+Environment=PYTHONPATH=/home/shumway/projects/CorvinOS/core/console:/home/shumway/projects/CorvinOS/core/gateway:/home/shumway/projects/CorvinOS/core/license:/home/shumway/projects/CorvinOS/core/compliance:/home/shumway/projects/CorvinOS/corvin_operator/forge:/home/shumway/projects/CorvinOS/corvin_operator/skill-forge:/home/shumway/projects/CorvinOS/corvin_operator/bridges/shared:/home/shumway/projects/CorvinOS/core/plugins:/home/shumway/projects/CorvinOS
+ExecStart=/home/shumway/projects/CorvinOS/core/console/.venv/bin/python -m corvin_console.task_tracking_git_sync --tenant _default
+StandardOutput=journal
+StandardError=journal
+# No User=/Group=: this is a USER unit (see corvin-stats-sync.service).

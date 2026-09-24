@@ -174,6 +174,20 @@ export function buildTree(items: Item[], f: Filters, collapsed: Set<string>): Tr
   };
   for (const r of kids.get(null) ?? []) visit(r, 0);
 
+  // Top level: most recent activity in the subtree first, so current work leads
+  // and a finished plan sinks. Children keep their stored order (sort_key).
+  const latest = new Map<string, number>();
+  const recency = (it: Item, depth: number): number => {
+    const own = Math.max(...[it.updated_at, it.status_changed_at, it.completed_at].map((t) => (t ? Date.parse(t) || 0 : 0)));
+    const sub = depth > 64 ? 0 : Math.max(0, ...(kids.get(it.id) ?? []).map((c) => recency(c, depth + 1)));
+    const v = Math.max(own, sub);
+    latest.set(it.id, v);
+    return v;
+  };
+  const roots = [...(kids.get(null) ?? [])];
+  for (const r of roots) recency(r, 0);
+  roots.sort((a, b) => (latest.get(b.id) ?? 0) - (latest.get(a.id) ?? 0));
+
   const rows: TreeRow[] = [];
   const walk = (it: Item, depth: number) => {
     if (!keep.get(it.id) || depth > 64) return;
@@ -182,7 +196,7 @@ export function buildTree(items: Item[], f: Filters, collapsed: Set<string>): Tr
     if (collapsed.has(it.id) && !active) return;
     for (const c of children) walk(c, depth + 1);
   };
-  for (const r of kids.get(null) ?? []) walk(r, 0);
+  for (const r of roots) walk(r, 0);
   return rows;
 }
 

@@ -32,7 +32,7 @@ import {
   type Item, type ItemCreateBody, type ItemStatus,
 } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
-import { SourceNotes, TaskTable, TypeChips } from "./activity-parts";
+import { RunningNow, SourceNotes, TaskTable, TypeChips } from "./activity-parts";
 import { CreateDialog } from "./create-dialog";
 import { DetailDrawer } from "./detail-drawer";
 import {
@@ -53,7 +53,7 @@ const VIEWS: { id: View; label: string; icon: typeof ListTree }[] = [
   { id: "activity", label: "Activity", icon: FolderTree },
 ];
 const ITEMS_KEY = ["task-tracking", "items"] as const;
-const RUN_TYPES: TaskType[] = ["chat", "background", "acs", "workflow", "flow", "gateway", "forge", "compute", "scheduled", "skill_creator"];
+const RUN_TYPES: TaskType[] = ["chat", "background", "acs", "workflow", "flow", "gateway", "forge", "compute", "scheduled", "skill_creator", "agent", "commit"];
 
 function useNow(skewMs: number): number {
   const [now, setNow] = useState(() => Date.now() + skewMs);
@@ -204,6 +204,18 @@ export default function TasksPage() {
     ...LIVE_QUERY,
     placeholderData: (prev) => prev,
   });
+  // "Running now": the operator's live agent sessions, above every view — what is
+  // actually being worked on, even before it produced a commit or an item.
+  const runningQ = useQuery({
+    queryKey: ["task-tracking", "running-now"],
+    queryFn: ({ signal }) => getAllTasks({ types: ["agent"], finishedLimit: 1 }, signal),
+    ...LIVE_QUERY,
+    placeholderData: (prev) => prev,
+  });
+  const runningNow = useMemo(
+    () => (runningQ.data?.active ?? []).filter((r) => r.status === "running" || r.status === "paused"),
+    [runningQ.data],
+  );
   const link = useMutation({
     mutationFn: (v: { itemId: string; run: UnifiedTask }) => linkTaskRun(v.itemId, v.run.type, v.run.id, csrf),
     onSuccess: (_r, v) => {
@@ -287,6 +299,10 @@ export default function TasksPage() {
               <span>{summary.approvals_pending} {summary.approvals_pending === 1 ? "gate is" : "gates are"} waiting for a go / no-go decision.</span>
               <Button size="sm" variant="outline" className="ml-auto h-7" onClick={() => kpiFilter({ approvalsOnly: true, kinds: [] })}>Review</Button>
             </div>
+          )}
+
+          {workViews && runningNow.length > 0 && (
+            <RunningNow runs={runningNow} onOpen={() => { setRunTypes(new Set<TaskType>(["agent"])); setQuery({ view: "activity" }); }} />
           )}
 
           <div className="flex flex-wrap items-center gap-2 border-b pb-2" role="tablist" aria-label="View">
@@ -377,7 +393,7 @@ export default function TasksPage() {
           {view === "activity" && (
             <div id="tasks-view-panel" role="tabpanel" className="space-y-4" data-testid="activity-view">
               <p className="text-sm text-muted-foreground">
-                What the runtime did — chat turns, background runs, ACS, forge and compute jobs, read from their own stores.
+                What ran on this install — agent sessions, commits, chat turns, background runs, ACS, forge and compute jobs, read from their own stores.
                 Link a run to a task to see it in that task's details.
               </p>
               {runsQ.data && (

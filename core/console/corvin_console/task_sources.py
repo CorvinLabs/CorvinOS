@@ -3,7 +3,9 @@
 CorvinOS has no single task store. Chat turns, background ``/task`` runs, ACS
 runs, gateway runs, forge tool runs, compute runs, workflow and flow runs,
 scheduled reminders and the operator's initiative tasks each persist their own
-records in their own shape. This module reads each store where it already lives
+records in their own shape. Two host-level sources (ADR-2060, ``host_activity.py``)
+add the operator's interactive Claude Code sessions (``agent``) and this
+checkout's commits (``commit``) — default tenant only. This module reads each store where it already lives
 (nothing is copied or migrated), maps it onto one record shape and one status
 vocabulary, and tells the caller which sources exist, which are empty and which
 are not available on this build.
@@ -59,6 +61,8 @@ TYPE_LABELS = {
     "compute": "Compute",
     "scheduled": "Scheduled",
     "skill_creator": "Skill creator",
+    "agent": "Agent session",
+    "commit": "Commit",
 }
 
 _FILE_CACHE: dict[str, tuple[int, int, Any]] = {}
@@ -444,10 +448,53 @@ def _initiatives(tenant_id: str, now: float) -> Iterator[dict]:
             yield rec
 
 
+def _agent_sessions(home: Path, now: float) -> Iterator[dict]:
+    """Interactive Claude Code sessions on this host (ADR-2060, host_activity.py).
+
+    Titled by the session's own ai-title, never prompt text. ``busy`` is
+    running; ``idle`` is paused (waiting for the operator's input)."""
+    from . import host_activity as ha  # noqa: PLC0415
+
+    if home.name != ha.HOST_TENANT:
+        return
+    for s in ha.agent_sessions(now):
+        if s["live"]:
+            status = "running" if s["state"] == "busy" else "paused"
+        else:
+            status = "done"
+        title = s.get("title") or "Claude Code session"
+        rec = _record(id=f"agent:{s['session_id']}", type="agent", subtype=s.get("project") or "session",
+                      title=title, status=status, raw_status=s["state"], started=s.get("started"),
+                      ended=None if s["live"] else s.get("last_active"), now=now,
+                      last_alive=s.get("last_active"),
+                      detail=(f"{s['name']} · " if s.get("name") else "")
+                      + ({"busy": "working", "idle": "waiting for input"}.get(s["state"], "ended")))
+        if s["live"] and rec["status"] == "stale":
+            # The process is verifiably alive (pid + start time): a long think
+            # without a transcript write is not a dead session.
+            rec["status"], rec["stale_reason"] = status, None
+        yield rec
+
+
+def _commits(home: Path, now: float) -> Iterator[dict]:
+    """Non-merge commits of this install's checkout, last 7 days (ADR-2060)."""
+    from . import host_activity as ha  # noqa: PLC0415
+
+    if home.name != ha.HOST_TENANT:
+        return
+    for c in ha.git_commits(now=now):
+        refs = ha.adr_refs(c["subject"])
+        yield _record(id=f"commit:{c['repo']}:{c['short']}", type="commit", subtype=c["repo"],
+                      title=_preview(c["subject"], 120), status="done", raw_status="committed",
+                      ended=c["ts"], started=c["ts"], now=now,
+                      detail=c["short"] + (f" · {', '.join(refs)}" if refs else ""))
+
+
 _SOURCES: list[tuple[str, Callable[[Path, float], Iterator[dict]]]] = [
     ("chat", _chat_tasks), ("acs", _acs_runs), ("gateway", _gateway_runs),
     ("forge", _forge_runs), ("compute", _compute), ("workflow", _workflow_runs),
     ("flow", _flow_runs), ("scheduled", _scheduled), ("skill_creator", _skill_creator),
+    ("agent", _agent_sessions), ("commit", _commits),
 ]
 
 
@@ -459,6 +506,10 @@ def _source_notes(home: Path) -> dict[str, str]:
     if "corvin_console.routes.skill_creator_api" not in sys.modules:
         notes["skill_creator"] = "Skill-creator runs are held in memory by the console process only."
     notes.setdefault("skill_creator", "In memory only — cleared when the console restarts.")
+    from . import host_activity as ha  # noqa: PLC0415
+
+    if home.name != ha.HOST_TENANT:
+        notes["agent"] = notes["commit"] = ha.HOST_NOTE
     return notes
 
 

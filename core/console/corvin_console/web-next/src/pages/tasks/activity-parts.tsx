@@ -6,7 +6,7 @@
  * Task-Tracking store — a run can only be LINKED to a work item.
  */
 import type { ReactNode } from "react";
-import { AlertTriangle, Info } from "lucide-react";
+import { Activity, AlertTriangle, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { TaskType, TaskTypeSummary, UnifiedTask } from "@/lib/api/initiatives";
@@ -97,6 +97,35 @@ export function TaskTable({ tasks, now, emptyText, action }: {
 }
 
 /** Sources that are empty for a reason worth knowing (e.g. not loaded). */
+/**
+ * The operator's live agent sessions (Claude Code at a terminal), one line
+ * above the work views: what is being worked on right now, before it produced
+ * a commit or a work item. "Waiting for input" is a live session between turns.
+ */
+export function RunningNow({ runs, onOpen }: { runs: UnifiedTask[]; onOpen: () => void }) {
+  const working = runs.filter((r) => r.status === "running").length;
+  return (
+    <div data-testid="running-now" className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+      <Activity className="h-4 w-4 text-cyan-700 dark:text-cyan-300" aria-hidden />
+      <span className="font-medium">Running now</span>
+      <span className="text-muted-foreground">
+        {runs.length} agent {runs.length === 1 ? "session" : "sessions"} · {working} working
+      </span>
+      <ul className="flex min-w-0 flex-wrap gap-1.5" aria-label="Live agent sessions">
+        {runs.slice(0, 6).map((r) => (
+          <li key={r.id} title={r.detail ?? undefined}
+            className={cn("max-w-[18rem] truncate rounded-full px-2 py-0.5 text-xs",
+              r.status === "running" ? TYPE_CLASS.agent : "bg-muted text-muted-foreground")}>
+            {r.status === "running" ? "● " : "○ "}{r.title}
+          </li>
+        ))}
+        {runs.length > 6 && <li className="text-xs text-muted-foreground">+{runs.length - 6} more</li>}
+      </ul>
+      <Button size="sm" variant="outline" className="ml-auto h-7" onClick={onOpen}>Open activity</Button>
+    </div>
+  );
+}
+
 export function SourceNotes({ types }: { types: TaskTypeSummary[] }) {
   const notes = types.filter((t) => t.note || t.error);
   if (notes.length === 0) return null;

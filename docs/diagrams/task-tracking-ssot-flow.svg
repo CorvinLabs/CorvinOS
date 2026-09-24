@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
-  <title>Task-Tracking SSOT — write path, read path, runs and the initiatives.json cutover</title>
-  <desc>The Tasks panel calls /v1/console/task-tracking. Writes go through the service: apply in a SQLite transaction, append a task_item record to the tenant audit chain, then commit; a chain failure rolls back and answers 503. Reads derive rollups and attach evidence from the frozen initiatives.json by external_ref. Runtime runs stay in their own stores and are only linked. initiatives.json was imported once and its write routes now answer 410.</desc>
+  <title>Task-Tracking SSOT — write path, read path, runs, the initiatives.json cutover and the host-activity sync</title>
+  <desc>The Tasks panel calls /v1/console/task-tracking. Writes go through the service: apply in a SQLite transaction, append a task_item record to the tenant audit chain, then commit; a chain failure rolls back and answers 503. Reads derive rollups and attach evidence from the frozen initiatives.json by external_ref. Runtime runs stay in their own stores and are only linked. initiatives.json was imported once and its write routes now answer 410. A timer-driven git sync (default tenant only) writes ADR-derived items and links commits and Claude Code sessions through the same audited service.</desc>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
@@ -64,7 +64,8 @@
   <text class="t" x="36" y="226">Run stores (unchanged)</text>
   <text class="s" x="36" y="248">chat · background · ACS · forge</text>
   <text class="s" x="36" y="266">gateway · compute · workflow …</text>
-  <text class="l" x="36" y="288">task_sources.py — linked, never copied</text>
+  <text class="s" x="36" y="284">agent sessions · commits (host)</text>
+  <text class="l" x="36" y="302">task_sources.py — linked, never copied</text>
 
   <path class="ln" d="M270,255 L330,255" marker-end="url(#a)"/>
   <text class="l" x="276" y="248">resolve links</text>
@@ -78,4 +79,15 @@
 
   <path class="ln" d="M465,370 L465,330" marker-end="url(#a)"/>
   <text class="l" x="472" y="356">import + evidence</text>
+
+  <rect class="core" x="620" y="392" width="280" height="118" rx="8"/>
+  <text class="t" x="636" y="416">git sync (timer, every 5 min)</text>
+  <text class="s" x="636" y="436">one task per ADR in recent commits</text>
+  <text class="s" x="636" y="454">status = the ADR's status</text>
+  <text class="s" x="636" y="472">links commits + the sessions that made them</text>
+  <text class="l" x="636" y="490">operator edits win · default tenant only</text>
+  <text class="l" x="636" y="504">task_tracking_git_sync.py · host_activity.py</text>
+
+  <path class="ln" d="M660,392 L600,325" marker-end="url(#a)"/>
+  <text class="l" x="668" y="385">actor sync:git</text>
 </svg>

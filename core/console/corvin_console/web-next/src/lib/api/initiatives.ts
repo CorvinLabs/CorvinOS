@@ -22,7 +22,8 @@ export function startInitiativesVerify(
 
 export type TaskType =
   | "initiative" | "chat" | "background" | "acs" | "workflow" | "flow"
-  | "gateway" | "forge" | "compute" | "scheduled" | "skill_creator";
+  | "gateway" | "forge" | "compute" | "scheduled" | "skill_creator"
+  | "agent" | "commit";
 
 export type UnifiedStatus =
   | "queued" | "running" | "paused" | "scheduled"

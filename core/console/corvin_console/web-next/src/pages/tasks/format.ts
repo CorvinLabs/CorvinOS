@@ -87,6 +87,8 @@ export const TYPE_CLASS: Record<string, string> = {
   compute: "bg-fuchsia-500/15 text-fuchsia-800 dark:text-fuchsia-300",
   scheduled: "bg-lime-500/15 text-lime-800 dark:text-lime-300",
   skill_creator: "bg-pink-500/15 text-pink-800 dark:text-pink-300",
+  agent: "bg-cyan-500/15 text-cyan-800 dark:text-cyan-300",
+  commit: "bg-stone-500/15 text-stone-800 dark:text-stone-300",
 };
 
 export const UNIFIED_STATUS: Record<string, { label: string; tone: "ok" | "danger" | "warn" | "secondary" | "outline" }> = {

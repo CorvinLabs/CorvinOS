@@ -98,6 +98,16 @@ describe("tasks encodings", () => {
     expect(buildTree(ITEMS, EMPTY_FILTERS, new Set(["epic"])).map((r) => r.item.id)).toEqual(["ini", "epic", "gate"]);
   });
 
+  it("puts the initiative with the most recent activity first, children in stored order", () => {
+    const old = item("old", { kind: "initiative", title: "Old plan", child_ids: ["o1"], updated_at: "2026-09-20T00:00:00Z" });
+    const o1 = item("o1", { parent_id: "old", updated_at: "2026-09-21T00:00:00Z" });
+    const cur = item("cur", { kind: "initiative", title: "Current work", child_ids: ["c1", "c2"], updated_at: "2026-09-19T00:00:00Z" });
+    const c1 = item("c1", { parent_id: "cur", updated_at: "2026-09-19T00:00:00Z" });
+    const c2 = item("c2", { parent_id: "cur", updated_at: "2026-09-24T11:00:00Z" });  // recent child lifts its root
+    const rows = buildTree([old, o1, cur, c1, c2], EMPTY_FILTERS, new Set());
+    expect(rows.map((r) => r.item.id)).toEqual(["cur", "c1", "c2", "old", "o1"]);
+  });
+
   it("shows the rollup for a parent and its own value for a leaf", () => {
     expect(displayProgress(ITEMS[1])).toBe(50);
     expect(displayProgress(ITEMS[2])).toBe(100);
@@ -148,6 +158,42 @@ describe("Tasks page", () => {
     expect(screen.getByText(/1 gate is waiting for a go \/ no-go decision/)).toBeTruthy();
     expect(screen.getByText("1/3 done")).toBeTruthy();
     expect(screen.getByText(/^\d+[dhm] overdue$/)).toBeTruthy();  // clock-relative
+  });
+
+  it("shows the live agent sessions above the work views and opens them in Activity", async () => {
+    const rec = (id: string, title: string, status: string) => ({
+      id, type: "agent", type_label: "Agent session", subtype: "CorvinOS", title, status, raw_status: null,
+      created_at: null, started_at: NOW, ended_at: null, sort_ts: 0, duration_s: null, stale_reason: null,
+      detail: status === "running" ? "working" : "waiting for input",
+    });
+    const seen: string[] = [];
+    server.use(http.get("/v1/console/initiatives/tasks", ({ request }) => {
+      seen.push(new URL(request.url).searchParams.get("types") ?? "");
+      return HttpResponse.json({
+        server_time: NOW, scan_ms: 1, finished: [], finished_total: 0,
+        types: [{ type: "agent", label: "Agent session", active: 2, finished: 0, stale: 0, failed: 0, note: null, error: null }],
+        active: [rec("agent:1", "A2A pairing", "running"), rec("agent:2", "Audit chain recovery", "paused")],
+        totals: { active: 2, running: 1, stale: 0, finished_24h: 0, failed_24h: 0, all: 2 },
+      });
+    }));
+    renderIt();
+    const strip = await screen.findByTestId("running-now");
+    expect(within(strip).getByText(/2 agent sessions · 1 working/)).toBeTruthy();
+    expect(within(strip).getByText(/A2A pairing/)).toBeTruthy();
+    expect(within(strip).getByText(/Audit chain recovery/)).toBeTruthy();
+    fireEvent.click(within(strip).getByRole("button", { name: "Open activity" }));
+    await waitFor(() => expect(screen.getByTestId("view-activity").getAttribute("aria-selected")).toBe("true"));
+    // Activity opens filtered to agent sessions (the strip's own query also asks for "agent",
+    // so the pressed chip — not the request log — is the proof).
+    await waitFor(() => expect(screen.getByTestId("type-chip-agent").getAttribute("aria-pressed")).toBe("true"));
+    expect(seen.length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("running-now")).toBeNull();  // only above the work views
+  });
+
+  it("shows no strip when no agent session is live", async () => {
+    renderIt();
+    expect(await screen.findByText("Loop B — Phase 9 fixes")).toBeTruthy();
+    expect(screen.queryByTestId("running-now")).toBeNull();
   });
 
   it("filters from a KPI tile and keeps the path to the hit", async () => {
