@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 
 # Allow-list (mirrored in security_events.py::_EVENT_ALLOWLIST)
+# CRITICAL (GDPR Art. 5, 6, 32): tenant_id is REQUIRED on every event.
 _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "a2a.genesis_block_created": frozenset({
         "tenant_id", "instance_id", "network_id", "nonce_prefix", "epoch",
@@ -35,19 +36,42 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     }),
 }
 
+# REQUIRED fields per event type (fail-closed if missing)
+_REQUIRED_FIELDS: dict[str, frozenset[str]] = {
+    "a2a.genesis_block_created": frozenset({"tenant_id"}),
+    "a2a.offline_pair_initiated": frozenset({"tenant_id"}),
+    "a2a.nonce_collision_detected": frozenset({"tenant_id"}),
+}
+
 
 class AuditFieldNotAllowed(ValueError):
     """Raised when an event details dict carries a non-allow-listed key."""
 
 
 def _check_allow_list(event: str, details: dict[str, Any]) -> None:
-    """Validate event details against the allow-list (fail-closed)."""
+    """Validate event details against the allow-list (fail-closed).
+
+    Enforces:
+    1. All required fields must be present (tenant_id is always required for GDPR compliance)
+    2. No extra fields (unknown fields are forbidden)
+    """
     allowed = _ALLOWED_FIELDS.get(event)
     if allowed is None:
         raise AuditFieldNotAllowed(
             f"unknown a2a event type: {event!r}; "
             f"register it in a2a_audit.py::_ALLOWED_FIELDS first",
         )
+
+    # Check required fields (GDPR compliance: tenant_id always required)
+    required = _REQUIRED_FIELDS.get(event, frozenset())
+    missing = required - set(details.keys())
+    if missing:
+        raise AuditFieldNotAllowed(
+            f"{event}: missing required fields {sorted(missing)}; "
+            f"all events must include tenant_id for GDPR compliance",
+        )
+
+    # Check for extra fields
     extras = set(details.keys()) - allowed
     if extras:
         raise AuditFieldNotAllowed(
