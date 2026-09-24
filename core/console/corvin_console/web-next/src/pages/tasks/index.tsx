@@ -14,11 +14,11 @@
  * An empty store renders an empty state (with an import offer when an
  * initiatives.json exists) — never sample data.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, CalendarRange, Columns3, Download, FolderTree, Gavel, Link2, ListTree, Loader2, Plus, RefreshCw,
+  AlertTriangle, CalendarRange, Columns3, Download, FolderTree, Gavel, Link2, ListTree, Loader2, Network, Plus, RefreshCw,
   Search, ShieldCheck, Table2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,15 +44,18 @@ import { LIVE_QUERY, freshness } from "./live";
 import { StatusIcon } from "./parts";
 import { BoardView, TableView, TimelineView, TreeView } from "./views";
 
-type View = "tree" | "board" | "timeline" | "table" | "activity";
+type View = "tree" | "board" | "timeline" | "table" | "graph" | "activity";
 const VIEWS: { id: View; label: string; icon: typeof ListTree }[] = [
   { id: "tree", label: "Tree", icon: ListTree },
   { id: "board", label: "Board", icon: Columns3 },
   { id: "timeline", label: "Timeline", icon: CalendarRange },
   { id: "table", label: "Table", icon: Table2 },
+  { id: "graph", label: "Graph", icon: Network },
   { id: "activity", label: "Activity", icon: FolderTree },
 ];
 const ITEMS_KEY = ["task-tracking", "items"] as const;
+// React Flow is heavy; load the graph only when the tab is opened.
+const GraphView = lazy(() => import("./graph-view"));
 const RUN_TYPES: TaskType[] = ["chat", "background", "acs", "workflow", "flow", "gateway", "forge", "compute", "scheduled", "skill_creator", "agent", "commit"];
 
 function useNow(skewMs: number): number {
@@ -316,7 +319,7 @@ export default function TasksPage() {
             ))}
           </div>
 
-          {workViews && items.length > 0 && (
+          {workViews && view !== "graph" && items.length > 0 && (
             <div className="flex flex-wrap items-center gap-2" aria-label="Filters">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -381,6 +384,11 @@ export default function TasksPage() {
                   onSelect={(id) => setQuery({ item: id })} onMove={(item, status) => move.mutate({ item, status })} />}
                 {view === "timeline" && <TimelineView rows={rows} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })} />}
                 {view === "table" && <TableView items={flat} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })} />}
+                {view === "graph" && (
+                  <Suspense fallback={<p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading graph…</p>}>
+                    <GraphView items={items} now={now} selectedId={selected} onSelect={(id) => setQuery({ item: id })} />
+                  </Suspense>
+                )}
               </div>
               {selected && (
                 <DetailDrawer key={selected} id={selected} csrf={csrf} items={items}

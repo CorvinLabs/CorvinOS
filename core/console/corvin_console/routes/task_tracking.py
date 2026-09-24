@@ -92,6 +92,38 @@ def _attach_evidence(items: list[dict[str, Any]], index: dict[str, dict[str, Any
             v and it["status"] == "complete" and v["state"] in ("failing", "partial"))
 
 
+# ── Live runs (derived per read from the run stores, never stored) ───────────
+
+_LIVE = ("running", "paused", "queued", "scheduled")
+
+
+def _attach_live_runs(tenant_id: str, items: list[dict[str, Any]]) -> None:
+    """``live_runs`` (linked runs still active), ``running_runs`` (of those, running
+    now) and up to three ``live_run_titles`` per item. Titles come from
+    ``task_sources`` records, which never carry third-party message text."""
+    for it in items:
+        it["live_runs"], it["running_runs"], it["live_run_titles"] = 0, 0, []
+    try:
+        links = service.run_links(tenant_id)
+        if not links:
+            return
+        from .. import task_sources  # noqa: PLC0415
+
+        recs = task_sources.collect(tenant_id)["records"]
+    except Exception:  # noqa: BLE001 — no live overlay is a degraded page, never a failed one
+        return
+    live = {(r["type"], r["id"]): r for r in recs if r["status"] in _LIVE}
+    for it in items:
+        for key in links.get(it["id"], ()):
+            r = live.get(key)
+            if r is None:
+                continue
+            it["live_runs"] += 1
+            it["running_runs"] += r["status"] == "running"
+            if len(it["live_run_titles"]) < 3:
+                it["live_run_titles"].append(f"{r['type_label']}: {r['title']}"[:140])
+
+
 # ── Reads ────────────────────────────────────────────────────────────────────
 
 @router.get("/items")
@@ -105,6 +137,7 @@ def get_items(
         _fail(exc)
         raise
     _attach_evidence(body["items"], _evidence_index(rec.tenant_id, time.time()))
+    _attach_live_runs(rec.tenant_id, body["items"])
     # Offer the import only on a store that never held anything: once items
     # exist (even deleted ones) the import would skip them all.
     body["import_available"] = (not body["items"]) and not service.has_any_rows(rec.tenant_id) \

@@ -69,6 +69,12 @@ export interface Item {
   waiting_on: string[];
   child_ids: string[];
   run_count: number;
+  /** Linked runs still active (running / paused / queued / scheduled) — derived per read. */
+  live_runs?: number;
+  /** Of those, running right now. */
+  running_runs?: number;
+  /** Up to three "Agent session: <title>" labels of the active linked runs. */
+  live_run_titles?: string[];
   rollup: Rollup | null;
   evidence: Evidence | null;
   claim_conflict: boolean;

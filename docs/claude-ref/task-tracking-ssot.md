@@ -82,7 +82,7 @@ The prefix is not `task.` because `task.spawn_*` already names runtime spawns.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/items[?include_deleted=true]` | items + rollups + evidence + `summary` + `import_available` |
+| GET | `/items[?include_deleted=true]` | items + rollups + evidence + live runs (`live_runs`, `running_runs`, `live_run_titles`) + `summary` + `import_available` |
 | GET | `/summary` | KPI counts |
 | GET | `/items/{id}` | item, ancestors, children, depends_on, required_by, runs (resolved), history |
 | POST | `/items` | CSRF; 201 |
@@ -165,10 +165,34 @@ Views: **Tree** (default; hierarchy with rollup bars, collapse, filter keeps the
 path to a hit), **Board** (status columns, work items only, drag to move),
 **Timeline** (start→deadline bars on one shared axis, gates/checkpoints as
 diamonds, now-line, hover tooltip; below two dated items it says so instead of
-drawing), **Table** (sortable), **Activity** (runs). View, filters and the
+drawing), **Table** (sortable), **Graph** (the live DAG, below), **Activity** (runs). View, filters and the
 selected item are in the URL. The detail drawer edits fields with the
 optimistic `version` and shows decision, evidence, children, dependencies,
 linked runs and history.
+
+**Graph view** (`pages/tasks/graph-view.tsx`, layout in `graph-layout.ts`,
+React Flow, lazy-loaded). Nodes are work items; edges are the breakdown
+(parent → child, quiet) and dependencies (prerequisite → dependent; dashed
+"waits for" while the prerequisite is open). Layout is Sugiyama-lite, left →
+right: longest-path layers over both edge kinds (a cycle across them is
+broken), barycenter ordering, layers taller than 12 wrap into sub-columns.
+Positions depend on **structure only** (ids, parents, dependencies,
+sort_key), so the 5 s poll recolours nodes and never moves them; the view
+refits only when the structure changes. "Where we are" per node
+(`nodeState`): **running** (a linked run is running now — beats done; the node
+pulses, stopped by reduced motion) → blocked → waiting → in progress → ready
+(open, nothing left to wait for; a pending gate reads "Decision pending") →
+done. The view opens zoomed on running work, else work in progress; chips
+count each state over work items and zoom to it. A scope (one initiative)
+also brings in prerequisites from outside it, marked "External", so a blocked
+initiative shows what blocks it. Theme tokens in this console are HSL
+components (`--card: 0 0% 100%`) — use `hsl(var(--card))`, never
+`var(--card)` as a colour; only `--viz-*` are hex.
+
+The list endpoint carries, per item and derived on every read, `live_runs`
+(linked runs still active), `running_runs` (of those, running now) and up to
+three `live_run_titles`, resolved against `task_sources` (routes/task_tracking.py
+`_attach_live_runs`, `service.run_links`).
 
 **Live data.** Every query of the panel (list, detail drawer, Activity) uses
 `LIVE_QUERY` (`pages/tasks/live.ts`): 5 s poll, immediate refetch on tab focus

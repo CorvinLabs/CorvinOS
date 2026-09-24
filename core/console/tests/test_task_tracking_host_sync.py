@@ -124,7 +124,9 @@ class HostSyncTest(unittest.TestCase):
             "pid": 999999, "procStart": "1", "sessionId": "s-dead", "cwd": str(self.repo),
             "kind": "interactive", "entrypoint": "cli", "status": "busy"}))
         _jsonl(proj / "s-live.jsonl", [
-            {"type": "user", "entrypoint": "cli", "cwd": str(self.repo), "timestamp": self.now - 600},
+            {"type": "user", "entrypoint": "cli", "cwd": str(self.repo), "timestamp": self.now - 2000},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {
+                "command": "git commit -m 'feat(y): the other thing [ADR-9002]'"}}]}},
             {"type": "ai-title", "aiTitle": "Live work", "sessionId": "s-live"}])
 
     @contextmanager
@@ -183,6 +185,10 @@ class HostSyncTest(unittest.TestCase):
             self.assertTrue(runs[("commit", f"commit:Proj:{self.sha_a[:12]}")]["found"])
             self.assertIn(("agent", "agent:s-op"), runs)  # the session that made the commit
             self.assertEqual(len(runs), 2)
+            # Live overlay on the list (graph view): the running session linked to ADR-9002.
+            self.assertEqual((prop["live_runs"], prop["running_runs"]), (1, 1), prop)
+            self.assertEqual(prop["live_run_titles"], ["Agent session: Live work"])
+            self.assertEqual((done["live_runs"], done["running_runs"]), (0, 0))  # s-op has ended
             n_events = len(_audit_events(home))
             again = self._sync()
             self.assertEqual((again["inserted"], again["updated"], again["linked"]), (0, 0, 0), again)

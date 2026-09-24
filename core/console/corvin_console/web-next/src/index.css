@@ -259,5 +259,24 @@
    override here loses on source order alone — the extra `.react-flow`
    ancestor selector gives this rule higher specificity so it always wins. */
 .react-flow .react-flow__edge-textbg {
-  fill: var(--card);
+  fill: hsl(var(--card));  /* --card holds HSL components, not a colour */
 }
+
+/* Tasks graph (pages/tasks/graph-view.tsx): a node with a linked run running
+   right now breathes. The reduced-motion block above stops it for operators
+   who asked for no motion; the state stays readable from the "N running" label. */
+@keyframes tasks-graph-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--viz-status-progress) 55%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--viz-status-progress) 0%, transparent); }
+}
+.tasks-graph-pulse { animation: tasks-graph-pulse 1.8s ease-in-out infinite; }
+
+/* React Flow chrome on the console theme. The minimap mask and the zoom
+   controls take colours as SVG attributes / their own white defaults, where
+   var() does not apply — style them here instead. */
+.react-flow .react-flow__minimap { background: hsl(var(--card)); }
+.react-flow .react-flow__minimap-mask { fill: color-mix(in srgb, hsl(var(--background)) 72%, transparent); }
+.react-flow .react-flow__controls { box-shadow: none; border: 1px solid hsl(var(--border)); border-radius: 6px; overflow: hidden; }
+.react-flow .react-flow__controls-button { background: hsl(var(--card)); color: hsl(var(--foreground)); border-bottom-color: hsl(var(--border)); }
+.react-flow .react-flow__controls-button svg { fill: currentColor; }
+.react-flow .react-flow__controls-button:hover { background: hsl(var(--muted)); }

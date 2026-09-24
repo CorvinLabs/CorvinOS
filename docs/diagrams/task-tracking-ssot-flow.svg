@@ -20,7 +20,7 @@
 
   <rect class="box" x="20" y="20" width="250" height="110" rx="8"/>
   <text class="t" x="36" y="46">Tasks panel  /app/initiatives</text>
-  <text class="s" x="36" y="68">Tree · Board · Timeline · Table</text>
+  <text class="s" x="36" y="68">Tree · Board · Timeline · Table · Graph</text>
   <text class="s" x="36" y="86">Activity (runs, read-only)</text>
   <text class="s" x="36" y="104">detail drawer — PATCH with version</text>
   <text class="l" x="36" y="122">web-next/src/pages/tasks/</text>

@@ -264,6 +264,18 @@ def _all_rows(tenant_id: str, include_deleted: bool) -> list[dict[str, Any]]:
     return rows
 
 
+def run_links(tenant_id: str) -> dict[str, list[tuple[str, str]]]:
+    """``{item_id: [(run_type, run_ref), …]}`` for every linked run — the route
+    resolves them against the live run stores (ADR-2060 graph: what runs now)."""
+    if not store.exists(tenant_id):
+        return {}
+    out: dict[str, list[tuple[str, str]]] = {}
+    with store.connect(tenant_id) as conn:
+        for r in conn.execute("SELECT item_id, run_type, run_ref FROM runs WHERE tenant_id=?", (tenant_id,)):
+            out.setdefault(r["item_id"], []).append((r["run_type"], r["run_ref"]))
+    return out
+
+
 def has_any_rows(tenant_id: str) -> bool:
     """True when the store holds any item, deleted ones included."""
     if not store.exists(tenant_id):
