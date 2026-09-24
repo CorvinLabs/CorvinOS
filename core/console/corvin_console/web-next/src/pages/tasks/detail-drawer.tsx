@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { KIND_META, PRIORITY_ORDER, PRIORITY_META, STATUS_META, STATUS_ORDER, displayProgress } from "./encodings";
 import { evidenceText, formatAgo, formatUtc } from "./format";
+import { LIVE_QUERY } from "./live";
 import { ApprovalTag, Deadline, EvidenceBadge, KindTag, ProgressBar, StatusBadge, StatusIcon } from "./parts";
 
 const inputCls = "h-8 w-full rounded-md border bg-background px-2 text-sm disabled:opacity-60";
@@ -125,7 +126,7 @@ export function DetailDrawer({ id, csrf, items, onClose, onSelect, onAddChild, o
   const q = useQuery({
     queryKey: ["task-tracking", "item", id],
     queryFn: ({ signal }) => getTaskItem(id, signal),
-    refetchInterval: 10_000,
+    ...LIVE_QUERY,  // same cadence as the list — the drawer must never lag the row it details
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [depPick, setDepPick] = useState("");
@@ -169,7 +170,7 @@ export function DetailDrawer({ id, csrf, items, onClose, onSelect, onAddChild, o
   const act = { mutate: (fn: () => Promise<unknown>) => enqueue(fn) };
   const busy = pending > 0;
 
-  if (q.isError) {
+  if (q.isError && !q.data) {
     return (
       <aside className="rounded-lg border p-4 text-sm text-destructive">
         Could not load this item. <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
@@ -210,6 +211,11 @@ export function DetailDrawer({ id, csrf, items, onClose, onSelect, onAddChild, o
           <EvidenceBadge evidence={it.evidence} conflict={it.claim_conflict} />
           {deleted && <span className="text-xs font-medium text-destructive">Deleted {formatUtc(it.deleted_at)}</span>}
         </div>
+        {q.isError && (
+          <p role="status" data-testid="drawer-stale" className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">
+            Could not refresh — showing the state from {formatUtc(new Date(q.dataUpdatedAt).toISOString())}. Retrying.
+          </p>
+        )}
         {notice && <p role="status" className="rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-800 dark:text-amber-300">{notice}</p>}
       </header>
 

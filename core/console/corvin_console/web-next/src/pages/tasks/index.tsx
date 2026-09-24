@@ -39,7 +39,8 @@ import {
   EMPTY_FILTERS, KIND_META, KIND_ORDER, PRIORITY_META, PRIORITY_ORDER, STATUS_META, WORK_KINDS, buildTree,
   filtersActive, filtersFromQuery, filtersToQuery, matches, type Filters,
 } from "./encodings";
-import { clockSkewMs } from "./format";
+import { clockSkewMs, formatUtc } from "./format";
+import { LIVE_QUERY, freshness } from "./live";
 import { StatusIcon } from "./parts";
 import { BoardView, TableView, TimelineView, TreeView } from "./views";
 
@@ -62,6 +63,26 @@ function useNow(skewMs: number): number {
     return () => clearInterval(t);
   }, [skewMs]);
   return now;
+}
+
+/** "Live · updated 3s ago" — or, loudly, that the numbers on screen are NOT current. */
+function FreshnessLine({ updatedAt, failing, fetching }: { updatedAt: number; failing: boolean; fetching: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(t); }, []);
+  const f = freshness(updatedAt, failing, now);
+  if (f.state === "loading") return null;
+  const at = updatedAt ? formatUtc(new Date(updatedAt).toISOString()) : "never";
+  return (
+    <p data-testid="freshness" data-state={f.state} className={cn("mt-0.5 flex items-center gap-1.5 text-xs",
+      f.state === "live" ? "text-muted-foreground" : f.state === "delayed" ? "text-amber-700 dark:text-amber-400" : "text-destructive")}>
+      <span aria-hidden className={cn("h-2 w-2 rounded-full",
+        f.state === "live" ? "bg-emerald-500" : f.state === "delayed" ? "bg-amber-500" : "bg-destructive")} />
+      {f.state === "live" && <>Live · updated {f.ageS}s ago</>}
+      {f.state === "delayed" && <>Updates delayed · last update {f.ageS}s ago</>}
+      {f.state === "offline" && <>Connection lost — showing data from {at}. Retrying.</>}
+      {fetching && <Loader2 className="h-3 w-3 animate-spin" aria-label="Refreshing" />}
+    </p>
+  );
 }
 
 function Kpi({ label, value, tone, active, onClick, testId }: {
@@ -120,11 +141,7 @@ export default function TasksPage() {
       setSkew(clockSkewMs(b.server_time, Date.now()));
       return b;
     },
-    refetchInterval: 5_000,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: "always",
-    refetchOnMount: "always",
-    staleTime: 0,
+    ...LIVE_QUERY,
     retry: (n, err) => !(err instanceof ApiError && err.status === 404) && n < 2,
     retryDelay: 1_000,
   });
@@ -184,8 +201,7 @@ export default function TasksPage() {
     queryKey: ["task-tracking", "runs", runTypeList.join(",")],
     queryFn: ({ signal }) => getAllTasks({ types: runTypeList, finishedLimit: 100 }, signal),
     enabled: view === "activity",
-    refetchInterval: view === "activity" ? 5_000 : false,
-    refetchIntervalInBackground: false,
+    ...LIVE_QUERY,
     placeholderData: (prev) => prev,
   });
   const link = useMutation({
@@ -220,8 +236,8 @@ export default function TasksPage() {
           <p className="text-sm text-muted-foreground">
             Initiatives, epics and tasks from the task store
             {summary && <> · {items.length} items · {summary.initiatives_active} active initiatives</>}
-            {q.isFetching && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" aria-label="Refreshing" />}
           </p>
+          <FreshnessLine updatedAt={q.dataUpdatedAt} failing={q.isError} fetching={q.isFetching} />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={verify.isPending || !csrf} onClick={() => verify.mutate()}

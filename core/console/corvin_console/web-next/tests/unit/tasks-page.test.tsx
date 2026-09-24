@@ -18,6 +18,7 @@ vi.mock("@/lib/auth", () => ({ useAuth: () => ({ session: { csrf_token: "csrf-1"
 
 import TasksPage from "@/pages/tasks";
 import { CreateDialog } from "@/pages/tasks/create-dialog";
+import { LIVE_QUERY, freshness } from "@/pages/tasks/live";
 import {
   EMPTY_FILTERS, boardColumns, buildTimeline, buildTree, deadlineText, displayProgress, filtersFromQuery,
   filtersToQuery, matches,
@@ -247,5 +248,36 @@ describe("regressions from the adversarial review", () => {
     const rows = buildTree([item("p", { deadline: "2026-09-25" }), item("q", { deadline: "9999-01-01" })], EMPTY_FILTERS, new Set());
     expect(buildTimeline(rows, Date.parse(NOW)).ticks.length).toBeLessThanOrEqual(8);
   });
+});
+
+describe("live data", () => {
+  it("never presents old data as live", () => {
+    const t = Date.parse(NOW);
+    expect(freshness(t - 3_000, false, t)).toEqual({ state: "live", ageS: 3 });
+    expect(freshness(t - 20_000, false, t)).toEqual({ state: "delayed", ageS: 20 });
+    expect(freshness(t - 3_000, true, t)).toEqual({ state: "offline", ageS: 3 });
+    expect(freshness(0, false, t)).toEqual({ state: "loading" });
+    // every panel query overrides the console-wide refetchOnWindowFocus:false
+    expect(LIVE_QUERY).toMatchObject({ refetchInterval: 5_000, refetchOnWindowFocus: "always", refetchOnMount: "always", staleTime: 0 });
+  });
+
+  it("re-polls and says so when the backend goes away", async () => {
+    let calls = 0;
+    let down = false;
+    server.use(http.get("/v1/console/task-tracking/items", () => {
+      calls += 1;
+      return down ? HttpResponse.json({ detail: "boom" }, { status: 500 }) : HttpResponse.json(LIST);
+    }));
+    renderIt();
+    const line = await screen.findByTestId("freshness");
+    expect(line.getAttribute("data-state")).toBe("live");
+    expect(line.textContent).toMatch(/Live · updated \d+s ago/);
+    down = true;
+    // the next 5 s poll fails; the page must stop claiming "live" but keep the data
+    await waitFor(() => expect(screen.getByTestId("freshness").getAttribute("data-state")).toBe("offline"), { timeout: 9_000 });
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/Connection lost — showing data from/)).toBeTruthy();
+    expect(screen.getByText("Loop B — Phase 9 fixes")).toBeTruthy();
+  }, 15_000);
 });
 

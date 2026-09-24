@@ -109,3 +109,55 @@ test("a change from another session appears without a reload; the drawer edits t
     await api.dispose();
   }
 });
+
+test("every surface follows a change made elsewhere — tree, KPI, board, table, drawer — without a reload", async ({ page }) => {
+  const { api, csrf } = await apiSession();
+  const body = await (await api.get("/v1/console/task-tracking/items")).json();
+  const target = body.items.find((i: { kind: string; status: string; category: string | null; deleted_at: string | null }) =>
+    i.kind === "task" && i.status === "open" && !i.category && !i.deleted_at)
+    ?? body.items.find((i: { kind: string; status: string; deleted_at: string | null }) => i.kind === "task" && i.status === "open" && !i.deleted_at);
+  expect(target, "need one open task on the live store").toBeTruthy();
+  const orig = { status: target.status, priority: target.priority, deadline: target.deadline };
+  const inProgressBefore: number = body.summary.in_progress;
+  const patch = async (data: Record<string, unknown>) => {
+    const cur = await (await api.get(`/v1/console/task-tracking/items/${target.id}`)).json();
+    const r = await api.patch(`/v1/console/task-tracking/items/${target.id}`,
+      { data: { version: cur.item.version, ...data }, headers: { "X-CSRF-Token": csrf } });
+    expect(r.status(), await r.text()).toBe(200);
+  };
+  try {
+    await open(page, `?item=${target.id}`);
+    // A marker on window survives SPA URL changes (view switch) but not a real reload.
+    await page.evaluate(() => { (window as unknown as { __noReload: number }).__noReload = 1; });
+    await expect(page.getByTestId("freshness")).toHaveAttribute("data-state", "live");
+    const row = page.getByTestId(`tree-row-${target.id}`);
+    const drawer = page.getByTestId("detail-drawer");
+
+    await patch({ status: "in_progress", priority: "critical", deadline: "2031-01-15" });
+
+    // tree row, KPI and drawer follow within one poll (+ server latency)
+    await expect(row.getByLabel("In progress")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("kpi-in-progress")).toContainText(String(inProgressBefore + 1), { timeout: 15_000 });
+    await expect(drawer.getByLabel("Status")).toHaveValue("in_progress", { timeout: 15_000 });
+    await expect(drawer.getByLabel("Priority")).toHaveValue("critical", { timeout: 15_000 });
+    await expect(drawer.getByLabel("Deadline", { exact: true })).toHaveValue("2031-01-15", { timeout: 15_000 });
+    await expect(drawer).toContainText("status: open → in_progress", { timeout: 15_000 });  // history, live
+
+    // board: the card sits in the In-progress column
+    await page.getByTestId("view-board").click();
+    await expect(page.getByRole("region", { name: "In progress" }).getByTestId(`card-${target.id}`)).toBeVisible();
+    // a second change while the board is open moves the card without a reload
+    await patch({ status: "blocked" });
+    await expect(page.getByRole("region", { name: "Blocked" }).getByTestId(`card-${target.id}`)).toBeVisible({ timeout: 15_000 });
+
+    // table shows the new priority
+    await page.getByTestId("view-table").click();
+    await expect(page.getByTestId("table-view").getByRole("row", { name: new RegExp(target.title.slice(0, 20)) })).toContainText("Critical");
+    expect(await page.evaluate(() => (window as unknown as { __noReload?: number }).__noReload)).toBe(1);
+    await expect(page.getByTestId("freshness")).toHaveAttribute("data-state", "live");
+  } finally {
+    await patch({ status: orig.status, priority: orig.priority, deadline: orig.deadline });
+    await api.dispose();
+  }
+});
+

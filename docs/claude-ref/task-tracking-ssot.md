@@ -128,6 +128,20 @@ selected item are in the URL. The detail drawer edits fields with the
 optimistic `version` and shows decision, evidence, children, dependencies,
 linked runs and history.
 
+**Live data.** Every query of the panel (list, detail drawer, Activity) uses
+`LIVE_QUERY` (`pages/tasks/live.ts`): 5 s poll, immediate refetch on tab focus
+and on mount, `staleTime: 0` — overriding the console-wide
+`refetchOnWindowFocus: false`, which the drawer once inherited. Rollups,
+overdue flags, KPIs and evidence are derived server-side on every read; linked
+runs resolve through `task_sources` (2 s aggregate cache). A line under the
+title says "Live · updated Ns ago"; after 15 s without a successful poll it
+turns to "Updates delayed", and a failing poll shows "Connection lost —
+showing data from …" (the data stays, never presented as live). Drawer fields
+own their draft only while focused, so a poll never overwrites typing.
+`tests/e2e/tasks-live.spec.ts` proves it against the running console: a change
+from a second session reaches tree row, KPI, board column, table, drawer fields
+and history without a reload.
+
 Colours: status marks use `--viz-status-progress/-blocked/-complete`
 (`src/index.css`, validated light vs `#ffffff` and dark vs `#0e1320` with the
 dataviz validator, all pairs); `open` is a hollow mark. Priority is an ordinal
