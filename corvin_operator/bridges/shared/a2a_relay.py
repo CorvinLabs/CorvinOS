@@ -77,6 +77,18 @@ _MAX_TOTAL_QUEUE_BYTES = 64 * 1024 * 1024  # global ceiling across ALL queues
 _SLOT_IDLE_TTL_S = 600.0                    # evict an offline, drained slot after 10 min
 _REPLY_KID_IDLE_TTL_S = 60.0               # an offline ephemeral reply slot after 1 min
 
+# 2026-09-24 shared-kid fan-out: a friendship kid is IDENTICAL on both peers
+# (and so is its relay auth key), so both peers' listeners register the SAME
+# slot. With one connection per slot, whoever registered last received both
+# directions and the other peer became unreachable via relay — measured: an
+# ack sent over the relay was routed straight back to its own sender. A slot
+# now holds every live connection that proved the pinned credential and a
+# delivery fans out to all of them; each listener drops its own traffic via
+# the `_relay_sender_instance_id` / `sender_instance_id` self-delivery guard,
+# so exactly the peer answers. Bounded so one credential cannot pile up
+# unbounded stale sockets: the oldest is un-claimed beyond this.
+_MAX_CONNECTIONS_PER_KID = 4
+
 
 def _is_reply_kid(kid: str) -> bool:
     """Ephemeral per-send reply slot minted by remote_trigger_sender._relay_post
@@ -103,7 +115,9 @@ class _KidSlot:
     """One routing slot: the pinned auth credential, the live connection (if
     any), and a bounded queue for delivery while the owner is offline."""
     auth_key: str
-    connection_id: str | None = None
+    # insertion-ordered set of live connection ids (dict keys) — see
+    # _MAX_CONNECTIONS_PER_KID for why a slot is no longer single-owner.
+    connection_ids: dict[str, None] = field(default_factory=dict)
     queue: deque[_QueuedMessage] = field(default_factory=lambda: deque(maxlen=_MAX_QUEUE_PER_KID))
     # monotonic timestamp of the last register/deliver touching this slot —
     # drives the idle-slot reaper (A2/A3).
@@ -142,7 +156,7 @@ class RelayState:
                 stale = slot.queue.popleft()
                 self._queued_bytes -= stale.nbytes
             # 2. never touch a live or still-queued slot.
-            if slot.connection_id is not None or slot.queue:
+            if slot.connection_ids or slot.queue:
                 continue
             # 3. evict an offline, drained slot once it is idle past its TTL.
             ttl = _REPLY_KID_IDLE_TTL_S if _is_reply_kid(kid) else _SLOT_IDLE_TTL_S
@@ -168,11 +182,17 @@ class RelayState:
         if slot is None:
             if len(self._slots) >= _MAX_TOTAL_SLOTS:
                 return "relay_at_capacity"
-            self._slots[kid] = _KidSlot(auth_key=auth_key, connection_id=connection_id)
+            self._slots[kid] = _KidSlot(auth_key=auth_key, connection_ids={connection_id: None})
             return None
         if slot.auth_key != auth_key:
             return "auth_key_mismatch"
-        slot.connection_id = connection_id
+        # Join the slot (re-registration moves this connection to the newest
+        # position); evict the oldest beyond the cap.
+        slot.connection_ids.pop(connection_id, None)
+        slot.connection_ids[connection_id] = None
+        while len(slot.connection_ids) > _MAX_CONNECTIONS_PER_KID:
+            oldest = next(iter(slot.connection_ids))
+            del slot.connection_ids[oldest]
         slot.last_active = time.monotonic()
         return None
 
@@ -194,7 +214,7 @@ class RelayState:
     # ── delivery ────────────────────────────────────────────────────
 
     async def deliver(self, to_kid: str, payload: dict[str, Any]) -> str:
-        """Forward ``payload`` to ``to_kid``'s live connection, or queue it.
+        """Forward ``payload`` to every live connection of ``to_kid``, or queue it.
 
         Returns "delivered", "queued", or "dropped" (queue full / unknown
         kid with no prior registration at all — nothing to queue against).
@@ -206,15 +226,22 @@ class RelayState:
             # would grow unbounded for kids that will never claim it.
             return "dropped"
         slot.last_active = time.monotonic()
-        if slot.connection_id is not None:
-            conn = self._connections.get(slot.connection_id)
-            if conn is not None:
+        if slot.connection_ids:
+            text = json.dumps(payload)
+            delivered = False
+            for cid in list(slot.connection_ids):
+                conn = self._connections.get(cid)
+                if conn is None:
+                    slot.connection_ids.pop(cid, None)
+                    continue
                 ws, _kids = conn
                 try:
-                    await ws.send_text(json.dumps(payload))
-                    return "delivered"
-                except Exception:  # noqa: BLE001 — fall through to queue
-                    pass
+                    await ws.send_text(text)
+                    delivered = True
+                except Exception:  # noqa: BLE001 — try the other connections, then queue
+                    continue
+            if delivered:
+                return "delivered"
         if len(slot.queue) >= _MAX_QUEUE_PER_KID:
             return "dropped"
         # Global byte-budget: bounded slot COUNT is not enough on its own — a
@@ -252,11 +279,13 @@ class RelayState:
         now = time.monotonic()
         for kid in kids:
             slot = self._slots.get(kid)
-            if slot is not None and slot.connection_id == connection_id:
-                # Un-claim the LIVE slot, but keep the pinned auth_key and
+            if slot is not None and connection_id in slot.connection_ids:
+                # Un-claim this connection, but keep the pinned auth_key and
                 # any already-queued messages — a reconnect with the same
                 # credential resumes exactly where it left off.
-                slot.connection_id = None
+                del slot.connection_ids[connection_id]
+                if slot.connection_ids:
+                    continue  # the peer's connection still holds the slot
                 # Reset the idle clock from the moment it went offline, so the
                 # reaper's TTL measures how long it has been GONE (A2/A3). An
                 # ephemeral reply slot that will never reconnect is now on the
@@ -697,7 +726,7 @@ class RelayListener:
                 if _my_instance and payload.get("_relay_sender_instance_id") == _my_instance:
                     return
                 from a2a_http_server import process_ping_request as _ppr  # noqa: PLC0415
-                _status, response_dict = _ppr(payload, self._receiver)
+                _status, response_dict = await _asyncio.to_thread(_ppr, payload, self._receiver)
             elif "peer_url" in payload and "kid" in payload and "task_id" not in payload:
                 # Friendship-ack request (ADR-0257) — same self-delivery
                 # reasoning as the ping branch above (ack requests carry no
@@ -707,8 +736,13 @@ class RelayListener:
                 if self._pending_dir is None or self._endpoints_dir is None:
                     return  # ack dispatch not configured on this listener — inert
                 from a2a_friendship import process_friendship_ack_request as _pfar  # noqa: PLC0415
-                _status, response_dict = _pfar(
-                    payload, pending_dir=Path(self._pending_dir),
+                # Off the event loop (2026-09-24): the ack core pings the
+                # redeemer back (up to 5 s, blocking) and that ping's relay
+                # fallback calls asyncio.run() — which raises inside a running
+                # loop, so a relay-only redeemer could never be reported
+                # reachable, and the blocking ping stalled every other delivery.
+                _status, response_dict = await _asyncio.to_thread(
+                    _pfar, payload, pending_dir=Path(self._pending_dir),
                     origins_dir=Path(self._origins_dir),
                     endpoints_dir=Path(self._endpoints_dir),
                 )
@@ -722,11 +756,10 @@ class RelayListener:
                 # task back (same kid, same keys, verifies clean) and execute
                 # it as if it came from the peer. Refuse any envelope whose
                 # HMAC-covered sender_instance_id is our own local UUID: a
-                # task we sent can never be a task we should run. (The
-                # remaining routing ambiguity when both peers share a relay
-                # degrades to a send-side timeout+retry, not a wrong
-                # execution — a wire-level instance-scoped routing key is the
-                # follow-up.)
+                # task we sent can never be a task we should run. Since the
+                # 2026-09-24 relay fan-out both peers' listeners receive every
+                # delivery for the shared kid, so this guard is what makes
+                # exactly the peer answer.
                 if _my_instance and payload.get("sender_instance_id") == _my_instance:
                     return  # our own task, routed back to us — never execute it
                 response = await _asyncio.to_thread(self._receiver.receive, payload)

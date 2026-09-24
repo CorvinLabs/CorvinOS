@@ -1388,11 +1388,21 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
 
     peer_knows_us = bool(cfg.get("_peer_knows_us", False))
     peer_reports_reachable = bool(cfg.get("_peer_reports_reachable", False))
-    if reachable and not peer_knows_us:
+    # Retry the reciprocal ack whenever the issuer has not confirmed us —
+    # NOT only after a successful ping. The ping is verified against the
+    # issuer's origin record, which the issuer writes only when it processes
+    # our ack; gating the ack on the ping was a deadlock that no recheck could
+    # ever break (measured 2026-09-24: a pairing whose first ack was lost
+    # stayed "peer can't reach you back" permanently). A signed ack response
+    # is itself a reachability proof, so it also settles `reachable`.
+    if not peer_knows_us:
         try:
             ack_result = _ft.retry_friendship_ack(kid, endpoints_dir=_endpoints_dir())
             peer_knows_us = bool(ack_result.get("ok"))
             peer_reports_reachable = bool(ack_result.get("reachable"))
+            if peer_knows_us and not reachable:
+                reachable = True
+                via = ack_result.get("via") or "direct"
         except Exception:  # noqa: BLE001 — best-effort; a failed retry just leaves the hint showing
             pass
 

@@ -26,7 +26,9 @@ Run: ``python3 operator/bridges/shared/test_a2a_friendship_handshake.py``
 """
 from __future__ import annotations
 
+import hmac
 import json
+import time
 import os
 import sys
 import tempfile
@@ -351,6 +353,103 @@ class TestRetryFriendshipAck(unittest.TestCase):
             result = ft.retry_friendship_ack(redeemed.kid, endpoints_dir=self.B.endpoints_dir)
         self.assertFalse(result.get("ok"))
         self.assertEqual(result.get("error"), "unreachable")
+
+
+class TestRepeatAck(unittest.TestCase):
+    """2026-09-24: the issuer consumed its pending record on the FIRST ack and
+    answered every later ack with the opaque 403 — so a redeemer whose first
+    ack response was lost (or whose recheck retried while `_peer_knows_us` was
+    still false) stayed "peer can't reach you back" forever, and a redeemer
+    whose IP changed could never re-announce its URL this way. A repeat ack is
+    now verified against the established origin's channel key."""
+
+    # Same two-instance fixture, without re-running the parent's tests.
+    setUp = TestRetryFriendshipAck.setUp
+    tearDown = TestRetryFriendshipAck.tearDown
+    _redeem_without_ack = TestRetryFriendshipAck._redeem_without_ack
+
+    def _pair(self) -> ft.FriendshipToken:
+        redeemed = self._redeem_without_ack(self.A, self.B)
+        with mock.patch.object(ft, "get_my_url", return_value=self.B.base_url):
+            first = ft.retry_friendship_ack(redeemed.kid, endpoints_dir=self.B.endpoints_dir)
+        self.assertTrue(first.get("ok"), msg=first)
+        self.assertIsNone(ft.load_pending_friendship(redeemed.kid, pending_dir=self.A.pending_dir))
+        return redeemed
+
+    def _signed_ack(self, kid: str, peer_url: str, *, issued_at: int | None = None,
+                    key: str | None = None) -> dict:
+        b_endpoint = json.loads((self.B.endpoints_dir / f"{kid}.json").read_text("utf-8"))
+        body = {"kid": kid, "issued_at": issued_at or int(time.time()), "peer_url": peer_url}
+        canon = json.dumps(body, separators=(",", ":"), sort_keys=True)
+        body["signature"] = hmac.new(
+            bytes.fromhex(key or b_endpoint["hmac_key"]), canon.encode(), "sha256").hexdigest()
+        return body
+
+    def _process(self, req: dict):
+        return ft.process_friendship_ack_request(
+            req, pending_dir=self.A.pending_dir,
+            origins_dir=self.A.origins_dir, endpoints_dir=self.A.endpoints_dir,
+        )
+
+    def test_repeat_ack_after_pending_consumed_succeeds(self):
+        redeemed = self._pair()
+        with mock.patch.object(ft, "get_my_url", return_value=self.B.base_url):
+            again = ft.retry_friendship_ack(redeemed.kid, endpoints_dir=self.B.endpoints_dir)
+        self.assertTrue(again.get("ok"), msg=again)
+        self.assertTrue(again.get("reachable"), msg=again)
+        self.assertEqual(again.get("via"), "direct")
+
+    def test_repeat_ack_refreshes_stale_peer_url(self):
+        redeemed = self._pair()
+        ep_path = self.A.endpoints_dir / f"{redeemed.kid}.json"
+        stale = json.loads(ep_path.read_text("utf-8"))
+        stale["url"] = "http://192.0.2.1:8765/v1/a2a/receive"  # TEST-NET: dead
+        stale["state"] = "UNREACHABLE"
+        ep_path.write_text(json.dumps(stale), encoding="utf-8")
+
+        status, resp = self._process(self._signed_ack(redeemed.kid, self.B.base_url))
+        self.assertEqual(status, 200, resp)
+        self.assertTrue(resp["reachable"])
+        healed = json.loads(ep_path.read_text("utf-8"))
+        self.assertEqual(healed["url"], self.B.base_url + "/v1/a2a/receive")
+        self.assertEqual(healed["state"], "ACTIVE")
+        # everything else on the record is untouched
+        self.assertEqual(healed["hmac_key"], stale["hmac_key"])
+
+    def test_repeat_ack_with_wrong_key_is_opaque_403_and_changes_nothing(self):
+        redeemed = self._pair()
+        ep_path = self.A.endpoints_dir / f"{redeemed.kid}.json"
+        before = ep_path.read_text("utf-8")
+        status, resp = self._process(
+            self._signed_ack(redeemed.kid, "http://192.0.2.9:8765", key="c" * 64))
+        self.assertEqual((status, resp), (403, {"reason": "ack_rejected"}))
+        self.assertEqual(ep_path.read_text("utf-8"), before)
+
+    def test_repeat_ack_never_resurrects_a_disabled_friendship(self):
+        redeemed = self._pair()
+        o_path = self.A.origins_dir / f"{redeemed.kid}.json"
+        origin = json.loads(o_path.read_text("utf-8"))
+        origin["enabled"] = False
+        o_path.write_text(json.dumps(origin), encoding="utf-8")
+        status, resp = self._process(self._signed_ack(redeemed.kid, self.B.base_url))
+        self.assertEqual((status, resp), (403, {"reason": "ack_rejected"}))
+
+    def test_stale_repeat_ack_rejected(self):
+        redeemed = self._pair()
+        status, resp = self._process(self._signed_ack(
+            redeemed.kid, self.B.base_url, issued_at=int(time.time()) - 600))
+        self.assertEqual((status, resp), (400, {"reason": "stale_ack"}))
+
+    def test_repeat_ack_rebuilds_a_missing_endpoint_record(self):
+        redeemed = self._pair()
+        ep_path = self.A.endpoints_dir / f"{redeemed.kid}.json"
+        ep_path.unlink()
+        status, resp = self._process(self._signed_ack(redeemed.kid, self.B.base_url))
+        self.assertEqual(status, 200, resp)
+        rebuilt = json.loads(ep_path.read_text("utf-8"))
+        self.assertEqual(rebuilt["url"], self.B.base_url + "/v1/a2a/receive")
+        self.assertEqual(rebuilt["origin_id_for_send"], redeemed.kid)
+        self.assertTrue(resp["reachable"])
 
 
 class TestAckUrlRejectionReason(unittest.TestCase):

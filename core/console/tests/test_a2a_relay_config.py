@@ -224,5 +224,51 @@ class TestViaPropagation(_RelayConfigTestBase):
         self.assertEqual(result["via"], "direct")
 
 
+
+class TestRecheckAckDeadlock(_RelayConfigTestBase):
+    """2026-09-24: the reciprocal-ack retry was gated on a successful ping, but
+    the issuer can only answer our ping once it has processed our ack — a
+    deadlock no recheck could break. The ack is now retried whenever the
+    issuer has not confirmed us, and a signed ack response settles
+    reachability on its own."""
+
+    def test_ack_retried_even_when_ping_fails(self):
+        self._write_friendship("peerA")
+        with mock.patch("remote_trigger_sender.RemoteTriggerSender.ping",
+                         return_value=_FakePingResult(False)), \
+             mock.patch.object(ft, "retry_friendship_ack",
+                               return_value={"ok": True, "reachable": True,
+                                             "peer_instance_id": "x", "via": "direct"}) as retry:
+            result = ap.friendship_recheck("peerA", _FakeRec())
+        retry.assert_called_once()
+        self.assertEqual(result["state"], "ACTIVE")
+        self.assertTrue(result["reachable"])
+        self.assertTrue(result["peer_knows_us"])
+        self.assertEqual(result["via"], "direct")
+        stored = json.loads((self.dir / "endpoints" / "peerA.json").read_text())
+        self.assertTrue(stored["_peer_knows_us"])
+        self.assertEqual(stored["state"], "ACTIVE")
+
+    def test_failed_ack_and_failed_ping_stay_unreachable(self):
+        self._write_friendship("peerA")
+        with mock.patch("remote_trigger_sender.RemoteTriggerSender.ping",
+                         return_value=_FakePingResult(False)), \
+             mock.patch.object(ft, "retry_friendship_ack",
+                               return_value={"ok": False, "error": "unreachable"}):
+            result = ap.friendship_recheck("peerA", _FakeRec())
+        self.assertEqual(result["state"], "UNREACHABLE")
+        self.assertFalse(result["peer_knows_us"])
+
+    def test_confirmed_peer_is_not_re_acked(self):
+        self._write_friendship("peerA")
+        ep = self.dir / "endpoints" / "peerA.json"
+        cfg = json.loads(ep.read_text()); cfg["_peer_knows_us"] = True
+        ep.write_text(json.dumps(cfg))
+        with mock.patch("remote_trigger_sender.RemoteTriggerSender.ping",
+                         return_value=_FakePingResult(True)), \
+             mock.patch.object(ft, "retry_friendship_ack") as retry:
+            ap.friendship_recheck("peerA", _FakeRec())
+        retry.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

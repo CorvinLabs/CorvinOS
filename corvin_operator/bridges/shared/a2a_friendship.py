@@ -1048,6 +1048,82 @@ def suggest_my_url(*, scheme: str = "http", port: int = 8765) -> str | None:
     return None
 
 
+def _local_ipv4_addresses() -> set[str]:
+    """Every IPv4 address currently assigned to a local interface (Linux:
+    SIOCGIFADDR per interface), unioned with detect_local_ip(). Best-effort —
+    on any failure the set degrades to the outbound-interface address alone."""
+    addrs: set[str] = set()
+    try:
+        import fcntl
+        import socket
+        import struct
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            for _idx, name in socket.if_nameindex():
+                try:
+                    packed = fcntl.ioctl(
+                        s.fileno(), 0x8915,  # SIOCGIFADDR
+                        struct.pack("256s", name[:15].encode("utf-8")),
+                    )
+                    addrs.add(socket.inet_ntoa(packed[20:24]))
+                except OSError:
+                    continue
+    except Exception:  # noqa: BLE001 — non-Linux / sandboxed: fall back below
+        pass
+    local = detect_local_ip()
+    if local:
+        addrs.add(local)
+    return addrs
+
+
+def heal_my_url() -> str | None:
+    """Rewrite a persisted ``my_a2a_url`` whose host is a stale LAN address.
+
+    DHCP hands out a new private address; the persisted URL keeps the old one
+    and every peer (and every ack/reconnect this instance sends) is pointed at
+    a dead host — measured 2026-09-24: my_url still named 192.168.2.73 while
+    the interface was 192.168.2.131, and the IP-change broadcast re-announced
+    the dead URL because it never touched my_url. Rewrites ONLY when all hold:
+    no ``CORVIN_A2A_URL`` override, the host is a literal private (RFC 1918)
+    IPv4 that no local interface carries anymore, and the current outbound
+    address is private too. Hostnames, public/port-forwarded addresses, mesh
+    addresses and a still-assigned address on another interface are the
+    operator's choice and are never touched. Scheme, port and path are kept.
+    Returns the new URL, or None when nothing changed.
+    """
+    import ipaddress as _ipa
+    import urllib.parse as _up
+
+    if os.environ.get("CORVIN_A2A_URL"):
+        return None
+    current = get_my_url()
+    if not current:
+        return None
+    parts = _up.urlsplit(current)
+    try:
+        host_ip = _ipa.IPv4Address(parts.hostname or "")
+    except ValueError:
+        return None  # hostname / IPv6 — operator-managed
+    if not host_ip.is_private or host_ip.is_loopback or host_ip.is_link_local:
+        return None
+    local = _local_ipv4_addresses()
+    if str(host_ip) in local:
+        return None
+    new_ip = detect_local_ip()
+    try:
+        if not new_ip or not _ipa.IPv4Address(new_ip).is_private:
+            return None
+    except ValueError:
+        return None
+    netloc = new_ip + (f":{parts.port}" if parts.port else "")
+    healed = _up.urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    set_my_url(healed)
+    import logging as _logging
+    _logging.getLogger("corvin.a2a.friendship").warning(
+        "A2A my_url healed: stale LAN address replaced by current interface address",
+    )
+    return healed
+
+
 def _last_known_ip_path() -> Path:
     return _corvin_home() / "global" / "remote_trigger" / "last_known_ip"
 
@@ -1071,13 +1147,23 @@ def check_and_broadcast_reconnect(
     if not current_ip:
         return 0
 
+    # Heal a stale persisted my_url FIRST and independently of last_known_ip:
+    # the IP may have changed while no peer was ACTIVE (last_known_ip was then
+    # persisted without any announcement), so an equality early-return below
+    # must not be able to keep a dead URL forever.
+    healed = None
+    try:
+        healed = heal_my_url()
+    except Exception:  # noqa: BLE001 — best-effort, never break the heartbeat
+        healed = None
+
     ip_path = _last_known_ip_path()
     try:
         last_ip = ip_path.read_text("utf-8").strip() if ip_path.exists() else ""
     except OSError:
         last_ip = ""
 
-    if current_ip == last_ip:
+    if current_ip == last_ip and not healed:
         return 0
 
     def _persist_ip() -> None:
@@ -1090,7 +1176,7 @@ def check_and_broadcast_reconnect(
         except OSError:
             pass
 
-    if not last_ip:
+    if not last_ip and not healed:
         # First observation this boot — nothing to compare against yet,
         # avoid announcing on every fresh start.
         _persist_ip()
@@ -1455,6 +1541,7 @@ def _ack_round_trip(
         ack_url, data=data, method="POST",
         headers={"Content-Type": "application/json"},
     )
+    via = "direct"
     try:
         with opener.open(http_req, timeout=timeout_s) as resp:
             raw = resp.read(64 * 1024 + 1)
@@ -1473,6 +1560,7 @@ def _ack_round_trip(
         payload = _relay_send_ack(kid, hmac_key, req_body, timeout_s)
         if payload is None:
             return {"ok": False, "error": "unreachable"}
+        via = "relay"
     except (ValueError, UnicodeDecodeError):
         return {"ok": False, "error": "invalid_response"}
 
@@ -1494,6 +1582,7 @@ def _ack_round_trip(
         "ok": bool(payload.get("ok")),
         "reachable": bool(payload.get("reachable", False)),
         "peer_instance_id": payload.get("instance_id"),
+        "via": via,
     }
 
 
@@ -1617,8 +1706,17 @@ def process_friendship_ack_request(
 
     pending = load_pending_friendship(kid, pending_dir=pending_dir)
     if pending is None:
-        # Opaque — indistinguishable from a bad signature (anti-enumeration).
-        return 403, {"reason": "ack_rejected"}
+        # The pending record is consumed by the FIRST successful ack. A repeat
+        # ack for an already-established pairing is legitimate and must not be
+        # rejected forever: the redeemer's first response may have been lost,
+        # its recheck retries the ack while `_peer_knows_us` is false, and a
+        # peer whose IP changed re-announces its URL the same way. Without this
+        # branch every such retry got the opaque 403 and the redeemer showed
+        # "peer can't reach you back" permanently (measured 2026-09-24).
+        return _process_repeat_ack(
+            kid=kid, issued_at=issued_at, peer_url=peer_url, signature=signature,
+            peer_label=peer_label, origins_dir=origins_dir, endpoints_dir=endpoints_dir,
+        )
 
     # ADR-0094 a2a_peers_max — the issuer's own record for this kid is about
     # to be created by THIS handler for the first time (friendship_create
@@ -1680,6 +1778,95 @@ def process_friendship_ack_request(
 
     delete_pending_friendship(kid, pending_dir=pending_dir)
 
+    return _ack_ping_back_and_respond(
+        kid=kid, recv_key=recv_key, origins_dir=origins_dir, endpoints_dir=endpoints_dir,
+    )
+
+
+def _process_repeat_ack(
+    *, kid: str, issued_at: int, peer_url: str, signature: str,
+    peer_label: str | None, origins_dir: Path, endpoints_dir: Path,
+) -> tuple[int, dict[str, Any]]:
+    """Issuer-side: a friendship-ack for a kid whose pending record is already
+    consumed. Accepted only for an ESTABLISHED, ENABLED ``_friendship`` origin,
+    verified against the channel key that origin already holds — the same key
+    the first ack was verified against, since both sides derive it from one
+    shared token (``_derive_channel_keys``). Effect: the redeemer's endpoint URL
+    is refreshed to ``peer_url`` (self-heals a peer whose IP changed) and the
+    redeemer is pinged back exactly as on the first ack.
+
+    Security properties kept identical to the first-ack path: every failure
+    before signature verification is the same opaque 403 (no kid oracle), the
+    ±30 s freshness window bounds replay to re-announcing the SAME signed URL,
+    and a disabled/revoked friendship is never resurrected.
+    """
+    origin_path = origins_dir / f"{kid}.json"
+    try:
+        origin = json.loads(origin_path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return 403, {"reason": "ack_rejected"}
+    hmac_key = origin.get("hmac_key")
+    recv_key = origin.get("recv_key")
+    if (not origin.get("_friendship") or not origin.get("enabled")
+            or not isinstance(hmac_key, str) or len(hmac_key) != 64
+            or not isinstance(recv_key, str) or len(recv_key) != 64):
+        return 403, {"reason": "ack_rejected"}
+
+    canonical_dict: dict[str, Any] = {"kid": kid, "issued_at": issued_at, "peer_url": peer_url}
+    if peer_label is not None:
+        canonical_dict["peer_label"] = peer_label
+    canonical = json.dumps(canonical_dict, separators=(",", ":"), sort_keys=True)
+    expected_sig = _hmac.new(bytes.fromhex(hmac_key), canonical.encode("utf-8"), "sha256").hexdigest()
+    if not _hmac.compare_digest(signature, expected_sig):
+        return 403, {"reason": "ack_rejected"}
+
+    if abs(int(time.time()) - issued_at) > _ACK_FRESHNESS_S:
+        return 400, {"reason": "stale_ack"}
+    rejection = _ack_url_rejection_reason(peer_url)
+    if rejection is not None:
+        return 400, {"reason": rejection}
+
+    endpoint_path = endpoints_dir / f"{kid}.json"
+    receive_url = peer_url + "/v1/a2a/receive"
+    with config_file_lock(origins_dir, endpoints_dir):
+        try:
+            endpoint = json.loads(endpoint_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            # Origin without endpoint (half-written pairing, or an endpoint the
+            # operator deleted while the origin stayed enabled): rebuild it from
+            # the origin's keys — same shape as to_endpoint_dict().
+            endpoint = {
+                "endpoint_id": kid,
+                "hmac_key": hmac_key,
+                "recv_key": recv_key,
+                "origin_id_for_send": kid,
+                "_friendship_key_version": origin.get("_friendship_key_version", 2),
+                "enabled": True,
+                "state": "ACTIVE",
+                "_friendship": True,
+            }
+            if origin.get("label"):
+                endpoint["label"] = origin["label"]
+        if endpoint.get("url") != receive_url:
+            endpoint["url"] = receive_url
+            _atomic_write(endpoint_path, endpoint)
+        elif not endpoint_path.exists():
+            _atomic_write(endpoint_path, endpoint)
+
+    return _ack_ping_back_and_respond(
+        kid=kid, recv_key=recv_key, origins_dir=origins_dir, endpoints_dir=endpoints_dir,
+    )
+
+
+def _ack_ping_back_and_respond(
+    *, kid: str, recv_key: str, origins_dir: Path, endpoints_dir: Path,
+) -> tuple[int, dict[str, Any]]:
+    """Issuer-side tail shared by the first ack and every repeat ack: ping the
+    redeemer back (ADR-0199), record the verified state, and return the
+    response signed with ``recv_key``."""
+    origin_path = origins_dir / f"{kid}.json"
+    endpoint_path = endpoints_dir / f"{kid}.json"
+
     # Reachability proof (ADR-0199) — url-presence is no longer sufficient
     # for EITHER side to claim a live connection; ping the redeemer back
     # before this side reports itself reachable.
@@ -1693,16 +1880,19 @@ def process_friendship_ack_request(
     except Exception:  # noqa: BLE001 — reachability check is best-effort
         reachable = False
 
-    if not reachable:
-        with config_file_lock(origins_dir, endpoints_dir):
-            for p in (origin_path, endpoint_path):
-                if not p.exists():
-                    continue
-                try:
-                    cfg = json.loads(p.read_text("utf-8"))
-                except (OSError, ValueError):
-                    continue
-                cfg["state"] = "UNREACHABLE"
+    # Record the verified state either way — a repeat ack for a pairing that
+    # an earlier ping marked UNREACHABLE must be able to bring it back.
+    new_state = "ACTIVE" if reachable else "UNREACHABLE"
+    with config_file_lock(origins_dir, endpoints_dir):
+        for p in (origin_path, endpoint_path):
+            if not p.exists():
+                continue
+            try:
+                cfg = json.loads(p.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            if cfg.get("state") != new_state:
+                cfg["state"] = new_state
                 _atomic_write(p, cfg)
 
     iid = ""

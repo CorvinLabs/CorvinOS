@@ -63,7 +63,11 @@ ExecStartPre=/bin/bash -c 'for i in $(seq 1 15); do if ! timeout 1 bash -c "exec
 # all. That silently skipped the audit fan-out flush, every plugin's on_unload(),
 # and the dispatcher drain that exists to stop half-runs being left in `running`
 # state. A streaming client reconnects; holding shutdown open for it does not.
-ExecStart=__REPO_ROOT__/core/console/.venv/bin/python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 --log-level info --timeout-graceful-shutdown 10
+# Bind host comes from the a2a_lan_bind feature flag (loopback unless the
+# operator opted in), resolved at every start by corvin_core.bind_host —
+# a hard-coded --host here silently ignored the flag (2026-09-24). The
+# resolver degrades to 127.0.0.1 on any failure, never to 0.0.0.0.
+ExecStart=/bin/bash -c 'exec __REPO_ROOT__/core/console/.venv/bin/python -m uvicorn corvin_gateway.app:app --host "$(__REPO_ROOT__/core/console/.venv/bin/python -m corvin_core.bind_host 2>/dev/null || echo 127.0.0.1)" --port 8765 --log-level info --timeout-graceful-shutdown 10'
 Restart=always
 # Exponential backoff (systemd >=254): 5s, 10s, 20s, ... capped at 60s.
 # Ignored gracefully (unit still loads, just without backoff) on older

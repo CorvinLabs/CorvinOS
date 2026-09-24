@@ -751,10 +751,17 @@ cmd_console() {
     reload_args=(--reload --reload-dir "$repo_root/core/console" --reload-dir "$repo_root/core/gateway")
   fi
 
+  # Bind host follows the a2a_lan_bind feature flag (loopback by default;
+  # the resolver never falls back to 0.0.0.0 on error).
+  local bind_host
+  bind_host="$(CORVIN_HOME="$corvin_home_resolved" PYTHONPATH="$pypath" \
+    "$venv/bin/python" -m corvin_core.bind_host 2>/dev/null || echo 127.0.0.1)"
+  [[ "$bind_host" == "127.0.0.1" || "$bind_host" == "0.0.0.0" ]] || bind_host=127.0.0.1
+
   CORVIN_HOME="$corvin_home_resolved" \
   PYTHONPATH="$pypath" \
   exec "$venv/bin/python" -m uvicorn corvin_gateway.app:app \
-    --host 127.0.0.1 --port 8765 --log-level info \
+    --host "$bind_host" --port 8765 --log-level info \
     "${reload_args[@]}"
 }
 

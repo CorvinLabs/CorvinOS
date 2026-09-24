@@ -18,6 +18,7 @@ Run: python3 operator/bridges/shared/test_a2a_relay.py
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import sys
@@ -603,6 +604,166 @@ class TestFirstBootstrapAckOverRelay(unittest.TestCase):
             pt = ft.decrypt_from_relay(hmac_key, reply["nonce"], reply["ciphertext"])
             self.assertEqual(json.loads(pt)["ok"], True)
 
+
+
+class TestSharedKidFanOut(unittest.TestCase):
+    """2026-09-24: a friendship kid (and its relay auth key) is identical on
+    both peers, so both listeners register the SAME slot. With one connection
+    per slot the last registrant received both directions: a redeemer's ack
+    over the relay was routed straight back to the redeemer, dropped as
+    self-delivery, and the handshake never completed. A slot now fans out to
+    every live connection that proved the credential."""
+
+    def setUp(self):
+        self.state = relay.RelayState()
+
+    def _live(self, kid: str, auth: str) -> tuple[str, _FakeWS]:
+        ws = _FakeWS()
+        cid = self.state.open_connection(ws)
+        self.assertIsNone(self.state.register(cid, kid, auth))
+        self.state.note_registered_kid(cid, kid)
+        return cid, ws
+
+    def test_both_peers_on_a_shared_kid_receive_each_delivery(self):
+        _a, a_ws = self._live("shared", "auth")
+        _b, b_ws = self._live("shared", "auth")  # registers LAST
+        self.assertEqual(asyncio.run(self.state.deliver("shared", {"m": 1})), "delivered")
+        self.assertEqual(len(a_ws.sent), 1)  # pre-fix: 0 — B had stolen the slot
+        self.assertEqual(len(b_ws.sent), 1)
+
+    def test_one_peer_leaving_keeps_the_slot_live_for_the_other(self):
+        a, a_ws = self._live("shared", "auth")
+        b, _b_ws = self._live("shared", "auth")
+        self.state.close_connection(b)
+        self.assertEqual(asyncio.run(self.state.deliver("shared", {"m": 2})), "delivered")
+        self.assertEqual(len(a_ws.sent), 1)
+
+    def test_dead_socket_does_not_block_the_live_one(self):
+        _a, a_ws = self._live("shared", "auth")
+        dead = _FakeWS(fail=True)
+        cid = self.state.open_connection(dead)
+        self.state.register(cid, "shared", "auth")
+        self.assertEqual(asyncio.run(self.state.deliver("shared", {"m": 3})), "delivered")
+        self.assertEqual(len(a_ws.sent), 1)
+
+    def test_connections_per_kid_are_bounded(self):
+        socks = [self._live("shared", "auth")[1] for _ in range(relay._MAX_CONNECTIONS_PER_KID + 2)]
+        asyncio.run(self.state.deliver("shared", {"m": 4}))
+        self.assertEqual(sum(len(w.sent) for w in socks), relay._MAX_CONNECTIONS_PER_KID)
+        self.assertEqual(len(socks[0].sent), 0)   # oldest evicted
+        self.assertEqual(len(socks[-1].sent), 1)  # newest kept
+
+    def test_wrong_credential_still_cannot_join(self):
+        self._live("shared", "auth")
+        self.assertEqual(self.state.register("intruder", "shared", "EVIL"), "auth_key_mismatch")
+
+
+class TestSharedKidAckOverRealRelay(unittest.TestCase):
+    """E2E over the real transport: a relay server on a real socket, two real
+    RelayListeners (issuer A with only a PENDING record, redeemer B with the
+    established origin — the exact 2026-09-24 state), B registering last, and
+    B's reciprocal ack sent through the real relay client. Pre-fix the ack
+    came back to B and the call returned None."""
+
+    def test_redeemer_ack_reaches_issuer_even_when_redeemer_registered_last(self):
+        import socket
+        import threading
+        import time as _time
+        import unittest.mock as mock
+
+        import uvicorn
+        from fastapi import FastAPI
+
+        state = relay.RelayState()
+        app = FastAPI()
+        app.include_router(relay.build_relay_router(state))
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+        threading.Thread(target=server.run, daemon=True).start()
+        deadline = _time.monotonic() + 10
+        while not server.started and _time.monotonic() < deadline:
+            _time.sleep(0.05)
+        self.assertTrue(server.started)
+        relay_url = f"ws://127.0.0.1:{port}/v1/a2a/relay/connect"
+
+        # Distinct instance identities per listener: both share one process
+        # here, and the self-delivery guard keys on the instance id. A
+        # ContextVar (not a thread-local) because the listener hands ack/ping
+        # processing to asyncio.to_thread, which carries the context along.
+        import contextvars
+        iid_var = contextvars.ContextVar("iid", default="sender-main")
+        import instance_identity
+        id_patch = mock.patch.object(
+            instance_identity, "get_instance_id", side_effect=lambda: iid_var.get())
+        gate_patch = mock.patch.object(ft, "_ack_url_rejection_reason", lambda url: None)
+        flag_patch = mock.patch("corvin_core.feature_flags.is_enabled", return_value=True)
+        url_patch = mock.patch.object(ft, "get_my_relay_url", return_value=relay_url)
+        for p in (id_patch, gate_patch, flag_patch, url_patch):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(setattr, server, "should_exit", True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dirs = {}
+            for side in ("a", "b"):
+                for d in ("origins", "endpoints", "pending"):
+                    (root / side / d).mkdir(parents=True)
+                dirs[side] = {d: root / side / d for d in ("origins", "endpoints", "pending")}
+
+            token, token_str = ft.create_friendship_token(url="http://issuer.invalid", label="A")
+            ft.save_pending_friendship(token, pending_dir=dirs["a"]["pending"])
+            redeemed = ft.parse_and_verify(token_str)
+            (dirs["b"]["origins"] / f"{token.kid}.json").write_text(json.dumps(ft.to_origin_dict(redeemed)))
+            b_endpoint = ft.to_endpoint_dict(redeemed)
+            (dirs["b"]["endpoints"] / f"{token.kid}.json").write_text(json.dumps(b_endpoint))
+
+            listeners = []
+
+            def run(side: str, iid: str):
+                iid_var.set(iid)
+                lst = relay.RelayListener(
+                    relay_url=relay_url, receiver=mock.Mock(),
+                    origins_dir=str(dirs[side]["origins"]),
+                    pending_dir=str(dirs[side]["pending"]),
+                    endpoints_dir=str(dirs[side]["endpoints"]),
+                )
+                listeners.append(lst)
+                asyncio.run(lst.run_forever(reconnect_backoff_s=0.2))
+
+            def slot_conns() -> int:
+                slot = state._slots.get(token.kid)
+                return len(slot.connection_ids) if slot else 0
+
+            threading.Thread(target=run, args=("a", "instance-A"), daemon=True).start()
+            deadline = _time.monotonic() + 10
+            while slot_conns() < 1 and _time.monotonic() < deadline:
+                _time.sleep(0.05)
+            threading.Thread(target=run, args=("b", "instance-B"), daemon=True).start()
+            while slot_conns() < 2 and _time.monotonic() < deadline:
+                _time.sleep(0.05)
+            self.assertEqual(slot_conns(), 2, "both peers must hold the shared slot")
+
+            # B's reciprocal ack, signed exactly like _ack_round_trip does.
+            body = {"kid": token.kid, "issued_at": int(_time.time()),
+                    "peer_url": "http://redeemer.invalid:1"}
+            canon = json.dumps(body, separators=(",", ":"), sort_keys=True)
+            body["signature"] = hmac.new(
+                bytes.fromhex(b_endpoint["hmac_key"]), canon.encode(), "sha256").hexdigest()
+            iid_var.set("instance-B")  # the sender is B
+            payload = ft._relay_send_ack(token.kid, b_endpoint["hmac_key"], body, 8)
+
+            for lst in listeners:
+                lst.stop()
+
+            self.assertIsNotNone(payload, "ack routed back to its own sender (pre-fix)")
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["instance_id"], "instance-A")
+            # A wrote its own record for B through the regular code path.
+            self.assertTrue((dirs["a"]["origins"] / f"{token.kid}.json").exists())
+            self.assertIsNone(ft.load_pending_friendship(token.kid, pending_dir=dirs["a"]["pending"]))
 
 if __name__ == "__main__":
     unittest.main()

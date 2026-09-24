@@ -779,3 +779,39 @@ the NEXT `corvin serve` / next (re-)registration binds to; the operator still re
 re-installs the autostart entry) once, same as any other bind-address change would require
 in any server. Tests: `ops/launcher/corvin/tests/test_lan_bind_flag.py` (7, both flag
 states + explicit-override + fail-closed-on-resolution-error).
+
+## Link robustness — self-healing handshake, relay fan-out, LAN proxy (ADR-2057, 2026-09-24)
+
+Measured live between two LAN instances (`shumway` ↔ `gpu-server`): the pairing
+showed "peer can't reach you back" permanently. Six independent defects stacked;
+each is fixed at its origin.
+
+| Defect | Fix | Where |
+|---|---|---|
+| Recheck retried the reciprocal ack only after a successful ping — but the issuer answers our ping only once it has processed our ack. Deadlock. | Recheck retries the ack whenever `_peer_knows_us` is false; a signed ack response settles `reachable` itself (`via` reports direct/relay). | `a2a_pair._recheck_connection`, `a2a_friendship._ack_round_trip` |
+| The issuer consumed its pending record on the first ack and answered every later ack with the opaque 403 — a lost first response stuck the redeemer forever. | Repeat ack accepted for an ESTABLISHED, ENABLED `_friendship` origin, verified against that origin's channel key (same key the first ack used — `_derive_channel_keys`). It refreshes the redeemer's endpoint URL (self-heals an IP change), rebuilds a missing endpoint record, pings back and re-records `state`. Opaque 403 before signature verification, ±30 s freshness, a disabled friendship is never resurrected. | `a2a_friendship._process_repeat_ack`, `_ack_ping_back_and_respond` |
+| DHCP moved the host; the persisted `my_a2a_url` kept the dead address and the IP-change broadcast re-announced it. | `heal_my_url()` rewrites a persisted URL whose host is a literal RFC 1918 IPv4 that no local interface carries anymore (scheme/port/path kept; hostnames, public, mesh and still-assigned addresses untouched; `CORVIN_A2A_URL` wins). Runs every heartbeat tick before the `last_known_ip` early-return. | `a2a_friendship.heal_my_url`, `check_and_broadcast_reconnect` |
+| A friendship kid (and its relay auth key) is identical on both peers, and a relay slot held ONE connection — whoever registered last received both directions (an ack sent over the relay came back to its own sender). | A slot holds up to `_MAX_CONNECTIONS_PER_KID` (4) live connections that proved the pinned credential; delivery fans out to all of them; each listener drops its own traffic via the existing `_relay_sender_instance_id` / `sender_instance_id` guard, so exactly the peer answers. A dead socket does not block the live one. **The public relay must be redeployed for this to take effect.** | `a2a_relay.RelayState` |
+| The relay listener ran the ack core (blocking 5 s ping-back whose relay fallback calls `asyncio.run()`) inside its event loop — the fallback raised, so a relay-only redeemer was never reported reachable, and the ping stalled every other delivery. | Ping and ack dispatch run via `asyncio.to_thread`, like task envelopes already did. | `a2a_relay.RelayListener._handle_deliver` |
+| `corvin-webui.service` and `bridge.sh console` hard-coded `--host 127.0.0.1`, ignoring `a2a_lan_bind`, while `corvin serve`/`corvin-service`/the installer honoured it. | Both resolve the host through `python -m corvin_core.bind_host` (loopback on any failure, never 0.0.0.0). | `core/console/corvin_core/bind_host.py`, `core/gateway/systemd/corvin-webui.service`, `bridge.sh` |
+
+**Recommended LAN topology (no `a2a_lan_bind`).** Keep the console on loopback and
+expose only the three HMAC-signed routes through a user-space reverse proxy on a
+separate port (e.g. nginx on `0.0.0.0:8775`, `location ~ ^/v1/a2a/(receive|ping|friendship-ack)$`,
+POST only, every other path 404, `X-Forwarded-For`/`Forwarded`/`X-Real-IP` cleared —
+uvicorn trusts forwarding headers from 127.0.0.1, and `local-login` treats a loopback
+peer as the owner, so the proxy must never forward anything else). Set My URL to
+`http://<lan-ip>:8775`. Binding the whole console to `0.0.0.0` exposes every
+unauthenticated surface to the LAN.
+
+**Pairing records are runtime state, never repo content.**
+`corvin_operator/cowork/{remote_endpoints,remote_origins,remote_pending_friendships,pending_invites}/`
+carry live channel keys; they are gitignored, and
+`tests/security/test_no_tracked_a2a_runtime_secrets.py` fails if one is tracked
+(commit cce86a13 had force-added a friendship's keys to this public repo — that
+pairing must be treated as compromised and re-paired).
+
+Tests: `test_a2a_friendship_handshake.py::TestRepeatAck` (real HTTP, two instances),
+`test_a2a_relay.py::TestSharedKidFanOut` + `TestSharedKidAckOverRealRelay` (real relay
+server on a socket, two real listeners, redeemer registering last — red on the old
+relay), `core/console/tests/test_a2a_relay_config.py::TestRecheckAckDeadlock`.
