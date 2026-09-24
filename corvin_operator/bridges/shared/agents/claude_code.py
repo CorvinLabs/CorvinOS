@@ -293,6 +293,22 @@ def _windows_bin_fallbacks() -> tuple[str, ...]:
     return tuple(candidates)
 
 
+def _fallback_candidates() -> tuple[str, ...]:
+    """Off-PATH probe list. ``helper_model.claude_bin_candidates`` is the one
+    shared list (native / legacy-local / npm-prefix / Volta / bun / pnpm /
+    Homebrew / snap / nvm + ``CORVIN_CLAUDE_BIN_FALLBACKS``); the local tuple
+    is only the floor for a host where ``helper_model`` is not importable."""
+    try:
+        from helper_model import claude_bin_candidates  # noqa: PLC0415
+        return claude_bin_candidates()
+    except Exception:  # noqa: BLE001
+        extra = os.environ.get("CORVIN_CLAUDE_BIN_FALLBACKS", "")
+        candidates: tuple[str, ...] = _DEFAULT_BIN_FALLBACKS
+        if sys.platform.startswith("win"):
+            candidates = _windows_bin_fallbacks() + candidates
+        return tuple(p for p in extra.split(os.pathsep) if p) + candidates
+
+
 def _resolve_claude_bin(name: str) -> str:
     """Return the absolute path to the claude binary, or ``name`` unchanged.
 
@@ -319,13 +335,7 @@ def _resolve_claude_bin(name: str) -> str:
     # error string.
     if name not in ("claude", "claude.exe"):
         return name
-    extra = os.environ.get("CORVIN_CLAUDE_BIN_FALLBACKS", "")
-    candidates: tuple[str, ...] = _DEFAULT_BIN_FALLBACKS
-    if sys.platform.startswith("win"):
-        candidates = _windows_bin_fallbacks() + candidates
-    if extra:
-        candidates = tuple(p for p in extra.split(os.pathsep) if p) + candidates
-    for cand in candidates:
+    for cand in _fallback_candidates():
         expanded = os.path.expanduser(cand)
         if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
             return expanded
@@ -340,10 +350,7 @@ def _format_binary_not_found_error(binary: str) -> str:
     *why* the lookup failed.
     """
     path_env = os.environ.get("PATH", "")
-    fallback_list = _DEFAULT_BIN_FALLBACKS
-    if sys.platform.startswith("win"):
-        fallback_list = _windows_bin_fallbacks() + fallback_list
-    fallbacks = ", ".join(fallback_list)
+    fallbacks = ", ".join(_fallback_candidates())
     return (
         f"claude binary not found: {binary!r}; "
         f"PATH={path_env!r}; tried fallbacks: {fallbacks}"

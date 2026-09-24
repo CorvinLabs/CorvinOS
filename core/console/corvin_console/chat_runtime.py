@@ -228,6 +228,26 @@ try:
 except Exception:  # noqa: BLE001
     _bridge_audit = None
 
+# Claude CLI resolution (shared with the bridge + WorkerEngine) and PATH
+# repair. A service manager starts this process with a minimal PATH, so the
+# CLI in ~/.local/bin (native installer), ~/.npm-global/bin, nvm, Volta, …
+# is invisible to every bare shutil.which("claude") probe — engine
+# detection, the dashboard, the healer — not just to the spawn. harden_path
+# APPENDS the install dirs that actually hold the CLI, once, at import.
+try:
+    if str(_BRIDGES_SHARED) not in sys.path:
+        sys.path.insert(0, str(_BRIDGES_SHARED))
+    import helper_model as _helper_model  # type: ignore  # noqa: E402
+    _added_path_dirs = _helper_model.harden_path()
+    if _added_path_dirs:
+        import logging as _logging  # noqa: E402
+
+        _logging.getLogger(__name__).info(
+            "claude CLI install dir(s) appended to PATH: %s", _added_path_dirs,
+        )
+except Exception:  # noqa: BLE001
+    _helper_model = None
+
 # ADR-0171 — universal engine-span audit (role=os for console OS turns).
 # Best-effort; a missing module must never break a turn (spans are additive).
 try:
@@ -1272,7 +1292,17 @@ def touch(sess: WebChatSession, *, increment_turn: bool = False) -> None:
 
 
 def _claude_binary() -> str:
-    return os.environ.get("CORVIN_CLAUDE_BIN") or "claude"
+    """The claude CLI to spawn: ``CORVIN_CLAUDE_BIN`` pin → PATH → every known
+    install location (``helper_model.resolve_claude_bin``). A bare
+    ``"claude"`` is not enough: the console runs under systemd / launchd with
+    a stripped PATH that lacks ``~/.local/bin``, and the chat then told the
+    operator the CLI was missing on a machine where it works in every shell."""
+    if _helper_model is not None:
+        try:
+            return _helper_model.resolve_claude_bin()
+        except Exception:  # noqa: BLE001
+            pass
+    return (os.environ.get("CORVIN_CLAUDE_BIN") or "").strip() or "claude"
 
 
 def _console_base_url() -> str:

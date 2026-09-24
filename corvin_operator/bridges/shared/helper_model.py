@@ -35,27 +35,58 @@ from typing import Final
 DEFAULT_HELPER_MODEL: Final[str] = "claude-haiku-4-5-20251001"
 
 # Known install locations probed when the CLI is not on PATH. The dominant
-# failure mode is the adapter running under systemd with a stripped PATH that
-# lacks ``~/.local/bin`` (where Claude Code installs the CLI) — a bare
-# ``"claude"`` spawn then raises FileNotFoundError. The WorkerEngine path
-# already survives this via ``agents.claude_code._resolve_claude_bin``; this
-# list mirrors it so EVERY helper ``claude -p`` spawn survives the same
-# environment. Override with ``CORVIN_CLAUDE_BIN_FALLBACKS=p1:p2:…``.
+# failure mode is a host running under systemd / launchd with a stripped PATH
+# that lacks ``~/.local/bin`` (where the native Claude Code installer puts the
+# CLI) — a bare ``"claude"`` spawn then raises FileNotFoundError, and the
+# console web chat told the operator "the `claude` CLI was not found" on a
+# machine where it is installed and works in every shell. Covers every
+# supported install method: native installer (``~/.local/bin``), the legacy
+# local install (``~/.claude/local``), npm with a user prefix / Volta / bun /
+# pnpm, Homebrew, system packages and snap. nvm installs are version-specific
+# and resolved dynamically (``_nvm_bin_dirs``). Extend with
+# ``CORVIN_CLAUDE_BIN_FALLBACKS=p1:p2:…`` (os.pathsep-separated).
+# ``agents.claude_code`` imports ``claude_bin_candidates()`` — ONE list.
 _CLAUDE_BIN_FALLBACKS: Final[tuple[str, ...]] = (
     "~/.local/bin/claude",
+    "~/.claude/local/claude",
+    "~/.npm-global/bin/claude",
+    "~/.volta/bin/claude",
+    "~/.bun/bin/claude",
+    "~/.local/share/pnpm/claude",
+    "~/Library/pnpm/claude",
     "/usr/local/bin/claude",
     "/usr/bin/claude",
     "/opt/homebrew/bin/claude",
+    "/snap/bin/claude",
 )
 
 
+def _nvm_bin_dirs() -> tuple[str, ...]:
+    """``bin`` dirs of nvm-managed node versions, newest first. An npm global
+    install under nvm lands in ``~/.nvm/versions/node/<ver>/bin`` — never on a
+    service PATH, and version-specific, so it cannot be a literal fallback.
+    Best-effort; never raises."""
+    try:
+        root = os.path.join(
+            os.environ.get("NVM_DIR") or os.path.expanduser("~/.nvm"),
+            "versions", "node",
+        )
+        if not os.path.isdir(root):
+            return ()
+
+        def _key(v: str) -> tuple[int, ...]:
+            return tuple(int(p) if p.isdigit() else 0 for p in v.lstrip("v").split("."))
+
+        versions = sorted(os.listdir(root), key=_key, reverse=True)
+        return tuple(os.path.join(root, v, "bin") for v in versions)
+    except Exception:  # noqa: BLE001
+        return ()
+
+
 def _windows_bin_fallbacks() -> tuple[str, ...]:
-    """Windows-only fallback locations, mirrors
-    ``agents.claude_code._windows_bin_fallbacks`` — kept as a separate
-    copy since this module is deliberately dependency-free (see module
-    docstring) and must not import the engine package. %APPDATA%/
-    %USERPROFILE% are per-user and not expressible as a ``~``-relative
-    literal, so these are resolved from env vars rather than hardcoded."""
+    """Windows-only fallback locations. %APPDATA%/%USERPROFILE% are per-user
+    and not expressible as a ``~``-relative literal, so these are resolved
+    from env vars rather than hardcoded."""
     candidates: list[str] = []
     appdata = os.environ.get("APPDATA")
     if appdata:
@@ -67,19 +98,38 @@ def _windows_bin_fallbacks() -> tuple[str, ...]:
     return tuple(candidates)
 
 
+def claude_bin_candidates() -> tuple[str, ...]:
+    """Every off-PATH location probed for the claude CLI, in priority order:
+    operator-supplied ``CORVIN_CLAUDE_BIN_FALLBACKS`` → Windows shims →
+    static install locations → nvm version dirs (newest first). Entries may
+    carry a leading ``~``; callers ``expanduser`` them."""
+    extra = os.environ.get("CORVIN_CLAUDE_BIN_FALLBACKS", "")
+    base: tuple[str, ...] = _CLAUDE_BIN_FALLBACKS
+    if sys.platform.startswith("win"):
+        base = _windows_bin_fallbacks() + base
+    nvm = tuple(os.path.join(d, "claude") for d in _nvm_bin_dirs())
+    return tuple(p for p in extra.split(os.pathsep) if p) + base + nvm
+
+
+def _is_executable_file(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
 def resolve_claude_bin() -> str:
-    """Resolve the claude CLI path for helper ``claude -p`` subprocess spawns.
+    """Resolve the claude CLI path for every ``claude`` subprocess spawn.
 
     Resolution order — ``CORVIN_CLAUDE_BIN`` (explicit pin) → ``PATH``
-    (``shutil.which``) → known-location fallbacks → bare ``"claude"`` (lets
-    ``Popen`` raise a clear ``FileNotFoundError``).
+    (``shutil.which``) → ``claude_bin_candidates()`` → bare ``"claude"``
+    (lets ``Popen`` raise a clear ``FileNotFoundError``).
 
-    Helper spawns must NOT rely on the bare name alone: the bridge runs under
-    systemd with a stripped PATH, so a bare ``"claude"`` raises
-    ``FileNotFoundError`` — and for the fail-closed L44 house-rules gate that
-    error escalated EVERY request to operator approval. Kept dependency-free
-    here (``helper_model`` must not import the engine) but semantically the
-    same resolver the WorkerEngine uses. Best-effort + never raises."""
+    Spawns must NOT rely on the bare name alone: the bridge and the console
+    run under systemd with a stripped PATH, so a bare ``"claude"`` raises
+    ``FileNotFoundError`` — for the fail-closed L44 house-rules gate that
+    escalated EVERY request to operator approval, and the console web chat
+    reported the CLI missing on a machine where it is installed. Kept
+    dependency-free (``helper_model`` must not import the engine); the
+    WorkerEngine resolver shares ``claude_bin_candidates()``. Best-effort +
+    never raises."""
     pinned = os.environ.get("CORVIN_CLAUDE_BIN", "").strip()
     if pinned and (os.sep in pinned or "/" in pinned):
         return pinned  # explicit absolute/relative pin — honour as-is
@@ -88,18 +138,46 @@ def resolve_claude_bin() -> str:
         found = shutil.which(name)
         if found:
             return found
-        extra = os.environ.get("CORVIN_CLAUDE_BIN_FALLBACKS", "")
-        base_fallbacks = _CLAUDE_BIN_FALLBACKS
-        if sys.platform.startswith("win"):
-            base_fallbacks = _windows_bin_fallbacks() + base_fallbacks
-        candidates = tuple(p for p in extra.split(os.pathsep) if p) + base_fallbacks
-        for cand in candidates:
+        for cand in claude_bin_candidates():
             expanded = os.path.expanduser(cand)
-            if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+            if _is_executable_file(expanded):
                 return expanded
     except Exception:  # noqa: BLE001 — resolution is best-effort; fall back to the name
         pass
     return name
+
+
+def harden_path() -> list[str]:
+    """PATH repair for a service process: APPEND every existing install dir
+    from ``claude_bin_candidates()`` that holds the ``claude`` CLI and is
+    missing from ``PATH`` — the whole dir, so an npm-installed ``claude``
+    also finds the ``node`` its ``#!/usr/bin/env node`` shebang needs (nvm,
+    Volta and Homebrew keep both side by side). Appending, never prepending, so
+    nothing the operator put on PATH is shadowed. Makes every bare
+    ``shutil.which("claude")`` probe in the process (engine detection,
+    dashboard status, healers, workflows) agree with ``resolve_claude_bin``
+    without patching each call site. Idempotent; returns the dirs it added;
+    never raises."""
+    added: list[str] = []
+    try:
+        parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+        seen = {os.path.normcase(os.path.normpath(p)) for p in parts}
+        for cand in claude_bin_candidates():
+            expanded = os.path.expanduser(cand)
+            d = os.path.dirname(expanded)
+            if not d or not _is_executable_file(expanded):
+                continue
+            key = os.path.normcase(os.path.normpath(d))
+            if key in seen:
+                continue
+            seen.add(key)
+            parts.append(d)
+            added.append(d)
+        if added:
+            os.environ["PATH"] = os.pathsep.join(parts)
+    except Exception:  # noqa: BLE001 — PATH repair is best-effort
+        return []
+    return added
 
 
 def is_hermes_available() -> bool:

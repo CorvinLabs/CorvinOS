@@ -629,6 +629,30 @@ fix had missed this auto-detect probe (now closed, with the
 `acs_runtime._claude_binary` is hardened through the same resolver for the same
 reason.
 
+**The console web chat uses it too** (`chat_runtime._claude_binary`). Until
+2026-09-24 it read only `CORVIN_CLAUDE_BIN` and `PATH`, so under the
+`corvin-webui.service` unit (PATH without `~/.local/bin`) every web turn
+answered *"The Claude Code engine is selected, but the `claude` CLI was not
+found"* on a machine where `claude` works in every shell.
+
+**One probe list, every install method.** `helper_model.claude_bin_candidates()`
+is the single list, and `agents.claude_code` imports it:
+`CORVIN_CLAUDE_BIN_FALLBACKS` (operator additions) → Windows npm shims →
+`~/.local/bin` (native installer) · `~/.claude/local` (legacy local install) ·
+`~/.npm-global/bin` · `~/.volta/bin` · `~/.bun/bin` · pnpm ·
+`/usr/local/bin` · `/usr/bin` · `/opt/homebrew/bin` · `/snap/bin` → nvm
+`~/.nvm/versions/node/*/bin`, newest first. Fallbacks are only used for the
+bare default name. A path pin in `CORVIN_CLAUDE_BIN` is always used exactly as given.
+
+**PATH repair at console import.** `helper_model.harden_path()` runs once when
+`chat_runtime` is imported. It APPENDS (never prepends) each candidate dir that
+actually holds the CLI and is missing from `PATH`. That way every bare
+`shutil.which("claude")` probe in the process (engine detection, the dashboard
+status dots, `engine_healer`, workflows) agrees with the spawn resolver, and an
+npm-installed `claude` finds the `node` next to it for its shebang. Because this
+happens at runtime, it also fixes installs whose service unit was written
+before this change, with no reinstall.
+
 This lets a fresh install with no Anthropic credentials still boot, defaulting
 to local Ollama. The path must **never end with a silent empty reply** (ADR-0159
 "the degraded path is not silent"). `_call_hermes_streaming_via_engine` therefore

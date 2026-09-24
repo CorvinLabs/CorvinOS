@@ -253,6 +253,72 @@ class ResolveClaudeBinTests(unittest.TestCase):
             self.assertEqual(helper_model.resolve_claude_bin(), str(fake))
 
 
+class InstallMethodCoverageTests(unittest.TestCase):
+    """Every supported Claude Code install method is found under a service
+    manager's stripped PATH — the console web chat reported "the `claude`
+    CLI was not found" when the native installer's ~/.local/bin was absent
+    from the systemd unit's PATH."""
+
+    def setUp(self) -> None:
+        self._snap = {k: os.environ.get(k) for k in
+                      ("HOME", "NVM_DIR", "CORVIN_CLAUDE_BIN",
+                       "CORVIN_CLAUDE_BIN_FALLBACKS", "PATH")}
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        os.environ["HOME"] = str(self.home)
+        os.environ.pop("NVM_DIR", None)
+        os.environ.pop("CORVIN_CLAUDE_BIN", None)
+        os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)
+        os.environ["PATH"] = "/nonexistent-dir-xyz"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+        for k, v in self._snap.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _fake(self, rel: str) -> Path:
+        p = self.home / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("#!/bin/sh\nexit 0\n")
+        p.chmod(0o755)
+        return p
+
+    def test_each_user_install_location_resolves(self) -> None:
+        for rel in (".local/bin/claude", ".claude/local/claude",
+                    ".npm-global/bin/claude", ".volta/bin/claude",
+                    ".bun/bin/claude", ".local/share/pnpm/claude"):
+            with self.subTest(rel=rel):
+                fake = self._fake(rel)
+                with mock.patch.object(helper_model.shutil, "which", return_value=None):
+                    self.assertEqual(helper_model.resolve_claude_bin(), str(fake))
+                fake.unlink()
+
+    def test_nvm_resolves_newest_version_first(self) -> None:
+        self._fake(".nvm/versions/node/v9.11.2/bin/claude")
+        newest = self._fake(".nvm/versions/node/v22.3.0/bin/claude")
+        self._fake(".nvm/versions/node/v18.20.1/bin/claude")
+        with mock.patch.object(helper_model.shutil, "which", return_value=None):
+            self.assertEqual(helper_model.resolve_claude_bin(), str(newest))
+
+    def test_harden_path_appends_install_dir_and_is_idempotent(self) -> None:
+        fake = self._fake(".local/bin/claude")
+        added = helper_model.harden_path()
+        self.assertEqual(added, [str(fake.parent)])
+        parts = os.environ["PATH"].split(os.pathsep)
+        self.assertEqual(parts[0], "/nonexistent-dir-xyz")  # appended, never prepended
+        self.assertEqual(helper_model.shutil.which("claude"), str(fake))
+        self.assertEqual(helper_model.harden_path(), [])
+        self.assertEqual(os.environ["PATH"].split(os.pathsep), parts)
+
+    def test_harden_path_skips_dirs_without_the_cli(self) -> None:
+        (self.home / ".local" / "bin").mkdir(parents=True)
+        self.assertEqual(helper_model.harden_path(), [])
+        self.assertEqual(os.environ["PATH"], "/nonexistent-dir-xyz")
+
+
 class WindowsBinFallbacksTests(unittest.TestCase):
     """helper_model.py's own copy of the Windows npm-shim fallback logic
     (ADR-0265 P1) — must mirror agents.claude_code._windows_bin_fallbacks
