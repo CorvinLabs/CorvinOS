@@ -199,18 +199,3 @@ def verify_token(token_str: str, codec_secret: str) -> Optional[A2AToken]:
     return codec.decode(token_str)
 
 
-if __name__ == "__main__":
-    # Quick test
-    codec = A2ATokenCodec()
-    token = A2AToken(
-        peer_id="adesso-windows",
-        endpoint_url="http://192.168.1.100:8765"
-    )
-    encoded = codec.encode(token)
-    print(f"Encoded: {encoded}")
-
-    decoded = codec.decode(encoded)
-    if decoded:
-        print(f"✅ Verified: {decoded.peer_id} → {decoded.endpoint_url}")
-    else:
-        print("❌ Verification failed")
