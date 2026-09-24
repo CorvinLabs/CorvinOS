@@ -3045,7 +3045,11 @@ decodes only lines matching the reader's event types, and keeps a 4 GiB bound
 purely as a latency backstop (full 187 MB `compute_cost_efficiency`: 0.77 s,
 vs. 0.95 s for the old 64 MiB tail). Result on the live tenant: 9 of 276
 worker runs priced, $1.79. Pinned by `test_worker_series_honesty.py::
-TestScanReachesPricedHistory`.
+TestScanReachesPricedHistory`. Since 2026-09-24 (ADR-2058) the helper reads the
+chain's seam-linked history files first (`chain_history_files()`, oldest
+first, each under the same byte bound), so a chain loss that restarted the
+canonical file does not zero the cost history; `model_usage` and the
+engine-config classified tally do the same.
 
 ### Worker activity over time (2026-09-22)
 

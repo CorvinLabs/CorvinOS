@@ -75,7 +75,18 @@ def _clamp01(x: float) -> float:
 
 
 def _parse_ts(raw: Any) -> Optional[datetime]:
-    """Parse an audit/event timestamp into an aware UTC datetime, or None."""
+    """Parse an audit/event timestamp into an aware UTC datetime, or None.
+
+    The chain writes ``ts`` as epoch-seconds FLOAT. Until 2026-09-24 only
+    strings were accepted, so every chain record parsed to ``None`` and was
+    counted as "now" in every window — which, once seam-linked history is read
+    too (ADR-2058), would have dated months of history into "today".
+    """
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        try:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
     if not isinstance(raw, str) or not raw:
         return None
     s = raw.strip().replace("Z", "+00:00")
@@ -114,6 +125,11 @@ def read_audit_events(
     ``total_chain_length`` is the full line count of the chain (window-
     independent — it is the audit LOOP's own maturity signal). The event list
     is filtered to ``since`` (``None`` = no lower bound).
+
+    ADR-2058 — "the chain" is the canonical file PLUS its seam-linked history
+    (``chain_history_files``, oldest first): after a chain loss the canonical
+    file restarts, and reading it alone reported a months-old install as brand
+    new. History files are read, never touched.
     """
     path = _audit_chain_path(tenant_id)
     events: List[Tuple[datetime, str]] = []
@@ -121,25 +137,35 @@ def read_audit_events(
     if not path or not path.exists():
         return events, total
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                total += 1
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                key = _audit_event_key(rec)
-                if not key:
-                    continue
-                ts = _parse_ts(rec.get("ts") or rec.get("timestamp"))
-                if since is not None and ts is not None and ts < since:
-                    continue
-                events.append((ts or _now(), str(key)))
-    except OSError as exc:
-        log.warning("maturity: audit read failed: %r", exc)
+        from core.paths.chain_history import chain_history_files  # noqa: PLC0415
+        files = [*chain_history_files(path), path]
+    except Exception as exc:  # noqa: BLE001 — history is additive, never fatal
+        log.warning("maturity: chain history unavailable: %r", exc)
+        files = [path]
+    for file_path in files:
+        try:
+            with file_path.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    total += 1
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(rec, dict):
+                        continue
+                    key = _audit_event_key(rec)
+                    if not key:
+                        continue
+                    raw_ts = rec.get("ts")
+                    ts = _parse_ts(raw_ts if raw_ts is not None else rec.get("timestamp"))
+                    if since is not None and ts is not None and ts < since:
+                        continue
+                    events.append((ts or _now(), str(key)))
+        except OSError as exc:
+            log.warning("maturity: audit read failed: %r", exc)
     return events, total
 
 

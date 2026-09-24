@@ -272,6 +272,25 @@ The event lists the first 20 problems (line + issue) and
 Daily systemd-timer with a Bridge-notification on chain break is
 **Roadmap** (not in Phase 1).
 
+### H2 — Readers traverse seam-linked history, verifiers do not (ADR-2058)
+
+After a chain loss (`python -m forge.chain_loss`) or an ADR-0650 convergence
+the canonical `<tenant>/global/forge/audit.jsonl` is young; its past lives in
+history files it links to by `audit.chain_supersedes` seams (post-loss file,
+`recovered/audit.backup-*.jsonl`, `recovered/audit.carved-*.jsonl`).
+Console readers that AGGREGATE traverse them through
+`security_events.chain_history_files()` / `iter_chain_records()` (for code
+under `core/`: the forwarder `core/paths/chain_history.py`): seams resolve by
+`chain_path_key` against the files in the canonical directory and its
+`recovered/` subdirectory, transitively, oldest first; `.corrupt-` fragments
+are skipped. Switched: `model_usage`, `/v1/console/learning/audit`, learning-loop
+audit rows (`learning_analytics`), `maturity_live`, the engine-config
+classified tally (`engine_api._iter_classified`), and
+`model_selection_learner` cost/threshold readers. Verifiers — the boot
+tripwire, `verify_chain`, the daily verify timer, compliance reports — read
+the canonical chain alone, and nothing ever merges, rewrites, reorders or
+deletes a history file.
+
 ### F — Linter NFKC + confusable normalisation
 
 `skill_forge.linter.lint()` now NFKC-normalises the body and folds a

@@ -26,6 +26,7 @@ ADR-0906: Learning-Loop Manifest Schema
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -453,30 +454,64 @@ def _sync_index_from_manifest(service: 'LearningLoopService', tenant_id: str) ->
         logger.warning("Learning loop manifest sync failed: %s", exc)
 
 
-async def _get_audit_events(tenant_id: str, loop_id: str, limit: int = 10) -> List[dict]:
-    """Fetch audit events for a loop from the core audit chain.
+def _read_loop_audit_events(tenant_id: str, loop_id: str, limit: int) -> List[dict]:
+    """Newest-first ``learning.*`` / ``skill_*`` records naming *loop_id*.
 
-    Queries: learning_event_received, skill_config_updated, outcome_feedback events
-    that reference this loop_id.
+    Reads the tenant's ONE chain (``tenant_audit_chain``) AND its seam-linked
+    history (ADR-2058 ``iter_chain_records``) — a loop's past must not vanish
+    from this view because the canonical file was restarted after a chain loss.
+    Content-free: only the identifiers the row model shows, never ``details``.
+    A record naming a DIFFERENT tenant is dropped (fail-closed isolation).
+    """
+    from core.paths import tenant_audit_chain  # noqa: PLC0415
+    from core.paths.chain_history import iter_chain_records  # noqa: PLC0415
+
+    path = tenant_audit_chain(tenant_id)
+    if not path.exists():
+        return []
+    matched: List[dict] = []
+    for rec in iter_chain_records(path, needles=('"loop_id"',)):
+        event_type = str(rec.get("event_type") or "")
+        if not (event_type.startswith("learning.") or event_type.startswith("skill_")):
+            continue
+        details = rec.get("details") or {}
+        if not isinstance(details, dict) or details.get("loop_id") != loop_id:
+            continue
+        rec_tenant = details.get("tenant_id") or rec.get("tenant_id")
+        if rec_tenant and rec_tenant != tenant_id:
+            continue
+        ts = rec.get("ts")
+        if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+            timestamp = datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+        else:
+            timestamp = str(ts or rec.get("timestamp") or "")
+        matched.append({
+            "timestamp": timestamp,
+            "event_type": event_type,
+            "skill_id": details.get("skill_id"),
+            "signal": details.get("signal") if isinstance(details.get("signal"), str) else None,
+            "outcome": details.get("outcome") if isinstance(details.get("outcome"), str) else None,
+            "metadata": {},
+        })
+    matched.reverse()
+    return matched[: max(0, limit)]
+
+
+async def _get_audit_events(tenant_id: str, loop_id: str, limit: int = 10) -> List[dict]:
+    """Fetch audit events for a loop from the core audit chain (newest first).
+
+    Queries ``learning.*`` / ``skill_*`` records that reference this loop_id,
+    across the canonical chain and its seam-linked history. Until 2026-09-24
+    this imported a ``forge.security.audit_query`` that does not exist, so the
+    ImportError branch answered ``[]`` for every loop, always.
 
     Returns: List of audit events, or empty list on error (graceful degradation).
     """
     try:
-        from forge.security import audit_query
-        events = await audit_query(
-            tenant_id=tenant_id,
-            event_type_patterns=["learning.*", "skill_.*"],
-            filters={"loop_id": loop_id},
-            limit=limit,
-            order="descending",
-        )
-        return events if events else []
-    except ImportError:
-        logger.warning("Audit query module not available")
-        return []
+        return await asyncio.to_thread(_read_loop_audit_events, tenant_id, loop_id, limit)
     except Exception as e:
-        # Catch all exceptions (ValueError, RuntimeError, asyncio errors, etc.)
-        # to ensure graceful degradation. Log for debugging but return empty list.
+        # Catch all exceptions to ensure graceful degradation. Log for
+        # debugging but return empty list.
         logger.error(f"Failed to query audit events: {type(e).__name__}: {e}")
         return []
 

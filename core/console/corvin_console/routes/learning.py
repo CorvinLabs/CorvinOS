@@ -31,7 +31,6 @@ is accepted but NEVER persisted (only presence + length).
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -746,32 +745,32 @@ async def get_audit_trail(
 
     events: list[AuditEvent] = []
     if path.exists():
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if '"learning.' not in line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                details = rec.get("details") or {}
-                if not str(rec.get("event_type", "")).startswith("learning."):
-                    continue
-                if details.get("tenant_id") != session.tenant_id:
-                    continue
-                ts = rec.get("ts")
-                events.append(
-                    AuditEvent(
-                        audit_ref=details.get("audit_ref"),
-                        event_type=rec["event_type"],
-                        timestamp=datetime.utcfromtimestamp(float(ts)).isoformat() + "Z"
-                        if isinstance(ts, (int, float)) else str(ts),
-                        skill_id=details.get("skill_id"),
-                        lom=details.get("lom"),
-                        hash=rec.get("hash"),
-                        prev_hash=rec.get("prev_hash"),
-                    )
+        # ADR-2058 — the chain's seam-linked history first (oldest first), then
+        # the canonical file, so ``[-limit:]`` below is still "newest last" and
+        # a chain loss does not erase the learning history from this view.
+        from core.paths.chain_history import iter_chain_records  # noqa: PLC0415
+
+        for rec in iter_chain_records(path, needles=('"learning.',)):
+            details = rec.get("details") or {}
+            if not isinstance(details, dict):
+                continue
+            if not str(rec.get("event_type", "")).startswith("learning."):
+                continue
+            if details.get("tenant_id") != session.tenant_id:
+                continue
+            ts = rec.get("ts")
+            events.append(
+                AuditEvent(
+                    audit_ref=details.get("audit_ref"),
+                    event_type=rec["event_type"],
+                    timestamp=datetime.utcfromtimestamp(float(ts)).isoformat() + "Z"
+                    if isinstance(ts, (int, float)) else str(ts),
+                    skill_id=details.get("skill_id"),
+                    lom=details.get("lom"),
+                    hash=rec.get("hash"),
+                    prev_hash=rec.get("prev_hash"),
                 )
+            )
     events = events[-limit:]
     return AuditResponse(events=events, count=len(events), chain_path=str(path))
 

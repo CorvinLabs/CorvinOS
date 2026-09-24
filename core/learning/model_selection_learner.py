@@ -109,27 +109,40 @@ def _iter_chain_records(
     dominated by event types no cost reader wants, and decoding them was the
     whole cost of a scan. Streams instead of reading the tail into memory, so
     the bound can sit far above any real chain (see ``_MAX_SCAN_BYTES``).
+
+    ADR-2058 — the chain's seam-linked HISTORY files are read first (oldest
+    first, each bounded by ``max_bytes`` like the canonical file), then the
+    chain itself. After a chain loss the canonical file restarts empty; reading
+    it alone priced a months-old install as if it had started that day. The
+    counting epoch is applied by the callers per record, so history records are
+    simply older events.
     """
     if not chain_path.exists():
         return
     try:
-        size = chain_path.stat().st_size
-        start = max(0, size - max_bytes)
-        with chain_path.open("rb") as fh:
-            fh.seek(start)
-            if start > 0:
-                fh.readline()  # drop the partial first line from the seek
-            for raw in fh:
-                if not any(n in raw for n in needles):
-                    continue
-                try:
-                    rec = json.loads(raw.decode("utf-8", errors="replace"))
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(rec, dict):
-                    yield rec
-    except OSError:
-        return
+        from core.paths.chain_history import chain_history_files  # noqa: PLC0415
+        files = [*chain_history_files(chain_path), chain_path]
+    except Exception:  # noqa: BLE001 — history is additive, never fatal
+        files = [chain_path]
+    for file_path in files:
+        try:
+            size = file_path.stat().st_size
+            start = max(0, size - max_bytes)
+            with file_path.open("rb") as fh:
+                fh.seek(start)
+                if start > 0:
+                    fh.readline()  # drop the partial first line from the seek
+                for raw in fh:
+                    if not any(n in raw for n in needles):
+                        continue
+                    try:
+                        rec = json.loads(raw.decode("utf-8", errors="replace"))
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(rec, dict):
+                        yield rec
+        except OSError:
+            continue
 
 
 def _read_completed_turns(chain_path: Path, max_bytes: int) -> list[dict[str, Any]]:

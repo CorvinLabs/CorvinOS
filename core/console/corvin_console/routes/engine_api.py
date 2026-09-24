@@ -190,11 +190,30 @@ def _iter_classified(
     path = _classified_chain_path(tenant_id)
     if path is None or not path.exists():
         return
+    # ADR-2058 — the canonical chain's seam-linked history is part of the
+    # record: oldest-first history, then the canonical file (forward), or the
+    # exact reverse (newest_first). ``max_lines`` counts across all of them.
     try:
-        if newest_first:
-            lines_iter = _iter_lines_backwards(path)
-        else:
-            lines_iter = path.open("r", encoding="utf-8")
+        from core.paths.chain_history import chain_history_files  # noqa: PLC0415
+        files = [*chain_history_files(path), path]
+    except Exception:  # noqa: BLE001 — history is additive, never fatal
+        files = [path]
+    if newest_first:
+        files.reverse()
+
+    def _lines():
+        for file_path in files:
+            try:
+                if newest_first:
+                    yield from _iter_lines_backwards(file_path)
+                else:
+                    with file_path.open("r", encoding="utf-8", errors="replace") as fh:
+                        yield from fh
+            except OSError:
+                continue
+
+    try:
+        lines_iter = _lines()
         scanned = 0
         try:
             for line in lines_iter:

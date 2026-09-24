@@ -40,7 +40,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 # 2026-08-03, reported live: a real Windows install's audit.jsonl accumulated
 # 1092 scattered hash-chain breaks over its history and eventually hit a
@@ -1601,6 +1601,258 @@ def chain_seam_links(chain_path: Path) -> list[dict[str, Any]]:
             "seam_hash": back.get("seam_hash", ""),
         })
     return out
+
+
+# ── ADR-2058: console READERS traverse seam-linked history ─────────────────
+#
+# After a chain loss (ADR-2058) or a convergence (ADR-0650) the canonical file
+# is young and its past lives in sibling files it links to by a forward
+# ``audit.chain_supersedes`` seam. Those files are append-only history: never
+# merged, rewritten, reordered or deleted. A console reader that aggregates
+# (usage, cost, learning, maturity) must see them or the operator's console
+# shows no history at all; a VERIFIER must not — the tripwire, the daily verify
+# and every compliance check read the canonical chain alone, exactly as before.
+#
+# Resolution is by ``chain_path_key`` (sha256 of the resolved path): a seam
+# names its sibling by key, never by path, so the candidates are the regular
+# files next to the canonical chain and in its ``recovered/`` subdirectory.
+# A file whose name contains ``.corrupt-`` stays linked for auditors but never
+# feeds a dashboard — a known-corrupt fragment would count garbage as history.
+
+CHAIN_HISTORY_SUBDIR = "recovered"
+_CORRUPT_MARKER = ".corrupt-"
+
+_history_cache: dict[str, tuple[tuple, list[Path]]] = {}
+_history_cache_lock = threading.Lock()
+
+
+def _stat_sig(p: Path) -> tuple[int, int] | None:
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns)
+
+
+#: resolved path → (inode, bytes scanned, forward seam keys found so far).
+#: Chains are append-only, so a seam scan resumes where the last one stopped:
+#: a reader polling a 315 MB history file (or a canonical chain that grows on
+#: every request) pays for the new bytes only. A new inode or a file shorter
+#: than the scanned offset (rotation, truncation) restarts the scan.
+_seam_scan_cache: dict[str, tuple[int, int, list[str]]] = {}
+#: resolved path → (inode, ts of its first parseable record or None).
+_first_ts_cache: dict[str, tuple[int, float | None]] = {}
+
+
+def _forward_seam_keys(chain_path: Path) -> list[str]:
+    """``superseded_key`` of every forward seam record in *chain_path*."""
+    try:
+        real = str(chain_path.resolve())
+        st = chain_path.stat()
+    except OSError:
+        return []
+    with _history_cache_lock:
+        hit = _seam_scan_cache.get(real)
+    offset, keys = 0, []
+    if hit is not None and hit[0] == st.st_ino and hit[1] <= st.st_size:
+        offset, keys = hit[1], list(hit[2])
+    needle = CHAIN_SEAM_EVENT.encode("utf-8")
+    try:
+        with chain_path.open("rb") as fh:
+            fh.seek(offset)
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    break  # a torn / still-being-written last line: next time
+                offset += len(raw)
+                if needle not in raw:
+                    continue
+                try:
+                    r = json.loads(raw.decode("utf-8", errors="replace"))
+                except Exception:  # noqa: BLE001
+                    continue
+                if not isinstance(r, dict) or r.get("event_type") != CHAIN_SEAM_EVENT:
+                    continue
+                key = (r.get("details") or {}).get("superseded_key")
+                if isinstance(key, str) and key:
+                    keys.append(key)
+    except OSError:
+        return keys
+    with _history_cache_lock:
+        _seam_scan_cache[real] = (st.st_ino, offset, list(keys))
+    return keys
+
+
+def _record_epoch(raw: Any) -> float | None:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str) and raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+        try:
+            from datetime import datetime, timezone  # noqa: PLC0415
+            dt = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _first_record_ts(path: Path, *, max_lines: int = 1000) -> float | None:
+    """ts of the first parseable record of *path* (``None`` when there is none
+    within the first ``max_lines`` lines). Cached per inode: the first record
+    of an append-only file does not change."""
+    try:
+        real = str(path.resolve())
+        ino = path.stat().st_ino
+    except OSError:
+        return None
+    with _history_cache_lock:
+        hit = _first_ts_cache.get(real)
+    if hit is not None and hit[0] == ino:
+        return hit[1]
+    found: float | None = None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i >= max_lines:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                ts = _record_epoch(rec.get("ts", rec.get("timestamp")))
+                if ts is not None:
+                    found = ts
+                    break
+    except OSError:
+        return None
+    with _history_cache_lock:
+        _first_ts_cache[real] = (ino, found)
+    return found
+
+
+def chain_history_files(chain_path: Path) -> list[Path]:
+    """The seam-linked HISTORY files of *chain_path*, oldest first.
+
+    Follows every forward ``audit.chain_supersedes`` seam of the canonical
+    chain — and, transitively, the seams inside those history files — to a real
+    file among the regular files in ``chain_path.parent`` and
+    ``chain_path.parent / "recovered"`` whose ``chain_path_key`` equals the
+    seam's ``superseded_key``. Files whose name contains ``.corrupt-`` are
+    skipped (and not traversed). The canonical file itself is never returned.
+
+    Ordered by the ts of each file's first parseable record (a file with none
+    sorts last among the history). For READERS only — a verifier must keep
+    reading the canonical chain alone. Never raises; ``[]`` when the chain has
+    no seams, when no seam resolves, or on any error.
+
+    Cached per (canonical path, canonical size+mtime, both directories'
+    size+mtime): history files are immutable, a new seam changes the canonical
+    file, and a file restored into either directory changes that directory.
+    """
+    try:
+        chain_path = Path(chain_path)
+        try:
+            real = str(chain_path.resolve())
+        except OSError:
+            real = os.path.abspath(str(chain_path))
+        dirs = [chain_path.parent, chain_path.parent / CHAIN_HISTORY_SUBDIR]
+        sig = (_stat_sig(chain_path), *(_stat_sig(d) for d in dirs))
+        if sig[0] is None:
+            return []
+        with _history_cache_lock:
+            hit = _history_cache.get(real)
+            if hit is not None and hit[0] == sig:
+                return list(hit[1])
+
+        canonical_key = chain_path_key(chain_path)
+        pending = _forward_seam_keys(chain_path)
+        found: dict[str, Path] = {}
+        if pending:
+            candidates: dict[str, Path] = {}
+            for d in dirs:
+                try:
+                    entries = sorted(d.iterdir())
+                except OSError:
+                    continue
+                for cand in entries:
+                    try:
+                        if not cand.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    key = chain_path_key(cand)
+                    if key == canonical_key:
+                        continue
+                    candidates.setdefault(key, cand)
+            seen: set[str] = {canonical_key}
+            while pending:
+                key = pending.pop(0)
+                if key in seen:
+                    continue
+                seen.add(key)
+                cand = candidates.get(key)
+                if cand is None or _CORRUPT_MARKER in cand.name:
+                    continue
+                found[key] = cand
+                pending.extend(_forward_seam_keys(cand))
+
+        def _order(p: Path) -> tuple[int, float, str]:
+            ts = _first_record_ts(p)
+            return (1, 0.0, p.name) if ts is None else (0, ts, p.name)
+
+        ordered = sorted(found.values(), key=_order)
+        with _history_cache_lock:
+            _history_cache[real] = (sig, list(ordered))
+        return ordered
+    except Exception:  # noqa: BLE001 — a reader aid must never break a reader
+        return []
+
+
+def iter_chain_records(
+    chain_path: Path, *, include_history: bool = True,
+    needles: tuple[str, ...] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Parsed records of the seam-linked history files (oldest first), then of
+    the canonical *chain_path*. Tolerant of blank, torn and non-JSON lines and
+    of unreadable files; never raises.
+
+    ``needles``: when given, a line is JSON-decoded only if it contains one of
+    these substrings — the cheap pre-filter every large-chain reader wants.
+
+    For console READERS that aggregate history. Verifiers, the boot tripwire
+    and compliance checks read the canonical chain alone and must not use this.
+    """
+    files: list[Path] = list(chain_history_files(chain_path)) if include_history else []
+    files.append(Path(chain_path))
+    for path in files:
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if needles is not None and not any(n in line for n in needles):
+                        continue
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:  # noqa: BLE001 — a torn line is normal
+                        continue
+                    if isinstance(rec, dict):
+                        yield rec
+        except OSError:
+            continue
 
 
 def note_chain_rotation(chain_path: Path, *, link_hash: str) -> None:

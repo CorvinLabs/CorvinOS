@@ -109,15 +109,32 @@ def _chain_path(tenant_id: str) -> Path | None:
 
 
 def _iter_events(path: Path) -> Iterator[dict[str, Any]]:
+    """The interesting records of the tenant chain AND its seam-linked history.
+
+    ADR-2058 — after a chain loss (or an ADR-0650 convergence) the canonical
+    file is young and its past lives in history files it links to by an
+    ``audit.chain_supersedes`` seam. Reading the canonical file alone showed the
+    operator no usage history at all. History records are simply older events:
+    the epoch filter in ``_collect`` applies to them per event, like any other.
+    """
+    try:
+        from core.paths.chain_history import iter_chain_records  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — no helper ⇒ the canonical chain alone
+        iter_chain_records = None
+
+    if iter_chain_records is not None:
+        # Cheap reject before json.loads: the chain holds thousands of
+        # license/threshold records this module has no use for.
+        for record in iter_chain_records(path, needles=tuple(_INTERESTING)):
+            if record.get("event_type") in _INTERESTING:
+                yield record
+        return
+
     try:
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
-                if not line:
-                    continue
-                # Cheap reject before json.loads: the chain holds thousands of
-                # license/threshold records this module has no use for.
-                if '"event_type"' not in line:
+                if not line or '"event_type"' not in line:
                     continue
                 try:
                     record = json.loads(line)
