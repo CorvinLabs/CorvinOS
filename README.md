@@ -60,6 +60,41 @@ Full Windows reference: [docs/windows-installation-guide.md](docs/windows-instal
 
 ---
 
+## Maintainer: Update & Deploy Cycle
+
+For maintainers pushing changes to `main`: `scripts/update-and-deploy.sh` (macOS/Linux)
+and `scripts/update-and-deploy.ps1` (Windows) run the full fail-closed cycle —
+`git pull origin main` → rebuild the console frontend (via `console-deploy.sh`) →
+run critical E2E tests → `git push origin main`. Both scripts are self-contained,
+use an exclusive lock to prevent concurrent runs, refuse to run with uncommitted
+changes, and abort on the first failure (nothing partial gets pushed).
+
+```bash
+# macOS / Linux
+bash scripts/update-and-deploy.sh                # full cycle: pull -> build -> test -> push
+bash scripts/update-and-deploy.sh --dry-run      # run everything except the final push
+bash scripts/update-and-deploy.sh --skip-tests   # skip E2E tests (not recommended)
+bash scripts/update-and-deploy.sh --verbose      # print each command
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1
+powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1 -SkipTests
+powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1 -VerboseOutput
+```
+
+Exit codes: `0` success (pushed) · `1` git/build/test failure · `2` repo-state
+validation failure. Logs are written to a timestamped file (`/tmp/corvin-update-*.log`
+on macOS/Linux, `%TEMP%\corvin-update-deploy-*.log` on Windows).
+
+This is a **maintainer/developer workflow** (it ends in `git push origin main`) — not
+the end-user updater. End users updating an existing install use `update.ps1` /
+`install.sh` instead, which rebuild and restart the local console without touching git remotes.
+
+---
+
 ## The Problem We Solve
 
 You use AI for important work. But three problems plague every AI system:
