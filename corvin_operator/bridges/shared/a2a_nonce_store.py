@@ -111,7 +111,18 @@ class PersistentNonceStore:
     # ── Public API ────────────────────────────────────────────────────
 
     def check_and_add(self, nonce: str, origin_id: str = "") -> bool:
-        """Return True if nonce is fresh (added). False = replay."""
+        """Return True if nonce is fresh (added). False = replay.
+
+        Args:
+            nonce: Unique nonce to check/add
+            origin_id: Origin identifier (REQUIRED for per-origin quota enforcement).
+                      Empty origin_id is rejected to prevent quota bypass attacks.
+        """
+        if not origin_id or not origin_id.strip():
+            # SECURITY: Empty origin_id bypasses per-origin quota enforcement.
+            # Fail-closed: reject empty/whitespace-only origin_id.
+            return False
+
         if self._fallback is not None:
             return self._fallback.check_and_add(nonce, origin_id=origin_id)
 
@@ -169,7 +180,12 @@ class PersistentNonceStore:
                 return False
 
     def remove(self, nonce: str) -> None:
-        """Remove a nonce — used to roll back after a failed audit-first write."""
+        """Remove a nonce — used to roll back after a failed audit-first write.
+
+        AUDIT-FIRST INVARIANT: If this fails (DB error), the nonce stays consumed
+        and a retry with the same nonce will be rejected as replay until TTL expires.
+        This is safe but should be logged for operational visibility.
+        """
         if self._fallback is not None:
             self._fallback.remove(nonce)
             return
@@ -180,15 +196,29 @@ class PersistentNonceStore:
                     con.execute("BEGIN IMMEDIATE")
                     con.execute("DELETE FROM nonces WHERE nonce = ?", (nonce,))
                     con.execute("COMMIT")
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     try:
                         con.execute("ROLLBACK")
                     except Exception:  # noqa: BLE001
                         pass
+                    # Log failure so operators can see DB issues (don't silent-swallow)
+                    import sys
+                    import logging
+                    log = logging.getLogger(__name__)
+                    log.warning(
+                        "[a2a_nonce_store] Failed to remove nonce during rollback "
+                        "(DB error: %s) — retry with same nonce will fail as replay "
+                        "until TTL expires (~700s). Check database state.",
+                        exc
+                    )
                 finally:
                     con.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # Final fallback: log but don't crash
+                import sys
+                import logging
+                log = logging.getLogger(__name__)
+                log.error("[a2a_nonce_store] Unexpected error in nonce.remove(): %s", exc)
 
     # ── Internals ─────────────────────────────────────────────────────
 
