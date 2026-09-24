@@ -181,6 +181,11 @@ EVENT_SEVERITY: dict[str, str] = {
     # reach the historical file and verify it. Never a merge, never a rewrite —
     # the chains are append-only.
     "audit.chain_supersedes":    "WARNING",
+    # ADR-2058 — operator acknowledgement that the anchored chain was LOST (no
+    # backup of its tail survives). First record of the fresh chain; names the
+    # lost chain by genesis + last anchored tail from the out-of-tree identity
+    # record. Written only by forge.chain_loss — never by a boot path.
+    "audit.chain_loss_acknowledged": "CRITICAL",
     # Layer 34 — Data classification + flow guard (ADR-0042)
     "data_flow.approved":        "INFO",
     "data_flow.blocked":         "CRITICAL",
@@ -2779,6 +2784,14 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "seam", "seam_reason", "superseded_key", "superseded_genesis",
         "superseded_tail", "superseded_size_bytes", "superseded_records",
         "canonical_key", "tenant_id",
+    }),
+    # ADR-2058 — chain-loss acknowledgement (see EVENT_SEVERITY). Hashes, a
+    # path KEY, booleans/counts and the operator's short cause text. The
+    # absolute path of the frozen file lives in its identity record, not here.
+    "audit.chain_loss_acknowledged": frozenset({
+        "lost_genesis", "lost_tail", "lost_anchor_ts", "lost_chain_key", "cause",
+        "retired_identity", "retired_witness", "postloss_frozen", "backups_linked",
+        "tenant_id",
     }),
     # PHASE 1: Critical Audit 100% Completeness (2026-09-24)
     # ──────────────────────────────────────────────────────
