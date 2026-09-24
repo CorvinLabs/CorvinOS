@@ -815,3 +815,24 @@ Tests: `test_a2a_friendship_handshake.py::TestRepeatAck` (real HTTP, two instanc
 `test_a2a_relay.py::TestSharedKidFanOut` + `TestSharedKidAckOverRealRelay` (real relay
 server on a socket, two real listeners, redeemer registering last — red on the old
 relay), `core/console/tests/test_a2a_relay_config.py::TestRecheckAckDeadlock`.
+
+## Zero-config connectivity — the token is the only input (ADR-2059, 2026-09-24)
+
+Builds on ADR-2057. Operator requirement: a user enters the friendship token and
+nothing else. Concept + root-cause analysis: `Corvin-ADR/concepts/a2a-robust-connectivity-concept.md`.
+
+| Piece | What it does | Where |
+|---|---|---|
+| Connectivity manager | One task per host process (all work off the loop). Keeps the ingress listener in line with its config; keeps an auto-managed `my_a2a_url` on the current mesh/LAN address + ingress port (hostnames, https, public IPs, foreign ports and `CORVIN_A2A_URL` are never touched); starts / stops / re-points the relay listener at runtime (was boot-only); runs hello (= the idempotent ack) + ping per connection with backoff 10 s → 5 min while unhealthy and a 10 min keepalive while healthy. Transitions audited (`A2A.connection_state`, `A2A.ingress_state`, `A2A.relay_listener_state`, `A2A.my_url_updated`). | `a2a_connectivity.py` |
+| Dedicated A2A ingress | Default on, port 8775, its own socket. Exactly `POST /v1/a2a/{receive,ping,friendship-ack}`; every other path/method 404. Served only to loopback / RFC 1918 / RFC 4193 / RFC 6598 (Tailscale) peers unless `allow_public`; per-address token bucket; shares the host's receiver (one nonce store). Config `<CORVIN_HOME>/global/remote_trigger/ingress.json` (`enabled`, `port`, `allow_public`), env `CORVIN_A2A_INGRESS=off|on`, `CORVIN_A2A_INGRESS_PORT`. Replaces the hand-written LAN proxy above; the console stays loopback. | `a2a_ingress.py` |
+| Relay in the token | `create` embeds the issuer's relay URL (`rly`, signed, ignored by older parsers). `import` adopts it unless the operator chose a relay (or `off`) explicitly. No explicit choice → `DEFAULT_RELAY_URL` (project relay). `a2a_relay_fallback` stays default-off; create/import turn it on through the audited tenant overlay (`a2a.relay.enabled_for_pairing`). Relay URL `off` opts out completely. | `a2a_friendship.create_friendship_token/parse_and_verify/get_my_relay_url`, `a2a_pair.friendship_create/friendship_import` |
+| Handshake completion | A verified ack (first or repeat) sets `_peer_knows_us` / `_peer_reports_reachable` on the RECEIVING side too (bug #5: the issuer showed "peer can't reach you back" forever). An ack with no direct URL goes straight to the relay; 404/5xx on the direct path fall back to the relay (400/402/403 stay authoritative). | `a2a_friendship._ack_round_trip`, `_ack_ping_back_and_respond` |
+| Relay listener refresh | Re-reads registrations every 15 s and on a console nudge (`nudge_listeners()` after create/import/relay change); registers PENDING connections; `status` snapshot for diagnostics. | `a2a_relay.RelayListener` |
+| Diagnostics | `GET /v1/console/remote-trigger/a2a/diagnostics`: ingress (running, port, counters), relay (connected, registered, source), advertised URL, per-connection handshake state. Metadata only. `enable-relay` also accepts a pending issued token. | `a2a_pair.a2a_diagnostics`, `friendship_enable_relay` |
+
+Tests: `test_a2a_ingress.py` (peer gate, config, rate limit),
+`core/console/tests/test_a2a_relay_config.py::TestZeroConfigPairingSurface`,
+`test_a2a_zero_config_e2e.py` — a real relay process and two instance processes
+(`a2a_e2e_host.py`, separate CORVIN_HOMEs, own audit chains, NO inbound route):
+token-only pairing in both directions, issuer offline during import, address
+change, revocation.

@@ -563,6 +563,14 @@ EVENT_SEVERITY: dict[str, str] = {
     "A2A.invite_created":   "INFO",
     "A2A.invite_accepted":  "INFO",
     "A2A.invite_revoked":   "WARNING",
+    # Layer 38 — A2A connectivity manager (a2a_connectivity.py, concept
+    # a2a-robust-connectivity 2026-09-24). Transitions only, never per tick.
+    # Allow-list: endpoint_id (pairing kid), reason (state token), source
+    # (transport / port / origin enum), reachable. NEVER addresses, keys, URLs.
+    "A2A.connection_state":     "INFO",     # WARNING when a connection degrades
+    "A2A.ingress_state":        "INFO",     # dedicated A2A ingress started/stopped/failed
+    "A2A.relay_listener_state": "INFO",     # relay listener started/stopped at runtime
+    "A2A.my_url_updated":       "INFO",     # auto-managed advertised URL changed
     # ADR-0096 — MCP Plugin Manager
     # Allow-list: tool_id, source, scope, tenant_id, reason, sha256_prefix (16 hex).
     # NEVER: secret values, full URLs with credentials, tool output, runtime command.
@@ -2297,6 +2305,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         # static set is the floor; the union is a convenience.
         "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
     }),
+    # Layer 38 — A2A connectivity manager (see EVENT_SEVERITY block). The
+    # writer additionally passes remote_trigger_sender._assert_audit_details_safe.
+    "A2A.connection_state": frozenset({"endpoint_id", "reason", "source", "reachable"}),
+    "A2A.ingress_state": frozenset({"reason", "source"}),
+    "A2A.relay_listener_state": frozenset({"reason", "source"}),
+    "A2A.my_url_updated": frozenset({"reason", "source"}),
     # ADR-0104 ACS core events — explicit allowlists for every emitted event.
     # Metadata only; comment at EVENT_SEVERITY block lists the intent.
     # NEVER: prompt/output, manager JSON, worker result, goal/task text (GDPR Art. 5).

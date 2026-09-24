@@ -95,10 +95,20 @@ class _RelayConfigTestBase(unittest.TestCase):
 
 
 class TestRelayUrlRoutes(_RelayConfigTestBase):
-    def test_get_relay_url_defaults_to_none_and_flag_off(self):
+    def test_get_relay_url_defaults_to_project_relay_and_flag_off(self):
+        # Zero-config connectivity (2026-09-24): the project relay is the
+        # built-in rendezvous, still inert until the flag is on (creating or
+        # importing a friendship token turns it on).
         res = ap.get_my_a2a_relay_url(_FakeRec())
-        self.assertIsNone(res["url"])
+        self.assertEqual(res["url"], ft.DEFAULT_RELAY_URL)
+        self.assertFalse(res["explicit"])
         self.assertFalse(res["flag_enabled"])
+
+    def test_relay_can_be_switched_off_explicitly(self):
+        res = ap.set_my_a2a_relay_url(ap.RelayUrlRequest(url="off"), _FakeRec())
+        self.assertEqual(res, {"ok": True, "url": None})
+        self.assertIsNone(ft.get_my_relay_url())
+        self.assertTrue(ap.get_my_a2a_relay_url(_FakeRec())["explicit"])
 
     def test_set_relay_url_persists_and_is_returned_by_get(self):
         ap.set_my_a2a_relay_url(ap.RelayUrlRequest(url="wss://relay.example.com:9443"), _FakeRec())
@@ -147,6 +157,7 @@ class TestEnableRelayForPeer(_RelayConfigTestBase):
 
     def test_no_relay_url_anywhere_rejected(self):
         self._write_friendship("peerA")
+        ap.set_my_a2a_relay_url(ap.RelayUrlRequest(url="off"), _FakeRec())
         with self.assertRaises(HTTPException) as cm:
             ap.friendship_enable_relay("peerA", ap.EnableRelayRequest(relay_url=""), _FakeRec())
         self.assertEqual(cm.exception.status_code, 400)
@@ -269,6 +280,90 @@ class TestRecheckAckDeadlock(_RelayConfigTestBase):
              mock.patch.object(ft, "retry_friendship_ack") as retry:
             ap.friendship_recheck("peerA", _FakeRec())
         retry.assert_not_called()
+
+
+class TestZeroConfigPairingSurface(_RelayConfigTestBase):
+    """Concept a2a-robust-connectivity (2026-09-24): the token is the only
+    thing an operator enters. These pin the console half of that contract;
+    test_a2a_zero_config_e2e.py proves it across real processes."""
+
+    def test_token_carries_relay_and_round_trips(self):
+        _tok, s = ft.create_friendship_token(url="http://10.0.0.5:8775",
+                                             relay_url="wss://relay.example.com/x")
+        parsed = ft.parse_and_verify(s)
+        self.assertEqual(parsed.relay_url, "wss://relay.example.com/x")
+        # A token without the field (older issuer) still parses.
+        _tok, s2 = ft.create_friendship_token(url="http://10.0.0.5:8775")
+        self.assertIsNone(ft.parse_and_verify(s2).relay_url)
+
+    def test_token_rejects_non_ws_relay(self):
+        with self.assertRaises(ft.FriendshipError):
+            ft.create_friendship_token(url="http://10.0.0.5:8775", relay_url="http://x")
+
+    def test_create_embeds_relay_and_turns_the_fallback_on(self):
+        self.assertFalse(ap._ff.is_enabled("a2a_relay_fallback"))
+        res = ap.friendship_create(
+            ap.FriendshipCreateRequest(url="http://10.0.0.5:8775"), _FakeRec())
+        self.assertEqual(ft.parse_and_verify(res.token).relay_url, ft.DEFAULT_RELAY_URL)
+        self.assertTrue(ap._ff.is_enabled("a2a_relay_fallback"))
+
+    def test_create_with_relay_off_embeds_nothing_and_leaves_flag(self):
+        ap.set_my_a2a_relay_url(ap.RelayUrlRequest(url="off"), _FakeRec())
+        res = ap.friendship_create(
+            ap.FriendshipCreateRequest(url="http://10.0.0.5:8775"), _FakeRec())
+        self.assertIsNone(ft.parse_and_verify(res.token).relay_url)
+        self.assertFalse(ap._ff.is_enabled("a2a_relay_fallback"))
+
+    def test_import_adopts_issuer_relay_and_enables_fallback(self):
+        _tok, s = ft.create_friendship_token(url="http://10.0.0.5:8775",
+                                             relay_url="wss://relay.example.com/r")
+        ft.set_my_url("http://10.0.0.9:8775")
+        with mock.patch.object(ft, "send_friendship_ack",
+                               return_value={"ok": True, "reachable": True}) as ack:
+            res = ap.friendship_import(ap.FriendshipImportRequest(token=s), _FakeRec())
+        ack.assert_called_once()
+        self.assertEqual(ft.get_my_relay_url(), "wss://relay.example.com/r")
+        self.assertTrue(ap._ff.is_enabled("a2a_relay_fallback"))
+        self.assertTrue(res.peer_knows_us)
+
+    def test_import_never_overrides_an_explicit_relay_choice(self):
+        ap.set_my_a2a_relay_url(ap.RelayUrlRequest(url="wss://mine.example.com"), _FakeRec())
+        _tok, s = ft.create_friendship_token(url="http://10.0.0.5:8775",
+                                             relay_url="wss://theirs.example.com")
+        ft.set_my_url("http://10.0.0.9:8775")
+        with mock.patch.object(ft, "send_friendship_ack",
+                               return_value={"ok": False, "error": "unreachable"}):
+            ap.friendship_import(ap.FriendshipImportRequest(token=s), _FakeRec())
+        self.assertEqual(ft.get_my_relay_url(), "wss://mine.example.com")
+
+    def test_import_of_token_without_url_still_acks_over_relay(self):
+        _tok, s = ft.create_friendship_token(url=None,
+                                             relay_url="wss://relay.example.com/r")
+        ft.set_my_url("http://10.0.0.9:8775")
+        with mock.patch.object(ft, "send_friendship_ack",
+                               return_value={"ok": True, "reachable": True}) as ack:
+            res = ap.friendship_import(ap.FriendshipImportRequest(token=s), _FakeRec())
+        ack.assert_called_once()
+        self.assertEqual(res.state, "PENDING")  # the issuer's hello brings its address
+        self.assertTrue(res.peer_knows_us)
+
+    def test_enable_relay_accepts_a_pending_issued_token(self):
+        res = ap.friendship_create(
+            ap.FriendshipCreateRequest(url="http://10.0.0.5:8775"), _FakeRec())
+        ap._ff.set_enabled("a2a_relay_fallback", False, tenant_id="_default")
+        out = ap.friendship_enable_relay(res.kid, ap.EnableRelayRequest(relay_url=""), _FakeRec())
+        self.assertEqual(out["state"], "PENDING")
+        self.assertTrue(out["relay_enabled"])
+        self.assertTrue(ap._ff.is_enabled("a2a_relay_fallback"))
+
+    def test_diagnostics_lists_connections_without_secrets(self):
+        self._write_friendship("peerA")
+        out = ap.a2a_diagnostics(_FakeRec())
+        self.assertEqual([c["kid"] for c in out["connections"]], ["peerA"])
+        blob = json.dumps(out)
+        self.assertNotIn("a" * 64, blob)  # hmac_key never leaves the files
+        self.assertNotIn("b" * 64, blob)
+
 
 if __name__ == "__main__":
     unittest.main()

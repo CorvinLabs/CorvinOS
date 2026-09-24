@@ -115,6 +115,28 @@ def _pending_friendships_dir() -> Path:
     return Path(env) if env else _PENDING_FRIENDSHIPS_DEFAULT
 
 
+def _conn_wake(kid: str | None = None) -> None:
+    """Nudge the A2A connectivity manager (relay re-registration + an
+    immediate upkeep pass for ``kid``). No-op when it is not running."""
+    try:
+        import a2a_connectivity as _conn  # type: ignore[import-not-found]
+        _conn.wake(kid)
+    except Exception:  # noqa: BLE001 — a nudge must never fail a request
+        pass
+
+
+def _advertised_port() -> int:
+    try:
+        import a2a_connectivity as _conn  # type: ignore[import-not-found]
+        mgr = _conn.get_manager()
+        if mgr is not None:
+            return mgr.advertised_port()
+        import a2a_ingress as _ing  # type: ignore[import-not-found]
+        return _ing.load_config().port
+    except Exception:  # noqa: BLE001
+        return 8765
+
+
 # ── Busy advisory lock → 503 ──────────────────────────────────────────
 
 def _refuse_lock_busy(
@@ -947,6 +969,8 @@ def get_my_a2a_relay_url(
     return {
         "url": _ft.get_my_relay_url(),
         "flag_enabled": _ff.is_enabled("a2a_relay_fallback", tenant_id=rec.tenant_id),
+        # False = the built-in project relay (no operator choice made yet).
+        "explicit": _ft.my_relay_url_is_explicit(),
     }
 
 
@@ -962,9 +986,22 @@ def set_my_a2a_relay_url(
     """Persist this instance's relay URL. Does NOT enable the feature flag —
     setting a relay URL while the flag is off is a documented no-op (see the
     flag's description); use the flag toggle in Settings, or the one-click
-    ``/friendship/{kid}/enable-relay`` below, to actually activate it."""
+    ``/friendship/{kid}/enable-relay`` below, to actually activate it.
+    ``"off"`` opts out of the built-in project relay."""
+    if body.url.strip().lower() == _ft.RELAY_OFF:
+        _ft.set_my_relay_url(_ft.RELAY_OFF)
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="a2a.config.relay_url_set",
+            target_kind="a2a_config",
+            target_id="my_relay_url",
+        )
+        _conn_wake()
+        return {"ok": True, "url": None}
     url = _validate_relay_url(body.url)
     _ft.set_my_relay_url(url)
+    _conn_wake()
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -1029,6 +1066,21 @@ def friendship_create(
     )
     max_ttl: int | None = body.max_call_ttl_s if body.max_call_ttl_s > 0 else None
 
+    # The relay this instance listens on travels in the token, so a redeemer
+    # that cannot reach us directly (loopback-bound install, NAT, firewall)
+    # still completes the handshake with zero configuration.
+    # Creating a friendship token IS the operator asking for connectivity:
+    # the relay fallback is switched on here (same audited overlay the
+    # Settings toggle writes) unless the operator opted out with relay "off".
+    relay_for_token = _ft.get_my_relay_url()
+    if relay_for_token and not _ff.is_enabled("a2a_relay_fallback", tenant_id=rec.tenant_id):
+        _ff.set_enabled("a2a_relay_fallback", True, tenant_id=rec.tenant_id)
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="a2a.relay.enabled_for_pairing", target_kind="a2a_config",
+            target_id="a2a_relay_fallback",
+        )
+
     try:
         token, token_str = _ft.create_friendship_token(
             url=url_val,
@@ -1036,6 +1088,7 @@ def friendship_create(
             ttl_seconds=ttl,
             personas=personas if personas else None,
             max_ttl_s=max_ttl,
+            relay_url=relay_for_token,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid request") from exc
@@ -1044,6 +1097,8 @@ def friendship_create(
         _ft.save_pending_friendship(token, pending_dir=_pending_friendships_dir())
     except OSError as exc:
         raise HTTPException(status_code=500, detail="could not persist pending friendship") from exc
+    # Claim the issuer relay route for the new token right away.
+    _conn_wake()
 
     if (body.remember_url or url_auto_detected) and url_val:
         # Persist the just-auto-detected address too (matching GET /my-url's
@@ -1139,11 +1194,30 @@ def friendship_import(
         _write_secure(origin_path, origin_cfg)
         _write_secure(endpoint_path, _ft.to_endpoint_dict(token))
 
+    # Zero-config rendezvous: the issuer told us which relay it listens on.
+    # Adopt it unless this operator chose a relay (or "off") explicitly —
+    # two peers on different relays can never meet there.
+    if token.relay_url and not _ft.my_relay_url_is_explicit():
+        if _ft.get_my_relay_url() != token.relay_url:
+            _ft.set_my_relay_url(token.relay_url)
+    if token.relay_url and _ft.get_my_relay_url() == token.relay_url:
+        if not _ff.is_enabled("a2a_relay_fallback", tenant_id=rec.tenant_id):
+            _ff.set_enabled("a2a_relay_fallback", True, tenant_id=rec.tenant_id)
+            console_audit.action_performed(
+                tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+                action="a2a.relay.enabled_for_pairing", target_kind="a2a_config",
+                target_id="a2a_relay_fallback",
+            )
+
     state = "ACTIVE" if token.url is not None else "PENDING"
     peer_knows_us = False
     peer_reports_reachable = False
 
-    if token.url is not None:
+    # Our relay listener must hold the kid BEFORE the issuer's ping-back
+    # (part of the ack round trip) can reach us through the relay.
+    _conn_wake(token.kid)
+
+    if token.url is not None or token.relay_url:
         # Note on ordering: the issuer (A) has NO record of us at all until a
         # successful ack completes (that write happens INSIDE
         # process_friendship_ack_request) — a ping FROM us TO them before the
@@ -1154,12 +1228,20 @@ def friendship_import(
         # reachability; A's own ping-back to US (performed server-side,
         # inside the ack handler) is the proof of THEM->US reachability, and
         # travels back in the ack response's ``reachable`` field.
-        my_own_url = _ft.get_my_url()
+        my_own_url = _ft.get_my_url() or _ft.suggest_my_url(port=_advertised_port())
+        if my_own_url and not _ft.get_my_url():
+            try:
+                _ft.set_my_url(my_own_url)
+            except OSError:
+                pass
         if my_own_url:
             ack_result = _ft.send_friendship_ack(token, my_url=my_own_url)
             peer_knows_us = bool(ack_result.get("ok"))
             peer_reports_reachable = bool(ack_result.get("reachable"))
-            state = "ACTIVE" if (peer_knows_us and peer_reports_reachable) else "UNREACHABLE"
+            if token.url is None:
+                state = "PENDING"  # the issuer's hello will bring its address
+            else:
+                state = "ACTIVE" if (peer_knows_us and peer_reports_reachable) else "UNREACHABLE"
         else:
             # We have no own URL configured (Settings -> A2A -> "My URL") —
             # the issuer can never be told about us, so this can only ever be
@@ -1183,6 +1265,9 @@ def friendship_import(
         target_kind="a2a_friendship",
         target_id=token.kid,
     )
+    # Whatever the first attempt achieved, the connectivity manager keeps
+    # retrying (hello + ping, backoff) until both directions are proven.
+    _conn_wake(token.kid)
     return FriendshipImportResponse(
         ok=True,
         kid=token.kid,
@@ -1498,7 +1583,11 @@ def friendship_enable_relay(
     if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
         raise HTTPException(status_code=400, detail="invalid kid")
     endpoint_path = _endpoints_dir() / f"{kid}.json"
-    if not endpoint_path.exists():
+    # 2026-09-24: an issued token whose ack never arrived has no endpoint
+    # file yet — and is precisely the connection that needs the relay.
+    pending_only = (not endpoint_path.exists()
+                    and _ft.load_pending_friendship(kid, pending_dir=_pending_friendships_dir()) is not None)
+    if not endpoint_path.exists() and not pending_only:
         raise HTTPException(status_code=404, detail="not found")
 
     relay_url = body.relay_url.strip()
@@ -1522,9 +1611,59 @@ def friendship_enable_relay(
         target_id=kid,
     )
 
+    _conn_wake(kid)
+    if pending_only:
+        return {"ok": True, "kid": kid, "state": "PENDING", "reachable": False,
+                "peer_knows_us": False, "via": None, "relay_enabled": True}
     result = _recheck_connection(kid)
     result["relay_enabled"] = True
     return result
+
+
+# ── GET /remote-trigger/a2a/diagnostics ───────────────────────────────
+
+@router.get("/remote-trigger/a2a/diagnostics")
+def a2a_diagnostics(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """One screen of truth for A2A connectivity: ingress listener, relay
+    listener (connected, routes registered), advertised URL, and per
+    connection the handshake/reachability state the connectivity manager
+    last measured. Metadata only — never keys, never message content."""
+    _ = rec
+    import a2a_connectivity as _conn  # type: ignore[import-not-found]
+    mgr = _conn.get_manager()
+    connections: list[dict[str, Any]] = []
+    for path in sorted(_endpoints_dir().glob("*.json")):
+        try:
+            cfg = json.loads(path.read_text("utf-8"))
+        except Exception:
+            continue
+        if not cfg.get("_friendship"):
+            continue
+        connections.append({
+            "kid": path.stem,
+            "label": _clean_label(cfg.get("label") or "") or None,
+            "state": cfg.get("state"),
+            "peer_knows_us": bool(cfg.get("_peer_knows_us", False)),
+            "peer_reports_reachable": bool(cfg.get("_peer_reports_reachable", False)),
+            "via": cfg.get("_last_via"),
+            "last_ok_at": cfg.get("_last_ok_at"),
+            "last_check_at": cfg.get("_last_check_at"),
+            "has_peer_url": bool(cfg.get("url")),
+        })
+    pending = sorted(p.stem for p in _pending_friendships_dir().glob("*.json")) \
+        if _pending_friendships_dir().exists() else []
+    return {
+        "manager_running": mgr is not None,
+        **(mgr.diagnostics() if mgr is not None else {
+            "my_url": _ft.get_my_url(),
+            "relay": {"enabled": _ff.is_enabled("a2a_relay_fallback", tenant_id=rec.tenant_id),
+                      "url_configured": _ft.get_my_relay_url() is not None},
+        }),
+        "connections": connections,
+        "pending_tokens": len(pending),
+    }
 
 
 # ── PATCH /remote-trigger/origins/{origin_id} ─────────────────────────

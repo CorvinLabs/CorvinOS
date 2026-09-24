@@ -146,18 +146,47 @@ def _my_relay_url_path() -> Path:
     return _corvin_home() / "global" / "remote_trigger" / "my_a2a_relay_url"
 
 
+# Zero-config connectivity (concept a2a-robust-connectivity, 2026-09-24):
+# an install that never chose a relay falls back to the project relay, so a
+# pairing between two loopback-bound / NAT'd installs completes with nothing
+# but the token. Still inert while the a2a_relay_fallback flag is off — the
+# console turns that flag on (audited) when the operator creates or imports
+# a friendship token, the operator action that asks for connectivity. The
+# relay only ever sees routing ids and AES-GCM ciphertext (a2a_relay.py).
+# "off" in the relay-url config file or CORVIN_A2A_RELAY_URL opts out.
+DEFAULT_RELAY_URL = "wss://corvin-a2a-relay-production.up.railway.app/v1/a2a/relay/connect"
+RELAY_OFF = "off"
+
+
 def get_my_relay_url() -> str | None:
-    """Return this instance's configured relay URL (ws:// or wss://), or
-    None if never set — Stage 3 is inert without one, even if the
-    a2a_relay_fallback feature flag is on."""
+    """Return this instance's relay URL (ws:// or wss://): env, then the
+    config file, then :data:`DEFAULT_RELAY_URL`. ``"off"`` in either source
+    disables the relay (None). Stage 3 stays inert while the
+    a2a_relay_fallback feature flag is off."""
     env = os.environ.get("CORVIN_A2A_RELAY_URL")
     if env:
-        return env.strip().rstrip("/") or None
+        val = env.strip().rstrip("/")
+        return None if val.lower() == RELAY_OFF else (val or None)
     p = _my_relay_url_path()
     if p.exists():
         val = p.read_text("utf-8").strip().rstrip("/")
-        return val or None
-    return None
+        if val.lower() == RELAY_OFF:
+            return None
+        if val:
+            return val
+    return DEFAULT_RELAY_URL
+
+
+def my_relay_url_is_explicit() -> bool:
+    """True when the relay URL came from env or the config file (including
+    an explicit ``off``), False when it is the built-in default."""
+    if os.environ.get("CORVIN_A2A_RELAY_URL"):
+        return True
+    p = _my_relay_url_path()
+    try:
+        return p.exists() and bool(p.read_text("utf-8").strip())
+    except OSError:
+        return False
 
 
 def set_my_relay_url(url: str) -> None:
@@ -198,6 +227,10 @@ class FriendshipToken:
     label: str | None
     expires: float | None           # unix timestamp or None
     constraints: dict[str, Any] = field(default_factory=dict)
+    # Issuer's relay URL ("rly", optional, signed with the rest of the
+    # payload): the redeemer reaches an issuer without an inbound route
+    # through the same relay, with nothing configured on either side.
+    relay_url: str | None = None
 
     @property
     def personas(self) -> list[str]:
@@ -219,13 +252,19 @@ def create_friendship_token(
     ttl_seconds: float | None = 30 * 86400,
     personas: list[str] | None = None,
     max_ttl_s: int | None = None,
+    relay_url: str | None = None,
 ) -> tuple[FriendshipToken, str]:
     """Generate a friendship token.  Writes NOTHING to disk.
 
     Returns ``(FriendshipToken, token_string)``.
 
     ``ttl_seconds=None`` → token never expires (explicit opt-out required).
+    ``relay_url`` → embedded as ``rly`` (ignored by older parsers).
     """
+    if relay_url is not None:
+        relay_url = relay_url.strip().rstrip("/") or None
+        if relay_url is not None and not relay_url.startswith(("ws://", "wss://")):
+            raise FriendshipError("relay_url must use ws:// or wss://")
     actual_kid = kid or str(uuid.uuid4())
     key = secrets.token_hex(32)     # 256-bit shared key
     now = time.time()
@@ -250,6 +289,8 @@ def create_friendship_token(
         payload_dict["exp"] = expires
     if constraints:
         payload_dict["con"] = constraints
+    if relay_url:
+        payload_dict["rly"] = relay_url
 
     payload_bytes = json.dumps(
         payload_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -266,6 +307,7 @@ def create_friendship_token(
         label=label[:_MAX_LABEL_LEN] if label else None,
         expires=expires,
         constraints=constraints,
+        relay_url=relay_url,
     ), token_str
 
 
@@ -316,6 +358,13 @@ def parse_and_verify(token_str: str) -> FriendshipToken:
     url_raw = d.get("url")
     label_raw = d.get("lbl")
     constraints = dict(d.get("con") or {})
+    relay_raw = d.get("rly")
+    relay_url: str | None = None
+    if isinstance(relay_raw, str):
+        cand = relay_raw.strip().rstrip("/")
+        # Signed by the issuer, but still only ever a ws/wss rendezvous URL.
+        if cand.startswith(("ws://", "wss://")) and len(cand) <= 512:
+            relay_url = cand
 
     return FriendshipToken(
         kid=str(d["kid"]),
@@ -324,6 +373,7 @@ def parse_and_verify(token_str: str) -> FriendshipToken:
         label=(sanitize_label(label_raw) or None) if label_raw else None,
         expires=expires,
         constraints=constraints,
+        relay_url=relay_url,
     )
 
 
@@ -1543,13 +1593,27 @@ def _ack_round_trip(
     )
     via = "direct"
     try:
+        if not issuer_url.strip():
+            # No direct address for the peer (token without url, or a peer
+            # only ever reachable through the relay): go straight to the
+            # relay instead of failing the handshake.
+            raise _urlerr.URLError("no_direct_url")
         with opener.open(http_req, timeout=timeout_s) as resp:
             raw = resp.read(64 * 1024 + 1)
             if len(raw) > 64 * 1024:
                 return {"ok": False, "error": "response_too_large"}
             payload = json.loads(raw.decode("utf-8"))
     except _urlerr.HTTPError as exc:
-        return {"ok": False, "error": f"http_{exc.code}"}
+        # 400/402/403 are the peer's own protocol verdict — authoritative.
+        # Anything else (404 from a stale address now owned by another
+        # device, a 5xx from a proxy) says nothing about the peer: try the
+        # relay before giving up.
+        if exc.code in (400, 402, 403):
+            return {"ok": False, "error": f"http_{exc.code}"}
+        payload = _relay_send_ack(kid, hmac_key, req_body, timeout_s)
+        if payload is None:
+            return {"ok": False, "error": f"http_{exc.code}"}
+        via = "relay"
     except (_urlerr.URLError, OSError, TimeoutError):
         # ADR-0258 Stage 3 (2026-08-02): the issuer's direct URL is
         # unreachable — try the relay before giving up. Without this, an
@@ -1600,15 +1664,13 @@ def send_friendship_ack(
     ``{"ok": False, "error": <category>}`` and NEVER raises — a network
     hiccup here must not break the LOCAL import that already succeeded.
     """
-    if not token.url:
-        return {"ok": False, "error": "no_issuer_url"}
     if not (my_url or "").strip():
         return {"ok": False, "error": "no_own_url"}
 
     hmac_key, recv_key = _derive_channel_keys(token.key)
     return _ack_round_trip(
         kid=token.kid, hmac_key=hmac_key, recv_key=recv_key,
-        issuer_url=token.url, my_url=my_url, my_label=my_label,
+        issuer_url=token.url or "", my_url=my_url, my_label=my_label,
         timeout_s=timeout_s,
     )
 
@@ -1650,7 +1712,7 @@ def retry_friendship_ack(
     issuer_url = cfg.get("url") or ""
     if issuer_url.endswith("/v1/a2a/receive"):
         issuer_url = issuer_url[: -len("/v1/a2a/receive")]
-    if not (isinstance(hmac_key, str) and isinstance(recv_key, str) and issuer_url):
+    if not (isinstance(hmac_key, str) and isinstance(recv_key, str)):
         return {"ok": False, "error": "endpoint_config_incomplete"}
 
     my_url = get_my_url()
@@ -1882,6 +1944,11 @@ def _ack_ping_back_and_respond(
 
     # Record the verified state either way — a repeat ack for a pairing that
     # an earlier ping marked UNREACHABLE must be able to bring it back.
+    # A verified ack is itself proof that the sender holds our record (it
+    # signed with the pairing key) and that its message reached us — the
+    # receiving side's mirror of the sender's peer_knows_us. Before
+    # 2026-09-24 only the redeemer ever set it, so the issuer showed "peer
+    # can't reach you back" forever (bug #5).
     new_state = "ACTIVE" if reachable else "UNREACHABLE"
     with config_file_lock(origins_dir, endpoints_dir):
         for p in (origin_path, endpoint_path):
@@ -1891,8 +1958,11 @@ def _ack_ping_back_and_respond(
                 cfg = json.loads(p.read_text("utf-8"))
             except (OSError, ValueError):
                 continue
-            if cfg.get("state") != new_state:
+            if (cfg.get("state") != new_state or not cfg.get("_peer_knows_us")
+                    or not cfg.get("_peer_reports_reachable")):
                 cfg["state"] = new_state
+                cfg["_peer_knows_us"] = True
+                cfg["_peer_reports_reachable"] = True
                 _atomic_write(p, cfg)
 
     iid = ""

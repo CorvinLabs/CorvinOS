@@ -41,6 +41,7 @@ CI lint: module MUST NOT import the anthropic SDK.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from collections import deque
@@ -482,6 +483,27 @@ async def relay_deliver_and_wait(
 
 # ── Receiver-side client: persistent listener ───────────────────────────
 
+_REFRESH_INTERVAL_S = 15.0
+_nudge_flag = threading.Event()
+
+
+def nudge_listeners() -> None:
+    """Ask every running RelayListener to re-read its connection files now.
+    Thread-safe; the console calls it right after a pairing changes."""
+    _nudge_flag.set()
+
+
+async def _wait_for_nudge(timeout_s: float) -> None:
+    import asyncio as _asyncio  # noqa: PLC0415
+    loop = _asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while loop.time() < deadline:
+        if _nudge_flag.is_set():
+            await _asyncio.sleep(0.2)  # let the writer finish its file
+            _nudge_flag.clear()
+            return
+        await _asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
+
 class RelayListener:
     """Receiver-side persistent connection to a configured relay.
 
@@ -534,9 +556,26 @@ class RelayListener:
         self._pending_dir = pending_dir
         self._endpoints_dir = endpoints_dir
         self._stop = False
+        self._ws: Any = None
+        # Diagnostics snapshot (the console's A2A diagnostics route reads it).
+        self.status: dict[str, Any] = {
+            "relay_url": relay_url, "connected": False, "registered": 0,
+            "rejected": 0, "last_error": None, "connected_since": None,
+        }
+
+    @property
+    def relay_url(self) -> str:
+        return self._relay_url
 
     def stop(self) -> None:
         self._stop = True
+        ws = self._ws
+        if ws is not None:
+            try:
+                import asyncio as _asyncio  # noqa: PLC0415
+                _asyncio.get_running_loop().create_task(ws.close())
+            except Exception:  # noqa: BLE001 — best-effort; run_forever exits on _stop
+                pass
 
     def _registrable_kids(self) -> list[tuple[str, str]]:
         """(kid, hmac_key) for every kid this instance should claim a relay
@@ -584,7 +623,9 @@ class RelayListener:
                     continue
                 if not cfg.get("_friendship"):
                     continue
-                if not cfg.get("enabled"):
+                if not cfg.get("enabled") and cfg.get("state") != "PENDING":
+                    # (A PENDING connection — imported without a peer URL — is
+                    # exactly the one that needs the relay to learn it.)
                     # A deliberately-disabled/revoked friendship must not be
                     # resurrected by a lingering pending record for the same kid:
                     # claim the kid in `seen` so the pending branch below skips it,
@@ -619,14 +660,15 @@ class RelayListener:
         while not self._stop:
             try:
                 await self._connect_and_serve()
-            except Exception:  # noqa: BLE001 — reconnect, never crash the caller
-                pass
+            except Exception as exc:  # noqa: BLE001 — reconnect, never crash the caller
+                self.status["last_error"] = type(exc).__name__
             if self._stop:
                 return
-            import asyncio as _asyncio
-            await _asyncio.sleep(reconnect_backoff_s)
+            # Wakes early when a pairing appears (first registration).
+            await _wait_for_nudge(reconnect_backoff_s)
 
     async def _connect_and_serve(self) -> None:
+        import asyncio as _asyncio  # noqa: PLC0415
         import websockets  # noqa: PLC0415
         import a2a_friendship as _ft  # noqa: PLC0415
 
@@ -637,12 +679,56 @@ class RelayListener:
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger("corvin.a2a.relay-listener")
 
-        async with websockets.connect(self._relay_url) as ws:
-            for kid, hmac_key in kids:
-                auth_key = _ft.derive_relay_auth_key(hmac_key)
-                await ws.send(json.dumps({"type": "register", "kid": kid, "relay_auth_key": auth_key}))
-            kids_by_id = dict(kids)
+        async with websockets.connect(self._relay_url, open_timeout=15) as ws:
+            self._ws = ws
+            kids_by_id: dict[str, str] = {}
             _registered: set[str] = set()
+
+            async def _register_new(current: list[tuple[str, str]]) -> None:
+                for kid, hmac_key in current:
+                    if kid in kids_by_id:
+                        continue
+                    kids_by_id[kid] = hmac_key
+                    auth_key = _ft.derive_relay_auth_key(hmac_key)
+                    await ws.send(json.dumps(
+                        {"type": "register", "kid": kid, "relay_auth_key": auth_key}))
+                # A revoked connection stops being served immediately; the
+                # relay drops the slot on the next reconnect.
+                live = {kid for kid, _h in current}
+                for kid in [k for k in kids_by_id if k not in live]:
+                    kids_by_id.pop(kid, None)
+                    _registered.discard(kid)
+                self.status["registered"] = len(_registered)
+
+            await _register_new(kids)
+            self.status.update(connected=True, last_error=None, connected_since=time.time())
+            _log.warning("A2A relay listener connected: %s (%d kid(s))",
+                         self._relay_url, len(kids_by_id))
+
+            async def _refresh_loop() -> None:
+                # A pairing made after connect must be reachable without a
+                # restart (2026-09-24: registrations were computed once per
+                # connection, so a friendship created after boot was never
+                # registered until the socket happened to drop). The console
+                # nudges this right after a create/import.
+                while not self._stop:
+                    await _wait_for_nudge(_REFRESH_INTERVAL_S)
+                    try:
+                        current = await _asyncio.to_thread(self._registrable_kids)
+                        await _register_new(current)
+                    except Exception:  # noqa: BLE001 — a dead socket ends the serve loop
+                        return
+
+            refresher = _asyncio.create_task(_refresh_loop())
+            try:
+                await self._serve(ws, kids_by_id, _registered, _log)
+            finally:
+                refresher.cancel()
+                self._ws = None
+                self.status.update(connected=False, registered=0)
+
+    async def _serve(self, ws: Any, kids_by_id: dict[str, str],
+                     _registered: set[str], _log: Any) -> None:
             async for raw in ws:
                 if self._stop:
                     return
@@ -661,8 +747,10 @@ class RelayListener:
                     k = msg.get("kid")
                     if isinstance(k, str):
                         _registered.add(k)
+                        self.status["registered"] = len(_registered)
                     continue
                 if mtype == "register_rejected":
+                    self.status["rejected"] = int(self.status.get("rejected") or 0) + 1
                     _log.warning(
                         "relay rejected registration for kid=%s reason=%s — this "
                         "peer is UNREACHABLE via the relay until resolved",
