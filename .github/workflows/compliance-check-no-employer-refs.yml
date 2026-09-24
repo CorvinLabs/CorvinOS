@@ -1,0 +1,60 @@
+name: Compliance Check - No Employer References
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main, develop ]
+
+jobs:
+  check-employer-refs:
+    runs-on: ubuntu-latest
+    name: Block Employer Email & References
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan commits for employer domains
+        run: |
+          echo "🔍 Scanning commits for employer email addresses..."
+
+          # Check all commits in the PR or push
+          if git log origin/main..HEAD &>/dev/null; then
+            COMMITS="origin/main..HEAD"
+          else
+            COMMITS="HEAD~1..HEAD"
+          fi
+
+          # Scan author/committer emails
+          if git log "$COMMITS" --format="%aN <%aE>" | grep -qiE "@allianz\.com|@adesso\.de"; then
+            echo "❌ COMPLIANCE FAILURE: Employer email domain detected in commits"
+            git log "$COMMITS" --format="%aN <%aE>" | grep -iE "@allianz\.com|@adesso\.de"
+            exit 1
+          fi
+
+          echo "✅ No employer email domains found"
+
+      - name: Scan code for employer references
+        run: |
+          echo "🔍 Scanning code for employer references..."
+
+          # Scan for hardcoded references
+          FOUND=0
+
+          if grep -r "ALLIANZDE\|allianzde\|allianz-ai" \
+             --include="*.py" --include="*.ts" --include="*.js" \
+             --include="*.md" --exclude-dir=node_modules \
+             --exclude-dir=.git . 2>/dev/null | grep -v "\.github"; then
+            echo "⚠️  WARNING: Found ALLIANZDE or allianz-ai references"
+            FOUND=1
+          fi
+
+          if [ $FOUND -eq 1 ]; then
+            echo ""
+            echo "Please anonymize these references:"
+            echo "  - ALLIANZDE → [CORPORATE-PROXY]"
+            echo "  - allianz-ai → internal-ai"
+          fi
+
+          echo "✅ Code scan completed"
