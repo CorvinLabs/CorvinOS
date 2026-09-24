@@ -179,14 +179,14 @@ def test_azure_endpoint_uses_the_azure_client(monkeypatch):
     sys.modules["openai"].OpenAI = _Plain
     sys.modules["openai"].AzureOpenAI = _Azure
     monkeypatch.setenv("CORVIN_TTS_OPENAI_BASE_URL",
-                       "https://allianz-ai.openai.azure.com")
+                       "https://internal-ai.openai.azure.com")
     monkeypatch.setenv("CORVIN_TTS_OPENAI_API_VERSION", "2025-01-01-preview")
     import provider_keys as _pk
     monkeypatch.setattr(_pk, "resolve_key", lambda name: "sk-test-key")
 
     assert V._try_openai_tts("Hallo.", "de", "nova", "_default") is None
     assert "plain" not in built, "an Azure endpoint must not use the plain client"
-    assert built["azure"]["azure_endpoint"] == "https://allianz-ai.openai.azure.com"
+    assert built["azure"]["azure_endpoint"] == "https://internal-ai.openai.azure.com"
     assert built["azure"]["api_version"] == "2025-01-01-preview"
     assert built["azure"]["max_retries"] == 0
 
@@ -230,7 +230,7 @@ def test_local_only_still_wins_over_a_configured_endpoint(monkeypatch):
     disabling the tier, checked before any key or endpoint resolution."""
     monkeypatch.setenv("CORVIN_TTS_LOCAL_ONLY", "1")
     monkeypatch.setenv("CORVIN_TTS_OPENAI_BASE_URL",
-                       "https://allianz-ai.openai.azure.com")
+                       "https://internal-ai.openai.azure.com")
 
     def _explode(**kwargs):
         raise AssertionError("local-only must short-circuit before any client")
@@ -249,10 +249,10 @@ def test_say_env_forwards_the_endpoint_to_the_subprocess(monkeypatch):
     not travel, the console's in-process tier would call the approved endpoint
     while its own subprocess fallback called the unreachable public one."""
     monkeypatch.setenv("CORVIN_TTS_OPENAI_BASE_URL",
-                       "https://allianz-ai.openai.azure.com")
+                       "https://internal-ai.openai.azure.com")
     monkeypatch.setenv("CORVIN_TTS_OPENAI_MODEL", "my-tts-deployment")
     env = V._say_env()
-    assert env["CORVIN_TTS_OPENAI_BASE_URL"] == "https://allianz-ai.openai.azure.com"
+    assert env["CORVIN_TTS_OPENAI_BASE_URL"] == "https://internal-ai.openai.azure.com"
     assert env["CORVIN_TTS_OPENAI_MODEL"] == "my-tts-deployment"
     assert env["CORVIN_TTS_OPENAI_API_VERSION"], "Azure needs an api-version"
 
