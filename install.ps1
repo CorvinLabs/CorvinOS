@@ -5,8 +5,15 @@
 
 .DESCRIPTION
     Bootstraps uv (which brings its own Python), a local Node.js runtime, and
-    installs the corvinos package -- either from PyPI or, with -Editable, from a
-    local clone. Mirrors install.sh (Linux/macOS) semantics.
+    installs the corvinos package. Mirrors install.sh (Linux/macOS) semantics.
+    Where the code comes from is decided once:
+      * -Editable PATH, or this script sits in a CorvinOS checkout (.corvin_repo)
+        -> install from that tree.
+      * -PyPI -> the published wheel (lags main; kept for pinned deployments).
+      * otherwise -> fetch main from GitHub (git, or the codeload zip when git is
+        missing or blocked) into %LOCALAPPDATA%\corvinos\src, marked as ours with
+        .corvin-managed, and install that. update.ps1 keeps it current and
+        uninstall.ps1 removes it. Re-running is safe (non-persistent VDI).
 
     ASCII-ONLY BY CONTRACT. Windows PowerShell 5.1 decodes a BOM-less script as
     ANSI (cp1252), where the UTF-8 bytes of characters like U+2713 and U+2551
@@ -16,7 +23,11 @@
     Enforced by .github/workflows/install-test.yml.
 
 .PARAMETER Editable
-    Install from this local clone instead of PyPI (developer install).
+    Install from this local clone (developer install).
+
+.PARAMETER PyPI
+    Install the published wheel from PyPI (corvinos >= the version floor)
+    instead of fetching main from GitHub.
 
 .PARAMETER DryRun
     Report every action without changing anything.
@@ -77,6 +88,7 @@ param(
     [Alias("e")]
     [string]$Editable = "",
 
+    [switch]$PyPI,
     [switch]$DryRun,
     [switch]$NoClaudeCode,
     [switch]$Lan,
@@ -108,6 +120,35 @@ try {
         [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
 } catch { }
 
+# Constrained Language Mode (AppLocker / WDAC script enforcement, common on
+# Citrix and managed desktops) forbids the .NET calls this installer depends on
+# (TcpClient, HttpWebRequest, System.IO.Path). Without this check the run dies
+# later with a bare "Cannot invoke method" that names nothing actionable.
+if ($ExecutionContext.SessionState.LanguageMode -ne "FullLanguage") {
+    Write-Host "PowerShell runs in $($ExecutionContext.SessionState.LanguageMode) mode here (AppLocker/WDAC policy)." -ForegroundColor Red
+    Write-Host "install.ps1 needs FullLanguage. Ask IT to allow this script (a path or publisher rule)," -ForegroundColor Yellow
+    Write-Host "or install inside WSL with install.sh. uninstall.ps1 works in this mode." -ForegroundColor Yellow
+    exit 2
+}
+
+# Corporate TLS-inspecting proxies (Zscaler, Citrix ADC, ...) re-sign HTTPS
+# with a company root that only the Windows certificate store knows. uv and
+# Node ship their own CA bundles and ignore that store unless told otherwise:
+#   UV_NATIVE_TLS=1        uv verifies against the Windows store
+#   NODE_USE_SYSTEM_CA=1   Node >= 23.8 (the pinned runtime is 24.x) adds the
+#                          Windows store to its bundle; npm inherits it
+# curl.exe (Schannel) and Invoke-WebRequest already use the store. Process
+# scope only, and an operator's own value always wins.
+if (-not $env:UV_NATIVE_TLS)      { $env:UV_NATIVE_TLS = "1" }
+if (-not $env:NODE_USE_SYSTEM_CA) { $env:NODE_USE_SYSTEM_CA = "1" }
+
+# Source of a default (non -PyPI, non -Editable) install: main, fetched into an
+# installer-managed tree. Same variables as install.sh / update.sh.
+$CorvinBranch  = if ($env:CORVIN_BRANCH)   { $env:CORVIN_BRANCH }   else { "main" }
+$CorvinRepoUrl = if ($env:CORVIN_REPO_URL) { $env:CORVIN_REPO_URL.TrimEnd('/') } else { "https://github.com/CorvinLabs/CorvinOS" }
+$ManagedSrc    = if ($env:CORVIN_SRC_DIR)  { $env:CORVIN_SRC_DIR }  else { Join-Path $env:LOCALAPPDATA "corvinos\src" }
+$script:SourceChanged = $false
+
 $PackageName      = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
 $CorvinMinVersion = "2.0.0"
 $UvVersion        = "0.12.9"
@@ -123,7 +164,7 @@ $DebugLogFile = Join-Path $LogDir "install-debug.log"
 $null = New-Item -ItemType Directory -Path $LogDir -Force -ErrorAction SilentlyContinue
 
 $script:CurrentStep        = 0
-$script:TotalSteps         = 25   # keep in sync with the Write-Step call count
+$script:TotalSteps         = 27   # keep in sync with the Write-Step call count
 $script:InstallationFailed = $false
 $script:Warnings           = New-Object System.Collections.ArrayList
 
@@ -223,6 +264,8 @@ function Write-Summary {
         }
     }
     Write-Host ("=" * 62) -ForegroundColor Cyan
+    # Every terminal path (success, Stop-WithError, the trap) ends here.
+    Exit-SetupLock
 }
 
 function Stop-WithError {
@@ -231,6 +274,69 @@ function Stop-WithError {
     Write-Log -Message $Message -Level "Error"
     Write-Summary -Status $Status -ExitCode $ExitCode
     exit $ExitCode
+}
+
+# One install/update at a time: two concurrent `uv tool install --force` runs
+# delete each other's venv. Shared with update.ps1, same name as the POSIX
+# lock directory. A lock whose owner PID is gone, or that is older than two
+# hours, is stale (a killed run) and is taken over.
+$SetupLockDir = Join-Path $env:TEMP "corvinos-setup.lock"
+$script:LockHeld = $false
+function Enter-SetupLock {
+    for ($i = 0; $i -lt 2; $i++) {
+        try {
+            $null = New-Item -ItemType Directory -Path $SetupLockDir -ErrorAction Stop
+            Set-Content -LiteralPath (Join-Path $SetupLockDir "pid") -Value $PID -ErrorAction SilentlyContinue
+            $script:LockHeld = $true
+            return $true
+        } catch {
+            $ownerPid = 0
+            try { $ownerPid = [int](Get-Content -LiteralPath (Join-Path $SetupLockDir "pid") -ErrorAction Stop | Select-Object -First 1) } catch { }
+            $item = Get-Item -LiteralPath $SetupLockDir -ErrorAction SilentlyContinue
+            $old = $item -and ($item.CreationTime -lt (Get-Date).AddHours(-2))
+            $dead = ($ownerPid -gt 0) -and -not (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)
+            if (-not ($old -or $dead)) { return $false }
+            Remove-Item -LiteralPath $SetupLockDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return $false
+}
+function Exit-SetupLock {
+    if ($script:LockHeld) {
+        Remove-Item -LiteralPath $SetupLockDir -Recurse -Force -ErrorAction SilentlyContinue
+        $script:LockHeld = $false
+    }
+}
+
+# AppLocker / WDAC / Software Restriction Policies on managed desktops block
+# executables in user-writable folders (TEMP, APPDATA, LOCALAPPDATA, .local\bin)
+# -- exactly where uv, the uv-managed Python and the local Node.js live. The
+# error text is Win32 error 1260; turn it into something an admin can act on.
+function Get-PolicyBlockHint {
+    param([string]$Text)
+    if ($Text -notmatch 'blocked by group policy|blocked by your system administrator|ERROR_ACCESS_DISABLED_BY_POLICY|\b1260\b|AppLocker|Application Control') { return "" }
+    return ("`n  Group Policy (AppLocker/WDAC) blocks programs in user folders on this machine. " +
+            "Ask IT for an allow rule covering $env:USERPROFILE\.local\bin, $env:APPDATA\uv, " +
+            "$env:LOCALAPPDATA\uv, $env:LOCALAPPDATA\corvinos and $env:USERPROFILE\.corvin\node -- or install inside WSL.")
+}
+
+# Multi-session hosts (Citrix Virtual Apps, RDS, AVD): every user's console binds
+# 127.0.0.1, and local-login trusts ANY loopback caller. A console that belongs
+# to another user on this port would therefore log this user straight into
+# that user's CorvinOS. Such a process is never reused, never killed, and no
+# browser is opened onto it. A process whose owner cannot be read (another
+# user's, from a standard account) is NOT ours.
+function Test-ProcessOwnedByMe {
+    param([int]$ProcessId)
+    try {
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+        if (-not $cim) { return $false }
+        $o = Invoke-CimMethod -InputObject $cim -MethodName GetOwner -ErrorAction Stop
+        if ($o.ReturnValue -ne 0) { return $false }
+        return (($o.User -eq $env:USERNAME) -and ((-not $o.Domain) -or ($o.Domain -eq $env:USERDOMAIN)))
+    } catch {
+        return $false
+    }
 }
 
 # Runs a native command, streams its output into the log, and fails on a
@@ -591,6 +697,18 @@ function Get-PortOwnerProcess {
     return $owners
 }
 
+# "" when the port is free or held by this user; otherwise a description of the
+# other user's listener (see Test-ProcessOwnedByMe).
+function Get-ForeignPortOwner {
+    param([int]$TargetPort)
+    foreach ($owner in (Get-PortOwnerProcess -TargetPort $TargetPort)) {
+        if (-not (Test-ProcessOwnedByMe -ProcessId $owner.Id)) {
+            return "$($owner.ProcessName) (PID $($owner.Id)) of another user"
+        }
+    }
+    return ""
+}
+
 # The process holding the port is usually NOT named corvin-anything. serve_entry
 # blocks on a uvicorn CHILD (`python -m uvicorn corvin_console.standalone:create_app
 # --factory`), and that child -- a python.exe under the uv-managed toolchain --
@@ -626,6 +744,12 @@ function Stop-ConsoleOnPort {
     foreach ($owner in (Get-PortOwnerProcess -TargetPort $TargetPort)) {
         if (-not (Test-IsCorvinConsoleProcess -Process $owner)) {
             Write-Log -Message "Port $TargetPort is held by $($owner.ProcessName) (PID $($owner.Id)), which is not CorvinOS -- leaving it alone" -Level "Warn"
+            continue
+        }
+        # Another user's console on a multi-session host: an elevated installer
+        # COULD kill it, which is exactly why it must not.
+        if (-not (Test-ProcessOwnedByMe -ProcessId $owner.Id)) {
+            Write-Log -Message "Port $TargetPort is held by another user's CorvinOS (PID $($owner.Id)) -- leaving it alone" -Level "Warn"
             continue
         }
         Write-Log -Message "Stopping stale console $($owner.ProcessName) (PID $($owner.Id))" -Level "Info"
@@ -793,6 +917,8 @@ Write-Header "Phase 1: Pre-Checks and Prerequisites"
 
 if ($DryRun) {
     Write-Log -Message "DRY RUN -- no changes will be made" -Level "Info"
+} elseif (-not (Enter-SetupLock)) {
+    Stop-WithError "Another CorvinOS install/update is running (lock: $SetupLockDir). Wait for it, or delete that folder if it crashed." 2 "FAILED (another install is running)"
 }
 
 Write-Step "Checking PowerShell version"
@@ -812,7 +938,7 @@ Write-Log -Message "Windows version: $osVersion ($($osInfo.Caption))" -Level "Su
 
 Write-Step "Checking prerequisites"
 $missingPrereqs = @()
-foreach ($cmd in @("curl", "git")) {
+foreach ($cmd in @("curl")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         $missingPrereqs += $cmd
     }
@@ -820,7 +946,13 @@ foreach ($cmd in @("curl", "git")) {
 if ($missingPrereqs.Count -gt 0) {
     Stop-WithError "Missing prerequisites: $($missingPrereqs -join ', ')" 2
 }
-Write-Log -Message "All prerequisites found" -Level "Success"
+# git is optional: locked-down / Citrix desktops often have none, and the
+# source is then fetched as a zip (Phase 5b). It only speeds up later updates.
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    Write-Log -Message "All prerequisites found" -Level "Success"
+} else {
+    Write-Log -Message "Prerequisites found (git is absent -- the source will be fetched as a zip)" -Level "Success"
+}
 
 # -----------------------------------------------------------------------------
 # Phase 2: Path validation
@@ -829,24 +961,51 @@ Write-Log -Message "All prerequisites found" -Level "Success"
 Write-Header "Phase 2: Path Validation"
 
 Write-Step "Resolving repository path"
-# An empty -Editable means "install from PyPI", but the repo path is still
-# needed for .nvmrc and the component bootstrap scripts.
+# Decided once, in the order install.sh uses (see .DESCRIPTION):
+#   -Editable PATH  >  this script's own checkout  >  -PyPI  >  managed main.
+# PyPI is no longer the default: its newest corvinos lags main by major
+# versions and does not satisfy the >= $CorvinMinVersion floor at all, so a
+# default PyPI install could only fail.
 $EditableMode = -not [string]::IsNullOrWhiteSpace($Editable)
-$RepoCandidate = if ($EditableMode) { $Editable } else { $PSScriptRoot }
-
-if (-not (Test-Path -LiteralPath $RepoCandidate -PathType Container)) {
-    Stop-WithError "Repository path does not exist: $RepoCandidate" 4 "FAILED (bad -Editable path)"
+$ManagedMode  = $false
+if ($EditableMode -and $PyPI) {
+    Stop-WithError "-Editable and -PyPI exclude each other -- pass one of them" 4 "FAILED (conflicting parameters)"
 }
-
-# Trailing separators must go: uv is handed "<path>[browser]" and
-# "C:\repo\[browser]" is not a valid requirement specifier.
-$RepoPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $RepoCandidate).Path)
-if ($RepoPath.Length -gt 3) { $RepoPath = $RepoPath.TrimEnd('\', '/') }
-Write-Log -Message "Repository path: $RepoPath" -Level "Success"
-if ($EditableMode) {
-    Write-Log -Message "Mode: EDITABLE (local clone)" -Level "Info"
+if (-not $EditableMode -and -not $PyPI -and $PSScriptRoot -and
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".corvin_repo")) -and
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot "pyproject.toml"))) {
+    $Editable = $PSScriptRoot
+    $EditableMode = $true
+    Write-Log -Message "Source: this checkout ($PSScriptRoot)" -Level "Info"
+}
+if (-not $EditableMode -and -not $PyPI) {
+    # Fetched in Phase 5b, after stale processes are stopped -- a running
+    # console inside the old tree would block the swap.
+    $ManagedMode  = $true
+    $EditableMode = $true
+    $RepoPath = [System.IO.Path]::GetFullPath($ManagedSrc)
+    if ($RepoPath.Length -gt 3) { $RepoPath = $RepoPath.TrimEnd('\', '/') }
+    Write-Log -Message "Repository path: $RepoPath (installer-managed)" -Level "Success"
+    Write-Log -Message "Mode: MANAGED SOURCE ($CorvinBranch from $CorvinRepoUrl)" -Level "Info"
 } else {
-    Write-Log -Message "Mode: PyPI ($PackageName >= $CorvinMinVersion)" -Level "Info"
+    # PyPI still reads .nvmrc from a checkout next to this script when there is
+    # one; piped (irm | iex) there is no script root, so the current directory.
+    $RepoCandidate = if ($EditableMode) { $Editable } elseif ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).ProviderPath }
+
+    if (-not (Test-Path -LiteralPath $RepoCandidate -PathType Container)) {
+        Stop-WithError "Repository path does not exist: $RepoCandidate" 4 "FAILED (bad -Editable path)"
+    }
+
+    # Trailing separators must go: uv is handed "<path>[browser]" and
+    # "C:\repo\[browser]" is not a valid requirement specifier.
+    $RepoPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $RepoCandidate).ProviderPath)
+    if ($RepoPath.Length -gt 3) { $RepoPath = $RepoPath.TrimEnd('\', '/') }
+    Write-Log -Message "Repository path: $RepoPath" -Level "Success"
+    if ($EditableMode) {
+        Write-Log -Message "Mode: EDITABLE (local clone)" -Level "Info"
+    } else {
+        Write-Log -Message "Mode: PyPI ($PackageName >= $CorvinMinVersion)" -Level "Info"
+    }
 }
 
 Write-Step "Verifying CorvinOS repository structure"
@@ -854,7 +1013,9 @@ $requiredFiles = @("install.ps1", "install.sh", "pyproject.toml", "package.json"
 $missingFiles = @($requiredFiles | Where-Object {
     -not (Test-Path -LiteralPath (Join-Path $RepoPath $_))
 })
-if ($missingFiles.Count -gt 0) {
+if ($ManagedMode) {
+    Write-Log -Message "Checked after the source is fetched (Phase 5b)" -Level "Info"
+} elseif ($missingFiles.Count -gt 0) {
     if ($EditableMode) {
         Stop-WithError "Not a CorvinOS clone -- missing: $($missingFiles -join ', ')" 4 "FAILED (bad -Editable path)"
     }
@@ -990,13 +1151,16 @@ try {
     # `uv tool install --force` has to delete. Measured 2026-09-18: two such
     # processes, and the install died with
     # "failed to remove directory ...\corvinos\Scripts: Access is denied".
+    #
+    # And only THIS user's: on a multi-session host another user's
+    # corvinos-serve.exe matches by name, and an elevated run could kill it.
     $candidates = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
         $_.Id -ne $PID -and (
             $_.ProcessName -like 'corvin*' -or
             ($_.Path -and $_.Path.StartsWith($CorvinHome, [StringComparison]::OrdinalIgnoreCase)) -or
             ($_.Path -and $_.Path.StartsWith($UvToolDir, [StringComparison]::OrdinalIgnoreCase))
         )
-    })
+    } | Where-Object { Test-ProcessOwnedByMe -ProcessId $_.Id })
 
     if ($candidates.Count -gt 0) {
         Write-Log -Message "Found $($candidates.Count) CorvinOS process(es) holding file locks" -Level "Warn"
@@ -1061,6 +1225,149 @@ if (Get-Command pip -ErrorAction SilentlyContinue) {
 }
 
 # -----------------------------------------------------------------------------
+# Phase 5b: Fetch the CorvinOS source (managed mode only)
+# -----------------------------------------------------------------------------
+#
+# Mirrors fetch_source in install.sh. git when it is present and works (cheap
+# updates, exact commit); otherwise the codeload zip, which needs nothing but
+# HTTPS -- and is also the FALLBACK when git fails, because Git for Windows'
+# OpenSSL backend does not trust a corporate TLS-inspection root that
+# curl.exe/Schannel (the zip download) does. Generated state inside the tree
+# (.corvin\, web-next\node_modules) is carried across a zip swap.
+
+function Invoke-GitQuiet {
+    param([string[]]$Arguments)
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & git @Arguments 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    foreach ($line in @($output)) { Write-Log -Message ([string]$line) -Level "Debug" }
+    return $code
+}
+
+function Get-GitHead {
+    param([string]$Dir)
+    # Same stderr trap as Invoke-GitQuiet: under "Stop", 5.1 turns even a
+    # redirected stderr line into a terminating error.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        return [string](& git -C $Dir rev-parse HEAD 2>$null | Select-Object -First 1)
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+function Update-SourceFromZip {
+    param([string]$Dest)
+    $zipUrl = ($CorvinRepoUrl -replace '^https://github\.com/', 'https://codeload.github.com/') + "/zip/refs/heads/$CorvinBranch"
+    $zip    = Join-Path $env:TEMP "corvinos-src-$InstallTimestamp.zip"
+    $stage  = "$Dest.new"
+    try {
+        Write-Log -Message "Downloading $zipUrl ..." -Level "Info"
+        Invoke-DownloadWithRetry -Uri $zipUrl -OutFile $zip -TimeoutSeconds 600
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop }
+        $null = New-Item -ItemType Directory -Path $stage -Force -ErrorAction Stop
+        try {
+            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force -ErrorAction Stop
+        } catch {
+            # Expand-Archive (5.1) fails on some long/odd entry names; bsdtar
+            # (System32\tar.exe, Windows 10 1803+) reads zips too.
+            $tar = Join-Path $env:SystemRoot "System32\tar.exe"
+            if (-not (Test-Path -LiteralPath $tar)) { throw }
+            Write-Log -Message "Expand-Archive failed ($($_.Exception.Message)) -- extracting with tar.exe" -Level "Warn"
+            $null = Invoke-Native -FilePath $tar -Arguments @("-xf", $zip, "-C", $stage)
+        }
+        $top = @(Get-ChildItem -LiteralPath $stage -Directory -Force)
+        if ($top.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $top[0].FullName "pyproject.toml"))) {
+            throw "unexpected archive layout in $zipUrl"
+        }
+        if (Test-Path -LiteralPath $Dest) {
+            foreach ($keep in @(".corvin", "core\console\corvin_console\web-next\node_modules")) {
+                $from = Join-Path $Dest $keep
+                if (-not (Test-Path -LiteralPath $from)) { continue }
+                $to = Join-Path $top[0].FullName $keep
+                $null = New-Item -ItemType Directory -Path (Split-Path -Parent $to) -Force
+                Move-Item -LiteralPath $from -Destination $to -Force -ErrorAction Stop
+            }
+            if (Test-Path -LiteralPath "$Dest.prev") { Remove-Item -LiteralPath "$Dest.prev" -Recurse -Force -ErrorAction Stop }
+            Move-Item -LiteralPath $Dest -Destination "$Dest.prev" -ErrorAction Stop
+        }
+        Move-Item -LiteralPath $top[0].FullName -Destination $Dest -ErrorAction Stop
+        Remove-Item -LiteralPath "$Dest.prev" -Recurse -Force -ErrorAction SilentlyContinue
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Update-ManagedSource {
+    param([string]$Dest)
+    $parent = Split-Path -Parent $Dest
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) { $null = New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop }
+    $haveGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
+    $before = ""
+    $done = $false
+    if ($haveGit -and (Test-Path -LiteralPath (Join-Path $Dest ".git"))) {
+        $before = Get-GitHead $Dest
+        for ($i = 1; $i -le 3 -and -not $done; $i++) {
+            if ((Invoke-GitQuiet @("-C", $Dest, "fetch", "--depth", "1", "origin", $CorvinBranch)) -eq 0) {
+                # Installer-managed tree: local edits are not ours to keep -- reset.
+                $done = ((Invoke-GitQuiet @("-C", $Dest, "reset", "--hard", "-q", "FETCH_HEAD")) -eq 0)
+            }
+            if (-not $done -and $i -lt 3) { Start-Sleep -Seconds (2 * $i) }
+        }
+    } elseif ($haveGit -and -not (Test-Path -LiteralPath $Dest)) {
+        for ($i = 1; $i -le 3 -and -not $done; $i++) {
+            Remove-Item -LiteralPath "$Dest.tmp" -Recurse -Force -ErrorAction SilentlyContinue
+            if ((Invoke-GitQuiet @("clone", "-q", "--depth", "1", "--branch", $CorvinBranch, "$CorvinRepoUrl.git", "$Dest.tmp")) -eq 0) {
+                Move-Item -LiteralPath "$Dest.tmp" -Destination $Dest -ErrorAction Stop
+                $done = $true
+            } elseif ($i -lt 3) { Start-Sleep -Seconds (2 * $i) }
+        }
+        Remove-Item -LiteralPath "$Dest.tmp" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $done) {
+        if ($haveGit) { Write-Log -Message "git could not fetch $CorvinRepoUrl -- falling back to the zip download" -Level "Warn" }
+        $null = Update-SourceFromZip -Dest $Dest
+    }
+    $null = New-Item -ItemType File -Path (Join-Path $Dest ".corvin-managed") -Force -ErrorAction Stop
+    $after = ""
+    if ($haveGit -and (Test-Path -LiteralPath (Join-Path $Dest ".git"))) {
+        $after = Get-GitHead $Dest
+    }
+    # A zip carries no revision: treat it as changed so the SPA is rebuilt.
+    $script:SourceChanged = (-not $after) -or ($after -ne $before)
+    return $(if ($after) { $after.Substring(0, [math]::Min(8, $after.Length)) } else { "zip" })
+}
+
+if ($ManagedMode) {
+    Write-Header "Phase 5b: Fetch the CorvinOS Source"
+    Write-Step "Fetching CorvinOS $CorvinBranch"
+    if ($DryRun) {
+        Write-Log -Message "[DRY RUN] Would fetch $CorvinBranch of $CorvinRepoUrl into $RepoPath (git, else the codeload zip)" -Level "Info"
+    } else {
+        try {
+            $rev = Update-ManagedSource -Dest $RepoPath
+        } catch {
+            Stop-WithError ("Could not download the CorvinOS source: $($_.Exception.Message)`n" +
+                "  Behind a proxy set HTTPS_PROXY (and, for git, git config --global http.proxy) and re-run," +
+                " or install the published package with -PyPI.") 1 "FAILED (source download)"
+        }
+        foreach ($f in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath (Join-Path $RepoPath $f))) {
+                Stop-WithError "The fetched source at $RepoPath is incomplete (missing $f)" 1 "FAILED (source download)"
+            }
+        }
+        Write-Log -Message "Source: $RepoPath ($rev)" -Level "Success"
+    }
+}
+
+# -----------------------------------------------------------------------------
 # Phase 6: Bootstrap uv
 # -----------------------------------------------------------------------------
 
@@ -1091,7 +1398,7 @@ if ($uvCmd) {
         $null = Invoke-Native -FilePath "powershell" `
             -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $uvInstallerPath)
     } catch {
-        Stop-WithError "uv installation failed: $_" 1
+        Stop-WithError ("uv installation failed: $_" + (Get-PolicyBlockHint "$_")) 1
     } finally {
         Remove-Item -LiteralPath $uvInstallerPath -Force -ErrorAction SilentlyContinue
     }
@@ -1163,7 +1470,7 @@ if (-not $nodeInstalled) {
             $verifiedVersion = ((& $nodeExe --version 2>&1) -join '').Trim()
             Write-Log -Message "Node.js $verifiedVersion installed at $NodeRoot" -Level "Success"
         } catch {
-            Stop-WithError "Node.js installation failed: $_" 1
+            Stop-WithError ("Node.js installation failed: $_" + (Get-PolicyBlockHint "$_")) 1
         } finally {
             Remove-Item -LiteralPath $nodeZip -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $nodeStage -Recurse -Force -ErrorAction SilentlyContinue
@@ -1242,7 +1549,10 @@ if ($DryRun) {
             if ($isLock) {
                 Write-Log -Message "$UvToolDir is still locked. Close every CorvinOS process and any terminal running one, then re-run." -Level "Error"
             }
-            Stop-WithError "corvinos installation failed: $failure" 1
+            if (-not $EditableMode) {
+                $failure += "`n  (PyPI may not carry $PackageName >= $CorvinMinVersion yet -- re-run without -PyPI to install main from GitHub)"
+            }
+            Stop-WithError ("corvinos installation failed: $failure" + (Get-PolicyBlockHint $failure)) 1
         }
     }
 
@@ -1312,11 +1622,13 @@ $WebDistIndex = Join-Path $WebNextDir "dist\index.html"
 
 if (-not $EditableMode) {
     Write-Log -Message "PyPI mode: the wheel ships a pre-built SPA -- nothing to build" -Level "Info"
-} elseif (-not (Test-Path -LiteralPath (Join-Path $WebNextDir "package.json"))) {
-    Write-Log -Message "No web-next/package.json under $RepoPath -- skipping the SPA build" -Level "Warn"
 } elseif ($DryRun) {
     Write-Log -Message "[DRY RUN] Would run npm install + npm run build in $WebNextDir" -Level "Info"
-} elseif ((Test-Path -LiteralPath $WebDistIndex) -and -not $RebuildWeb) {
+} elseif (-not (Test-Path -LiteralPath (Join-Path $WebNextDir "package.json"))) {
+    Write-Log -Message "No web-next/package.json under $RepoPath -- skipping the SPA build" -Level "Warn"
+} elseif ((Test-Path -LiteralPath $WebDistIndex) -and -not $RebuildWeb -and -not $script:SourceChanged) {
+    # (A managed tree that was just updated is always rebuilt: its dist\ -- kept
+    # across a git reset, since it is gitignored -- belongs to the OLD code.)
     Write-Log -Message "SPA already built ($WebDistIndex) -- re-run with -RebuildWeb to force" -Level "Success"
 } else {
     # npm.cmd sits at the ROOT of the Windows Node archive, next to node.exe.
@@ -1379,6 +1691,21 @@ if (-not $EditableMode) {
         $buildFailed = ($null -ne $buildResult.ExitCode) -and ($buildResult.ExitCode -ne 0)
     }
 
+    # `npm run build` is `tsc -b && vite build`: a type error in ONE panel
+    # stops the whole bundle, although vite (esbuild) would emit a working one.
+    # update.sh builds past it for the same reason; do it here too, loudly.
+    # Relative script path + WorkingDirectory: Start-Process (5.1) does not
+    # quote ArgumentList items, so a profile path with a space would split.
+    $viteJs = Join-Path $WebNextDir "node_modules\vite\bin\vite.js"
+    $nodeForBuild = if (Test-Path -LiteralPath $nodeExe) { $nodeExe } else { [string](Get-Command node -ErrorAction SilentlyContinue).Source }
+    if ($buildFailed -and -not $buildResult.TimedOut -and $nodeForBuild -and (Test-Path -LiteralPath $viteJs) -and
+        (@($buildResult.Output | Where-Object { [string]$_ -match 'error TS\d+' }).Count -gt 0)) {
+        Write-Log -Message "The type check (tsc -b) failed -- building with vite alone; fix the type errors in the log" -Level "Warn"
+        $buildResult = Invoke-NativeTimed -FilePath $nodeForBuild -Arguments @("node_modules\vite\bin\vite.js", "build") `
+            -WorkingDirectory $WebNextDir -TimeoutSeconds 1800
+        $buildFailed = ($null -ne $buildResult.ExitCode) -and ($buildResult.ExitCode -ne 0)
+    }
+
     if ($buildResult.TimedOut) {
         Stop-WithError ("The console SPA build timed out after 1800s.`n" +
             "  Build it by hand to see where it stalls:`n" +
@@ -1437,6 +1764,33 @@ if (-not $Provision) {
 
 Write-Header "Phase 12: System Integration"
 
+# Before anything records $Port (the task below bakes it into its action): on a
+# multi-session host 127.0.0.1:$Port may already be ANOTHER user's console,
+# and reusing it would hand this user that user's session (see
+# Test-ProcessOwnedByMe). With the default port, move to the next free one;
+# with an explicit -Port, stop and say so.
+Write-Step "Checking that port $Port is not another user's console"
+$foreignOwner = Get-ForeignPortOwner -TargetPort $Port
+if (-not $foreignOwner) {
+    Write-Log -Message "Port $Port is free or this user's" -Level "Success"
+} elseif ($PSBoundParameters.ContainsKey('Port')) {
+    Stop-WithError ("Port $Port is held by $foreignOwner. Connecting there would open THAT user's CorvinOS.`n" +
+        "  Re-run with a free port: -Port <n>") 3 "INSTALLED, BUT PORT $Port BELONGS TO ANOTHER USER"
+} else {
+    $freePort = 0
+    for ($candidate = $Port + 1; $candidate -le $Port + 100; $candidate++) {
+        if (-not (Test-TcpPort -TargetPort $candidate -TimeoutMs 300) -and @(Get-PortOwnerProcess -TargetPort $candidate).Count -eq 0) {
+            $freePort = $candidate
+            break
+        }
+    }
+    if ($freePort -eq 0) {
+        Stop-WithError "Port $Port is held by $foreignOwner and no free port was found up to $($Port + 100). Re-run with -Port <n>." 3 "INSTALLED, BUT NO FREE PORT"
+    }
+    Write-Log -Message "Port $Port is held by $foreignOwner -- this user's console will use port $freePort instead" -Level "Warn"
+    $Port = $freePort
+}
+
 Write-Step "Registering autostart task"
 $taskName = "CorvinOS-AutoRestart"
 $taskPath = "\CorvinOS\"
@@ -1445,6 +1799,16 @@ if ($DryRun) {
 } else {
     try {
         $existingTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
+        # The task namespace is MACHINE-wide. On a multi-session host the plain
+        # name may already be another user's task: never adopt or overwrite it,
+        # register a per-user one instead.
+        $existingUser = if ($existingTask) { [string]$existingTask.Principal.UserId } else { "" }
+        if ($existingTask -and $existingUser -and $existingUser -ne $env:USERNAME -and
+            $existingUser -ne "$env:USERDOMAIN\$env:USERNAME") {
+            Write-Log -Message "$taskPath$taskName belongs to $existingUser -- using a per-user task name" -Level "Info"
+            $taskName = "CorvinOS-AutoRestart-$env:USERNAME"
+            $existingTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
+        }
         if ($existingTask) {
             Write-Log -Message "Scheduled task $taskName already exists (state: $($existingTask.State))" -Level "Info"
         } else {
@@ -1466,8 +1830,19 @@ if ($DryRun) {
                 -DontStopIfGoingOnBatteries -StartWhenAvailable `
                 -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
 
-            $null = Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath `
-                -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop
+            try {
+                $null = Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath `
+                    -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop
+            } catch {
+                # A standard user cannot even SEE another user's task, so the
+                # collision above goes undetected and surfaces here as
+                # "Access is denied" -- retry once under a per-user name.
+                if ($taskName -ne "CorvinOS-AutoRestart" -or
+                    [string]$_.Exception.Message -notmatch 'Access is denied|0x80070005') { throw }
+                $taskName = "CorvinOS-AutoRestart-$env:USERNAME"
+                $null = Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath `
+                    -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop
+            }
             Write-Log -Message "Scheduled task registered: $taskPath$taskName" -Level "Success"
         }
     } catch {
@@ -1525,7 +1900,12 @@ if ($NoStart) {
     # behind "the port is in use", and the old bare-TCP check collapsed all of
     # them into "already serving -- reusing the running console".
     $existing = Get-ConsoleHealth -TargetPort $Port -TimeoutSeconds 10
-    if ($existing.Serving) {
+    $foreignOwner = if ($existing.Listening) { Get-ForeignPortOwner -TargetPort $Port } else { "" }
+    if ($foreignOwner) {
+        # Checked in Phase 12 already; this closes the window since then.
+        $script:ConsoleFailure = "Port $Port is now held by $foreignOwner -- not connecting to another user's console. Re-run with -Port <n>."
+        Write-Log -Message $script:ConsoleFailure -Level "Warn"
+    } elseif ($existing.Serving) {
         Write-Log -Message "A console is already serving $ConsoleUrl -- reusing it" -Level "Success"
         $script:ConsoleReady = $true
     } elseif ($existing.Listening) {
@@ -1742,7 +2122,7 @@ Write-Host ""
 Write-Host "Installation details:" -ForegroundColor Green
 Write-Host "   CORVIN_HOME: $CorvinHome" -ForegroundColor White
 Write-Host "   Repository:  $RepoPath" -ForegroundColor White
-Write-Host "   Mode:        $(if ($EditableMode) { 'editable (local clone)' } else { "PyPI ($PackageName)" })" -ForegroundColor White
+Write-Host "   Mode:        $(if ($ManagedMode) { "managed source ($CorvinBranch; update with update.ps1)" } elseif ($EditableMode) { 'editable (local clone)' } else { "PyPI ($PackageName)" })" -ForegroundColor White
 Write-Host "   Logs:        $LogDir" -ForegroundColor White
 Write-Host ""
 if ($script:ConsoleReady) {
@@ -1751,8 +2131,10 @@ if ($script:ConsoleReady) {
     Write-Host "   Server log:  $ConsoleStdout" -ForegroundColor White
     # NOT `Get-Process corvinos-serve | Stop-Process`: that stops the launcher
     # and leaves its uvicorn child holding the port.
-    Write-Host "   Stop it:     taskkill /F /T /IM corvinos-serve.exe" -ForegroundColor White
-    Write-Host "   Restarts automatically at logon (task \CorvinOS\CorvinOS-AutoRestart)." -ForegroundColor White
+    # The USERNAME filter matters on a multi-session host: without it an
+    # elevated shell stops every user's console.
+    Write-Host "   Stop it:     taskkill /F /T /FI `"USERNAME eq $env:USERNAME`" /IM corvinos-serve.exe" -ForegroundColor White
+    Write-Host "   Restarts automatically at logon (task $taskPath$taskName)." -ForegroundColor White
     if ($NoBrowser) {
         Write-Host ""
         Write-Host "   Open $ConsoleUrl to reach the chat." -ForegroundColor White

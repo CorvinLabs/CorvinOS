@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import stat
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,10 +52,15 @@ pytestmark = pytest.mark.skipif(
 def _run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 20) -> subprocess.CompletedProcess:
     """Execute the real install.sh as a subprocess, never touching the real
     network/PATH unless the caller explicitly builds that into `env`."""
+    env = dict(env) if env is not None else {}
+    # A private TMPDIR: install.sh takes a machine-wide setup lock there, and
+    # a test must never contend with (or leave a lock behind for) a real
+    # install/update on the same host.
+    env.setdefault("TMPDIR", tempfile.mkdtemp(prefix="install-sh-test-"))
     return subprocess.run(
         ["/bin/sh", str(_INSTALL_SH), *args],
         cwd=_REPO,
-        env=env if env is not None else {},
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -176,6 +182,8 @@ esac
 for a in "$@"; do
   case "$a" in
     *healthz*) exit 0 ;;
+    # the readiness probe: `curl -s -o /dev/null -w '%{http_code}' .../console/`
+    */console/) printf 200; exit 0 ;;
   esac
 done
 exit 1
@@ -201,8 +209,9 @@ def test_happy_path_reaches_ready_banner_with_no_hermes(_stubbed_env) -> None:
 
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
     assert "CorvinOS is ready!" in result.stdout
-    assert "Server is ready!" in result.stdout
-    assert f"Installing CorvinOS (editable) from {editable_dir}" in result.stdout
+    # "Up" means /console/ answered 200 with the SPA shell, not only healthz.
+    assert "waiting for the console" in result.stdout or "Console already running" in result.stdout
+    assert f"Installing CorvinOS from {editable_dir}" in result.stdout
 
 
 def test_editable_install_carries_the_browser_extra(_stubbed_env) -> None:
@@ -233,3 +242,40 @@ def test_missing_corvinos_serve_on_path_dies_with_clear_message(_stubbed_env) ->
     assert result.returncode == 1
     assert "corvinos-serve" in result.stderr
     assert "is not on PATH" in result.stderr
+
+
+# ── setup lock (shared with update.sh; the watchdog honours it) ────────────
+
+
+def test_stale_lock_of_a_dead_process_is_taken_over(tmp_path) -> None:
+    """A run killed mid-way leaves the lock behind. Taking it over when its
+    owner is dead is what keeps later installs — and the watchdog, which
+    stands down while the lock is held — from being blocked forever."""
+    lock = tmp_path / "corvinos-setup.lock"
+    lock.mkdir()
+    (lock / "pid").write_text("999999")  # no such process
+    result = _run(["--this-flag-does-not-exist"],
+                  env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
+    # argument parsing happens first; a valid run must get past the lock:
+    assert "Unknown argument" in result.stderr
+    # Only the lock's own tools on PATH: past the lock the script must stop at
+    # the very next check (no curl/wget), proving the lock was taken over.
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for t in ("mkdir", "rm", "cat", "sleep", "find", "id", "uname", "date"):
+        src = shutil.which(t)
+        if src:
+            os.symlink(src, tools / t)
+    result = _run([], env={"PATH": str(tools), "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
+    assert "another CorvinOS install/update is running" not in result.stderr
+    assert "curl or wget" in result.stderr
+
+
+def test_live_lock_blocks_a_second_run(tmp_path) -> None:
+    lock = tmp_path / "corvinos-setup.lock"
+    lock.mkdir()
+    (lock / "pid").write_text(str(os.getpid()))  # alive: this test process
+    result = _run([], env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
+    assert result.returncode == 1
+    assert "another CorvinOS install/update is running" in result.stderr
+    assert lock.is_dir(), "a live owner's lock must never be removed"

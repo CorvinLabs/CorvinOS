@@ -45,7 +45,7 @@ USE_PYPI=0
 # kept as an installer-managed tree that update.sh refreshes in place.
 CORVIN_REPO_URL="${CORVIN_REPO_URL:-https://github.com/CorvinLabs/CorvinOS}"
 CORVIN_BRANCH="${CORVIN_BRANCH:-main}"
-MANAGED_SRC="${CORVIN_SRC_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/corvinos/src}"
+MANAGED_SRC="${CORVIN_SRC_DIR:-${XDG_DATA_HOME:-${HOME:-}/.local/share}/corvinos/src}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Styling utilities
@@ -118,16 +118,28 @@ printf '\n%s — self-hosted, local-first AI operating system\n\n' "$(_bold 'Cor
 
 # One installer/updater at a time: two concurrent `uv tool install --force`
 # runs corrupt the tool venv, two SPA builds race on dist/. mkdir is atomic on
-# every filesystem (flock is not on macOS). A lock older than 2 h is stale.
+# every filesystem (flock is not on macOS). The lock records its owner's PID:
+# a lock whose owner is gone (killed run, reboot) is stale and taken over —
+# otherwise it would block every later install AND keep the watchdog, which
+# stands down while the lock is held, silent forever. Older than 2 h: stale.
 LOCK_DIR="${TMPDIR:-/tmp}/corvinos-setup.lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    if [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
-        rm -rf "$LOCK_DIR"; mkdir "$LOCK_DIR" 2>/dev/null || die "cannot take $LOCK_DIR"
-    else
-        die "another CorvinOS install/update is running (lock: $LOCK_DIR). Wait for it, or remove the lock if it crashed."
+_take_lock() {
+    if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ >"$LOCK_DIR/pid"; return 0; fi
+    _lk_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -z "$_lk_pid" ]; then sleep 1; _lk_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"; fi
+    if [ -z "$_lk_pid" ] || ! kill -0 "$_lk_pid" 2>/dev/null \
+       || [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
+        rm -rf "$LOCK_DIR"
+        mkdir "$LOCK_DIR" 2>/dev/null && echo $$ >"$LOCK_DIR/pid" && return 0
     fi
+    return 1
+}
+# No coreutils on PATH at all → no lock (the checks below then report what
+# is actually missing, instead of a phantom "another install is running").
+if command -v mkdir >/dev/null 2>&1 && command -v rm >/dev/null 2>&1; then
+    _take_lock || die "another CorvinOS install/update is running (lock: $LOCK_DIR, pid $(cat "$LOCK_DIR/pid" 2>/dev/null))."
+    trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 fi
-trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 
 # Corporate networks (Citrix, Zscaler, TLS-inspecting proxies) re-sign HTTPS
 # with a company CA that only the OS trust store knows. uv and git honour the

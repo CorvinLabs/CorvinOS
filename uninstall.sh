@@ -130,7 +130,9 @@ _units() {
 _plists() { ls "$LAUNCH_DIR"/com.corvin.*.plist 2>/dev/null || true; }
 # Process patterns: specific enough never to match an editor, a shell in the
 # repo, or this script. Kept in one place so stop + verify agree.
-_PROC_RE='corvin_gateway\.app|corvinos-serve|corvin-serve|corvin-service|bridges/shared/adapter\.py|corvin_operator/bridges/[a-z]+/daemon\.js|uv/tools/corvinos/bin/python|corvin-watchdog|watchdog-health-check\.sh'
+# Script paths only count when an interpreter runs them: an editor with
+# adapter.py or daemon.js open must never be killed.
+_PROC_RE='corvin_gateway\.app|corvinos-serve|corvin-serve|corvin-service|python[0-9.]*[^ ]* [^ ]*bridges/shared/adapter\.py|node[^ ]* [^ ]*corvin_operator/bridges/[a-z]+/daemon\.js|uv/tools/corvinos/bin/python|corvin-watchdog|watchdog-health-check\.sh'
 _procs() {
     ps -eo pid=,args= 2>/dev/null | grep -E "$_PROC_RE" | grep -v -E 'grep|uninstall\.sh' \
         | awk -v me="$$" '$1 != me {print $1}' || true
@@ -379,8 +381,19 @@ if [ "$KEEP_DATA" != 1 ]; then
     done
 fi
 if [ -f "$MANAGED_SRC/.corvin-managed" ]; then
-    run rm -rf "$MANAGED_SRC" && ok "removed installer-managed source $MANAGED_SRC"
-    rmdir "$(dirname "$MANAGED_SRC")" 2>/dev/null || true
+    if [ "$KEEP_DATA" = 1 ] && [ -e "$MANAGED_SRC/.corvin" ]; then
+        # The managed tree also holds the install's data (<src>/.corvin):
+        # --keep-data removes the code around it, never the data itself.
+        for _e in "$MANAGED_SRC"/* "$MANAGED_SRC"/.[!.]*; do
+            [ -e "$_e" ] || [ -L "$_e" ] || continue
+            [ "$(basename "$_e")" = .corvin ] && continue
+            run rm -rf "$_e"
+        done
+        ok "removed installer-managed source (kept its data: $MANAGED_SRC/.corvin)"
+    else
+        run rm -rf "$MANAGED_SRC" && ok "removed installer-managed source $MANAGED_SRC"
+        rmdir "$(dirname "$MANAGED_SRC")" 2>/dev/null || true
+    fi
 fi
 for s in $SRC_DIRS; do
     [ "$s" = "$MANAGED_SRC" ] && continue

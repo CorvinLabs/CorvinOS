@@ -73,10 +73,10 @@ Type=simple
 # Restart the console only after 3 consecutive failed probes (~60 s): a single
 # miss during a cold boot or a long first plugin scan is not a crash, and
 # restarting then just restarts the boot. Stands down while an install/update
-# holds the setup lock (it restarts the console itself). 127.0.0.1, not
+# holds the setup lock (its owner PID is alive; a stale lock is ignored). 127.0.0.1, not
 # localhost: the console binds v4 loopback only. $$ is systemd's escape for $.
 # NO User=: in a --user unit it fails every start with 216/GROUP.
-ExecStart=/bin/bash -c 'f=0; while true; do if curl -fs -m 5 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || [ -d "$${TMPDIR:-/tmp}/corvinos-setup.lock" ]; then f=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
+ExecStart=/bin/bash -c 'f=0; while true; do if curl -fs -m 5 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || kill -0 "$$(cat "$${TMPDIR:-/tmp}/corvinos-setup.lock/pid" 2>/dev/null || echo none)" 2>/dev/null; then f=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
 Restart=always
 RestartSec=10
 StandardOutput=journal

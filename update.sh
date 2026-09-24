@@ -41,7 +41,7 @@ BRANCH="${CORVIN_BRANCH:-main}"
 REPO_URL="${CORVIN_REPO_URL:-https://github.com/CorvinLabs/CorvinOS}"
 PORT="${CORVIN_CONSOLE_PORT:-8765}"
 BASE_URL="http://127.0.0.1:${PORT}"
-MANAGED_SRC="${CORVIN_SRC_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/corvinos/src}"
+MANAGED_SRC="${CORVIN_SRC_DIR:-${XDG_DATA_HOME:-${HOME:-}/.local/share}/corvinos/src}"
 LOG="${CORVIN_UPDATE_LOG:-${TMPDIR:-/tmp}/corvinos-update.log}"
 UV_PIN_VERSION="0.12.9"
 UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"
@@ -116,13 +116,19 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # ── Lock (shared with install.sh; the watchdog stands down while it exists) ──
 LOCK_DIR="${TMPDIR:-/tmp}/corvinos-setup.lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    if [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
-        rm -rf "$LOCK_DIR"; mkdir "$LOCK_DIR" 2>/dev/null || die "cannot take $LOCK_DIR" 3
-    else
-        die "another CorvinOS install/update is running (lock: $LOCK_DIR)" 3
+# Same PID-checked lock as install.sh: a dead owner's lock is stale.
+_take_lock() {
+    if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ >"$LOCK_DIR/pid"; return 0; fi
+    _lk_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -z "$_lk_pid" ]; then sleep 1; _lk_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"; fi
+    if [ -z "$_lk_pid" ] || ! kill -0 "$_lk_pid" 2>/dev/null \
+       || [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
+        rm -rf "$LOCK_DIR"
+        mkdir "$LOCK_DIR" 2>/dev/null && echo $$ >"$LOCK_DIR/pid" && return 0
     fi
-fi
+    return 1
+}
+_take_lock || die "another CorvinOS install/update is running (lock: $LOCK_DIR, pid $(cat "$LOCK_DIR/pid" 2>/dev/null))" 3
 trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 
 # ── 1. Tooling: uv (self-bootstrapping, pinned + checksummed) ───────────────

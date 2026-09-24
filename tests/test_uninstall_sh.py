@@ -236,6 +236,33 @@ def test_failed_docker_export_keeps_the_volumes(sandbox):
     assert "docker volume rm" not in sandbox["calls"].read_text()
 
 
+def test_keep_data_keeps_the_data_inside_a_managed_tree(sandbox):
+    """The managed tree holds <src>/.corvin — --keep-data must not delete it
+    along with the code (found in review 2026-09-24)."""
+    data = sandbox["managed"] / ".corvin" / "instance_id"
+    data.parent.mkdir()
+    data.write_text("keep me")
+    (sandbox["managed"] / "core").mkdir()
+    r = _run(sandbox, "--yes", "--keep-data")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert data.read_text() == "keep me"
+    assert not (sandbox["managed"] / "core").exists()
+    assert not (sandbox["managed"] / ".corvin-managed").exists()
+
+
+def test_process_pattern_ignores_editors(sandbox):
+    """Only an interpreter running adapter.py/daemon.js is a CorvinOS process."""
+    fake = Path(sandbox["env"]["PATH"].split(":")[0])
+    _shim(fake, "ps", "cat <<'EOF'\n"
+          "  101 vim /home/u/CorvinOS/corvin_operator/bridges/shared/adapter.py\n"
+          "  102 code /home/u/CorvinOS/corvin_operator/bridges/discord/daemon.js\n"
+          "  103 /home/u/.local/share/uv/tools/corvinos/bin/python /x/corvin_operator/bridges/shared/adapter.py\n"
+          "EOF")
+    r = _run(sandbox, "--verify-only")
+    assert "process 103" in r.stdout
+    assert "process 101" not in r.stdout and "process 102" not in r.stdout
+
+
 def test_keep_data_removes_software_only(sandbox):
     r = _run(sandbox, "--yes", "--keep-data")
     assert r.returncode == 0, r.stdout + r.stderr

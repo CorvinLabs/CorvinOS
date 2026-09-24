@@ -52,9 +52,9 @@ try {
         [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
 } catch { }
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Configuration & Logging
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
@@ -106,10 +106,22 @@ function Invoke-Logged {
     if ($VerboseOutput) {
         Write-Log -Message "$ $Exe $($ArgList -join ' ')" -Level "Debug"
     }
-    $output = & $Exe @ArgList 2>&1
-    $output | ForEach-Object { Write-Log -Message $_ -Level "Debug" }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log -Message "$FailMessage (exit $LASTEXITCODE)" -Level "Error"
+    # '2>&1' under $ErrorActionPreference = "Stop" is fatal on PowerShell 5.1:
+    # every stderr line becomes an ErrorRecord and the first one terminates the
+    # script. git writes ordinary progress ("From github.com:...") to stderr,
+    # so a SUCCESSFUL fetch aborted the whole cycle. Scope the preference down
+    # and judge by the exit code alone (same fix as update.ps1).
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $Exe @ArgList 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    $output | ForEach-Object { Write-Log -Message "$_" -Level "Debug" }
+    if ($code -ne 0) {
+        Write-Log -Message "$FailMessage (exit $code)" -Level "Error"
         return $false
     }
     return $true
@@ -123,9 +135,9 @@ function Remove-Lock {
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Main
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "CorvinOS update-and-deploy" -ForegroundColor White
 Write-Host "=========================="
