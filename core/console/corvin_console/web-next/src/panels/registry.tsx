@@ -15,7 +15,7 @@ import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import {
   DashboardPage, SettingsPage,
-  ComputePage, BridgesPage, VoicePage, ForgePage,
+  ComputePage, BridgesPage, DiscoveryPage, VoicePage, ForgePage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
@@ -42,6 +42,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   SettingsPage,
   ComputePage,
   BridgesPage,
+  DiscoveryPage,
   VoicePage,
   ForgePage,
   LddPage,
@@ -96,6 +97,7 @@ export const PANELS: ConsolePanel[] = [
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
   rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),
   rc("bridges", "Bridges", BridgesPage, { nav: { label: "Channels", icon: "Network", group: "messaging" } }),
+  rc("discovery", "Discovery", DiscoveryPage, { nav: { label: "Discovery", icon: "Globe2", group: "network" } }),
   rc("voice", "Voice", VoicePage, { nav: { label: "Voice", icon: "AudioLines", group: "messaging" } }),
   rc("forge", "Forge", ForgePage, { nav: { label: "Forge", icon: "Hammer", group: "build" } }),
   // "skills" is no longer a panel (2026-09-20). /v1/console/skills and

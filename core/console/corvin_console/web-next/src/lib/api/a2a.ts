@@ -500,3 +500,31 @@ export async function deleteA2AEndpoint(
     csrf,
   });
 }
+
+// ── A2A Peer Discovery (Console UI) ────────────────────────────────────
+
+export interface DiscoveryPeerInfo {
+  peer_id: string;
+  name: string;
+  status: string;
+  endpoint?: string | null;
+  region?: string | null;
+  last_seen?: string | null;
+  instance_id?: string | null;
+}
+
+export interface DiscoveryPeersResponse {
+  peers: DiscoveryPeerInfo[];
+  total: number;
+}
+
+export async function listDiscoveryPeers(signal?: AbortSignal): Promise<DiscoveryPeersResponse> {
+  return api<DiscoveryPeersResponse>("/discovery/peers", { signal });
+}
+
+export async function getDiscoveryPeer(
+  peerId: string,
+  signal?: AbortSignal,
+): Promise<DiscoveryPeerInfo> {
+  return api<DiscoveryPeerInfo>(`/discovery/peers/${encodeURIComponent(peerId)}`, { signal });
+}

@@ -353,6 +353,21 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, body)
             return
 
+        # Prometheus metrics endpoint (Layer 38 Observability)
+        # Exposes A2A relay and connectivity metrics in Prometheus text format.
+        # SLO targets: query p99 < 100ms, success > 95%, uptime 99.9%
+        if self.path == "/metrics":
+            try:
+                import a2a_relay_metrics  # type: ignore[import-not-found]
+                metrics = a2a_relay_metrics.get_relay_metrics()
+                body = metrics.generate_metrics_text()
+                self._respond(200, body, content_type="text/plain; version=0.0.4; charset=utf-8")
+            except Exception:
+                # Metrics unavailable (prometheus_client not installed or error)
+                body = b"# A2A relay metrics unavailable\n"
+                self._respond(503, body)
+            return
+
         # ADR-0141 Tier 4 — Audit Chain Transparency. A peer requests the local
         # chain head + event count to detect a fork that silenced its audit
         # module. Optional ?origin_id=<id> selects the recv_key used to HMAC-sign
@@ -624,9 +639,9 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
 
     # ── Helpers ───────────────────────────────────────────────────────
 
-    def _respond(self, status: int, body: bytes) -> None:
+    def _respond(self, status: int, body: bytes, content_type: str = "application/json") -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
