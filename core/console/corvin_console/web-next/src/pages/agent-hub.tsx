@@ -70,6 +70,7 @@ import {
   type LicenseInfo,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -1117,7 +1118,7 @@ function LiveFeedTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Last 100 A2A audit events — newest first.
+          Last 100 A2A audit events (metadata only) — newest first.
           {log.data && (
             <span className="ml-2 font-mono text-xs">
               {log.data.count} event{log.data.count !== 1 ? "s" : ""}
@@ -2201,7 +2202,7 @@ function EmptyState({
 
 export function AgentHubPage() {
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <header>
         <div className="flex items-center gap-2">
           <Globe2 className="h-5 w-5 text-accent" />
@@ -2209,15 +2210,16 @@ export function AgentHubPage() {
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           Connect this Corvin instance to other agents over HMAC-signed task envelopes.
-          Manage permissions per peer, monitor live activity.
+          Watch their conversations live, manage permissions per peer.
         </p>
       </header>
 
-      <Tabs defaultValue="peers">
+      <Tabs defaultValue="feed">
         <TabsList className="flex-wrap h-auto gap-1">
+          <TabsTrigger value="feed">Live Feed</TabsTrigger>
           <TabsTrigger value="peers">Peers</TabsTrigger>
           <TabsTrigger value="connect">Connect</TabsTrigger>
-          <TabsTrigger value="feed">Live Feed</TabsTrigger>
+          <TabsTrigger value="audit">Audit trail</TabsTrigger>
         </TabsList>
 
         <TabsContent value="peers" className="mt-4">
@@ -2229,6 +2231,10 @@ export function AgentHubPage() {
         </TabsContent>
 
         <TabsContent value="feed" className="mt-4">
+          <AgentLiveFeed />
+        </TabsContent>
+
+        <TabsContent value="audit" className="mt-4">
           <LiveFeedTab />
         </TabsContent>
       </Tabs>

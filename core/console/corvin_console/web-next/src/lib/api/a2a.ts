@@ -528,3 +528,80 @@ export async function getDiscoveryPeer(
 ): Promise<DiscoveryPeerInfo> {
   return api<DiscoveryPeerInfo>(`/discovery/peers/${encodeURIComponent(peerId)}`, { signal });
 }
+
+// ── Agent Hub live feed — A2A messages with media (a2a_feed.py) ──────────
+
+export interface A2AFeedAttachment {
+  name: string;
+  mime: string;
+  size: number;
+  sha256: string;
+}
+
+export interface A2AFeedMessage {
+  id: string;
+  ts: number;
+  /** "out" = written by THIS instance, "in" = written by the peer. */
+  direction: "in" | "out";
+  kind: "task" | "response";
+  peer_id: string;
+  peer_label: string | null;
+  task_id: string;
+  status: string;
+  text: string;
+  data: Record<string, unknown>;
+  attachments: A2AFeedAttachment[];
+  duration_ms: number | null;
+  error: string | null;
+}
+
+export interface A2AFeedPeer {
+  peer_id: string;
+  label: string | null;
+  state: string | null;
+  can_send: boolean;
+  can_receive: boolean;
+  enabled: boolean;
+  spawn_worker?: boolean;
+}
+
+export interface A2AFeedResponse {
+  tenant_id: string;
+  ts: number;
+  retention_days: number;
+  messages: A2AFeedMessage[];
+  peers: A2AFeedPeer[];
+}
+
+export async function getA2AFeed(
+  params: { since?: number; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<A2AFeedResponse> {
+  const q = new URLSearchParams();
+  if (params.since) q.set("since", String(params.since));
+  if (params.limit) q.set("limit", String(params.limit));
+  const qs = q.toString();
+  return api<A2AFeedResponse>(`/a2a/feed${qs ? `?${qs}` : ""}`, { signal });
+}
+
+export function a2aFeedBlobUrl(att: A2AFeedAttachment): string {
+  const q = new URLSearchParams({ name: att.name, mime: att.mime });
+  return `/v1/console/a2a/feed/blob/${att.sha256}?${q.toString()}`;
+}
+
+export async function sendA2AFeedMessage(
+  body: {
+    peer_id: string;
+    text: string;
+    attachments: { name: string; mime: string; content_b64: string }[];
+  },
+  csrf: string,
+): Promise<{ accepted: boolean; peer_id: string }> {
+  return api(`/a2a/feed/send`, { method: "POST", body, csrf });
+}
+
+export async function clearA2AFeed(
+  csrf: string,
+): Promise<{ cleared: boolean; messages_removed: number; blobs_removed: number }> {
+  return api(`/a2a/feed`, { method: "DELETE", csrf });
+}

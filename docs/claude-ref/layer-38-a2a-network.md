@@ -836,3 +836,33 @@ Tests: `test_a2a_ingress.py` (peer gate, config, rate limit),
 (`a2a_e2e_host.py`, separate CORVIN_HOMEs, own audit chains, NO inbound route):
 token-only pairing in both directions, issuer offline during import, address
 change, revocation.
+
+## Agent Hub live feed — A2A messages with media (ADR-2063, 2026-09-25)
+
+The audit chain stays metadata-only for A2A (instruction text, worker output
+and attachment bytes never enter it). The Agent Hub's **Live Feed** tab
+(`/console/app/agent-hub`, now the default tab) is the readable view of the
+same exchanges: a chat of every task this instance sent or received, the
+peer's reply, and the attachments, rendered inline (images, audio, video,
+PDF, text previews). The old metadata list moved to the **Audit trail** tab.
+
+| Piece | What it does | Where |
+|---|---|---|
+| Content store | Tenant-local, append-only `messages.jsonl` + content-addressed `blobs/<sha256>` (the digest is recomputed, never the declared one). Dir 0o700, files 0o600. 30-day retention + 32 MiB cap, compacted with orphan-blob GC. Best-effort: a store failure never changes an A2A result. Override `CORVIN_A2A_FEED_DIR` (tests). | `corvin_operator/bridges/shared/a2a_feed.py` → `<tenant>/global/a2a_feed/` |
+| Outbound hook | `RemoteTriggerSender.send()` is a thin wrapper over `_send_impl()`: it assigns the `task_id`, records the task BEFORE sending (so the feed shows it while the peer works), then records the response or failure on every return path. | `remote_trigger_sender.py::send`, `_record_feed_task`, `_record_feed_response` |
+| Inbound hook | Records the task only AFTER HMAC, nonce, TTL, consent and the CLAG chain gate passed — an unauthenticated sender can never write into the store — then the signed response (including the injection-rejection path). | `remote_trigger_receiver.py::receive`, `_feed_record` |
+| Console API | `GET /v1/console/a2a/feed?since=&limit=` (messages oldest-first + peer directory), `GET /a2a/feed/blob/{sha256}`, `POST /a2a/feed/send` (202; send runs on a background thread, result lands in the feed), `DELETE /a2a/feed` (audit-FIRST `A2A.feed_cleared`, counts only; no chain record → 503, nothing deleted). Router-level session + CSRF guard. | `core/console/corvin_console/routes/a2a_feed.py` |
+| Blob serving | Only passive media types are served inline; SVG/HTML and every unknown type go out as `application/octet-stream` attachments. Always `nosniff` + `Content-Security-Policy: sandbox`. | `routes/a2a_feed.py::_INLINE_MIME` |
+| UI | Agent rail with state dots + last message, chat bubbles (this instance right, peers left), reply quotes the task, typing indicator for tasks without a response, composer with attach / drag-drop / paste (1 MiB, 16 files — the protocol caps), 2 s polling with a `since` cursor. A detail-less `rejected` is explained, never shown as "delivered". | `web-next/src/components/agent-hub/live-feed.tsx`, logic in `src/lib/a2a-feed.ts` |
+
+A rejection's reason stays on the answering side by protocol design (the
+signed `rejected` response carries no reason); the feed says so instead of
+guessing.
+
+Tests: `corvin_operator/bridges/shared/test_a2a_feed.py` (real sender → real
+receiver over HTTP: four records per exchange, forged envelope stores nothing,
+broken store never breaks a send, retention, clear),
+`web-next/tests/unit/a2a-feed.test.ts`,
+`tests/e2e/test_agent_hub_live_feed_e2e.py` against the running console
+(`CORVIN_E2E_A2A_LIVE=1` additionally sends a real envelope with a PNG to the
+paired peer and verifies feed, blob serving and the `task_id` link to the chain).

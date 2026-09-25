@@ -783,6 +783,36 @@ class RemoteTriggerSender:
         purpose_id: str | None = None,
         attestation: dict | None = None,
     ) -> SendResult:
+        """Send a signed TaskEnvelope and record the exchange in the A2A feed.
+
+        See :meth:`_send_impl` for the protocol. The feed write (a2a_feed.py)
+        happens after the send on EVERY return path and is best-effort: it can
+        never change the result.
+        """
+        task_id = str(uuid.uuid4())
+        _record_feed_task(endpoint_id, task_id, instruction, attachments)
+        result = self._send_impl(
+            endpoint_id, instruction,
+            result_schema=result_schema, ttl_s=ttl_s, timeout_s=timeout_s,
+            attachments=attachments, purpose_id=purpose_id,
+            attestation=attestation, task_id=task_id,
+        )
+        _record_feed_response(endpoint_id, result)
+        return result
+
+    def _send_impl(
+        self,
+        endpoint_id: str,
+        instruction: str,
+        *,
+        result_schema: dict | None = None,
+        ttl_s: int | None = None,
+        timeout_s: int = _DEFAULT_TIMEOUT_S,
+        attachments: list | None = None,
+        purpose_id: str | None = None,
+        attestation: dict | None = None,
+        task_id: str | None = None,
+    ) -> SendResult:
         """Send a signed TaskEnvelope to a registered endpoint.
 
         v3: ``attachments`` may be a list of
@@ -800,7 +830,7 @@ class RemoteTriggerSender:
         )
 
         start = time.time()
-        task_id = str(uuid.uuid4())
+        task_id = task_id or str(uuid.uuid4())
         nonce = secrets.token_hex(32)
 
         # ── Normalize + validate outbound attachments BEFORE we sign ──
@@ -1882,6 +1912,36 @@ class RemoteTriggerSender:
 
 def _ms(start: float) -> int:
     return int((time.time() - start) * 1000)
+
+
+def _record_feed_task(
+    endpoint_id: str, task_id: str, instruction: str, attachments: list | None,
+) -> None:
+    """Write the outbound task into the A2A feed before sending (best-effort),
+    so the Agent Hub shows it while the peer is still working."""
+    try:
+        import a2a_feed  # type: ignore[import-not-found]
+        a2a_feed.record(
+            direction="out", kind="task", peer_id=endpoint_id,
+            task_id=task_id, text=instruction, status="sent",
+            attachments=attachments,
+        )
+    except Exception:
+        pass
+
+
+def _record_feed_response(endpoint_id: str, result: "SendResult") -> None:
+    """Write the peer's response (or the failure) into the A2A feed."""
+    try:
+        import a2a_feed  # type: ignore[import-not-found]
+        a2a_feed.record(
+            direction="in", kind="response", peer_id=endpoint_id,
+            task_id=result.task_id, data=result.data, status=result.status,
+            attachments=result.attachments, duration_ms=result.duration_ms,
+            error=(result.error_detail if not result.ok else None),
+        )
+    except Exception:
+        pass
 
 
 __all__ = [

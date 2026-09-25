@@ -1061,6 +1061,15 @@ class RemoteTriggerReceiver:
                 return resp
             raise
 
+        # A2A feed (a2a_feed.py): the envelope is now authenticated, consented
+        # and chain-gated — only from here on may its content be stored for
+        # the operator's Agent Hub view. Best-effort, never raises.
+        _feed_record(
+            direction="in", kind="task", peer_id=env.origin_id,
+            task_id=env.task_id, text=env.instruction, status="received",
+            attachments=env.attachments,
+        )
+
         # M1 vs M2: decide whether to spawn a worker.
         spawn_worker = (
             (not self._force_m1_only)
@@ -1084,6 +1093,11 @@ class RemoteTriggerReceiver:
                      "reason": f"injection_attempt:{exc.reason}",
                      "status": "rejected",
                      "duration_ms": _ms(start)},
+                )
+                _feed_record(
+                    direction="out", kind="response", peer_id=env.origin_id,
+                    task_id=env.task_id, status="rejected",
+                    duration_ms=_ms(start), error="injection_attempt",
                 )
                 return resp
         else:
@@ -1127,6 +1141,11 @@ class RemoteTriggerReceiver:
             {"task_id": env.task_id, "origin_id": env.origin_id,
              "status": resp.status, "duration_ms": _ms(start),
              **_out_audit},
+        )
+        _feed_record(
+            direction="out", kind="response", peer_id=env.origin_id,
+            task_id=env.task_id, data=worker_data, status=resp.status,
+            attachments=worker_attachments, duration_ms=_ms(start),
         )
         return resp
 
@@ -2337,6 +2356,15 @@ class RemoteTriggerReceiver:
             )
         except Exception:
             pass
+
+
+def _feed_record(**kwargs: Any) -> None:
+    """Best-effort write into the A2A feed content store (a2a_feed.py)."""
+    try:
+        import a2a_feed  # type: ignore[import-not-found]
+        a2a_feed.record(**kwargs)
+    except Exception:
+        pass
 
 
 class _ChainIntegrityFailureGateUnavailable(RuntimeError):

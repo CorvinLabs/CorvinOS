@@ -110,6 +110,7 @@ from .routes import (
     engine as engine_route,
     engine_pref as engine_pref_route,
     remote_trigger_log as remote_trigger_log_route,
+    a2a_feed as a2a_feed_route,
     a2a_pair as a2a_pair_route,
     a2a_discovery as a2a_discovery_route,
     files as files_route,
@@ -239,6 +240,7 @@ router.include_router(sessions.router, tags=["console-sessions"])
 router.include_router(audit_tail.router, tags=["console-audit"])
 router.include_router(chain_dual_track_route.router, tags=["console-audit"])
 router.include_router(remote_trigger_log_route.router, tags=["console-a2a"])
+router.include_router(a2a_feed_route.router, tags=["console-a2a"])
 router.include_router(a2a_pair_route.router, tags=["console-a2a-pair"])
 router.include_router(a2a_discovery_route.router, tags=["console-a2a-discovery"])
 router.include_router(runs.router, tags=["console-runs"])

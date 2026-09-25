@@ -24,6 +24,7 @@ def isolate() -> Path:
         return Path(current)
     sandbox = Path(tempfile.mkdtemp(prefix="corvin-test-audit-"))
     os.environ["VOICE_AUDIT_PATH"] = str(sandbox / "global" / "forge" / "audit.jsonl")
+    os.environ.setdefault("CORVIN_A2A_FEED_DIR", str(sandbox / "a2a_feed"))
     atexit.register(shutil.rmtree, sandbox, True)
     return sandbox
 

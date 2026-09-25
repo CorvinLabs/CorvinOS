@@ -153,3 +153,6 @@ def _isolated_audit_chain(monkeypatch, tmp_path):
     those files import ``_test_isolation`` for the same effect."""
     monkeypatch.setenv(
         "VOICE_AUDIT_PATH", str(tmp_path / "audit-sandbox" / "global" / "forge" / "audit.jsonl"))
+    # Same reason for the A2A feed content store (a2a_feed.py): a test send
+    # must never land in the operator's Agent Hub feed.
+    monkeypatch.setenv("CORVIN_A2A_FEED_DIR", str(tmp_path / "a2a-feed-sandbox"))

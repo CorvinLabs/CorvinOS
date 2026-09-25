@@ -557,6 +557,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "A2A.request_rejected":     "WARNING",  # security-relevant: failed validation/HMAC/nonce
     "A2A.response_rejected":    "WARNING",
     "A2A.nonce_store_fallback": "WARNING",  # in-memory nonce store active (no persistent store)
+    # Operator wiped the local A2A feed content store (a2a_feed.py, Agent Hub
+    # live feed). Counts only — never message text, peer content or names.
+    "A2A.feed_cleared":         "WARNING",
     # Layer 38 M4 — A2A Invite-Token Protocol (ADR-0063)
     # Metadata only — hk/rk/url/iid/full-token NEVER in chain.
     # Allow-list: ikey (16-hex prefix), oid, lbl, exp, su, pa, bidirectional.
@@ -2563,6 +2566,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "A2A.ingress_state": frozenset({"reason", "source"}),
     "A2A.relay_listener_state": frozenset({"reason", "source"}),
     "A2A.my_url_updated": frozenset({"reason", "source"}),
+    "A2A.feed_cleared": frozenset({"messages_removed", "blobs_removed", "reason"}),
     # ADR-0104 ACS core events — explicit allowlists for every emitted event.
     # Metadata only; comment at EVENT_SEVERITY block lists the intent.
     # NEVER: prompt/output, manager JSON, worker result, goal/task text (GDPR Art. 5).
