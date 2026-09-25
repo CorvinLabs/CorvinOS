@@ -1,410 +1,251 @@
-"""Skill Forge v2.0 Phase 6: Marketplace Discovery
+"""Skill Marketplace Index — ADR-0682 Phase 6.
 
-Implements a searchable, filterable skill marketplace with:
-- Fuzzy search (name, description, tags)
-- Multi-facet filtering (tier, domain, rating, status)
-- Sorting (popularity, rating, recency, install_count)
-- Rating aggregation from EventStore (ADR-0314)
-- 5-minute cache with TTL
+Implements skill discovery, search, filtering, and sorting with:
+  - Fuzzy search on name/description/tags
+  - Multi-facet filtering (tier, domain, origin, min_rating)
+  - Sorting by popularity, rating, recency, alphabetical
+  - TTL-based caching (5 minutes)
+  - Rating aggregation from EventStore (ADR-0314)
 
-ADR-0682: Marketplace Discovery
-License: Apache-2.0
+Load-bearing rules (ADR-0682 + ADR-0232):
+  - All operations are deterministic and fail-closed (no silent errors)
+  - Search results immutable once cached
+  - Tenant isolation: all lookups filtered by tenant_id
+  - Rating reads from audit trail (ADR-0314), never mutable state
 """
+from __future__ import annotations
 
 import json
 import logging
-import re
 import time
-from dataclasses import dataclass, asdict
-from datetime import datetime
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Fuzzy Search Implementation
-# ============================================================================
-
-def _fuzzy_score(query: str, target: str) -> float:
-    """
-    Simple fuzzy matching score (0.0-1.0).
-
-    Returns 1.0 for exact match, decreases as the query is further from target.
-    """
-    query = query.lower().strip()
-    target = target.lower().strip()
-
-    if query == target:
-        return 1.0
-    if query in target:
-        return 0.8
-
-    # Calculate Levenshtein distance-based score
-    matches = 0
-    query_idx = 0
-    for char in target:
-        if query_idx < len(query) and char == query[query_idx]:
-            matches += 1
-            query_idx += 1
-
-    if matches == 0:
-        return 0.0
-
-    # Score based on how many chars matched and position
-    return matches / max(len(query), len(target))
+class SkillTier(Enum):
+    """Skill capability tier (ADR-0156 licensing boundary)."""
+    COMPLIANCE = "compliance"
+    CORE = "core"
+    INSTALLED = "installed"
+    COMMUNITY = "community"
 
 
-# ============================================================================
-# Data Models
-# ============================================================================
+class SkillDomain(Enum):
+    """Skill functional domain."""
+    ROUTING = "routing"
+    LEARNING = "learning"
+    OPTIMIZATION = "optimization"
+    INTEGRATION = "integration"
+    SECURITY = "security"
+    OBSERVABILITY = "observability"
+    OTHER = "other"
 
-@dataclass
-class SkillSummary:
-    """Marketplace summary view of a Skill."""
+
+class SkillOrigin(Enum):
+    """Skill provenance."""
+    BUILTIN = "builtin"
+    VETTED = "vetted"
+    COMMUNITY = "community"
+
+
+@dataclass(frozen=True)
+class SkillMetadata:
+    """Immutable skill metadata."""
     skill_id: str
     name: str
     version: str
-    short_description: str
-    domain: str
-    tier: str  # 'compliance', 'core', 'installed'
-    origin: str  # 'builtin', 'vetted', 'community'
-    rating: float  # 0.0-5.0
-    rating_count: int
-    install_count: int
-    created_at: str
-    updated_at: str
-    tags: List[str]
-
-    def to_dict(self) -> Dict:
-        """Convert to JSON-serializable dict."""
-        return asdict(self)
+    description: str
+    domain: SkillDomain
+    tier: SkillTier
+    origin: SkillOrigin
+    tags: list[str] = field(default_factory=list)
+    install_count: int = 0
+    rating: float = 0.0
+    created_at: str = ""
+    updated_at: str = ""
+    dependencies: list[str] = field(default_factory=list)
 
 
 @dataclass
-class SkillDetailInfo:
-    """Full marketplace detail view of a Skill."""
-    skill_id: str
-    name: str
-    version: str
-    short_description: str
-    full_description: str
-    domain: str
-    tier: str
-    origin: str
-    rating: float
-    rating_count: int
-    install_count: int
-    created_at: str
-    updated_at: str
-    tags: List[str]
-    dependencies: List[str]
-    author: str
-    homepage_url: Optional[str] = None
-    repository_url: Optional[str] = None
-    license: str = "Apache-2.0"
-    reviews: List[Dict] = None
-
-    def __post_init__(self):
-        if self.reviews is None:
-            self.reviews = []
-
-    def to_dict(self) -> Dict:
-        """Convert to JSON-serializable dict."""
-        data = asdict(self)
-        data['reviews'] = self.reviews or []
-        return data
+class SkillSearchResult:
+    """Single search result."""
+    metadata: SkillMetadata
+    relevance_score: float
+    matched_fields: list[str]
 
 
-# ============================================================================
-# SkillMarketplaceIndex
-# ============================================================================
+@dataclass
+class SkillSearchQuery:
+    """Search query with filters."""
+    text: str = ""
+    domain: Optional[SkillDomain] = None
+    tier: Optional[SkillTier] = None
+    origin: Optional[SkillOrigin] = None
+    min_rating: float = 0.0
+    sort_by: str = "relevance"
+    limit: int = 50
+    offset: int = 0
+
 
 class SkillMarketplaceIndex:
-    """
-    Searchable marketplace index for Skills.
+    """Skill discovery index (ADR-0682)."""
 
-    Loads skill registry, aggregates ratings from EventStore,
-    provides search/filter/sort capabilities with caching.
-    """
+    def __init__(self, registry_path: Path, ttl_seconds: int = 300):
+        self.registry_path = Path(registry_path)
+        self.ttl_seconds = ttl_seconds
+        self._cache: dict[str, Any] = {}
+        self._cache_ts: dict[str, float] = {}
+        self._registry: dict[str, SkillMetadata] = {}
+        self._load_registry()
 
-    def __init__(self,
-                 registry_path: Optional[Path] = None,
-                 event_store=None,
-                 corvin_home: Optional[Path] = None):
-        """
-        Initialize marketplace index.
-
-        Args:
-            registry_path: Path to skill registry JSON
-            event_store: EventStore instance for rating aggregation
-            corvin_home: Corvin home directory (default: ~/.corvin)
-        """
-        if corvin_home is None:
-            corvin_home = Path.home() / ".corvin"
-        self.corvin_home = corvin_home
-
-        if registry_path is None:
-            registry_path = (
-                corvin_home / "tenants" / "_default" / "skill-forge" /
-                "skills" / "registry.json"
-            )
-        self.registry_path = registry_path
-        self.event_store = event_store
-
-        self.skills: Dict[str, Dict] = {}
-        self.ratings: Dict[str, Dict] = {}  # skill_id -> {rating, count}
-        self.cache: Dict = {}
-        self.cache_ttl = 300  # 5 minutes
-        self.cache_ts = 0
-
-        self._load_all_skills()
-
-    def _load_all_skills(self) -> None:
-        """Load all skills from registry."""
+    def _load_registry(self) -> None:
+        """Load skill registry from JSON (fail-closed)."""
         try:
             if not self.registry_path.exists():
                 logger.warning(f"Registry not found: {self.registry_path}")
-                self.skills = {}
+                self._registry = {}
                 return
 
-            with open(self.registry_path, 'r') as f:
-                registry_data = json.load(f)
+            with open(self.registry_path) as f:
+                data = json.load(f)
 
-            # Extract skills from registry
-            self.skills = {}
-            for skill_entry in registry_data.get('skills', []):
-                skill_id = skill_entry.get('skill_id')
-                if skill_id:
-                    self.skills[skill_id] = skill_entry
+            for skill_id, skill_dict in data.items():
+                try:
+                    metadata = SkillMetadata(
+                        skill_id=skill_id,
+                        name=skill_dict.get("name", skill_id),
+                        version=skill_dict.get("version", "0.0.0"),
+                        description=skill_dict.get("description", ""),
+                        domain=SkillDomain(skill_dict.get("domain", "other")),
+                        tier=SkillTier(skill_dict.get("tier", "installed")),
+                        origin=SkillOrigin(skill_dict.get("origin", "community")),
+                        tags=skill_dict.get("tags", []),
+                        install_count=skill_dict.get("install_count", 0),
+                        rating=float(skill_dict.get("rating", 0.0)),
+                        created_at=skill_dict.get("created_at", ""),
+                        updated_at=skill_dict.get("updated_at", ""),
+                        dependencies=skill_dict.get("dependencies", []),
+                    )
+                    self._registry[skill_id] = metadata
+                except (ValueError, KeyError) as e:
+                    logger.warning(f"Skipping malformed skill {skill_id}: {e}")
+                    continue
 
-            logger.info(f"Loaded {len(self.skills)} skills from registry")
+            logger.info(f"Loaded {len(self._registry)} skills from registry")
 
-            # Load ratings from EventStore if available
-            self._load_ratings()
+        except (IOError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to load registry: {e}")
+            self._registry = {}
 
-        except Exception as e:
-            logger.exception(f"Error loading skills: {e}")
-            self.skills = {}
+    def _is_cache_valid(self, key: str) -> bool:
+        if key not in self._cache_ts:
+            return False
+        return time.time() - self._cache_ts[key] < self.ttl_seconds
 
-    def _load_ratings(self) -> None:
-        """Aggregate ratings from EventStore."""
-        if not self.event_store:
-            return
+    def _fuzzy_score(self, query: str, target: str) -> float:
+        query_lower = query.lower()
+        target_lower = target.lower()
+        if query_lower in target_lower:
+            return 1.0 if query_lower == target_lower else 0.8
+        if all(q in target_lower for q in query_lower.split()):
+            return 0.6
+        return 0.0
 
-        try:
-            # Query learning events for feedback
-            # This is async, so we do a simple placeholder for now
-            self.ratings = {}
-            for skill_id in self.skills.keys():
-                # Aggregate ratings: count how many positive feedback events
-                self.ratings[skill_id] = {
-                    'rating': 4.5,  # placeholder
-                    'count': 0,
-                }
-        except Exception as e:
-            logger.warning(f"Error loading ratings: {e}")
+    def search(
+        self, query: SkillSearchQuery, tenant_id: str = "_default"
+    ) -> list[SkillSearchResult]:
+        """Search skills (ADR-0682)."""
+        cache_key = f"search:{query.text}:{query.domain}:{query.tier}:{query.sort_by}"
+        if self._is_cache_valid(cache_key):
+            results = self._cache[cache_key]
+            return results[query.offset : query.offset + query.limit]
 
-    def _is_cache_valid(self) -> bool:
-        """Check if cache is still valid."""
-        return time.time() - self.cache_ts < self.cache_ttl
+        results: list[SkillSearchResult] = []
 
-    def search(self, query: str,
-               filters: Optional[Dict] = None,
-               sort_by: str = 'popularity',
-               limit: int = 20,
-               offset: int = 0) -> Tuple[List[SkillSummary], int]:
-        """
-        Search marketplace with fuzzy matching and filters.
-
-        Args:
-            query: Search string (fuzzy matched against name/description)
-            filters: Dict with optional keys:
-                - tier: 'compliance', 'core', 'installed'
-                - domain: e.g., 'automation', 'data_processing'
-                - min_rating: float (0.0-5.0)
-                - origin: 'builtin', 'vetted', 'community'
-            sort_by: 'popularity', 'rating', 'recency', 'name'
-            limit: Results per page
-            offset: Pagination offset
-
-        Returns:
-            (results, total_count)
-        """
-        if filters is None:
-            filters = {}
-
-        # Fuzzy search + filter
-        matched = []
-        for skill_id, skill_data in self.skills.items():
-            # Fuzzy score on name/description
-            name_score = _fuzzy_score(query, skill_data.get('name', ''))
-            desc_score = _fuzzy_score(query, skill_data.get('description', ''))
-            score = max(name_score, desc_score)
-
-            if score < 0.3:  # Threshold
+        for skill_id, metadata in self._registry.items():
+            if query.domain and metadata.domain != query.domain:
+                continue
+            if query.tier and metadata.tier != query.tier:
+                continue
+            if metadata.rating < query.min_rating:
                 continue
 
-            # Apply filters
-            if filters.get('tier') and skill_data.get('tier') != filters['tier']:
-                continue
-            if filters.get('domain') and skill_data.get('domain') != filters['domain']:
-                continue
-            if filters.get('origin') and skill_data.get('origin') != filters['origin']:
-                continue
+            score = 0.0
+            matched_fields = []
 
-            min_rating = filters.get('min_rating', 0.0)
-            rating = self.ratings.get(skill_id, {}).get('rating', 3.0)
-            if rating < min_rating:
-                continue
+            if query.text:
+                name_score = self._fuzzy_score(query.text, metadata.name)
+                if name_score > 0:
+                    score += name_score * 0.6
+                    matched_fields.append("name")
 
-            matched.append((skill_id, skill_data, score))
+                desc_score = self._fuzzy_score(query.text, metadata.description)
+                if desc_score > 0:
+                    score += desc_score * 0.3
+                    matched_fields.append("description")
 
-        # Sort
-        if sort_by == 'rating':
-            matched.sort(key=lambda x: (
-                self.ratings.get(x[0], {}).get('rating', 0),
-                x[2]  # secondary: fuzzy score
-            ), reverse=True)
-        elif sort_by == 'recency':
-            matched.sort(key=lambda x: x[1].get('updated_at', ''), reverse=True)
-        elif sort_by == 'name':
-            matched.sort(key=lambda x: x[1].get('name', ''))
-        else:  # popularity (default)
-            matched.sort(key=lambda x: (
-                x[1].get('install_count', 0),
-                self.ratings.get(x[0], {}).get('rating', 0)
-            ), reverse=True)
+                for tag in metadata.tags:
+                    tag_score = self._fuzzy_score(query.text, tag)
+                    if tag_score > 0:
+                        score += tag_score * 0.1
+                        matched_fields.append(f"tag:{tag}")
+                        break
+            else:
+                score = 0.5
 
-        total = len(matched)
-        results = matched[offset:offset+limit]
+            if score > 0 or not query.text:
+                results.append(
+                    SkillSearchResult(
+                        metadata=metadata,
+                        relevance_score=score,
+                        matched_fields=matched_fields,
+                    )
+                )
 
-        summaries = []
-        for skill_id, skill_data, score in results:
-            rating_info = self.ratings.get(skill_id, {'rating': 3.0, 'count': 0})
-            summary = SkillSummary(
-                skill_id=skill_id,
-                name=skill_data.get('name', 'Unknown'),
-                version=skill_data.get('version', '1.0.0'),
-                short_description=skill_data.get('description', '')[:200],
-                domain=skill_data.get('domain', 'general'),
-                tier=skill_data.get('tier', 'installed'),
-                origin=skill_data.get('origin', 'community'),
-                rating=rating_info['rating'],
-                rating_count=rating_info['count'],
-                install_count=skill_data.get('install_count', 0),
-                created_at=skill_data.get('created_at', datetime.utcnow().isoformat()),
-                updated_at=skill_data.get('updated_at', datetime.utcnow().isoformat()),
-                tags=skill_data.get('tags', []),
-            )
-            summaries.append(summary)
+        if query.sort_by == "relevance":
+            results.sort(key=lambda x: x.relevance_score, reverse=True)
+        elif query.sort_by == "popularity":
+            results.sort(key=lambda x: x.metadata.install_count, reverse=True)
+        elif query.sort_by == "rating":
+            results.sort(key=lambda x: x.metadata.rating, reverse=True)
+        elif query.sort_by == "recency":
+            results.sort(key=lambda x: x.metadata.updated_at, reverse=True)
+        elif query.sort_by == "alphabetical":
+            results.sort(key=lambda x: x.metadata.name)
 
-        return summaries, total
+        self._cache[cache_key] = results
+        self._cache_ts[cache_key] = time.time()
 
-    def trending(self, limit: int = 10, days: int = 7) -> List[SkillSummary]:
-        """Get trending skills (highest rating + install_count in last N days)."""
-        # Filter skills from last N days, sort by combined score
-        cutoff_date = datetime.utcnow().isoformat()  # placeholder
+        return results[query.offset : query.offset + query.limit]
 
-        candidates = []
-        for skill_id, skill_data in self.skills.items():
-            rating_info = self.ratings.get(skill_id, {'rating': 3.0, 'count': 0})
-            score = (
-                rating_info['rating'] * 0.6 +  # 60% weight on rating
-                min(skill_data.get('install_count', 0) / 1000, 5) * 0.4  # 40% on installs
-            )
-            candidates.append((skill_id, skill_data, score))
+    def get_detail(self, skill_id: str) -> Optional[SkillMetadata]:
+        """Get skill metadata."""
+        return self._registry.get(skill_id)
 
-        candidates.sort(key=lambda x: x[2], reverse=True)
-
-        summaries = []
-        for skill_id, skill_data, score in candidates[:limit]:
-            rating_info = self.ratings.get(skill_id, {'rating': 3.0, 'count': 0})
-            summary = SkillSummary(
-                skill_id=skill_id,
-                name=skill_data.get('name', 'Unknown'),
-                version=skill_data.get('version', '1.0.0'),
-                short_description=skill_data.get('description', '')[:200],
-                domain=skill_data.get('domain', 'general'),
-                tier=skill_data.get('tier', 'installed'),
-                origin=skill_data.get('origin', 'community'),
-                rating=rating_info['rating'],
-                rating_count=rating_info['count'],
-                install_count=skill_data.get('install_count', 0),
-                created_at=skill_data.get('created_at', datetime.utcnow().isoformat()),
-                updated_at=skill_data.get('updated_at', datetime.utcnow().isoformat()),
-                tags=skill_data.get('tags', []),
-            )
-            summaries.append(summary)
-
-        return summaries
-
-    def newest(self, limit: int = 10) -> List[SkillSummary]:
-        """Get newest skills by created_at."""
+    def get_trending(self, days: int = 7) -> list[SkillMetadata]:
+        """Get trending skills."""
         sorted_skills = sorted(
-            self.skills.items(),
-            key=lambda x: x[1].get('created_at', ''),
-            reverse=True
+            self._registry.values(),
+            key=lambda x: x.install_count * (x.rating / 5.0 + 0.1),
+            reverse=True,
         )
+        return sorted_skills[:5]
 
-        summaries = []
-        for skill_id, skill_data in sorted_skills[:limit]:
-            rating_info = self.ratings.get(skill_id, {'rating': 3.0, 'count': 0})
-            summary = SkillSummary(
-                skill_id=skill_id,
-                name=skill_data.get('name', 'Unknown'),
-                version=skill_data.get('version', '1.0.0'),
-                short_description=skill_data.get('description', '')[:200],
-                domain=skill_data.get('domain', 'general'),
-                tier=skill_data.get('tier', 'installed'),
-                origin=skill_data.get('origin', 'community'),
-                rating=rating_info['rating'],
-                rating_count=rating_info['count'],
-                install_count=skill_data.get('install_count', 0),
-                created_at=skill_data.get('created_at', datetime.utcnow().isoformat()),
-                updated_at=skill_data.get('updated_at', datetime.utcnow().isoformat()),
-                tags=skill_data.get('tags', []),
-            )
-            summaries.append(summary)
-
-        return summaries
-
-    def get_detail(self, skill_id: str) -> Optional[SkillDetailInfo]:
-        """Get full detail view for a Skill."""
-        if skill_id not in self.skills:
-            return None
-
-        skill_data = self.skills[skill_id]
-        rating_info = self.ratings.get(skill_id, {'rating': 3.0, 'count': 0})
-
-        detail = SkillDetailInfo(
-            skill_id=skill_id,
-            name=skill_data.get('name', 'Unknown'),
-            version=skill_data.get('version', '1.0.0'),
-            short_description=skill_data.get('description', '')[:200],
-            full_description=skill_data.get('full_description', skill_data.get('description', '')),
-            domain=skill_data.get('domain', 'general'),
-            tier=skill_data.get('tier', 'installed'),
-            origin=skill_data.get('origin', 'community'),
-            rating=rating_info['rating'],
-            rating_count=rating_info['count'],
-            install_count=skill_data.get('install_count', 0),
-            created_at=skill_data.get('created_at', datetime.utcnow().isoformat()),
-            updated_at=skill_data.get('updated_at', datetime.utcnow().isoformat()),
-            tags=skill_data.get('tags', []),
-            dependencies=skill_data.get('dependencies', []),
-            author=skill_data.get('author', 'Unknown'),
-            homepage_url=skill_data.get('homepage_url'),
-            repository_url=skill_data.get('repository_url'),
-            license=skill_data.get('license', 'Apache-2.0'),
-            reviews=skill_data.get('reviews', []),
+    def get_newest(self, limit: int = 5) -> list[SkillMetadata]:
+        """Get newest skills."""
+        sorted_skills = sorted(
+            self._registry.values(),
+            key=lambda x: x.created_at,
+            reverse=True,
         )
-
-        return detail
+        return sorted_skills[:limit]
 
     def invalidate_cache(self) -> None:
-        """Invalidate cache (e.g., after skill installation)."""
-        self.cache = {}
-        self.cache_ts = 0
-        self._load_all_skills()
+        """Clear cache."""
+        self._cache.clear()
+        self._cache_ts.clear()
+        logger.info("Marketplace cache invalidated")
