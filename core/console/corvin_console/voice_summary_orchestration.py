@@ -265,18 +265,22 @@ def _get_outbox_path() -> Path:
 def _synthesize_voice_file(
     summary_text: str,
     lang: str = "de",
-    voice: str = "shimmer",
+    voice: str | None = None,
 ) -> Optional[str]:
     """Synthesize text to voice using say.py.
 
     Args:
         summary_text: Text to synthesize
         lang: BCP-47 language code (default: "de" for German)
-        voice: Voice name for OpenAI TTS (default: "shimmer")
+        voice: Voice name for OpenAI TTS; if None, auto-select by language
+               (nova for German, shimmer otherwise)
 
     Returns:
         Absolute path to OGG file, or None if synthesis failed
     """
+    # Auto-select voice by language if not explicitly pinned (matches say.py logic)
+    if voice is None:
+        voice = "nova" if lang.lower().startswith("de") else "shimmer"
     outbox = _get_outbox_path()
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_file = outbox / f"orchestration_summary_{timestamp}.ogg"
@@ -376,8 +380,8 @@ async def synthesize_orchestration_summary(
 
     logger.debug(f"Generated summary: {summary_text[:100]}...")
 
-    # Step 3: Voice synthesis
-    voice_file = _synthesize_voice_file(summary_text, lang="de", voice="shimmer")
+    # Step 3: Voice synthesis (voice auto-selects to "nova" for German)
+    voice_file = _synthesize_voice_file(summary_text, lang="de")
 
     if voice_file:
         # Update event with voice attachment path

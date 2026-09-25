@@ -260,7 +260,7 @@ class TestSynthesizeVoiceFile:
     """Test voice file synthesis."""
 
     def test_voice_synthesis_success(self, tmp_path):
-        """Test successful voice synthesis."""
+        """Test successful voice synthesis with language-dependent voice selection."""
         with mock.patch.dict(os.environ, {"CORVIN_HOME": str(tmp_path)}):
             # Create mock output file
             outbox = tmp_path / "shared" / "outbox"
@@ -280,7 +280,8 @@ class TestSynthesizeVoiceFile:
                     # Create the file so it exists
                     expected_output.touch()
 
-                    result = _synthesize_voice_file("Test summary")
+                    # Test German: should pass voice="nova" (or empty to let say.py default)
+                    result = _synthesize_voice_file("Test summary", lang="de")
 
                     assert result == str(expected_output)
                     mock_run.assert_called_once()
@@ -288,8 +289,33 @@ class TestSynthesizeVoiceFile:
                     # Verify call parameters
                     call_args = mock_run.call_args
                     assert "de" in call_args[0][0]  # language param
-                    assert "shimmer" in call_args[0][0]  # voice param
+                    assert "nova" in call_args[0][0]  # voice param should be nova for German
                     assert "Test summary" in call_args[0][0]  # text param
+
+    def test_voice_synthesis_english_uses_shimmer(self, tmp_path):
+        """Test that English defaults to shimmer voice."""
+        with mock.patch.dict(os.environ, {"CORVIN_HOME": str(tmp_path)}):
+            outbox = tmp_path / "shared" / "outbox"
+            outbox.mkdir(parents=True)
+            expected_output = outbox / "test_output.ogg"
+
+            with mock.patch("core.console.corvin_console.voice_summary_orchestration.Path.exists", return_value=True):
+                with mock.patch("subprocess.run") as mock_run:
+                    mock_run.return_value = mock.Mock(
+                        returncode=0,
+                        stdout=str(expected_output),
+                        stderr="",
+                    )
+                    expected_output.touch()
+
+                    result = _synthesize_voice_file("Test summary", lang="en")
+
+                    assert result == str(expected_output)
+
+                    # For English, should use shimmer (or empty to let say.py default to shimmer)
+                    call_args = mock_run.call_args
+                    assert "en" in call_args[0][0]  # language param
+                    assert "shimmer" in call_args[0][0]  # voice param should be shimmer for English
 
     def test_voice_synthesis_disabled(self, tmp_path):
         """Test voice synthesis when say.py silently disables it."""
