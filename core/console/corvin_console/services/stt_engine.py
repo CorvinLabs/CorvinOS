@@ -80,18 +80,41 @@ class STTEngine:
 
     async def _transcribe_google_cloud(self, audio_data: bytes) -> Tuple[Optional[STTResult], Optional[str]]:
         """
-        Transcribe using Google Cloud Speech-to-Text API.
-        Phase 2c: Implement full integration.
+        Transcribe using Google Cloud Speech-to-Text API (Phase 3b).
+        Requires GOOGLE_APPLICATION_CREDENTIALS or ADC.
         """
-        # TODO: Phase 2c - Implement Google Cloud integration
-        # from google.cloud import speech_v1
-        # client = speech_v1.SpeechClient()
-        # config = speech_v1.RecognitionConfig(...)
-        # audio = speech_v1.RecognitionAudio(content=audio_data)
-        # response = client.recognize(config=config, audio=audio)
+        try:
+            from google.cloud import speech_v1
+            from google.api_core import exceptions as google_exceptions
 
-        logger.info("Google Cloud STT not yet implemented (Phase 2c) - using mock")
-        return await self._transcribe_mock(audio_data)
+            client = speech_v1.SpeechClient()
+            config = speech_v1.RecognitionConfig(
+                encoding=speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=16000,
+                language_code="en-US",
+            )
+            audio = speech_v1.RecognitionAudio(content=audio_data)
+
+            try:
+                response = client.recognize(config=config, audio=audio)
+            except google_exceptions.GoogleAPIError as e:
+                logger.error(f"Google Cloud STT API error: {e}")
+                return None, f"Google Cloud STT API error: {str(e)}"
+
+            if response.results:
+                result = response.results[0]
+                if result.alternatives:
+                    transcript = result.alternatives[0].transcript
+                    confidence = result.alternatives[0].confidence
+                    return STTResult(transcript, confidence, "google_cloud"), None
+
+            return None, "No transcription results from Google Cloud STT"
+        except ImportError:
+            logger.warning("google-cloud-speech not installed - using mock STT")
+            return await self._transcribe_mock(audio_data)
+        except Exception as e:
+            logger.error(f"Google Cloud STT error: {e}")
+            return None, f"STT error: {str(e)}"
 
     async def _transcribe_mock(self, audio_data: bytes) -> Tuple[Optional[STTResult], Optional[str]]:
         """
