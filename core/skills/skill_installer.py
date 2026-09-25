@@ -5,6 +5,15 @@ from typing import Dict, List, Tuple
 import json, zipfile, hashlib, shutil
 
 
+class InstallationError(Exception):
+    """Raised when skill installation fails.
+
+    Kept for callers that import it (``routes/skill_forge_distribution_routes``):
+    removing it made ``corvin_console.app`` fail to import, which takes the
+    whole console down on the next gateway restart.
+    """
+
+
 class SkillInstaller:
     """Atomic skill installation with dependency resolution."""
     
