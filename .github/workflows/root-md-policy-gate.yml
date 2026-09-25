@@ -1,0 +1,99 @@
+name: Root .md Files Policy Gate
+
+on:
+  pull_request:
+    paths:
+      - '**.md'
+  push:
+    branches:
+      - main
+    paths:
+      - '**.md'
+
+jobs:
+  root-md-policy:
+    name: Enforce Root .md Policy (ADR-0516)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check root .md files (only 8 allowed)
+        run: |
+          # Allowed files per ADR-0516
+          ALLOWED=(
+            "README.md"
+            "CONTRIBUTING.md"
+            "CLA.md"
+            "CLA-SIGNATORIES.md"
+            "CLAUDE.md"
+            "CCLA.md"
+            "CHANGELOG.md"
+            "SECURITY.md"
+          )
+
+          # Find all .md files in root
+          ROOT_MD=$(find . -maxdepth 1 -name "*.md" -type f | sed 's|^\./||' | sort)
+
+          # Check each file
+          echo "[POLICY] Checking root .md files..."
+          VIOLATIONS=0
+
+          for file in $ROOT_MD; do
+            IS_ALLOWED=0
+            for allowed in "${ALLOWED[@]}"; do
+              if [ "$file" = "$allowed" ]; then
+                IS_ALLOWED=1
+                echo "✓ $file (allowed)"
+                break
+              fi
+            done
+
+            if [ $IS_ALLOWED -eq 0 ]; then
+              echo "✗ $file (NOT ALLOWED per ADR-0516)"
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+          done
+
+          if [ $VIOLATIONS -gt 0 ]; then
+            echo ""
+            echo "❌ POLICY VIOLATION: Found $VIOLATIONS unauthorized .md files in root"
+            echo ""
+            echo "Policy: Root directory can ONLY contain these 8 files:"
+            for allowed in "${ALLOWED[@]}"; do
+              echo "  - $allowed"
+            done
+            echo ""
+            echo "Migration path:"
+            echo "  - ADRs → Corvin-ADR/decisions/"
+            echo "  - Plans/Reports → Corvin-ADR/archive/<DATE>/"
+            echo "  - Concepts → Corvin-ADR/concepts/"
+            echo ""
+            echo "See: CLAUDE.md § Root MD Files Enforcement (ADR-0516)"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Root .md policy passed (${{ matrix.count }}/8 files)"
+
+      - name: Check ADR-0516 compliance
+        run: |
+          echo "[COMPLIANCE] ADR-0516 validation..."
+
+          # Verify 8 files are present
+          EXPECTED=8
+          FOUND=$(find . -maxdepth 1 -name "*.md" -type f | wc -l)
+
+          if [ "$FOUND" -ne "$EXPECTED" ]; then
+            echo "⚠️ Expected $EXPECTED files, found $FOUND"
+          else
+            echo "✅ All $EXPECTED canonical files present"
+          fi
+
+          # Verify ADRs are in Corvin-ADR
+          ADR_COUNT=$(find Corvin-ADR/decisions -name "ADR-*.md" -type f 2>/dev/null | wc -l)
+          if [ "$ADR_COUNT" -gt 0 ]; then
+            echo "✅ $ADR_COUNT ADRs in canonical location (Corvin-ADR/decisions/)"
+          fi
