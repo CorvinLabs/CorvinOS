@@ -1,23 +1,28 @@
 """
-Voice Summary API Routes (Phase 1)
-Separate APIRouter for Voice Recording + Summary Generation
-Implements Graceful Degradation: STT unavailable → Chat works
+Voice Summary API Routes (Phase 1 + Phase 2a)
+Separate APIRouter for Voice Recording + Summary Generation + Type-Aware Strategies
 
 Architecture (ADR-0596):
-- Type-aware Summary (Phase 2)
-- Opt-In Recording with Transcript + Auto-Summary
-- Audit-logged (Events only, not raw audio)
-- Tenant-scoped
+- Phase 1: Simple Summary + Graceful Fallback
+- Phase 2a: Type-Aware Detection (Code/Image/Video strategies)
+- Phase 2b: Persistent Storage (SQLite/Postgres)
+- Phase 2c: Learning Loop + Task Collision Detection
 
 @date 2026-09-25
-@phase Phase 1: Simple Summary + Graceful Fallback
+@phase Phase 2a: Type-Aware Summary Detection
 """
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import logging
+
+from core.console.corvin_console.services.type_detector import (
+    detect_message_type,
+    get_summary_strategy_for_type,
+    MessageType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +37,17 @@ class VoiceStartRequest(BaseModel):
     tenant_id: str = "_default"
 
 
+class MessageContentType(BaseModel):
+    """Phase 2a: Type-aware content detection"""
+    detected_type: str  # "text" | "code" | "image" | "video" | "mixed"
+    confidence: float
+    metadata: Dict[str, Any] = {}
+
+
 class VoiceStopRequest(BaseModel):
     tenant_id: str = "_default"
     transcript: str = ""
+    messages: Optional[List[Dict[str, str]]] = None  # Phase 2a: message stream for type detection
 
 
 class VoiceHealthResponse(BaseModel):
@@ -49,6 +62,8 @@ class VoiceSummaryResponse(BaseModel):
     status: str  # "not_started" | "recording" | "stopped"
     transcript: str = ""
     summary: Optional[str] = None
+    summary_strategy: Optional[str] = None  # Phase 2a: strategy used
+    content_types: Optional[List[MessageContentType]] = None  # Phase 2a: detected types
     started_at: Optional[str] = None
     stopped_at: Optional[str] = None
 
@@ -133,7 +148,11 @@ async def start_voice_recording(sid: str, req: VoiceStartRequest):
 @router.post("/{sid}/voice/stop", response_model=Dict[str, Any])
 async def stop_voice_recording(sid: str, req: VoiceStopRequest):
     """
-    Stop Voice Recording and trigger Summary Generation.
+    Stop Voice Recording and trigger Type-Aware Summary Generation (Phase 2a).
+
+    Phase 2a: Detects content type (code/image/video/text) and selects strategy
+    Phase 2b: Persists to database
+    Phase 2c: Learns from user feedback
     """
     if sid not in _voice_sessions:
         raise HTTPException(status_code=404, detail=f"No recording session for {sid}")
@@ -143,15 +162,75 @@ async def stop_voice_recording(sid: str, req: VoiceStopRequest):
     session["transcript"] = req.transcript
     session["stopped_at"] = datetime.utcnow().isoformat()
 
-    # Phase 2: Call LLM for type-aware summary
-    summary = f"Session summary: {req.transcript[:100]}..." if req.transcript else "No transcript"
+    # ──────────────────────────────────────────────────────────
+    # Phase 2a: Type-Aware Detection
+    # ──────────────────────────────────────────────────────────
+
+    content_types = []
+    dominant_type = MessageType.TEXT
+    dominant_strategy = "simple"
+
+    if req.messages:
+        # Detect type for each message
+        for msg in req.messages:
+            text = msg.get("text", "")
+            if text:
+                detection = detect_message_type(text)
+                content_types.append({
+                    "detected_type": detection.detected_type.value,
+                    "confidence": detection.confidence,
+                    "metadata": detection.metadata,
+                })
+
+        # Find dominant type (Phase 2a: simple majority voting)
+        if content_types:
+            type_counts = {}
+            for ct in content_types:
+                t = ct["detected_type"]
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+            dominant_type_str = max(type_counts, key=type_counts.get)
+            dominant_type = MessageType(dominant_type_str)
+            dominant_strategy = get_summary_strategy_for_type(dominant_type)
+    else:
+        # Fallback: detect from transcript
+        if req.transcript:
+            detection = detect_message_type(req.transcript)
+            dominant_type = detection.detected_type
+            dominant_strategy = get_summary_strategy_for_type(dominant_type)
+            content_types.append({
+                "detected_type": dominant_type.value,
+                "confidence": detection.confidence,
+                "metadata": detection.metadata,
+            })
+
+    # ──────────────────────────────────────────────────────────
+    # Phase 2: Summary Generation (strategy-dependent)
+    # ──────────────────────────────────────────────────────────
+
+    # Phase 2a: Simple strategy selection
+    # Phase 2b: Implement strategy-specific LLM prompts
+    summary_prompt = {
+        "simple": "Summarize this conversation concisely.",
+        "syntax_aware": "Summarize this code discussion, highlighting function signatures and key logic.",
+        "visual_aware": "Describe the key visual elements and composition discussed.",
+        "temporal_aware": "Create a timeline summary of the key moments and transitions.",
+        "entity_aware": "Extract and relate key entities and concepts discussed.",
+    }.get(dominant_strategy, "Summarize this conversation.")
+
+    # Phase 2: TODO - Call real LLM (currently mock)
+    summary = f"[{dominant_strategy}] {summary_prompt}: {req.transcript[:100]}..." if req.transcript else "No transcript"
     session["summary"] = summary
+    session["summary_strategy"] = dominant_strategy
+    session["content_types"] = content_types
 
     _record_audit_event(
         "recording_stopped",
         {
             "session_id": sid,
             "transcript_length": len(req.transcript),
+            "dominant_type": dominant_type.value,
+            "summary_strategy": dominant_strategy,
             "summary": summary,
         },
         req.tenant_id,
@@ -162,13 +241,15 @@ async def stop_voice_recording(sid: str, req: VoiceStopRequest):
         "session_id": sid,
         "transcript": req.transcript,
         "summary": summary,
+        "summary_strategy": dominant_strategy,
+        "content_types": content_types,
     }
 
 
 @router.get("/{sid}/voice/summary", response_model=VoiceSummaryResponse)
 async def get_voice_summary(sid: str):
     """
-    Retrieve Voice Summary for a session.
+    Retrieve Voice Summary for a session (Phase 2a: with type-aware data).
     """
     if sid not in _voice_sessions:
         return VoiceSummaryResponse(
@@ -177,11 +258,21 @@ async def get_voice_summary(sid: str):
         )
 
     session = _voice_sessions.get(sid, {})
+
+    # Convert content_types to response format
+    content_types = None
+    if session.get("content_types"):
+        content_types = [
+            MessageContentType(**ct) for ct in session["content_types"]
+        ]
+
     return VoiceSummaryResponse(
         session_id=sid,
         status=session.get("status", "unknown"),
         transcript=session.get("transcript", ""),
         summary=session.get("summary"),
+        summary_strategy=session.get("summary_strategy"),
+        content_types=content_types,
         started_at=session.get("started_at"),
         stopped_at=session.get("stopped_at"),
     )
