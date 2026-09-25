@@ -1,29 +1,35 @@
 /**
- * Graph view — the work items as a DAG, laid out left → right (ADR-2060).
+ * Graph view — how an initiative was broken down, projected onto a graph (ADR-2060).
  *
- * Pure and deterministic: the same items give the same positions, and the
- * positions depend on STRUCTURE only (ids, parents, dependencies, scope) — never
- * on status — so a live poll recolours nodes without moving them.
+ * One graph per initiative (or loop): the initiative on top, every level of
+ * its breakdown below it (epic → story → task → subtask, gates, checkpoints,
+ * preconditions, criteria), dependencies drawn across as arrows. Laid out top
+ * → bottom as a tidy tree:
  *
- * Edges:
- *   hierarchy   parent → child           (the plan's breakdown)
- *   dependency  prerequisite → dependent (the item must wait for it)
+ *   - a node sits centred above the block of its children;
+ *   - sibling subtrees sit side by side in their stored order (sort_key);
+ *   - a node with GROUP_AT or more parts groups its LEAF parts by type (task,
+ *     precondition, gate, decision record …): each group of two or more is a
+ *     framed, labelled grid ("6 tasks", "4 preconditions"), so an initiative with
+ *     90 tasks is a block, not a 25 000 px row; parts with their own breakdown
+ *     stay subtrees beside the groups;
+ *   - prerequisites from OUTSIDE the initiative sit in a column to its left.
  *
- * Layout (Sugiyama-lite):
- *   1. layer = longest path from a source over both edge kinds; a cycle
- *      (possible only across the two kinds) is broken, never looped on;
- *   2. order within a layer by the barycenter of neighbours, 4 sweeps;
- *   3. a layer taller than MAX_PER_COLUMN wraps into sub-columns, so an
- *      initiative with 90 tasks is a grid, not a 6 000 px column.
+ * Pure and deterministic: positions depend on STRUCTURE only (ids, parents,
+ * dependencies, order) — never on status — so a live poll recolours nodes
+ * without moving them.
  */
 import type { Item, ItemStatus } from "@/lib/api/task-tracking";
 
-export const NODE_W = 260;
+export const NODE_W = 240;
 export const NODE_H = 76;
-export const GAP_X = 70;
-export const GAP_Y = 18;
-export const SUBCOL_GAP = 24;
-export const MAX_PER_COLUMN = 12;
+export const GAP_X = 28;        // between sibling subtrees
+export const GAP_LEVEL = 70;    // between a parent and its children
+export const GRID_GAP_Y = 18;   // between grid rows
+export const GROUP_AT = 3;      // this many parts or more → leaf parts grouped by type
+export const MAX_GRID_COLS = 8;
+export const FRAME_PAD = 14;
+export const FRAME_LABEL = 18;
 
 export type EdgeKind = "hierarchy" | "dependency";
 
@@ -36,14 +42,29 @@ export interface GraphEdge {
 
 export interface PlacedNode {
   id: string;
-  layer: number;
+  /** breakdown depth below the root (0 = the initiative); -1 = an outside prerequisite */
+  depth: number;
   x: number;
   y: number;
+}
+
+/** A frame around a group of same-type leaf parts — the breakdown edge ends on the frame. */
+export interface GridFrame {
+  id: string;
+  parentId: string;
+  /** the parts' type: their category (gate, precondition …) or else their kind */
+  groupKey: string;
+  count: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 export interface GraphLayout {
   nodes: PlacedNode[];
   edges: GraphEdge[];
+  frames: GridFrame[];
   /** changes only when the structure changes — the view refits on it. */
   key: string;
 }
@@ -88,7 +109,7 @@ export function scopeItems(items: Item[], scope: string, hideDone: boolean): Ite
     picked = items;
   } else {
     picked = [];
-    const stack = items.filter((i) => i.id === scope);
+    const stack = scopeRoots(items, scope);
     const seen = new Set<string>();
     while (stack.length) {
       const it = stack.pop()!;
@@ -123,12 +144,34 @@ export function scopeItems(items: Item[], scope: string, hideDone: boolean): Ite
   return [...picked, ...outside];
 }
 
+/** The pseudo-scope for top-level work items that belong to no initiative. */
+export const LOOSE_SCOPE = "__loose";
+const CONTAINER_KINDS = new Set(["initiative", "epic", "story"]);
+
+/** The graphs to choose from: every top-level container (an initiative, a loop, a
+ *  stand-alone epic), plus the loose top-level work items as one more graph. */
+export function scopeRoots(items: Item[], scope: string): Item[] {
+  const ids = new Set(items.map((i) => i.id));
+  const top = (i: Item) => !i.parent_id || !ids.has(i.parent_id);
+  if (scope === LOOSE_SCOPE) return items.filter((i) => top(i) && !CONTAINER_KINDS.has(i.kind));
+  return items.filter((i) => i.id === scope);
+}
+
+export function graphChoices(items: Item[]): { id: string; roots: Item[] }[] {
+  const ids = new Set(items.map((i) => i.id));
+  const tops = items.filter((i) => !i.parent_id || !ids.has(i.parent_id));
+  const out = tops.filter((i) => CONTAINER_KINDS.has(i.kind)).map((i) => ({ id: i.id, roots: [i] }));
+  const loose = tops.filter((i) => !CONTAINER_KINDS.has(i.kind));
+  if (loose.length) out.push({ id: LOOSE_SCOPE, roots: loose });
+  return out;
+}
+
 /** Ids a scope pulled in only as outside prerequisites. */
 export function externalIds(items: Item[], scope: string): Set<string> {
   if (scope === "all") return new Set();
   const inScope = new Set(scopeItems(items, scope, false).map((i) => i.id));
   const own = new Set<string>();
-  const stack = [scope];
+  const stack = scopeRoots(items, scope).map((i) => i.id);
   while (stack.length) {
     const id = stack.pop()!;
     if (own.has(id)) continue;
@@ -154,101 +197,149 @@ export function graphEdges(items: Item[]): GraphEdge[] {
   return edges;
 }
 
-function assignLayers(order: string[], edges: GraphEdge[]): Map<string, number> {
-  const indeg = new Map(order.map((id) => [id, 0]));
-  const out = new Map<string, string[]>();
-  for (const e of edges) {
-    indeg.set(e.target, (indeg.get(e.target) ?? 0) + 1);
-    out.set(e.source, [...(out.get(e.source) ?? []), e.target]);
-  }
-  const layer = new Map<string, number>();
-  const done = new Set<string>();
-  const queue = order.filter((id) => indeg.get(id) === 0);
-  for (const id of queue) layer.set(id, 0);
-  while (done.size < order.length) {
-    if (!queue.length) {
-      // A cycle: release the pending node with the fewest open inputs (stable by input order).
-      let pick = "";
-      let best = Infinity;
-      for (const id of order) {
-        if (done.has(id)) continue;
-        const d = indeg.get(id) ?? 0;
-        if (d < best) { best = d; pick = id; }
-      }
-      indeg.set(pick, 0);
-      if (!layer.has(pick)) layer.set(pick, 0);
-      queue.push(pick);
-    }
-    const id = queue.shift()!;
-    if (done.has(id)) continue;
-    done.add(id);
-    for (const t of out.get(id) ?? []) {
-      if (done.has(t)) continue;  // a broken cycle edge
-      layer.set(t, Math.max(layer.get(t) ?? 0, (layer.get(id) ?? 0) + 1));
-      const d = (indeg.get(t) ?? 0) - 1;
-      indeg.set(t, d);
-      if (d === 0) queue.push(t);
-    }
-  }
-  return layer;
+/**
+ * Tidy top-down tree of ``items`` (one scope). Roots are the items whose parent
+ * is not in ``items`` — normally the one initiative; ``external`` ids are placed
+ * in a column left of the roots instead of as roots of their own.
+ */
+export function typeKey(it: Pick<Item, "category" | "kind">): string {
+  return it.category ?? it.kind;
 }
 
-export function layoutGraph(items: Item[]): GraphLayout {
+/** Roughly square groups (the graph area is landscape, but the tree already spreads wide). */
+function gridCols(n: number): number {
+  return Math.min(MAX_GRID_COLS, Math.max(1, Math.ceil(Math.sqrt(n))));
+}
+
+export function treeLayout(items: Item[], external: Set<string> = new Set()): GraphLayout {
   const sorted = [...items].sort((a, b) => a.sort_key - b.sort_key || a.id.localeCompare(b.id));
-  const order = sorted.map((i) => i.id);
-  const edges = graphEdges(sorted);
-  const layerOf = assignLayers(order, edges);
-
-  const nLayers = Math.max(0, ...layerOf.values()) + 1;
-  const layers: string[][] = Array.from({ length: nLayers }, () => []);
-  for (const id of order) layers[layerOf.get(id) ?? 0].push(id);
-
-  const nbrs = new Map<string, { up: string[]; down: string[] }>();
-  for (const id of order) nbrs.set(id, { up: [], down: [] });
-  for (const e of edges) {
-    nbrs.get(e.target)?.up.push(e.source);
-    nbrs.get(e.source)?.down.push(e.target);
+  const byId = new Map(sorted.map((i) => [i.id, i]));
+  const kids = new Map<string, string[]>();
+  const roots: string[] = [];
+  for (const it of sorted) {
+    if (external.has(it.id)) continue;
+    const p = it.parent_id && byId.has(it.parent_id) && !external.has(it.parent_id) ? it.parent_id : null;
+    if (p) kids.set(p, [...(kids.get(p) ?? []), it.id]);
+    else roots.push(it.id);
   }
-  const pos = new Map<string, number>();
-  const index = () => layers.forEach((l) => l.forEach((id, i) => pos.set(id, i)));
-  index();
-  const bary = (id: string, dir: "up" | "down", fallback: number) => {
-    const ns = nbrs.get(id)![dir].filter((n) => pos.has(n));
-    return ns.length ? ns.reduce((s, n) => s + pos.get(n)!, 0) / ns.length : fallback;
-  };
-  for (let sweep = 0; sweep < 4; sweep++) {
-    const down = sweep % 2 === 0;
-    const range = down ? layers.map((_, i) => i).slice(1) : layers.map((_, i) => i).reverse().slice(1);
-    for (const li of range) {
-      const l = layers[li];
-      const key = new Map(l.map((id, i) => [id, bary(id, down ? "up" : "down", i)]));
-      l.sort((a, b) => key.get(a)! - key.get(b)! || pos.get(a)! - pos.get(b)!);
-      l.forEach((id, i) => pos.set(id, i));
+  const isLeaf = (id: string) => !(kids.get(id) ?? []).length;
+
+  type Unit =
+    | { kind: "node"; id: string; w: number; h: number }
+    | { kind: "grid"; key: string; ids: string[]; cols: number; w: number; h: number };
+  interface Block { w: number; h: number; units: Unit[]; unitsW: number }
+  const blocks = new Map<string, Block>();
+  const onPath = new Set<string>();
+
+  const measure = (id: string): Block => {
+    const hit = blocks.get(id);
+    if (hit) return hit;
+    onPath.add(id);
+    const ks = (kids.get(id) ?? []).filter((k) => !onPath.has(k));  // never recurse into a cycle
+    const units: Unit[] = [];
+    if (ks.length >= GROUP_AT) {
+      const groups = new Map<string, string[]>();
+      for (const k of ks) if (isLeaf(k)) groups.set(typeKey(byId.get(k)!), [...(groups.get(typeKey(byId.get(k)!)) ?? []), k]);
+      const emitted = new Set<string>();
+      for (const k of ks) {   // units in the order of their first part
+        const g = isLeaf(k) ? groups.get(typeKey(byId.get(k)!))! : null;
+        if (g && g.length >= 2) {
+          const key = typeKey(byId.get(k)!);
+          if (emitted.has(key)) continue;
+          emitted.add(key);
+          const cols = gridCols(g.length);
+          const rows = Math.ceil(g.length / cols);
+          units.push({
+            kind: "grid", key, ids: g, cols,
+            w: cols * NODE_W + (cols - 1) * GAP_X + 2 * FRAME_PAD,
+            h: rows * NODE_H + (rows - 1) * GRID_GAP_Y + 2 * FRAME_PAD + FRAME_LABEL,
+          });
+        } else {
+          const b = measure(k);
+          units.push({ kind: "node", id: k, w: b.w, h: b.h });
+        }
+      }
+    } else {
+      for (const k of ks) {
+        const b = measure(k);
+        units.push({ kind: "node", id: k, w: b.w, h: b.h });
+      }
     }
-  }
+    const unitsW = units.reduce((s, u) => s + u.w, 0) + Math.max(0, units.length - 1) * GAP_X;
+    const b: Block = {
+      w: Math.max(NODE_W, unitsW),
+      h: units.length ? NODE_H + GAP_LEVEL + Math.max(...units.map((u) => u.h)) : NODE_H,
+      units, unitsW,
+    };
+    onPath.delete(id);
+    blocks.set(id, b);
+    return b;
+  };
 
   const nodes: PlacedNode[] = [];
-  let x = 0;
-  const colHeights: number[] = [];
-  const columns: { ids: string[]; layer: number; x: number }[] = [];
-  layers.forEach((l, li) => {
-    const sub = Math.max(1, Math.ceil(l.length / MAX_PER_COLUMN));
-    const per = Math.ceil(l.length / sub);
-    for (let s = 0; s < sub; s++) {
-      const ids = l.slice(s * per, (s + 1) * per);
-      columns.push({ ids, layer: li, x });
-      colHeights.push(ids.length * (NODE_H + GAP_Y) - GAP_Y);
-      x += NODE_W + (s < sub - 1 ? SUBCOL_GAP : GAP_X);
+  const frames: GridFrame[] = [];
+  const gridded = new Set<string>();  // parts placed inside a group frame
+  const placed = new Set<string>();
+  const place = (id: string, x0: number, y0: number, depth: number) => {
+    if (placed.has(id)) return;
+    placed.add(id);
+    const b = measure(id);
+    nodes.push({ id, depth, x: x0 + (b.w - NODE_W) / 2, y: y0 });
+    const top = y0 + NODE_H + GAP_LEVEL;
+    let x = x0 + (b.w - b.unitsW) / 2;
+    for (const u of b.units) {
+      if (u.kind === "node") {
+        place(u.id, x, top, depth + 1);
+      } else {
+        frames.push({ id: `grid:${id}:${u.key}`, parentId: id, groupKey: u.key, count: u.ids.length, x, y: top, w: u.w, h: u.h });
+        u.ids.forEach((k, i) => {
+          placed.add(k);
+          gridded.add(k);
+          nodes.push({
+            id: k, depth: depth + 1,
+            x: x + FRAME_PAD + (i % u.cols) * (NODE_W + GAP_X),
+            y: top + FRAME_PAD + FRAME_LABEL + Math.floor(i / u.cols) * (NODE_H + GRID_GAP_Y),
+          });
+        });
+      }
+      x += u.w + GAP_X;
     }
-  });
-  const tallest = Math.max(0, ...colHeights);
-  columns.forEach((c, ci) => {
-    const top = (tallest - colHeights[ci]) / 2;  // centre each column on the tallest
-    c.ids.forEach((id, i) => nodes.push({ id, layer: c.layer, x: c.x, y: top + i * (NODE_H + GAP_Y) }));
-  });
+  };
+  let x = 0;
+  for (const r of roots) {
+    place(r, x, 0, 0);
+    x += measure(r).w + GAP_X * 3;
+  }
+  // Outside prerequisites: one column left of everything, top-aligned.
+  const ext = sorted.filter((i) => external.has(i.id));
+  ext.forEach((it, i) => nodes.push({ id: it.id, depth: -1, x: -(NODE_W + GAP_X * 4), y: i * (NODE_H + GRID_GAP_Y) }));
 
-  const key = [order.join(","), edges.map((e) => e.id).join(",")].join("|");
-  return { nodes, edges, key };
+  // A grouped part's breakdown edge is replaced by ONE edge onto its group frame.
+  const edges = graphEdges(sorted).filter((e) => !(e.kind === "hierarchy" && gridded.has(e.target)));
+  for (const f of frames) edges.push({ id: `h:${f.parentId}>${f.id}`, source: f.parentId, target: f.id, kind: "hierarchy" });
+  const key = [sorted.map((i) => `${i.id}<${i.parent_id ?? ""}`).join(","), edges.map((e) => e.id).join(","),
+    [...external].sort().join(",")].join("|");
+  return { nodes, edges, frames, key };
+}
+
+/** Shape of one breakdown, for the header line: levels and counts per kind/category. */
+export function breakdownStats(layout: GraphLayout, byId: Map<string, Item>): {
+  levels: number; items: number; perKind: [string, number][]; dependencies: number;
+} {
+  const inside = layout.nodes.filter((n) => n.depth >= 0);
+  const per = new Map<string, number>();
+  for (const n of inside) {
+    const it = byId.get(n.id);
+    if (!it || n.depth === 0) continue;
+    const k = it.category ?? it.kind;
+    per.set(k, (per.get(k) ?? 0) + 1);
+  }
+  return {
+    levels: inside.length ? Math.max(...inside.map((n) => n.depth)) + 1 : 0,
+    items: inside.length,
+    perKind: [...per.entries()].sort((a, b) => b[1] - a[1]),
+    dependencies: layout.edges.filter((e) => e.kind === "dependency").length,
+  };
 }
 
 /** Counts per state over WORK items (containers summarise, they do not count). */

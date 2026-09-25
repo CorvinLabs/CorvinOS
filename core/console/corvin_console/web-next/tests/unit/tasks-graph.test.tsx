@@ -1,12 +1,14 @@
 /**
- * Tasks panel — Graph view (pages/tasks/graph-layout.ts + graph-view.tsx).
+ * Tasks panel — Graph view: one breakdown graph per initiative
+ * (pages/tasks/graph-layout.ts + graph-view.tsx).
  *
- * Layout: prerequisites sit left of what waits for them, children right of
- * their parent; a cycle across the two edge kinds is broken, not looped on; a
- * wide layer wraps; positions depend on structure only, so a status poll never
- * moves a node. State: running (a linked run runs now) > blocked > waiting >
- * in progress > ready. Page: the Graph tab renders every item as a node with
- * its state, and a click opens the drawer.
+ * Layout: the initiative on top, each level of its breakdown below, parents
+ * centred over their parts in stored order; many leaf parts become a framed
+ * grid with ONE breakdown edge onto the frame; outside prerequisites sit left;
+ * positions depend on structure only, so a status poll never moves a node.
+ * State: running (a linked run runs now) > blocked > waiting > in progress >
+ * ready. Page: a picker lists every initiative; choosing one draws its
+ * breakdown with each item's state; a click opens the drawer.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -16,7 +18,8 @@ import { http, HttpResponse } from "msw";
 import { server } from "../fixtures/server";
 import type { Item } from "@/lib/api/task-tracking";
 import {
-  MAX_PER_COLUMN, NODE_W, externalIds, layoutGraph, nodeState, scopeItems, stateCounts,
+  GROUP_AT, LOOSE_SCOPE, NODE_H, breakdownStats, externalIds, graphChoices, nodeState, scopeItems, stateCounts,
+  treeLayout,
 } from "@/pages/tasks/graph-layout";
 
 vi.mock("@/lib/auth", () => ({ useAuth: () => ({ session: { csrf_token: "csrf-1" } }) }));
@@ -33,42 +36,92 @@ function item(id: string, over: Partial<Item> = {}): Item {
   };
 }
 
-const x = (l: ReturnType<typeof layoutGraph>, id: string) => l.nodes.find((n) => n.id === id)!.x;
+const pos = (l: ReturnType<typeof treeLayout>, id: string) => l.nodes.find((n) => n.id === id)!;
 
-describe("graph layout", () => {
-  it("puts prerequisites left of dependents and children right of their parent", () => {
-    const l = layoutGraph([
-      item("ini", { kind: "initiative", sort_key: 1 }),
-      item("a", { parent_id: "ini", sort_key: 2 }),
-      item("b", { parent_id: "ini", sort_key: 3, depends_on: ["a"] }),
-      item("c", { parent_id: "ini", sort_key: 4, depends_on: ["b"] }),
-    ]);
-    expect(x(l, "ini")).toBeLessThan(x(l, "a"));
-    expect(x(l, "a")).toBeLessThan(x(l, "b"));
-    expect(x(l, "b")).toBeLessThan(x(l, "c"));
-    expect(l.edges.filter((e) => e.kind === "dependency").map((e) => e.id)).toEqual(["d:a>b", "d:b>c"]);
+describe("breakdown layout", () => {
+  const plan = [
+    item("ini", { kind: "initiative", sort_key: 1 }),
+    item("e1", { kind: "epic", parent_id: "ini", sort_key: 2 }),
+    item("e2", { kind: "epic", parent_id: "ini", sort_key: 3 }),
+    item("t1", { parent_id: "e1", sort_key: 4 }),
+    item("t2", { parent_id: "e1", sort_key: 5 }),
+    item("t3", { parent_id: "e2", sort_key: 6, depends_on: ["t2"] }),
+    item("s1", { kind: "subtask", parent_id: "t3", sort_key: 7 }),
+  ];
+
+  it("puts the initiative on top and each breakdown level below, parents centred over their parts", () => {
+    const l = treeLayout(plan);
+    expect(pos(l, "ini").depth).toBe(0);
+    expect(pos(l, "e1").depth).toBe(1);
+    expect(pos(l, "s1").depth).toBe(3);
+    expect(pos(l, "ini").y).toBeLessThan(pos(l, "e1").y);
+    expect(pos(l, "e1").y).toBeLessThan(pos(l, "t1").y);
+    expect(pos(l, "t3").y).toBeLessThan(pos(l, "s1").y);
+    expect(pos(l, "e1").x).toBeLessThan(pos(l, "e2").x);           // stored order
+    expect(pos(l, "t1").x).toBeLessThan(pos(l, "t2").x);
+    expect(pos(l, "e1").x).toBe((pos(l, "t1").x + pos(l, "t2").x) / 2);  // centred over its parts
+    const deps = l.edges.filter((e) => e.kind === "dependency").map((e) => e.id);
+    expect(deps).toEqual(["d:t2>t3"]);                              // across the breakdown
+    expect(l.frames).toEqual([]);
   });
 
-  it("breaks a cycle across hierarchy and dependency instead of hanging", () => {
-    // parent depends on its own child: hierarchy p→c plus dependency c→p
-    const l = layoutGraph([item("p", { kind: "initiative", depends_on: ["c"] }), item("c", { parent_id: "p" })]);
-    expect(l.nodes).toHaveLength(2);
+  it("frames many leaf parts as a grid with one breakdown edge onto the frame", () => {
+    const n = GROUP_AT * 4;
+    const kids = Array.from({ length: n }, (_, i) => item(`k${i}`, { parent_id: "ini", sort_key: i + 2 }));
+    const l = treeLayout([item("ini", { kind: "initiative", sort_key: 1 }), ...kids]);
+    expect(l.frames).toHaveLength(1);
+    expect(l.frames[0].count).toBe(n);
+    expect(l.frames[0].groupKey).toBe("task");
+    const hier = l.edges.filter((e) => e.kind === "hierarchy");
+    expect(hier.map((e) => e.target)).toEqual(["grid:ini:task"]);
+    const rows = new Set(kids.map((k) => pos(l, k.id).y));
+    expect(rows.size).toBeGreaterThan(1);
+    for (const k of kids) expect(pos(l, k.id).y).toBeGreaterThan(pos(l, "ini").y + NODE_H);
   });
 
-  it("wraps a wide layer into sub-columns", () => {
-    const kids = Array.from({ length: MAX_PER_COLUMN * 2 + 1 }, (_, i) => item(`k${i}`, { parent_id: "ini", sort_key: i + 2 }));
-    const l = layoutGraph([item("ini", { kind: "initiative", sort_key: 1 }), ...kids]);
-    const cols = new Set(l.nodes.filter((n) => n.id !== "ini").map((n) => n.x));
-    expect(cols.size).toBe(3);
-    expect(Math.min(...cols)).toBeGreaterThanOrEqual(NODE_W);
+  it("groups a mixed breakdown by type and keeps parts with their own breakdown as subtrees", () => {
+    // Loop A's shape: tasks, preconditions, one checkpoint, one gate with criteria.
+    const parts = [
+      ...[1, 2, 3].map((n) => item(`t${n}`, { parent_id: "ini", sort_key: n + 1 })),
+      ...[1, 2].map((n) => item(`p${n}`, { parent_id: "ini", category: "precondition", sort_key: n + 10 })),
+      item("cp", { parent_id: "ini", category: "checkpoint", sort_key: 20 }),
+      item("gate", { parent_id: "ini", category: "gate", sort_key: 21 }),
+      item("c1", { kind: "subtask", parent_id: "gate", category: "criterion", sort_key: 22 }),
+      item("c2", { kind: "subtask", parent_id: "gate", category: "criterion", sort_key: 23 }),
+    ];
+    const l = treeLayout([item("ini", { kind: "initiative", sort_key: 1 }), ...parts]);
+    expect(l.frames.map((f) => `${f.groupKey}:${f.count}`)).toEqual(["task:3", "precondition:2"]);
+    const hierTargets = l.edges.filter((e) => e.kind === "hierarchy").map((e) => e.target).sort();
+    // the lone checkpoint and the gate subtree keep their own edges; the gate's criteria hang below it
+    expect(hierTargets).toEqual(["c1", "c2", "cp", "gate", "grid:ini:precondition", "grid:ini:task"]);
+    expect(pos(l, "c1").y).toBeGreaterThan(pos(l, "gate").y);
+    // groups sit in the order of their first part: tasks, preconditions, checkpoint, gate
+    const fx = Object.fromEntries(l.frames.map((f) => [f.groupKey, f.x]));
+    expect(fx.task).toBeLessThan(fx.precondition);
+    expect(fx.precondition).toBeLessThan(pos(l, "cp").x);
+    expect(pos(l, "cp").x).toBeLessThan(pos(l, "gate").x);
   });
 
   it("does not move a node when only its status changes", () => {
-    const base = [item("ini", { kind: "initiative" }), item("a", { parent_id: "ini" }), item("b", { parent_id: "ini" })];
-    const before = layoutGraph(base);
-    const after = layoutGraph(base.map((i) => (i.id === "a" ? { ...i, status: "complete" as const, running_runs: 1 } : i)));
+    const before = treeLayout(plan);
+    const after = treeLayout(plan.map((i) => (i.id === "t1" ? { ...i, status: "complete" as const, running_runs: 1 } : i)));
     expect(after.nodes).toEqual(before.nodes);
     expect(after.key).toBe(before.key);
+  });
+
+  it("describes the shape of the breakdown", () => {
+    const l = treeLayout(plan);
+    const st = breakdownStats(l, new Map(plan.map((i) => [i.id, i])));
+    expect(st.levels).toBe(4);
+    expect(st.items).toBe(7);
+    expect(Object.fromEntries(st.perKind)).toEqual({ epic: 2, task: 3, subtask: 1 });
+    expect(st.dependencies).toBe(1);
+  });
+
+  it("offers one graph per top-level initiative, plus loose items as one more", () => {
+    const items = [item("i1", { kind: "initiative" }), item("t", { parent_id: "i1" }), item("loose")];
+    expect(graphChoices(items).map((c) => c.id)).toEqual(["i1", LOOSE_SCOPE]);
+    expect(scopeItems(items, LOOSE_SCOPE, false).map((i) => i.id)).toEqual(["loose"]);
   });
 
   it("derives where each item stands", () => {
@@ -103,10 +156,13 @@ describe("graph layout", () => {
       item("b", { kind: "initiative", status: "blocked", depends_on: ["gate"], waiting_on: ["gate"] }), item("s", { parent_id: "b" }),
     ];
     expect(scopeItems(items, "b", false).map((i) => i.id).sort()).toEqual(["b", "gate", "s"]);
-    expect([...externalIds(items, "b")]).toEqual(["gate"]);
-    const l = layoutGraph(scopeItems(items, "b", false));
+    const ext = externalIds(items, "b");
+    expect([...ext]).toEqual(["gate"]);
+    const l = treeLayout(scopeItems(items, "b", false), ext);
     expect(l.edges.map((e) => e.id)).toContain("d:gate>b");
-    expect(x(l, "gate")).toBeLessThan(x(l, "b"));
+    expect(pos(l, "gate").depth).toBe(-1);
+    expect(pos(l, "gate").x).toBeLessThan(pos(l, "b").x);
+    expect(pos(l, "b").depth).toBe(0);  // the gate's parent is not drawn as a second root
   });
 });
 
@@ -125,6 +181,10 @@ describe("Graph tab", () => {
         live_run_titles: ["Agent session: A2A pairing"], sort_key: 2 }),
       item("done", { parent_id: "ini", title: "Audit recovery", status: "complete", sort_key: 3 }),
       item("wait", { parent_id: "ini", title: "Release", depends_on: ["run"], waiting_on: ["run"], sort_key: 4 }),
+      item("loopb", { kind: "initiative", title: "Loop B — Phase 9 fixes", child_ids: ["p0"], status: "in_progress", sort_key: 5,
+        updated_at: "2026-09-19T00:00:00Z" }),
+      item("p0", { kind: "epic", parent_id: "loopb", title: "P0 — 13 critical", child_ids: ["fix"], sort_key: 6 }),
+      item("fix", { parent_id: "p0", title: "Audit backend wiring", status: "in_progress", sort_key: 7 }),
     ];
     server.use(
       http.get("/v1/console/task-tracking/items", () => HttpResponse.json({
@@ -148,7 +208,13 @@ describe("Graph tab", () => {
         <MemoryRouter initialEntries={["/app/initiatives?view=graph"]}><TasksPage /></MemoryRouter>
       </QueryClientProvider>,
     );
+    try { localStorage.removeItem("corvin.tasks.graph.scope"); } catch { /* no storage */ }
     const graph = await screen.findByTestId("graph-view", {}, { timeout: 5000 });
+    // The picker lists both initiatives; the one with a running session opens first.
+    expect(within(graph).getByTestId("graph-pick-ini").getAttribute("aria-selected")).toBe("true");
+    expect(within(graph).getByTestId("graph-pick-loopb")).toBeTruthy();
+    expect(within(graph).queryByTestId("graph-node-fix")).toBeNull();
+    expect(within(graph).getByTestId("graph-breakdown").textContent).toMatch(/broken down into 3 items over 1 level: 3 tasks · 1 dependency$/);
     const runNode = await within(graph).findByTestId("graph-node-run", {}, { timeout: 5000 });
     expect(runNode.getAttribute("data-state")).toBe("running");
     expect(within(runNode).getByText("1 running")).toBeTruthy();
@@ -157,5 +223,10 @@ describe("Graph tab", () => {
     expect(within(screen.getByTestId("graph-count-running")).getByText("1")).toBeTruthy();
     fireEvent.click(runNode);
     expect(await screen.findByDisplayValue("A2A pairing", {}, { timeout: 5000 })).toBeTruthy();  // drawer title field
+    // Switch to Loop B: its breakdown (initiative → epic → task) replaces the first graph.
+    fireEvent.click(within(graph).getByTestId("graph-pick-loopb"));
+    expect(await within(graph).findByTestId("graph-node-fix", {}, { timeout: 5000 })).toBeTruthy();
+    expect(within(graph).queryByTestId("graph-node-run")).toBeNull();
+    expect(within(graph).getByTestId("graph-breakdown").textContent).toMatch(/broken down into 2 items over 2 levels: 1 epic · 1 task$/);
   });
 });

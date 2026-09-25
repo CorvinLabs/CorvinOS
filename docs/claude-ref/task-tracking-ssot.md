@@ -171,21 +171,30 @@ optimistic `version` and shows decision, evidence, children, dependencies,
 linked runs and history.
 
 **Graph view** (`pages/tasks/graph-view.tsx`, layout in `graph-layout.ts`,
-React Flow, lazy-loaded). Nodes are work items; edges are the breakdown
-(parent → child, quiet) and dependencies (prerequisite → dependent; dashed
-"waits for" while the prerequisite is open). Layout is Sugiyama-lite, left →
-right: longest-path layers over both edge kinds (a cycle across them is
-broken), barycenter ordering, layers taller than 12 wrap into sub-columns.
+React Flow, lazy-loaded) — **one graph per initiative / loop**: how it was
+broken down, projected onto a graph. A picker lists every top-level container
+(plus "Items without an initiative" when loose top-level work exists) with its
+progress, done/total, in-progress count and a pulsing "N running" when a linked
+run works on it right now; it opens on the one with running work, else the most
+recently touched, and remembers the choice per browser. The graph is a tidy
+tree top → bottom: the initiative on top, each breakdown level below, parents
+centred over their parts in stored order (`sort_key`). A node with 3+ parts
+groups its LEAF parts by type (`category`, else `kind`): each group of 2+ is a
+framed, roughly square grid labelled "6 tasks", "4 preconditions",
+"92 decision records", with ONE breakdown edge onto the frame; parts with their
+own breakdown (a gate with its criteria) stay subtrees. Dependencies are arrows
+across (dashed "waits for" while the prerequisite is open); prerequisites from
+outside the initiative sit in a column to its left, marked "External". A line
+above the graph states the shape: "broken down into 15 items over 2 levels:
+6 tasks · 4 preconditions · 3 criteria · 1 checkpoint · 1 gate".
 Positions depend on **structure only** (ids, parents, dependencies,
-sort_key), so the 5 s poll recolours nodes and never moves them; the view
+`sort_key`), so the 5 s poll recolours nodes and never moves them; the view
 refits only when the structure changes. "Where we are" per node
 (`nodeState`): **running** (a linked run is running now — beats done; the node
 pulses, stopped by reduced motion) → blocked → waiting → in progress → ready
 (open, nothing left to wait for; a pending gate reads "Decision pending") →
-done. The view opens zoomed on running work, else work in progress; chips
-count each state over work items and zoom to it. A scope (one initiative)
-also brings in prerequisites from outside it, marked "External", so a blocked
-initiative shows what blocks it. Theme tokens in this console are HSL
+done; state chips count each over work items and zoom to it, "Where we are
+now" zooms to running work. Theme tokens in this console are HSL
 components (`--card: 0 0% 100%`) — use `hsl(var(--card))`, never
 `var(--card)` as a colour; only `--viz-*` are hex.
 
