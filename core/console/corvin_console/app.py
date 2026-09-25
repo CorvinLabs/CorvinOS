@@ -102,6 +102,7 @@ from .routes import (
     chat as chat_route,
     voice as voice_route,
     voice_summary as voice_summary_route,
+    remediation_routes,
     # workflows_route replaced by PluginLoader (ADR-0039 Phase 6)
     connectors as connectors_route,
     setup as setup_route,
@@ -492,6 +493,8 @@ router.include_router(panels_route.router, tags=["console-panels"])
 router.include_router(multi_instance_route.router, tags=["console-multi-instance"])
 # DataHub Phase 3 — Console UI + HTTP Wiring (Artifact creation + CRUD)
 router.include_router(datahub_route.router, tags=["console-datahub"])
+# ADR-0411 Phase 5 — Automated Remediation (approval workflow + operator gates)
+router.include_router(remediation_routes.remediation_router, tags=["console-remediation"])
 # Media System (30087270) is NOT mounted: its module was committed outside this
 # package (core/console/routes/media_routes.py), has no require_session / tenant
 # scoping on upload/delete/send-to-bridge, and its own fastapi import fails.
@@ -831,9 +834,9 @@ def create_app() -> FastAPI:
         try:
             from core.config import CentralizedConfigManager
             import logging as _config_logger
-            from . import _bootstrap
+            import forge.paths as _cfg_paths
 
-            audit_log_path = _bootstrap.forge_paths.tenant_audit_chain(tenant_id="_default")
+            audit_log_path = _cfg_paths.tenant_audit_chain(tenant_id="_default")
             config_mgr = CentralizedConfigManager.create_with_audit(audit_log_path)
             app.state.config_manager = config_mgr
             _config_logger.getLogger("corvin.config").info(
