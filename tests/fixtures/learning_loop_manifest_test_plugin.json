@@ -1,0 +1,35 @@
+{
+  "plugin_id": "test/learning_loop_manifest",
+  "name": "Learning Loop Manifest Test Plugin",
+  "version": "0.1.0",
+  "description": "Feature 1: Test plugin for learning loop manifest discovery (ADR-0906)",
+  "boot_layer": "installed",
+  "learning_loops": [
+    {
+      "id": "confidence_routing",
+      "description": "Confidence score predictor for task routing — test loop",
+      "event_source": "SkillExecutedEvent.confidence_score",
+      "feedback_types": ["outcome_feedback", "preference_feedback"],
+      "aggregation": "rolling_mean_7d",
+      "health_threshold": 0.5,
+      "dormancy_alert_hours": 24,
+      "owner_skill": "os.delegation_router",
+      "metadata": {
+        "internal": false,
+        "test_loop": true
+      }
+    },
+    {
+      "id": "context_quality",
+      "description": "Context retrieval quality feedback loop",
+      "event_source": "MemoryDecisionEvent.irrelevance_score",
+      "feedback_types": ["metric_observed"],
+      "aggregation": "percentile_p95",
+      "health_threshold": 0.7,
+      "dormancy_alert_hours": null,
+      "metadata": {
+        "internal": false
+      }
+    }
+  ]
+}
