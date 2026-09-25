@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CorvinOS Configuration Schema",
+  "description": "Phase 2 Configuration Management - Centralized schema validation",
+  "type": "object",
+  "properties": {
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable telemetry collection"
+        },
+        "push_interval_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 300,
+          "description": "Interval between telemetry pushes (5-300 seconds)"
+        },
+        "aggregator_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL of telemetry aggregator"
+        }
+      },
+      "required": ["enabled", "push_interval_seconds"],
+      "additionalProperties": false
+    },
+    "plugins": {
+      "type": "object",
+      "properties": {
+        "enabled_plugins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Plugin identifier"
+              },
+              "version": {
+                "type": "string",
+                "description": "Plugin version (semver)"
+              },
+              "hash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "Plugin SHA256 hash"
+              }
+            },
+            "required": ["id", "version"],
+            "additionalProperties": false
+          },
+          "description": "List of enabled plugins with versions and hashes"
+        },
+        "auto_update": {
+          "type": "boolean",
+          "description": "Enable automatic plugin updates"
+        }
+      },
+      "required": ["enabled_plugins", "auto_update"],
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 6,
+          "description": "Database schema version (4-6)"
+        },
+        "replication_enabled": {
+          "type": "boolean",
+          "description": "Enable database replication"
+        }
+      },
+      "required": ["schema_version", "replication_enabled"],
+      "additionalProperties": false
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "audit_enabled": {
+          "type": "boolean",
+          "description": "Enable audit logging (always true, non-negotiable)"
+        },
+        "consent_required": {
+          "type": "boolean",
+          "description": "Require user consent (GDPR compliance)"
+        }
+      },
+      "required": ["audit_enabled", "consent_required"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["telemetry", "plugins", "database", "security"],
+  "additionalProperties": false
+}
