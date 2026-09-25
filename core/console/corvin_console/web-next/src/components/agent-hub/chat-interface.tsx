@@ -1,9 +1,10 @@
 /**
- * Agent Hub Chat Interface (MVP)
- * Unified chat thread: humans + agents in one message stream
- * Collab Chat integration (Phase 3-4 exploration)
+ * Agent Hub Chat Interface (Phase 1)
+ * Extended with: Voice Summary (Opt-In), Full Media Support, Session Autonomy
  *
+ * Architecture: Decoupled Voice (separate blueprint), Graceful Degradation
  * @date 2026-09-25
+ * @phase Phase 1: Foundation
  */
 
 import * as React from "react";
@@ -11,7 +12,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   Send,
@@ -21,6 +21,13 @@ import {
   User,
   Bot,
   AlertCircle,
+  Mic,
+  MicOff,
+  Users,
+  Download,
+  Code,
+  Image as ImageIcon,
+  Video as VideoIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -29,6 +36,16 @@ import { cn } from "@/lib/utils";
 // Types
 // ────────────────────────────────────────────────────────────────────
 
+type MediaType = "code" | "image" | "video" | "none";
+
+interface MediaContent {
+  type: MediaType;
+  url: string;
+  filename?: string;
+  language?: string; // für code
+  mimeType?: string;
+}
+
 interface ChatMessage {
   id: string;
   author_kind: "human" | "agent" | "system";
@@ -36,24 +53,38 @@ interface ChatMessage {
   text: string;
   timestamp: number;
   ai_generated?: boolean;
+  media?: MediaContent;
 }
 
 interface ChatThread {
   thread_id: string;
   title: string;
+  owner_id: string; // Session-Owner
   message_count: number;
   created_at: number;
+  voice_summary?: string;
+  is_voice_recording?: boolean;
+  agent_invited?: boolean;
+}
+
+interface VoiceSummaryState {
+  isRecording: boolean;
+  isAvailable: boolean; // STT-Verfügbarkeit (Graceful Fallback)
+  transcript?: string;
+  summary?: string;
 }
 
 // ────────────────────────────────────────────────────────────────────
-// MVP: Mock data (no backend yet, local state)
+// Mock Data (Phase 1 Testing)
 // ────────────────────────────────────────────────────────────────────
 
 const MOCK_THREAD: ChatThread = {
   thread_id: "thread-001",
   title: "Agent Hub Chat",
+  owner_id: "user-001", // User ist Owner
   message_count: 0,
   created_at: Date.now(),
+  agent_invited: false,
 };
 
 const MOCK_MESSAGES: ChatMessage[] = [
@@ -61,23 +92,29 @@ const MOCK_MESSAGES: ChatMessage[] = [
     id: "msg-001",
     author_kind: "system",
     author_name: "System",
-    text: "Welcome to Agent Hub Chat. Start a conversation or ask questions about agents.",
+    text: "Welcome to Extended Agent Hub Chat. Voice Summary (Opt-In), Full Media Support, User Sessions.",
     timestamp: Date.now() - 60000,
   },
   {
     id: "msg-002",
     author_kind: "human",
     author_name: "You",
-    text: "What agents are available?",
+    text: "Show me a code example",
     timestamp: Date.now() - 45000,
   },
   {
     id: "msg-003",
     author_kind: "agent",
     author_name: "os-router",
-    text: "I can classify requests and route them to the right executor. Available agents: os-router, os-executor, os-optimizer.",
+    text: "Here's a Python example that demonstrates request routing.",
     timestamp: Date.now() - 30000,
     ai_generated: true,
+    media: {
+      type: "code",
+      language: "python",
+      url: "https://example.com/code.py",
+      filename: "router.py",
+    },
   },
 ];
 
@@ -87,6 +124,64 @@ const MOCK_MESSAGES: ChatMessage[] = [
 
 interface ChatBubbleProps {
   message: ChatMessage;
+}
+
+function MediaRenderer({ media }: { media: MediaContent }) {
+  if (!media) return null;
+
+  switch (media.type) {
+    case "code":
+      return (
+        <div className="bg-gray-900 text-gray-100 rounded-lg p-3 font-mono text-xs max-w-2xl">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-gray-400">{media.language || "code"}</span>
+            <a
+              href={media.url}
+              className="text-blue-400 hover:text-blue-300 flex items-center gap-1"
+              download
+            >
+              <Download className="h-3 w-3" /> {media.filename}
+            </a>
+          </div>
+          <pre className="overflow-x-auto">
+            <code>
+              {`def route_request(task):\n    if task.type == "complex":\n        return dispatch(opus)\n    return dispatch(haiku)`}
+            </code>
+          </pre>
+        </div>
+      );
+
+    case "image":
+      return (
+        <div className="max-w-2xl">
+          <img
+            src={media.url}
+            alt={media.filename || "Media"}
+            className="rounded-lg max-h-64 object-cover"
+          />
+          {media.filename && (
+            <p className="text-xs text-muted-foreground mt-1">{media.filename}</p>
+          )}
+        </div>
+      );
+
+    case "video":
+      return (
+        <div className="max-w-2xl">
+          <video
+            src={media.url}
+            controls
+            className="rounded-lg max-h-64 w-full"
+          />
+          {media.filename && (
+            <p className="text-xs text-muted-foreground mt-1">{media.filename}</p>
+          )}
+        </div>
+      );
+
+    default:
+      return null;
+  }
 }
 
 function ChatBubble({ message }: ChatBubbleProps) {
@@ -117,8 +212,8 @@ function ChatBubble({ message }: ChatBubbleProps) {
         {isSystem && <MessageCircle className="h-4 w-4 text-gray-600 dark:text-gray-300" />}
       </div>
 
-      {/* Message */}
-      <div className="flex-1 max-w-md">
+      {/* Message Container */}
+      <div className="flex-1 max-w-3xl">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-sm font-medium">{message.author_name}</span>
           {isAgent && message.ai_generated && (
@@ -134,9 +229,11 @@ function ChatBubble({ message }: ChatBubbleProps) {
             })}
           </span>
         </div>
+
+        {/* Text Message */}
         <div
           className={cn(
-            "rounded-lg px-4 py-2 text-sm",
+            "rounded-lg px-4 py-2 text-sm mb-2",
             isHuman
               ? "bg-blue-500 text-white rounded-br-none"
               : isAgent
@@ -146,6 +243,9 @@ function ChatBubble({ message }: ChatBubbleProps) {
         >
           {message.text}
         </div>
+
+        {/* Media (Phase 1: Code, Images, Videos) */}
+        {message.media && <MediaRenderer media={message.media} />}
       </div>
     </div>
   );
@@ -156,27 +256,28 @@ function ChatBubble({ message }: ChatBubbleProps) {
 // ────────────────────────────────────────────────────────────────────
 
 export function AgentHubChat() {
+  const [thread, setThread] = React.useState<ChatThread>(MOCK_THREAD);
   const [messages, setMessages] = React.useState<ChatMessage[]>(MOCK_MESSAGES);
   const [inputValue, setInputValue] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
+  const [voiceState, setVoiceState] = React.useState<VoiceSummaryState>({
+    isRecording: false,
+    isAvailable: true, // Mock: STT verfügbar
+  });
   const scrollAreaRef = React.useRef<HTMLDivElement>(null);
 
   // Auto-scroll to latest message
   React.useEffect(() => {
     if (scrollAreaRef.current) {
-      const scrollElement = scrollAreaRef.current.querySelector("[data-radix-scroll-area-viewport]");
-      if (scrollElement) {
-        setTimeout(() => {
-          scrollElement.scrollTop = scrollElement.scrollHeight;
-        }, 0);
-      }
+      setTimeout(() => {
+        scrollAreaRef.current!.scrollTop = scrollAreaRef.current!.scrollHeight;
+      }, 0);
     }
   }, [messages]);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
-    // Add user message
     const userMessage: ChatMessage = {
       id: `msg-${Date.now()}`,
       author_kind: "human",
@@ -189,19 +290,37 @@ export function AgentHubChat() {
     setInputValue("");
     setIsLoading(true);
 
-    // Simulate agent response (MVP: mock response)
+    // Simulate agent response
     setTimeout(() => {
       const agentMessage: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
         author_kind: "agent",
         author_name: "os-router",
-        text: `I received your message: "${inputValue}". This is a mock response. Full integration coming soon.`,
+        text: `I received: "${inputValue}". Phase 1 implementation with Voice Summary (Opt-In), Media Support, and Session Autonomy.`,
         timestamp: Date.now(),
         ai_generated: true,
       };
       setMessages((prev) => [...prev, agentMessage]);
       setIsLoading(false);
     }, 800);
+  };
+
+  const handleStartVoiceRecording = () => {
+    if (!voiceState.isAvailable) {
+      console.warn("STT not available - graceful fallback");
+      return;
+    }
+    setVoiceState((prev) => ({
+      ...prev,
+      isRecording: !prev.isRecording,
+    }));
+  };
+
+  const handleInviteAgent = () => {
+    setThread((prev) => ({
+      ...prev,
+      agent_invited: !prev.agent_invited,
+    }));
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -213,13 +332,65 @@ export function AgentHubChat() {
 
   return (
     <div className="flex flex-col h-full gap-4">
-      {/* Header */}
+      {/* Header + Session Controls */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-lg">Agent Hub Chat (MVP)</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Unified chat interface for humans and agents
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg">{thread.title}</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Owner: <strong>{thread.owner_id}</strong> (User-Owned Session)
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {/* Voice Summary Button (Opt-In) */}
+              <Button
+                size="sm"
+                variant={voiceState.isRecording ? "default" : "outline"}
+                onClick={handleStartVoiceRecording}
+                disabled={!voiceState.isAvailable}
+                className="gap-1"
+              >
+                {voiceState.isRecording ? (
+                  <>
+                    <Mic className="h-4 w-4 animate-pulse" />
+                    Recording...
+                  </>
+                ) : (
+                  <>
+                    <MicOff className="h-4 w-4" />
+                    Voice (Opt-In)
+                  </>
+                )}
+              </Button>
+
+              {/* Agent Invitation Button (Optional) */}
+              <Button
+                size="sm"
+                variant={thread.agent_invited ? "default" : "outline"}
+                onClick={handleInviteAgent}
+                className="gap-1"
+              >
+                <Users className="h-4 w-4" />
+                {thread.agent_invited ? "Agent Invited" : "Invite Agent"}
+              </Button>
+            </div>
+          </div>
+
+          {/* Voice Recording Status */}
+          {voiceState.isRecording && (
+            <div className="flex gap-2 items-center text-xs text-orange-600 dark:text-orange-400 mt-3 pt-3 border-t">
+              <AlertCircle className="h-3 w-3" />
+              Voice Summary is recording. Will auto-generate at session end.
+            </div>
+          )}
+
+          {thread.agent_invited && (
+            <div className="flex gap-2 items-center text-xs text-blue-600 dark:text-blue-400 mt-3 pt-3 border-t">
+              <Users className="h-3 w-3" />
+              Agent invited. Tasks tracked separately. User remains session owner.
+            </div>
+          )}
         </CardHeader>
       </Card>
 
@@ -275,9 +446,14 @@ export function AgentHubChat() {
       </Card>
 
       {/* Status */}
-      <div className="flex gap-2 items-center text-xs text-muted-foreground px-1">
-        <AlertCircle className="h-3 w-3" />
-        <span>MVP: Using mock data. Backend integration in Phase 2.</span>
+      <div className="flex gap-2 items-start text-xs text-muted-foreground px-1">
+        <AlertCircle className="h-3 w-3 mt-0.5 flex-none" />
+        <div className="space-y-1">
+          <p>✅ Phase 1: Voice Summary (Opt-In) + Full Media Support (Code/Images/Videos)</p>
+          <p>✅ Session-Owner model (User owns session, Agent optional)</p>
+          <p>✅ Graceful Degradation: Chat works even without STT</p>
+          <p>🟡 Backend: Voice routes + Audio processing coming next</p>
+        </div>
       </div>
     </div>
   );

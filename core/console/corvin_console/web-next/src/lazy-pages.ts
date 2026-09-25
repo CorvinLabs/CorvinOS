@@ -139,7 +139,7 @@ export const MemoryPage = React.lazy(() =>
 // src/pages/marketplace/index.tsx — never add a sibling pages/marketplace.tsx
 // (file beats directory; tests/unit/page-dir-shadow.test.ts).
 export const MarketplacePage = React.lazy(() =>
-  import("@/pages/marketplace").then((m) => ({ default: m.MarketplacePage }))
+  import("@/pages/marketplace").then((m) => ({ default: m.default }))
 );
 
 

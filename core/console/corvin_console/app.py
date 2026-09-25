@@ -101,6 +101,7 @@ from .routes import (
     skill_creator_api as skill_creator_route,
     chat as chat_route,
     voice as voice_route,
+    voice_summary as voice_summary_route,
     # workflows_route replaced by PluginLoader (ADR-0039 Phase 6)
     connectors as connectors_route,
     setup as setup_route,
@@ -361,6 +362,8 @@ router.include_router(video_learning_api_route.router, tags=["console-video-lear
 # ADR-0037 (web-next) — web-bridge chat + voice (Iter 3a/b).
 router.include_router(chat_route.router, tags=["console-chat"])
 router.include_router(voice_route.router, tags=["console-voice"])
+# Phase 1: Voice Summary (Opt-In, Graceful Degradation)
+router.include_router(voice_summary_route.router, tags=["console-voice-summary"])
 # ADR-0039 — Workflow Builder (Phases 1-7, Phase 6: plugin migration).
 # Load workflows router from marketplace plugin with console adapters (fallback: console routes).
 try:
