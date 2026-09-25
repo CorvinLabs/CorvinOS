@@ -159,12 +159,28 @@ GET /v1/console/capabilities/manifest
 → { manifest_version, panels, skills, plugins, learning_loops }
 ```
 
-## Next Steps (k=2, k=3, k=4, k=5)
+## Phase 2+ Roadmap: What's Next (k=6–k=9)
 
-- **k=2:** Wire real plugin registry (currently seeded from test fixture)
-- **k=3:** Emit seed events from plugins to populate `event_count_7d`, `health_score`
-- **k=4:** KG MCP integration for health computation (ADR-0907)
-- **k=5:** Console UI panel for loop monitoring + health trends
+**⚠️ CRITICAL INTEGRATION GAP:**  
+Plugins currently **do NOT emit events** for learning loops. Phase 1 computes health from audit chain, but the chain is empty for learning loops. Health scores fall back to synthetic data.
+
+**Phase 2 (k=6–k=9)** closes this gap and adds operator features:
+
+| Iteration | Goal | Blocker | Status |
+|-----------|------|---------|--------|
+| **k=6** | Real plugin event emission (ADR-0314) | ⛔ Phase 2 BLOCKED | ⏳ Next |
+| **k=7** | Console monitoring panel + trends | k=6 data | ⏳ TBD |
+| **k=8** | Health alerts + automatic rollback | k=6 data | ⏳ TBD |
+| **k=9** | Meta-optimization: learn best thresholds | k=7 feedback | ⏳ TBD |
+
+**→ Full Roadmap:** See [`learning-loop-phase2-roadmap.md`](./learning-loop-phase2-roadmap.md)  
+**→ Gate Criteria for k=6:** [`learning-loop-phase2-roadmap.md` § "Gate Criteria for k=6 Start"`](./learning-loop-phase2-roadmap.md#gate-criteria-for-k6-start)
+
+**How to Start k=6:**
+1. Read `learning-loop-phase2-roadmap.md` (this session's handoff)
+2. Verify all Phase 1 gates passed ✅
+3. Approve k=6 scope: "Plugin event emission for learning loops"
+4. Begin k=6 with real audit chain wiring
 
 ---
 
