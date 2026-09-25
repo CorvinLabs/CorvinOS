@@ -230,6 +230,7 @@ from .routes import (
     # Cost Insights Stream 3 — Daily spend, breakdown, guardrails
     cost_insights_routes as cost_insights_route,
     skill_manager as skill_manager_route,
+    marketplace_routes as marketplace_skill_routes,
 )
 
 
@@ -272,6 +273,8 @@ router.include_router(skills.router, tags=["console-skills"])
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
 # ADR-0681 Phase 5 — Console Skill Manager (install, list, uninstall)
 router.include_router(skill_manager_route.router, prefix="/skills-manager", tags=["console-skill-manager"])
+# ADR-0682 Phase 6 — Marketplace Discovery (browse, search, filter, install)
+router.include_router(marketplace_skill_routes.router, prefix="/marketplace", tags=["console-marketplace"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(phase3_monitor_route.router, tags=["console-phase3-monitor"])
 router.include_router(learning_route.router, tags=["console-learning"])
