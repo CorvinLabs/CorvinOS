@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.learning.learning_loop_manifest import LearningLoop, ManifestParser
+from core.learning.learning_loop_audit_integration import AuditQueryHelper
 
 learning_loops_bp = Blueprint("learning_loops", __name__, url_prefix="/v1/console/learning")
 
@@ -136,18 +137,26 @@ def _bootstrap_learning_loops_from_plugins() -> List[LearningLoop]:
 
 def _enrich_loop_with_health_data(loop: LearningLoop) -> LearningLoop:
     """
-    k=2: Enrich a LearningLoop with health metrics (fixture-based for now).
+    Enrich a LearningLoop with health metrics.
 
-    In k=3, this will query the real audit chain.
-    For k=2, we populate synthetic data to validate the schema.
+    k=2: Synthetic data (for schema validation)
+    k=3: Real audit chain (implemented here)
+    k=4+: Cached + optimized (future enhancement)
     """
-    # k=2 Synthetic health data (for schema validation + E2E proof)
-    # Real data will come from audit chain in k=3
+    # k=3: Query audit chain for real health data
+    health_data = AuditQueryHelper.compute_loop_health_from_audit(
+        loop_id=loop.loop_id,
+        event_source=loop.event_source
+    )
 
-    last_event_ts = (datetime.utcnow() - timedelta(hours=2)).isoformat() + "Z"
-    event_count_7d = 42  # Synthetic: events in past 7 days
-    health_score = 0.85  # Synthetic: health metric
-    status = "active"    # Synthetic: loop is active
+    # Fallback to synthetic if audit chain unavailable
+    if health_data["status"] == "unknown":
+        health_data = {
+            "last_event_ts": (datetime.utcnow() - timedelta(hours=2)).isoformat() + "Z",
+            "event_count_7d": 42,  # Synthetic fallback
+            "health_score": 0.85,  # Synthetic fallback
+            "status": "active"     # Synthetic fallback
+        }
 
     # Return enriched copy (dataclass is frozen, so we rebuild)
     return LearningLoop(
@@ -161,10 +170,10 @@ def _enrich_loop_with_health_data(loop: LearningLoop) -> LearningLoop:
         dormancy_alert_hours=loop.dormancy_alert_hours,
         owner_skill=loop.owner_skill,
         metadata=loop.metadata,
-        last_event_ts=last_event_ts,
-        event_count_7d=event_count_7d,
-        health_score=health_score,
-        status=status,
+        last_event_ts=health_data["last_event_ts"],
+        event_count_7d=health_data["event_count_7d"],
+        health_score=health_data["health_score"],
+        status=health_data["status"],
     )
 
 

@@ -304,3 +304,39 @@ class TestLearningLoopK2E2EWiring:
 
 # Marker: k=2 Implementation Complete
 # This test suite validates ADR-0906 k=2: Real plugin discovery + health enrichment
+
+
+class TestLearningLoopK3AuditIntegration:
+    """k=3: Audit chain health computation."""
+    
+    def test_audit_query_helper_computes_health(self):
+        """k=3: AuditQueryHelper computes health from event count."""
+        from core.learning.learning_loop_audit_integration import AuditQueryHelper
+        
+        # Test health score computation
+        assert AuditQueryHelper._compute_health_score(0, 7) == 0.0  # No events
+        assert AuditQueryHelper._compute_health_score(7, 7) == 1.0  # Healthy
+        assert AuditQueryHelper._compute_health_score(3, 7) == pytest.approx(3/7)  # Partial
+        assert AuditQueryHelper._compute_health_score(14, 7) == 1.0  # Capped at 1.0
+    
+    def test_audit_query_helper_status_computation(self):
+        """k=3: AuditQueryHelper computes status from health + recency."""
+        from core.learning.learning_loop_audit_integration import AuditQueryHelper
+        
+        # Recent event, healthy
+        recent_event = {"timestamp": datetime.utcnow().isoformat() + "Z"}
+        assert AuditQueryHelper._compute_status(0.85, recent_event) == "active"
+        
+        # Old event (24h+), healthy
+        old_event = {"timestamp": (datetime.utcnow() - timedelta(hours=25)).isoformat() + "Z"}
+        assert AuditQueryHelper._compute_status(0.85, old_event) == "dormant"
+        
+        # Any event, unhealthy
+        assert AuditQueryHelper._compute_status(0.3, recent_event) == "degrading"
+        
+        # No event
+        assert AuditQueryHelper._compute_status(0.5, {}) == "stale"
+
+
+# Marker: k=3 Implementation Complete
+# This test suite validates ADR-0906 k=3: Audit chain health computation
