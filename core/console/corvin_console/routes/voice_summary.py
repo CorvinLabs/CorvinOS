@@ -23,6 +23,10 @@ from core.console.corvin_console.services.type_detector import (
     get_summary_strategy_for_type,
     MessageType,
 )
+from core.console.corvin_console.services.stt_engine import (
+    get_stt_engine,
+    is_stt_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +81,10 @@ _voice_sessions: Dict[str, Dict[str, Any]] = {}
 
 def _get_stt_available() -> bool:
     """
-    Check if STT (Speech-To-Text) is available.
-    Phase 1: Mock availability. Later: Check actual provider (Google Cloud STT, etc.)
+    Check if STT (Speech-To-Text) is available (Phase 2b: via STT Engine).
     Graceful Fallback: Chat works even if STT is unavailable.
     """
-    return True
+    return is_stt_available()
 
 
 def _record_audit_event(event_type: str, data: Dict[str, Any], tenant_id: str) -> None:
