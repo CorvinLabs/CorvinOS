@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status as http_status
 
 from .. import auth as session_auth
 from ..deps import require_session
-from core.console.corvin_core.task_audit_trail import TaskAuditTrail
+from corvin_core.task_audit_trail import TaskAuditTrail
 from ..deps import require_session_csrf_on_mutation
 
 router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
