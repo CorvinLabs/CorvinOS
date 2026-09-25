@@ -826,6 +826,43 @@ def create_app() -> FastAPI:
             import logging
             logging.getLogger(__name__).warning("GitHub auto-sync boot resume failed: %s", exc)
 
+        # ADR-2066 Phase 2 — Centralized Configuration Management
+        # Initialize config manager for fail-closed config validation
+        try:
+            from core.config import CentralizedConfigManager
+            import logging as _config_logger
+            from . import _bootstrap
+
+            audit_log_path = _bootstrap.forge_paths.tenant_audit_chain(tenant_id="_default")
+            config_mgr = CentralizedConfigManager.create_with_audit(audit_log_path)
+            app.state.config_manager = config_mgr
+            _config_logger.getLogger("corvin.config").info(
+                "Configuration manager initialized (fail-closed validation enabled)"
+            )
+        except Exception as exc:
+            import logging as _config_err_logger
+            _config_err_logger.getLogger("corvin.config").warning(
+                f"Failed to initialize config manager (using DEFAULT_SAFE_CONFIG): {exc}"
+            )
+
+        # ADR-0409 Phase 4 — Real-Time Drift Detection & Alerting
+        # Start background monitoring service (30s polling for all drifts)
+        try:
+            from core.monitoring.drift_detector import get_drift_service
+            import logging as _monitoring_logger
+
+            detector = get_drift_service()
+            detector.start_monitoring()
+            app.state.drift_detector = detector
+            _monitoring_logger.getLogger("corvin.monitoring").info(
+                "Drift detection service started (30s polling, Slack/PagerDuty routing active)"
+            )
+        except Exception as exc:
+            import logging as _monitoring_err_logger
+            _monitoring_err_logger.getLogger("corvin.monitoring").warning(
+                f"Failed to start drift detection service: {exc}"
+            )
+
         yield
 
         # Shutdown: cleanup task (optional — can be extended for graceful cleanup)
