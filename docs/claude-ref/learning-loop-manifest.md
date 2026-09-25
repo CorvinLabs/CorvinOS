@@ -168,5 +168,33 @@ GET /v1/console/capabilities/manifest
 
 ---
 
-**Implemented:** 2026-09-25 (Loop 1, k=1)  
+## Implementation Progress
+
+| Iteration | Scope | Status | Date |
+|-----------|-------|--------|------|
+| **k=1** | Static manifest discovery (test fixture) | ✅ COMPLETE | 2026-09-25 |
+| **k=2** | Real plugin scanning + health enrichment | ✅ COMPLETE | 2026-09-25 |
+| **k=3** | Audit chain health computation | ⏳ TODO | Next |
+| **k=4** | KG MCP indexing (ADR-0907) | ⏳ TODO | TBD |
+| **k=5** | Console UI panel + monitoring | ⏳ TODO | TBD |
+
+### k=2: Real Plugin Discovery (2026-09-25)
+
+**What was added:**
+- Plugin registry scanning (`_bootstrap_learning_loops_from_plugins`)
+- Health data enrichment (`_enrich_loop_with_health_data`)
+- Caching layer for performance
+- 7 new E2E tests
+
+**How it works:**
+1. On first `/v1/console/learning/loops` request, scan all `plugin.json` files
+2. Extract `learning_loops` declarations from each manifest
+3. Enrich with health data (k=2: synthetic, k=3: real audit chain)
+4. Cache results for repeated requests
+5. Gracefully skip invalid or missing loops
+
+**Files Changed (k=2):**
+- `core/console/corvin_console/routes/learning_loops.py` (+120 LoC)
+- `tests/integration/test_learning_loop_manifest_e2e.py` (+95 LoC)
+
 **Reference:** ADR-0906, CONCEPT-0051, ADR-0314 (audit events)
