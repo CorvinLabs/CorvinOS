@@ -345,6 +345,28 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         _appr_log_err.getLogger("corvin.approval_gate").warning(
             "Failed to initialize OperatorApprovalGate (approval endpoints disabled): %s", e
         )
+    # ADR-0407 Phase 1 — Deployment State Registration (drift prevention)
+    # Register this instance with the deployment state manager.
+    # Enables multi-instance drift detection (code version, config, plugins).
+    # Best-effort: if deployment system unavailable, gateway still starts.
+    try:
+        from core.deployment.state_sync import get_deployment_manager
+        import logging as _deployment_logger
+
+        manager = get_deployment_manager()
+        instance_id = os.environ.get("INSTANCE_ID", "gateway-local")
+        tenant_id = os.environ.get("TENANT_ID", "_default")
+
+        manager.register_instance(instance_id=instance_id, tenant_id=tenant_id)
+        _deployment_logger.getLogger("corvin.deployment").info(
+            f"Deployment state registered: {instance_id} (tenant={tenant_id})"
+        )
+    except Exception as exc:  # noqa: BLE001
+        import logging as _deploy_err_logger
+        _deploy_err_logger.getLogger("corvin.deployment").warning(
+            f"Failed to register deployment state (drift detection disabled): {exc}"
+        )
+
     # Phase 7.1 — recover any pending runs from the durable queue
     # the previous process accepted but never finished.
     try:

@@ -403,6 +403,26 @@ def create_app() -> FastAPI:
             )
             raise
 
+        # ADR-0407 Phase 1 — Deployment State Registration (drift prevention)
+        # Register this instance with the deployment state manager.
+        # Enables multi-instance drift detection (code version, config, plugins).
+        # Best-effort: if deployment system unavailable, console still starts.
+        try:
+            from core.deployment.state_sync import get_deployment_manager
+
+            manager = get_deployment_manager()
+            instance_id = os.environ.get("INSTANCE_ID", "console-local")
+            tenant_id = os.environ.get("TENANT_ID", "_default")
+
+            manager.register_instance(instance_id=instance_id, tenant_id=tenant_id)
+            log.info(
+                f"Deployment state registered: {instance_id} (tenant={tenant_id})"
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                f"Failed to register deployment state (drift detection disabled): {exc}"
+            )
+
         # ── ADR-0365 — Token Metrics Measurement Hook (best-effort) ─────────
         # Initialize the global token measurement hook. This hook records token
         # usage (input/output) for every turn, enabling the Vibe Engineering
