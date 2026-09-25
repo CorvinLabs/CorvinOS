@@ -26,6 +26,27 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def _normalise_entry(entry: Any) -> dict[str, Any]:
+    """Accept both registry shapes.
+
+    `SkillInstaller` (ADR-0680) writes `{skill_id: [ {version, boot_layer,
+    dependencies: [{skill_id, ...}], verified}, ... ]}` — one entry per
+    installed version. The flat `{skill_id: {name, version, ...}}` shape is
+    the catalogue's own. The newest installed version stands for a list.
+    """
+    if isinstance(entry, list):
+        if not entry:
+            raise ValueError("no installed version")
+        entry = dict(entry[-1])
+    if not isinstance(entry, dict):
+        raise TypeError(f"unexpected registry entry: {type(entry).__name__}")
+    deps = entry.get("dependencies", []) or []
+    entry["dependencies"] = [
+        d.get("skill_id", "") if isinstance(d, dict) else str(d) for d in deps
+    ]
+    return entry
+
+
 class SkillTier(Enum):
     """Skill capability tier (ADR-0156 licensing boundary)."""
     COMPLIANCE = "compliance"
@@ -115,6 +136,7 @@ class SkillMarketplaceIndex:
 
             for skill_id, skill_dict in data.items():
                 try:
+                    skill_dict = _normalise_entry(skill_dict)
                     metadata = SkillMetadata(
                         skill_id=skill_id,
                         name=skill_dict.get("name", skill_id),
@@ -131,7 +153,7 @@ class SkillMarketplaceIndex:
                         dependencies=skill_dict.get("dependencies", []),
                     )
                     self._registry[skill_id] = metadata
-                except (ValueError, KeyError) as e:
+                except (ValueError, KeyError, TypeError, AttributeError) as e:
                     logger.warning(f"Skipping malformed skill {skill_id}: {e}")
                     continue
 

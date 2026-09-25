@@ -1,6 +1,6 @@
 /**
  * Marketplace — ONE panel for browsing the plugin index, managing installed
- * plugins, skill packages and MCP tools (ADR-0892). Replaces
+ * plugins, the skill catalogue (ADR-0682), skill packages and MCP tools (ADR-0892). Replaces
  * /app/marketplace-hub (a synthetic index that fetched a 404), the manifest's
  * /app/plugin-center (a deleted component: the 404 page) and /app/packages.
  *
@@ -17,6 +17,7 @@ import { DEFAULT_TAB, TAB_IDS, TAB_LABEL, isTabId, type TabId } from "./tabs";
 import { BrowseTab } from "./tabs/browse";
 import { InstalledTab } from "./tabs/installed";
 import { PackagesTab } from "./tabs/packages";
+import { SkillsTab } from "./tabs/skills";
 import { ToolsTab } from "./tabs/tools";
 
 export function MarketplacePage() {
@@ -54,6 +55,7 @@ export function MarketplacePage() {
 
         <TabsContent value="browse" className="mt-6"><BrowseTab onGoTo={goTo} /></TabsContent>
         <TabsContent value="installed" className="mt-6"><InstalledTab onGoTo={goTo} /></TabsContent>
+        <TabsContent value="skills" className="mt-6"><SkillsTab onGoTo={goTo} /></TabsContent>
         <TabsContent value="packages" className="mt-6"><PackagesTab /></TabsContent>
         <TabsContent value="tools" className="mt-6"><ToolsTab /></TabsContent>
       </Tabs>

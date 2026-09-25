@@ -262,3 +262,52 @@ export function removeTool(id: string, csrf: string): Promise<unknown> {
  *  switched off by a flag. Both are "not available here", never an error toast. */
 export const isUnavailable = (e: unknown): e is ApiError =>
   e instanceof ApiError && (e.status === 503 || e.status === 404);
+
+// ── Skill catalogue (ADR-0682) — Skills tab, read-only ───────────────────
+// /marketplace/skills/* (marketplace_routes.py) lists the skills SkillInstaller
+// (ADR-0680) has installed on this host. There is no install call: skills
+// arrive as packages (Packages tab).
+
+export interface SkillCard {
+  skill_id: string;
+  name: string;
+  version: string;
+  description: string;
+  domain: string;
+  tier: string;
+  origin: string;
+  rating: number;
+  install_count: number;
+  relevance_score?: number;
+}
+
+export interface SkillDetail extends SkillCard {
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  dependencies: string[];
+}
+
+export interface SkillSearchResponse {
+  total: number;
+  count: number;
+  skills: SkillCard[];
+}
+
+export interface SkillSearchParams {
+  q: string;
+  domain: string;
+  tier: string;
+  sort_by: string;
+}
+
+export function searchSkills(p: SkillSearchParams, signal?: AbortSignal): Promise<SkillSearchResponse> {
+  const qs = new URLSearchParams({ q: p.q, sort_by: p.sort_by, limit: "100" });
+  if (p.domain) qs.set("domain", p.domain);
+  if (p.tier) qs.set("tier", p.tier);
+  return api<SkillSearchResponse>(`/marketplace/skills/search?${qs}`, { signal });
+}
+
+export function getSkillDetail(skillId: string, signal?: AbortSignal): Promise<SkillDetail> {
+  return api<SkillDetail>(`/marketplace/skills/${encodeURIComponent(skillId)}`, { signal });
+}
