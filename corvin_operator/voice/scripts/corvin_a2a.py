@@ -18,6 +18,7 @@ import os
 import secrets
 import sys
 from pathlib import Path
+from typing import Any
 
 # Locate the shared module path when invoked from the repo.
 _HERE = Path(__file__).resolve()
@@ -1079,6 +1080,54 @@ def _cmd_revoke_invite(args: argparse.Namespace) -> int:
 import a2a_friendship as _friendship  # type: ignore[import-not-found]
 
 
+def _audit_a2a(event_type: str, severity: str, **details: Any) -> None:
+    """Content-free, best-effort audit write — same substrate/pattern as
+    a2a_connectivity.py's ``_audit`` (module-local, not shared, since the
+    connectivity manager is not otherwise needed in a CLI process)."""
+    try:
+        se = getattr(rts, "_forge_se", None)
+        if se is None:
+            return
+        path = rts.audit_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        se.write_event(
+            path, event_type, severity=severity, tool="", run_id="",
+            details=rts._assert_audit_details_safe(details), hash_chain=True,
+        )
+    except Exception:  # noqa: BLE001 — audit is best-effort on this path
+        pass
+
+
+def _maybe_enable_relay_fallback(*, reason: str) -> None:
+    """Turn on the ``a2a_relay_fallback`` flag (ADR-0258) the same way the
+    Console pairing routes do (``routes/a2a_pair.py``), so a CLI-only pairing
+    gets the identical zero-config relay behaviour as a browser pairing.
+
+    Before this, ``create-token``/``import-token`` never touched the flag at
+    all — a CLI-paired connection whose direct URL was unreachable (e.g. the
+    peer's gateway bound to loopback only) stayed permanently UNREACHABLE
+    with the relay silently inert, even though a relay URL (the built-in
+    default, or an explicit one) was already available. Best-effort: a
+    missing ``corvin_core`` (bare CLI checkout without the console package)
+    leaves pairing itself unaffected — same fallback the connectivity
+    manager's own ``_relay_desired()`` uses.
+    """
+    try:
+        from corvin_core import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        if _ff.is_enabled("a2a_relay_fallback"):
+            return
+        _ff.set_enabled("a2a_relay_fallback", True)
+        _audit_a2a(
+            "a2a.relay.enabled_for_pairing", "INFO",
+            reason=reason, source="cli",
+        )
+    except Exception:  # noqa: BLE001 — pairing must not fail on this
+        pass
+
+
 def _cmd_create_token(args: argparse.Namespace) -> int:
     """Generate a friendship token.  Writes nothing to disk."""
     url = args.url.strip().rstrip("/") if args.url else None
@@ -1105,6 +1154,12 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
 
     max_ttl: int | None = args.max_call_ttl if args.max_call_ttl > 0 else None
 
+    # The relay this instance listens on travels in the token, so a redeemer
+    # that cannot reach us directly (loopback-bound install, NAT, firewall)
+    # still completes the handshake with zero configuration — same as the
+    # Console's POST /remote-trigger/pair/friendship/create.
+    relay_for_token = _friendship.get_my_relay_url()
+
     try:
         token, token_str = _friendship.create_friendship_token(
             url=url,
@@ -1112,10 +1167,14 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
             ttl_seconds=ttl,
             personas=personas,
             max_ttl_s=max_ttl,
+            relay_url=relay_for_token,
         )
     except _friendship.FriendshipError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    if relay_for_token:
+        _maybe_enable_relay_fallback(reason="a2a.relay.enabled_for_pairing")
 
     if args.remember_url and url:
         _friendship.set_my_url(url)
@@ -1205,7 +1264,63 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
     _atomic_write(origin_path, _friendship.to_origin_dict(token))
     _atomic_write(endpoint_path, _friendship.to_endpoint_dict(token))
 
+    # Zero-config rendezvous (concept a2a-robust-connectivity, 2026-09-24):
+    # adopt the issuer's relay unless we already chose one explicitly (incl.
+    # explicit "off") — two peers on different relays can never meet there.
+    # Same logic as the Console's POST /remote-trigger/pair/friendship/import;
+    # the CLI previously never ran it, leaving a CLI-only pairing unable to
+    # fall back to the relay even when both sides had one configured.
+    if token.relay_url and not _friendship.my_relay_url_is_explicit():
+        if _friendship.get_my_relay_url() != token.relay_url:
+            _friendship.set_my_relay_url(token.relay_url)
+    if token.relay_url and _friendship.get_my_relay_url() == token.relay_url:
+        _maybe_enable_relay_fallback(reason="a2a.relay.enabled_for_pairing")
+
+    # Reciprocal ack (found 2026-07-29, ported from the Console route): the
+    # issuer has NO record of us until this succeeds — a ping FROM us TO
+    # them before the ack would always fail. The ack round trip itself is
+    # the proof of OUR->THEM reachability; the issuer's own ping-back to us
+    # (server-side, inside the ack handler) proves THEM->US reachability and
+    # comes back in the ack response's "reachable" field. Without this step,
+    # a CLI-only pairing was permanently one-way: the redeemer had a working
+    # config, but the issuer never learned it existed.
     state = "ACTIVE" if token.url else "PENDING"
+    peer_knows_us = False
+    peer_reports_reachable = False
+    if token.url is not None or token.relay_url:
+        my_own_url = _friendship.get_my_url() or _friendship.suggest_my_url()
+        if my_own_url and not _friendship.get_my_url():
+            try:
+                _friendship.set_my_url(my_own_url)
+            except OSError:
+                pass
+        if my_own_url:
+            ack_result = _friendship.send_friendship_ack(token, my_url=my_own_url)
+            peer_knows_us = bool(ack_result.get("ok"))
+            peer_reports_reachable = bool(ack_result.get("reachable"))
+            if token.url is None:
+                state = "PENDING"  # the issuer's hello will bring its address
+            else:
+                state = "ACTIVE" if (peer_knows_us and peer_reports_reachable) else "UNREACHABLE"
+        else:
+            # No own URL configured (`corvin-a2a my-url <url>`) — the issuer
+            # can never be told about us, so this stays a one-way import.
+            state = "UNREACHABLE"
+
+        for p in (origin_path, endpoint_path):
+            if not p.exists():
+                continue
+            cfg = json.loads(p.read_text("utf-8"))
+            cfg["state"] = state
+            cfg["_peer_knows_us"] = peer_knows_us
+            cfg["_peer_reports_reachable"] = peer_reports_reachable
+            _atomic_write(p, cfg)
+
+    _audit_a2a(
+        "a2a.friendship.imported", "INFO",
+        kid=token.kid, state=state, source="cli",
+    )
+
     print(f"[OK] Verbindung importiert (kid={token.kid}, state={state})")
     if token.label:
         print(f"     Label:   {token.label}")
@@ -1214,6 +1329,8 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
     else:
         print(f"     URL:     (noch nicht gesetzt)")
         print(f"     → URL ergänzen: corvin-a2a set-url {token.kid} <peer-url>")
+    print(f"     Peer weiß von uns:       {'ja' if peer_knows_us else 'nein'}")
+    print(f"     Peer meldet uns erreichbar: {'ja' if peer_reports_reachable else 'nein'}")
     print(f"     Origin:  {origin_path}")
     print(f"     Endpoint:{endpoint_path}")
     return 0
