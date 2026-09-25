@@ -22,7 +22,7 @@ class ExtractedFeatures:
     has_pseudocode: bool  # Whether pseudocode/logic flow is present
     intent_clarity: float  # 0.0-1.0, how clear the intent is
 
-    def to_dict(self) -> Dict[str, any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "token_estimate": self.token_estimate,
             "keyword_complexity": self.keyword_complexity,
