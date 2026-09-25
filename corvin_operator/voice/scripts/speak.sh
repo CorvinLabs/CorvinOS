@@ -84,17 +84,18 @@ is_quota_error() {
 
 try_openai_tts() {
   local text="$1" voice="$2" model="$3" speed="$4" outfile="$5"
-  local err_output
+  local err_output _py
 
   err_output=$(mktemp "${TMPDIR:-/tmp}/corvin.XXXXXX.err")
   trap 'rm -f "$err_output"' RETURN
+  _py="$(voice_resolve_python)"
 
   if OPENAI_TTS_TEXT="$text" \
      OPENAI_TTS_VOICE="$voice" \
      OPENAI_TTS_MODEL="$model" \
      OPENAI_TTS_SPEED="$speed" \
      OPENAI_TTS_OUTFILE="$outfile" \
-     python3 - 2>"$err_output" <<'PY'
+     "$_py" - 2>"$err_output" <<'PY'
 import os, sys
 from openai import OpenAI
 client = OpenAI()
@@ -126,8 +127,9 @@ PY
 
 try_edge_tts() {
   local text="$1" lang="$2" player="$3"
+  local _py; _py="$(voice_resolve_python)"
 
-  if ! python3 -c "import edge_tts" 2>/dev/null; then
+  if ! "$_py" -c "import edge_tts" 2>/dev/null; then
     voice_log "speak: edge-tts package not installed"
     return 1
   fi
@@ -143,7 +145,7 @@ try_edge_tts() {
   esac
 
   if ! EDGE_TTS_TEXT="$text" EDGE_TTS_VOICE="$voice" EDGE_TTS_OUTFILE="$tmp_mp3" \
-       python3 - 2>/dev/null <<'PY'
+       "$_py" - 2>/dev/null <<'PY'
 import asyncio, edge_tts, os
 async def main():
     tts = edge_tts.Communicate(os.environ["EDGE_TTS_TEXT"], os.environ["EDGE_TTS_VOICE"])

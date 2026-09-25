@@ -24,7 +24,8 @@
 #   .\bridge.ps1 uninstall-autostart   # Remove the autostart tasks
 #
 # Prerequisites (set up by install.ps1):
-#   - Python 3.11+ in PATH or %USERPROFILE%\.corvinos\Scripts\python.exe
+#   - Python 3.11+ in PATH, or the uv-tool venv install.ps1 provisions at
+#     %APPDATA%\uv\tools\corvinos\Scripts\python.exe (see Find-Python below)
 #   - CorvinOS installed via: pip install -e .
 #   - Ollama running (for hermes engine): ollama serve
 #   - (Optional) claude CLI for claude_code engine
@@ -41,16 +42,49 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # ── Python / venv resolution ──────────────────────────────────────────────────
 
+# True when `openai` actually imports in $PyPath -- venv existence alone is
+# not enough (a stale/partial venv passes Test-Path and still fails on the
+# real import). A bare `python`/`python3`/`py` from PATH almost never has it;
+# the uv-tool venv install.ps1 provisions almost always does.
+function Test-PythonHasOpenAI {
+    param([string]$PyPath)
+    if (-not $PyPath) { return $false }
+    try {
+        & $PyPath -c "import openai" 2>$null 1>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Find-Python {
-    $venvPy = Join-Path $env:USERPROFILE ".corvinos\Scripts\python.exe"
-    if (Test-Path $venvPy) { return $venvPy }
+    # install.ps1 Phase 9 provisions the real venv via `uv tool install` at
+    # %APPDATA%\uv\tools\<pkg> (install.ps1's $UvToolDir), NOT
+    # %USERPROFILE%\.corvinos\ -- nothing ever creates that path, so the old
+    # check here always fell through to a raw PATH scan with only a version
+    # check and no `openai` importability check. Same bug class already fixed
+    # on Linux/macOS in voice_lib.sh::voice_resolve_python (2026-09-25): a
+    # valid OPENAI_API_KEY silently never reached OpenAI TTS because the
+    # python actually running `bridge.ps1 doctor` / `console` had no `openai`
+    # package, even though the uv-tool venv right next to it did.
+    $pkg = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
+    $uvToolDir = if ($env:UV_TOOL_DIR) { Join-Path $env:UV_TOOL_DIR $pkg } else { Join-Path $env:APPDATA "uv\tools\$pkg" }
+    $venvPy = Join-Path $uvToolDir "Scripts\python.exe"
+    if (Test-PythonHasOpenAI $venvPy) { return $venvPy }
+
+    $fallback = $null
     foreach ($cmd in @("python", "python3", "py")) {
         try {
             $ver = & $cmd -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')" 2>$null
             if ($ver -match "^3\.(\d+)" -and [int]$Matches[1] -ge 11) {
-                return $cmd
+                if (Test-PythonHasOpenAI $cmd) { return $cmd }
+                if (-not $fallback) { $fallback = $cmd }
             }
         } catch {}
+    }
+    if ($fallback) {
+        Write-Warning "No Python with the 'openai' package found (checked $venvPy and PATH) -- OpenAI TTS will be unavailable and voice falls back to edge-tts/Piper. Re-run install.ps1, or: $fallback -m pip install openai"
+        return $fallback
     }
     Write-Error "Python 3.11+ not found. Run install.ps1 first."
     exit 1

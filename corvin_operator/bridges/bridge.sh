@@ -136,13 +136,40 @@ _resolve_npm() {
   fi
   command -v npm 2>/dev/null || true
 }
+# A candidate only counts if `openai` actually imports in it — existence of
+# the venv dir is not enough. A half-bootstrapped or stale venv (created once,
+# never updated) passed the old `-x` check and still crash-looped/silently
+# skipped OpenAI TTS on first import (found 2026-09-25: an adapter pinned to
+# such a venv ran fine but every _try_openai_tts() call hit ImportError and
+# fell through to edge-tts, even with a valid OPENAI_API_KEY configured).
+_py_has_openai() {
+  [[ -n "$1" && -x "$1" ]] && "$1" -c "import openai" >/dev/null 2>&1
+}
 _resolve_python() {
   if [[ -n "${PY_BIN:-}" && -x "$PY_BIN" ]]; then printf '%s' "$PY_BIN"; return; fi
   # The repo venv carries the adapter's dependencies; a bare `python3` from
   # PATH (e.g. ~/.local/bin) does not, and an adapter unit installed against it
   # crash-loops on the first import (found 2026-09-24 re-running install-units).
   local repo_py="$BRIDGES_DIR/../../.venv/bin/python3"
-  if [[ -x "$repo_py" ]]; then (cd "$(dirname "$repo_py")" && printf '%s/python3' "$(pwd)"); return; fi
+  if _py_has_openai "$repo_py"; then (cd "$(dirname "$repo_py")" && printf '%s/python3' "$(pwd)"); return; fi
+  # core/console/.venv is the ONE python env this repo self-heals on every
+  # boot (corvin-webui.service's ExecStartPre runs core/console/bootstrap.sh
+  # whenever it's absent or broken) — prefer it over a bare system python3
+  # before giving up, since a fresh clone / `install.sh` run never creates
+  # BRIDGES_DIR/../../.venv at all (only a developer's manual `uv sync` does).
+  local console_py="$BRIDGES_DIR/../../core/console/.venv/bin/python"
+  if _py_has_openai "$console_py"; then (cd "$(dirname "$console_py")" && printf '%s/python' "$(pwd)"); return; fi
+  # Neither venv exists yet, or exists but is missing the TTS extras (fresh
+  # clone, git clean, first install before the console has ever booted).
+  # bootstrap.sh is idempotent and self-healing — run it once on the spot so
+  # `bridge.sh up` on a brand-new install doesn't silently pin the adapter to
+  # a python that can never speak OpenAI TTS. Costs nothing on a repeat call.
+  local bootstrap="$BRIDGES_DIR/../../core/console/bootstrap.sh"
+  if [[ -z "${CORVIN_SKIP_VOICE_BOOTSTRAP:-}" && -f "$bootstrap" ]]; then
+    echo "[bridge.sh] no python with the 'openai' package found — bootstrapping core/console/.venv (one-time) ..." >&2
+    bash "$bootstrap" >&2 || true
+    if _py_has_openai "$console_py"; then (cd "$(dirname "$console_py")" && printf '%s/python' "$(pwd)"); return; fi
+  fi
   command -v python3 2>/dev/null || true
 }
 NODE_BIN="$(_resolve_node)"

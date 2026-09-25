@@ -47,6 +47,9 @@ case "$cmd" in
     voice_mode="$(voice_cfg .voice_mode auto)"
     max_chars="$(voice_cfg .summarize_max_chars 4096)"
     player="$(voice_audio_player)"
+    tts_py="$(voice_resolve_python)"
+    openai_sdk="no"; "$tts_py" -c "import openai" 2>/dev/null && openai_sdk="yes"
+    anthropic_sdk="no"; "$tts_py" -c "import anthropic" 2>/dev/null && anthropic_sdk="yes"
     cat <<EOF
 🎙  Claude Voice — Status
 ─────────────────────────────────────────
@@ -61,8 +64,9 @@ Config file    : $VOICE_CONFIG_FILE
 Log file       : $VOICE_LOG_FILE
 ─────────────────────────────────────────
 Verfügbare Tools:
-  openai-sdk   : $(python3 -c "import openai" 2>/dev/null && echo yes || echo no)
-  anthropic-sdk: $(python3 -c "import anthropic" 2>/dev/null && echo yes || echo no)
+  python (TTS) : $tts_py
+  openai-sdk   : $openai_sdk
+  anthropic-sdk: $anthropic_sdk
   OPENAI_API_KEY    : $([[ -n "${OPENAI_API_KEY:-}" ]] && echo set || echo unset)
   ANTHROPIC_API_KEY : $([[ -n "${ANTHROPIC_API_KEY:-}" ]] && echo set || echo unset)
   piper        : $(command -v piper >/dev/null 2>&1 && echo yes || echo no)

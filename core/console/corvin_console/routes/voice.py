@@ -20,10 +20,8 @@ for TTS — only ``len(text)`` is logged.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import os
 import random
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,6 +38,7 @@ from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
 from .. import audit as console_audit
+from .. import voice_interpreter as _voice_interpreter
 from ..deps import require_csrf, require_session
 
 import logging
@@ -1039,34 +1038,21 @@ _AUDIO_EXT_BY_MIME = {
 }
 
 
+# Interpreter resolution is SSOT'd in voice_interpreter.py — it used to be
+# defined here only, and voice_summary_orchestration.py carried an
+# independent, simpler copy that hardcoded a bare "python3" and silently lost
+# OpenAI TTS on any install where the first python3 on PATH lacked the
+# `openai` package (2026-09-25 finding). _say_interpreter is kept as a thin
+# wrapper so every existing call site / docstring reference below still
+# resolves.
 def _say_interpreter() -> list[str]:
     """argv prefix that runs say.py in an environment which HAS a TTS provider.
 
-    Prefer this process's own interpreter: the installer provisions the console
-    env with the TTS extras (edge-tts, openai, piper), so it is the one
-    environment we can actually verify — ``find_spec`` here is a real check, not
-    an assumption, and it costs nothing (no import).
-
-    ``uv run`` is the fallback for a console running from an env without the
-    extras (a minimal wheel install). It is deliberately NOT the default: uv
-    resolves its project by walking up from the CWD, so the env say.py lands in
-    depends on where the operator launched the console from — inside the
-    checkout it finds the repo venv, anywhere else it gets a bare ephemeral env
-    with no edge-tts and TTS goes silently mute (ADR-0194 asked for venv
-    isolation, which the running interpreter already provides).
-
-    ``--project`` pins that walk to the tree say.py itself lives in, so the
-    fallback is at least deterministic rather than CWD-dependent.
+    See voice_interpreter.say_interpreter — this module's copy is the
+    canonical implementation every other say.py caller in corvin_console
+    imports.
     """
-    if importlib.util.find_spec("edge_tts") or importlib.util.find_spec("openai"):
-        return [sys.executable]
-    uv = shutil.which("uv")
-    if uv:
-        return [uv, "run", "--project", str(_VOICE_SCRIPTS.parents[2]), "python"]
-    # No provider importable and no uv: say.py will exit 0 with no audio and the
-    # endpoint answers its designed 204. Spawn it anyway — its own diagnostics
-    # on stderr are what a `voice-doctor` run needs to report the cause.
-    return [sys.executable]
+    return _voice_interpreter.say_interpreter(_VOICE_SCRIPTS)
 
 
 def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:

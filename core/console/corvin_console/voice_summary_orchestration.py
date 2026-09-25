@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .voice_interpreter import resolve_voice_scripts_dir, say_interpreter
+
 logger = logging.getLogger(__name__)
 
 
@@ -279,17 +281,21 @@ def _synthesize_voice_file(
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_file = outbox / f"orchestration_summary_{timestamp}.ogg"
 
-    say_script = Path(__file__).parent.parent.parent.parent / "corvin_operator" / "voice" / "scripts" / "say.py"
+    voice_scripts_dir = resolve_voice_scripts_dir(Path(__file__).resolve().parent)
+    say_script = voice_scripts_dir / "say.py"
 
     if not say_script.exists():
         logger.warning(f"say.py not found at {say_script}")
         return None
 
     try:
-        # Call say.py subprocess
+        # Interpreter resolution is shared with routes/voice.py (voice_interpreter
+        # module) — a bare "python3" here used to resolve to whatever is first on
+        # PATH (typically system python3, which has no `openai` installed) and
+        # silently dropped OpenAI TTS even with a valid OPENAI_API_KEY configured.
         result = subprocess.run(
             [
-                "python3",
+                *say_interpreter(voice_scripts_dir),
                 str(say_script),
                 str(out_file),
                 summary_text,

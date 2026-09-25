@@ -66,14 +66,48 @@ function Write-SupervisorLog([string]$Message) {
     try { Add-Content -Path $LogFile -Value "$ts [$LogName] $Message" -ErrorAction SilentlyContinue } catch {}
 }
 
+# True when `openai` actually imports in $PyPath -- venv existence alone is
+# not enough. Mirrors bridge.ps1's Test-PythonHasOpenAI (this script runs as
+# its own process, launched by a Scheduled Task action, so it cannot dot-source
+# bridge.ps1's copy -- kept in lock-step by hand, same as the two independent
+# `_resolve_python` copies in bridge.sh / voice_lib.sh on Linux).
+function Test-PythonHasOpenAI {
+    param([string]$PyPath)
+    if (-not $PyPath) { return $false }
+    try {
+        & $PyPath -c "import openai" 2>$null 1>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Find-Python {
-    $venvPy = Join-Path $env:USERPROFILE ".corvinos\Scripts\python.exe"
-    if (Test-Path $venvPy) { return $venvPy }
+    # See bridge.ps1's Find-Python for the full history: the old
+    # %USERPROFILE%\.corvinos\ path is never actually created by install.ps1
+    # (the real uv-tool venv lives at %APPDATA%\uv\tools\<pkg>), and the old
+    # PATH fallback never verified `openai` was importable -- so the console
+    # this supervisor restarts on every crash/reboot could run for months on
+    # a Python that can never speak OpenAI TTS, with no error anywhere
+    # (2026-09-25 finding).
+    $pkg = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
+    $uvToolDir = if ($env:UV_TOOL_DIR) { Join-Path $env:UV_TOOL_DIR $pkg } else { Join-Path $env:APPDATA "uv\tools\$pkg" }
+    $venvPy = Join-Path $uvToolDir "Scripts\python.exe"
+    if (Test-PythonHasOpenAI $venvPy) { return $venvPy }
+
+    $fallback = $null
     foreach ($cmd in @("python", "python3", "py")) {
         try {
             $ver = & $cmd -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')" 2>$null
-            if ($ver -match "^3\.(\d+)" -and [int]$Matches[1] -ge 11) { return $cmd }
+            if ($ver -match "^3\.(\d+)" -and [int]$Matches[1] -ge 11) {
+                if (Test-PythonHasOpenAI $cmd) { return $cmd }
+                if (-not $fallback) { $fallback = $cmd }
+            }
         } catch {}
+    }
+    if ($fallback) {
+        Write-SupervisorLog "WARNING: no Python with the 'openai' package found (checked $venvPy and PATH) -- console will run without OpenAI TTS (falls back to edge-tts/Piper)."
+        return $fallback
     }
     # 2026-08-02: the old fallback here was `return "python"`, reasoning
     # "Start-Process will error clearly if this isn't on PATH either" — false

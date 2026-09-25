@@ -10,6 +10,62 @@ voice_log() {
   printf '%s [voice] %s\n' "$(date -Iseconds)" "$*" >>"$VOICE_LOG_FILE"
 }
 
+# ── Python interpreter resolution (SSOT) ────────────────────────────────────
+# A bare `python3` resolves to whatever is first on PATH — almost always
+# system Python, which has neither `openai` nor `edge_tts` installed (the
+# console's own venv, provisioned by core/console/bootstrap.sh, almost always
+# does). Every TTS engine probe/invocation in this plugin used to call bare
+# `python3` independently and diverge silently: `voice status` could report
+# "openai-sdk: no" and `voice speak` could fall through to edge-tts/piper even
+# with a fully valid, present OPENAI_API_KEY (2026-09-25 finding). This is the
+# one place that resolves a python actually verified to have `openai`.
+#
+# Resolution order, each candidate verified by a REAL import (venv dir
+# existence alone is not enough — a stale/partial venv passes `-x` and still
+# fails on import):
+#   1. $VOICE_PY_BIN / $PY_BIN override (operator/script-set, trusted as-is)
+#   2. <repo>/.venv (developer convenience venv, `uv sync`)
+#   3. core/console/.venv (the ONE venv this repo self-heals on every console
+#      boot — corvin-webui.service's ExecStartPre runs bootstrap.sh whenever
+#      it's missing)
+#   4. self-heal: run core/console/bootstrap.sh once, then re-check #3
+#   5. bare `python3` from PATH (last resort — TTS degrades to edge-tts/piper)
+#
+# Cached in VOICE_PY_BIN after the first call so repeated probes (status,
+# detect_engine, the actual synth call) don't each re-run every check.
+_VOICE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_voice_py_has_openai() {
+  [[ -n "$1" && -x "$1" ]] && "$1" -c "import openai" >/dev/null 2>&1
+}
+voice_resolve_python() {
+  if [[ -n "${VOICE_PY_BIN:-}" ]]; then printf '%s' "$VOICE_PY_BIN"; return; fi
+  if [[ -n "${PY_BIN:-}" && -x "$PY_BIN" ]]; then
+    VOICE_PY_BIN="$PY_BIN"; printf '%s' "$VOICE_PY_BIN"; return
+  fi
+  local repo_root candidate
+  repo_root="$(cd "$_VOICE_LIB_DIR/../../.." 2>/dev/null && pwd || true)"
+  if [[ -n "$repo_root" ]]; then
+    candidate="$repo_root/.venv/bin/python3"
+    if _voice_py_has_openai "$candidate"; then
+      VOICE_PY_BIN="$candidate"; printf '%s' "$VOICE_PY_BIN"; return
+    fi
+    candidate="$repo_root/core/console/.venv/bin/python"
+    if _voice_py_has_openai "$candidate"; then
+      VOICE_PY_BIN="$candidate"; printf '%s' "$VOICE_PY_BIN"; return
+    fi
+    local bootstrap="$repo_root/core/console/bootstrap.sh"
+    if [[ -z "${CORVIN_SKIP_VOICE_BOOTSTRAP:-}" && -f "$bootstrap" ]]; then
+      voice_log "resolve_python: no python with 'openai' importable — bootstrapping core/console/.venv"
+      bash "$bootstrap" >>"$VOICE_LOG_FILE" 2>&1 || true
+      if _voice_py_has_openai "$candidate"; then
+        VOICE_PY_BIN="$candidate"; printf '%s' "$VOICE_PY_BIN"; return
+      fi
+    fi
+  fi
+  VOICE_PY_BIN="$(command -v python3 2>/dev/null || echo python3)"
+  printf '%s' "$VOICE_PY_BIN"
+}
+
 voice_ensure_config() {
   mkdir -p "$VOICE_CONFIG_DIR"
   if [[ ! -f "$VOICE_CONFIG_FILE" ]]; then
@@ -311,11 +367,12 @@ voice_detect_engine() {
     return
   fi
   voice_load_openai_key || true
+  local _py; _py="$(voice_resolve_python)"
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-    if ! command -v python3 >/dev/null 2>&1; then
-      voice_log "detect_engine: openai key found but python3 missing — falling through"
-    elif ! python3 -c "import openai" 2>/dev/null; then
-      voice_log "detect_engine: openai key found but \`pip install openai\` missing — falling through"
+    if [[ -z "$_py" ]] || ! command -v "$_py" >/dev/null 2>&1; then
+      voice_log "detect_engine: openai key found but no usable python — falling through"
+    elif ! "$_py" -c "import openai" 2>/dev/null; then
+      voice_log "detect_engine: openai key found but \`pip install openai\` missing (checked $_py) — falling through"
     else
       printf 'openai'
       return
@@ -325,7 +382,7 @@ voice_detect_engine() {
   fi
   # edge-tts connects to tts.microsoft.com — skip on deployments that enforce
   # local-only egress (EU_PRODUCTION / CORVIN_TTS_LOCAL_ONLY=1).
-  if [[ "${CORVIN_TTS_LOCAL_ONLY:-0}" != "1" ]] && python3 -c "import edge_tts" 2>/dev/null; then
+  if [[ "${CORVIN_TTS_LOCAL_ONLY:-0}" != "1" ]] && "$_py" -c "import edge_tts" 2>/dev/null; then
     voice_log "detect_engine: chose edge-tts (no openai, edge-tts available; cloud egress to tts.microsoft.com)"
     printf 'edge-tts'
     return
