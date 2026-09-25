@@ -71,6 +71,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
+import { AgentHubChat } from "@/components/agent-hub/chat-interface";
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -1742,8 +1743,9 @@ function TokenConnectSection() {
 
       <div className="rounded-md border border-accent/20 bg-accent/5 px-4 py-3 text-sm text-muted-foreground">
         <strong className="text-foreground">How it works:</strong>{" "}
-        Generate a token and share it with the peer. Both sides import the same token.
-        No server-to-server handshake needed — the connection becomes active once both URLs are known.
+        Generate a token and send it to the other agent — only <em>they</em> import it.
+        Their instance then completes the pairing with yours automatically (directly or through the relay),
+        and the conversation appears in the Live Feed. Don&apos;t import your own token.
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -2214,13 +2216,18 @@ export function AgentHubPage() {
         </p>
       </header>
 
-      <Tabs defaultValue="feed">
+      <Tabs defaultValue="chat">
         <TabsList className="flex-wrap h-auto gap-1">
+          <TabsTrigger value="chat">💬 Chat (MVP)</TabsTrigger>
           <TabsTrigger value="feed">Live Feed</TabsTrigger>
           <TabsTrigger value="peers">Peers</TabsTrigger>
           <TabsTrigger value="connect">Connect</TabsTrigger>
           <TabsTrigger value="audit">Audit trail</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="chat" className="mt-4">
+          <AgentHubChat />
+        </TabsContent>
 
         <TabsContent value="peers" className="mt-4">
           <PeersTab />
