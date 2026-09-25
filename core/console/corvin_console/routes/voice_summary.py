@@ -27,6 +27,12 @@ from core.console.corvin_console.services.stt_engine import (
     get_stt_engine,
     is_stt_available,
 )
+from core.console.corvin_console.services.voice_feedback_loop import (
+    get_feedback_store,
+    get_collision_detector,
+    SummaryFeedback,
+    FeedbackType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -294,3 +300,113 @@ async def voice_summary_health():
         timestamp=datetime.utcnow().isoformat(),
         message="Voice Summary available" if stt_available else "STT unavailable (Graceful Fallback active)",
     )
+
+
+# ────────────────────────────────────────────────────────────────────
+# Phase 2c: Learning Loop + Task Collision Detection
+# ────────────────────────────────────────────────────────────────────
+
+
+class FeedbackRequest(BaseModel):
+    """User feedback on summary quality (Phase 2c)"""
+    tenant_id: str = "_default"
+    score: float  # 0-5 rating
+    comment: Optional[str] = None
+
+
+class TaskRegistrationRequest(BaseModel):
+    """Register a task (user or agent initiated) (Phase 2c)"""
+    task_id: str
+    initiated_by: str  # "user" or "agent"
+
+
+@router.post("/{sid}/voice/feedback")
+async def record_summary_feedback(sid: str, req: FeedbackRequest):
+    """
+    Record user feedback on summary quality (Phase 2c Learning Loop).
+    Used to improve summary strategies via learning.
+    """
+    if sid not in _voice_sessions:
+        raise HTTPException(status_code=404, detail=f"Session {sid} not found")
+
+    feedback = SummaryFeedback(
+        session_id=sid,
+        feedback_type=FeedbackType.QUALITY_RATING,
+        score=req.score,
+        comment=req.comment,
+    )
+
+    feedback_store = get_feedback_store()
+    feedback_store.record_feedback(feedback)
+
+    # Update session with feedback
+    _voice_sessions[sid]["feedback_score"] = req.score
+    _voice_sessions[sid]["feedback_provided_at"] = datetime.utcnow().isoformat()
+
+    _record_audit_event(
+        "feedback_provided",
+        {
+            "session_id": sid,
+            "score": req.score,
+            "comment": req.comment,
+        },
+        req.tenant_id,
+    )
+
+    return {
+        "status": "feedback_recorded",
+        "session_id": sid,
+        "score": req.score,
+    }
+
+
+@router.post("/{sid}/task/register")
+async def register_task(sid: str, req: TaskRegistrationRequest):
+    """
+    Register a task to detect collisions (Phase 2c).
+    Prevents user and agent from working on same task.
+    """
+    collision_detector = get_collision_detector()
+
+    if req.initiated_by == "user":
+        collision_detector.register_user_task(sid, req.task_id)
+        return {
+            "status": "task_registered",
+            "session_id": sid,
+            "task_id": req.task_id,
+            "initiated_by": "user",
+        }
+
+    elif req.initiated_by == "agent":
+        success = collision_detector.register_agent_task(sid, req.task_id)
+        if not success:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Task collision detected: user already working on {req.task_id}",
+            )
+        return {
+            "status": "task_registered",
+            "session_id": sid,
+            "task_id": req.task_id,
+            "initiated_by": "agent",
+        }
+
+    raise HTTPException(status_code=400, detail="initiated_by must be 'user' or 'agent'")
+
+
+@router.get("/{sid}/task/status")
+async def get_task_status(sid: str):
+    """
+    Get task status for a session (Phase 2c).
+    Returns user tasks vs agent tasks to detect conflicts.
+    """
+    collision_detector = get_collision_detector()
+
+    return {
+        "session_id": sid,
+        "user_tasks": list(collision_detector.get_user_tasks(sid)),
+        "agent_tasks": list(collision_detector.get_agent_tasks(sid)),
+        "collision_risk": len(
+            collision_detector.get_user_tasks(sid) & collision_detector.get_agent_tasks(sid)
+        ) > 0,
+    }
