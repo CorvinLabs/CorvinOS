@@ -17,6 +17,10 @@ Fail-closed:
   - Skill timeout (>2s): return base context
   - Skill error: return base context
   - Malformed output: return base context
+
+Phase 2 Blocker 2 Resolution (2026-09-25): This file bridges os.context_adapter
+Skill (core/context_engineering/adapter_l10.py) into the CEL execution pipeline
+via the stage registry (register_stage). Previously orphaned; now wired.
 """
 from __future__ import annotations
 
@@ -118,10 +122,9 @@ class L10AdapterStage:
                 stage="l10_adapter",
                 status="failed",
                 confidence_tier="low",
-                reason=f"error: {type(exc).__name__}",
-                error=str(exc),
+                reason="error",
             )
 
 
-# Self-register at import
+# Register this stage into the CEL pipeline
 register_stage(L10AdapterStage())
