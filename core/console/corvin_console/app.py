@@ -229,6 +229,7 @@ from .routes import (
     control_plane_snapshots as control_plane_snapshots_route,
     # Cost Insights Stream 3 — Daily spend, breakdown, guardrails
     cost_insights_routes as cost_insights_route,
+    skill_manager as skill_manager_route,
 )
 
 
@@ -269,6 +270,8 @@ router.include_router(monitoring_route.router, prefix="/monitoring", tags=["cons
 router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
+# ADR-0681 Phase 5 — Console Skill Manager (install, list, uninstall)
+router.include_router(skill_manager_route.router, prefix="/skills-manager", tags=["console-skill-manager"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(phase3_monitor_route.router, tags=["console-phase3-monitor"])
 router.include_router(learning_route.router, tags=["console-learning"])

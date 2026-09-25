@@ -1,17 +1,18 @@
-"""Phase 5: Console Skill Manager API Routes (ADR-0681)"""
-from flask import Blueprint, jsonify, request
+"""Phase 5: Console Skill Manager API Routes (ADR-0681) — FastAPI"""
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pathlib import Path
 from core.skills.skill_installer import SkillInstaller
-import tempfile, hashlib
+import tempfile, hashlib, json
 
-skill_manager_bp = Blueprint('skill_manager', __name__, url_prefix='/v1/console/skills')
+router = APIRouter()
 
 def get_installer():
     install_root = Path.home() / ".corvin" / "skills_installed"
     return SkillInstaller(install_root)
 
-@skill_manager_bp.route('/installed', methods=['GET'])
-def list_installed_skills():
+@router.get("/skills/installed", tags=["skill-manager"])
+async def list_installed_skills():
+    """List all installed skills."""
     try:
         installer = get_installer()
         registry = installer._load_registry()
@@ -19,51 +20,69 @@ def list_installed_skills():
         for skill_id, versions in registry.items():
             for v in versions:
                 skills.append({
-                    "skill_id": skill_id, "version": v.get("version"),
+                    "skill_id": skill_id,
+                    "version": v.get("version"),
                     "boot_layer": v.get("boot_layer", "installed"),
                     "verified": v.get("verified", False)
                 })
-        return jsonify({"skills": skills}), 200
+        return {"skills": skills, "total": len(skills)}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@skill_manager_bp.route('/install', methods=['POST'])
-def install_skill():
+@router.post("/skills/install", tags=["skill-manager"])
+async def install_skill(
+    file: UploadFile = File(...),
+    skill_id: str = Form(...),
+    version: str = Form(...)
+):
+    """Install skill from uploaded ZIP."""
     try:
-        if 'file' not in request.files:
-            return jsonify({"error": "No file"}), 400
-        zip_file = request.files['file']
-        metadata = request.form.to_dict()
-        skill_id, version = metadata.get('skill_id'), metadata.get('version')
-        if not skill_id or not version:
-            return jsonify({"error": "Missing skill_id/version"}), 400
+        if not file.filename.endswith('.zip'):
+            raise HTTPException(status_code=400, detail="File must be ZIP")
         
         with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
-            zip_file.save(tmp.name)
+            content = await file.read()
+            tmp.write(content)
+            tmp.flush()
+            
             sha256 = hashlib.sha256()
-            with open(tmp.name, 'rb') as f:
-                sha256.update(f.read())
+            sha256.update(content)
+            
             installer = get_installer()
-            success, msg = installer.install_skill(Path(tmp.name), sha256.hexdigest(),
-                {"skill_id": skill_id, "version": version})
-            return jsonify({"success": success, "message": msg}), (200 if success else 400)
+            success, msg = installer.install_skill(
+                Path(tmp.name),
+                sha256.hexdigest(),
+                {"skill_id": skill_id, "version": version}
+            )
+            
+            if not success:
+                raise HTTPException(status_code=400, detail=msg)
+            return {"success": True, "message": msg}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@skill_manager_bp.route('/uninstall/<skill_id>/<version>', methods=['DELETE'])
-def uninstall_skill(skill_id, version):
+@router.delete("/skills/uninstall/{skill_id}/{version}", tags=["skill-manager"])
+async def uninstall_skill(skill_id: str, version: str):
+    """Uninstall skill version."""
     try:
         installer = get_installer()
         success, msg = installer.uninstall_skill(skill_id, version)
-        return jsonify({"success": success, "message": msg}), (200 if success else 400)
+        if not success:
+            raise HTTPException(status_code=400, detail=msg)
+        return {"success": True, "message": msg}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@skill_manager_bp.route('/health', methods=['GET'])
-def health_check():
+@router.get("/skills/health", tags=["skill-manager"])
+async def health_check():
+    """Health check for skill manager."""
     try:
         installer = get_installer()
         registry = installer._load_registry()
-        return jsonify({"status": "ok", "installed_count": len(registry)}), 200
+        return {
+            "status": "ok",
+            "installed_count": len(registry),
+            "registry_path": str(installer.registry_path)
+        }
     except Exception as e:
-        return jsonify({"status": "error"}), 500
+        raise HTTPException(status_code=500, detail={"status": "error", "error": str(e)})

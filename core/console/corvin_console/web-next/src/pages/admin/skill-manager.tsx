@@ -22,7 +22,7 @@ export function SkillManager() {
   const fetchSkills = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/v1/console/skills/installed');
+      const response = await fetch('/v1/console/skills-manager/skills/installed');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       setSkills(data.skills || []);
