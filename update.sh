@@ -147,8 +147,31 @@ TOOL_ENV="$(uv tool dir 2>/dev/null)/corvinos"
 RECEIPT="$TOOL_ENV/uv-receipt.toml"
 
 # ── 2. Locate the install ────────────────────────────────────────────────────
+# The tree the always-on console actually imports — and serves dist/ from —
+# is named by its unit's PYTHONPATH (…/core/console first). That tree is the
+# one to update. Updating any other tree builds a bundle nobody serves, so
+# wait_live can never match, and an editable install pointing elsewhere than
+# the unit's PYTHONPATH trips the license validator's path check at runtime.
+served_tree() {
+    _pp=""
+    if command -v systemctl >/dev/null 2>&1; then
+        _pp="$(systemctl --user show corvin-webui.service -p Environment --value 2>/dev/null \
+            | tr ' ' '\n' | sed -n 's/^"\{0,1\}PYTHONPATH=//p' | tr -d '"' | head -1)"
+    fi
+    if [ -z "$_pp" ] && command -v plutil >/dev/null 2>&1; then
+        for _p in "$HOME"/Library/LaunchAgents/com.corvin.*.plist; do
+            [ -f "$_p" ] || continue
+            _pp="$(plutil -extract EnvironmentVariables.PYTHONPATH raw -o - "$_p" 2>/dev/null)" && [ -n "$_pp" ] && break
+        done
+    fi
+    _first="$(printf '%s' "$_pp" | cut -d: -f1)"
+    case "$_first" in */core/console) printf '%s' "${_first%/core/console}" ;; esac
+}
+SERVED_SRC="$(served_tree)"
 SRC=""; KIND=""
-if [ -f "$RECEIPT" ]; then
+if [ -n "$SERVED_SRC" ] && [ -f "$SERVED_SRC/pyproject.toml" ]; then
+    SRC="$SERVED_SRC"
+elif [ -f "$RECEIPT" ]; then
     SRC="$(sed -n 's/.*editable = "\([^"]*\)".*/\1/p' "$RECEIPT" | head -1)"
 fi
 if [ -n "$SRC" ] && [ -f "$SRC/pyproject.toml" ]; then
@@ -347,8 +370,10 @@ except Exception: print("")' 2>/dev/null)"
 fi
 
 if [ "$SYSTEMD" = 1 ]; then
-    if ! systemctl --user cat corvin-webui.service >/dev/null 2>&1 && [ -x "$TOOL_PY" ]; then
-        # Units gone (deleted, profile reset): re-provision them.
+    if [ -x "$TOOL_PY" ] && { ! systemctl --user cat corvin-webui.service >/dev/null 2>&1 \
+            || { [ -n "$(served_tree)" ] && [ "$(served_tree)" != "$SRC" ]; }; }; then
+        # Units gone (deleted, profile reset), or pointing at a different
+        # source tree than the one just built: re-provision them from $SRC.
         _quiet "re-registering services" corvin-install --yes || warn "service registration incomplete — run: corvin-install --yes"
     fi
     [ -f "$SRC/scripts/setup.sh" ] && { bash "$SRC/scripts/setup.sh" --no-autostart >>"$LOG" 2>&1 || true; }
@@ -430,6 +455,12 @@ elif [ -d "$SRC.prev" ]; then
         [ -e "$SRC/$_k" ] && rm -rf "$SRC.prev/$_k" && mv "$SRC/$_k" "$SRC.prev/$_k"
     done
     rm -rf "$SRC.failed"; mv "$SRC" "$SRC.failed" && mv "$SRC.prev" "$SRC" || RB=0
+else
+    # Fresh tree (e.g. PyPI → managed conversion): there is no previous code
+    # to go back to. Reinstalling would reinstall the NEW code and report it
+    # as "rolled back" — say so instead.
+    echo "  no previous source revision to restore (first managed install)" >>"$LOG"
+    RB=0
 fi
 if [ -d "$WEB/dist.prev" ]; then rm -rf "$WEB/dist"; mv "$WEB/dist.prev" "$WEB/dist" || RB=0; fi
 _quiet "reinstalling the previous version" _uv_install_healing || RB=0
