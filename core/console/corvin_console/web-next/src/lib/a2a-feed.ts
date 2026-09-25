@@ -78,7 +78,15 @@ export function statusTone(status: string): StatusTone {
 /** Plain-language reason for a failed response that carries no detail.
  *  A rejection's cause stays on the answering side by protocol design. */
 export function failureHint(m: A2AFeedMessage, mine: boolean): string | null {
-  if (m.kind !== "response" || m.error) return null;
+  if (m.kind !== "response") return null;
+  // A busy refusal is recorded with data.reason on both sides (older receiver
+  // records carried error "busy" instead — show the hint for those too).
+  const busy = (m.data as { reason?: unknown })?.reason === "busy" || m.error === "busy";
+  if (m.status === "rejected" && busy)
+    return mine
+      ? "Your instance was busy with this agent's other tasks and refused it — they can retry."
+      : "The agent is busy with your other tasks right now — try again in a moment.";
+  if (m.error) return null;
   if (m.status === "rejected")
     return mine
       ? "Your instance refused this task (policy, quota or safety gate — see the Audit trail tab)."
@@ -88,13 +96,19 @@ export function failureHint(m: A2AFeedMessage, mine: boolean): string | null {
   return null;
 }
 
-/** Merge a polled page into the known list: dedupe by id, keep ts order. */
+/** Merge a polled page into the known list: dedupe by id, keep append order
+ *  (``seq``; ``ts`` only breaks ties for records written before seq existed). */
 export function mergeMessages(known: A2AFeedMessage[], incoming: A2AFeedMessage[]): A2AFeedMessage[] {
   if (incoming.length === 0) return known;
   const seen = new Set(known.map((m) => m.id));
   const fresh = incoming.filter((m) => !seen.has(m.id));
   if (fresh.length === 0) return known;
-  return [...known, ...fresh].sort((a, b) => a.ts - b.ts);
+  return [...known, ...fresh].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0) || a.ts - b.ts);
+}
+
+/** Highest seq in a list — the next live cursor. */
+export function maxSeq(messages: A2AFeedMessage[], fallback = 0): number {
+  return messages.reduce((m, x) => (Number.isFinite(x.seq) ? Math.max(m, x.seq as number) : m), fallback);
 }
 
 export function fmtBytes(n: number): string {
@@ -103,12 +117,30 @@ export function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
-/** Stable initials for a peer avatar. */
+/** Initials for a peer avatar that stay distinguishable in a list:
+ *  "corvin_a2a_2" → "C2", "agent-01" → "A1", "gpu server" → "GS", "gpu" → "GP". */
 export function initials(label: string): string {
   const parts = label.replace(/[_\-.]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  const last = parts[parts.length - 1];
+  if (/^\d+$/.test(last)) {
+    // A numeric suffix is what tells "agent-01" from "agent-02".
+    return (parts[0][0] + String(Number(last))).slice(0, 3).toUpperCase();
+  }
+  return (parts[0][0] + last[0]).toUpperCase();
+}
+
+/** One-line plain-text preview of a message body (no Markdown syntax). */
+export function plainPreview(text: string, max = 120): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " [code] ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`~>#]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
 }
 
 /** Protocol cap (a2a_attachments.MAX_ATTACHMENTS_TOTAL_BYTES). */

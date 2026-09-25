@@ -2,7 +2,8 @@
 
 Fetches, signature-verifies, caches, and exposes the Corvin Labs network
 manifest.  All legitimate CorvinOS instances pick up revocation list updates
-on every adapter restart.
+on every adapter restart and, in a running process, when the in-process cache
+expires (1 h after a verified live fetch, 5 min after a fallback result).
 
 Primary:  https://corvin-labs.com/a2a/manifest.json
 Mirror:   https://github.com/CorvinLabs/CorvinOS/releases/latest/download/a2a-manifest.json
@@ -252,14 +253,40 @@ class A2AManifest:
 
 
 _LOADED_MANIFEST: A2AManifest | None = None
+_LOADED_EXPIRES_AT: float = 0.0  # monotonic deadline of the in-process cache
 _MANIFEST_LOCK = threading.Lock()
+
+# In-process cache lifetime. The first result used to be kept for the whole
+# process lifetime — including the empty (permissive) fallback returned after
+# a failed fetch at boot, so a network blip at startup disabled revocation
+# enforcement until the next restart, and a published revocation never
+# reached a long-running receiver. Nobody passes ``force_refresh``, so the
+# expiry has to live here.
+#   * a live-fetched, signature-verified manifest → 1 h
+#   * anything served because the fetch FAILED (signed disk cache, or the
+#     empty permissive fallback) → 5 min, so the next live fetch is retried soon
+_VERIFIED_TTL_S: float = 3600.0
+_FALLBACK_TTL_S: float = 300.0
+
+
+def _monotonic() -> float:
+    """Clock seam (tests advance it instead of sleeping)."""
+    return time.monotonic()
+
+
+def _cache_ttl_for(m: "A2AManifest") -> float:
+    if m.sig_verified and not m.from_cache:
+        return _VERIFIED_TTL_S
+    return _FALLBACK_TTL_S
 
 
 def load_manifest(*, force_refresh: bool = False) -> A2AManifest:
     """Return the current A2A network manifest.
 
     Call order:
-    1. Return in-process cache if already loaded and not force_refresh.
+    1. Return in-process cache if already loaded, not expired and not
+       force_refresh (expiry: 1 h for a live-fetched verified manifest,
+       5 min for a disk-cache / empty fallback — see ``_cache_ttl_for``).
     2. Fetch from primary / mirror URL.
     3. Verify RS256 signature — reject if invalid.
     4. Cache on disk at mode 0600.
@@ -270,11 +297,17 @@ def load_manifest(*, force_refresh: bool = False) -> A2AManifest:
       a2a.manifest_fetched — on successful fresh fetch
       a2a.manifest_stale   — when manifest age ≥ 3 days
     """
-    global _LOADED_MANIFEST
+    global _LOADED_MANIFEST, _LOADED_EXPIRES_AT
     with _MANIFEST_LOCK:
-        if _LOADED_MANIFEST is not None and not force_refresh:
+        if (
+            _LOADED_MANIFEST is not None
+            and not force_refresh
+            and _monotonic() < _LOADED_EXPIRES_AT
+        ):
             return _LOADED_MANIFEST
-        return _load_manifest_unlocked()
+        m = _load_manifest_unlocked()
+        _LOADED_EXPIRES_AT = _monotonic() + _cache_ttl_for(m)
+        return m
 
 
 def _load_manifest_unlocked() -> "A2AManifest":
@@ -344,9 +377,10 @@ def _load_manifest_unlocked() -> "A2AManifest":
 
 def clear_cached() -> None:
     """Discard the in-process cache so the next call re-fetches."""
-    global _LOADED_MANIFEST
+    global _LOADED_MANIFEST, _LOADED_EXPIRES_AT
     with _MANIFEST_LOCK:
         _LOADED_MANIFEST = None
+        _LOADED_EXPIRES_AT = 0.0
 
 
 def pubkey_present() -> bool:

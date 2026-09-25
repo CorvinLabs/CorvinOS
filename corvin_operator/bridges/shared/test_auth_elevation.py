@@ -227,7 +227,7 @@ def case_6_audit_chain_records_events() -> None:
                  channel="discord")
         ae.revoke(chat_key="discord:c-aud", channel="discord")
 
-        audit_path = sb / "global" / "forge" / "audit.jsonl"
+        audit_path = sb / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
         if not audit_path.exists():
             _bad(f"audit.jsonl not created at {audit_path}")
             return
@@ -334,7 +334,7 @@ class TestPinLockout(unittest.TestCase):
     def test_pin_lockout_emits_lockout_started_audit_event(self) -> None:
         """V-006 / ADR-0072: after 5 wrong-PIN attempts the
         ``auth.elevation_lockout_started`` event must appear in the
-        unified audit chain at ``<CORVIN_HOME>/global/forge/audit.jsonl``."""
+        unified audit chain at ``<CORVIN_HOME>/tenants/<tid>/global/forge/audit.jsonl``."""
         sb = Path(tempfile.mkdtemp(prefix="pin-lockout-audit-"))
         try:
             ae = self._fresh_ae(sb)
@@ -353,7 +353,7 @@ class TestPinLockout(unittest.TestCase):
                     settings_pin=settings_pin, channel="discord",
                 )
 
-            audit_path = sb / "global" / "forge" / "audit.jsonl"
+            audit_path = sb / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
             self.assertTrue(
                 audit_path.exists(),
                 f"audit.jsonl not created at {audit_path}",

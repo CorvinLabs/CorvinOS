@@ -851,9 +851,9 @@ PDF, text previews). The old metadata list moved to the **Audit trail** tab.
 | Content store | Tenant-local, append-only `messages.jsonl` + content-addressed `blobs/<sha256>` (the digest is recomputed, never the declared one). Dir 0o700, files 0o600. 30-day retention + 32 MiB cap, compacted with orphan-blob GC. Best-effort: a store failure never changes an A2A result. Override `CORVIN_A2A_FEED_DIR` (tests). | `corvin_operator/bridges/shared/a2a_feed.py` → `<tenant>/global/a2a_feed/` |
 | Outbound hook | `RemoteTriggerSender.send()` is a thin wrapper over `_send_impl()`: it assigns the `task_id`, records the task BEFORE sending (so the feed shows it while the peer works), then records the response or failure on every return path. | `remote_trigger_sender.py::send`, `_record_feed_task`, `_record_feed_response` |
 | Inbound hook | Records the task only AFTER HMAC, nonce, TTL, consent and the CLAG chain gate passed — an unauthenticated sender can never write into the store — then the signed response (including the injection-rejection path). | `remote_trigger_receiver.py::receive`, `_feed_record` |
-| Console API | `GET /v1/console/a2a/feed?since=&limit=` (messages oldest-first + peer directory), `GET /a2a/feed/blob/{sha256}`, `POST /a2a/feed/send` (202; send runs on a background thread, result lands in the feed), `DELETE /a2a/feed` (audit-FIRST `A2A.feed_cleared`, counts only; no chain record → 503, nothing deleted). Router-level session + CSRF guard. | `core/console/corvin_console/routes/a2a_feed.py` |
+| Console API | `GET /v1/console/a2a/feed?after=<seq>` or `?before=<seq>&limit=` (append-ordered page + `has_more` + `last_seq` + peer directory; `since=` kept as a legacy ts filter), `GET /a2a/feed/blob/{sha256}`, `POST /a2a/feed/send` (202; runs on a bounded send pool, result lands in the feed; > 16 KiB after NFKC → 422), `DELETE /a2a/feed` (audit-FIRST `A2A.feed_cleared`, counts only; no chain record → 503, nothing deleted). Router-level session + CSRF guard. | `core/console/corvin_console/routes/a2a_feed.py` |
 | Blob serving | Only passive media types are served inline; SVG/HTML and every unknown type go out as `application/octet-stream` attachments. Always `nosniff` + `Content-Security-Policy: sandbox`. | `routes/a2a_feed.py::_INLINE_MIME` |
-| UI | Agent rail with state dots + last message, chat bubbles (this instance right, peers left), reply quotes the task, typing indicator for tasks without a response, composer with attach / drag-drop / paste (1 MiB, 16 files — the protocol caps), 2 s polling with a `since` cursor. A detail-less `rejected` is explained, never shown as "delivered". | `web-next/src/components/agent-hub/live-feed.tsx`, logic in `src/lib/a2a-feed.ts` |
+| UI | Agent rail with state dots + last message, chat bubbles (this instance right, peers left), reply quotes the task, typing indicator for tasks without a response, composer with attach / drag-drop / paste (1 MiB, 16 files — the protocol caps), 2 s polling with a `seq` cursor (`after`, drained while `has_more`), per-agent history via `before`. A detail-less `rejected` is explained, never shown as "delivered". | `web-next/src/components/agent-hub/live-feed.tsx`, logic in `src/lib/a2a-feed.ts` |
 
 A rejection's reason stays on the answering side by protocol design (the
 signed `rejected` response carries no reason); the feed says so instead of
@@ -866,3 +866,198 @@ broken store never breaks a send, retention, clear),
 `tests/e2e/test_agent_hub_live_feed_e2e.py` against the running console
 (`CORVIN_E2E_A2A_LIVE=1` additionally sends a real envelope with a PNG to the
 paired peer and verifies feed, blob serving and the `task_id` link to the chain).
+
+## Adversarial review + hardening (ADR-2064, 2026-09-25)
+
+Five parallel adversarial reviews of the whole A2A stack found 44 defects
+(≈37 distinct), all fixed with regression tests, then a second review round
+on the diff. The product goal they were measured against: *the user creates
+a friendship token, any agent imports it, and the two talk — text and media —
+while the user watches everything in the Agent Hub live feed, for many
+connections at once.* `test_a2a_hub_ten_peers_e2e.py` proves exactly that
+with ten agents (below).
+
+**Root causes that blocked the goal outright**
+
+| Defect | Effect | Fix |
+|---|---|---|
+| Empty `result_schema` → receiver releases `{}` (by design) and no sender declared one | every chat reply arrived empty (`filtered`) | `send()` defaults to `CHAT_RESULT_SCHEMA` (`{"output": string}`) when the caller passes none; the receiver invariant is unchanged |
+| `_load_sest()` used the `CORVIN-` **EdDSA** licence as the RS256 network-attestation SesT | every licensed (Member) instance's tasks were rejected by every peer: `network_attestation_bad_sig` | the block is built only from a token whose header says `alg: RS256`; otherwise omitted (manifest grace period) |
+| The connectivity manager (`start_manager`) had no production caller; the relay listener started once at boot, only if the flag was already on | a fresh install that paired by token was unreachable over the relay until a restart; no ACTIVE/UNREACHABLE transitions | both hosts (`corvin_gateway.app`, `corvin_console.standalone`) start/stop the manager in their lifespan |
+| `/v1/a2a/receive` + `/ping` ran the sync receiver on the event loop; relay listener handled deliveries serially | one worker run froze the whole console and every other peer | `asyncio.to_thread` in both hosts; relay deliveries run concurrently (16 heavy slots, pings bypass) |
+| Revocation could not reach the peer (keys + relay slot gone first) | the other side showed "peer knows us" forever | signed **revoke notice** on the friendship-ack channel, sent before the keys are deleted (`send_revoke_notice` / `_process_revoke_notice`); older receivers reject it as `missing_fields` |
+
+**Security + integrity** — token `kid`/invite `oid` validated as filenames
+(path traversal); repeat acks bound to the peer instance (`signature_v2`,
+`_peer_instance_id`) and gated by the reconnect URL rule; ack reflection
+rejected; redeemer-side SSRF gate on the token URL; unredeemed tokens
+revocable; `a2a_peers_max` checked under the config lock after the
+signature; invite registry claim is atomic (console + CLI); pairing is
+audited first (`A2A.friendship_paired`, `A2A.friendship_url_updated`,
+`A2A.friendship_peer_revoked`); the sender rejects responses signed by its
+own instance and TOFU-pins the peer instance id (`A2A.instance_pinned`;
+recover from a peer that lost its home by re-pairing); `receive()` never
+raises on malformed input (no origin-existence oracle); nonce store keyed
+`(origin_id, nonce)` with a per-origin cap and refuse-when-full (no
+eviction of live nonces); a replay no longer spends a rate token; ingress
+gates peers and rate at accept time with a whole-request read deadline and
+thread caps; ping pre-auth bucket per source address; worker deny list
+covers `Monitor`, `PowerShell`, `RemoteTrigger`, `CronCreate`, `Workflow`,
+`TaskStop`/`KillShell`/`KillBash` and `Agent` when `allow_bash`/subagents
+are off; silent workers are killed at `ttl_s` (watchdog) and reported as
+`timeout`; relay fallback only when the direct request provably was not
+delivered (no duplicate execution); relay frames up to a 4 MiB plaintext
+with `task_id` on error frames (the public relay needs a redeploy for >512 KB).
+
+**Audit completeness** — every `A2A.*` event now has an allowlist listing
+all fields its emitter sends (`corvin_operator/forge/forge/security_events.py`);
+attachment file names are no longer emitted (peer-chosen, may carry personal
+data). The six compliance modules whose `_audit_path()` fell back to the
+legacy `<home>/global/forge/audit.jsonl` without a tenant now resolve the
+process tenant's canonical chain — the boot tripwire's own consent probe was
+the writer behind `audit_chain_split` on fresh installs.
+
+**Live feed** — the store takes one sidecar lock (`store.lock`) across
+processes for blob write + append, compaction and clear; `seq` (allocated
+under that lock) replaces wall-clock `ts` as the cursor; `GET /a2a/feed`
+takes `after` (oldest page past a cursor + `has_more`) and `before`
+(history); the UI drains `has_more`, loads a peer's history on selection,
+offers "Load older", renders peer Markdown without auto-loading remote images,
+keeps the conversation of a removed connection under its last name, and the
+route is bound to the host A2A tenant.
+
+**Proof** — `corvin_operator/bridges/shared/test_a2a_hub_ten_peers_e2e.py`:
+a real relay, the user's instance as the real gateway + console (own
+CORVIN_HOME, Member licence copy) driven only over HTTP with session + CSRF,
+and ten agent processes running the real worker path with a scripted model.
+Half the agents are direct over the LAN ingress, half relay-only; the hub is
+relay-only. Steps: 10 tokens → 20 linked connection ends → user sends text +
+image to every agent, each reply carries the marker, the input hash and a
+rendered image → every agent writes to the user → feed integrity + gap-free
+seq cursor → 30 concurrent round trips → one revocation cuts exactly that
+agent off and it sees the revocation → the UI shows all agents with images →
+no A2A audit field dropped in any of the 11 chains. Run:
+`python3 test_a2a_hub_ten_peers_e2e.py` (`E2E_PEERS=N` to scale).
+
+### Pairing binding keys (ADR-2064, review rounds 4–5)
+
+A friendship token is a bearer secret and instance ids are public (every
+signed ping response carries one), so neither can authenticate "the bound
+peer". Each instance therefore has a long-term **X25519 binding key**
+(`<CORVIN_HOME>/global/remote_trigger/a2a_bind_key`, 0600, fsync'd on
+creation, a corrupt file is replaced; `a2a_binding.py`).
+
+- **The issuer's public key travels in the signed token** (`bpk`, ignored by
+  older parsers). The redeemer stores it at import as `_peer_bind_pub`.
+- **The redeemer's public key arrives with the first ack** (`bind_pub`,
+  covered by `signature_v3`). The issuer stores it with the pairing, and its
+  ack response carries its own `bind_pub`.
+- **A key is never adopted from any later response.** After pairing, every
+  response path can be spoofed by someone holding the token: relay fan-out,
+  or a URL moved on a legacy pairing. Keys come only from the token and the
+  first ack.
+- **Legacy pairings** keep the instance-id rule until they are re-paired.
+- **Once the peer's key is stored, every change needs a MAC** under
+  HKDF(X25519, kid):
+  - a repeat ack that moves the URL or rebuilds the endpoint (`bind_mac`);
+  - a revoke notice (`bind_mac`);
+  - an ADR-0198 reconnect push (`reconnect.bind_mac` over kid, new URL and
+    nonce). A reconnect also requires a bound peer and a matching
+    `sender_instance_id`.
+- **Keep-alives from the bound sender need no MAC.**
+- **Inbound acks never bind anything.** A binding comes only from our own
+  verified outbound round trip or from the token.
+- **Recovery after a peer reinstalls** (new instance id and binding key):
+  re-pair with a new token, because keys are never re-learned. Endpoint PATCH
+  `reset_instance_pin` (clears the instance pin, `_peer_instance_id` and
+  `_peer_bind_pub`) only unblocks a legacy pairing's instance-id pin.
+
+### Executors (review rounds 2–4)
+
+A2A task work runs on a dedicated executor (`run_a2a_work`, 24 threads). It is
+used by both hosts' `/receive` and by relay task deliveries. Pairing acks and
+revoke notices over the relay use their own control executor
+(`run_a2a_control`) and skip the heavy-slot semaphore.
+
+Pings stay on the default pool, so worker runs never starve liveness checks.
+ContextVars are carried like `to_thread`. At most 4 worker runs per origin at
+a time; beyond that the task gets a signed `rejected` whose data carries
+`reason: "busy"` (the UI says "busy — try again"), and it is never queued.
+The receiver's own feed record of that refusal carries the same
+`data.reason`, not an `error` string, so its UI shows "your instance was busy"
+(round 8).
+
+### Messages with files and no text (round 8)
+
+A message with attachments and an empty text is legitimate. The sender puts
+the stand-in instruction `ATTACHMENTS_ONLY_INSTRUCTION` ("Please look at the
+attached file(s).") on the wire and keeps the empty text in its feed. The
+worker applies the same substitution for older senders. Without it, the
+receiver refused the message as an `injection_attempt:empty_instruction` and
+left a false security signal in its audit chain. Text-less AND file-less stays
+refused.
+
+### Legacy invite routes (round 8)
+
+`POST /remote-trigger/pair/redeem` host-gates the invite's `accept_url` and
+`issuer_url` (`_ack_url_rejection_reason`) before any request or write, and
+refuses with 409 when the invite's `origin_id` already names a connection. An
+invite can therefore neither take over nor, through the failure rollback,
+delete another peer's pairing. `POST /remote-trigger/pair/accept` restores the
+invite on its correctable refusals (400 URL, 409 id), so the redeemer can
+retry, and deletes it on a licence refusal (402). No `.used` file holding the
+pairing keys is left behind. `corvin-a2a import` rolls back on the issuer's
+402 exactly like the console import, and prints the connection's stored name
+(the issuer's `nam`).
+
+### Round 9
+
+- **Reconnect MAC names its direction.** Both ends of a pairing derive the
+  same binding secret, so a push A sent to B also verified at A. A token
+  holder could reflect it and re-point A's endpoint for B at A itself.
+  `reconnect_bind_canonical(kid, new_url, nonce, bind_ts, sender_pub)` now
+  covers the sender's binding public key. The sender uses its own key, the
+  receiver the stored `_peer_bind_pub`. Repeat acks and revoke notices
+  already covered the sender's instance id.
+- **ADR-0063 invite accept is host-gated.** `parse_invite` requires `rp` to
+  be a plain path (no `@`, `?`, `#` or `..`), so `url + rp` cannot move the
+  real host. Accepting a FOREIGN invite runs `_ack_url_rejection_reason`
+  (`a2a_invite.endpoint_url_rejection_reason`) before any claim or write, in
+  the console route (400) and the CLI (exit 1). `generate_invite` refuses a
+  non-plain `receive_path`.
+- **Relay queue budget per kid.** Besides the global 64 MiB ceiling, one
+  recipient kid may hold at most one full-size frame
+  (`_MAX_QUEUE_BYTES_PER_KID = _MAX_MESSAGE_BYTES`). Residual: first-use
+  registration is credential-free, so an attacker with many fake kids can
+  still fill the global budget for the queue TTL. That limit is availability
+  only and applies to the standalone relay process.
+
+### Round 10
+
+- **Task direction.** A friendship's HMAC keys are identical on both ends, so
+  a task we signed for the peer also verified against our own origin file.
+  Anyone who saw it on the wire (plain `http` on a LAN) could POST it back
+  and have us run our own instruction as the peer's, with no key at all.
+  `_validate()` now refuses, right after the HMAC check and before the nonce
+  is consumed, a task whose HMAC-covered `sender_instance_id` is our own id
+  (`sender_is_self`) or differs from the bound `_peer_instance_id`
+  (`sender_not_bound_peer`). This runs inside `receive()`, so every
+  transport is covered. An empty sender id (legacy sender) passes. The
+  Google A2A adapter builds its in-process envelopes with an empty
+  `sender_instance_id`: it speaks for no Corvin peer and must not claim the
+  host's own identity (round 11).
+- **Attachment names** use `fullmatch`; `$` admitted a trailing newline.
+
+### Live feed store — seq allocation (review rounds 4–5)
+
+`seq` is allocated under `store.lock` and never lowered, not even by `clear()`.
+Records without a `seq` get one from the same counter through the sidecar
+`seq_overrides.json`, under the lock. Such records come from the first store
+version, or from a process still running it during a rolling restart.
+`messages.jsonl` is never rewritten on a read. A reader whose file parse
+overlaps a compaction re-reads the file and the sidecar together under the
+lock. `compact()` folds the sidecar into the records.
+
+Residual: during a rolling restart, a compaction can still race an old-version
+writer, which locks only the data file. Restart all feed writers together
+(gateway, adapter, MCP server).

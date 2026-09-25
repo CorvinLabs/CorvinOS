@@ -187,7 +187,17 @@ def test_clag_gate_a2a_fail_open_when_forge_genuinely_absent():
 def test_clag_gate_a2a_fail_closed_when_forge_present_clag_broken():
     """FND-17: forge present (audits active, _forge_se set) but clag unimportable
     is a BROKEN gate → fail-CLOSED (raise), never silently fail-open."""
-    with patch.object(rtr, "_forge_se", object()), \
-         patch.dict("sys.modules", {"forge.clag": None}):
-        with pytest.raises(rtr._ChainIntegrityFailureGateUnavailable):
-            rtr._clag_gate_a2a("L38.a2a_instruction.test")
+    import forge as _forge_pkg
+    # `from forge import clag` reads the package ATTRIBUTE first; once any
+    # earlier test imported forge.clag, a sys.modules patch alone no longer
+    # makes the import fail (the test only passed when run first). Remove the
+    # attribute too, restored afterwards.
+    _saved = _forge_pkg.__dict__.pop("clag", None)
+    try:
+        with patch.object(rtr, "_forge_se", object()), \
+             patch.dict("sys.modules", {"forge.clag": None}):
+            with pytest.raises(rtr._ChainIntegrityFailureGateUnavailable):
+                rtr._clag_gate_a2a("L38.a2a_instruction.test")
+    finally:
+        if _saved is not None:
+            _forge_pkg.clag = _saved

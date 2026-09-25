@@ -156,3 +156,6 @@ def _isolated_audit_chain(monkeypatch, tmp_path):
     # Same reason for the A2A feed content store (a2a_feed.py): a test send
     # must never land in the operator's Agent Hub feed.
     monkeypatch.setenv("CORVIN_A2A_FEED_DIR", str(tmp_path / "a2a-feed-sandbox"))
+    # And the instance's pairing binding key (a2a_binding): tests must never
+    # create or read the live install's key.
+    monkeypatch.setenv("CORVIN_A2A_BIND_KEY_PATH", str(tmp_path / "a2a-bind-key"))

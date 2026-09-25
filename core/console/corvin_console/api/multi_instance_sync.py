@@ -124,70 +124,95 @@ class A2ATaskEnvelope:
         sender = RemoteTriggerSender()
         timeout_s = timeout_s or self.timeout_s
 
-        # Retry logic: exponential backoff (1s, 2s, 4s)
+        # 2026-09-25 — three defects fixed here:
+        #  1. sender.send() is BLOCKING (HTTP + up to timeout_s of waiting); it
+        #     ran on the event loop and froze the whole console for the call.
+        #     It now runs in a worker thread (asyncio.to_thread) — which also
+        #     gives its relay fallback a thread with no running loop.
+        #  2. Every non-ok result was retried — including a remote timeout, a
+        #     signed rejection, or "delivered but no answer yet". Each retry is
+        #     a NEW task (new task_id + nonce), so a peer that was merely slow
+        #     executed the same work up to three times. Only a failure that
+        #     PROVES nothing was delivered is retried: error_category
+        #     "unreachable", which the sender reports only when neither the
+        #     direct POST nor the relay handed the envelope over.
+        #  3. An exception from send() is not retried either (it may have been
+        #     raised after the envelope left), and error_detail no longer
+        #     stringifies the SendResult (that leaked response data into logs
+        #     and the HTTP response).
         backoff_delays = [1, 2, 4]
-        last_error = None
+        last_result = None
+        last_exc: Optional[BaseException] = None
 
         for attempt in range(self.retry_count):
+            logger.debug(
+                f"A2A dispatch attempt {attempt + 1}/{self.retry_count} "
+                f"to {self.endpoint_id} (timeout {timeout_s}s)"
+            )
             try:
-                logger.debug(
-                    f"A2A dispatch attempt {attempt + 1}/{self.retry_count} "
-                    f"to {self.endpoint_id} (timeout {timeout_s}s)"
-                )
-
-                result = sender.send(
+                result = await asyncio.to_thread(
+                    sender.send,
                     endpoint_id=self.endpoint_id,
                     instruction=self.to_json(),
                     timeout_s=timeout_s,
                     purpose_id=f"multi-instance-sync:{self.task_id}",
                 )
-
-                # Success
-                if result.ok:
-                    logger.info(
-                        f"A2A dispatch succeeded: task_id={self.task_id}, "
-                        f"remote_task_id={result.task_id}"
-                    )
-                    return {
-                        "ok": True,
-                        "status": result.status,
-                        "task_id": self.task_id,
-                        "remote_task_id": result.task_id,
-                        "instance_id": result.instance_id,
-                        "data": result.data,
-                        "duration_ms": result.duration_ms,
-                    }
-
-                # Recoverable failure
-                last_error = result
-                if attempt < self.retry_count - 1:
-                    delay = backoff_delays[attempt] if attempt < len(backoff_delays) else 4
-                    logger.warning(
-                        f"A2A dispatch attempt {attempt + 1} failed "
-                        f"(status={result.status}), retrying in {delay}s..."
-                    )
-                    await asyncio.sleep(delay)
-
-            except Exception as exc:
-                last_error = exc
+            except Exception as exc:  # noqa: BLE001 — never retried, see (3)
+                last_exc = exc
                 logger.warning(
-                    f"A2A dispatch attempt {attempt + 1} raised {type(exc).__name__}: {exc}"
+                    f"A2A dispatch attempt {attempt + 1} raised {type(exc).__name__}"
                 )
-                if attempt < self.retry_count - 1:
-                    delay = backoff_delays[attempt] if attempt < len(backoff_delays) else 4
-                    await asyncio.sleep(delay)
+                break
 
-        # All retries exhausted
-        logger.error(
-            f"A2A dispatch to {self.endpoint_id} failed after {self.retry_count} attempts"
-        )
-        error_detail = str(last_error) if last_error else "Max retries exceeded"
+            if result.ok:
+                logger.info(
+                    f"A2A dispatch succeeded: task_id={self.task_id}, "
+                    f"remote_task_id={result.task_id}"
+                )
+                return {
+                    "ok": True,
+                    "status": result.status,
+                    "task_id": self.task_id,
+                    "remote_task_id": result.task_id,
+                    "instance_id": result.instance_id,
+                    "data": result.data,
+                    "duration_ms": result.duration_ms,
+                }
+
+            last_result = result
+            if getattr(result, "error_category", None) not in _RETRYABLE_ERROR_CATEGORIES:
+                break  # may have been delivered / was answered — never re-send
+            if attempt < self.retry_count - 1:
+                delay = backoff_delays[attempt] if attempt < len(backoff_delays) else 4
+                logger.warning(
+                    f"A2A dispatch attempt {attempt + 1} unreachable, retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+
+        logger.error(f"A2A dispatch to {self.endpoint_id} failed")
+        if last_result is not None:
+            return {
+                "ok": False,
+                "status": getattr(last_result, "status", "error") or "error",
+                "task_id": self.task_id,
+                "remote_task_id": getattr(last_result, "task_id", None),
+                "error_category": getattr(last_result, "error_category", None),
+                "error_detail": (getattr(last_result, "error_detail", None)
+                                 or "A2A dispatch failed")[:128],
+            }
         return {
             "ok": False,
             "status": "error",
             "task_id": self.task_id,
-            "error_detail": error_detail[:128],  # Cap error message length
+            "error_category": "internal_error" if last_exc is not None else None,
+            "error_detail": (type(last_exc).__name__ if last_exc is not None
+                             else "Max retries exceeded")[:128],
         }
+
+
+#: Only a provably-undelivered failure may be retried with a fresh task — see
+#: A2ATaskEnvelope.dispatch and remote_trigger_sender.TransportError.
+_RETRYABLE_ERROR_CATEGORIES = frozenset({"unreachable"})
 
 
 async def _a2a_rpc_call(method: str, peer_id: str, params: dict) -> Optional[dict]:

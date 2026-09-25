@@ -99,9 +99,10 @@ class _Host:
 
     def env(self) -> dict[str, str]:
         home = self.root / "home"
-        env = dict(os.environ)
-        for k in ("CORVIN_A2A_URL", "CORVIN_A2A_RELAY_URL", "CORVIN_A2A_INGRESS"):
-            env.pop(k, None)
+        # A separate installation per host: no inherited Corvin/A2A variable
+        # (binding key, feed dir, instance-id path …) may be shared.
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("CORVIN_", "REMOTE_", "VOICE_", "FORGE_"))}
         env.update({
             "PYTHONPATH": _PYTHONPATH,
             "CORVIN_HOME": str(home),

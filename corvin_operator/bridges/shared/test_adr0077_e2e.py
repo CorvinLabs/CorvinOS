@@ -177,18 +177,19 @@ class TestS2PersistentNonceStore(unittest.TestCase):
     def test_replay_rejected_across_new_instance(self):
         store1 = PersistentNonceStore(self.db_path)
         nonce = secrets.token_hex(32)
-        self.assertTrue(store1.check_and_add(nonce))
+        # origin_id is required: nonces are keyed per origin (per-origin quota).
+        self.assertTrue(store1.check_and_add(nonce, origin_id="peer-a"))
 
         # Simulate restart: new instance from same DB.
         store2 = PersistentNonceStore(self.db_path)
-        self.assertFalse(store2.check_and_add(nonce),
+        self.assertFalse(store2.check_and_add(nonce, origin_id="peer-a"),
                          "Nonce should be rejected by new instance (replayed)")
 
     def test_unique_nonces_all_accepted(self):
         store = PersistentNonceStore(self.db_path)
         nonces = [secrets.token_hex(32) for _ in range(20)]
         for n in nonces:
-            self.assertTrue(store.check_and_add(n))
+            self.assertTrue(store.check_and_add(n, origin_id="peer-a"))
 
     def test_mode_0600_enforced(self):
         import stat

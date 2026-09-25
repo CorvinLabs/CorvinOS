@@ -241,13 +241,16 @@ class TestParseOutput(unittest.TestCase):
         self.assertIn("output", out)
 
     # ADR-0077 S-4 — robust JSON detection with trailing text
-    def test_json_with_trailing_text_parsed(self):
-        out = w.parse_worker_output('{"summary": "ok", "count": 3} Note: see log.')
-        self.assertEqual(out, {"summary": "ok", "count": 3})
+    # 2026-09-25 (ADR-2064, round 3): trailing text after a JSON object is no
+    # longer dropped — it can be a refusal ("{...APPROVED} I will not approve
+    # this"). The whole reply is delivered as prose instead.
+    def test_json_with_trailing_text_is_delivered_whole(self):
+        text = '{"summary": "ok", "count": 3} Note: see log.'
+        self.assertEqual(w.parse_worker_output(text), {"output": text})
 
-    def test_json_with_trailing_newline_text_parsed(self):
-        out = w.parse_worker_output('{"key": "val"}\nExtra commentary here.')
-        self.assertEqual(out, {"key": "val"})
+    def test_json_with_trailing_newline_text_is_delivered_whole(self):
+        text = '{"key": "val"}\nExtra commentary here.'
+        self.assertEqual(w.parse_worker_output(text), {"output": text})
 
     def test_multiple_json_objects_takes_first_complete(self):
         # Both attempts parse to the same leading object.

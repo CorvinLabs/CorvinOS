@@ -25,6 +25,7 @@ import contextlib
 import hmac as _hmac
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -97,6 +98,33 @@ def sanitize_label(raw: object, max_len: int = _MAX_LABEL_LEN) -> str:
 
 class FriendshipError(Exception):
     """Raised on token format or validation failure."""
+
+
+# ── pairing identifiers (kid) ───────────────────────────────────────────
+#
+# A friendship ``kid`` is chosen by the TOKEN ISSUER and travels inside the
+# (self-signed) token, yet every side uses it verbatim as a file name:
+# ``remote_origins/<kid>.json``, ``remote_endpoints/<kid>.json``,
+# ``remote_pending_friendships/<kid>.json``. A peer-controlled string used as
+# a path component is a path-traversal primitive (``../../x`` wrote a 0600
+# JSON file outside the config directories — 2026-09-25 review, finding 1).
+# The kid is therefore restricted to a filename-safe alphabet at PARSE time
+# and re-checked wherever a path is composed from it. uuid4 (what
+# create_friendship_token mints) fits comfortably.
+KID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def is_valid_kid(kid: object) -> bool:
+    """True when ``kid`` is safe to use as a single path component."""
+    return isinstance(kid, str) and KID_RE.fullmatch(kid) is not None
+
+
+def kid_path(directory: Path, kid: str) -> Path:
+    """``<directory>/<kid>.json`` — refusing any kid that is not a plain,
+    filename-safe identifier (defence in depth behind the parse-time check)."""
+    if not is_valid_kid(kid):
+        raise FriendshipError("invalid kid")
+    return Path(directory) / f"{kid}.json"
 
 
 # ── path helpers ────────────────────────────────────────────────────────
@@ -231,6 +259,17 @@ class FriendshipToken:
     # payload): the redeemer reaches an issuer without an inbound route
     # through the same relay, with nothing configured on either side.
     relay_url: str | None = None
+    # Issuer's pairing BINDING public key ("bpk", signed with the payload,
+    # ignored by older parsers — ADR-2064 round 5). Anchors the issuer's
+    # binding identity in the token itself: the redeemer never has to learn
+    # it from a (spoofable) response, and a later token finder knows only the
+    # public half.
+    bind_pub: str | None = None
+    # Issuer's display name ("nam", signed, ignored by older parsers). The
+    # token LABEL is the issuer's name for the REDEEMER ("For Max"); using it
+    # as the redeemer's name for the issuer made every connection on the
+    # redeemer side read like the redeemer itself (round 7).
+    issuer_name: str | None = None
 
     @property
     def personas(self) -> list[str]:
@@ -243,6 +282,26 @@ class FriendshipToken:
 
 
 # ── Token generation ────────────────────────────────────────────────────
+
+def local_display_name() -> str:
+    """This instance's name as shown to a paired peer: the instance label,
+    ``CORVIN_INSTANCE_LABEL``, else the host name. Sanitised, ≤64 chars."""
+    name = ""
+    try:
+        import instance_identity as _ii  # noqa: PLC0415
+        name = str(_ii.instance_id_metadata().get("label") or "")
+    except Exception:  # noqa: BLE001
+        name = ""
+    if not name:
+        name = os.environ.get("CORVIN_INSTANCE_LABEL", "")
+    if not name:
+        import socket as _socket  # noqa: PLC0415
+        try:
+            name = _socket.gethostname()
+        except OSError:
+            name = ""
+    return sanitize_label(name)[:64] if name else ""
+
 
 def create_friendship_token(
     *,
@@ -266,6 +325,8 @@ def create_friendship_token(
         if relay_url is not None and not relay_url.startswith(("ws://", "wss://")):
             raise FriendshipError("relay_url must use ws:// or wss://")
     actual_kid = kid or str(uuid.uuid4())
+    if not is_valid_kid(actual_kid):
+        raise FriendshipError("kid must match [A-Za-z0-9_-]{1,64}")
     key = secrets.token_hex(32)     # 256-bit shared key
     now = time.time()
     expires = (now + ttl_seconds) if ttl_seconds is not None else None
@@ -291,6 +352,16 @@ def create_friendship_token(
         payload_dict["con"] = constraints
     if relay_url:
         payload_dict["rly"] = relay_url
+    try:
+        import a2a_binding as _bind  # noqa: PLC0415
+        _bpk = _bind.local_bind_pub()
+    except Exception:  # noqa: BLE001 — no binding key → legacy pairing semantics
+        _bpk = None
+    if _bpk:
+        payload_dict["bpk"] = _bpk
+    _nam = local_display_name()
+    if _nam:
+        payload_dict["nam"] = _nam
 
     payload_bytes = json.dumps(
         payload_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -308,6 +379,8 @@ def create_friendship_token(
         expires=expires,
         constraints=constraints,
         relay_url=relay_url,
+        bind_pub=_bpk,
+        issuer_name=_nam or None,
     ), token_str
 
 
@@ -351,6 +424,11 @@ def parse_and_verify(token_str: str) -> FriendshipToken:
     if not _hmac.compare_digest(expected, sig_bytes):
         raise FriendshipError("HMAC verification failed — token may have been tampered")
 
+    # The signature only proves the token is self-consistent — the issuer
+    # chose every field, kid included. See KID_RE.
+    if not is_valid_kid(d["kid"]):
+        raise FriendshipError("kid field is not a valid identifier")
+
     expires: float | None = float(d["exp"]) if "exp" in d else None
     if expires is not None and time.time() > expires + _EXPIRY_TOLERANCE_S:
         raise FriendshipError("token has expired")
@@ -366,6 +444,7 @@ def parse_and_verify(token_str: str) -> FriendshipToken:
         if cand.startswith(("ws://", "wss://")) and len(cand) <= 512:
             relay_url = cand
 
+    import a2a_binding as _bind  # noqa: PLC0415
     return FriendshipToken(
         kid=str(d["kid"]),
         key=key,
@@ -374,6 +453,8 @@ def parse_and_verify(token_str: str) -> FriendshipToken:
         expires=expires,
         constraints=constraints,
         relay_url=relay_url,
+        bind_pub=_bind.clean_pub(d.get("bpk")),
+        issuer_name=(sanitize_label(d.get("nam")) or None) if isinstance(d.get("nam"), str) else None,
     )
 
 
@@ -519,10 +600,13 @@ def to_origin_dict(token: FriendshipToken) -> dict[str, Any]:
     }
     if token.max_ttl_s is not None:
         d["max_ttl_s"] = token.max_ttl_s
-    if token.label:
-        d["label"] = token.label
+    _name = token.issuer_name or token.label  # see FriendshipToken.issuer_name
+    if _name:
+        d["label"] = _name
     if token.expires is not None:
         d["_ft_expires"] = token.expires
+    if token.bind_pub:
+        d["_peer_bind_pub"] = token.bind_pub  # the issuer's, from the signed token
     return d
 
 
@@ -560,10 +644,13 @@ def to_endpoint_dict(token: FriendshipToken) -> dict[str, Any]:
         "state": "ACTIVE" if active else "PENDING",
         "_friendship": True,
     }
-    if token.label:
-        d["label"] = token.label
+    _name = token.issuer_name or token.label  # see FriendshipToken.issuer_name
+    if _name:
+        d["label"] = _name
     if token.expires is not None:
         d["_ft_expires"] = token.expires
+    if token.bind_pub:
+        d["_peer_bind_pub"] = token.bind_pub
     return d
 
 
@@ -668,8 +755,8 @@ def activate_connection(
     2026-07-20) so a concurrent writer in another process (Console PATCH,
     reconnect-driven :func:`update_endpoint_url`) cannot be lost.
     """
-    origin_path = origins_dir / f"{kid}.json"
-    endpoint_path = endpoints_dir / f"{kid}.json"
+    origin_path = kid_path(origins_dir, kid)
+    endpoint_path = kid_path(endpoints_dir, kid)
 
     peer_url = peer_url.strip().rstrip("/")
 
@@ -954,7 +1041,9 @@ def validate_endpoint_url_change(
     Performs NO write — the receiver uses this to audit-then-write
     (audit-first invariant, ADR-0198 hardening 2026-07-19).
     """
-    path = endpoints_dir / f"{kid}.json"
+    if not is_valid_kid(kid):
+        return "no_matching_active_endpoint"
+    path = kid_path(endpoints_dir, kid)
     if not path.exists():
         return "no_matching_active_endpoint"
     try:
@@ -993,7 +1082,9 @@ def update_endpoint_url(kid: str, new_url: str, *, endpoints_dir: Path) -> bool:
     the peer must already be a cryptographically-paired ACTIVE friend and
     redirects are blocked.
     """
-    path = endpoints_dir / f"{kid}.json"
+    if not is_valid_kid(kid):
+        return False
+    path = kid_path(endpoints_dir, kid)
     new_url = new_url.strip().rstrip("/")
     if not new_url:
         return False
@@ -1394,7 +1485,7 @@ _ACK_FRESHNESS_S = 30  # mirrors process_ping_request's ±30s window
 
 
 def _pending_path(pending_dir: Path, kid: str) -> Path:
-    return pending_dir / f"{kid}.json"
+    return kid_path(pending_dir, kid)
 
 
 def save_pending_friendship(token: FriendshipToken, *, pending_dir: Path) -> None:
@@ -1402,7 +1493,8 @@ def save_pending_friendship(token: FriendshipToken, *, pending_dir: Path) -> Non
     verify a future reciprocal ack for this ``kid`` — called from
     create_friendship_token() call sites, never from import. Single-use:
     consumed and deleted by the first valid ack (see
-    process_friendship_ack_request)."""
+    process_friendship_ack_request), or by the operator revoking the
+    not-yet-redeemed token (``delete_pending_friendship``)."""
     d: dict[str, Any] = {
         "kid": token.kid,
         "key": token.key,
@@ -1415,7 +1507,13 @@ def save_pending_friendship(token: FriendshipToken, *, pending_dir: Path) -> Non
 
 
 def load_pending_friendship(kid: str, *, pending_dir: Path) -> dict[str, Any] | None:
-    """Return the pending record for ``kid``, or None if absent/expired."""
+    """Return the pending record for ``kid``, or None if absent/expired.
+
+    An EXPIRED record is deleted on the spot (2026-09-25, finding 5): it can
+    never be redeemed again, and leaving it on disk kept a relay slot and a
+    live ack verifier around for a token the operator believes is dead."""
+    if not is_valid_kid(kid):
+        return None
     path = _pending_path(pending_dir, kid)
     if not path.exists():
         return None
@@ -1423,21 +1521,205 @@ def load_pending_friendship(kid: str, *, pending_dir: Path) -> dict[str, Any] | 
         d = json.loads(path.read_text("utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(d, dict):
+        return None
     expires = d.get("expires")
     if expires is not None:
         try:
-            if time.time() > float(expires) + _EXPIRY_TOLERANCE_S:
-                return None
+            expired = time.time() > float(expires) + _EXPIRY_TOLERANCE_S
         except (TypeError, ValueError):
+            expired = True
+        if expired:
+            delete_pending_friendship(kid, pending_dir=pending_dir)
             return None
     return d
 
 
-def delete_pending_friendship(kid: str, *, pending_dir: Path) -> None:
+def delete_pending_friendship(kid: str, *, pending_dir: Path) -> bool:
+    """Delete the issuer-side pending record for ``kid``. Returns True when a
+    record existed. Used on the first valid ack AND by the operator's revoke
+    of a created-but-never-redeemed token."""
+    if not is_valid_kid(kid):
+        return False
+    path = _pending_path(pending_dir, kid)
     try:
-        _pending_path(pending_dir, kid).unlink(missing_ok=True)
+        existed = path.exists()
+        path.unlink(missing_ok=True)
+        return existed
     except OSError:
+        return False
+
+
+# ── ack sender identity (2026-09-25, findings 2 + 3) ─────────────────────
+#
+# Both peers derive the SAME hmac_key from the one shared token key, so a
+# plain HMAC over {kid, issued_at, peer_url} cannot say WHICH side produced
+# an ack: B accepted its own ack reflected back at it (and rewrote its
+# endpoint for A to its own URL), and anyone holding a leaked token could
+# re-point the issuer at an arbitrary URL through the repeat-ack path.
+#
+# An ack now also carries ``sender_instance_id`` covered by a second HMAC,
+# ``signature_v2`` (same key, canonical form INCLUDING the sender id). The
+# legacy ``signature`` is still sent, so a peer running the previous version
+# (which ignores unknown fields) keeps verifying it. The receiver:
+#   * refuses an ack whose authenticated sender is itself (reflection);
+#   * records the sender on the FIRST ack as ``_peer_instance_id`` and binds
+#     every later (repeat) ack to it;
+#   * treats an ack without a valid v2 signature as LEGACY: accepted on the
+#     first-ack path, but never allowed to change a stored URL on the repeat
+#     path.
+_NO_INSTANCE_IDS = frozenset({"", "00000000-0000-0000-0000-000000000000"})
+_MAX_INSTANCE_ID_LEN = 128
+
+
+def _local_instance_id() -> str:
+    """This instance's UUID, or "" when unknown (never raises)."""
+    try:
+        from instance_identity import get_instance_id as _get_iid  # type: ignore[import-not-found]
+        iid = str(_get_iid() or "")
+    except Exception:  # noqa: BLE001
+        return ""
+    if iid in _NO_INSTANCE_IDS or len(iid) > _MAX_INSTANCE_ID_LEN:
+        return ""
+    return iid
+
+
+def _clean_instance_id(raw: object) -> str | None:
+    if not isinstance(raw, str) or raw in _NO_INSTANCE_IDS:
+        return None
+    if len(raw) > _MAX_INSTANCE_ID_LEN or not raw.isprintable():
+        return None
+    return raw
+
+
+def _ack_canonical(
+    kid: str, issued_at: int, peer_url: str, peer_label: str | None,
+    sender_instance_id: str | None = None, bind_pub: str | None = None,
+) -> bytes:
+    d: dict[str, Any] = {"kid": kid, "issued_at": issued_at, "peer_url": peer_url}
+    if peer_label is not None:
+        d["peer_label"] = peer_label
+    if sender_instance_id is not None:
+        d["sender_instance_id"] = sender_instance_id
+    if bind_pub is not None:
+        d["bind_pub"] = bind_pub
+    return json.dumps(d, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _verified_bind_pub(req: dict[str, Any], *, kid: str, issued_at: int, peer_url: str,
+                       peer_label: str | None, sender: str | None, hmac_key: str) -> str | None:
+    """The sender's binding public key, if ``signature_v3`` (pairing HMAC over
+    the v2 fields + ``bind_pub``) verifies. See a2a_binding."""
+    import a2a_binding as _bind  # noqa: PLC0415
+    pub = _bind.clean_pub(req.get("bind_pub"))
+    if pub is None or sender is None:
+        return None
+    try:
+        key = bytes.fromhex(hmac_key)
+    except (TypeError, ValueError):
+        return None
+    expected = _hmac.new(key, _ack_canonical(kid, issued_at, peer_url, peer_label, sender, pub),
+                         "sha256").hexdigest()
+    return pub if _hex_sig_eq(expected, req.get("signature_v3")) else None
+
+
+def _hex_sig_eq(expected: str, presented: object) -> bool:
+    """Constant-time compare that never raises: ``hmac.compare_digest`` raises
+    TypeError on a non-ASCII str, which turned a malformed peer signature into
+    an exception (HTTP 500) instead of an opaque rejection (2026-09-25)."""
+    if not isinstance(presented, str) or not presented.isascii():
+        return False
+    return _hmac.compare_digest(expected, presented)
+
+
+def _verify_ack_signature(
+    req: dict[str, Any], *, kid: str, issued_at: int, peer_url: str,
+    peer_label: str | None, hmac_key: str,
+) -> tuple[bool, str | None]:
+    """Return ``(authentic, sender_instance_id)``. ``sender_instance_id`` is
+    set ONLY when the v2 signature covering it verified; a legacy ack
+    (v1 signature only) yields ``(True, None)``."""
+    try:
+        key = bytes.fromhex(hmac_key)
+    except (TypeError, ValueError):
+        return False, None
+    sig_v2 = req.get("signature_v2")
+    sender = _clean_instance_id(req.get("sender_instance_id"))
+    if isinstance(sig_v2, str) and sender is not None:
+        expected = _hmac.new(
+            key, _ack_canonical(kid, issued_at, peer_url, peer_label, sender), "sha256",
+        ).hexdigest()
+        if _hex_sig_eq(expected, sig_v2):
+            return True, sender
+        return False, None
+    signature = req.get("signature")
+    if not isinstance(signature, str):
+        return False, None
+    expected = _hmac.new(
+        key, _ack_canonical(kid, issued_at, peer_url, peer_label), "sha256",
+    ).hexdigest()
+    return _hex_sig_eq(expected, signature), None
+
+
+# ── pairing audit (2026-09-25, finding 8) ────────────────────────────────
+#
+# The issuer-side ack path creates a NEW trusted origin+endpoint (a peer that
+# may now send us signed tasks) and the repeat path re-points where our
+# signed tasks go — neither left a record in the hash chain. Both now write
+# one content-free event BEFORE touching a file (audit-first). Details are
+# ids, enums and booleans only: never a URL, a label or a key.
+#   A2A.friendship_paired      — {endpoint_id, pairing, url_changed, reason, peer_bound}
+#   A2A.friendship_url_updated — {endpoint_id, pairing, url_changed, reason, peer_bound}
+AUDIT_EVENT_PAIRED = "A2A.friendship_paired"
+AUDIT_EVENT_URL_UPDATED = "A2A.friendship_url_updated"
+AUDIT_EVENT_PEER_REVOKED = "A2A.friendship_peer_revoked"
+AUDIT_FIELDS = frozenset({"endpoint_id", "pairing", "url_changed", "reason", "peer_bound"})
+
+
+class FriendshipAuditError(RuntimeError):
+    """The hash-chained writer is present but the audit record did not land —
+    the pairing write it was guarding must not happen."""
+
+
+def _audit_writer() -> tuple[Any, Path] | None:
+    """``(security_events module, chain path)`` or None when no hash-chained
+    writer exists in this process (minimal deploy without forge)."""
+    try:
+        import audit as _audit_mod  # type: ignore[import-not-found]
+        se = getattr(_audit_mod, "_se", None)
+        if se is not None and callable(getattr(_audit_mod, "audit_path", None)):
+            return se, Path(_audit_mod.audit_path())
+    except Exception:  # noqa: BLE001 — fall through to the sender's writer
         pass
+    try:
+        import remote_trigger_sender as _rts  # type: ignore[import-not-found]
+        se = getattr(_rts, "_forge_se", None)
+        if se is not None and callable(getattr(_rts, "audit_path", None)):
+            return se, Path(_rts.audit_path())
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _audit_pairing_event(event_type: str, severity: str, **details: Any) -> None:
+    """Audit-first write for a pairing state change. Raises
+    :class:`FriendshipAuditError` when a writer exists but the write fails;
+    a no-op only when this process has no hash-chained writer at all."""
+    unknown = set(details) - AUDIT_FIELDS
+    if unknown:  # programming error — never ship a field nobody allowlisted
+        raise FriendshipAuditError(f"unregistered audit fields: {sorted(unknown)}")
+    writer = _audit_writer()
+    if writer is None:
+        return
+    se, path = writer
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        se.write_event(
+            path, event_type, severity=severity, tool="", run_id="",
+            details=details, hash_chain=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise FriendshipAuditError(f"{event_type} audit write failed") from exc
 
 
 def _ack_url_rejection_reason(url: str) -> str | None:
@@ -1552,7 +1834,7 @@ def _relay_send_ack(
 
 def _ack_round_trip(
     *, kid: str, hmac_key: str, recv_key: str, issuer_url: str, my_url: str,
-    my_label: str | None, timeout_s: float,
+    my_label: str | None, timeout_s: float, peer_bind_pub: str | None = None,
 ) -> dict[str, Any]:
     """Shared core: build+sign a friendship-ack request against ``issuer_url``,
     POST it (falling back to the relay on direct failure), and verify the
@@ -1569,6 +1851,10 @@ def _ack_round_trip(
     my_url = (my_url or "").strip().rstrip("/")
     if not my_url:
         return {"ok": False, "error": "no_own_url"}
+    if my_label is None:
+        # Tell the peer what to call us (it uses it only when its own
+        # operator gave the connection no name).
+        my_label = local_display_name() or None
 
     issued_at = int(time.time())
     req_body: dict[str, Any] = {
@@ -1579,10 +1865,34 @@ def _ack_round_trip(
     clean_label = sanitize_label(my_label) if my_label else ""
     if clean_label:
         req_body["peer_label"] = clean_label
-    canonical = json.dumps(req_body, separators=(",", ":"), sort_keys=True)
+    label_for_sig = clean_label or None
+    # Legacy signature (what a previous-version peer verifies) ...
     req_body["signature"] = _hmac.new(
-        bytes.fromhex(hmac_key), canonical.encode("utf-8"), "sha256",
+        bytes.fromhex(hmac_key),
+        _ack_canonical(kid, issued_at, my_url, label_for_sig), "sha256",
     ).hexdigest()
+    # ... plus the v2 signature that binds WHO sent this ack (see
+    # "ack sender identity" above). Omitted when our own id is unknown.
+    my_iid = _local_instance_id()
+    if my_iid:
+        req_body["sender_instance_id"] = my_iid
+        req_body["signature_v2"] = _hmac.new(
+            bytes.fromhex(hmac_key),
+            _ack_canonical(kid, issued_at, my_url, label_for_sig, my_iid), "sha256",
+        ).hexdigest()
+        # v3 (ADR-2064 round 4): our binding public key, and — once we know the
+        # peer's — a MAC under the ECDH binding secret the token does not hold.
+        import a2a_binding as _bind  # noqa: PLC0415
+        my_pub = _bind.local_bind_pub()
+        if my_pub:
+            canon_v3 = _ack_canonical(kid, issued_at, my_url, label_for_sig, my_iid, my_pub)
+            req_body["bind_pub"] = my_pub
+            req_body["signature_v3"] = _hmac.new(
+                bytes.fromhex(hmac_key), canon_v3, "sha256").hexdigest()
+            if peer_bind_pub:
+                mac = _bind.bind_mac(peer_bind_pub, kid, canon_v3)
+                if mac:
+                    req_body["bind_mac"] = mac
 
     ack_url = issuer_url.rstrip("/") + "/v1/a2a/friendship-ack"
     opener = _urlreq.build_opener(_AckNoRedirect())
@@ -1598,6 +1908,11 @@ def _ack_round_trip(
             # only ever reachable through the relay): go straight to the
             # relay instead of failing the handshake.
             raise _urlerr.URLError("no_direct_url")
+        if _ack_url_rejection_reason(issuer_url.strip().rstrip("/")) is not None:
+            # The peer's address comes from its own token: never let it aim
+            # this POST at loopback / link-local metadata / other forbidden
+            # hosts (2026-09-25, finding 4). The relay, if any, still works.
+            raise _urlerr.URLError("forbidden_direct_url")
         with opener.open(http_req, timeout=timeout_s) as resp:
             raw = resp.read(64 * 1024 + 1)
             if len(raw) > 64 * 1024:
@@ -1632,6 +1947,11 @@ def _ack_round_trip(
         return {"ok": False, "error": "invalid_response"}
     sig = payload.get("signature")
     if not isinstance(sig, str):
+        if via == "relay" and payload.get("reason") == "license_limit":
+            # The issuer's refusal carries no signature (it never signs a
+            # rejection), but over the relay it arrived AEAD-sealed under the
+            # pairing key — map it like the direct path's HTTP 402.
+            return {"ok": False, "error": "http_402"}
         return {"ok": False, "error": "unsigned_response"}
     body_for_verify = {k: v for k, v in payload.items() if k != "signature"}
     expected = _hmac.new(
@@ -1639,13 +1959,14 @@ def _ack_round_trip(
         json.dumps(body_for_verify, separators=(",", ":"), sort_keys=True).encode("utf-8"),
         "sha256",
     ).hexdigest()
-    if not _hmac.compare_digest(expected, sig):
+    if not _hex_sig_eq(expected, sig):
         return {"ok": False, "error": "bad_response_signature"}
 
     return {
         "ok": bool(payload.get("ok")),
         "reachable": bool(payload.get("reachable", False)),
         "peer_instance_id": payload.get("instance_id"),
+        "peer_bind_pub": payload.get("bind_pub"),  # recv_key-verified above
         "via": via,
     }
 
@@ -1699,7 +2020,9 @@ def retry_friendship_ack(
     never raises; a missing/unreadable endpoint file or missing own URL
     returns ``{"ok": False, "error": ...}`` like any other failure.
     """
-    endpoint_path = Path(endpoints_dir) / f"{kid}.json"
+    if not is_valid_kid(kid):
+        return {"ok": False, "error": "endpoint_unreadable"}
+    endpoint_path = kid_path(Path(endpoints_dir), kid)
     try:
         cfg = json.loads(endpoint_path.read_text("utf-8"))
     except (OSError, ValueError):
@@ -1719,11 +2042,279 @@ def retry_friendship_ack(
     if not my_url:
         return {"ok": False, "error": "no_own_url"}
 
-    return _ack_round_trip(
+    result = _ack_round_trip(
         kid=kid, hmac_key=hmac_key, recv_key=recv_key,
         issuer_url=issuer_url, my_url=my_url, my_label=my_label,
-        timeout_s=timeout_s,
+        timeout_s=timeout_s, peer_bind_pub=cfg.get("_peer_bind_pub"),
     )
+    if result.get("ok"):
+        remember_peer_instance_id(
+            kid, result.get("peer_instance_id"), endpoints_dir=Path(endpoints_dir),
+            origins_dir=_sibling_origins_dir(Path(endpoints_dir)),
+            peer_bind_pub=result.get("peer_bind_pub"), via=result.get("via"),
+        )
+    return result
+
+
+def _sibling_origins_dir(endpoints_dir: Path) -> Path | None:
+    """The origins dir that pairs with ``endpoints_dir`` (same resolution the
+    console and receiver use), so a binding learned on a hello lands on BOTH
+    files — the revoke-notice and repeat-ack gates read the origin too."""
+    env = os.environ.get("REMOTE_ORIGINS_DIR")
+    if env:
+        return Path(env)
+    names = {"remote_endpoints": "remote_origins", "endpoints": "origins"}
+    sib = names.get(endpoints_dir.name)
+    if sib is None:
+        return None
+    cand = endpoints_dir.parent / sib
+    return cand if cand.is_dir() else None
+
+
+def remember_peer_instance_id(
+    kid: str, peer_instance_id: object, *, endpoints_dir: Path,
+    origins_dir: Path | None = None, peer_bind_pub: object = None,
+    via: str | None = None,
+) -> bool:
+    """Record the peer's instance id learned from a VERIFIED (recv_key-signed)
+    ack response, so later repeat acks from the peer are bound to it (see
+    "ack sender identity"). Never overwrites an existing binding, never binds
+    a different instance than one already pinned on ANY of the pairing's
+    files, and never records our own id. Best-effort: returns False on any
+    failure.
+
+    A binding PUBLIC KEY is never adopted here (round 6). After pairing, every
+    response path is spoofable by a leaked-token holder (relay fan-out, or a
+    URL moved on a legacy pairing), so keys come only from the signed token
+    (issuer's ``bpk``) and the first ack (redeemer's ``bind_pub``). Legacy
+    pairings keep the instance-id rule until re-paired. ``peer_bind_pub`` and
+    ``via`` are accepted for call compatibility and ignored.
+    """
+    del peer_bind_pub, via
+    iid = _clean_instance_id(peer_instance_id)
+    if iid is None or not is_valid_kid(kid) or iid == _local_instance_id():
+        return False
+    dirs = [Path(endpoints_dir)] + ([Path(origins_dir)] if origins_dir is not None else [])
+    wrote = False
+    try:
+        with config_file_lock(*dirs):
+            cfgs: list[tuple[Path, dict]] = []
+            for d in dirs:
+                path = kid_path(d, kid)
+                try:
+                    cfg = json.loads(path.read_text("utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if cfg.get("_friendship"):
+                    cfgs.append((path, cfg))
+            # One pin across ALL files (round 6): a TOFU pin on the endpoint
+            # must stop a different instance from being bound on the origin.
+            pinned = next((c.get(k) for _p, c in cfgs
+                           for k in ("_peer_instance_id", "instance_id") if c.get(k)), None)
+            if pinned and pinned != iid:
+                return False
+            for path, cfg in cfgs:
+                if not cfg.get("_peer_instance_id"):
+                    cfg["_peer_instance_id"] = iid
+                    _atomic_write(path, cfg)
+                    wrote = True
+    except (FriendshipLockBusy, OSError):
+        return False
+    return wrote
+
+
+# ── revoke notice (2026-09-25) ───────────────────────────────────────────
+#
+# Revoking a friendship deletes our keys, and the relay listener unregisters
+# the kid — so afterwards the peer can no longer get an AUTHORITATIVE answer:
+# its ping/ack go unanswered over the relay, which is indistinguishable from
+# an outage, and it kept showing "peer knows us" forever. The revoking side
+# therefore sends one signed notice with the old keys BEFORE deleting them
+# (direct, else relay). It rides the friendship-ack channel so both
+# transports and the relay listener's ack dispatch carry it unchanged; a
+# previous-version receiver rejects it as `missing_fields` (no peer_url) and
+# changes nothing.
+REVOKE_NOTICE_TYPE = "revoke"
+_REVOKE_WINDOW_S = 300
+
+
+def _revoke_canonical(kid: str, issued_at: int, sender: str) -> bytes:
+    return f"corvin-a2a-revoke|{kid}|{issued_at}|{sender}".encode("utf-8")
+
+
+def relay_url_rejection_reason(url: str) -> str | None:
+    """Host gate for a relay URL chosen by a token ISSUER (``rly``). Same host
+    classes the ack-URL gate forbids (loopback, link-local / cloud metadata,
+    unspecified, multicast, reserved; unresolvable): the listener would open
+    a WebSocket there and register every pairing's relay credential."""
+    from urllib.parse import urlsplit as _us
+    try:
+        parts = _us(str(url or "").strip())
+    except ValueError:
+        return "relay_url_invalid"
+    if parts.scheme not in ("ws", "wss") or not parts.hostname:
+        return "relay_url_invalid"
+    http_like = f"{'https' if parts.scheme == 'wss' else 'http'}://{parts.netloc}"
+    reason = _ack_url_rejection_reason(http_like)
+    return None if reason is None else f"relay_{reason}"
+
+
+def adopt_token_relay(token_relay: str | None, *, endpoints_dir: Path,
+                      exclude_kid: str | None = None) -> str:
+    """Decide whether an imported token's relay becomes OUR relay.
+
+    Returns ``"adopted"``, ``"same"``, ``"none"`` (token carries no relay),
+    ``"explicit"`` (the operator chose one — never overridden), ``"rejected"``
+    (host gate) or ``"kept_existing"``. The last case (round 3): other
+    pairings already rendezvous on the current relay; silently switching
+    would strand them AND hand their relay credentials to the new host. The
+    import reports it instead so the operator can decide.
+    """
+    if not token_relay:
+        return "none"
+    if my_relay_url_is_explicit():
+        return "explicit"
+    current = get_my_relay_url()
+    if current == token_relay:
+        return "same"  # already ours (the common default-relay case): no DNS needed
+    if relay_url_rejection_reason(token_relay) is not None:
+        return "rejected"
+    others = [p for p in Path(endpoints_dir).glob("*.json")
+              if p.stem != exclude_kid and _is_friendship_file(p)]
+    if others and current:
+        return "kept_existing"
+    set_my_relay_url(token_relay)
+    return "adopted"
+
+
+def _is_friendship_file(path: Path) -> bool:
+    try:
+        return bool(json.loads(path.read_text("utf-8")).get("_friendship"))
+    except (OSError, ValueError):
+        return False
+
+
+def send_revoke_notice(kid: str, *, endpoints_dir: Path, timeout_s: float = 5.0) -> dict[str, Any]:
+    """Tell the peer that we revoked ``kid``. Best-effort, never raises; call
+    it BEFORE the connection files are deleted (it needs the keys)."""
+    import urllib.error as _urlerr
+    import urllib.request as _urlreq
+
+    if not is_valid_kid(kid):
+        return {"ok": False, "error": "invalid_kid"}
+    try:
+        cfg = json.loads((endpoints_dir / f"{kid}.json").read_text("utf-8"))
+        hmac_key = str(cfg["hmac_key"])
+        bytes.fromhex(hmac_key)
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "endpoint_unreadable"}
+    sender = _local_instance_id()
+    if not sender:
+        return {"ok": False, "error": "no_instance_id"}
+    issued_at = int(time.time())
+    import a2a_binding as _bind  # noqa: PLC0415
+    _peer_pub = _bind.clean_pub(cfg.get("_peer_bind_pub"))
+    body = {
+        "type": REVOKE_NOTICE_TYPE, "kid": kid, "issued_at": issued_at,
+        # Empty peer_url: the relay listener classifies ack-channel frames by
+        # this key, and a previous-version receiver rejects the notice as
+        # missing_fields ("" is falsy) without changing anything.
+        "peer_url": "",
+        "sender_instance_id": sender,
+        "signature": _hmac.new(bytes.fromhex(hmac_key),
+                               _revoke_canonical(kid, issued_at, sender), "sha256").hexdigest(),
+    }
+    if _peer_pub:
+        _mac = _bind.bind_mac(_peer_pub, kid, _revoke_canonical(kid, issued_at, sender))
+        if _mac:
+            body["bind_mac"] = _mac
+    url = str(cfg.get("url") or "")
+    base = url[: -len("/v1/a2a/receive")] if url.endswith("/v1/a2a/receive") else url
+    base = base.strip().rstrip("/")
+    if base and _ack_url_rejection_reason(base) is None:
+        try:
+            req = _urlreq.Request(base + "/v1/a2a/friendship-ack",
+                                  data=json.dumps(body).encode("utf-8"), method="POST",
+                                  headers={"Content-Type": "application/json"})
+            with _urlreq.build_opener(_AckNoRedirect()).open(req, timeout=timeout_s) as resp:
+                if 200 <= resp.status < 300:
+                    return {"ok": True, "via": "direct"}
+        except (_urlerr.URLError, OSError, TimeoutError, ValueError):
+            pass
+    payload = _relay_send_ack(kid, hmac_key, body, timeout_s)
+    if isinstance(payload, dict) and payload.get("ok"):
+        return {"ok": True, "via": "relay"}
+    return {"ok": False, "error": "unreachable"}
+
+
+def _process_revoke_notice(
+    req: dict[str, Any], *, origins_dir: Path, endpoints_dir: Path,
+) -> tuple[int, dict[str, Any]]:
+    """Receiving side of :func:`send_revoke_notice`: verified against the keys
+    we hold for ``kid``, then marks the connection as no longer known by the
+    peer. Never deletes anything — what to do with a revoked connection stays
+    the operator's decision."""
+    kid, issued_at = req.get("kid"), req.get("issued_at")
+    signature = req.get("signature")
+    sender = _clean_instance_id(req.get("sender_instance_id"))
+    if not isinstance(kid, str) or not is_valid_kid(kid):
+        return 400, {"reason": "invalid_kid"}
+    if isinstance(issued_at, bool) or not isinstance(issued_at, int) or not isinstance(signature, str):
+        return 400, {"reason": "missing_fields"}
+    if sender is None:
+        return 400, {"reason": "missing_fields"}
+    origin_path, endpoint_path = origins_dir / f"{kid}.json", endpoints_dir / f"{kid}.json"
+    try:
+        cfg = json.loads(origin_path.read_text("utf-8"))
+        key = bytes.fromhex(str(cfg["hmac_key"]))
+    except Exception:  # noqa: BLE001
+        return 403, {"reason": "ack_rejected"}  # opaque: same as a bad signature
+    expected = _hmac.new(key, _revoke_canonical(kid, issued_at, sender), "sha256").hexdigest()
+    if not _hex_sig_eq(expected, signature):
+        return 403, {"reason": "ack_rejected"}
+    if abs(time.time() - issued_at) > _REVOKE_WINDOW_S:
+        return 403, {"reason": "ack_rejected"}
+    if sender == _local_instance_id():
+        return 400, {"reason": "ack_reflected"}
+    # Binding lives on origin AND/OR endpoint (a hello records it on the
+    # endpoint first) — read both, like the repeat-ack gate (round 5).
+    try:
+        ecfg = json.loads(endpoint_path.read_text("utf-8"))
+    except (OSError, ValueError):
+        ecfg = {}
+    import a2a_binding as _bind  # noqa: PLC0415
+    bound = (cfg.get("_peer_instance_id") or ecfg.get("_peer_instance_id")
+             or ecfg.get("instance_id"))
+    if bound and bound != sender:
+        return 403, {"reason": "ack_peer_mismatch"}
+    stored_pub = (_bind.clean_pub(cfg.get("_peer_bind_pub"))
+                  or _bind.clean_pub(ecfg.get("_peer_bind_pub")))
+    if stored_pub and not _bind.verify_bind_mac(
+            stored_pub, kid, _revoke_canonical(kid, issued_at, sender), req.get("bind_mac")):
+        # A leaked-token holder knows the keys and the public instance id —
+        # not the binding secret (round 4).
+        return 403, {"reason": "ack_peer_unproven"}
+    try:
+        _audit_pairing_event(AUDIT_EVENT_PEER_REVOKED, "WARNING", endpoint_id=kid,
+                             pairing="repeat", url_changed=False, reason="peer_revoked",
+                             peer_bound=bool(bound))
+    except FriendshipAuditError:
+        return 503, {"reason": "audit_unavailable"}
+    now = time.time()
+    try:
+        with config_file_lock(origins_dir, endpoints_dir):
+            for path in (origin_path, endpoint_path):
+                try:
+                    data = json.loads(path.read_text("utf-8"))
+                except Exception:  # noqa: BLE001
+                    continue
+                data["_peer_knows_us"] = False
+                data["_peer_reports_reachable"] = False
+                data["_peer_revoked_at"] = now
+                _atomic_write(path, data)
+    except FriendshipLockBusy:
+        return 503, {"reason": "busy"}
+    return 200, {"ok": True}
 
 
 def process_friendship_ack_request(
@@ -1743,10 +2334,16 @@ def process_friendship_ack_request(
     Anti-oracle ordering: signature is verified BEFORE any other rejection
     reason is distinguished — unknown-kid and bad-signature share one opaque
     403 (mirrors process_ping_request), so an unauthenticated caller cannot
-    enumerate valid pending kids.
+    enumerate valid pending kids. The a2a_peers_max licence gate is likewise
+    evaluated only for an authenticated ack, and inside the same
+    ``config_file_lock`` as the write it guards (2026-09-25, finding 6: it
+    used to count-then-write unlocked, BEFORE the signature check — ten
+    concurrent acks all passed a limit of one).
     """
     if not isinstance(req, dict):
         return 400, {"reason": "envelope_not_object"}
+    if req.get("type") == REVOKE_NOTICE_TYPE:
+        return _process_revoke_notice(req, origins_dir=origins_dir, endpoints_dir=endpoints_dir)
 
     kid = req.get("kid")
     issued_at = req.get("issued_at")
@@ -1762,8 +2359,11 @@ def process_friendship_ack_request(
         return 400, {"reason": "invalid_issued_at"}
     if peer_label is not None and not isinstance(peer_label, str):
         return 400, {"reason": "missing_fields"}
+    if not is_valid_kid(kid):
+        # A kid is a path component on this side (see KID_RE). Format-only
+        # verdict: reveals nothing about which kids exist.
+        return 400, {"reason": "invalid_kid"}
 
-    kid = kid[:128]
     peer_url = peer_url.strip().rstrip("/")[:_ACK_MAX_URL_LEN]
 
     pending = load_pending_friendship(kid, pending_dir=pending_dir)
@@ -1776,43 +2376,20 @@ def process_friendship_ack_request(
         # branch every such retry got the opaque 403 and the redeemer showed
         # "peer can't reach you back" permanently (measured 2026-09-24).
         return _process_repeat_ack(
-            kid=kid, issued_at=issued_at, peer_url=peer_url, signature=signature,
+            req, kid=kid, issued_at=issued_at, peer_url=peer_url,
             peer_label=peer_label, origins_dir=origins_dir, endpoints_dir=endpoints_dir,
         )
-
-    # ADR-0094 a2a_peers_max — the issuer's own record for this kid is about
-    # to be created by THIS handler for the first time (friendship_create
-    # never checked this; it wrote nothing to disk). Skip the check for a
-    # kid we already have a record of (a retry/reconnect ack must not be
-    # blocked by a limit that was already satisfied when the record was
-    # first created).
-    if not (origins_dir / f"{kid}.json").exists():
-        try:
-            from license.validator import get_limit as _lic_get_limit  # type: ignore[import-not-found]
-        except Exception:  # noqa: BLE001
-            _lic_get_limit = None
-        if _lic_get_limit is not None:
-            try:
-                _max = _lic_get_limit("a2a_peers_max")
-            except Exception:  # noqa: BLE001
-                _max = None
-            if _max is not None:
-                _limit = 1 if _max is True else (0 if _max is False else int(_max))
-                _existing = sum(1 for _ in origins_dir.glob("*.json")) if origins_dir.exists() else 0
-                if _existing >= _limit:
-                    return 402, {"reason": "license_limit"}
 
     try:
         hmac_key, recv_key = _derive_channel_keys(str(pending["key"]))
     except (KeyError, TypeError, ValueError):
         return 403, {"reason": "ack_rejected"}
 
-    canonical_dict: dict[str, Any] = {"kid": kid, "issued_at": issued_at, "peer_url": peer_url}
-    if peer_label is not None:
-        canonical_dict["peer_label"] = peer_label
-    canonical = json.dumps(canonical_dict, separators=(",", ":"), sort_keys=True)
-    expected_sig = _hmac.new(bytes.fromhex(hmac_key), canonical.encode("utf-8"), "sha256").hexdigest()
-    if not _hmac.compare_digest(signature, expected_sig):
+    authentic, sender_iid = _verify_ack_signature(
+        req, kid=kid, issued_at=issued_at, peer_url=peer_url,
+        peer_label=peer_label, hmac_key=hmac_key,
+    )
+    if not authentic:
         return 403, {"reason": "ack_rejected"}
 
     # Freshness — authenticated callers only past this point, so a distinct
@@ -1821,99 +2398,277 @@ def process_friendship_ack_request(
     if abs(now - issued_at) > _ACK_FRESHNESS_S:
         return 400, {"reason": "stale_ack"}
 
+    own_iid = _local_instance_id()
+    if sender_iid is not None and own_iid and sender_iid == own_iid:
+        return 400, {"reason": "ack_reflected"}
+
     rejection = _ack_url_rejection_reason(peer_url)
     if rejection is not None:
         return 400, {"reason": rejection}
 
-    label = (sanitize_label(peer_label) if peer_label else "") or pending.get("label") or None
+    # The issuer's OWN name for this peer (the token label, e.g. "For Max")
+    # wins; the peer's self-declared name only fills an unlabelled token.
+    label = pending.get("label") or (sanitize_label(peer_label) if peer_label else "") or None
     constraints = dict(pending.get("constraints") or {})
     reconstructed = FriendshipToken(
         kid=kid, key=str(pending["key"]), url=peer_url, label=label,
         expires=pending.get("expires"), constraints=constraints,
     )
+    origin_cfg = to_origin_dict(reconstructed)
+    endpoint_cfg = to_endpoint_dict(reconstructed)
+    if sender_iid is not None:
+        origin_cfg["_peer_instance_id"] = sender_iid
+        endpoint_cfg["_peer_instance_id"] = sender_iid
+        _first_pub = _verified_bind_pub(req, kid=kid, issued_at=issued_at, peer_url=peer_url,
+                                        peer_label=peer_label, sender=sender_iid, hmac_key=hmac_key)
+        if _first_pub:
+            origin_cfg["_peer_bind_pub"] = _first_pub
+            endpoint_cfg["_peer_bind_pub"] = _first_pub
 
-    origin_path = origins_dir / f"{kid}.json"
-    endpoint_path = endpoints_dir / f"{kid}.json"
-    with config_file_lock(origins_dir, endpoints_dir):
-        _atomic_write(origin_path, to_origin_dict(reconstructed))
-        _atomic_write(endpoint_path, to_endpoint_dict(reconstructed))
+    origin_path = kid_path(origins_dir, kid)
+    endpoint_path = kid_path(endpoints_dir, kid)
+    try:
+        with config_file_lock(origins_dir, endpoints_dir, pending_dir):
+            # Re-check under the lock: two holders of one token acking at the
+            # same moment must not both "complete" the first pairing (the
+            # later write silently replacing the earlier peer). The loser is
+            # handled exactly like any other repeat ack — bound to the winner.
+            if load_pending_friendship(kid, pending_dir=pending_dir) is None:
+                consumed_meanwhile = True
+            else:
+                consumed_meanwhile = False
+                limited = _peers_max_reached(origins_dir, excluding_kid=kid)
+                if limited:
+                    return 402, {"reason": "license_limit"}
+                _audit_pairing_event(
+                    AUDIT_EVENT_PAIRED, "INFO",
+                    endpoint_id=kid, pairing="first", url_changed=True,
+                    reason="ack_verified", peer_bound=sender_iid is not None,
+                )
+                _atomic_write(origin_path, origin_cfg)
+                _atomic_write(endpoint_path, endpoint_cfg)
+                delete_pending_friendship(kid, pending_dir=pending_dir)
+    except FriendshipLockBusy:
+        return 503, {"reason": "busy"}
+    except FriendshipAuditError:
+        return 503, {"reason": "audit_unavailable"}
 
-    delete_pending_friendship(kid, pending_dir=pending_dir)
+    if consumed_meanwhile:
+        return _process_repeat_ack(
+            req, kid=kid, issued_at=issued_at, peer_url=peer_url,
+            peer_label=peer_label, origins_dir=origins_dir, endpoints_dir=endpoints_dir,
+        )
 
     return _ack_ping_back_and_respond(
         kid=kid, recv_key=recv_key, origins_dir=origins_dir, endpoints_dir=endpoints_dir,
     )
 
 
+def _peers_max_reached(origins_dir: Path, *, excluding_kid: str) -> bool:
+    """ADR-0094 a2a_peers_max for the issuer-side ack path. The caller MUST
+    hold ``config_file_lock(origins_dir, ...)`` so the count and the write it
+    guards are one atomic step. The kid being (re)written is never counted
+    against its own admission."""
+    try:
+        from license.validator import get_limit as _lic_get_limit  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        _max = _lic_get_limit("a2a_peers_max")
+    except Exception:  # noqa: BLE001
+        return False
+    if _max is None:
+        return False
+    limit = 1 if _max is True else (0 if _max is False else int(_max))
+    if not Path(origins_dir).exists():
+        return limit <= 0
+    existing = sum(1 for p in Path(origins_dir).glob("*.json") if p.stem != excluding_kid)
+    return existing >= limit
+
+
+def _awaiting_activation(origin: dict[str, Any]) -> bool:
+    """An imported connection that is disabled ONLY because the token carried
+    no address (state PENDING) — as opposed to one the operator disabled."""
+    return (not origin.get("enabled") and origin.get("state") == "PENDING"
+            and not origin.get("_operator_disabled"))
+
+
 def _process_repeat_ack(
-    *, kid: str, issued_at: int, peer_url: str, signature: str,
+    req: dict[str, Any], *, kid: str, issued_at: int, peer_url: str,
     peer_label: str | None, origins_dir: Path, endpoints_dir: Path,
 ) -> tuple[int, dict[str, Any]]:
-    """Issuer-side: a friendship-ack for a kid whose pending record is already
-    consumed. Accepted only for an ESTABLISHED, ENABLED ``_friendship`` origin,
-    verified against the channel key that origin already holds — the same key
-    the first ack was verified against, since both sides derive it from one
-    shared token (``_derive_channel_keys``). Effect: the redeemer's endpoint URL
-    is refreshed to ``peer_url`` (self-heals a peer whose IP changed) and the
-    redeemer is pinged back exactly as on the first ack.
+    """A friendship-ack for a kid whose pending record is already consumed
+    (or, on the redeemer's side, never existed — the issuer's hello). Accepted
+    only for an ESTABLISHED, ENABLED ``_friendship`` origin, verified against
+    the channel key that origin already holds. Effect: the peer is pinged
+    back exactly as on the first ack, and its endpoint URL MAY be refreshed
+    to ``peer_url`` (self-heals a peer whose IP changed).
 
-    Security properties kept identical to the first-ack path: every failure
-    before signature verification is the same opaque 403 (no kid oracle), the
-    ±30 s freshness window bounds replay to re-announcing the SAME signed URL,
-    and a disabled/revoked friendship is never resurrected.
+    A URL rewrite re-points where this instance sends signed tasks, so it is
+    gated far more tightly than the first pairing (2026-09-25, finding 2 —
+    it used to be allowed for anyone holding the pairing key, under the
+    permissive first-pairing host gate):
+
+    * the ack must carry an authenticated ``sender_instance_id`` (v2
+      signature); a legacy ack is accepted only when it changes nothing;
+    * that sender must be the peer bound on the first ack
+      (``_peer_instance_id``) — a second importer of a leaked token cannot
+      take the connection over. A pairing from before binding existed is
+      bound on its first authenticated repeat ack (trust on first use);
+    * an ack whose sender is THIS instance is a reflection and is refused;
+    * the new URL must pass :func:`_reconnect_url_rejection_reason` against
+      the stored one (no https→http downgrade, no global→private pivot);
+    * the change is audited (``A2A.friendship_url_updated``) BEFORE the write.
+
+    Every failure before signature verification is the same opaque 403 (no
+    kid oracle), the ±30 s freshness window bounds replay, and a
+    disabled/revoked friendship is never resurrected.
     """
-    origin_path = origins_dir / f"{kid}.json"
+    origin_path = kid_path(origins_dir, kid)
+    endpoint_path = kid_path(endpoints_dir, kid)
     try:
         origin = json.loads(origin_path.read_text("utf-8"))
     except (OSError, ValueError):
         return 403, {"reason": "ack_rejected"}
     hmac_key = origin.get("hmac_key")
     recv_key = origin.get("recv_key")
-    if (not origin.get("_friendship") or not origin.get("enabled")
+    if (not origin.get("_friendship") or not (origin.get("enabled") or _awaiting_activation(origin))
             or not isinstance(hmac_key, str) or len(hmac_key) != 64
             or not isinstance(recv_key, str) or len(recv_key) != 64):
         return 403, {"reason": "ack_rejected"}
 
-    canonical_dict: dict[str, Any] = {"kid": kid, "issued_at": issued_at, "peer_url": peer_url}
-    if peer_label is not None:
-        canonical_dict["peer_label"] = peer_label
-    canonical = json.dumps(canonical_dict, separators=(",", ":"), sort_keys=True)
-    expected_sig = _hmac.new(bytes.fromhex(hmac_key), canonical.encode("utf-8"), "sha256").hexdigest()
-    if not _hmac.compare_digest(signature, expected_sig):
+    authentic, sender_iid = _verify_ack_signature(
+        req, kid=kid, issued_at=issued_at, peer_url=peer_url,
+        peer_label=peer_label, hmac_key=hmac_key,
+    )
+    if not authentic:
         return 403, {"reason": "ack_rejected"}
 
     if abs(int(time.time()) - issued_at) > _ACK_FRESHNESS_S:
         return 400, {"reason": "stale_ack"}
+    own_iid = _local_instance_id()
+    if sender_iid is not None and own_iid and sender_iid == own_iid:
+        return 400, {"reason": "ack_reflected"}
     rejection = _ack_url_rejection_reason(peer_url)
     if rejection is not None:
         return 400, {"reason": rejection}
 
-    endpoint_path = endpoints_dir / f"{kid}.json"
     receive_url = peer_url + "/v1/a2a/receive"
-    with config_file_lock(origins_dir, endpoints_dir):
-        try:
-            endpoint = json.loads(endpoint_path.read_text("utf-8"))
-        except (OSError, ValueError):
-            # Origin without endpoint (half-written pairing, or an endpoint the
-            # operator deleted while the origin stayed enabled): rebuild it from
-            # the origin's keys — same shape as to_endpoint_dict().
-            endpoint = {
-                "endpoint_id": kid,
-                "hmac_key": hmac_key,
-                "recv_key": recv_key,
-                "origin_id_for_send": kid,
-                "_friendship_key_version": origin.get("_friendship_key_version", 2),
-                "enabled": True,
-                "state": "ACTIVE",
-                "_friendship": True,
-            }
-            if origin.get("label"):
-                endpoint["label"] = origin["label"]
-        if endpoint.get("url") != receive_url:
-            endpoint["url"] = receive_url
-            _atomic_write(endpoint_path, endpoint)
-        elif not endpoint_path.exists():
-            _atomic_write(endpoint_path, endpoint)
+    try:
+        with config_file_lock(origins_dir, endpoints_dir):
+            # Re-read both under the lock: the verdict below must be made on
+            # the same bytes the write replaces.
+            try:
+                origin = json.loads(origin_path.read_text("utf-8"))
+            except (OSError, ValueError):
+                return 403, {"reason": "ack_rejected"}
+            activating = not origin.get("enabled") and _awaiting_activation(origin)
+            if not origin.get("_friendship") or not (origin.get("enabled") or activating):
+                return 403, {"reason": "ack_rejected"}
+            endpoint_missing = False
+            try:
+                endpoint = json.loads(endpoint_path.read_text("utf-8"))
+            except (OSError, ValueError):
+                # Origin without endpoint (half-written pairing, or an endpoint
+                # the operator deleted while the origin stayed enabled):
+                # rebuild it from the origin's keys — same shape as
+                # to_endpoint_dict().
+                endpoint_missing = True
+                endpoint = {
+                    "endpoint_id": kid,
+                    "hmac_key": hmac_key,
+                    "recv_key": recv_key,
+                    "origin_id_for_send": kid,
+                    "_friendship_key_version": origin.get("_friendship_key_version", 2),
+                    "enabled": True,
+                    "state": "ACTIVE",
+                    "_friendship": True,
+                }
+                if origin.get("label"):
+                    endpoint["label"] = origin["label"]
+                # Keep the pairing's binding on the rebuilt record (round 6):
+                # this side's own senders read it from the endpoint.
+                for _k in ("_peer_instance_id", "_peer_bind_pub"):
+                    if origin.get(_k):
+                        endpoint[_k] = origin[_k]
+
+            stored_url = str(endpoint.get("url") or "")
+            url_changed = stored_url != receive_url
+            # A binding comes ONLY from our own outbound round trip verified
+            # with recv_key against the stored URL (remember_peer_instance_id
+            # on import / hello, or the sender's instance pin) — never from an
+            # inbound ack (round 3: a leaked-token holder bound itself with a
+            # URL-repeating ack and re-pointed the endpoint with the next one).
+            bound = (_clean_instance_id(origin.get("_peer_instance_id"))
+                     or _clean_instance_id(endpoint.get("_peer_instance_id"))
+                     or _clean_instance_id(endpoint.get("instance_id")))
+            if bound is not None:
+                if sender_iid is None:
+                    # Legacy-format ack on a bound pairing: a keep-alive is
+                    # fine, a rewrite is not (it could be anyone with the key).
+                    if url_changed or endpoint_missing:
+                        return 403, {"reason": "ack_peer_unbound"}
+                elif sender_iid != bound:
+                    return 403, {"reason": "ack_peer_mismatch"}
+            else:
+                if sender_iid is None:
+                    if url_changed or endpoint_missing:
+                        return 403, {"reason": "ack_peer_unbound"}
+                elif url_changed or endpoint_missing:
+                    # Unbound pairing: nobody may re-point or rebuild it via an
+                    # inbound ack. It gets bound by our own verified outbound
+                    # hello, after which the bound peer can move.
+                    return 403, {"reason": "ack_peer_unbound"}
+                # else: a v2 keep-alive repeating the stored URL — accepted,
+                # but it binds NOTHING (no inbound trust on first use).
+
+            # Binding proof (ADR-2064 round 4): an instance id is public and
+            # signature_v2 uses the token's key, so a leaked-token holder could
+            # claim the bound id. Once the peer's binding public key is known,
+            # any CHANGE needs a MAC under the ECDH secret the token lacks. A
+            # plain keep-alive stays allowed — its response is how a peer that
+            # missed our key on the first ack learns it.
+            import a2a_binding as _bind  # noqa: PLC0415
+            stored_pub = (_bind.clean_pub(origin.get("_peer_bind_pub"))
+                          or _bind.clean_pub(endpoint.get("_peer_bind_pub")))
+            if stored_pub and (url_changed or endpoint_missing):
+                req_pub = _bind.clean_pub(req.get("bind_pub"))
+                canon_v3 = _ack_canonical(kid, issued_at, peer_url, peer_label, sender_iid, req_pub)
+                if (req_pub != stored_pub or sender_iid is None
+                        or not _bind.verify_bind_mac(stored_pub, kid, canon_v3, req.get("bind_mac"))):
+                    return 403, {"reason": "ack_peer_unproven"}
+
+            if url_changed and stored_url:
+                reason = _reconnect_url_rejection_reason(peer_url, stored_url)
+                if reason is not None:
+                    return 400, {"reason": reason}
+
+            if url_changed or endpoint_missing:
+                _audit_pairing_event(
+                    AUDIT_EVENT_URL_UPDATED, "WARNING" if url_changed else "INFO",
+                    endpoint_id=kid, pairing="repeat", url_changed=url_changed,
+                    reason="endpoint_rebuilt" if endpoint_missing else "peer_reannounced",
+                    peer_bound=bound is not None,
+                )
+                if activating:
+                    # The imported-but-URL-less connection (token without an
+                    # address) learns the issuer's address from this verified,
+                    # bound hello: it becomes a live connection in BOTH
+                    # directions. Before, nothing but a manual set-url ever
+                    # enabled it, so a relay-only issuer could never send.
+                    origin["enabled"] = True
+                    origin["state"] = "ACTIVE"
+                    if not endpoint.get("_operator_disabled"):
+                        endpoint["enabled"] = True
+                        endpoint["state"] = "ACTIVE"
+                if activating:
+                    _atomic_write(origin_path, origin)
+                endpoint["url"] = receive_url
+                _atomic_write(endpoint_path, endpoint)
+    except FriendshipLockBusy:
+        return 503, {"reason": "busy"}
+    except FriendshipAuditError:
+        return 503, {"reason": "audit_unavailable"}
 
     return _ack_ping_back_and_respond(
         kid=kid, recv_key=recv_key, origins_dir=origins_dir, endpoints_dir=endpoints_dir,
@@ -1926,19 +2681,22 @@ def _ack_ping_back_and_respond(
     """Issuer-side tail shared by the first ack and every repeat ack: ping the
     redeemer back (ADR-0199), record the verified state, and return the
     response signed with ``recv_key``."""
-    origin_path = origins_dir / f"{kid}.json"
-    endpoint_path = endpoints_dir / f"{kid}.json"
+    origin_path = kid_path(origins_dir, kid)
+    endpoint_path = kid_path(endpoints_dir, kid)
 
     # Reachability proof (ADR-0199) — url-presence is no longer sufficient
     # for EITHER side to claim a live connection; ping the redeemer back
     # before this side reports itself reachable.
     reachable = False
+    via: str | None = None
     try:
         from remote_trigger_sender import (  # type: ignore[import-not-found]
             RemoteEndpointRegistry as _RER, RemoteTriggerSender as _RTS,
         )
         _sender = _RTS(endpoints_dir, _RER(endpoints_dir))
-        reachable = bool(_sender.ping(kid, timeout_s=5).reachable)
+        _ping = _sender.ping(kid, timeout_s=5)
+        reachable = bool(_ping.reachable)
+        via = getattr(_ping, "via", None) if reachable else None
     except Exception:  # noqa: BLE001 — reachability check is best-effort
         reachable = False
 
@@ -1958,19 +2716,20 @@ def _ack_ping_back_and_respond(
                 cfg = json.loads(p.read_text("utf-8"))
             except (OSError, ValueError):
                 continue
+            # The transport that answered is recorded with the state it
+            # proves — otherwise the issuer showed an ACTIVE connection with no
+            # "via" until the connectivity manager's next ping.
+            via_stale = via is not None and cfg.get("_last_via") != via
             if (cfg.get("state") != new_state or not cfg.get("_peer_knows_us")
-                    or not cfg.get("_peer_reports_reachable")):
+                    or not cfg.get("_peer_reports_reachable") or via_stale):
                 cfg["state"] = new_state
                 cfg["_peer_knows_us"] = True
                 cfg["_peer_reports_reachable"] = True
+                if via is not None:
+                    cfg["_last_via"] = via
                 _atomic_write(p, cfg)
 
-    iid = ""
-    try:
-        from instance_identity import get_instance_id as _get_iid  # type: ignore[import-not-found]
-        iid = _get_iid()
-    except Exception:  # noqa: BLE001
-        iid = ""
+    iid = _local_instance_id()
 
     response: dict[str, Any] = {
         "ok": True,
@@ -1978,6 +2737,13 @@ def _ack_ping_back_and_respond(
         "reachable": reachable,
         "instance_id": iid,
     }
+    try:
+        import a2a_binding as _bind  # noqa: PLC0415
+        _pub = _bind.local_bind_pub()
+        if _pub:
+            response["bind_pub"] = _pub  # covered by the recv_key signature below
+    except Exception:  # noqa: BLE001
+        pass
     resp_canonical = json.dumps(response, separators=(",", ":"), sort_keys=True)
     response["signature"] = _hmac.new(
         bytes.fromhex(recv_key), resp_canonical.encode("utf-8"), "sha256",

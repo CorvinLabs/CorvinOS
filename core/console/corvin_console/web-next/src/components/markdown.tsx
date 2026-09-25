@@ -59,6 +59,13 @@ interface MarkdownProps {
   /** Compact mode shrinks spacing for chat bubbles. */
   compact?: boolean;
   className?: string;
+  /** For text written by a remote party (e.g. an A2A peer): render every
+   *  image as a link except inline ``data:``/``blob:`` ones. A remote image
+   *  is a read-receipt beacon (IP + time) that bypasses L35 egress, and a
+   *  same-origin URL loads WITH the operator's cookies — e.g.
+   *  ``![x](/v1/console/auth/local-login)`` minted a new session on every
+   *  render (2026-09-25, round 3). A peer has no legitimate same-origin image. */
+  blockRemoteImages?: boolean;
 }
 
 /**
@@ -73,7 +80,7 @@ interface MarkdownProps {
  *   the Corvin palette via Tailwind classes (NOT @tailwindcss/typography
  *   so we keep full control over spacing and colour).
  */
-export function Markdown({ text, compact, className }: MarkdownProps) {
+export function Markdown({ text, compact, className, blockRemoteImages }: MarkdownProps) {
   const components: Components = React.useMemo(
     () => ({
       h1: ({ children }) => (
@@ -148,6 +155,13 @@ export function Markdown({ text, compact, className }: MarkdownProps) {
       img: ({ src, alt }) => {
         const s = typeof src === "string" ? src : "";
         if (!s) return null;
+        if (blockRemoteImages && !isInlineImageUrl(s)) {
+          return (
+            <a href={s} target="_blank" rel="noreferrer noopener" className="text-accent underline underline-offset-2">
+              [image: {alt || s}]
+            </a>
+          );
+        }
         return (
           <span className="my-2 block">
             <img
@@ -189,11 +203,14 @@ export function Markdown({ text, compact, className }: MarkdownProps) {
         // children is a single <code className="language-xxx">…</code>
         const code = extractCodeText(children);
         const lang = extractLanguage(children);
-        if (lang === "mermaid") return <MermaidBlock code={code.trim()} />;
+        // Mermaid renders SVG via innerHTML and its DOMPurify pass keeps
+        // <img src>/style — for remote-authored text that is a request
+        // channel around the image block (round 4). Show it as code instead.
+        if (lang === "mermaid" && !blockRemoteImages) return <MermaidBlock code={code.trim()} />;
         return <CodeBlock code={code} lang={lang}>{children}</CodeBlock>;
       },
     }),
-    [compact],
+    [compact, blockRemoteImages],
   );
 
   return (
@@ -233,6 +250,22 @@ function CodeBlock({ code, lang, children }: { code: string; lang: string | null
       </pre>
     </div>
   );
+}
+
+/** Inline image payloads that trigger no request at all. */
+export function isInlineImageUrl(src: string): boolean {
+  return src.startsWith("data:image/") || src.startsWith("blob:");
+}
+
+/** True for an absolute URL on another origin (data: and same-origin are not remote). */
+export function isRemoteUrl(src: string): boolean {
+  if (src.startsWith("data:") || src.startsWith("blob:")) return false;
+  try {
+    const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    return new URL(src, base).origin !== base;
+  } catch {
+    return true;
+  }
 }
 
 // Helpers to extract code text + language from react-markdown's <pre><code> wrapper

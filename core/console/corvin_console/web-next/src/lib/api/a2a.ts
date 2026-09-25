@@ -540,6 +540,8 @@ export interface A2AFeedAttachment {
 
 export interface A2AFeedMessage {
   id: string;
+  /** Append-order sequence number — the read cursor (0 = written before seq existed). */
+  seq?: number;
   ts: number;
   /** "out" = written by THIS instance, "in" = written by the peer. */
   direction: "in" | "out";
@@ -570,16 +572,21 @@ export interface A2AFeedResponse {
   ts: number;
   retention_days: number;
   messages: A2AFeedMessage[];
+  /** More messages exist beyond this page (poll again / load older). */
+  has_more: boolean;
+  last_seq: number;
   peers: A2AFeedPeer[];
 }
 
 export async function getA2AFeed(
-  params: { since?: number; limit?: number } = {},
+  params: { after?: number; before?: number; limit?: number; peer_id?: string } = {},
   signal?: AbortSignal,
 ): Promise<A2AFeedResponse> {
   const q = new URLSearchParams();
-  if (params.since) q.set("since", String(params.since));
+  if (params.after !== undefined) q.set("after", String(params.after));
+  if (params.before !== undefined) q.set("before", String(params.before));
   if (params.limit) q.set("limit", String(params.limit));
+  if (params.peer_id) q.set("peer_id", params.peer_id);
   const qs = q.toString();
   return api<A2AFeedResponse>(`/a2a/feed${qs ? `?${qs}` : ""}`, { signal });
 }

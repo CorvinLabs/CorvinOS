@@ -16,10 +16,14 @@ M2: WorkerEngine spawn + result filter + IBC attestation gate (ADR-0145 M2).
 
 ADR-0048 compliance:
 - OriginRegistry per-call reads (no cache); mode 0600 enforced.
-- NonceStore in-memory, TTL-keyed, LRU-evicted at 10 000.
+- Nonce store (SQLite ``a2a_nonce_store`` by default) TTL-keyed, capped at
+  10 000 live entries and a per-origin quota; a full store REFUSES, it never
+  evicts a live nonce. Checked BEFORE the rate limiter (a replay never
+  spends the real peer's token); a rate-limited request gives its nonce back.
 - HMAC-SHA256 with constant-time compare.
 - Audit-first: L16 write MUST succeed before any response.
-- Fail-silent: all errors return identical "rejected" ResponseEnvelope.
+- Fail-silent: all errors return identical "rejected" ResponseEnvelope;
+  receive() never raises (catch-all → unsigned unknown-origin-shaped rejection).
 - MUST NOT import the anthropic SDK (CI AST lint enforces this).
 """
 from __future__ import annotations
@@ -73,17 +77,39 @@ except ImportError:
         sys.path.insert(0, str(_shared))
     from audit import audit_path  # type: ignore[import-not-found]
 
-# ── a2a_audit for emitting A2A security events ──────────────────────────────
-try:
-    from a2a_audit import emit_nonce_collision_detected as _emit_nonce_collision  # type: ignore[import-not-found]
-except ImportError:
-    _shared = Path(__file__).resolve().parent
-    if str(_shared) not in sys.path:
-        sys.path.insert(0, str(_shared))
+# ``a2a.nonce_collision_detected`` is written through the receiver's OWN audit
+# writer (``_audit_best_effort``), not ``a2a_audit.emit_nonce_collision_detected``:
+# that helper imports ``forge.security_events`` directly, bypassing an injected
+# ``forge_se`` — a test (or a second receiver) would then append to whatever
+# chain ``audit_path()`` resolves to. One receiver, one writer.
+
+# A well-formed TaskEnvelope signature: HMAC-SHA256 hexdigest.
+_SIG_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+
+
+def _is_hex64(value: Any) -> bool:
+    """True for a 64-char hex string. Anything else (non-ASCII, wrong length,
+    non-str) is rejected BEFORE ``hmac.compare_digest``, which raises
+    ``TypeError`` on non-ASCII ``str`` input — an unauthenticated crash that
+    surfaced as HTTP 500 for known origins only (origin-existence oracle)."""
+    return (
+        isinstance(value, str) and len(value) == 64
+        and all(c in _SIG_HEX_CHARS for c in value)
+    )
+
+
+def _resolve_tenant_id() -> str:
+    """Active tenant for receiver-emitted events that REQUIRE ``tenant_id``.
+
+    ``forge.tenants.current_tenant()`` (explicit → ``CORVIN_TENANT_ID`` →
+    ``_default``, validated); falls back to ``_default`` when forge is absent
+    or the env value is invalid, so the event is written rather than dropped.
+    """
     try:
-        from a2a_audit import emit_nonce_collision_detected as _emit_nonce_collision  # type: ignore[import-not-found]
-    except ImportError:
-        _emit_nonce_collision = None  # type: ignore[assignment]
+        from forge.tenants import current_tenant  # type: ignore[import-not-found]
+        return current_tenant()
+    except Exception:  # noqa: BLE001
+        return "_default"
 
 # ── instance_identity (local UUID) ────────────────────────────────────────
 try:
@@ -405,7 +431,11 @@ class TaskEnvelope:
                 corvin_id_jwt=str(corvin_id_jwt_raw)[:8192] if isinstance(corvin_id_jwt_raw, str) else None,
                 reconnect=dict(reconnect_raw) if isinstance(reconnect_raw, dict) else None,
             )
-        except (TypeError, ValueError, AttributeError) as exc:
+        except (TypeError, ValueError, AttributeError, OverflowError,
+                RecursionError) as exc:
+            # OverflowError: int(float('inf')) for ttl_s = Infinity / 1e400
+            # (both valid json.loads output). RecursionError: a deeply nested
+            # result_schema handed in by a non-HTTP caller. Both pre-HMAC.
             raise ValidationError(f"type_error:{type(exc).__name__}") from exc
 
     def canonical_payload(self) -> bytes:
@@ -499,15 +529,21 @@ class NonceStore:
 
     def check_and_add(self, nonce: str, origin_id: str = "") -> bool:
         """Return True if nonce is fresh (added). False = replay or quota exceeded."""
+        return self.check_and_add_ex(nonce, origin_id=origin_id) == "ok"
+
+    def check_and_add_ex(self, nonce: str, origin_id: str = "",
+                         per_origin_max: int | None = None) -> str:
+        """Same admission as :meth:`check_and_add`, returning the reason:
+        ``ok`` / ``replay`` / ``origin_quota_exceeded`` / ``store_full``."""
         now = time.time()
         with self._lock:
             self._expire(now)
             if nonce in self._store:
-                return False
+                return "replay"
             # Per-origin quota — cap one origin's share of the global store.
             if origin_id:
-                if self._origin_count.get(origin_id, 0) >= self._PER_ORIGIN_MAX:
-                    return False
+                if self._origin_count.get(origin_id, 0) >= (per_origin_max or self._PER_ORIGIN_MAX):
+                    return "origin_quota_exceeded"
             # Global capacity guard: only evict expired entries.
             while len(self._store) >= _NONCE_MAX:
                 oldest_k, oldest_exp = next(iter(self._store.items()))
@@ -519,14 +555,14 @@ class NonceStore:
                         )
                     del self._store[oldest_k]
                 else:
-                    return False
+                    return "store_full"
             self._store[nonce] = now + self._ttl_s
             if origin_id:
                 self._origin_map[nonce] = origin_id
                 self._origin_count[origin_id] = self._origin_count.get(origin_id, 0) + 1
-            return True
+            return "ok"
 
-    def remove(self, nonce: str) -> None:
+    def remove(self, nonce: str, origin_id: str | None = None) -> None:
         """Remove a nonce — used to roll back after a failed audit-first write."""
         with self._lock:
             if nonce in self._store:
@@ -776,17 +812,69 @@ class RemoteTriggerReceiver:
             )
         # Injected forge_se for test isolation (avoids module-level patch conflicts).
         self._inst_forge_se = forge_se
+        # Tenant for events whose allowlist REQUIRES tenant_id. None = resolve
+        # per event via _resolve_tenant_id() (CORVIN_TENANT_ID → _default).
+        self._tenant_id: str | None = None
 
     # ── Public API ────────────────────────────────────────────────────
+
+    # Echoed identifiers in a rejection are capped (the body cap is 4 MiB).
+    _ECHO_MAX = 256
 
     def receive(self, envelope_dict: dict) -> ResponseEnvelope:
         """Validate, audit, and return a signed ResponseEnvelope.
 
         This method NEVER raises — all errors produce a "rejected" response.
+
+        The contract is enforced HERE, not by every branch below remembering
+        it: any exception escaping :meth:`_receive_impl` becomes an UNSIGNED
+        rejection of exactly the shape an unknown origin gets, plus an
+        ``A2A.request_rejected`` record. Before 2026-09-25 a non-ASCII
+        signature, ``ttl_s: Infinity`` or a non-object body raised out of
+        here; the HTTP layer answered 500 — and because some of those paths
+        were reachable only for EXISTING origins, the 500-vs-200 split was an
+        unauthenticated origin-id existence oracle.
         """
         start = time.time()
-        task_id = str(envelope_dict.get("task_id", ""))
-        origin_id = str(envelope_dict.get("origin_id", ""))
+        if not isinstance(envelope_dict, dict):
+            self._audit_best_effort(
+                "A2A.request_rejected", "WARNING",
+                {"task_id": "", "origin_id": "",
+                 "reason": "envelope_not_object", "status": "rejected",
+                 "duration_ms": _ms(start)},
+            )
+            return self._rejected_response("", "", None)
+        try:
+            return self._receive_impl(envelope_dict, start)
+        except Exception as exc:  # noqa: BLE001 — never-raises contract
+            task_id, origin_id = self._echo_ids(envelope_dict)
+            self._audit_best_effort(
+                "A2A.request_rejected", "WARNING",
+                {"task_id": task_id, "origin_id": origin_id,
+                 "reason": f"internal_error:{type(exc).__name__}",
+                 "status": "rejected", "duration_ms": _ms(start)},
+            )
+            try:
+                return self._rejected_response(task_id, origin_id, None)
+            except Exception:  # noqa: BLE001 — last resort, still no raise
+                return ResponseEnvelope(
+                    task_id="", origin_id="", issued_at=time.time(),
+                    instance_id="", status="rejected", data={},
+                    attachments=[], signature="",
+                )
+
+    def _echo_ids(self, envelope_dict: dict) -> tuple[str, str]:
+        """(task_id, origin_id) as echoed in a rejection — never raises."""
+        out = []
+        for key in ("task_id", "origin_id"):
+            try:
+                out.append(str(envelope_dict.get(key, ""))[: self._ECHO_MAX])
+            except Exception:  # noqa: BLE001 — exotic __str__
+                out.append("")
+        return out[0], out[1]
+
+    def _receive_impl(self, envelope_dict: dict, start: float) -> ResponseEnvelope:
+        task_id, origin_id = self._echo_ids(envelope_dict)
 
         # Validate steps 1–6 (+ 2.5 purpose, 6.5 attachments)
         try:
@@ -844,7 +932,6 @@ class RemoteTriggerReceiver:
             _att_validation_error = type(_att_exc).__name__
             _att_details = {"attachments_count": 0,
                             "attachments_total_bytes": 0,
-                            "attachment_names": [],
                             "attachment_sha_prefixes": [],
                             "attachment_validation_error": _att_validation_error}
 
@@ -864,7 +951,7 @@ class RemoteTriggerReceiver:
             # consumed in _validate() before the audit write; without rollback
             # a transient audit failure would permanently burn the nonce
             # (finding MED-IT4-06, audit-first invariant violation).
-            self._nonces.remove(env.nonce)
+            self._nonce_rollback(env)
             reason = f"audit_write_failed:{exc}"
             resp = self._rejected_response(env.task_id, env.origin_id, recv_key_bytes)
             self._audit_best_effort(
@@ -1065,7 +1152,7 @@ class RemoteTriggerReceiver:
         # and chain-gated — only from here on may its content be stored for
         # the operator's Agent Hub view. Best-effort, never raises.
         _feed_record(
-            direction="in", kind="task", peer_id=env.origin_id,
+            direction="in", kind="task", peer_id=env.origin_id, peer_label=origin_config.get("label"),
             task_id=env.task_id, text=env.instruction, status="received",
             attachments=env.attachments,
         )
@@ -1076,14 +1163,37 @@ class RemoteTriggerReceiver:
             and bool(origin_config.get("spawn_worker", False))
         )
 
+        if spawn_worker and not _worker_slot_acquire(env.origin_id):
+            # Per-origin concurrency cap (round 3): one worker-enabled peer
+            # must not occupy the whole shared A2A work executor with long
+            # runs and starve every other peer. Refused immediately (signed),
+            # never queued — the sender sees a clear "busy" and may retry.
+            resp = self._rejected_response(env.task_id, env.origin_id, recv_key_bytes,
+                                           reason="busy")
+            self._audit_best_effort(
+                "A2A.request_rejected", "WARNING",
+                {"task_id": env.task_id, "origin_id": env.origin_id,
+                 "reason": "origin_busy", "status": "rejected",
+                 "duration_ms": _ms(start)},
+            )
+            _feed_record(
+                direction="out", kind="response", peer_id=env.origin_id,
+                peer_label=origin_config.get("label"), task_id=env.task_id,
+                status="rejected", duration_ms=_ms(start), data={"reason": "busy"},
+            )
+            return resp
+
         if spawn_worker:
             try:
-                worker_status, worker_data, worker_attachments = (
-                    self._spawn_and_filter(
-                        env=env, origin_config=origin_config,
-                        start=start, inbound_attachments=_inbound_atts,
+                try:
+                    worker_status, worker_data, worker_attachments = (
+                        self._spawn_and_filter(
+                            env=env, origin_config=origin_config,
+                            start=start, inbound_attachments=_inbound_atts,
+                        )
                     )
-                )
+                finally:
+                    _worker_slot_release(env.origin_id)
             except _InjectionRejected as exc:
                 # C-5: sign the rejection with recv_key (we have it now)
                 resp = self._rejected_response(env.task_id, env.origin_id, recv_key_bytes)
@@ -1095,7 +1205,7 @@ class RemoteTriggerReceiver:
                      "duration_ms": _ms(start)},
                 )
                 _feed_record(
-                    direction="out", kind="response", peer_id=env.origin_id,
+                    direction="out", kind="response", peer_id=env.origin_id, peer_label=origin_config.get("label"),
                     task_id=env.task_id, status="rejected",
                     duration_ms=_ms(start), error="injection_attempt",
                 )
@@ -1143,7 +1253,7 @@ class RemoteTriggerReceiver:
              **_out_audit},
         )
         _feed_record(
-            direction="out", kind="response", peer_id=env.origin_id,
+            direction="out", kind="response", peer_id=env.origin_id, peer_label=origin_config.get("label"),
             task_id=env.task_id, data=worker_data, status=resp.status,
             attachments=worker_attachments, duration_ms=_ms(start),
         )
@@ -1197,8 +1307,20 @@ class RemoteTriggerReceiver:
         _a2a_allowed: list[str] | None = origin_config.get("allowed_tools")
         _base_disallowed: list[str] = list(origin_config.get("disallowed_tools") or [])
         if not origin_config.get("allow_bash"):
-            if "Bash" not in _base_disallowed:
-                _base_disallowed.insert(0, "Bash")
+            # "Bash" alone is not the shell capability. Verified against the
+            # installed Claude Code binary (2.1.282, tool defs carrying
+            # enablesCodeExecution) on 2026-09-25: Monitor (runs a command and
+            # streams its output), PowerShell, RemoteTrigger, CronCreate and
+            # Workflow all execute code; TaskStop (aliases KillShell/KillBash)
+            # and the legacy BashOutput/TaskOutput drive background shells.
+            # Denying an unknown name is a no-op, so older/newer CLIs are
+            # covered by listing both current and legacy names.
+            for _bt in _SHELL_TOOLS:
+                if _bt not in _base_disallowed:
+                    _base_disallowed.append(_bt)
+            # Keep "Bash" first (historic position; some tests read [0]).
+            _base_disallowed.remove("Bash")
+            _base_disallowed.insert(0, "Bash")
         if not origin_config.get("allow_network"):
             for _nt in ("WebFetch", "WebSearch"):
                 if _nt not in _base_disallowed:
@@ -1243,7 +1365,9 @@ class RemoteTriggerReceiver:
             )
             _allow_subagents = False
         if not _allow_subagents:
-            for _st in ("Task", "TodoWrite", "TodoRead"):
+            # "Agent" is the current name of the subagent tool; "Task" is its
+            # legacy alias (Claude Code 2.1.x). Deny both.
+            for _st in ("Task", "Agent", "TodoWrite", "TodoRead"):
                 if _st not in _base_disallowed:
                     _base_disallowed.append(_st)
         _a2a_disallowed: list[str] | None = _base_disallowed or None
@@ -1654,6 +1778,11 @@ class RemoteTriggerReceiver:
 
         # Step 5: Signature (constant-time compare) — MUST run before nonce
         # is consumed so an unauthenticated flood cannot burn nonce slots.
+        # A malformed signature is the same "bad_signature" as a wrong one
+        # (no distinct reason, no distinct response): compare_digest raises
+        # TypeError on non-ASCII str, so the format gate MUST come first.
+        if not _is_hex64(env.signature):
+            raise ValidationError("bad_signature")
         key = bytes.fromhex(origin_config["hmac_key"])
         expected = _hmac.new(key, env.canonical_payload(), hashlib.sha256).hexdigest()
         if not _hmac.compare_digest(expected.lower(), env.signature.lower()):
@@ -1662,6 +1791,22 @@ class RemoteTriggerReceiver:
         # HMAC verified — all subsequent ValidationErrors carry recv_key so
         # the caller can produce a signed rejection (ADR-0077 C-5).
         recv_key = bytes.fromhex(origin_config["recv_key"])
+
+        # Step 5.1 (round 10): direction. A friendship's HMAC keys are the SAME
+        # on both ends, so a task WE signed for the peer also verifies against
+        # our own origin file for that pairing: anyone who saw it on the wire
+        # (plain http on a LAN) could POST it back to us and have us run our
+        # own instruction "from" the peer — with no key at all. The sender id
+        # is HMAC-covered; our own id, or an id other than the bound peer's,
+        # is not the peer. Checked before the nonce is consumed (no state).
+        # An empty sender id (a legacy sender) cannot be our own reflection.
+        _sender = str(env.sender_instance_id or "")
+        if _sender:
+            if self._instance_id and _sender == self._instance_id:
+                raise ValidationError("sender_is_self", recv_key)
+            _bound = str(origin_config.get("_peer_instance_id") or "")
+            if _bound and _sender != _bound:
+                raise ValidationError("sender_not_bound_peer", recv_key)
 
         # Step 5.5 (ADR-0077 C-2): purpose_id gate — AFTER HMAC so an
         # unauthenticated attacker cannot enumerate valid purpose_ids via
@@ -1673,39 +1818,48 @@ class RemoteTriggerReceiver:
             if env.purpose_id not in allowed_purposes:
                 raise ValidationError("purpose_not_allowed", recv_key)
 
-        # Step 5.6: Rate-limit check — AFTER HMAC, BEFORE nonce consumption.
-        # Running after HMAC ensures only authenticated origins hit the limiter.
-        # Running before nonce consumption ensures rate-limited requests don't
-        # burn a nonce, so the sender can retry with the same nonce
-        # (ADR-0099 iter-5 finding LOW-IT5-05).
+        # Step 5.6: Nonce — consumed only after HMAC is verified, so an
+        # unauthenticated flood cannot burn nonce slots (CRIT-02). origin_id
+        # is passed so the per-origin quota (MED-IT4-07) is enforced.
+        #
+        # The nonce is checked BEFORE the rate limiter (2026-09-25). The old
+        # order charged the limiter first, so anyone who had sniffed ONE valid
+        # envelope could replay it 60x/min without the key: every replay
+        # passed HMAC, took a token from the real peer's bucket, and only then
+        # failed as "replay" — the real peer's next fresh request was
+        # rate_limited. A replay now never reaches the bucket.
+        nonce_outcome = self._nonce_check_and_add(env, origin_config)
+        if nonce_outcome != "ok":
+            if nonce_outcome == "replay":
+                # a2a.nonce_collision_detected REQUIRES tenant_id (a2a_audit /
+                # security_events allowlist); with None it was never written.
+                self._audit_best_effort(
+                    "a2a.nonce_collision_detected", "WARNING",
+                    {"tenant_id": getattr(self, "_tenant_id", None)
+                     or _resolve_tenant_id(),
+                     "nonce_prefix": env.nonce[:8],
+                     "epoch": int(time.time()),
+                     "collision_count": 1},
+                )
+                raise ValidationError("replay", recv_key)
+            # Quota / full store / store error: refused WITHOUT evicting a
+            # live nonce. Distinct audit reason so an operator does not chase
+            # a replay attack that is really a flooding origin.
+            raise ValidationError(f"nonce_{nonce_outcome}", recv_key)
+
+        # Step 6: Rate-limit check — AFTER HMAC and the replay check. A
+        # rate-limited request gives its nonce BACK, so the sender can retry
+        # with the same nonce (ADR-0099 iter-5 finding LOW-IT5-05 preserved).
         rate_limit_rpm = origin_config.get("rate_limit_rpm", _DEFAULT_RATE_LIMIT_RPM)
         if rate_limit_rpm is not None:
             try:
                 rate_limit_rpm = int(rate_limit_rpm)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 rate_limit_rpm = None
         if rate_limit_rpm is not None and rate_limit_rpm > 0:
             if not self._check_rate_limit(env.origin_id, rate_limit_rpm):
+                self._nonce_rollback(env)
                 raise ValidationError("rate_limited", recv_key)
-
-        # Step 6: Nonce — consumed only after HMAC is verified.
-        # This ordering prevents an unauthenticated attacker from exhausting
-        # nonce slots with invalid-HMAC envelopes (CRIT-02).
-        # origin_id is passed so the per-origin quota (MED-IT4-07) is enforced.
-        if not self._nonces.check_and_add(env.nonce, origin_id=env.origin_id):
-            # Emit nonce collision detection audit event (audit-first)
-            if _emit_nonce_collision is not None:
-                try:
-                    _emit_nonce_collision(
-                        path=audit_path(),
-                        nonce_prefix=env.nonce[:8],
-                        epoch=int(time.time()),
-                        collision_count=1,
-                        tenant_id=getattr(self, "_tenant_id", None),
-                    )
-                except Exception:
-                    pass
-            raise ValidationError("replay", recv_key)
 
         # Step 6.5 (v5, ADR-0078): min_trust / attestation check.
         # Runs AFTER HMAC so the attestation dict is authenticated before
@@ -2075,6 +2229,43 @@ class RemoteTriggerReceiver:
         resp.signature = sig
         return resp
 
+    def _reconnect_binding_rejection(self, env: TaskEnvelope, new_url: str) -> str | None:
+        kid = env.origin_id
+        cfgs: list[dict] = []
+        for d in (self._registry._dir, self._endpoints_dir()):
+            try:
+                data = json.loads((Path(d) / f"{kid}.json").read_text("utf-8"))
+                if isinstance(data, dict):
+                    cfgs.append(data)
+            except (OSError, ValueError, TypeError):
+                continue
+        bound = next((str(c[k]) for c in cfgs for k in ("_peer_instance_id", "instance_id")
+                      if c.get(k)), "")
+        sender = str(env.sender_instance_id or "")
+        if not bound:
+            return "reconnect_peer_unbound"
+        if sender == self._instance_id:
+            return "reconnect_reflected"
+        if sender != bound:
+            return "reconnect_peer_mismatch"
+        try:
+            import a2a_binding as _bind  # noqa: PLC0415
+            from remote_trigger_sender import reconnect_bind_canonical  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            return None
+        pub = next((_bind.clean_pub(c.get("_peer_bind_pub")) for c in cfgs
+                    if _bind.clean_pub(c.get("_peer_bind_pub"))), None)
+        if pub:
+            bts = (env.reconnect or {}).get("bind_ts")
+            if (isinstance(bts, bool) or not isinstance(bts, int)
+                    or abs(time.time() - bts) > _TIME_WINDOW_S):
+                return "reconnect_peer_unproven"  # stale / absent: a replayed push
+            if not _bind.verify_bind_mac(
+                    pub, kid, reconnect_bind_canonical(kid, new_url.rstrip("/"), env.nonce, bts, pub),
+                    (env.reconnect or {}).get("bind_mac")):
+                return "reconnect_peer_unproven"
+        return None
+
     def _handle_reconnect(
         self, env: TaskEnvelope, recv_key: bytes, start: float,
     ) -> ResponseEnvelope:
@@ -2121,6 +2312,13 @@ class RemoteTriggerReceiver:
         elif not new_url.isprintable() or any(c.isspace() for c in new_url):
             reason = "reconnect_url_bad_chars"
 
+        # Binding (ADR-2064 round 4): the pairing HMAC key is in the token, so
+        # key possession alone must never re-point where our signed tasks go.
+        # Only a BOUND peer may push a new URL, from its bound instance, and —
+        # once its binding key is known — with a MAC the token cannot produce.
+        if reason is None:
+            reason = self._reconnect_binding_rejection(env, new_url)
+
         # Read-only preflight: endpoint existence/state + ADR-0198 SSRF gate
         # (forbidden hosts, global→private, scheme downgrade, unresolvable).
         if reason is None:
@@ -2145,7 +2343,7 @@ class RemoteTriggerReceiver:
             except AuditWriteError:
                 # No durable evidence → roll back the nonce and reject so the
                 # sender retries. Nothing was mutated.
-                self._nonces.remove(env.nonce)
+                self._nonce_rollback(env)
                 return self._rejected_response(env.task_id, env.origin_id, recv_key)
         else:
             # Validated OK — DURABLE write first, then audit the real outcome.
@@ -2168,7 +2366,7 @@ class RemoteTriggerReceiver:
                     # Durable write landed but could not be recorded. Roll back
                     # the nonce (a later push re-writes idempotently + audits)
                     # and reject. See docstring "Residual".
-                    self._nonces.remove(env.nonce)
+                    self._nonce_rollback(env)
                     return self._rejected_response(
                         env.task_id, env.origin_id, recv_key,
                     )
@@ -2186,7 +2384,7 @@ class RemoteTriggerReceiver:
                     )
                 except AuditWriteError:
                     pass
-                self._nonces.remove(env.nonce)
+                self._nonce_rollback(env)
 
         resp = ResponseEnvelope(
             task_id=env.task_id,
@@ -2208,20 +2406,69 @@ class RemoteTriggerReceiver:
         env = os.environ.get(_REMOTE_ENDPOINTS_ENV)
         return Path(env) if env else _REMOTE_ENDPOINTS_DEFAULT
 
+    @staticmethod
+    def _per_origin_nonce_cap(origin_config: dict) -> int:
+        """Live-nonce ceiling for one origin, derived from ITS rate limit.
+
+        A fixed 2 500 (the default) silently capped every origin at ~214
+        req/min regardless of ``rate_limit_rpm`` — contradicting the
+        documented ``rate_limit_rpm: 0`` = unlimited (2026-09-25, round 2).
+        The cap covers ``rpm`` × the nonce lifetime with 25 % headroom; an
+        unlimited origin is bounded only by the global store size (which
+        refuses when full, never evicts a live nonce) and never gets more than
+        three quarters of it."""
+        rpm = origin_config.get("rate_limit_rpm", _DEFAULT_RATE_LIMIT_RPM)
+        try:
+            rpm = float(rpm) if rpm is not None else 0.0
+        except (TypeError, ValueError):
+            rpm = float(_DEFAULT_RATE_LIMIT_RPM)
+        # Never the whole store (round 3): one origin — unlimited or fast —
+        # filling it would lock every OTHER origin out with store_full for a
+        # full nonce lifetime. A quarter always stays for the rest.
+        ceiling = (_NONCE_MAX * 3) // 4
+        if rpm <= 0:
+            return ceiling
+        need = int(rpm * (_NONCE_TTL_S + 60.0) / 60.0 * 1.25) + 1
+        return max(NonceStore._PER_ORIGIN_MAX, min(need, ceiling))
+
+    def _nonce_check_and_add(self, env: TaskEnvelope, origin_config: dict | None = None) -> str:
+        """Consume ``env.nonce`` for ``env.origin_id``; return ``"ok"`` or the
+        refusal reason. Stores without ``check_and_add_ex`` (injected test
+        doubles) report a bare refusal as ``"replay"``."""
+        ex = getattr(self._nonces, "check_and_add_ex", None)
+        if callable(ex):
+            cap = self._per_origin_nonce_cap(origin_config or {})
+            try:
+                return str(ex(env.nonce, origin_id=env.origin_id, per_origin_max=cap))
+            except TypeError:  # an older/injected store without the parameter
+                return str(ex(env.nonce, origin_id=env.origin_id))
+        return "ok" if self._nonces.check_and_add(env.nonce, origin_id=env.origin_id) else "replay"
+
+    def _nonce_rollback(self, env: TaskEnvelope) -> None:
+        """Give a consumed nonce back (origin-scoped where supported)."""
+        try:
+            self._nonces.remove(env.nonce, origin_id=env.origin_id)
+        except TypeError:
+            self._nonces.remove(env.nonce)
+
     def _rejected_response(
         self, task_id: str, origin_id: str, recv_key: bytes | None = None,
+        *, reason: str | None = None,
     ) -> ResponseEnvelope:
         # ADR-0077 C-5: sign rejected responses when we have the recv_key
         # so the caller can distinguish a genuine rejection from an
         # injected one. When no recv_key is available (unknown origin),
         # the response is unsigned — identical to the pre-v4 behaviour.
+        # ``reason`` (a closed token, e.g. "busy") rides in the SIGNED data
+        # only: an unsigned rejection must keep empty data, which is all a
+        # sender accepts unsigned. Senders that predate it ignore the field.
         resp = ResponseEnvelope(
             task_id=task_id,
             origin_id=origin_id,
             issued_at=time.time(),
             instance_id=self._instance_id,
             status="rejected",
-            data={},
+            data={"reason": reason} if (reason and recv_key) else {},
             attachments=[],
             signature="",
         )
@@ -2356,6 +2603,95 @@ class RemoteTriggerReceiver:
             )
         except Exception:
             pass
+
+
+# Tool names that execute code / drive shells in the worker (allow_bash=false
+# denies all of them — see _spawn_and_filter).
+_SHELL_TOOLS: tuple[str, ...] = (
+    "Bash", "Monitor", "PowerShell",
+    "TaskStop", "KillShell", "KillBash", "BashOutput", "TaskOutput",
+    "RemoteTrigger", "CronCreate", "Workflow",
+)
+
+
+# ── A2A work executor (2026-09-25, round 2) ────────────────────────────────
+# receive() can run a worker for up to the envelope ttl. Running it through
+# asyncio's DEFAULT thread pool (``to_thread``: min(32, cpu+4) threads) let a
+# few concurrent tasks occupy every thread, so pings — which share that pool —
+# queued behind worker runs and peers were marked unreachable. Task work runs
+# here instead; pings keep the default pool. Used by both hosts' /receive
+# routes and the relay listener's heavy deliveries.
+_A2A_WORK_THREADS = 24
+_A2A_WORK_EXECUTOR: Any = None
+_A2A_WORK_LOCK = threading.Lock()
+
+
+# Per-origin worker concurrency (round 3). The shared executor above is sized
+# for all peers together; without a per-origin cap a single peer with
+# spawn_worker could hold every thread for up to the envelope ttl.
+_MAX_WORKERS_PER_ORIGIN = 4
+_worker_inflight: dict[str, int] = {}
+_worker_inflight_lock = threading.Lock()
+
+
+def _worker_slot_acquire(origin_id: str) -> bool:
+    with _worker_inflight_lock:
+        n = _worker_inflight.get(origin_id, 0)
+        if n >= _MAX_WORKERS_PER_ORIGIN:
+            return False
+        _worker_inflight[origin_id] = n + 1
+        return True
+
+
+def _worker_slot_release(origin_id: str) -> None:
+    with _worker_inflight_lock:
+        n = _worker_inflight.get(origin_id, 0) - 1
+        if n <= 0:
+            _worker_inflight.pop(origin_id, None)
+        else:
+            _worker_inflight[origin_id] = n
+
+
+# Friendship acks / revoke notices over the relay run on their own small
+# executor: a new pairing's ack round trip (10 s timeout) must never wait
+# behind long worker runs on the work executor.
+_A2A_CONTROL_EXECUTOR: Any = None
+
+
+async def run_a2a_control(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    global _A2A_CONTROL_EXECUTOR
+    import asyncio as _aio
+    import contextvars as _cv
+    import functools as _ft
+    with _A2A_WORK_LOCK:
+        if _A2A_CONTROL_EXECUTOR is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _A2A_CONTROL_EXECUTOR = ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="a2a-control")
+    ctx = _cv.copy_context()
+    return await _aio.get_running_loop().run_in_executor(
+        _A2A_CONTROL_EXECUTOR, _ft.partial(ctx.run, fn, *args, **kwargs))
+
+
+async def run_a2a_work(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """``asyncio.to_thread`` semantics (ContextVars carried along) on the
+    dedicated A2A work executor instead of the default pool."""
+    import asyncio as _aio
+    import contextvars as _cv
+    import functools as _ft
+    ctx = _cv.copy_context()
+    return await _aio.get_running_loop().run_in_executor(
+        a2a_work_executor(), _ft.partial(ctx.run, fn, *args, **kwargs))
+
+
+def a2a_work_executor() -> Any:
+    global _A2A_WORK_EXECUTOR
+    with _A2A_WORK_LOCK:
+        if _A2A_WORK_EXECUTOR is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _A2A_WORK_EXECUTOR = ThreadPoolExecutor(
+                max_workers=_A2A_WORK_THREADS, thread_name_prefix="a2a-work")
+        return _A2A_WORK_EXECUTOR
 
 
 def _feed_record(**kwargs: Any) -> None:

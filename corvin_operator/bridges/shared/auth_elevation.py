@@ -107,7 +107,12 @@ def _store_path(*, tenant_id: str | None = None) -> Path:
 def _audit_path(*, tenant_id: str | None = None) -> Path:
     home = _corvin_home()
     if tenant_id is None:
-        return home / "global" / "forge" / "audit.jsonl"
+        # ONE chain per tenant (CLAUDE.md / ADR-0650): without an explicit
+        # tenant this is the PROCESS tenant's canonical chain, never the
+        # legacy <home>/global/forge/audit.jsonl — writing there on a fresh
+        # install is what made the boot tripwire report audit_chain_split.
+        import os as _os
+        tenant_id = (_os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default"
     return home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
 
 

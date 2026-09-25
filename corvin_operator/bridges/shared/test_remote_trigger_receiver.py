@@ -699,6 +699,14 @@ class TestEndToEnd(unittest.TestCase):
 # ── ADR-0077 S-2 — Persistent nonce store ────────────────────────────────
 
 class TestPersistentNonceStore(unittest.TestCase):
+    """PersistentNonceStore refuses an EMPTY origin_id (fail-closed: the
+    per-origin quota is keyed on it) — the receiver always passes the
+    authenticated origin. These tests used to call check_and_add() without
+    one, so the "accepted" cases failed and the replay cases passed
+    vacuously (every call returned False). Pass the origin, like the
+    receiver does, and pin the empty-origin refusal separately."""
+
+    OID = "test-origin"
 
     def setUp(self):
         self.db = Path(tempfile.mkdtemp()) / "nonces.db"
@@ -710,36 +718,41 @@ class TestPersistentNonceStore(unittest.TestCase):
         shutil.rmtree(self.db.parent, ignore_errors=True)
 
     def test_fresh_nonce_accepted(self):
-        self.assertTrue(self.store.check_and_add("nonce-001"))
+        self.assertTrue(self.store.check_and_add("nonce-001", origin_id=self.OID))
 
     def test_replay_rejected(self):
-        self.store.check_and_add("nonce-002")
-        self.assertFalse(self.store.check_and_add("nonce-002"))
+        self.assertTrue(self.store.check_and_add("nonce-002", origin_id=self.OID))
+        self.assertFalse(self.store.check_and_add("nonce-002", origin_id=self.OID))
+
+    def test_empty_origin_refused(self):
+        self.assertFalse(self.store.check_and_add("nonce-003"))
+        self.assertFalse(self.store.check_and_add("nonce-003", origin_id="  "))
 
     def test_different_nonces_independent(self):
-        self.assertTrue(self.store.check_and_add("n1"))
-        self.assertTrue(self.store.check_and_add("n2"))
-        self.assertTrue(self.store.check_and_add("n3"))
+        self.assertTrue(self.store.check_and_add("n1", origin_id=self.OID))
+        self.assertTrue(self.store.check_and_add("n2", origin_id=self.OID))
+        self.assertTrue(self.store.check_and_add("n3", origin_id=self.OID))
 
     def test_db_mode_0600(self):
         import stat
-        self.store.check_and_add("mode-check")
+        self.store.check_and_add("mode-check", origin_id=self.OID)
         mode = self.db.stat().st_mode
         self.assertFalse(mode & (stat.S_IRWXG | stat.S_IRWXO))
 
     def test_survives_new_instance(self):
         # Simulate a process restart: nonce added by first store, rejected by second.
         from a2a_nonce_store import PersistentNonceStore
-        self.store.check_and_add("persist-nonce")
+        self.assertTrue(self.store.check_and_add("persist-nonce", origin_id=self.OID))
         store2 = PersistentNonceStore(self.db)
-        self.assertFalse(store2.check_and_add("persist-nonce"))
+        self.assertFalse(store2.check_and_add("persist-nonce", origin_id=self.OID))
 
     def test_fallback_on_bad_path(self):
         from a2a_nonce_store import PersistentNonceStore
         # Unwritable path → falls back to in-memory silently.
         bad = PersistentNonceStore("/root/forbidden/nonces.db")
         self.assertIsNotNone(bad._fallback)
-        self.assertTrue(bad.check_and_add("fallback-nonce"))
+        self.assertTrue(bad.check_and_add("fallback-nonce", origin_id=self.OID))
+        self.assertFalse(bad.check_and_add("fallback-nonce", origin_id=self.OID))
 
 
 # ── ADR-0077 S-3 — Per-origin rate limiting ───────────────────────────────
@@ -1275,8 +1288,11 @@ class TestIBCGates(unittest.TestCase):
                 "instruction": instruction, "sender_instance_id": sender_instance_id,
                 "instance_attestation": att,
             })
+            # The receiver is a DIFFERENT instance: since round 10 a task whose
+            # sender id is the receiver's own is refused as a reflection.
             recv = rtr.RemoteTriggerReceiver(
-                origins_dir=origins_dir, engine_factory=lambda: mock.MagicMock()
+                origins_dir=origins_dir, engine_factory=lambda: mock.MagicMock(),
+                instance_id="receiver-instance",
             )
             resp = recv.receive(env)
             self.assertNotEqual(

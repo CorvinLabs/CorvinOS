@@ -494,7 +494,7 @@ class TestPingRelayFallback(unittest.TestCase):
 
         def _fake_relay_deliver_and_wait(*, relay_url, my_kid, my_relay_auth_key,
                                           to_kid, nonce_hex, ciphertext_hex,
-                                          task_id, timeout_s):
+                                          task_id, timeout_s, from_instance_tag=None):
             # Decrypt what the sender encrypted, build a valid signed pong,
             # re-encrypt it — exactly what a real relay+peer round trip does.
             plain = ft.decrypt_from_relay(HMAC_KEY, nonce_hex, ciphertext_hex)

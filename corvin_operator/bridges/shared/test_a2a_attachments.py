@@ -169,7 +169,8 @@ class TestAuditProjection(unittest.TestCase):
         ])
         proj = att.attachments_audit_details(items)
         self.assertEqual(proj["attachments_count"], 2)
-        self.assertEqual(proj["attachment_names"], ["a.txt", "b.png"])
+        # File names are peer-chosen and may carry personal data: not audited.
+        self.assertNotIn("attachment_names", proj)
         self.assertEqual(len(proj["attachment_sha_prefixes"][0]), 16)
         # Full sha not in projection
         full = items[0].sha256

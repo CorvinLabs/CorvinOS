@@ -477,36 +477,32 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # whole module has finished executing, and Python resolves free
     # variables in the enclosing scope by name at call time, not at
     # definition time (same reasoning standalone.py's block documents).
-    _relay_listener = None
-    _relay_task = None
+    # A2A connectivity manager (ADR-2059, wired 2026-09-25): owns the A2A
+    # ingress, the auto-managed advertised URL, the relay listener (started,
+    # stopped and re-pointed at RUNTIME when pairing turns the relay on) and
+    # the per-connection hello/ping upkeep. Until 2026-09-25 only the E2E
+    # harness called start_manager(); this host started the relay listener
+    # once at boot and only if the flag was already on — so a fresh install
+    # that paired by token was unreachable over the relay until a restart,
+    # and no connection ever moved between ACTIVE and UNREACHABLE on its own.
+    _a2a_manager_started = False
     try:
-        from corvin_core import feature_flags as _relay_ff
-        import a2a_friendship as _relay_ft  # type: ignore[import-not-found]
-        if _A2A_AVAILABLE and _a2a_receiver is not None and _relay_ff.is_enabled("a2a_relay_fallback"):
-            _relay_url = _relay_ft.get_my_relay_url()
-            if _relay_url:
-                import asyncio as _relay_asyncio
-                import a2a_relay as _relay_mod  # type: ignore[import-not-found]
-                from corvin_console.routes.a2a_pair import (
-                    _origins_dir as _relay_origins_dir,
-                    _pending_friendships_dir as _relay_pending_dir,
-                    _endpoints_dir as _relay_endpoints_dir,
-                )
-                _relay_listener = _relay_mod.RelayListener(
-                    relay_url=_relay_url, receiver=_a2a_receiver,
-                    origins_dir=_relay_origins_dir(),
-                    pending_dir=_relay_pending_dir(),
-                    endpoints_dir=_relay_endpoints_dir(),
-                )
-                _relay_task = _relay_asyncio.create_task(_relay_listener.run_forever())
-                import logging as _relay_log
-                _relay_log.getLogger(__name__).info(
-                    "A2A relay listener started: %s", _relay_url,
-                )
+        if _A2A_AVAILABLE and _a2a_receiver is not None:
+            import a2a_connectivity as _a2a_conn  # type: ignore[import-not-found]
+            from corvin_console.routes.a2a_pair import (
+                _origins_dir as _conn_origins_dir,
+                _pending_friendships_dir as _conn_pending_dir,
+                _endpoints_dir as _conn_endpoints_dir,
+            )
+            await _a2a_conn.start_manager(
+                receiver=_a2a_receiver, origins_dir=_conn_origins_dir(),
+                endpoints_dir=_conn_endpoints_dir(), pending_dir=_conn_pending_dir(),
+            )
+            _a2a_manager_started = True
     except Exception:
-        import logging as _relay_log
-        _relay_log.getLogger(__name__).exception(
-            "A2A relay listener failed to start (non-fatal)"
+        import logging as _conn_log
+        _conn_log.getLogger(__name__).exception(
+            "A2A connectivity manager failed to start (non-fatal)"
         )
 
     # KPI Collector Daemon — continuous background metrics emission (Phase 6.3, ADR-0470)
@@ -541,10 +537,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 _metrics_log.getLogger("corvin.metrics.daemon").warning(
                     "Error stopping KPI collector daemon (non-fatal)", exc_info=True
                 )
-        if _relay_listener is not None:
-            _relay_listener.stop()
-        if _relay_task is not None:
-            _relay_task.cancel()
+        if _a2a_manager_started:
+            try:
+                import a2a_connectivity as _a2a_conn  # type: ignore[import-not-found]
+                await _a2a_conn.stop_manager()
+            except Exception:
+                pass
         # Stop polling before unloading, or a poll can land on a plugin that is
         # halfway through on_unload().
         if _health_collector is not None:
@@ -851,7 +849,14 @@ async def a2a_receive(request: Request) -> JSONResponse:
             status_code=400,
             detail={"reason": "invalid_json"},
         )
-    response = _a2a_receiver.receive(body)
+    # receive() is SYNC and can run a worker for up to ttl_s: off the event
+    # loop, or one inbound task freezes the whole host (every console route,
+    # every other peer, the relay keepalive). Same idiom as friendship-ack.
+    import asyncio as _a2a_asyncio
+    import remote_trigger_receiver as _a2a_rtr  # type: ignore[import-not-found]
+    # Own executor (not the default pool pings use): a few concurrent
+    # worker runs must never starve liveness pings (2026-09-25).
+    response = await _a2a_rtr.run_a2a_work(_a2a_receiver.receive, body)
     return JSONResponse(content=response.to_dict())
 
 
@@ -878,7 +883,10 @@ async def a2a_ping(request: Request) -> JSONResponse:
             detail={"reason": "invalid_json"},
         )
     from a2a_http_server import process_ping_request  # type: ignore[import-not-found]
-    status_code, payload = process_ping_request(body, _a2a_receiver)
+    import asyncio as _a2a_asyncio
+    status_code, payload = await _a2a_asyncio.to_thread(
+        process_ping_request, body, _a2a_receiver,
+        client_addr=(request.client.host if request.client else None))
     return JSONResponse(content=payload, status_code=status_code)
 
 

@@ -23,8 +23,15 @@ standalone A2A server has always shipped) with three restrictions on top:
 * peer-address gate — only loopback, RFC 1918 / RFC 4193 private, and the
   RFC 6598 shared range (Tailscale / CGNAT mesh) peers are served unless the
   operator sets ``allow_public`` (port-forward / reverse proxy setups);
-* per-address rate limit (token bucket) in front of the handlers;
-* body cap and socket timeout inherited from the base handler.
+* per-address rate limit (token bucket);
+* both run at ACCEPT time (``verify_request``) — before a handler thread
+  exists or a header byte is read. Until 2026-09-25 they ran in ``do_POST``,
+  i.e. only after the peer had finished sending headers, so a slowloris peer
+  (from any address) was never gated at all;
+* at most ``_MAX_HANDLER_THREADS`` handler threads, ``_MAX_PER_PEER`` per
+  source address — beyond that an immediate 503, not a new thread;
+* a whole-request read deadline (request line + headers + body), plus the
+  body cap and per-recv socket timeout inherited from the base handler.
 
 Configuration: ``<CORVIN_HOME>/global/remote_trigger/ingress.json``
 (``{"enabled": true, "port": 8775, "allow_public": false}``), overridable by
@@ -55,6 +62,12 @@ _SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")  # RFC 6598 (Tails
 # receiver's threads busy.
 _RATE_BURST = 30
 _RATE_PER_S = 2.0
+
+# Concurrency caps (slowloris): one LAN host can hold at most _MAX_PER_PEER
+# handler threads; the listener at most _MAX_HANDLER_THREADS. A reverse proxy
+# in front of the ingress presents as ONE peer — raise _MAX_PER_PEER there.
+_MAX_HANDLER_THREADS = 64
+_MAX_PER_PEER = 16
 
 
 @dataclass(frozen=True)
@@ -148,6 +161,7 @@ class IngressStats:
         self.rejected_peer = 0
         self.rate_limited = 0
         self.not_found = 0
+        self.overloaded = 0
         self.last_request_at: float | None = None
 
     def bump(self, field: str) -> None:
@@ -161,6 +175,7 @@ class IngressStats:
             return {
                 "served": self.served, "rejected_peer": self.rejected_peer,
                 "rate_limited": self.rate_limited, "not_found": self.not_found,
+                "overloaded": self.overloaded,
                 "last_request_at": self.last_request_at,
             }
 
@@ -175,26 +190,37 @@ def build_ingress_server(
     registry, one audit writer — a replayed envelope is rejected no matter
     which socket it arrives on.
     """
-    from a2a_http_server import _A2AHandler  # type: ignore[import-not-found]
+    from a2a_http_server import (  # type: ignore[import-not-found]
+        HardenedThreadingHTTPServer, _A2AHandler,
+    )
 
     limiter = _RateLimiter()
     counters = stats or IngressStats()
     allow_public = config.allow_public
 
+    def _peer_filter(peer: str) -> tuple[bool, int, str]:
+        # Accept-time gate: runs in the accept loop, before any handler
+        # thread or read. Order matters — a refused address never spends a
+        # rate-limit token.
+        if not peer_allowed(peer, allow_public=allow_public):
+            return False, 403, "peer_not_allowed"
+        if not limiter.allow(peer):
+            return False, 429, "rate_limited"
+        return True, 200, ""
+
+    _reject_counter = {
+        "peer_not_allowed": "rejected_peer",
+        "rate_limited": "rate_limited",
+        "overloaded": "overloaded",
+    }
+
+    def _on_reject(reason: str) -> None:
+        field = _reject_counter.get(reason)
+        if field:
+            counters.bump(field)
+
     class _IngressHandler(_A2AHandler):
         google_adapter = None
-
-        def _gate(self) -> bool:
-            peer = self.client_address[0] if self.client_address else ""
-            if not peer_allowed(str(peer), allow_public=allow_public):
-                counters.bump("rejected_peer")
-                self._respond(403, b'{"reason":"peer_not_allowed"}\n')
-                return False
-            if not limiter.allow(str(peer)):
-                counters.bump("rate_limited")
-                self._respond(429, b'{"reason":"rate_limited"}\n')
-                return False
-            return True
 
         def do_GET(self):  # noqa: N802
             counters.bump("not_found")
@@ -213,8 +239,6 @@ def build_ingress_server(
                 counters.bump("not_found")
                 self._respond(404, b'{"reason":"not_found"}\n')
                 return
-            if not self._gate():
-                return
             counters.bump("served")
             super().do_POST()
 
@@ -222,11 +246,15 @@ def build_ingress_server(
     _IngressHandler.endpoints_dir = Path(endpoints_dir)
     _IngressHandler.pending_dir = Path(pending_dir)
 
-    class _Server(http.server.ThreadingHTTPServer):
+    class _Server(HardenedThreadingHTTPServer):
         daemon_threads = True
         allow_reuse_address = True
 
-    return _Server((config.host, config.port), _IngressHandler)
+    return _Server(
+        (config.host, config.port), _IngressHandler,
+        peer_filter=_peer_filter, on_reject=_on_reject,
+        max_handler_threads=_MAX_HANDLER_THREADS, max_per_peer=_MAX_PER_PEER,
+    )
 
 
 class IngressRunner:

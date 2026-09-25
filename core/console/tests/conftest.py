@@ -149,3 +149,41 @@ def _isolate_stdlib_spawners():
         for mod, attr, original in saved:
             if getattr(mod, attr, None) is not original:
                 setattr(mod, attr, original)
+
+
+@pytest.fixture(autouse=True)
+def _a2a_issuer_has_its_own_binding_key(request, tmp_path, monkeypatch):
+    """A2A pairing tests simulate TWO instances in one process: they mint a
+    token and import it here. Since tokens carry the issuer's binding key
+    (``bpk``, ADR-2064) and importing a token that carries OUR key is refused
+    as "your own token", mint under a separate issuer key file."""
+    if not request.module.__name__.rsplit(".", 1)[-1].startswith("test_a2a"):
+        yield
+        return
+    import os as _os
+    try:
+        import a2a_binding as _bind
+        import a2a_friendship as _ft
+    except ImportError:
+        yield
+        return
+    monkeypatch.setenv("CORVIN_A2A_BIND_KEY_PATH", str(tmp_path / "local-bind-key"))
+    _bind._cached.clear()
+    real = _ft.create_friendship_token
+
+    def as_issuer(*a, **k):
+        prev = _os.environ.get("CORVIN_A2A_BIND_KEY_PATH")
+        _os.environ["CORVIN_A2A_BIND_KEY_PATH"] = str(tmp_path / "issuer-bind-key")
+        _bind._cached.clear()
+        try:
+            return real(*a, **k)
+        finally:
+            if prev is None:
+                _os.environ.pop("CORVIN_A2A_BIND_KEY_PATH", None)
+            else:
+                _os.environ["CORVIN_A2A_BIND_KEY_PATH"] = prev
+            _bind._cached.clear()
+
+    monkeypatch.setattr(_ft, "create_friendship_token", as_issuer)
+    yield
+    _bind._cached.clear()

@@ -818,12 +818,17 @@ class TestADR0198WriteFirstAudit:
 
     def _make_receiver(self, tmp_path):
         from remote_trigger_receiver import RemoteTriggerReceiver, NonceStore
-        return RemoteTriggerReceiver(
+        rec = RemoteTriggerReceiver(
             origins_dir=tmp_path / "origins",
             nonce_store=NonceStore(),
             instance_id="recv-test",
             forge_se=MagicMock(),
         )
+        # These tests pin the write-first / audit ordering. The binding gate
+        # that runs before it (ADR-2064: only a bound peer may push a new URL)
+        # has its own tests in test_a2a_binding / test_remote_trigger_receiver_hardening.
+        rec._reconnect_binding_rejection = lambda env, new_url: None
+        return rec
 
     def _make_env(self):
         from remote_trigger_receiver import TaskEnvelope

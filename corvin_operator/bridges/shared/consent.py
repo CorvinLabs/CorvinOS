@@ -65,6 +65,8 @@ Design notes
 """
 from __future__ import annotations
 
+import secrets as _secrets
+
 from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on Windows
 from _bounded_lock import LockBusy as ConsentLockBusy, acquire_exclusive as _acquire_exclusive
 import hashlib as _hashlib
@@ -173,7 +175,12 @@ def _store_path(channel: str, chat_key: str, *, tenant_id: str) -> Path:
 def _audit_path(*, tenant_id: str | None = None) -> Path:
     home = _corvin_home()
     if tenant_id is None:
-        return home / "global" / "forge" / "audit.jsonl"
+        # ONE chain per tenant (CLAUDE.md / ADR-0650): without an explicit
+        # tenant this is the PROCESS tenant's canonical chain, never the
+        # legacy <home>/global/forge/audit.jsonl — writing there on a fresh
+        # install is what made the boot tripwire report audit_chain_split.
+        import os as _os
+        tenant_id = (_os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default"
     return home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
 
 
@@ -275,7 +282,22 @@ def _clag_gate(layer_id: str) -> None:
             "pre-check skipped for %s", layer_id,
         )
         return
-    _gate(_audit_path(), layer_id)
+    # Ancestor anchor (2026-09-25): the per-call layer id has no shadow, and
+    # the last-k hash-link check cannot see a TRUNCATED tail — so this module
+    # also checks that the record where it last saw the chain still sits at
+    # the same offset (append-only). Same module object as the gate.
+    _path = _audit_path()
+    _mod = _import_clag()
+    _anchor_key = layer_id.rsplit(".", 1)[0]
+    _anchor_check = getattr(_mod, "anchor_check", None)
+    if _anchor_check is not None:
+        _reason = _anchor_check(_anchor_key, _path)
+        if _reason:
+            raise _mod.ChainIntegrityFailure(_reason, layer_id, "anchor_mismatch")
+    _gate(_path, layer_id)
+    _anchor_update = getattr(_mod, "anchor_update", None)
+    if _anchor_update is not None:
+        _anchor_update(_anchor_key, _path)
 
 
 # ── Audit emission (best-effort, mirrors auth_elevation pattern) ──────
@@ -317,19 +339,6 @@ def _audit(event_type: str, *, channel: str, chat_key: str, uid: str,
                         details=body, severity=severity)
         else:
             write_event(_audit_path(), event_type, details=body)
-        # ADR-0133 CLAG — advance the L16.consent_gate shadow after each audit
-        # write so subsequent gate() calls see the current chain tail, not the
-        # stale tail from the last cit_issued event.
-        try:
-            _import_clag().advance_layer_shadow("L16.consent_gate", _audit_path())
-        except Exception as _adv_exc:  # noqa: BLE001
-            # Non-fatal: a stale shadow errs toward a (safe) false
-            # shadow_mismatch on the next gate(), never toward fail-open —
-            # but log it so the degraded state is observable.
-            import logging as _logging
-            _logging.getLogger("corvin.consent").warning(
-                "CLAG shadow advance failed for L16.consent_gate: %s", _adv_exc
-            )
     except Exception as _exc:
         import logging as _logging
         _logging.getLogger("corvin.consent").warning(
@@ -523,7 +532,12 @@ def is_granted(channel: str, chat_key: str, uid: str
         return False, "no-uid"
     # ADR-0133 CLAG M2 — chain integrity gate before consent decision (fail-closed).
     try:
-        _clag_gate("L16.consent_gate")
+        # Per-call layer id (2026-09-25): this module writes the SHARED tenant
+        # chain; a static layer's shadow ("nobody else wrote since my last
+        # gate") fails after any other subsystem's write and locked every
+        # user out. Same idiom as the A2A receiver's L38 gate; the last-k
+        # hash-link verification still runs on every call.
+        _clag_gate(f"L16.consent_gate.{_secrets.token_hex(4)}")
     except Exception:
         return False, "chain-integrity-failed"
     path = _store_path(channel, chat_key, tenant_id="_default")

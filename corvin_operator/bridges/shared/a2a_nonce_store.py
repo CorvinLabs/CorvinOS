@@ -9,9 +9,15 @@ Schema
 ------
 Single table ``nonces``:
 
-  nonce TEXT PRIMARY KEY
+  origin_id TEXT           -- authenticated origin that consumed the nonce
+  nonce TEXT               --   PRIMARY KEY (origin_id, nonce)
   expires_at REAL          -- Unix timestamp after which the nonce is no
                            --   longer valid (and will be pruned)
+
+A pre-2026-09-25 database (``nonce`` as the sole primary key, no
+``origin_id``) is migrated in place on open; its rows keep
+``origin_id = ''`` and are still consulted by the replay check until they
+expire (at most one TTL).
 
 The file lives at ``<tenant_home>/global/nonces/a2a_nonces.db`` (mode
 0600). WAL mode is enabled for concurrent reader/writer safety.
@@ -27,8 +33,13 @@ Pruning
 -------
 Expired nonces are pruned at construction time (``__init__``) and on each
 ``check_and_add`` call (before the existence check), so the table stays
-bounded. LRU eviction at 10 000 rows applies in addition to TTL-based
-pruning, matching the in-memory store's behaviour.
+bounded. A still-LIVE nonce is NEVER evicted: when the store holds
+``_NONCE_MAX`` live rows, or one origin holds ``_PER_ORIGIN_MAX`` live rows,
+``check_and_add`` refuses (returns False) instead. Evicting live rows (the
+behaviour until 2026-09-25) let one authenticated peer push 10 000 nonces
+through and re-open replay of every other peer's captured envelopes; a full
+store is an availability problem for the flooding origin, never a replay
+hole for everyone else. Same rule in the in-memory fallback.
 
 Fallback
 --------
@@ -61,6 +72,18 @@ _NONCE_MAX: int = 10_000
 _NONCE_TTL_S: float = 640.0
 # One extra minute of slack to absorb clock drift between restarts.
 _NONCE_PERSIST_BUFFER_S: float = 60.0
+# One origin may hold at most this many live nonce rows (mirrors
+# remote_trigger_receiver.NonceStore._PER_ORIGIN_MAX). At the default
+# 60 rpm rate limit an origin produces ~700 nonces per TTL window.
+_PER_ORIGIN_MAX: int = _NONCE_MAX // 4
+
+# check_and_add_ex() outcomes.
+OK = "ok"
+REPLAY = "replay"
+ORIGIN_QUOTA = "origin_quota_exceeded"
+STORE_FULL = "store_full"
+INVALID = "invalid"
+ERROR = "error"
 
 
 class PersistentNonceStore:
@@ -71,10 +94,13 @@ class PersistentNonceStore:
 
     _DDL = """
         CREATE TABLE IF NOT EXISTS nonces (
-            nonce      TEXT    NOT NULL PRIMARY KEY,
-            expires_at REAL    NOT NULL
+            origin_id  TEXT    NOT NULL DEFAULT '',
+            nonce      TEXT    NOT NULL,
+            expires_at REAL    NOT NULL,
+            PRIMARY KEY (origin_id, nonce)
         );
         CREATE INDEX IF NOT EXISTS idx_expires ON nonces(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_nonce ON nonces(nonce);
     """
 
     def __init__(
@@ -111,20 +137,29 @@ class PersistentNonceStore:
     # ── Public API ────────────────────────────────────────────────────
 
     def check_and_add(self, nonce: str, origin_id: str = "") -> bool:
-        """Return True if nonce is fresh (added). False = replay.
+        """Return True if nonce is fresh (added). False = replay, quota
+        exhausted, store full, or DB error (all fail-closed).
 
         Args:
             nonce: Unique nonce to check/add
             origin_id: Origin identifier (REQUIRED for per-origin quota enforcement).
                       Empty origin_id is rejected to prevent quota bypass attacks.
         """
+        return self.check_and_add_ex(nonce, origin_id=origin_id) == OK
+
+    def check_and_add_ex(self, nonce: str, origin_id: str = "",
+                         per_origin_max: int | None = None) -> str:
+        """Like :meth:`check_and_add` but returns WHY a nonce was refused
+        (``ok`` / ``replay`` / ``origin_quota_exceeded`` / ``store_full`` /
+        ``invalid`` / ``error``) so the caller can audit the real reason."""
         if not origin_id or not origin_id.strip():
             # SECURITY: Empty origin_id bypasses per-origin quota enforcement.
             # Fail-closed: reject empty/whitespace-only origin_id.
-            return False
+            return INVALID
 
         if self._fallback is not None:
-            return self._fallback.check_and_add(nonce, origin_id=origin_id)
+            return self._fallback.check_and_add_ex(nonce, origin_id=origin_id,
+                                                   per_origin_max=per_origin_max)
 
         now = time.time()
         expires_at = now + self._ttl_s + _NONCE_PERSIST_BUFFER_S
@@ -143,30 +178,39 @@ class PersistentNonceStore:
                     # pruning and the insert are atomic — avoids a race
                     # where another process prunes+reuses the same nonce.
                     con.execute("DELETE FROM nonces WHERE expires_at <= ?", (now,))
+                    # Legacy rows (pre-migration) carry origin_id '' and are
+                    # still honoured until they expire.
                     row = con.execute(
-                        "SELECT 1 FROM nonces WHERE nonce = ?", (nonce,)
+                        "SELECT 1 FROM nonces WHERE nonce = ? "
+                        "AND origin_id IN (?, '')", (nonce, origin_id),
                     ).fetchone()
                     if row is not None:
                         # Nonce already present → replay.
                         con.execute("ROLLBACK")
-                        return False
-                    con.execute(
-                        "INSERT INTO nonces (nonce, expires_at) VALUES (?, ?)",
-                        (nonce, expires_at),
-                    )
-                    # LRU eviction: drop oldest if over cap.
-                    count = con.execute(
+                        return REPLAY
+                    per_origin = con.execute(
+                        "SELECT COUNT(*) FROM nonces WHERE origin_id = ?",
+                        (origin_id,),
+                    ).fetchone()[0]
+                    if per_origin >= (per_origin_max or _PER_ORIGIN_MAX):
+                        con.execute("ROLLBACK")
+                        return ORIGIN_QUOTA
+                    total = con.execute(
                         "SELECT COUNT(*) FROM nonces"
                     ).fetchone()[0]
-                    if count > _NONCE_MAX:
-                        overshoot = count - _NONCE_MAX
-                        con.execute(
-                            "DELETE FROM nonces WHERE nonce IN "
-                            "(SELECT nonce FROM nonces ORDER BY expires_at ASC LIMIT ?)",
-                            (overshoot,),
-                        )
+                    if total >= _NONCE_MAX:
+                        # Every remaining row is live (expired ones were just
+                        # pruned). Refuse — evicting a live row would re-open
+                        # replay of that envelope.
+                        con.execute("ROLLBACK")
+                        return STORE_FULL
+                    con.execute(
+                        "INSERT INTO nonces (origin_id, nonce, expires_at) "
+                        "VALUES (?, ?, ?)",
+                        (origin_id, nonce, expires_at),
+                    )
                     con.execute("COMMIT")
-                    return True
+                    return OK
                 except Exception:  # noqa: BLE001
                     try:
                         con.execute("ROLLBACK")
@@ -177,24 +221,34 @@ class PersistentNonceStore:
                     con.close()
             except Exception:  # noqa: BLE001
                 # DB error after init — degrade to reject (conservative).
-                return False
+                return ERROR
 
-    def remove(self, nonce: str) -> None:
-        """Remove a nonce — used to roll back after a failed audit-first write.
+    def remove(self, nonce: str, origin_id: str | None = None) -> None:
+        """Remove a nonce — used to roll back after a failed audit-first write
+        (or a post-consumption rate-limit refusal).
+
+        ``origin_id`` scopes the delete to that origin's row; ``None`` (legacy
+        callers) deletes the nonce for every origin.
 
         AUDIT-FIRST INVARIANT: If this fails (DB error), the nonce stays consumed
         and a retry with the same nonce will be rejected as replay until TTL expires.
         This is safe but should be logged for operational visibility.
         """
         if self._fallback is not None:
-            self._fallback.remove(nonce)
+            self._fallback.remove(nonce, origin_id=origin_id)
             return
         with self._lock:
             try:
                 con = self._open()
                 try:
                     con.execute("BEGIN IMMEDIATE")
-                    con.execute("DELETE FROM nonces WHERE nonce = ?", (nonce,))
+                    if origin_id is None:
+                        con.execute("DELETE FROM nonces WHERE nonce = ?", (nonce,))
+                    else:
+                        con.execute(
+                            "DELETE FROM nonces WHERE nonce = ? AND origin_id = ?",
+                            (nonce, origin_id),
+                        )
                     con.execute("COMMIT")
                 except Exception as exc:  # noqa: BLE001
                     try:
@@ -237,6 +291,7 @@ class PersistentNonceStore:
         with self._lock:
             con = self._open()
             try:
+                self._migrate_legacy_schema(con)
                 # executescript commits any pending transaction and then
                 # runs the DDL in its own implicit transaction.
                 con.executescript(self._DDL)
@@ -247,6 +302,37 @@ class PersistentNonceStore:
             os.chmod(self._db_path, 0o600)
         except OSError:
             pass
+
+    @staticmethod
+    def _migrate_legacy_schema(con: sqlite3.Connection) -> None:
+        """Rebuild a pre-2026-09-25 ``nonces`` table (``nonce`` sole PK, no
+        ``origin_id``) into the (origin_id, nonce) schema. Idempotent and
+        safe against a concurrent process doing the same (BEGIN IMMEDIATE +
+        re-check inside the transaction). Legacy rows keep ``origin_id=''``."""
+        cols = [r[1] for r in con.execute("PRAGMA table_info(nonces)").fetchall()]
+        if not cols or "origin_id" in cols:
+            return
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            cols = [r[1] for r in con.execute("PRAGMA table_info(nonces)").fetchall()]
+            if cols and "origin_id" not in cols:
+                con.execute(
+                    "CREATE TABLE nonces_v2 ("
+                    " origin_id TEXT NOT NULL DEFAULT '',"
+                    " nonce TEXT NOT NULL,"
+                    " expires_at REAL NOT NULL,"
+                    " PRIMARY KEY (origin_id, nonce))"
+                )
+                con.execute(
+                    "INSERT OR IGNORE INTO nonces_v2 (origin_id, nonce, expires_at) "
+                    "SELECT '', nonce, expires_at FROM nonces"
+                )
+                con.execute("DROP TABLE nonces")
+                con.execute("ALTER TABLE nonces_v2 RENAME TO nonces")
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
 
     def _prune_expired(self) -> None:
         now = time.time()
@@ -269,29 +355,67 @@ class PersistentNonceStore:
 
 
 class _InMemoryNonceStore:
-    """Thin in-memory fallback (matches original NonceStore API)."""
+    """In-memory fallback with the SAME admission rules as the SQLite store:
+    keyed (origin_id, nonce), per-origin live-slot cap, and a full store
+    refuses instead of evicting a still-live nonce (evicting the oldest live
+    entry — the pre-2026-09-25 behaviour — re-opened replay of it)."""
 
     def __init__(self, ttl_s: float | None = None) -> None:
         self._ttl_s = ttl_s if ttl_s is not None else _NONCE_TTL_S
-        self._store: collections.OrderedDict[str, float] = collections.OrderedDict()
+        # (origin_id, nonce) -> expires_at, insertion-ordered == expiry-ordered
+        # (constant TTL), so expiry pops from the front.
+        self._store: collections.OrderedDict[tuple[str, str], float] = (
+            collections.OrderedDict()
+        )
+        self._origin_count: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def check_and_add(self, nonce: str, origin_id: str = "") -> bool:
-        now = time.time()
-        with self._lock:
-            expired = [k for k, exp in self._store.items() if exp <= now]
-            for k in expired:
-                del self._store[k]
-            if nonce in self._store:
-                return False
-            while len(self._store) >= _NONCE_MAX:
-                self._store.popitem(last=False)
-            self._store[nonce] = now + self._ttl_s
-            return True
+    def _expire(self, now: float) -> None:
+        while self._store:
+            key, exp = next(iter(self._store.items()))
+            if exp > now:
+                break
+            del self._store[key]
+            left = self._origin_count.get(key[0], 0) - 1
+            if left > 0:
+                self._origin_count[key[0]] = left
+            else:
+                self._origin_count.pop(key[0], None)
 
-    def remove(self, nonce: str) -> None:
+    def check_and_add(self, nonce: str, origin_id: str = "") -> bool:
+        return self.check_and_add_ex(nonce, origin_id=origin_id) == OK
+
+    def check_and_add_ex(self, nonce: str, origin_id: str = "",
+                         per_origin_max: int | None = None) -> str:
+        if not origin_id or not origin_id.strip():
+            return INVALID
+        now = time.time()
+        key = (origin_id, nonce)
         with self._lock:
-            self._store.pop(nonce, None)
+            self._expire(now)
+            if key in self._store:
+                return REPLAY
+            if self._origin_count.get(origin_id, 0) >= (per_origin_max or _PER_ORIGIN_MAX):
+                return ORIGIN_QUOTA
+            if len(self._store) >= _NONCE_MAX:
+                return STORE_FULL
+            self._store[key] = now + self._ttl_s
+            self._origin_count[origin_id] = self._origin_count.get(origin_id, 0) + 1
+            return OK
+
+    def remove(self, nonce: str, origin_id: str | None = None) -> None:
+        with self._lock:
+            keys = (
+                [(origin_id, nonce)] if origin_id is not None
+                else [k for k in self._store if k[1] == nonce]
+            )
+            for key in keys:
+                if self._store.pop(key, None) is not None:
+                    left = self._origin_count.get(key[0], 0) - 1
+                    if left > 0:
+                        self._origin_count[key[0]] = left
+                    else:
+                        self._origin_count.pop(key[0], None)
 
 
 def default_nonce_store(tenant_home: Path | str | None = None) -> PersistentNonceStore:

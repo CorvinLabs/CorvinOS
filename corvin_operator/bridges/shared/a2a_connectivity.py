@@ -153,8 +153,18 @@ def refresh_friendship(
     if ecfg is None or not ecfg.get("_friendship"):
         return {"ok": False, "kid": kid, "error": "not_found"}
     ocfg = _read_json(origin_path) or {}
+    if ocfg.get("_operator_disabled") or ecfg.get("_operator_disabled"):
+        # The operator switched it off: no hellos, no pings, no state writes.
+        return {"ok": False, "kid": kid, "error": "disabled"}
     if ocfg and not ocfg.get("enabled") and ocfg.get("state") != "PENDING":
         return {"ok": False, "kid": kid, "error": "disabled"}
+    # Imported from a token without an address: disabled + PENDING until the
+    # bound issuer's verified hello activates it (a2a_friendship
+    # _awaiting_activation). This pass may say hello and ping, but must NOT
+    # rewrite its state — round 3: writing ACTIVE/UNREACHABLE here (the origin
+    # file has no "url" key, so the PENDING branch never matched) made the
+    # connection un-activatable before the issuer's hello could arrive.
+    awaiting = ft._awaiting_activation(ocfg) if ocfg else False
 
     peer_knows_us = bool(ecfg.get("_peer_knows_us", False))
     peer_reports_reachable = bool(ecfg.get("_peer_reports_reachable", False))
@@ -190,7 +200,11 @@ def refresh_friendship(
             cfg = _read_json(p)
             if cfg is None:
                 continue
-            if cfg.get("url", None) == "" and not reachable:
+            if cfg.get("_operator_disabled"):
+                continue
+            if awaiting and not cfg.get("enabled") and cfg.get("state") == "PENDING":
+                pass  # keep PENDING: activation is the issuer hello's job
+            elif cfg.get("url", None) == "" and not reachable:
                 cfg["state"] = "PENDING"
             else:
                 cfg["state"] = "ACTIVE" if reachable else "UNREACHABLE"
@@ -343,6 +357,27 @@ class ConnectivityManager:
         managed_ports = {_CONSOLE_PORT, a2a_ingress.DEFAULT_PORT, port}
         if stored and not _is_auto_managed_url(stored, managed_ports):
             return
+        if not self.ingress.running:
+            # The ingress is NOT listening (disabled, or its port is held by
+            # another process — e.g. a reverse proxy on :8775). Never announce
+            # the ingress port then: peers would re-point to a dead or foreign
+            # socket (2026-09-25, round 2). Only follow an address change of
+            # an existing auto-managed URL, keeping ITS port.
+            if not stored:
+                return
+            try:
+                port = int(urlsplit(stored).port or 0)
+            except ValueError:
+                return
+            if not port:
+                return
+            ingress_port = (self.ingress.config.port if self.ingress.config is not None
+                            else a2a_ingress.load_config().port)
+            if port == ingress_port:
+                # That port belonged to OUR ingress, which is not listening
+                # now: re-announcing it on a new IP points peers at a dead
+                # socket (round 3). Leave it; peers keep the relay.
+                return
         host, source = self._detect_host()
         if not host or host.startswith("127."):
             return

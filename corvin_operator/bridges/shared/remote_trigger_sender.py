@@ -35,9 +35,20 @@ Audit contract (L16 hash chain, three new event types):
   ``A2A.ping_result``           INFO/WARN ADR-0199: one event per ping() call
                                           (reachable → INFO, else WARNING)
   ``A2A.relay_fallback_used``   INFO     ADR-0258: send()'s direct HTTP POST
-                                          failed and the relay path delivered
-                                          it instead
+                                          provably did not reach the peer
+                                          (TransportError.maybe_delivered is
+                                          False) and the relay delivered it; or
+                                          ping()'s direct probe failed
+  ``A2A.instance_pinned``       INFO     2026-09-25: first verified response
+                                          pinned a friendship endpoint's peer
+                                          instance_id (TOFU)
   ============================= ======== =========================================
+
+Response trust (2026-09-25): friendship keys are symmetric, so a response
+signed by THIS instance's own receiver verifies like the peer's. send() and
+ping() reject any signed response whose ``instance_id`` is our own (reflection
+guard, reason ``self_response``), enforce an endpoint's ``instance_id`` pin on
+both paths, and TOFU-pin friendship endpoints on the first verified response.
 
 Audit ``details`` allow-list (enforced fail-closed by
 ``_assert_audit_details_safe`` — the ADR-0197 backstop; free-form values
@@ -46,7 +57,8 @@ are dropped and replaced with ``"redacted"``):
   ``duration_ms``, ``reason``, ``ttl_s``, ``nonce_prefix``,
   ``http_status``, ``error_category``, ``error_detail``,
   ``attachments_count``, ``our_chain_tail``, ``peer_chain_tail``,
-  ``match``, ``reachable``, ``source`` (ADR-0197/0199).
+  ``match``, ``reachable``, ``source`` (ADR-0197/0199), ``via``
+  (closed enum ``direct``/``relay``, 2026-09-25).
 
 ``error_detail`` values come exclusively from the fixed template set
 (``_ERROR_DETAIL_TEMPLATES``) or the closed exception-type-name allowlist
@@ -62,12 +74,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac as _hmac
+import http.client
 import json
 import os
 import re as _re
 import secrets
 import stat
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -162,6 +176,20 @@ _REMOTE_ENDPOINTS_DEFAULT = _default_endpoints_dir()
 # Default outbound timeouts; operators may override per call.
 _DEFAULT_TIMEOUT_S = 30
 _DEFAULT_TTL_S = 60
+# 2026-09-25: a send() without an explicit timeout used to wait 30 s while the
+# peer's worker is allowed ttl_s (60 s default) of wall time
+# (a2a_worker.spawn_worker timeout=ttl_s). Every task taking 30-60 s therefore
+# reported timeout_transport although the peer finished it — and the relay
+# fallback then re-sent the identical envelope. The default now covers the
+# worker's budget plus overhead (spawn, audit, response signing, transit):
+# max(_DEFAULT_TIMEOUT_S, ttl_s + _TIMEOUT_MARGIN_S). An explicit timeout_s
+# is always honoured as given.
+_TIMEOUT_MARGIN_S = 15
+# TCP connect (+TLS handshake) budget, separate from the read budget above: a
+# dead host must fail fast as "not delivered" so the relay fallback still gets
+# its turn inside the caller's patience, while a slow worker gets the full
+# read budget.
+_CONNECT_TIMEOUT_S = 10
 
 # Maximum response body the sender will read from a remote receiver.
 # Mirrors the inbound cap in a2a_http_server.py (4 MiB). A valid response
@@ -186,7 +214,67 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # do not follow — urlopen raises HTTPError for the 3xx
 
 
-_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+class _ConnectTimeoutMixin:
+    """Split connect/read timeouts for http.client connections.
+
+    urllib applies ONE ``timeout`` to connect and to every read. The sender
+    needs them apart (2026-09-25): whether a failure happened BEFORE the
+    request reached the peer decides whether the relay fallback may run (see
+    TransportError.maybe_delivered), so a dead host must fail inside a short
+    connect budget and surface as a pre-send URLError, while an accepted
+    request waits the full read budget."""
+
+    _corvin_connect_timeout: "float | None" = None
+
+    def connect(self):  # noqa: D401
+        ct = self._corvin_connect_timeout
+        if ct is None:
+            return super().connect()  # type: ignore[misc]
+        read_timeout = self.timeout  # type: ignore[attr-defined]
+        self.timeout = ct  # type: ignore[attr-defined]
+        try:
+            super().connect()  # type: ignore[misc]  # TCP (+TLS handshake for https)
+        finally:
+            self.timeout = read_timeout  # type: ignore[attr-defined]
+        sock = getattr(self, "sock", None)
+        if sock is not None:
+            sock.settimeout(read_timeout)
+
+
+class _HTTPConnCT(_ConnectTimeoutMixin, http.client.HTTPConnection):
+    pass
+
+
+class _HTTPSConnCT(_ConnectTimeoutMixin, http.client.HTTPSConnection):
+    pass
+
+
+def _conn_factory(cls: Any, connect_timeout: "float | None") -> Any:
+    def _make(host: str, **kwargs: Any) -> Any:
+        conn = cls(host, **kwargs)
+        conn._corvin_connect_timeout = connect_timeout
+        return conn
+    return _make
+
+
+class _SplitTimeoutHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):  # noqa: D401
+        return self.do_open(
+            _conn_factory(_HTTPConnCT, getattr(req, "_corvin_connect_timeout", None)), req)
+
+
+class _SplitTimeoutHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):  # noqa: D401
+        kwargs: dict = {"context": self._context}
+        if "_check_hostname" in self.__dict__:  # Python <= 3.11 signature
+            kwargs["check_hostname"] = self._check_hostname
+        return self.do_open(
+            _conn_factory(_HTTPSConnCT, getattr(req, "_corvin_connect_timeout", None)),
+            req, **kwargs)
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(
+    _NoRedirect, _SplitTimeoutHTTPHandler, _SplitTimeoutHTTPSHandler)
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────
@@ -203,12 +291,45 @@ class EndpointError(SendError):
     """Registry / config issue (unknown, disabled, world-readable)."""
 
 
-class TransportError(SendError):
-    """HTTP transport failure (timeout, refused, non-200 body)."""
+#: TransportError reasons that PROVE the request never reached a receiver —
+#: nothing to replay, nothing possibly executing. See TransportError.
+_NOT_DELIVERED_REASONS = frozenset({
+    "connection_failed",
+    "relay_fallback_disabled", "relay_not_configured",
+    "relay_endpoint_config_incomplete",
+})
+#: HTTP statuses that prove no A2A receiver accepted the request: the route is
+#: absent / the method is wrong / the server is not the one addressed — e.g.
+#: the peer's old IP now answered by another box. The receiver route itself
+#: never answers these for an envelope (a2a_http_server / gateway app).
+_NOT_DELIVERED_HTTP = frozenset({404, 405, 421})
 
-    def __init__(self, reason: str, http_status: int | None = None) -> None:
+
+class TransportError(SendError):
+    """HTTP transport failure (timeout, refused, non-200 body).
+
+    ``maybe_delivered`` (2026-09-25) — whether the request may have reached
+    the peer's receiver. The relay fallback re-sends the IDENTICAL envelope
+    (same nonce), so it may only run when this is False: after a read timeout
+    the peer is typically still executing the task, rejects the second copy
+    as a nonce replay, and the caller saw a "rejected" for a task that was in
+    fact running. Inferred from the reason when not given: only pre-send
+    failures (connect refused / DNS / connect timeout / body never fully
+    sent / relay not even attempted) and routing-miss statuses are "not
+    delivered"; every post-send failure (read timeout, 5xx, oversize or
+    invalid response) is conservatively "maybe delivered".
+    """
+
+    def __init__(self, reason: str, http_status: int | None = None, *,
+                 maybe_delivered: bool | None = None) -> None:
         super().__init__(reason)
         self.http_status = http_status
+        if maybe_delivered is None:
+            maybe_delivered = not (
+                reason in _NOT_DELIVERED_REASONS
+                or (http_status is not None and http_status in _NOT_DELIVERED_HTTP)
+            )
+        self.maybe_delivered = maybe_delivered
 
 
 class ResponseVerificationError(SendError):
@@ -417,6 +538,35 @@ class ErrorCategory:
 
 # ── Sender ────────────────────────────────────────────────────────────────
 
+def reconnect_bind_canonical(kid: str, new_url: str, nonce: str, bind_ts: int,
+                             sender_pub: str) -> bytes:
+    """What a reconnect push's binding MAC covers (sender and receiver).
+    ``bind_ts`` (round 7): without a time in the MAC a recorded push could be
+    re-signed with a fresh envelope ``issued_at`` once its nonce aged out of
+    the replay store — the receiver checks it against the same ±300 s window.
+    ``sender_pub`` (round 9): both ends derive the SAME binding secret, so
+    without a direction a push A sent to B verified at A too — a token holder
+    could reflect it and re-point A's endpoint for B at A itself. The sender's
+    binding public key names the direction; each side knows it (its own key /
+    the stored ``_peer_bind_pub``)."""
+    return (f"corvin-a2a-reconnect|{kid}|{sender_pub}|{new_url}|{nonce}|{bind_ts}"
+            .encode("utf-8"))
+
+
+#: Mirrors a2a_worker.MAX_INSTRUCTION_BYTES (the receiver's cap, after NFKC).
+MAX_INSTRUCTION_BYTES = 16 * 1024
+# Must match a2a_worker.ATTACHMENTS_ONLY_INSTRUCTION.
+ATTACHMENTS_ONLY_INSTRUCTION = "Please look at the attached file(s)."
+
+
+#: Default result_schema for a send() without one: the worker's free-text
+#: reply, which ``a2a_worker.parse_worker_output`` wraps as ``{"output": ...}``.
+CHAT_RESULT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"output": {"type": "string"}},
+}
+
+
 @dataclass
 class SendResult:
     """Outcome of a sender.send() call (ADR-0197 typed errors).
@@ -502,6 +652,11 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
     "unexpected_receiver_status",
     "Unsigned ping response rejected",
     "Peer rejected ping",
+    # 2026-09-25 (reflection guard / relay taxonomy)
+    "Response originated from this instance",
+    "Message exceeds relay size limit",
+    "Relay response timeout",
+    "Relay transport error",
     _ERROR_DETAIL_GENERIC,
 })
 
@@ -562,7 +717,11 @@ _AUDIT_ALLOWED_KEYS = frozenset({
     "reason", "ttl_s", "nonce_prefix", "http_status", "error_category",
     "error_detail", "attachments_count", "our_chain_tail", "peer_chain_tail",
     "match", "reachable", "source",
+    # which transport carried the exchange — closed enum, see _AUDIT_VIA_VALUES.
+    # Was missing, so ping_result's via landed in the chain as "redacted".
+    "via",
 })
+_AUDIT_VIA_VALUES = frozenset({"direct", "relay"})
 _AUDIT_STATUS_VALUES = frozenset({
     "sent", "ok", "error", "rejected", "filtered", "timeout",
 })
@@ -604,6 +763,8 @@ def _is_safe_audit_value(key: str, value: Any) -> bool:
                 or value == "internal_error")
     if key == "status":
         return value in _AUDIT_STATUS_VALUES
+    if key == "via":
+        return value in _AUDIT_VIA_VALUES
     if key == "reason":
         return bool(_AUDIT_REASON_RE.match(value))
     return bool(_AUDIT_ENUMISH_RE.match(value))
@@ -700,6 +861,24 @@ class RemoteTriggerSender:
             return ErrorCategory.PROTOCOL_ERROR, RemoteTriggerSender._sanitize_error(
                 "Response is not valid JSON"
             )
+        elif reason == "relay_error:message_too_large":
+            return ErrorCategory.PROTOCOL_ERROR, RemoteTriggerSender._sanitize_error(
+                "Message exceeds relay size limit"
+            )
+        elif reason == "relay_response_invalid":
+            return ErrorCategory.PROTOCOL_ERROR, RemoteTriggerSender._sanitize_error(
+                "Relay transport error"
+            )
+        elif reason.startswith("relay_error:"):
+            # Invariant relied on by retrying callers (multi_instance_sync):
+            # UNREACHABLE only when the relay provably did not deliver.
+            if getattr(exc, "maybe_delivered", True):
+                return ErrorCategory.TIMEOUT_TRANSPORT, RemoteTriggerSender._sanitize_error(
+                    "Relay response timeout"
+                )
+            return ErrorCategory.UNREACHABLE, RemoteTriggerSender._sanitize_error(
+                "Relay transport error"
+            )
         else:
             # ADR-0197 §2 catch-all: emit ONLY the allowlisted exception type
             # name — never the free-form reason string (which may embed
@@ -778,7 +957,7 @@ class RemoteTriggerSender:
         *,
         result_schema: dict | None = None,
         ttl_s: int | None = None,
-        timeout_s: int = _DEFAULT_TIMEOUT_S,
+        timeout_s: int | None = None,
         attachments: list | None = None,
         purpose_id: str | None = None,
         attestation: dict | None = None,
@@ -789,15 +968,48 @@ class RemoteTriggerSender:
         happens after the send on EVERY return path and is best-effort: it can
         never change the result.
         """
+        # The receiver refuses instructions over 16 KiB (after NFKC) as an
+        # "injection attempt" — refuse locally with a clear reason instead of
+        # sending it and leaving a false security signal on the peer (round 7).
+        try:
+            import unicodedata as _ud  # noqa: PLC0415
+            if len(_ud.normalize("NFKC", instruction or "").encode("utf-8")) > MAX_INSTRUCTION_BYTES:
+                return SendResult(
+                    ok=False, status="error", task_id=str(uuid.uuid4()),
+                    instance_id="", instance_id_match=False, data={}, attachments=[],
+                    duration_ms=0, error_category=ErrorCategory.PROTOCOL_ERROR,
+                    error_detail="Message too long (max 16 KiB)",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        # A caller that declares no schema is having a conversation: accept the
+        # worker's prose reply. The receiver deliberately answers an EMPTY
+        # schema with {} (it only ever releases declared fields), so without
+        # this every chat reply — Agent Hub, MCP a2a_send, the CLI — arrived
+        # as an empty "filtered" response. An explicit schema (even {}) wins.
+        if result_schema is None:
+            result_schema = CHAT_RESULT_SCHEMA
         task_id = str(uuid.uuid4())
-        _record_feed_task(endpoint_id, task_id, instruction, attachments)
+        # The connection name travels with every feed record, so a
+        # conversation stays readable after the connection is revoked.
+        try:
+            peer_label = (self._registry.load(endpoint_id) or {}).get("label")
+        except Exception:  # noqa: BLE001 — unknown/disabled endpoint: no label
+            peer_label = None
+        _record_feed_task(endpoint_id, task_id, instruction, attachments, peer_label)
+        # Files without text: send a stand-in instruction so a receiver that
+        # predates the worker-side substitution does not refuse it as an
+        # empty-instruction injection (round 8). The feed keeps what was typed.
+        wire_instruction = instruction
+        if not (instruction or "").strip() and attachments:
+            wire_instruction = ATTACHMENTS_ONLY_INSTRUCTION
         result = self._send_impl(
-            endpoint_id, instruction,
+            endpoint_id, wire_instruction,
             result_schema=result_schema, ttl_s=ttl_s, timeout_s=timeout_s,
             attachments=attachments, purpose_id=purpose_id,
             attestation=attestation, task_id=task_id,
         )
-        _record_feed_response(endpoint_id, result)
+        _record_feed_response(endpoint_id, result, peer_label)
         return result
 
     def _send_impl(
@@ -807,7 +1019,7 @@ class RemoteTriggerSender:
         *,
         result_schema: dict | None = None,
         ttl_s: int | None = None,
-        timeout_s: int = _DEFAULT_TIMEOUT_S,
+        timeout_s: int | None = None,
         attachments: list | None = None,
         purpose_id: str | None = None,
         attestation: dict | None = None,
@@ -879,6 +1091,9 @@ class RemoteTriggerSender:
             )
 
         ttl_s = int(ttl_s if ttl_s is not None else cfg.get("default_ttl_s", _DEFAULT_TTL_S))
+        if timeout_s is None:
+            # Not shorter than the peer's worker budget — see _TIMEOUT_MARGIN_S.
+            timeout_s = max(_DEFAULT_TIMEOUT_S, ttl_s + _TIMEOUT_MARGIN_S)
 
         # ADR-0103 M2: build network membership attestation block.
         # Best-effort — if no SesT is available or crypto library missing,
@@ -962,30 +1177,48 @@ class RemoteTriggerSender:
         # delivered it. Inert (raises immediately) when the feature flag is
         # off or no relay is configured — a direct-only deployment sees
         # byte-identical behavior to before this stage existed.
+        #
+        # 2026-09-25: the fallback runs ONLY when the direct attempt provably
+        # never reached the peer (TransportError.maybe_delivered is False).
+        # After a read timeout / 5xx / oversize response the peer may be
+        # executing the task: re-sending the same envelope (same nonce) is
+        # rejected there as a replay and was reported to the caller as
+        # "rejected" while the real task was still running.
+        via = "direct"
         try:
             raw = self._http_post(cfg["url"], envelope, timeout_s)
         except TransportError as direct_exc:
-            try:
-                raw = self._relay_post(cfg, endpoint_id, envelope, timeout_s)
-                self._audit_best_effort(
-                    "A2A.relay_fallback_used", "INFO",
-                    {"endpoint_id": endpoint_id, "task_id": task_id,
-                     "reason": direct_exc.reason, "duration_ms": _ms(start)},
-                )
-            except TransportError as exc:
-                # ADR-0197: Map transport error to specific category before auditing.
-                # Audit the DIRECT failure's category (the primary path) —
-                # the relay attempt's own failure reason is not yet part of
-                # the ADR-0197 closed template set and must never leak
-                # verbatim; direct_exc.reason already is.
-                error_cat, error_det = self._categorize_transport_error(direct_exc)
+            failure: TransportError = direct_exc
+            if not direct_exc.maybe_delivered:
+                try:
+                    raw = self._relay_post(cfg, endpoint_id, envelope, timeout_s)
+                    via = "relay"
+                    self._audit_best_effort(
+                        "A2A.relay_fallback_used", "INFO",
+                        {"endpoint_id": endpoint_id, "task_id": task_id,
+                         "reason": direct_exc.reason, "via": "relay",
+                         "duration_ms": _ms(start)},
+                    )
+                    failure = None  # type: ignore[assignment]
+                except TransportError as relay_exc:
+                    # Report the relay's failure once the relay was actually
+                    # tried (it is the later, more informative one — e.g. a
+                    # too-large message, or "delivered, no answer", which must
+                    # NOT read as unreachable). If the relay was never tried
+                    # (flag off / not configured) the direct failure stands.
+                    if relay_exc.reason not in _NOT_DELIVERED_REASONS:
+                        failure = relay_exc
+                        via = "relay"
+            if failure is not None:
+                error_cat, error_det = self._categorize_transport_error(failure)
                 self._audit_best_effort(
                     "A2A.response_rejected", "WARNING",
                     {"endpoint_id": endpoint_id, "task_id": task_id,
-                     "reason": direct_exc.reason, "status": "error",
-                     "http_status": direct_exc.http_status,
+                     "reason": failure.reason, "status": "error",
+                     "http_status": failure.http_status,
                      "error_category": error_cat,
                      "error_detail": error_det,
+                     "via": via,
                      "duration_ms": _ms(start)},
                 )
                 return SendResult(
@@ -1026,14 +1259,43 @@ class RemoteTriggerSender:
         # pin check is skipped because the response is inherently untrusted —
         # applying the pin check would surface "instance_id_mismatch" instead
         # of the real cause ("bad hmac_key → rejected").
-        pinned = cfg.get("instance_id", "") or ""
+        # The peer identity the friendship handshake authenticated
+        # (_peer_instance_id, HMAC-bound) is a pin too — otherwise whoever
+        # answered first (e.g. a leaked-token holder racing on the shared relay
+        # kid) got TOFU-pinned over it and locked the real peer out.
+        pinned = cfg.get("instance_id", "") or cfg.get("_peer_instance_id", "") or ""
         received_iid = str(response.get("instance_id", ""))
+        # 5a) Reflection guard (2026-09-25, HIGH). Friendship keys are
+        # SYMMETRIC: both peers hold the same hmac_key/recv_key, so a response
+        # signed by OUR OWN receiver verifies here exactly like the peer's. A
+        # network attacker (or the shared-kid relay fan-out) can reflect our
+        # envelope into our own /v1/a2a/receive and hand back that signed
+        # answer — and with no pin on a friendship endpoint it was accepted
+        # as the peer's. A response carrying our own instance_id is never the
+        # peer's answer.
+        if _resp_is_signed and self._instance_id and received_iid == self._instance_id:
+            self._audit_best_effort(
+                "A2A.response_rejected", "WARNING",
+                {"endpoint_id": endpoint_id, "task_id": task_id,
+                 "reason": "self_response", "status": "error",
+                 "instance_id_match": False, "via": via,
+                 "error_category": ErrorCategory.AUTH_FAILED,
+                 "error_detail": self._sanitize_error("Response originated from this instance"),
+                 "duration_ms": _ms(start)},
+            )
+            return SendResult(
+                ok=False, status="error", task_id=task_id,
+                instance_id=received_iid, instance_id_match=False,
+                data={}, attachments=[], duration_ms=_ms(start),
+                error_category=ErrorCategory.AUTH_FAILED,
+                error_detail=self._sanitize_error("Response originated from this instance"),
+            )
         if _resp_is_signed and pinned and received_iid != pinned:
             self._audit_best_effort(
                 "A2A.response_rejected", "WARNING",
                 {"endpoint_id": endpoint_id, "task_id": task_id,
                  "reason": "instance_id_mismatch", "status": "error",
-                 "instance_id_match": False,
+                 "instance_id_match": False, "via": via,
                  "error_category": ErrorCategory.AUTH_FAILED,
                  "error_detail": self._sanitize_error("Instance ID mismatch"),
                  "duration_ms": _ms(start)},
@@ -1047,6 +1309,8 @@ class RemoteTriggerSender:
             )
 
         instance_id_match = (not pinned) or (received_iid == pinned)
+        if _resp_is_signed and not pinned:
+            self._tofu_pin_instance(cfg, endpoint_id, received_iid)
         status = str(response.get("status", "rejected"))
         data = dict(response.get("data", {}))
 
@@ -1075,6 +1339,7 @@ class RemoteTriggerSender:
              "instance_id_match": instance_id_match,
              "status": status,
              "attachments_count": len(verified_atts),
+             "via": via,
              "duration_ms": _ms(start)},
         )
 
@@ -1131,16 +1396,35 @@ class RemoteTriggerSender:
             )
             return False
 
+        _nonce = secrets.token_hex(32)
+        _new = new_url.strip().rstrip("/")[:512]
+        _reconnect: dict = {"new_url": _new}
+        # Binding proof (ADR-2064 round 4): the receiver only re-points a
+        # BOUND pairing, and once it knows our binding key it wants a MAC the
+        # token cannot produce.
+        try:
+            import a2a_binding as _bind  # noqa: PLC0415
+            _pub = _bind.clean_pub(cfg.get("_peer_bind_pub"))
+            _own = _bind.local_bind_pub()
+            if _pub and _own:
+                _bts = int(time.time())
+                _mac = _bind.bind_mac(_pub, endpoint_id, reconnect_bind_canonical(
+                    endpoint_id, _new, _nonce, _bts, _own))
+                if _mac:
+                    _reconnect["bind_mac"] = _mac
+                    _reconnect["bind_ts"] = _bts
+        except Exception:  # noqa: BLE001
+            pass
         envelope = self._build_envelope(
             task_id=str(uuid.uuid4()),
-            nonce=secrets.token_hex(32),
+            nonce=_nonce,
             origin_id=cfg.get("origin_id_for_send") or cfg.get("our_origin_id") or self._instance_id,
             instruction="",
             result_schema={},
             ttl_s=int(cfg.get("default_ttl_s", _DEFAULT_TTL_S)),
             hmac_key_hex=cfg["hmac_key"],
             sender_instance_id=self._instance_id,
-            reconnect={"new_url": new_url.strip().rstrip("/")[:512]},
+            reconnect=_reconnect,
         )
         try:
             raw = self._http_post(cfg["url"], envelope, timeout_s)
@@ -1299,17 +1583,25 @@ class RemoteTriggerSender:
         # relay could never be reported as reachable by ping()/Recheck, even
         # once a relay was correctly configured and enabled on both sides —
         # the console's UNREACHABLE badge would never clear.
+        #
+        # Unlike send(), a ping is idempotent and nonce-free (±30 s freshness
+        # only), so a relay retry after ANY direct failure is harmless — the
+        # delivered-or-not gate that protects send() is not needed here.
         via = "direct"
         try:
             raw = self._http_post(ping_url, ping_request, timeout_s)
         except TransportError as direct_exc:
             try:
-                raw = self._relay_ping(cfg, endpoint_id, ping_request, timeout_s)
+                # The relay payload's self-delivery marker / instance tag must
+                # be THIS sender's identity (an explicit instance_id may differ
+                # from the process identity — e2e hosts, tests).
+                relay_cfg = dict(cfg, _sender_instance_id=self._instance_id)
+                raw = self._relay_ping(relay_cfg, endpoint_id, ping_request, timeout_s)
                 via = "relay"
                 self._audit_best_effort(
                     "A2A.relay_fallback_used", "INFO",
                     {"endpoint_id": endpoint_id, "reason": direct_exc.reason,
-                     "source": "ping"},
+                     "source": "ping", "via": "relay"},
                 )
             except TransportError as exc:
                 error_cat, error_det = self._categorize_transport_error(direct_exc)
@@ -1341,10 +1633,90 @@ class RemoteTriggerSender:
                 "Peer rejected ping"
             ), via
 
+        # Reflection guard + pin (2026-09-25, HIGH) — same reasoning as
+        # send() step 5a: with symmetric friendship keys our OWN receiver's
+        # signed ping answer verifies here, so a reflected probe reported a
+        # dead peer as reachable. The pin was never checked on ping at all.
+        received_iid = str(response.get("instance_id") or "")
+        if self._instance_id and received_iid == self._instance_id:
+            return False, ErrorCategory.AUTH_FAILED, self._sanitize_error(
+                "Response originated from this instance"
+            ), via
+        # The peer identity the friendship handshake authenticated
+        # (_peer_instance_id, HMAC-bound) is a pin too — otherwise whoever
+        # answered first (e.g. a leaked-token holder racing on the shared relay
+        # kid) got TOFU-pinned over it and locked the real peer out.
+        pinned = cfg.get("instance_id", "") or cfg.get("_peer_instance_id", "") or ""
+        if pinned and received_iid != pinned:
+            return False, ErrorCategory.AUTH_FAILED, self._sanitize_error(
+                "Instance ID mismatch"
+            ), via
+        if not pinned:
+            self._tofu_pin_instance(cfg, endpoint_id, received_iid)
+
         # Success
         return True, None, None, via
 
     # ── Internals ─────────────────────────────────────────────────────
+
+    def _tofu_pin_instance(self, cfg: dict, endpoint_id: str, received_iid: str) -> None:
+        """Trust-on-first-use instance pin for a FRIENDSHIP endpoint.
+
+        Friendship endpoints are written without an ``instance_id`` pin (the
+        token carries none), so any holder of the shared key could answer for
+        the peer. After the FIRST verified, non-self response the peer's
+        instance_id is persisted as the pin; every later send()/ping() then
+        rejects a different responder (step 5 / ping pin check).
+
+        Scope, deliberately narrow:
+          - only ``_friendship`` endpoints — a hand-configured endpoint's empty
+            pin means "any" by the documented schema and is left alone;
+          - only a uuid/enum-shaped id that is not our own;
+          - the read-modify-write runs under a2a_friendship.config_file_lock
+            (the cross-process lock every endpoint-file writer takes) and is
+            skipped unless the file still holds the SAME pairing keys with no
+            pin — a concurrent re-pair or operator edit always wins;
+          - best-effort: a busy lock / unwritable dir just skips; the next
+            verified response tries again. Never raises, never fails a send.
+
+        Recovery if a peer legitimately changes identity (operator-initiated
+        ``corvin-instance-id rotate``, or a lost CORVIN_HOME): re-pair, or clear
+        ``instance_id`` in ``remote_endpoints/<kid>.json``.
+        """
+        try:
+            if (not cfg.get("_friendship") or cfg.get("instance_id")
+                    or cfg.get("_peer_instance_id")):
+                return  # already pinned (explicitly or by the handshake)
+            if not received_iid or not _re.fullmatch(r"[A-Za-z0-9_\-]{8,64}", received_iid):
+                return
+            if self._instance_id and received_iid == self._instance_id:
+                return
+            ep_dir = getattr(self._registry, "_dir", None)
+            if ep_dir is None:
+                return
+            ep_dir = Path(ep_dir)
+            import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
+            path = ep_dir / f"{endpoint_id}.json"
+            with _ft.config_file_lock(ep_dir):
+                if not path.exists():
+                    return
+                current = json.loads(path.read_text("utf-8"))
+                if (not isinstance(current, dict) or not current.get("_friendship")
+                        or current.get("instance_id")
+                        or current.get("hmac_key") != cfg.get("hmac_key")
+                        or current.get("recv_key") != cfg.get("recv_key")):
+                    return
+                current["instance_id"] = received_iid
+                current["_instance_id_pin_source"] = "tofu"
+                current["_instance_id_pinned_at"] = int(time.time())
+                _ft._atomic_write(path, current)
+            self._audit_best_effort(
+                "A2A.instance_pinned", "INFO",
+                {"endpoint_id": endpoint_id, "reason": "tofu_first_response",
+                 "source": "sender"},
+            )
+        except Exception:  # noqa: BLE001 — pinning is hardening, never a send failure
+            return
 
     @staticmethod
     def _load_sest() -> str | None:
@@ -1425,9 +1797,18 @@ class RemoteTriggerSender:
         if not sest:
             return None
 
-        parts = sest.split(".")
-        if len(parts) != 3:
+        # 2026-09-25 (HIGH): only a genuine RS256 JWT is a SesT. _load_sest()
+        # falls back to <CORVIN_HOME>/global/license.key, which on a licensed
+        # install is the "CORVIN-"-prefixed EdDSA (Ed25519) LICENCE JWT — it
+        # also splits into three dot-parts, so the block was built from it,
+        # and every receiver's RS256 check against a2a_network_pubkey.pem
+        # failed: network_attestation_bad_sig, i.e. every task from every
+        # licensed instance signed-rejected by every peer. Any other token
+        # shape now omits the block, which receivers accept during the
+        # manifest grace period (the documented "no SesT" path).
+        if not _is_rs256_jwt(sest):
             return None
+        parts = sest.split(".")
 
         try:
             import hashlib as _hl
@@ -1652,26 +2033,12 @@ class RemoteTriggerSender:
         import secrets as _secrets  # noqa: PLC0415
         my_relay_auth_key = _secrets.token_hex(32)  # ephemeral, single-use — no TOFU needed
 
-        try:
-            import a2a_relay as _relay  # type: ignore[import-not-found]  # noqa: PLC0415
-            import asyncio as _asyncio  # noqa: PLC0415
-
-            plaintext = json.dumps(envelope).encode("utf-8")
-            nonce_hex, ct_hex = _ft.encrypt_for_relay(hmac_key, plaintext)
-
-            result = _asyncio.run(_relay.relay_deliver_and_wait(
-                relay_url=relay_url, my_kid=my_kid, my_relay_auth_key=my_relay_auth_key,
-                to_kid=to_kid, nonce_hex=nonce_hex, ciphertext_hex=ct_hex,
-                task_id=task_id, timeout_s=timeout_s,
-            ))
-        except Exception as exc:  # noqa: BLE001 — a2a_relay.RelayTransportError or any transport failure
-            raise TransportError("relay_error:" + _safe_exc_type_name(exc)) from exc
-
-        try:
-            resp_plain = _ft.decrypt_from_relay(hmac_key, result["nonce"], result["ciphertext"])
-            return json.loads(resp_plain)
-        except Exception as exc:  # noqa: BLE001 — RelayDecryptError, KeyError, JSONDecodeError
-            raise TransportError("relay_response_invalid") from exc
+        return _relay_round_trip(
+            relay_url=relay_url, hmac_key=hmac_key, to_kid=to_kid, my_kid=my_kid,
+            my_relay_auth_key=my_relay_auth_key, payload=envelope,
+            correlation_id=task_id, timeout_s=timeout_s,
+            sender_instance_id=str(envelope.get("sender_instance_id") or ""),
+        )
 
     @staticmethod
     def _relay_ping(cfg: dict, endpoint_id: str, ping_request: dict, timeout_s: int) -> dict:
@@ -1718,45 +2085,50 @@ class RemoteTriggerSender:
         import secrets as _secrets  # noqa: PLC0415
         my_relay_auth_key = _secrets.token_hex(32)  # ephemeral, single-use — no TOFU needed
 
-        try:
-            import instance_identity as _iid  # type: ignore[import-not-found]  # noqa: PLC0415
-            my_instance_id = _iid.get_instance_id()
-        except Exception:  # noqa: BLE001
-            my_instance_id = ""
+        my_instance_id = str(cfg.get("_sender_instance_id") or "")
+        if not my_instance_id:
+            try:
+                import instance_identity as _iid  # type: ignore[import-not-found]  # noqa: PLC0415
+                my_instance_id = _iid.get_instance_id()
+            except Exception:  # noqa: BLE001
+                my_instance_id = ""
 
         relay_payload = dict(ping_request)
         relay_payload["_relay_sender_instance_id"] = my_instance_id
 
-        try:
-            import a2a_relay as _relay  # type: ignore[import-not-found]  # noqa: PLC0415
-            import asyncio as _asyncio  # noqa: PLC0415
-
-            plaintext = json.dumps(relay_payload).encode("utf-8")
-            nonce_hex, ct_hex = _ft.encrypt_for_relay(hmac_key, plaintext)
-
-            result = _asyncio.run(_relay.relay_deliver_and_wait(
-                relay_url=relay_url, my_kid=my_kid, my_relay_auth_key=my_relay_auth_key,
-                to_kid=to_kid, nonce_hex=nonce_hex, ciphertext_hex=ct_hex,
-                task_id=ping_id, timeout_s=timeout_s,
-            ))
-        except Exception as exc:  # noqa: BLE001 — a2a_relay.RelayTransportError or any transport failure
-            raise TransportError("relay_error:" + _safe_exc_type_name(exc)) from exc
-
-        try:
-            resp_plain = _ft.decrypt_from_relay(hmac_key, result["nonce"], result["ciphertext"])
-            return json.loads(resp_plain)
-        except Exception as exc:  # noqa: BLE001 — RelayDecryptError, KeyError, JSONDecodeError
-            raise TransportError("relay_response_invalid") from exc
+        return _relay_round_trip(
+            relay_url=relay_url, hmac_key=hmac_key, to_kid=to_kid, my_kid=my_kid,
+            my_relay_auth_key=my_relay_auth_key, payload=relay_payload,
+            correlation_id=ping_id, timeout_s=timeout_s,
+            sender_instance_id=my_instance_id,
+        )
 
     @staticmethod
     def _http_post(url: str, envelope: dict, timeout_s: int) -> dict:
+        """POST ``envelope``; return the parsed response.
+
+        Every TransportError carries ``maybe_delivered`` (see TransportError):
+        False for failures that happen before the request is on the wire —
+        an unusable URL (e.g. a PENDING endpoint's empty url), DNS, connect
+        refused, connect/TLS timeout (bounded by _CONNECT_TIMEOUT_S), or a
+        request body that could not be fully sent (urllib wraps all of these
+        in URLError, raised from inside ``h.request``). Everything after the
+        request was sent — waiting for/reading the response — is
+        maybe-delivered, as is any 5xx.
+        """
         body = json.dumps(envelope).encode()
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json", "User-Agent": "corvin-a2a/1.0"},
-            method="POST",
-        )
+        try:
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json", "User-Agent": "corvin-a2a/1.0"},
+                method="POST",
+            )
+        except Exception as exc:  # noqa: BLE001 — ValueError: unknown url type (empty url)
+            raise TransportError(
+                "transport_error:" + _safe_exc_type_name(exc), maybe_delivered=False,
+            ) from exc
+        req._corvin_connect_timeout = min(float(timeout_s), float(_CONNECT_TIMEOUT_S))  # type: ignore[attr-defined]
         try:
             # urlopen(timeout=N) sets a *per-recv()* socket timeout, NOT a
             # total-transfer timeout. A rogue receiver that trickles bytes can
@@ -1796,15 +2168,25 @@ class RemoteTriggerSender:
                 f"http_{exc.code}", http_status=exc.code,
             ) from exc
         except urllib.error.URLError as exc:
-            raise TransportError("connection_failed") from exc
+            # Raised from inside h.request(): connect, TLS, or sending the
+            # body failed — the receiver never got a complete request.
+            raise TransportError("connection_failed", maybe_delivered=False) from exc
         except TimeoutError as exc:
-            raise TransportError("timeout") from exc
+            # Read timeout while waiting for/reading the response: the request
+            # was sent and may be executing (connect timeouts arrive as
+            # URLError above).
+            raise TransportError("timeout", maybe_delivered=True) from exc
+        except (http.client.InvalidURL, ValueError) as exc:
+            # Rejected while building the connection — nothing was sent.
+            raise TransportError(
+                "transport_error:" + _safe_exc_type_name(exc), maybe_delivered=False,
+            ) from exc
         except Exception as exc:
             # ADR-0197 §2: reason carries ONLY the allowlisted exception type
             # name. str(exc) can embed the target URL/host and must never
             # reach SendResult or audit details (2026-07-19 finding).
             raise TransportError(
-                "transport_error:" + _safe_exc_type_name(exc)
+                "transport_error:" + _safe_exc_type_name(exc), maybe_delivered=True,
             ) from exc
 
         try:
@@ -1879,7 +2261,9 @@ class RemoteTriggerSender:
             # ADR-0197 §2: fixed reason, no str(exc) (can quote key material).
             raise ResponseVerificationError("bad_recv_key") from exc
         expected = _hmac.new(key, canonical, hashlib.sha256).hexdigest()
-        if not _hmac.compare_digest(expected, sig.lower()):
+        # isascii() first: compare_digest raises on a non-ASCII str, and a
+        # peer-supplied signature must yield a verification error, not a crash.
+        if not sig.isascii() or not _hmac.compare_digest(expected, sig.lower()):
             raise ResponseVerificationError("bad_signature")
 
         # Bind response to the sent task_id — prevents a rogue receiver from
@@ -1914,8 +2298,115 @@ def _ms(start: float) -> int:
     return int((time.time() - start) * 1000)
 
 
+def _is_rs256_jwt(token: str) -> bool:
+    """True iff ``token`` is a compact JWS whose protected header declares
+    ``alg == "RS256"`` — the only algorithm a2a_network_pubkey.pem verifies.
+    Nothing is stripped or repaired: a ``CORVIN-`` prefix, an EdDSA/other
+    alg, or an undecodable header all return False."""
+    import base64 as _b64  # noqa: PLC0415
+    if not isinstance(token, str):
+        return False
+    parts = token.split(".")
+    if len(parts) != 3 or not all(parts):
+        return False
+    try:
+        seg = parts[0]
+        header = json.loads(_b64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    except Exception:  # noqa: BLE001 — not base64url JSON (e.g. "CORVIN-eyJ...")
+        return False
+    return isinstance(header, dict) and header.get("alg") == "RS256"
+
+
+def _run_coro_blocking(make_coro: Any) -> Any:
+    """Run ``make_coro()`` to completion from SYNC code, whatever thread.
+
+    ``asyncio.run`` raises "cannot be called from a running event loop" when
+    the calling thread already runs one — i.e. whenever send()/ping() is
+    called (synchronously) from async code: A2ATaskEnvelope.dispatch, any
+    route handler, a lifespan task. That failure was swallowed into
+    ``relay_error:internal_error`` BEFORE any network I/O, so the relay path
+    was simply dead for every async caller. With no running loop in this
+    thread (worker threads, CLI) asyncio.run is used as before; otherwise the
+    coroutine runs on a private loop in a helper thread and this call blocks
+    until it finishes — the same blocking contract as the direct HTTP path.
+    """
+    import asyncio as _asyncio  # noqa: PLC0415
+    try:
+        _asyncio.get_running_loop()
+    except RuntimeError:
+        return _asyncio.run(make_coro())
+    box: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            box["result"] = _asyncio.run(make_coro())
+        except BaseException as exc:  # noqa: BLE001 — re-raised in the caller
+            box["error"] = exc
+
+    t = threading.Thread(target=_runner, name="a2a-relay-client", daemon=True)
+    t.start()
+    t.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
+#: RelayTransportError reason heads that may flow into TransportError reasons
+#: (and from there into audit ``reason``) — a closed set, never a relay string.
+_RELAY_REASON_HEADS = frozenset({
+    "message_too_large", "connect_failed", "registration_timeout",
+    "registration_failed", "delivery_dropped", "relay_rejected",
+    "response_timeout", "connection_lost", "malformed_response",
+})
+
+
+def _relay_round_trip(
+    *, relay_url: str, hmac_key: str, to_kid: str, my_kid: str,
+    my_relay_auth_key: str, payload: dict, correlation_id: str,
+    timeout_s: float, sender_instance_id: str,
+) -> dict:
+    """Shared relay transport for _relay_post/_relay_ping: AEAD-wrap
+    ``payload``, deliver it, return the decrypted, still-signed response.
+
+    Raises TransportError whose reason is ``relay_error:<head>`` from the
+    closed _RELAY_REASON_HEADS set, carrying the relay client's
+    ``maybe_delivered`` verdict (see TransportError)."""
+    import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
+    import a2a_relay as _relay  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    try:
+        nonce_hex, ct_hex = _ft.encrypt_for_relay(
+            hmac_key, json.dumps(payload).encode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — local, nothing left the process
+        raise TransportError("relay_error:" + _safe_exc_type_name(exc),
+                             maybe_delivered=False) from exc
+    tag = _relay.instance_tag(to_kid, sender_instance_id) if sender_instance_id else None
+
+    try:
+        result = _run_coro_blocking(lambda: _relay.relay_deliver_and_wait(
+            relay_url=relay_url, my_kid=my_kid, my_relay_auth_key=my_relay_auth_key,
+            to_kid=to_kid, nonce_hex=nonce_hex, ciphertext_hex=ct_hex,
+            task_id=correlation_id, timeout_s=timeout_s, from_instance_tag=tag,
+        ))
+    except _relay.RelayTransportError as exc:
+        head = str(exc.reason).split(":", 1)[0]
+        head = head if head in _RELAY_REASON_HEADS else "internal_error"
+        raise TransportError("relay_error:" + head,
+                             maybe_delivered=bool(exc.maybe_delivered)) from exc
+    except Exception as exc:  # noqa: BLE001 — failed before/while starting the client
+        raise TransportError("relay_error:" + _safe_exc_type_name(exc),
+                             maybe_delivered=False) from exc
+
+    try:
+        resp_plain = _ft.decrypt_from_relay(hmac_key, result["nonce"], result["ciphertext"])
+        return json.loads(resp_plain)
+    except Exception as exc:  # noqa: BLE001 — RelayDecryptError, KeyError, JSONDecodeError
+        raise TransportError("relay_response_invalid", maybe_delivered=True) from exc
+
+
 def _record_feed_task(
     endpoint_id: str, task_id: str, instruction: str, attachments: list | None,
+    peer_label: str | None = None,
 ) -> None:
     """Write the outbound task into the A2A feed before sending (best-effort),
     so the Agent Hub shows it while the peer is still working."""
@@ -1924,13 +2415,14 @@ def _record_feed_task(
         a2a_feed.record(
             direction="out", kind="task", peer_id=endpoint_id,
             task_id=task_id, text=instruction, status="sent",
-            attachments=attachments,
+            attachments=attachments, peer_label=peer_label,
         )
     except Exception:
         pass
 
 
-def _record_feed_response(endpoint_id: str, result: "SendResult") -> None:
+def _record_feed_response(endpoint_id: str, result: "SendResult",
+                          peer_label: str | None = None) -> None:
     """Write the peer's response (or the failure) into the A2A feed."""
     try:
         import a2a_feed  # type: ignore[import-not-found]
@@ -1939,6 +2431,7 @@ def _record_feed_response(endpoint_id: str, result: "SendResult") -> None:
             task_id=result.task_id, data=result.data, status=result.status,
             attachments=result.attachments, duration_ms=result.duration_ms,
             error=(result.error_detail if not result.ok else None),
+            peer_label=peer_label,
         )
     except Exception:
         pass
@@ -1952,4 +2445,5 @@ __all__ = [
     "TransportError",
     "ResponseVerificationError",
     "SendResult",
+    "CHAT_RESULT_SCHEMA",
 ]

@@ -48,11 +48,30 @@ def _corvin_home() -> Path:
 
 
 def _audit_path() -> Path:
-    """Resolve the live audit chain path (mirrors the adapter / self_test)."""
+    """Resolve THE audit chain this process appends to.
+
+    Delegates to ``audit.audit_path()`` — the same resolver the receiver's
+    writer uses (``VOICE_AUDIT_PATH`` > ``FORGE_ROOT/audit.jsonl`` > the
+    canonical per-tenant chain ``<home>/tenants/<tid>/global/forge/
+    audit.jsonl``). This used to compose ``<home>/global/forge/audit.jsonl``
+    by hand: the legacy location, which on a tenant-native install is a
+    separate (usually empty or frozen) file, so the published head never
+    advanced and a peer's Tier-4 check read a live node as "chain removed".
+    CLAUDE.md "ONE audit chain per tenant": never compose the path by hand.
+    """
     p = os.environ.get("VOICE_AUDIT_PATH")
     if p:
         return Path(p)
-    return _corvin_home() / "global" / "forge" / "audit.jsonl"
+    try:
+        import sys as _sys
+        here = str(Path(__file__).resolve().parent)
+        if here not in _sys.path:
+            _sys.path.insert(0, here)
+        import audit as _audit  # type: ignore[import-not-found]
+        return Path(_audit.audit_path())
+    except Exception:  # noqa: BLE001 — fall back to the SSOT path helper
+        from paths import tenant_audit_chain  # type: ignore[import-not-found]
+        return tenant_audit_chain()
 
 
 # ── Server side ─────────────────────────────────────────────────────────────
@@ -104,6 +123,24 @@ def _origin_recv_key(origin_id: str) -> "bytes | None":
         return None
 
 
+_HEAD_CACHE: dict[str, tuple[float, dict]] = {}
+_HEAD_CACHE_TTL_S = 5.0
+
+
+def _cached_head(audit_path: "Path | None") -> dict:
+    """read_audit_head walks the whole chain; an unauthenticated GET must not
+    be able to make every call do that (round 7) — short TTL cache."""
+    import time as _t
+    key = str(audit_path)
+    hit = _HEAD_CACHE.get(key)
+    now = _t.monotonic()
+    if hit and now - hit[0] < _HEAD_CACHE_TTL_S:
+        return hit[1]
+    head = read_audit_head(audit_path)
+    _HEAD_CACHE[key] = (now, head)
+    return head
+
+
 def build_audit_head(origin_id: "str | None" = None,
                      instance_id: "str | None" = None,
                      audit_path: "Path | None" = None) -> dict:
@@ -124,20 +161,28 @@ def build_audit_head(origin_id: "str | None" = None,
         except Exception:
             instance_id = ""
 
-    head = read_audit_head(audit_path)
+    head = _cached_head(audit_path)
     body = {
         "chain_head": head["chain_head"],
         "event_count": head["event_count"],
         "latest_ts": head["latest_ts"],
         "instance_id": instance_id or "",
     }
-    signature = ""
     key = _origin_recv_key(origin_id or "")
-    if key is not None:
-        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"),
-                               ensure_ascii=True).encode()
-        signature = _hmac.new(key, canonical, hashlib.sha256).hexdigest()
+    # No origin-existence oracle (round 7): an unknown / absent origin gets a
+    # signature under a random per-process key — the same 64-hex shape — so
+    # "signed vs empty" no longer reveals which pairing ids exist. A real peer
+    # verifies with its recv_key; a forged-looking one simply fails there.
+    if key is None:
+        key = _DECOY_KEY
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=True).encode()
+    signature = _hmac.new(key, canonical, hashlib.sha256).hexdigest()
     return {**body, "signature": signature}
+
+
+import secrets as _secrets  # noqa: E402
+_DECOY_KEY = _secrets.token_bytes(32)
 
 
 # ── Sender side (anomaly detection) ─────────────────────────────────────────

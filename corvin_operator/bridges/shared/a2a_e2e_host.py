@@ -61,6 +61,60 @@ def _status() -> dict[str, Any]:
     return out
 
 
+class _E2EAgentEngine:
+    """Scripted agent for the multi-peer E2E (``E2E_AGENT_MODE=echo``).
+
+    Runs through the REAL worker path (a2a_worker.spawn_a2a_worker: framing,
+    scratch workspace, input drop, output harvest, parse) — only the model is
+    replaced. It proves content end to end: it echoes the ``[e2e-…]`` marker
+    from the instruction, reports the SHA-256 of every input file it found in
+    ``in/``, and returns an image it rendered itself as an out/ attachment.
+    """
+
+    name = "e2e_agent"
+    capabilities: dict = {}
+
+    def __init__(self, agent: str) -> None:
+        self.agent = agent
+
+    @staticmethod
+    def _png(rgb: tuple[int, int, int], size: int = 32) -> bytes:
+        import struct
+        import zlib
+        raw = b"".join(b"\x00" + bytes(rgb) * size for _ in range(size))
+
+        def chunk(t: bytes, d: bytes) -> bytes:
+            return (struct.pack(">I", len(d)) + t + d
+                    + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF))
+
+        return (b"\x89PNG\r\n\x1a\n"
+                + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    def spawn(self, prompt: str, *, working_dir: Any = None, **_kw: Any):
+        import hashlib
+        import re
+        from agents import StreamEvent  # type: ignore[import-not-found]
+
+        ws = Path(working_dir)
+        inputs = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                  for p in sorted((ws / "in").iterdir()) if p.is_file()}
+        m = re.search(r"\[(e2e-[0-9a-f]+)\]", prompt)
+        marker = m.group(1) if m else "no-marker"
+        # "[sleep=N]" simulates a long model turn (N ≤ 90 s) so the E2E can
+        # prove concurrency, the default timeout and the work executor.
+        sl = re.search(r"\[sleep=(\d{1,2})\]", prompt)
+        if sl:
+            import time as _t
+            _t.sleep(min(90, int(sl.group(1))))
+        digest = hashlib.sha256(self.agent.encode()).digest()
+        (ws / "out" / f"{self.agent}-reply.png").write_bytes(self._png(tuple(digest[:3])))
+        reply = (f"**{self.agent}** received `{marker}` with {len(inputs)} attachment(s): "
+                 + ", ".join(f"{n}={h[:12]}" for n, h in inputs.items()))
+        yield StreamEvent(type="text_delta", text=reply)
+        yield StreamEvent(type="turn_completed", usage={})
+
+
 def main() -> int:
     ap_ = argparse.ArgumentParser()
     ap_.add_argument("--control-port", type=int, required=True)
@@ -75,7 +129,12 @@ def main() -> int:
     from corvin_console.routes import a2a_pair as ap  # noqa: PLC0415
     from fastapi import HTTPException  # noqa: PLC0415
 
-    receiver = rtr.RemoteTriggerReceiver(origins_dir=origins, force_m1_only=True)
+    agent = os.environ.get("E2E_AGENT_NAME", "")
+    if os.environ.get("E2E_AGENT_MODE") == "echo" and agent:
+        receiver = rtr.RemoteTriggerReceiver(
+            origins_dir=origins, engine_factory=lambda: _E2EAgentEngine(agent))
+    else:
+        receiver = rtr.RemoteTriggerReceiver(origins_dir=origins, force_m1_only=True)
 
     loop = asyncio.new_event_loop()
 
@@ -107,6 +166,9 @@ def main() -> int:
         def do_GET(self):  # noqa: N802
             if self.path == "/status":
                 self._send(200, _status())
+            elif self.path == "/feed":
+                import a2a_feed  # noqa: PLC0415
+                self._send(200, {"messages": a2a_feed.read(limit=0)})
             else:
                 self._send(404, {})
 
@@ -120,7 +182,9 @@ def main() -> int:
                 elif self.path == "/import":
                     b = self._body()
                     res = ap.friendship_import(
-                        ap.FriendshipImportRequest(token=b["token"]), _Rec())
+                        ap.FriendshipImportRequest(
+                            token=b["token"], spawn_worker=bool(b.get("spawn_worker"))),
+                        _Rec())
                     self._send(200, res.model_dump())
                 elif self.path.startswith("/refresh/"):
                     self._send(200, ap.friendship_recheck(self.path.split("/")[-1], _Rec()))
@@ -130,8 +194,15 @@ def main() -> int:
                     kid = self.path.split("/")[-1]
                     import remote_trigger_sender as rts  # noqa: PLC0415
                     sender = rts.RemoteTriggerSender(endpoints, rts.RemoteEndpointRegistry(endpoints))
-                    result = sender.send(kid, "e2e ping message", ttl_s=60, timeout_s=20)
+                    b = self._body()
+                    result = sender.send(kid, b.get("text") or "e2e ping message",
+                                         attachments=b.get("attachments") or None,
+                                         ttl_s=60, timeout_s=int(b.get("timeout_s") or 20))
                     self._send(200, {"ok": result.ok, "status": result.status,
+                                     "task_id": result.task_id, "data": result.data,
+                                     "attachments": [
+                                         {k: a[k] for k in ("name", "mime", "sha256")}
+                                         for a in result.attachments],
                                      "error": getattr(result, "error_category", None),
                                      "detail": getattr(result, "error_detail", None)})
                 else:

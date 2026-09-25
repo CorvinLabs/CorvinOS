@@ -315,6 +315,12 @@ class TestZeroConfigPairingSurface(_RelayConfigTestBase):
         self.assertFalse(ap._ff.is_enabled("a2a_relay_fallback"))
 
     def test_import_adopts_issuer_relay_and_enables_fallback(self):
+        # relay.example.com does not resolve in the sandbox; the host gate
+        # (2026-09-25) is covered in test_a2a_friendship_security — here only
+        # the adoption semantics are under test.
+        _gate = mock.patch.object(ft, "relay_url_rejection_reason", return_value=None)
+        _gate.start()
+        self.addCleanup(_gate.stop)
         _tok, s = ft.create_friendship_token(url="http://10.0.0.5:8775",
                                              relay_url="wss://relay.example.com/r")
         ft.set_my_url("http://10.0.0.9:8775")

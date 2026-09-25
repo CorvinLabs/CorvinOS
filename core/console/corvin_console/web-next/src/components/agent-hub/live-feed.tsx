@@ -45,9 +45,11 @@ import {
   initials,
   isEmptyDelivery,
   mediaKind,
+  maxSeq,
   mergeMessages,
   messageBody,
   pendingTaskIds,
+  plainPreview,
   sanitizeAttachmentName,
   statusTone,
 } from "@/lib/a2a-feed";
@@ -81,6 +83,7 @@ function fmtDuration(ms: number | null): string | null {
 
 function stateDot(state: string | null): string {
   if (state === "ACTIVE") return "bg-emerald-500";
+  if (state === "REMOVED") return "bg-muted-foreground/40";
   if (state === "UNREACHABLE") return "bg-destructive";
   return "bg-amber-400";
 }
@@ -313,7 +316,7 @@ function Bubble({
           {text && (
             m.kind === "task"
               ? <p className="whitespace-pre-wrap break-words">{text}</p>
-              : <div className="break-words"><Markdown text={text} compact /></div>
+              : <div className="break-words"><Markdown text={text} compact blockRemoteImages /></div>
           )}
           {empty && (
             <p className="text-xs italic text-muted-foreground">
@@ -568,6 +571,7 @@ function Composer({ peer, onSent }: { peer: A2AFeedPeer; onSent: () => void }) {
             }
           }}
           rows={1}
+          maxLength={16000}
           placeholder={`Message ${label}…`}
           className="max-h-48 min-h-[2rem] flex-1 resize-none bg-transparent py-1.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
           data-testid="a2a-feed-input"
@@ -606,16 +610,40 @@ export function AgentLiveFeed() {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
   const atBottom = React.useRef(true);
-  const lastTs = React.useRef<number>(0);
+  const cursor = React.useRef<number | null>(null);
 
+  // Live cursor = the highest append sequence number seen. `after` returns
+  // the OLDEST page past it plus `has_more`, so a burst larger than one page
+  // (or a tab that was hidden for a while) is drained completely instead of
+  // skipping to the newest 200 — and seq, unlike wall-clock ts, is allocated
+  // under the store lock, so a slow writer can never land behind the cursor.
+  const polling = React.useRef(false);
   const poll = React.useCallback(async (signal?: AbortSignal) => {
+    if (polling.current) return;
+    polling.current = true;
     try {
-      const res = await getA2AFeed(lastTs.current ? { since: lastTs.current } : { limit: 500 }, signal);
-      setPeersList(res.peers);
-      setRetention(res.retention_days);
-      if (res.messages.length) {
-        lastTs.current = res.messages[res.messages.length - 1].ts;
-        setMessages((prev) => mergeMessages(prev, res.messages));
+      if (cursor.current !== null && !Number.isFinite(cursor.current)) cursor.current = null;
+      let res = cursor.current === null
+        ? await getA2AFeed({ limit: 500 }, signal)
+        : await getA2AFeed({ after: cursor.current, limit: 500 }, signal);
+      if (cursor.current === null) {
+        setHistoryMore((m) => ({ ...m, [ALL]: res.has_more }));
+        noteOldest(ALL, res.messages);
+      }
+      for (let page = 0; ; page++) {
+        setPeersList(res.peers);
+        setRetention(res.retention_days);
+        // A server that sends no/invalid last_seq (an older backend during a
+        // rolling restart) must never poison the cursor: NaN made every
+        // later poll `after=NaN` → 422 until a reload.
+        const lastSeq = Number.isFinite(res.last_seq) ? res.last_seq : 0;
+        const prev = Number.isFinite(cursor.current) ? (cursor.current as number) : 0;
+        cursor.current = Math.max(prev, lastSeq, maxSeq(res.messages));
+        if (res.messages.length) setMessages((prev) => mergeMessages(prev, res.messages));
+        if (!res.has_more || cursor.current === null || page >= 20) break;
+        // The initial newest-page load never walks backwards here — older
+        // history is "Load older"; this loop only drains the live direction.
+        res = await getA2AFeed({ after: cursor.current, limit: 500 }, signal);
       }
       setLoadError(null);
       setLoaded(true);
@@ -623,6 +651,41 @@ export function AgentLiveFeed() {
       if ((e as Error).name === "AbortError") return;
       setLoadError(e instanceof Error ? e.message : "Failed to load feed.");
       setLoaded(true);
+    } finally {
+      polling.current = false;
+    }
+  }, []);
+
+  // History: a peer's full conversation, and older pages on demand.
+  const [historyMore, setHistoryMore] = React.useState<Record<string, boolean>>({});
+  // Oldest seq each VIEW has loaded through its own pages. Deriving it from
+  // the merged list broke "All": a peer's history (fetched with peer_id)
+  // reached far back, and All's "Load older" then skipped every other peer's
+  // messages in between (round 3).
+  const oldestLoaded = React.useRef<Record<string, number>>({});
+  const noteOldest = (key: string, msgs: A2AFeedMessage[]) => {
+    const seqs = msgs.map((m) => m.seq ?? 0).filter((n) => Number.isFinite(n) && n > 0);
+    if (!seqs.length) return;
+    const lo = Math.min(...seqs);
+    const cur = oldestLoaded.current[key];
+    oldestLoaded.current[key] = cur === undefined ? lo : Math.min(cur, lo);
+  };
+  const [loadingOlder, setLoadingOlder] = React.useState(false);
+  const loadOlder = React.useCallback(async (key: string, before?: number) => {
+    setLoadingOlder(true);
+    try {
+      const res = await getA2AFeed({
+        limit: 200,
+        ...(before ? { before } : {}),
+        ...(key !== ALL ? { peer_id: key } : {}),
+      });
+      setMessages((prev) => mergeMessages(prev, res.messages));
+      setHistoryMore((m) => ({ ...m, [key]: res.has_more }));
+      noteOldest(key, res.messages);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to load history.");
+    } finally {
+      setLoadingOlder(false);
     }
   }, []);
 
@@ -641,9 +704,14 @@ export function AgentLiveFeed() {
   // Peers that appear only in the feed (e.g. a since-removed connection).
   const allPeers = React.useMemo(() => {
     const out = [...peersList];
+    // A conversation outlives its connection (revoked / removed): keep it in
+    // the rail under the last name the feed recorded for it.
+    const lastLabel = new Map<string, string>();
+    for (const m of messages) if (m.peer_label) lastLabel.set(m.peer_id, m.peer_label);
     for (const m of messages) {
       if (!peers.has(m.peer_id) && !out.some((p) => p.peer_id === m.peer_id)) {
-        out.push({ peer_id: m.peer_id, label: m.peer_label, state: null, can_send: false, can_receive: false, enabled: false });
+        out.push({ peer_id: m.peer_id, label: lastLabel.get(m.peer_id) ?? null, state: "REMOVED",
+                   can_send: false, can_receive: false, enabled: false });
       }
     }
     return out;
@@ -669,8 +737,17 @@ export function AgentLiveFeed() {
 
   // Stick to the bottom when the reader is already there; otherwise count.
   const prevLen = React.useRef(0);
+  const prevSelected = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
     const el = scrollRef.current;
+    if (prevSelected.current !== selected) {
+      // Switching agents starts at the newest message — done here, in the
+      // same layout pass that decides the scroll, not in a later effect.
+      prevSelected.current = selected;
+      prevLen.current = 0;
+      atBottom.current = true;
+      setUnseen(0);
+    }
     const grew = view.length > prevLen.current;
     const first = prevLen.current === 0;
     prevLen.current = view.length;
@@ -681,9 +758,15 @@ export function AgentLiveFeed() {
     } else {
       setUnseen((n) => n + 1);
     }
-  }, [view.length, pending.size]);
+  }, [view.length, pending.size, selected]);
 
-  React.useEffect(() => { prevLen.current = 0; atBottom.current = true; }, [selected]);
+  // A peer's conversation may be older than the initial all-agents page.
+  const loadedPeers = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    if (!selected || selected === ALL || loadedPeers.current.has(selected)) return;
+    loadedPeers.current.add(selected);
+    void loadOlder(selected);
+  }, [selected, loadOlder]);
 
   // Media loads after the scroll-to-bottom above and grows the content; keep
   // a reader who is at the bottom pinned there.
@@ -708,7 +791,6 @@ export function AgentLiveFeed() {
     try {
       await clearA2AFeed(session?.csrf_token ?? "");
       setMessages([]);
-      lastTs.current = 0;
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Clear failed.");
     }
@@ -781,7 +863,9 @@ export function AgentLiveFeed() {
           {allPeers.map((p) => {
             const last = lastByPeer.get(p.peer_id);
             const label = p.label || p.peer_id.slice(0, 8);
-            const preview = last ? (messageBody(last).text || (last.attachments.length ? `📎 ${last.attachments[0].name}` : last.status)) : "No messages yet";
+            const preview = p.state === "REMOVED"
+              ? "Connection removed"
+              : last ? (plainPreview(messageBody(last).text) || (last.attachments.length ? `📎 ${last.attachments[0].name}` : last.status)) : "No messages yet";
             return (
               <button
                 key={p.peer_id}
@@ -800,7 +884,7 @@ export function AgentLiveFeed() {
                     {last && <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{fmtTime(last.ts)}</span>}
                   </div>
                   <div className="truncate text-[11px] text-muted-foreground">
-                    {last?.direction === "out" && "You: "}{preview}
+                    {p.state !== "REMOVED" && last?.direction === "out" && "You: "}{preview}
                   </div>
                 </div>
               </button>
@@ -828,7 +912,9 @@ export function AgentLiveFeed() {
             </div>
             <div className="truncate text-[11px] text-muted-foreground">
               {current
-                ? `${current.state ?? "unknown"} · ${current.can_send ? "you can message this agent" : "receive only"}${current.can_receive ? (current.spawn_worker ? " · their tasks run a worker here" : " · their tasks get no worker here") : ""}`
+                ? current.state === "REMOVED"
+                  ? "connection removed — the conversation is kept for reference"
+                  : `${current.state ?? "unknown"} · ${current.can_send ? "you can message this agent" : "receive only"}${current.can_receive ? (current.spawn_worker ? " · their tasks run a worker here" : " · their tasks get no worker here") : ""}`
                 : "Every A2A exchange of this instance, newest at the bottom"}
             </div>
           </div>
@@ -903,6 +989,22 @@ export function AgentLiveFeed() {
                     : "A2A tasks this instance sends or receives will appear here live, with their attachments."}
                 </p>
               </div>
+            </div>
+          )}
+          {loaded && view.length > 0 && historyMore[selected ?? ALL] !== false && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => {
+                  const key = selected ?? ALL;
+                  void loadOlder(key, oldestLoaded.current[key]);
+                }}
+                disabled={loadingOlder}
+                className="rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground hover:bg-muted"
+                data-testid="a2a-feed-older"
+              >
+                {loadingOlder ? "Loading…" : "Load older messages"}
+              </button>
             </div>
           )}
           {rows}

@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac as _hmac
+import contextlib
 import json
 import os
 import re
@@ -115,6 +116,32 @@ def _pending_friendships_dir() -> Path:
     return Path(env) if env else _PENDING_FRIENDSHIPS_DEFAULT
 
 
+# A connection id (friendship ``kid``, CLI-invite ``oid``) arrives inside a
+# peer-authored token and becomes a FILE NAME below. Never compose such a path
+# by hand: this refuses anything that is not a single, plain path component
+# and re-checks that the result really sits directly inside ``directory``
+# (2026-09-25, finding 1 — a token kid of ``../../x`` wrote outside the
+# config directories).
+_CONN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _is_valid_conn_id(conn_id: object) -> bool:
+    return (isinstance(conn_id, str) and _CONN_ID_RE.fullmatch(conn_id) is not None
+            and ".." not in conn_id)
+
+
+def _conn_path(directory: Path, conn_id: str) -> Path:
+    if not _is_valid_conn_id(conn_id):
+        raise HTTPException(status_code=400, detail="invalid connection id")
+    path = directory / f"{conn_id}.json"
+    try:
+        if path.resolve().parent != directory.resolve():
+            raise HTTPException(status_code=400, detail="invalid connection id")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="invalid connection id") from exc
+    return path
+
+
 def _conn_wake(kid: str | None = None) -> None:
     """Nudge the A2A connectivity manager (relay re-registration + an
     immediate upkeep pass for ``kid``). No-op when it is not running."""
@@ -188,13 +215,33 @@ def _verify(key_hex: str, payload: str, sig: str) -> bool:
 router = APIRouter()
 
 
-def _check_a2a_peers_max() -> None:
+@contextlib.contextmanager
+def _pair_write_lock():
+    """``_pair_lock`` (threads) + the cross-PROCESS config lock the issuer-side
+    ack path uses for the same count-then-write (2026-09-25, round 2): with
+    only the thread lock, a console import and a peer's ack could both count
+    0 peers and both write, exceeding ``a2a_peers_max``. The bodies under this
+    lock only write files — never call a helper that takes config_file_lock
+    itself (flock on a second descriptor would block this same process)."""
+    with _pair_lock:
+        try:
+            with _ft.config_file_lock(_origins_dir(), _endpoints_dir()):
+                yield
+        except _ft.FriendshipLockBusy:
+            raise HTTPException(status_code=503, detail="lock_busy") from None
+
+
+def _check_a2a_peers_max(excluding: str | None = None) -> None:
     """Raise HTTP 402 if a2a_peers_max licence limit is reached.
 
     MUST be called while holding _pair_lock to prevent TOCTOU races where two
     concurrent requests both read the same count and both pass before either
     writes an origin file. All callsites use ``with _pair_lock:`` covering both
     this check and the subsequent _write_secure() calls.
+
+    ``excluding`` — the id whose origin file is about to be OVERWRITTEN: a
+    re-import of a connection that already exists does not add a peer, so it
+    must not be counted against its own admission (2026-09-25, finding 9).
     """
     _a2a_max = _lic_get_limit("a2a_peers_max")
     if _a2a_max is None:
@@ -209,7 +256,9 @@ def _check_a2a_peers_max() -> None:
                 "upgrade_url": "https://corvin-labs.com/pricing",
             })
         _a2a_max = 1
-    _existing = sum(1 for _ in _origins_dir().glob("*.json")) if _origins_dir().exists() else 0
+    _existing = sum(
+        1 for p in _origins_dir().glob("*.json") if excluding is None or p.stem != excluding
+    ) if _origins_dir().exists() else 0
     if _existing >= _a2a_max:
         raise HTTPException(
             status_code=402,
@@ -389,6 +438,17 @@ async def pair_redeem(
     accept_key: str = invite["accept_key"]
     max_ttl_s: int = int(invite.get("max_ttl_s", 300))
 
+    # Round 8: the invite names both URLs — the console POSTs to one and
+    # stores the other — so both pass the same host gate as friendship
+    # imports BEFORE any request or write.
+    for _name, _raw in (("accept_url", accept_url), ("issuer_url", issuer_url)):
+        _base = str(_raw or "").strip().rstrip("/")
+        if _name == "issuer_url" and _base.endswith("/v1/a2a/receive"):
+            _base = _base[: -len("/v1/a2a/receive")]
+        _rej = _ft._ack_url_rejection_reason(_base) if _base else "empty_url"
+        if _rej is not None:
+            raise HTTPException(status_code=400, detail=f"invite {_name} rejected ({_rej})")
+
     our_instance_id = ""
     try:
         from instance_identity import get_instance_id  # type: ignore[import]
@@ -399,7 +459,13 @@ async def pair_redeem(
     # ADR-0094: enforce a2a_peers_max before creating any pairing files.
     # Lock held across check+write to prevent TOCTOU (two concurrent redeems
     # both reading count=0 before either writes an origin file).
-    with _pair_lock:
+    with _pair_write_lock():
+        # Round 8: the invite chooses this id. An existing connection is never
+        # overwritten — nor deleted by the rollback below — so an invite cannot
+        # take over or wipe another peer's pairing.
+        if (_conn_path(_endpoints_dir(), origin_id_for_issuer).exists()
+                or _conn_path(_origins_dir(), origin_id_for_issuer).exists()):
+            raise HTTPException(status_code=409, detail="connection id already in use")
         _check_a2a_peers_max()
 
         # 1. Install endpoint file (we → issuer)
@@ -542,13 +608,41 @@ def pair_accept(body: AcceptRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=f"Malformed invite: missing field {_ke}") from _ke
     max_ttl_s: int = int(invite.get("max_ttl_s", 300))
     redeemer_id = body.origin_id_for_us
+    # Round 7: the redeemer chooses this id and the URL. The id is a filename
+    # (validated), the URL is contacted later (same host gate as friendship
+    # imports), and an EXISTING connection is never overwritten — an invite
+    # holder must not be able to take over another peer's pairing.
+    origin_file = _conn_path(_origins_dir(), redeemer_id)
+    endpoint_file = _conn_path(_endpoints_dir(), redeemer_id)
+    _base = str(body.redeemer_url or "").strip().rstrip("/")
+    if _base.endswith("/v1/a2a/receive"):
+        _base = _base[: -len("/v1/a2a/receive")]
+    def _unconsume() -> None:
+        # Round 8: a correctable 400/409 must not burn the invite (and must not
+        # leave a ``.used`` file holding every pairing key on disk).
+        try:
+            os.rename(processed_file, pending_file)
+        except OSError:
+            processed_file.unlink(missing_ok=True)
+
+    _url_rej = _ft._ack_url_rejection_reason(_base) if _base else "empty_url"
+    if _url_rej is not None:
+        _unconsume()
+        raise HTTPException(status_code=400, detail=f"redeemer url rejected ({_url_rej})")
 
     # ADR-0094: issuer also enforces a2a_peers_max when installing its own
     # pairing files for the redeemer (redeemer already checked its own limit
     # in pair_redeem; this protects the issuer's peer count independently).
     # Lock held across check+write to prevent concurrent accept races.
-    with _pair_lock:
-        _check_a2a_peers_max()
+    with _pair_write_lock():
+        if origin_file.exists() or endpoint_file.exists():
+            _unconsume()
+            raise HTTPException(status_code=409, detail="connection id already in use")
+        try:
+            _check_a2a_peers_max()
+        except HTTPException:
+            processed_file.unlink(missing_ok=True)  # no key material left behind
+            raise
 
         # Install origin file (redeemer → us)
         _write_secure(_origins_dir() / f"{redeemer_id}.json", {
@@ -706,9 +800,15 @@ def accept_cli_invite(
     validation = _inv.validate_invite(token, registry=registry)
     if not validation.ok:
         raise HTTPException(status_code=400, detail="token rejected")
+    if token.iid != local_iid:
+        # A foreign token's URL is the issuer's unverified choice — same host
+        # gate as every other pairing path, before any claim or write (round 9).
+        _rej = _inv.endpoint_url_rejection_reason(token)
+        if _rej is not None:
+            raise HTTPException(status_code=400, detail=f"peer url rejected ({_rej})")
 
-    origin_path = _origins_dir() / f"{token.oid}.json"
-    endpoint_path = _endpoints_dir() / f"{token.oid}.json"
+    origin_path = _conn_path(_origins_dir(), token.oid)
+    endpoint_path = _conn_path(_endpoints_dir(), token.oid)
     if (origin_path.exists() or endpoint_path.exists()) and not body.overwrite:
         raise HTTPException(
             status_code=409,
@@ -716,21 +816,26 @@ def accept_cli_invite(
         )
 
     # ADR-0094: enforce a2a_peers_max before installing new pairing files.
-    with _pair_lock:
-        _check_a2a_peers_max()
+    with _pair_write_lock():
+        _check_a2a_peers_max(excluding=token.oid if origin_path.exists() else None)
+        if registry is not None:
+            # Claim the invite BEFORE installing anything, atomically (the
+            # registry holds its lock across load-check-save): of two
+            # concurrent accepts of a single-use invite exactly one wins.
+            # Its verdict used to be ignored (2026-09-25, finding 7).
+            try:
+                claim = registry.claim(token.ikey)
+            except _reg.InviteLockBusy:
+                # Single-use bookkeeping did not land. Refuse rather than
+                # report success: a token reported accepted but still
+                # "pending" on disk is a replayable single-use invite.
+                raise _refuse_lock_busy(
+                    rec, "a2a.invite.accepted", "a2a_invite", token.ikey
+                ) from None
+            if claim in ("revoked", "already_accepted"):
+                raise HTTPException(status_code=400, detail="token rejected")
         _write_secure(origin_path, _inv.invite_to_origin_dict(token))
         _write_secure(endpoint_path, _inv.invite_to_endpoint_dict(token, local_instance_id=local_iid))
-
-    if registry is not None:
-        try:
-            registry.mark_accepted(token.ikey)
-        except _reg.InviteLockBusy:
-            # Single-use bookkeeping did not land. Refuse rather than report
-            # success: a token reported accepted but still "pending" on disk
-            # is a replayable single-use invite.
-            raise _refuse_lock_busy(
-                rec, "a2a.invite.accepted", "a2a_invite", token.ikey
-            ) from None
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -1143,6 +1248,10 @@ class FriendshipImportResponse(BaseModel):
     # pairing, not just a one-way import. False when we have no own A2A URL
     # configured yet (Settings → A2A → "My URL") or A could not be reached.
     peer_knows_us: bool = False
+    # What happened to the token's relay (adopted / same / none / explicit /
+    # rejected / kept_existing) — "rejected"/"kept_existing" mean this pairing
+    # may not meet the issuer on a relay; the UI should say so.
+    relay_decision: str = "none"
     peer_reports_reachable: bool = False
 
 
@@ -1171,14 +1280,42 @@ def friendship_import(
     except _ft.FriendshipError as exc:
         raise HTTPException(status_code=400, detail="invalid token") from exc
 
+    # Our OWN token (we issued it and it is still pending): importing it would
+    # overwrite nothing useful and — with overwrite — rewrite the pairing to
+    # point at ourselves. Only the other agent imports it (round 7).
+    import a2a_binding as _bind  # type: ignore[import-not-found]
+    _own_token = (
+        _ft.load_pending_friendship(token.kid, pending_dir=_pending_friendships_dir()) is not None
+        # after the pairing completed the pending record is gone — but the
+        # token still carries OUR binding key
+        or (token.bind_pub is not None and token.bind_pub == _bind.local_bind_pub())
+    )
+    if _own_token:
+        raise HTTPException(status_code=409,
+                            detail="this is your own token — send it to the other agent to import")
+
     # Override/set URL from request body if not embedded in token.
     peer_url_override = body.peer_url.strip().rstrip("/") or None
     if peer_url_override:
         from dataclasses import replace
         token = replace(token, url=peer_url_override)
 
-    origin_path = _origins_dir() / f"{token.kid}.json"
-    endpoint_path = _endpoints_dir() / f"{token.kid}.json"
+    # The token URL is chosen by the ISSUER, and this side POSTs the ack to
+    # it right away and keeps hello/ping-ing it for as long as the pairing
+    # lives. Apply the same host gate the issuer applies to OUR address
+    # (2026-09-25, finding 4 — a token naming 127.0.0.1 or 169.254.169.254
+    # turned the redeemer into an SSRF client). LAN / Tailscale / global
+    # addresses pass; loopback, link-local/metadata, unspecified, multicast
+    # and reserved hosts do not.
+    if token.url is not None:
+        url_rejection = _ft._ack_url_rejection_reason(token.url)
+        if url_rejection is not None:
+            raise HTTPException(
+                status_code=400, detail=f"peer url rejected ({url_rejection})",
+            )
+
+    origin_path = _conn_path(_origins_dir(), token.kid)
+    endpoint_path = _conn_path(_endpoints_dir(), token.kid)
     if (origin_path.exists() or endpoint_path.exists()) and not body.overwrite:
         raise HTTPException(
             status_code=409,
@@ -1186,8 +1323,16 @@ def friendship_import(
         )
 
     # ADR-0094: enforce a2a_peers_max before installing new pairing files.
-    with _pair_lock:
-        _check_a2a_peers_max()
+    # Snapshot what an overwrite replaces, so a refusal by the issuer (402
+    # below) can put the previous state back instead of leaving a half pairing.
+    previous: dict[Path, bytes | None] = {}
+    with _pair_write_lock():
+        _check_a2a_peers_max(excluding=token.kid if origin_path.exists() else None)
+        for p in (origin_path, endpoint_path):
+            try:
+                previous[p] = p.read_bytes() if p.exists() else None
+            except OSError:
+                previous[p] = None
         origin_cfg = _ft.to_origin_dict(token)
         if body.spawn_worker:
             origin_cfg["spawn_worker"] = True
@@ -1197,9 +1342,10 @@ def friendship_import(
     # Zero-config rendezvous: the issuer told us which relay it listens on.
     # Adopt it unless this operator chose a relay (or "off") explicitly —
     # two peers on different relays can never meet there.
-    if token.relay_url and not _ft.my_relay_url_is_explicit():
-        if _ft.get_my_relay_url() != token.relay_url:
-            _ft.set_my_relay_url(token.relay_url)
+    # Host-gated, and never switched away from a relay other pairings already
+    # use (round 3) — see a2a_friendship.adopt_token_relay.
+    relay_decision = _ft.adopt_token_relay(token.relay_url, endpoints_dir=_endpoints_dir(),
+                                           exclude_kid=token.kid)
     if token.relay_url and _ft.get_my_relay_url() == token.relay_url:
         if not _ff.is_enabled("a2a_relay_fallback", tenant_id=rec.tenant_id):
             _ff.set_enabled("a2a_relay_fallback", True, tenant_id=rec.tenant_id)
@@ -1236,8 +1382,41 @@ def friendship_import(
                 pass
         if my_own_url:
             ack_result = _ft.send_friendship_ack(token, my_url=my_own_url)
+            if ack_result.get("error") == "http_402":
+                # The issuer refused on ITS licence (a2a_peers_max): it will
+                # never hold a record of us, so this is not a pairing — do not
+                # answer ok:true over a one-way import (2026-09-25, finding 9).
+                with _pair_lock:
+                    for p, blob in previous.items():
+                        try:
+                            if blob is None:
+                                p.unlink(missing_ok=True)
+                            else:
+                                atomic_write_json(p, json.loads(blob.decode("utf-8")))
+                        except (OSError, ValueError):
+                            p.unlink(missing_ok=True)
+                try:
+                    console_audit.action_failed(
+                        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+                        action="a2a.friendship.imported", target_kind="a2a_friendship",
+                        target_id=token.kid, reason="peer_license_limit",
+                    )
+                except Exception:  # noqa: BLE001 - the refusal must not depend on the audit sink
+                    pass
+                raise HTTPException(status_code=402, detail={
+                    "error": "license_limit", "feature": "a2a_peers_max", "side": "peer",
+                    "msg": "The peer's licence does not allow another A2A connection.",
+                })
             peer_knows_us = bool(ack_result.get("ok"))
             peer_reports_reachable = bool(ack_result.get("reachable"))
+            if peer_knows_us:
+                # Bind later repeat acks (the issuer's hello) to the instance
+                # that just answered, verified by the recv_key signature.
+                _ft.remember_peer_instance_id(
+                    token.kid, ack_result.get("peer_instance_id"),
+                    endpoints_dir=_endpoints_dir(), origins_dir=_origins_dir(),
+                    peer_bind_pub=ack_result.get("peer_bind_pub"), via=ack_result.get("via"),
+                )
             if token.url is None:
                 state = "PENDING"  # the issuer's hello will bring its address
             else:
@@ -1278,6 +1457,7 @@ def friendship_import(
         expires=token.expires,
         peer_knows_us=peer_knows_us,
         peer_reports_reachable=peer_reports_reachable,
+        relay_decision=relay_decision,
     )
 
 
@@ -1335,30 +1515,43 @@ def friendship_revoke(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Delete a friendship connection (both origin and endpoint files)."""
-    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
+    if not _ft.is_valid_kid(kid):
         raise HTTPException(status_code=400, detail="invalid kid")
-    origin_path = _origins_dir() / f"{kid}.json"
-    endpoint_path = _endpoints_dir() / f"{kid}.json"
+    origin_path = _conn_path(_origins_dir(), kid)
+    endpoint_path = _conn_path(_endpoints_dir(), kid)
 
-    # Verify at least one is a friendship connection.
-    found = False
-    for p in (origin_path, endpoint_path):
-        if p.exists():
-            try:
-                cfg = json.loads(p.read_text("utf-8"))
-                if cfg.get("_friendship"):
-                    found = True
-            except Exception:
-                pass
+    def _is_friendship(p: Path) -> bool:
+        try:
+            return bool(json.loads(p.read_text("utf-8")).get("_friendship"))
+        except Exception:  # noqa: BLE001
+            return False
 
-    if not found:
-        raise HTTPException(
-            status_code=404,
-            detail=f"connection {kid!r} not found",
-        )
+    # Tell the peer while we still hold the keys: afterwards it has no way to
+    # learn it authoritatively (our relay slot is gone, pings go unanswered)
+    # and it would keep showing the connection as bidirectional. Network I/O,
+    # so it runs BEFORE the lock below. Best-effort.
+    notice = (_ft.send_revoke_notice(kid, endpoints_dir=_endpoints_dir())
+              if _is_friendship(endpoint_path) else {"ok": False})
 
-    origin_path.unlink(missing_ok=True)
-    endpoint_path.unlink(missing_ok=True)
+    # Everything that decides and deletes runs under the SAME cross-process
+    # config lock as the first-ack / repeat-ack writers (2026-09-25, round 2):
+    # unlocked, an ack past its re-check could re-create an enabled
+    # connection right after revoke answered ok.
+    try:
+        with _ft.config_file_lock(_origins_dir(), _endpoints_dir(), _pending_friendships_dir()):
+            # A created-but-never-redeemed token has no origin/endpoint yet —
+            # only the issuer-side pending record that would accept its first
+            # ack. That record IS the token's authority on this side, so
+            # revoking deletes it (2026-09-25, finding 5).
+            pending_deleted = _ft.delete_pending_friendship(
+                kid, pending_dir=_pending_friendships_dir())
+            found = _is_friendship(origin_path) or _is_friendship(endpoint_path)
+            if not found and not pending_deleted:
+                raise HTTPException(status_code=404, detail=f"connection {kid!r} not found")
+            origin_path.unlink(missing_ok=True)
+            endpoint_path.unlink(missing_ok=True)
+    except _ft.FriendshipLockBusy:
+        raise _refuse_lock_busy(rec, "a2a.friendship.revoked", "a2a_friendship", kid) from None
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -1366,7 +1559,8 @@ def friendship_revoke(
         target_kind="a2a_friendship",
         target_id=kid,
     )
-    return {"ok": True, "kid": kid}
+    return {"ok": True, "kid": kid, "pending_token_revoked": pending_deleted,
+            "peer_notified": bool(notice.get("ok"))}
 
 
 # ── GET /remote-trigger/pair/friendship/connections ───────────────────
@@ -1445,7 +1639,7 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
     path a plain recheck would use — see ``friendship_recheck``'s original
     docstring for the full behavioral rationale (state semantics,
     peer_knows_us refresh)."""
-    endpoint_path = _endpoints_dir() / f"{kid}.json"
+    endpoint_path = _conn_path(_endpoints_dir(), kid)
     if not endpoint_path.exists():
         raise HTTPException(status_code=404, detail="not found")
 
@@ -1498,7 +1692,7 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
     # not folded into `state` itself.
     new_state = "ACTIVE" if reachable else "UNREACHABLE"
     with _pair_lock:
-        for p in (_origins_dir() / f"{kid}.json", endpoint_path):
+        for p in (_conn_path(_origins_dir(), kid), endpoint_path):
             if not p.exists():
                 continue
             try:
@@ -1542,7 +1736,7 @@ def friendship_recheck(
     the issuer has recorded US, so this re-runs the actual ack handshake
     (``retry_friendship_ack``) rather than inferring it from the ping.
     """
-    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
+    if not _ft.is_valid_kid(kid):
         raise HTTPException(status_code=400, detail="invalid kid")
     return _recheck_connection(kid)
 
@@ -1580,9 +1774,9 @@ def friendship_enable_relay(
     override — the "for this peer" framing is a UX entry point, not a
     narrower trust boundary than what Stage 3 already provides.
     """
-    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
+    if not _ft.is_valid_kid(kid):
         raise HTTPException(status_code=400, detail="invalid kid")
-    endpoint_path = _endpoints_dir() / f"{kid}.json"
+    endpoint_path = _conn_path(_endpoints_dir(), kid)
     # 2026-09-24: an issued token whose ack never arrived has no endpoint
     # file yet — and is precisely the connection that needs the relay.
     pending_only = (not endpoint_path.exists()
@@ -1770,6 +1964,12 @@ def patch_origin(
             changed.append(f"spawn_worker={body.spawn_worker}")
         if body.enabled is not None:
             cfg["enabled"] = body.enabled
+            # An operator's disable must never be undone by a peer's hello
+            # (a2a_friendship._awaiting_activation keys on this marker).
+            if body.enabled:
+                cfg.pop("_operator_disabled", None)
+            else:
+                cfg["_operator_disabled"] = True
             changed.append(f"enabled={body.enabled}")
         if body.allowed_personas is not None:
             cfg["allowed_personas"] = body.allowed_personas
@@ -1907,6 +2107,10 @@ class EndpointPatchRequest(BaseModel):
     url: str | None = Field(default=None, max_length=512)
     enabled: bool | None = Field(default=None)
     default_ttl_s: int | None = Field(default=None, ge=10, le=86400)
+    # Recovery after a peer LEGITIMATELY changed identity (instance-id rotate,
+    # reinstall): forget the pinned peer instance so the next verified
+    # response / hello re-binds. Operator action, audited like every PATCH.
+    reset_instance_pin: bool = Field(default=False)
 
 
 @router.patch("/remote-trigger/endpoints/{endpoint_id}")
@@ -1927,7 +2131,7 @@ def patch_endpoint(
     # this endpoint's keys must not be clobbered by a stale read-back. The
     # file lock (A2, 2026-07-20) extends the guarantee across PROCESSES
     # (bridge receiver reconnect updates, voice CLI set-url).
-    with _pair_lock, _ft.config_file_lock(_endpoints_dir()):
+    with _pair_lock, _ft.config_file_lock(_origins_dir(), _endpoints_dir()):
         if not endpoint_path.exists():
             raise HTTPException(status_code=404, detail=f"Endpoint {endpoint_id!r} not found")
         try:
@@ -1944,6 +2148,24 @@ def patch_endpoint(
             cfg["url"] = validated_url
         if body.enabled is not None:
             cfg["enabled"] = body.enabled
+            if body.enabled:
+                cfg.pop("_operator_disabled", None)
+            else:
+                cfg["_operator_disabled"] = True
+        if body.reset_instance_pin:
+            for _k in ("instance_id", "_peer_instance_id", "_instance_id_pin_source",
+                       "_instance_id_pinned_at", "_peer_bind_pub"):
+                cfg.pop(_k, None)
+            # The same binding lives on the origin (repeat-ack sender check).
+            _opath = _origins_dir() / f"{endpoint_id}.json"
+            if _opath.exists():
+                try:
+                    _ocfg = json.loads(_opath.read_text("utf-8"))
+                    _had = [_ocfg.pop(_k, None) for _k in ("_peer_instance_id", "_peer_bind_pub")]
+                    if any(v is not None for v in _had):
+                        _write_secure(_opath, _ocfg)
+                except (OSError, ValueError):
+                    pass
         if body.default_ttl_s is not None:
             cfg["default_ttl_s"] = body.default_ttl_s
         _write_secure(endpoint_path, cfg)

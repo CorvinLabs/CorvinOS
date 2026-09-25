@@ -292,7 +292,7 @@ class HotReloadTests(unittest.TestCase):
 
 class AuditContractTests(unittest.TestCase):
     def _chain_path(self, sb: _Sandbox) -> Path:
-        return sb.home / "global" / "forge" / "audit.jsonl"
+        return sb.home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
 
     def test_audit_allow_list_rejects_smuggled_keys(self):
         # The structural defence — even if a future edit tried to pass

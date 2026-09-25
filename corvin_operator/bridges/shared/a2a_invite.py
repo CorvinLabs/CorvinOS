@@ -31,6 +31,7 @@ import base64
 import hmac as _hmac
 import json
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -48,6 +49,23 @@ _HMAC_ALGO = "sha256"
 
 class InviteError(Exception):
     """Raised on token format / validation failure."""
+
+
+# ``oid`` is chosen by the ISSUER and the accepting side uses it verbatim as a
+# file name (``remote_origins/<oid>.json``, ``remote_endpoints/<oid>.json``);
+# a remote-issued token's signature cannot even be checked there. So the
+# alphabet is enforced at parse time (2026-09-25, finding 1: an oid of
+# ``../../x`` wrote outside the config directories). Same pattern the console
+# enforces when it MINTS an invite (CLIInviteRequest.origin_id) — a leading
+# alphanumeric, then [A-Za-z0-9._-], at most 64 chars, and never "..".
+OID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# Receive path appended to the invite URL: a plain absolute path only — no
+# "@" (userinfo host swap), "?", "#", "\\" or "..".
+_RP_RE = re.compile(r"^(?:/[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}){0,8}$")
+
+
+def is_valid_oid(oid: object) -> bool:
+    return isinstance(oid, str) and OID_RE.fullmatch(oid) is not None and ".." not in oid
 
 
 # ── path helpers ───────────────────────────────────────────────────────────
@@ -142,8 +160,10 @@ def generate_invite(
     """
     if allowed_personas is None:
         allowed_personas = ["assistant"]
-    if not origin_id or "/" in origin_id or "\\" in origin_id:
+    if not is_valid_oid(origin_id):
         raise InviteError(f"invalid origin_id: {origin_id!r}")
+    if not _RP_RE.fullmatch(receive_path or ""):
+        raise InviteError(f"invalid receive_path: {receive_path!r}")
 
     now = time.time()
     exp: float | None = (now + ttl_seconds) if ttl_seconds is not None else None
@@ -229,6 +249,13 @@ def parse_invite(token_str: str) -> tuple[InviteToken, bytes]:
     missing = {f for f in ("v", "iid", "oid", "url", "rp", "hk", "rk", "pa", "mt", "iat") if f not in d}
     if missing:
         raise InviteError(f"token payload missing fields: {missing}")
+
+    if not is_valid_oid(d["oid"]):
+        raise InviteError("token oid is not a valid identifier")
+    # The endpoint is ``url + rp``: an ``rp`` like "@169.254.169.254/x" would
+    # move the real host while the displayed ``url`` stays harmless (round 9).
+    if not isinstance(d["rp"], str) or not _RP_RE.fullmatch(d["rp"]):
+        raise InviteError("token receive path is not a plain path")
 
     ikey = sig_bytes.hex()[:16]
     token = InviteToken(
@@ -321,6 +348,18 @@ def invite_to_origin_dict(token: InviteToken) -> dict[str, Any]:
         "_invite_ikey": token.ikey,
         "_invite_issuer": token.iid,
     }
+
+
+def endpoint_url_rejection_reason(token: "InviteToken") -> str | None:
+    """Host gate for a FOREIGN invite's endpoint (round 9) — the same gate as
+    every other pairing path (``a2a_friendship._ack_url_rejection_reason``):
+    no loopback, link-local / cloud metadata or other forbidden hosts. The
+    token's signature cannot be checked here, so its URL is the issuer's
+    unverified choice and every later send would POST there."""
+    if not _RP_RE.fullmatch(token.rp or ""):
+        return "invite_rp_invalid"
+    import a2a_friendship as _ft  # noqa: PLC0415 — sibling module, lazy
+    return _ft._ack_url_rejection_reason(token.url.strip().rstrip("/"))
 
 
 def invite_to_endpoint_dict(

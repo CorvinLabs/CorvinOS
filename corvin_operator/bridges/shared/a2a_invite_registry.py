@@ -7,8 +7,8 @@ can be enforced on the issuing instance.
 Storage: ``<corvin_home>/global/remote_trigger/invites.json``  (mode 0600)
 Format:  dict keyed by ``ikey`` (16-hex-char sig prefix).
 
-Thread-safety: a bounded ``fcntl.flock`` on a stable ``.lock`` sidecar on
-every write (see :data:`LOCK_TIMEOUT_SECONDS`).
+Thread-safety: a bounded ``fcntl.flock`` on a stable ``.lock`` sidecar held
+across every load-modify-save (see :data:`LOCK_TIMEOUT_SECONDS`).
 
 CI lint: module MUST NOT ``import anthropic``.
 """
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on Windows
 from _bounded_lock import LockBusy as InviteLockBusy, acquire_exclusive as _acquire_exclusive
+import contextlib
 import json
 import os
 import time
@@ -125,11 +126,15 @@ class InviteRegistry:
         except Exception:
             return {}
 
-    def _save(self, data: dict[str, dict[str, Any]]) -> None:
-        """Atomically replace the registry under a bounded sidecar lock.
+    @contextlib.contextmanager
+    def _locked(self):
+        """Hold the bounded sidecar lock across a whole load-modify-save.
 
-        Raises :class:`InviteLockBusy` when the sidecar is still held at
-        ``LOCK_TIMEOUT_SECONDS`` — never blocks the caller.
+        ``_load`` used to run OUTSIDE the lock, so two writers each loaded the
+        same snapshot and the second save silently dropped the first one's
+        change — ten concurrent creates plus a revoke left 2 of 11 entries
+        and the revoke lost (2026-09-25, finding 7). Raises
+        :class:`InviteLockBusy` at ``LOCK_TIMEOUT_SECONDS``; never blocks.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self._path.with_name(self._path.name + ".lock")
@@ -138,50 +143,81 @@ class InviteRegistry:
         try:
             _acquire_exclusive(lock_fd, "a2a invite registry", timeout=LOCK_TIMEOUT_SECONDS)
             locked = True
-            tmp = self._path.with_suffix(".tmp")
-            with tmp.open("w", encoding="utf-8") as fh:
-                json.dump(data, fh, sort_keys=True, indent=2)
-                fh.write("\n")
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self._path)
-            if self._path.exists():
-                os.chmod(self._path, 0o600)
+            yield
         finally:
             if locked:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
+    def _write(self, data: dict[str, dict[str, Any]]) -> None:
+        """Atomically replace the registry file. Caller holds ``_locked()``."""
+        tmp = self._path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(data, fh, sort_keys=True, indent=2)
+            fh.write("\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self._path)
+        if self._path.exists():
+            os.chmod(self._path, 0o600)
+
+    def _save(self, data: dict[str, dict[str, Any]]) -> None:
+        """Atomically replace the registry under a bounded sidecar lock.
+
+        Raises :class:`InviteLockBusy` when the sidecar is still held at
+        ``LOCK_TIMEOUT_SECONDS`` — never blocks the caller. Prefer the
+        public mutators, which hold the lock across load AND save.
+        """
+        with self._locked():
+            self._write(data)
+
     # ── public API ────────────────────────────────────────────────────
 
     def create(self, entry: InviteEntry) -> None:
         """Add a new invite entry (idempotent on ikey)."""
-        data = self._load()
-        data[entry.ikey] = entry.to_dict()
-        self._save(data)
+        with self._locked():
+            data = self._load()
+            data[entry.ikey] = entry.to_dict()
+            self._write(data)
 
     def get(self, ikey: str) -> dict[str, Any] | None:
         """Return raw entry dict or None if not found."""
         return self._load().get(ikey)
 
+    def claim(self, ikey: str) -> str:
+        """Atomically accept an invite. Returns ``"ok"`` (now accepted),
+        ``"not_found"``, ``"revoked"``, or ``"already_accepted"`` (a
+        single-use invite somebody accepted first). The check and the write
+        happen under one lock, so of two concurrent claims of a single-use
+        invite exactly one gets ``"ok"``."""
+        with self._locked():
+            data = self._load()
+            entry = data.get(ikey)
+            if entry is None:
+                return "not_found"
+            if entry.get("revoked"):
+                return "revoked"
+            if entry.get("su") and entry.get("accepted"):
+                return "already_accepted"
+            entry["accepted"] = True
+            entry["accepted_at"] = time.time()
+            self._write(data)
+            return "ok"
+
     def mark_accepted(self, ikey: str) -> bool:
-        """Mark invite as accepted.  Returns False if not found."""
-        data = self._load()
-        if ikey not in data:
-            return False
-        data[ikey]["accepted"] = True
-        data[ikey]["accepted_at"] = time.time()
-        self._save(data)
-        return True
+        """Mark invite as accepted. Returns False if it is not found, revoked,
+        or a single-use invite that was already accepted (see :meth:`claim`)."""
+        return self.claim(ikey) == "ok"
 
     def revoke(self, ikey: str) -> bool:
         """Mark invite as revoked.  Returns False if not found."""
-        data = self._load()
-        if ikey not in data:
-            return False
-        data[ikey]["revoked"] = True
-        data[ikey]["revoked_at"] = time.time()
-        self._save(data)
-        return True
+        with self._locked():
+            data = self._load()
+            if ikey not in data:
+                return False
+            data[ikey]["revoked"] = True
+            data[ikey]["revoked_at"] = time.time()
+            self._write(data)
+            return True
 
     def list_all(self) -> list[InviteEntry]:
         """Return all entries, newest first."""
@@ -195,15 +231,16 @@ class InviteRegistry:
         Returns number of entries removed.
         """
         now = time.time()
-        data = self._load()
-        before = len(data)
-        data = {
-            k: v
-            for k, v in data.items()
-            if v.get("exp") is None or now - float(v["exp"]) < max_age_s
-        }
-        if len(data) < before:
-            self._save(data)
+        with self._locked():
+            data = self._load()
+            before = len(data)
+            data = {
+                k: v
+                for k, v in data.items()
+                if v.get("exp") is None or now - float(v["exp"]) < max_age_s
+            }
+            if len(data) < before:
+                self._write(data)
         return before - len(data)
 
     def find_by_label(self, label: str) -> InviteEntry | None:

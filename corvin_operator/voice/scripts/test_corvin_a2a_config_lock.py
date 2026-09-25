@@ -130,3 +130,42 @@ def test_migrate_attestation_dry_run_takes_no_lock(dirs):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+@pytest.mark.parametrize("bad_url", ["http://169.254.169.254", "http://127.0.0.1:9", "http://[::1]:80"])
+def test_import_token_refuses_forbidden_peer_urls(dirs, bad_url):
+    """Round-2 review: the CLI import stored an issuer-chosen metadata/loopback
+    URL unchecked, and the connection then kept contacting it."""
+    origins, endpoints = dirs
+    _tok, token_str = a2a_friendship.create_friendship_token(url=bad_url, label="evil")
+    rc = corvin_a2a._cmd_import_token(argparse.Namespace(
+        token=token_str, url=None, overwrite=False, dry_run=False))
+    assert rc == 1
+    assert list(origins.glob("*.json")) == [] and list(endpoints.glob("*.json")) == []
+
+
+def test_revoke_token_notifies_the_peer_and_deletes_under_the_lock(dirs, tmp_path, monkeypatch):
+    """Round 3: the CLI revoke mirrored none of the console's fixes."""
+    origins, endpoints = dirs
+    monkeypatch.setenv("REMOTE_PENDING_FRIENDSHIPS_DIR", str(tmp_path / "pending"))
+    kid = "kid-cli-revoke-1"
+    for d, extra in ((origins, {"origin_id": kid}), (endpoints, {"endpoint_id": kid, "url": ""})):
+        _write(d / f"{kid}.json", {"hmac_key": "ab" * 32, "recv_key": "cd" * 32,
+                                   "_friendship": True, **extra})
+    sent = []
+    monkeypatch.setattr(a2a_friendship, "send_revoke_notice",
+                        lambda k, **kw: sent.append(k) or {"ok": True})
+    assert corvin_a2a._cmd_revoke_token(argparse.Namespace(kid=kid)) == 0
+    assert sent == [kid]
+    assert not (origins / f"{kid}.json").exists() and not (endpoints / f"{kid}.json").exists()
+    assert corvin_a2a._cmd_revoke_token(argparse.Namespace(kid="../x")) == 2
+
+
+def test_create_token_saves_the_pending_record(dirs, tmp_path, monkeypatch):
+    """Round 4: without it the redeemer's ack was always refused (403)."""
+    monkeypatch.setenv("REMOTE_PENDING_FRIENDSHIPS_DIR", str(tmp_path / "pending"))
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))  # never the live install
+    monkeypatch.setenv("CORVIN_A2A_RELAY_URL", "off")
+    assert corvin_a2a.main(["create-token", "--url", "http://10.0.0.5:8775",
+                            "--label", "cli", "--ttl", "1d"]) == 0
+    assert len(list((tmp_path / "pending").glob("*.json"))) == 1

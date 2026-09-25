@@ -32,11 +32,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Generator
 
 try:
+    # 2026-09-25: this list used to import ``Registry``, which prometheus_client
+    # has never exported. The ImportError it raised was swallowed below, so
+    # PROMETHEUS_AVAILABLE was False on EVERY install — including ones with
+    # prometheus_client present — and /metrics served the "unavailable" stub.
     from prometheus_client import (
         Counter,
         Gauge,
         Histogram,
-        Registry,
         CollectorRegistry,
         generate_latest,
         CONTENT_TYPE_LATEST,
@@ -44,6 +47,9 @@ try:
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
+
+# Type alias kept for the public signature (``registry: Optional[Registry]``).
+Registry = Any
 
 _log = logging.getLogger("corvin.a2a.relay_metrics")
 
@@ -394,12 +400,16 @@ class RelayMetricsCollector:
             yield
         finally:
             elapsed_ms = (time.monotonic() - start) * 1000
-            if metric_type == "discovery":
-                self.discovery_latency_ms.labels(tenant_id=tenant_id).observe(elapsed_ms)
-            elif metric_type == "handshake":
-                self.a2a_handshake_latency_ms.labels(tenant_id=tenant_id).observe(elapsed_ms)
-            elif metric_type == "message":
-                self.relay_message_latency_ms.labels(tenant_id=tenant_id).observe(elapsed_ms)
+            if PROMETHEUS_AVAILABLE and self.registry is not None:
+                try:  # fail-closed: a metric error never reaches the caller
+                    if metric_type == "discovery":
+                        self.discovery_latency_ms.labels(tenant_id=tenant_id).observe(elapsed_ms)
+                    elif metric_type == "handshake":
+                        self.a2a_handshake_latency_ms.labels(tenant_id=tenant_id).observe(elapsed_ms)
+                    elif metric_type == "message":
+                        self.relay_message_latency_ms.labels(tenant_id=tenant_id).observe(elapsed_ms)
+                except Exception as e:  # noqa: BLE001
+                    _log.error(f"Failed to record latency metric: {e}")
 
 
 # Global singleton instance

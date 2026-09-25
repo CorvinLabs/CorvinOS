@@ -412,6 +412,12 @@ class TestA2APeerLimitHttp(unittest.TestCase):
         self._tmp = tempfile.mkdtemp()
         self._origins_dir = Path(self._tmp) / "remote_origins"
         self._origins_dir.mkdir(parents=True, exist_ok=True)
+        # These tests pin the licence gate; the invite's placeholder URLs
+        # (localhost) would be refused earlier by the round-8 host gate.
+        import a2a_friendship as _ft  # type: ignore[import-not-found]
+        _gate = patch.object(_ft, "_ack_url_rejection_reason", return_value=None)
+        _gate.start()
+        self.addCleanup(_gate.stop)
 
     def tearDown(self):
         import shutil

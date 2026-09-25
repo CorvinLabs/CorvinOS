@@ -144,7 +144,7 @@ class GoogleA2AError(Exception):
 
 def _sanitize_attachment_name(raw: str, index: int) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]", "_", raw or "")
-    if not name or name[0] == "." or not _SAFE_NAME_RE.match(name):
+    if not name or name[0] == "." or not _SAFE_NAME_RE.fullmatch(name):
         name = f"attachment_{index}.bin"
     return name
 
@@ -385,7 +385,10 @@ class GoogleA2AAdapter:
             instruction=instruction,
             result_schema=result_schema,
             ttl_s=ttl_s,
-            sender_instance_id=self._instance_id,
+            # The adapter speaks for no Corvin peer: it must not claim THIS
+            # host's identity, which the receiver refuses as a reflected task
+            # (round 10 direction check). Empty = "not a Corvin instance".
+            sender_instance_id="",
             attachments=[
                 asdict(a) if hasattr(a, "__dataclass_fields__") else a
                 for a in file_attachments

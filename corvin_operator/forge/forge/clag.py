@@ -220,7 +220,13 @@ def _derive_cit_key(dna_seed: str | None) -> bytes:
 # ── Shadow hash tracking ───────────────────────────────────────────────────────
 
 _shadow_lock = threading.Lock()
-_shadow_hashes: dict[str, str] = {}  # layer_id → expected next chain tail hash
+# Bounded like _layer_cits: per-call layer ids (L38.a2a_instruction.<hex>,
+# L16.consent_gate.<hex>, …) each leave a shadow that is never read again, and
+# an unbounded dict grew by one entry per A2A task / consent check for the
+# life of the process. Evicting a static layer's shadow only resets it to the
+# documented first-call semantics (no shadow → no mismatch possible).
+_MAX_SHADOWS: int = 1024
+_shadow_hashes: "OrderedDict[str, str]" = OrderedDict()  # layer_id → expected next tail
 _shadow_paths: dict[str, str] = {}   # layer_id → audit path at shadow creation
 
 # ── Per-layer CIT store (for self-verification) ────────────────────────────────
@@ -277,8 +283,12 @@ def _shadow_check(layer_id: str, actual_tail: str, path: Path) -> str | None:
 def _shadow_update(layer_id: str, new_tail: str, path: Path | None = None) -> None:
     with _shadow_lock:
         _shadow_hashes[layer_id] = new_tail
+        _shadow_hashes.move_to_end(layer_id)
         if path is not None:
             _shadow_paths[layer_id] = str(path)
+        while len(_shadow_hashes) > _MAX_SHADOWS:
+            old_id, _ = _shadow_hashes.popitem(last=False)
+            _shadow_paths.pop(old_id, None)
 
 
 def clear_shadow_hashes() -> None:
@@ -292,6 +302,73 @@ def clear_shadow_hashes() -> None:
         _shadow_paths.clear()
     with _cit_lock:
         _layer_cits.clear()
+
+
+# ── Ancestor anchors (shared-chain truncation check, 2026-09-25) ────────────
+#
+# A per-call layer id (the idiom for modules writing the SHARED tenant chain)
+# has no shadow, and verify_last_k only checks hash links — so deleting the
+# newest N records went unnoticed. An anchor remembers where this module last
+# saw the tail: (inode, byte offset just past that record, its hash). The
+# chain is append-only, so a later check must find the SAME record ending at
+# the SAME offset — appends by other subsystems are fine, truncation or a
+# rewrite is not. O(1): one stat + one small read before the offset.
+_anchor_lock = threading.Lock()
+_anchors: dict[str, tuple[str, int, int, str]] = {}  # key → (path, inode, end_offset, hash)
+_ANCHOR_READ_BACK = 256 * 1024
+
+
+def _last_record_before(path: Path, end: int) -> dict | None:
+    import json as _json
+    start = max(0, end - _ANCHOR_READ_BACK)
+    with open(path, "rb") as fh:
+        fh.seek(start)
+        chunk = fh.read(end - start)
+    lines = [ln for ln in chunk.split(b"\n") if ln.strip()]
+    if not lines:
+        return None
+    try:
+        rec = _json.loads(lines[-1])
+    except ValueError:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def anchor_check(key: str, path: Path) -> str | None:
+    """None if the chain still contains this module's last anchor record at
+    its offset (or no anchor exists / the file was rotated); else a reason."""
+    with _anchor_lock:
+        a = _anchors.get(key)
+    if a is None:
+        return None
+    a_path, a_ino, a_end, a_hash = a
+    if a_path != str(path):
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return "chain_missing"
+    if st.st_ino != a_ino:
+        return None  # rotated / replaced by an operator-level rotation: re-anchor
+    if st.st_size < a_end:
+        return f"chain truncated below the last anchor of {key!r}"
+    rec = _last_record_before(Path(path), a_end)
+    if rec is None or str(rec.get("hash", "")) != a_hash:
+        return f"record at the last anchor of {key!r} was rewritten"
+    return None
+
+
+def anchor_update(key: str, path: Path) -> None:
+    """Anchor at the current tail (call right after a successful gate)."""
+    try:
+        st = os.stat(path)
+        rec = _last_record_before(Path(path), st.st_size)
+    except OSError:
+        return
+    if not rec or not rec.get("hash"):
+        return
+    with _anchor_lock:
+        _anchors[key] = (str(path), st.st_ino, st.st_size, str(rec["hash"]))
 
 
 def advance_layer_shadow(layer_id: str, path: Path) -> None:

@@ -560,6 +560,15 @@ EVENT_SEVERITY: dict[str, str] = {
     # Operator wiped the local A2A feed content store (a2a_feed.py, Agent Hub
     # live feed). Counts only — never message text, peer content or names.
     "A2A.feed_cleared":         "WARNING",
+    # 2026-09-25 A2A adversarial review — events added by the fixes.
+    "A2A.instance_pinned":            "INFO",     # TOFU pin of the peer instance id
+    "A2A.friendship_paired":          "INFO",     # issuer completed a pairing (audit-first)
+    "A2A.friendship_url_updated":     "WARNING",  # a repeat ack re-pointed a peer URL
+    "A2A.friendship_peer_revoked":    "WARNING",  # the peer revoked the friendship (signed notice)
+    "A2A.relay_fallback_used":        "INFO",
+    "A2A.ping_result":                "INFO",
+    "A2A.reconnect_sent":             "INFO",
+    "A2A.reconnect_send_failed":      "WARNING",
     # Layer 38 M4 — A2A Invite-Token Protocol (ADR-0063)
     # Metadata only — hk/rk/url/iid/full-token NEVER in chain.
     # Allow-list: ikey (16-hex prefix), oid, lbl, exp, su, pa, bidirectional.
@@ -2567,6 +2576,51 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "A2A.relay_listener_state": frozenset({"reason", "source"}),
     "A2A.my_url_updated": frozenset({"reason", "source"}),
     "A2A.feed_cleared": frozenset({"messages_removed", "blobs_removed", "reason"}),
+    # CLI pairing events (corvin_a2a.py, round 7: their fields were dropped).
+    "a2a.friendship.imported": frozenset({"endpoint_id", "reason", "source"}),
+    "a2a.relay.enabled_for_pairing": frozenset({"reason", "source"}),
+    # 2026-09-25 A2A adversarial review: every A2A.* event carried fields the
+    # vocabulary floor dropped (attachment digests, purpose, error taxonomy,
+    # ping reachability, anchoring prefixes) — so the chain could not show
+    # which files crossed the boundary or why a send failed. Each allowlist
+    # lists EVERY field its emitter sends (an allowlist replaces the floor).
+    # Content-free only: ids, enums, counts, 16-char hash prefixes. Never
+    # instruction text, file names, URLs or full digests.
+    **{_et: frozenset({"task_id", "origin_id", "endpoint_id", "status", "reason",
+                       "duration_ms", "source", "via"} | _extra)
+       for _et, _extra in (
+        ("A2A.envelope_received", {"nonce_prefix", "purpose_id", "sender_instance_id",
+                                   "instance_id_match", "ttl_s", "attachments_count",
+                                   "attachments_total_bytes", "attachment_sha_prefixes",
+                                   "attachment_validation_error"}),
+        ("A2A.envelope_sent", {"nonce_prefix", "ttl_s", "attachments_count"}),
+        ("A2A.response_signed", {"attachments_count", "attachments_total_bytes",
+                                 "attachment_sha_prefixes"}),
+        ("A2A.response_received", {"instance_id_match", "attachments_count"}),
+        ("A2A.response_rejected", {"http_status", "error_category", "error_detail",
+                                   "instance_id_match"}),
+        ("A2A.result_filtered", {"filter_pass_count", "filter_reject_count",
+                                 "attachments_out_count"}),
+        ("A2A.request_rejected", {"nonce_prefix"}),
+        ("A2A.engine_spawned", {"persona", "engine_id"}),
+        ("A2A.chain_anchor_sent", {"nonce_prefix", "our_chain_tail"}),
+        ("A2A.chain_anchor_received", {"nonce_prefix", "peer_chain_tail"}),
+        ("A2A.chain_anchor_verified", {"peer_chain_tail", "match"}),
+        ("A2A.chain_tail_unavailable", set()),
+        ("A2A.chain_dna_mismatch", {"nonce_prefix", "peer_genesis_hash_prefix", "expected_prefix"}),
+        ("A2A.chain_dna_verified", {"nonce_prefix", "peer_genesis_hash_prefix"}),
+        ("A2A.chain_dna_genesis_absent", {"nonce_prefix"}),
+        ("A2A.relay_fallback_used", set()),
+        ("A2A.ping_result", {"reachable", "error_category"}),
+        ("A2A.reconnect_sent", set()),
+        ("A2A.reconnect_send_failed", set()),
+        ("A2A.instance_pinned", set()),
+        ("A2A.nonce_store_fallback", {"impact"}),
+        ("a2a.attestation_failed", {"sest_fp_prefix"}),
+        ("A2A.friendship_paired", {"pairing", "url_changed", "peer_bound"}),
+        ("A2A.friendship_url_updated", {"pairing", "url_changed", "peer_bound"}),
+        ("A2A.friendship_peer_revoked", {"pairing", "url_changed", "peer_bound"}),
+    )},
     # ADR-0104 ACS core events — explicit allowlists for every emitted event.
     # Metadata only; comment at EVENT_SEVERITY block lists the intent.
     # NEVER: prompt/output, manager JSON, worker result, goal/task text (GDPR Art. 5).
@@ -2748,8 +2802,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "instance.ibc_sig_failed":        frozenset({"origin_id", "reason", "ibc_jti"}),
     "instance.ibc_hardware_mismatch": frozenset({"reason"}),
     "instance.hardware_bound":        frozenset({"ibc_jti"}),
-    "instance.attestation_verified":  frozenset({"origin_id", "trust_level", "ibc_jti"}),
-    "instance.attestation_failed":    frozenset({"origin_id", "trust_level", "ibc_jti", "reason"}),
+    "instance.attestation_verified":  frozenset({"origin_id", "trust_level", "ibc_jti", "task_id",
+                                                 "attestation_present", "tier", "corvin_version"}),
+    "instance.attestation_failed":    frozenset({"origin_id", "trust_level", "ibc_jti", "reason",
+                                                 "task_id", "attestation_present", "tier",
+                                                 "corvin_version"}),
     # ADR-0153 M4 — CorvinID cert lifecycle. Metadata-only: 8-char instance_id
     # prefix, request_id. NEVER email, full UUID, subject_id, or cert content.
     "identity.certificate_revoked":  frozenset({"request_id"}),
@@ -2911,7 +2968,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "setup.onboarding_complete": frozenset({"default_engine", "engine_count"}),
     "setup.engine_probe_run": frozenset({"engine_ids", "found_count"}),
     "a2a.manifest_fetched": frozenset({"age_days", "revoked_count", "sig_verified"}),
-    "a2a.manifest_stale": frozenset({"age_days", "sig_verified"}),
+    "a2a.manifest_stale": frozenset({"age_days", "sig_verified", "reason"}),
     "a2a.manifest_cache_sig_invalid": frozenset({"age_days"}),
     # ── R4-B: L25 compute (ADR-0013) — mirror of
     # ``core/compute/corvin_compute/audit.py::_ALLOWED_FIELDS``. That dict was

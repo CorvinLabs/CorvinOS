@@ -50,6 +50,12 @@ def _endpoints_dir() -> Path:
     return Path(env) if env else _ENDPOINTS_DIR
 
 
+def _pending_friendships_dir() -> Path:
+    # Same resolution as the console / a2a_http_server (REMOTE_PENDING_FRIENDSHIPS_DIR).
+    env = os.environ.get("REMOTE_PENDING_FRIENDSHIPS_DIR")
+    return Path(env) if env else _OPERATOR_COWORK / "remote_pending_friendships"
+
+
 def _generate_key() -> str:
     return secrets.token_hex(32)
 
@@ -954,6 +960,13 @@ def _cmd_accept(args: argparse.Namespace) -> int:
     if not validation.ok:
         print(f"error: Token abgelehnt: {validation.reason}", file=sys.stderr)
         return 1
+    if token.iid != local_iid:
+        # Same host gate as the console accept and every friendship import:
+        # a foreign token's URL is the issuer's unverified choice (round 9).
+        _rej = _inv.endpoint_url_rejection_reason(token)
+        if _rej is not None:
+            print(f"error: peer url rejected ({_rej})", file=sys.stderr)
+            return 1
 
     # Conflict check
     origin_path = _origins_dir() / f"{token.oid}.json"
@@ -972,15 +985,21 @@ def _cmd_accept(args: argparse.Namespace) -> int:
         print(f"[dry-run] oid={token.oid}  url={token.url}  personas={token.pa}")
         return 0
 
+    # Claim the invite BEFORE installing anything (issuer side): atomic under
+    # the registry lock, so a revoked or already-used single-use invite can
+    # never install a connection — the same rule the console accept route
+    # enforces. Ignoring mark_accepted()'s result used to let it through.
+    if registry is not None:
+        claim = registry.claim(token.ikey)
+        if claim != "ok":
+            print(f"error: Token abgelehnt: {claim}", file=sys.stderr)
+            return 1
+
     # Write files
     origin_cfg = _inv.invite_to_origin_dict(token)
     endpoint_cfg = _inv.invite_to_endpoint_dict(token, local_instance_id=local_iid)
     _atomic_write(origin_path, origin_cfg)
     _atomic_write(endpoint_path, endpoint_cfg)
-
-    # Mark accepted in registry (if we are the issuer)
-    if registry is not None:
-        registry.mark_accepted(token.ikey)
 
     print(f"[OK] Verbindung zu {token.oid!r} hergestellt.")
     print(f"     URL:              {token.url}")
@@ -1173,8 +1192,17 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    # The issuer-side pending record is what the redeemer's ack is verified
+    # against (same as the console create route). Without it every ack got
+    # an opaque 403 and the pairing never became bidirectional (round 4).
+    try:
+        _friendship.save_pending_friendship(token, pending_dir=_pending_friendships_dir())
+    except (_friendship.FriendshipError, OSError) as exc:
+        print(f"error: pending record not saved: {exc}", file=sys.stderr)
+        return 1
+
     if relay_for_token:
-        _maybe_enable_relay_fallback(reason="a2a.relay.enabled_for_pairing")
+        _maybe_enable_relay_fallback(reason="enabled_for_pairing")
 
     if args.remember_url and url:
         _friendship.set_my_url(url)
@@ -1247,6 +1275,23 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
 
     origin_path = _origins_dir() / f"{token.kid}.json"
     endpoint_path = _endpoints_dir() / f"{token.kid}.json"
+    # Never import our OWN token (same rule as the console import).
+    if (_friendship.load_pending_friendship(token.kid, pending_dir=_pending_friendships_dir()) is not None
+            or (token.bind_pub is not None
+                and token.bind_pub == __import__("a2a_binding").local_bind_pub())):
+        print("error: das ist dein eigener Token — gib ihn dem anderen Agenten zum Import",
+              file=sys.stderr)
+        return 1
+
+    # Same host gate as the console import: the token URL is chosen by the
+    # issuer, and the stored endpoint is pinged/contacted afterwards — never
+    # accept loopback, link-local / cloud-metadata or other forbidden hosts.
+    if token.url:
+        _rej = _friendship._ack_url_rejection_reason(token.url.strip().rstrip("/"))
+        if _rej is not None:
+            print(f"error: peer url rejected ({_rej})", file=sys.stderr)
+            return 1
+
     if (origin_path.exists() or endpoint_path.exists()) and not args.overwrite:
         print(
             f"warn: Verbindung {token.kid!r} existiert bereits. --overwrite verwenden.",
@@ -1256,11 +1301,17 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         state = "ACTIVE" if token.url else "PENDING"
-        print(f"[dry-run] kid={token.kid}  state={state}  url={token.url or '(leer)'}  label={token.label or '—'}")
+        print(f"[dry-run] kid={token.kid}  state={state}  url={token.url or '(leer)'}  label={token.issuer_name or token.label or '—'}")
         print(f"[dry-run] Würde schreiben: {origin_path}")
         print(f"[dry-run] Würde schreiben: {endpoint_path}")
         return 0
 
+    previous: dict[Path, bytes | None] = {}
+    for p in (origin_path, endpoint_path):
+        try:
+            previous[p] = p.read_bytes() if p.exists() else None
+        except OSError:
+            previous[p] = None
     _atomic_write(origin_path, _friendship.to_origin_dict(token))
     _atomic_write(endpoint_path, _friendship.to_endpoint_dict(token))
 
@@ -1270,11 +1321,12 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
     # Same logic as the Console's POST /remote-trigger/pair/friendship/import;
     # the CLI previously never ran it, leaving a CLI-only pairing unable to
     # fall back to the relay even when both sides had one configured.
-    if token.relay_url and not _friendship.my_relay_url_is_explicit():
-        if _friendship.get_my_relay_url() != token.relay_url:
-            _friendship.set_my_relay_url(token.relay_url)
+    relay_decision = _friendship.adopt_token_relay(
+        token.relay_url, endpoints_dir=_endpoints_dir(), exclude_kid=token.kid)
+    if relay_decision in ("rejected", "kept_existing"):
+        print(f"warn: Relay des Tokens nicht übernommen ({relay_decision}).", file=sys.stderr)
     if token.relay_url and _friendship.get_my_relay_url() == token.relay_url:
-        _maybe_enable_relay_fallback(reason="a2a.relay.enabled_for_pairing")
+        _maybe_enable_relay_fallback(reason="enabled_for_pairing")
 
     # Reciprocal ack (found 2026-07-29, ported from the Console route): the
     # issuer has NO record of us until this succeeds — a ping FROM us TO
@@ -1296,8 +1348,37 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
                 pass
         if my_own_url:
             ack_result = _friendship.send_friendship_ack(token, my_url=my_own_url)
+            if ack_result.get("error") == "http_402":
+                # Same as the console import (round 8): the issuer refused on
+                # ITS licence and will never hold a record of us — roll the
+                # files back instead of keeping a one-way pairing.
+                with _friendship.config_file_lock(_origins_dir(), _endpoints_dir()):
+                    for p, blob in previous.items():
+                        try:
+                            if blob is None:
+                                p.unlink(missing_ok=True)
+                            else:
+                                _atomic_write(p, json.loads(blob.decode("utf-8")))
+                        except (OSError, ValueError):
+                            p.unlink(missing_ok=True)
+                _audit_a2a(
+                    "a2a.friendship.imported", "WARNING",
+                    endpoint_id=token.kid, reason="peer_license_limit", source="cli",
+                )
+                print("error: die Lizenz des Peers erlaubt keine weitere A2A-Verbindung "
+                      "(a2a_peers_max) — nichts importiert", file=sys.stderr)
+                return 1
             peer_knows_us = bool(ack_result.get("ok"))
             peer_reports_reachable = bool(ack_result.get("reachable"))
+            if peer_knows_us:
+                # Same as the console import: bind the issuer's instance from
+                # the recv_key-verified ack response, so its later hello can
+                # activate / move this connection and nobody else's can.
+                _friendship.remember_peer_instance_id(
+                    token.kid, ack_result.get("peer_instance_id"),
+                    endpoints_dir=_endpoints_dir(), origins_dir=_origins_dir(),
+                    peer_bind_pub=ack_result.get("peer_bind_pub"), via=ack_result.get("via"),
+                )
             if token.url is None:
                 state = "PENDING"  # the issuer's hello will bring its address
             else:
@@ -1307,23 +1388,26 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
             # can never be told about us, so this stays a one-way import.
             state = "UNREACHABLE"
 
-        for p in (origin_path, endpoint_path):
-            if not p.exists():
-                continue
-            cfg = json.loads(p.read_text("utf-8"))
-            cfg["state"] = state
-            cfg["_peer_knows_us"] = peer_knows_us
-            cfg["_peer_reports_reachable"] = peer_reports_reachable
-            _atomic_write(p, cfg)
+        with _friendship.config_file_lock(_origins_dir(), _endpoints_dir()):
+            for p in (origin_path, endpoint_path):
+                if not p.exists():
+                    continue
+                cfg = json.loads(p.read_text("utf-8"))
+                cfg["state"] = state
+                cfg["_peer_knows_us"] = peer_knows_us
+                cfg["_peer_reports_reachable"] = peer_reports_reachable
+                _atomic_write(p, cfg)
 
     _audit_a2a(
         "a2a.friendship.imported", "INFO",
-        kid=token.kid, state=state, source="cli",
+        # Keys the sender's audit backstop admits (kid/state were redacted).
+        endpoint_id=token.kid, reason=str(state).lower(), source="cli",
     )
 
     print(f"[OK] Verbindung importiert (kid={token.kid}, state={state})")
-    if token.label:
-        print(f"     Label:   {token.label}")
+    _shown_name = token.issuer_name or token.label
+    if _shown_name:
+        print(f"     Label:   {_shown_name}")
     if token.url:
         print(f"     URL:     {token.url}")
     else:
@@ -1373,31 +1457,42 @@ def _cmd_my_url(args: argparse.Namespace) -> int:
 
 
 def _cmd_revoke_token(args: argparse.Namespace) -> int:
-    """Delete a friendship connection (origin + endpoint files)."""
+    """Delete a friendship connection (origin + endpoint files) — same
+    semantics as the console route: tell the peer first (signed revoke notice,
+    needs the keys), then decide + delete under the cross-process config lock
+    the ack paths use, and revoke a still-unredeemed token too."""
     kid = args.kid
-    if "/" in kid or "\\" in kid or kid.startswith("."):
+    if not _friendship.is_valid_kid(kid):
         print(f"error: ungültige kid: {kid!r}", file=sys.stderr)
         return 2
     origin_path = _origins_dir() / f"{kid}.json"
     endpoint_path = _endpoints_dir() / f"{kid}.json"
 
-    found = False
-    for p in (origin_path, endpoint_path):
-        if p.exists():
-            try:
-                cfg = json.loads(p.read_text("utf-8"))
-                if cfg.get("_friendship"):
-                    found = True
-            except Exception:
-                pass
+    def _is_friendship(p: Path) -> bool:
+        try:
+            return bool(json.loads(p.read_text("utf-8")).get("_friendship"))
+        except Exception:  # noqa: BLE001
+            return False
 
-    if not found:
-        print(f"error: Friendship-Verbindung {kid!r} nicht gefunden", file=sys.stderr)
+    notified = False
+    if _is_friendship(endpoint_path):
+        notified = bool(_friendship.send_revoke_notice(
+            kid, endpoints_dir=_endpoints_dir()).get("ok"))
+    pending_dir = _pending_friendships_dir()
+    try:
+        with _friendship.config_file_lock(_origins_dir(), _endpoints_dir(), pending_dir):
+            pending_deleted = _friendship.delete_pending_friendship(kid, pending_dir=pending_dir)
+            found = _is_friendship(origin_path) or _is_friendship(endpoint_path)
+            if not found and not pending_deleted:
+                print(f"error: Friendship-Verbindung {kid!r} nicht gefunden", file=sys.stderr)
+                return 1
+            origin_path.unlink(missing_ok=True)
+            endpoint_path.unlink(missing_ok=True)
+    except _friendship.FriendshipLockBusy:
+        print("error: Konfiguration gerade gesperrt — bitte erneut versuchen", file=sys.stderr)
         return 1
-
-    origin_path.unlink(missing_ok=True)
-    endpoint_path.unlink(missing_ok=True)
-    print(f"[OK] Verbindung {kid!r} gelöscht.")
+    print(f"[OK] Verbindung {kid!r} gelöscht."
+          + (" Peer benachrichtigt." if notified else ""))
     return 0
 
 
@@ -1431,7 +1526,9 @@ def main(argv: list[str] | None = None) -> int:
     p_send.add_argument("endpoint_id")
     p_send.add_argument("instruction", help="instruction text, or '-' for stdin")
     p_send.add_argument("--ttl", type=int, default=60)
-    p_send.add_argument("--timeout", type=int, default=30)
+    # Default None: the sender waits at least the envelope TTL + a margin (the
+    # peer's worker may run that long); a fixed 30 s lost 30–60 s replies.
+    p_send.add_argument("--timeout", type=int, default=None)
     p_send.add_argument("--schema", default=None,
                         help="path to a result_schema JSON file")
     p_send.add_argument("--attach", action="append", default=[],

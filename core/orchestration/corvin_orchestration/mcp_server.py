@@ -659,8 +659,9 @@ _A2A_SEND_SCHEMA: dict = {
             "description": "Override the endpoint's default_ttl_s. Omit to use the endpoint default.",
         },
         "timeout_s": {
-            "type": "integer", "minimum": 5, "maximum": 120,
-            "description": "HTTP round-trip timeout. Clamped [5,120], default 30.",
+            "type": "integer", "minimum": 5, "maximum": 600,
+            "description": ("Round-trip timeout. Omit to wait at least the envelope TTL + 15 s "
+                            "(the peer's worker may run that long). Clamped [5,600]."),
         },
         "purpose_id": {
             "type": ["string", "null"],
@@ -1219,9 +1220,22 @@ class OrchestrationServer:
         except Exception as exc:  # ambiguous label → refuse, never guess a peer
             self._error(msgid, INVALID_PARAMS, f"a2a_send target not unique: {exc}")
             return
-        timeout_s = _clamp(args.get("timeout_s"), lo=5, hi=120, default=30)
         ttl_s = args.get("ttl_s")
         purpose_id = args.get("purpose_id")
+        # No explicit timeout → the sender's default, which is never shorter
+        # than the peer's worker budget (envelope ttl + margin). A fixed 30 s
+        # reported "timeout" for every 30–60 s task the peer then completed.
+        if args.get("timeout_s") is None:
+            timeout_s = None
+            try:
+                _ttl = int(ttl_s) if ttl_s is not None else int(
+                    _RemoteEndpointRegistry().load(endpoint_id).get("default_ttl_s") or 60)
+            except Exception:  # noqa: BLE001
+                _ttl = 60
+            wait_s = max(30, _ttl + 15)
+        else:
+            timeout_s = _clamp(args.get("timeout_s"), lo=5, hi=600, default=30)
+            wait_s = timeout_s
 
         sender = _RemoteTriggerSender()
         try:
@@ -1230,7 +1244,7 @@ class OrchestrationServer:
                     endpoint_id, instruction,
                     ttl_s=ttl_s, timeout_s=timeout_s, purpose_id=purpose_id,
                 ),
-                budget_s=timeout_s + 15,
+                budget_s=wait_s + 15,
             )
         except Exception as exc:  # noqa: BLE001
             self._error(msgid, INTERNAL_ERROR, f"a2a_send failed: {exc}")

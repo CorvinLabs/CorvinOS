@@ -28,12 +28,15 @@ CI lint: MUST NOT import the anthropic SDK.
 from __future__ import annotations
 
 import argparse
+import collections
 import http.server
 import json
 import os
 import re
+import socket
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -132,20 +135,66 @@ except ImportError:
 # runs PRE-auth (its whole point is to shield OriginRegistry.load from
 # unauthenticated floods), and sharing the map would let an attacker with
 # unique fake origin_ids evict real /receive buckets (refutation finding,
-# 2026-07-22). Worst case here: fake ids evict other PING buckets only.
+# 2026-07-22). Worst case here: fake keys evict other PING buckets only.
+#
+# Two stages since 2026-09-25 (the pre-auth bucket used to be keyed on the
+# CLAIMED origin_id, so 60 unauthenticated pings naming a real peer locked
+# that peer's genuine pings out for a minute):
+#   * pre-auth  — keyed on the SOURCE ADDRESS ("addr:<ip>") when the caller
+#     knows it; callers that do not (gateway/console routes, relay) share one
+#     coarse "anon" bucket sized so only a real flood trips it;
+#   * post-auth — keyed on the origin ("origin:<id>"), charged only AFTER the
+#     HMAC verified, so only the key holder can spend it.
 _PING_RATE_BUCKETS: dict[str, dict[str, float]] = {}
 _PING_RATE_BUCKETS_MAX = 1000
 _PING_RATE_LOCK = threading.Lock()
-_PING_RATE_RPM = 60.0
+_PING_RATE_RPM = 60.0          # post-auth, per origin
+# Pre-auth, per source address. Deliberately well above the per-origin
+# budget: several peers can share one source address (NAT, or a reverse proxy
+# in front of the ingress, where every peer is 127.0.0.1). It only has to stop
+# a flood from reaching OriginRegistry.load; per-origin fairness is the
+# post-auth bucket's job.
+_PING_ADDR_RATE_RPM = 600.0
+_PING_ANON_RATE_RPM = 1200.0   # pre-auth, callers that pass no address
+# Round 2 (2026-09-25): behind a reverse proxy every peer is 127.0.0.1, so a
+# per-ADDRESS bucket alone let any LAN host starve every genuine peer with
+# junk pings. The pre-auth stage is keyed on (source, claimed origin) — junk
+# with made-up ids only drains its own buckets — and the per-address bucket
+# stays only as a coarse flood ceiling.
+_PING_PREAUTH_PAIR_RPM = 120.0
+_PING_FLOOD_CEILING_RPM = 6000.0
 
 
-def _ping_rate_ok(origin_id: str) -> bool:
-    """Token bucket per (requested) origin_id, 60 rpm, bounded map."""
+_PING_SEEN: "collections.OrderedDict[tuple[str, str], float]" = collections.OrderedDict()
+_PING_SEEN_MAX = 4096
+_PING_SEEN_TTL_S = 90.0
+
+
+def _ping_seen(origin_id: str, ping_id: str) -> bool:
+    """True if this (origin, ping_id) was already answered in the window;
+    records it otherwise. Bounded, TTL'd."""
+    import time as _t
+    now = _t.monotonic()
+    key = (origin_id, ping_id)
+    with _PING_RATE_LOCK:
+        while _PING_SEEN:
+            k0, t0 = next(iter(_PING_SEEN.items()))
+            if now - t0 <= _PING_SEEN_TTL_S and len(_PING_SEEN) <= _PING_SEEN_MAX:
+                break
+            _PING_SEEN.popitem(last=False)
+        if key in _PING_SEEN:
+            return True
+        _PING_SEEN[key] = now
+        return False
+
+
+def _ping_rate_ok(key: str, rpm: float = _PING_RATE_RPM) -> bool:
+    """Token bucket per ``key`` (``rpm`` per minute, burst ``rpm``), bounded map."""
     import time as _time_module
 
     now = _time_module.monotonic()
     with _PING_RATE_LOCK:
-        bucket = _PING_RATE_BUCKETS.get(origin_id)
+        bucket = _PING_RATE_BUCKETS.get(key)
         if bucket is None:
             if len(_PING_RATE_BUCKETS) >= _PING_RATE_BUCKETS_MAX:
                 oldest = min(
@@ -153,12 +202,12 @@ def _ping_rate_ok(origin_id: str) -> bool:
                     key=lambda k: _PING_RATE_BUCKETS[k]["last_refill"],
                 )
                 del _PING_RATE_BUCKETS[oldest]
-            bucket = {"tokens": _PING_RATE_RPM, "last_refill": now}
-            _PING_RATE_BUCKETS[origin_id] = bucket
+            bucket = {"tokens": rpm, "last_refill": now}
+            _PING_RATE_BUCKETS[key] = bucket
         elapsed = now - bucket["last_refill"]
         bucket["last_refill"] = now
         bucket["tokens"] = min(
-            _PING_RATE_RPM, bucket["tokens"] + elapsed * (_PING_RATE_RPM / 60.0)
+            rpm, bucket["tokens"] + elapsed * (rpm / 60.0)
         )
         if bucket["tokens"] >= 1.0:
             bucket["tokens"] -= 1.0
@@ -166,7 +215,21 @@ def _ping_rate_ok(origin_id: str) -> bool:
         return False
 
 
-def process_ping_request(req: Any, receiver: Any) -> tuple[int, dict[str, Any]]:
+_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+
+
+def _is_hex64(value: Any) -> bool:
+    """HMAC-SHA256 hexdigest shape. Checked before ``hmac.compare_digest``,
+    which raises TypeError on a non-ASCII ``str``."""
+    return (
+        isinstance(value, str) and len(value) == 64
+        and all(c in _HEX_CHARS for c in value)
+    )
+
+
+def process_ping_request(
+    req: Any, receiver: Any, *, client_addr: str | None = None,
+) -> tuple[int, dict[str, Any]]:
     """ADR-0199: shared core of the receiver-side ping (both backends).
 
     Takes the parsed JSON body and the RemoteTriggerReceiver instance;
@@ -180,6 +243,9 @@ def process_ping_request(req: Any, receiver: Any) -> tuple[int, dict[str, Any]]:
     pairing ids cannot be enumerated. No nonce store — replay within the
     ±30s freshness window is accepted by design (a replayed ping only
     reconfirms liveness).
+
+    ``client_addr`` (the TCP peer address, when the host knows it) keys the
+    pre-auth rate limit; see ``_PING_RATE_BUCKETS``.
     """
     import hashlib
     import hmac as _hmac
@@ -213,15 +279,26 @@ def process_ping_request(req: Any, receiver: Any) -> tuple[int, dict[str, Any]]:
     if isinstance(issued_at, bool) or not isinstance(issued_at, int):
         return 400, {"reason": "invalid_issued_at"}
 
-    # Rate-limit BEFORE any disk work (ADR-0199 Decision 7): a flood of pings
-    # (valid or not) must not burn CPU/disk via OriginRegistry.load. Uses the
-    # ping-only bounded bucket map — see _PING_RATE_BUCKETS above for why the
-    # receiver's post-HMAC /receive buckets must NOT be reused here.
+    # Pre-auth rate limit BEFORE any disk work (ADR-0199 Decision 7): a flood
+    # of pings (valid or not) must not burn CPU/disk via OriginRegistry.load.
+    # Keyed on the SOURCE, never on the claimed origin_id — see
+    # _PING_RATE_BUCKETS above.
     try:
-        if not _ping_rate_ok(origin_id[:128]):
+        _src = f"addr:{str(client_addr)[:64]}" if client_addr else "anon"
+        _claimed = str(origin_id)[:128] if isinstance(origin_id, str) else "?"
+        _pre_ok = (_ping_rate_ok(f"{_src}|origin:{_claimed}", _PING_PREAUTH_PAIR_RPM)
+                   and _ping_rate_ok(_src, _PING_FLOOD_CEILING_RPM))
+        if not _pre_ok:
             return 429, {"reason": "rate_limited"}
     except Exception:
         pass  # rate limiting is a shield, never a crash source
+
+    # A signature that is not a 64-char hex digest can never verify; refuse it
+    # with the SAME opaque 403 as an unknown origin (it used to reach
+    # compare_digest and raise TypeError on non-ASCII — a 500 for known
+    # origins only, i.e. an origin-existence oracle).
+    if not _is_hex64(signature):
+        return 403, {"reason": "ping_rejected"}
 
     # Load origin config from the SAME registry the receiver was built with
     # (build_server wires origins_dir into the receiver; a separate
@@ -252,14 +329,26 @@ def process_ping_request(req: Any, receiver: Any) -> tuple[int, dict[str, Any]]:
         # Malformed origin config (non-hex/missing hmac_key) — same opaque
         # rejection, never an unhandled exception in the handler thread.
         return 403, {"reason": "ping_rejected"}
-    if not _hmac.compare_digest(signature, expected_sig):
+    if not _hmac.compare_digest(signature.lower(), expected_sig):
         return 403, {"reason": "ping_rejected"}
 
     # Verify freshness (±30s window) — authenticated callers only, so the
-    # distinct reason is safe and aids clock-skew diagnostics.
+    # distinct reason is safe and aids clock-skew diagnostics. BEFORE the
+    # budget (round 7): a replayed stale ping must not cost a token.
     now = int(_time_module.time())
     if abs(now - issued_at) > 30:
         return 400, {"reason": "stale_ping"}
+
+    # Post-auth per-origin budget — only the key holder can spend it, and a
+    # REPEATED ping_id inside the window (a replay; pings carry no nonce) is
+    # answered without charging, so replays cannot drain the real peer's
+    # budget into 429s.
+    try:
+        if not _ping_seen(origin_id[:128], str(ping_id)[:128]):
+            if not _ping_rate_ok(f"origin:{origin_id[:128]}"):
+                return 429, {"reason": "rate_limited"}
+    except Exception:
+        pass
 
     # Record heartbeat (if supported)
     try:
@@ -329,6 +418,47 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
     # in one TCP burst); an attacker who can send 4 MiB in 30 s is already
     # inside the network and rate-limiting applies.
     timeout: int = 30
+
+    # Whole-request READ deadline (2026-09-25). ``timeout`` above is per
+    # recv() call, so a peer trickling one byte every <30 s held a handler
+    # thread forever (measured: 50 threads alive after 5x the timeout). The
+    # deadline bounds request line + headers + body together; it is enforced
+    # by the server's _ReadDeadlineWatchdog (shutdown of the socket) and is
+    # DISARMED once the body is read, so a long-running receive() (worker
+    # spawn, up to ttl_s) is never cut off.
+    request_read_deadline_s: float = 30.0
+
+    def setup(self) -> None:
+        super().setup()
+        self._deadline_token = None
+        watchdog = getattr(self.server, "read_watchdog", None)
+        if watchdog is not None:
+            self._deadline_token = watchdog.arm(
+                self.connection, float(self.request_read_deadline_s))
+
+    def _disarm_read_deadline(self) -> None:
+        token = getattr(self, "_deadline_token", None)
+        if token is not None:
+            self._deadline_token = None
+            watchdog = getattr(self.server, "read_watchdog", None)
+            if watchdog is not None:
+                watchdog.disarm(token)
+
+    def finish(self) -> None:
+        self._disarm_read_deadline()
+        try:
+            super().finish()
+        except OSError:
+            pass  # peer gone / socket shut down by the deadline watchdog
+
+    def _read_body(self, length: int) -> bytes:
+        raw = self.rfile.read(length)
+        if len(raw) < length:
+            # Short read = EOF (peer closed, or the read deadline shut the
+            # socket). Never hand a truncated body to a parser.
+            raise ConnectionAbortedError("short_body")
+        self._disarm_read_deadline()
+        return raw
 
     # Silence default request logging (operator can re-enable via env).
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -451,7 +581,7 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(413, b'{"reason":"body_too_large_or_empty"}\n')
             return
 
-        raw = self.rfile.read(length)
+        raw = self._read_body(length)
         try:
             body = json.loads(raw)
         except Exception:
@@ -489,7 +619,7 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(413, b'{"reason":"body_too_large_or_empty"}\n')
             return
 
-        raw = self.rfile.read(length)
+        raw = self._read_body(length)
         try:
             body = json.loads(raw)
         except Exception:
@@ -565,7 +695,7 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(413, b'{"reason":"body_too_large_or_empty"}\n')
             return
 
-        raw = self.rfile.read(length)
+        raw = self._read_body(length)
         try:
             req = json.loads(raw)
         except Exception:
@@ -575,7 +705,10 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(400, b'{"reason":"envelope_not_object"}\n')
             return
 
-        status, payload = process_ping_request(req, self.receiver)
+        peer = self.client_address[0] if self.client_address else None
+        status, payload = process_ping_request(
+            req, self.receiver, client_addr=str(peer) if peer else None,
+        )
         self._respond(status, (json.dumps(payload) + "\n").encode())
 
     def _handle_friendship_ack(self) -> None:
@@ -596,7 +729,7 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(413, b'{"reason":"body_too_large_or_empty"}\n')
             return
 
-        raw = self.rfile.read(length)
+        raw = self._read_body(length)
         try:
             req = json.loads(raw)
         except Exception:
@@ -647,6 +780,179 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _ReadDeadlineWatchdog:
+    """One thread per server that shuts down sockets whose request READ
+    deadline passed. Cheaper than a timer thread per connection and immune
+    to per-recv trickling (which ``socket.settimeout`` alone is not)."""
+
+    _TICK_S = 0.1
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._armed: dict[int, tuple[float, socket.socket]] = {}
+        self._next = 0
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self.expired = 0
+
+    def arm(self, sock: socket.socket, seconds: float) -> int:
+        with self._lock:
+            self._next += 1
+            token = self._next
+            self._armed[token] = (time.monotonic() + seconds, sock)
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, name="a2a-read-deadline", daemon=True)
+                self._thread.start()
+            return token
+
+    def disarm(self, token: int) -> None:
+        with self._lock:
+            self._armed.pop(token, None)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._TICK_S):
+            now = time.monotonic()
+            with self._lock:
+                due = [t for t, (dl, _) in self._armed.items() if dl <= now]
+                socks = [self._armed.pop(t)[1] for t in due]
+            for sock in socks:
+                self.expired += 1
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+
+class HardenedThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer with the slowloris defences the stdlib lacks.
+
+    * ``peer_filter(addr) -> (ok, status, reason)`` runs at ACCEPT time
+      (``verify_request``), before a handler thread exists or a byte is read;
+      a refusal is answered with a tiny fixed response and the socket closed.
+    * at most ``max_handler_threads`` handler threads (and at most
+      ``max_per_peer`` per source address, when set); beyond that the
+      connection gets an immediate 503 instead of a thread.
+    * a whole-request read deadline via :class:`_ReadDeadlineWatchdog`
+      (handler side: ``_A2AHandler.request_read_deadline_s``).
+    """
+
+    daemon_threads = True
+    max_handler_threads: int = 64
+    max_per_peer: int | None = None
+
+    def __init__(self, server_address, handler_cls, *, peer_filter=None,
+                 on_reject=None, max_handler_threads: int | None = None,
+                 max_per_peer: int | None = None, bind_and_activate: bool = True):
+        self.peer_filter = peer_filter
+        self.on_reject = on_reject
+        if max_handler_threads is not None:
+            self.max_handler_threads = max_handler_threads
+        if max_per_peer is not None:
+            self.max_per_peer = max_per_peer
+        self._slots = threading.BoundedSemaphore(self.max_handler_threads)
+        self._per_peer: dict[str, int] = {}
+        self._per_peer_lock = threading.Lock()
+        self.read_watchdog = _ReadDeadlineWatchdog()
+        super().__init__(server_address, handler_cls, bind_and_activate)
+
+    @staticmethod
+    def _peer_key(client_address: Any) -> str:
+        try:
+            return str(client_address[0])
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _refuse(self, request: Any, status: int, reason: str) -> None:
+        phrase = {403: "Forbidden", 429: "Too Many Requests",
+                  503: "Service Unavailable"}.get(status, "Error")
+        body = json.dumps({"reason": reason}).encode() + b"\n"
+        head = (f"HTTP/1.0 {status} {phrase}\r\n"
+                "Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n")
+        try:
+            request.settimeout(1.0)
+            request.sendall(head.encode() + body)
+        except OSError:
+            pass
+        if self.on_reject is not None:
+            try:
+                self.on_reject(reason)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def verify_request(self, request, client_address) -> bool:  # noqa: D401
+        if self.peer_filter is None:
+            return True
+        try:
+            ok, status, reason = self.peer_filter(self._peer_key(client_address))
+        except Exception:  # noqa: BLE001 — a broken filter refuses (fail-closed)
+            ok, status, reason = False, 403, "peer_not_allowed"
+        if not ok:
+            self._refuse(request, status, reason)
+        return ok
+
+    def process_request(self, request, client_address) -> None:
+        if not self._slots.acquire(blocking=False):
+            self._refuse(request, 503, "overloaded")
+            self.shutdown_request(request)
+            return
+        peer = self._peer_key(client_address)
+        if self.max_per_peer is not None:
+            with self._per_peer_lock:
+                n = self._per_peer.get(peer, 0)
+                if n >= self.max_per_peer:
+                    admitted = False
+                else:
+                    self._per_peer[peer] = n + 1
+                    admitted = True
+            if not admitted:
+                self._slots.release()
+                self._refuse(request, 503, "overloaded")
+                self.shutdown_request(request)
+                return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._release(peer)
+            raise
+
+    def _release(self, peer: str) -> None:
+        if self.max_per_peer is not None:
+            with self._per_peer_lock:
+                n = self._per_peer.get(peer, 0) - 1
+                if n > 0:
+                    self._per_peer[peer] = n
+                else:
+                    self._per_peer.pop(peer, None)
+        self._slots.release()
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release(self._peer_key(client_address))
+
+    def handle_error(self, request, client_address) -> None:
+        # A peer that vanished or was cut off by the read deadline is not an
+        # error worth a traceback on stderr.
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (OSError, ConnectionError)):
+            return
+        super().handle_error(request, client_address)
+
+    def server_close(self) -> None:
+        self.read_watchdog.stop()
+        super().server_close()
+
+    def active_handlers(self) -> int:
+        """Handler threads currently admitted (diagnostics / tests)."""
+        return self.max_handler_threads - self._slots._value  # noqa: SLF001
+
+
 def build_server(
     *,
     host: str = "127.0.0.1",
@@ -661,8 +967,8 @@ def build_server(
     google_a2a_enabled: bool = False,
     agent_card_overrides: dict | None = None,
     forge_se: Any = None,
-) -> http.server.ThreadingHTTPServer:
-    """Build (but do not start) a ThreadingHTTPServer with a bound receiver.
+) -> HardenedThreadingHTTPServer:
+    """Build (but do not start) a hardened ThreadingHTTPServer with a bound receiver.
 
     Port 0 → OS picks an ephemeral port; read it back via
     ``server.server_address[1]``.
@@ -726,7 +1032,7 @@ def build_server(
     _Handler.google_adapter = google_adapter
     _Handler.endpoints_dir = endpoints_dir
     _Handler.pending_dir = pending_dir
-    return http.server.ThreadingHTTPServer((host, port), _Handler)
+    return HardenedThreadingHTTPServer((host, port), _Handler)
 
 
 def serve_in_thread(server: http.server.ThreadingHTTPServer) -> threading.Thread:

@@ -346,12 +346,18 @@ class TestMed03RawOutputCap(unittest.TestCase):
         result = parse_worker_output("Hello, world!")
         self.assertEqual(result, {"output": "Hello, world!"})
 
-    def test_output_over_cap_returns_empty(self):
-        """Non-JSON output exceeding cap must return {} (not the raw text)."""
-        big = "x" * (MAX_RAW_OUTPUT_FALLBACK_BYTES + 1)
+    def test_output_over_cap_is_truncated_to_cap(self):
+        """Non-JSON output exceeding the cap is TRUNCATED to it (marker
+        included), never returned whole (MED-03). A2A review r4: it used to be
+        dropped to {}, which made every long conversational answer arrive
+        empty; the exfiltration ceiling is exactly as tight either way."""
+        big = "x" * (MAX_RAW_OUTPUT_FALLBACK_BYTES * 3)
         result = parse_worker_output(big)
-        self.assertEqual(result, {},
-            "Oversized raw output must return {} to prevent exfiltration (MED-03)")
+        self.assertIn("output", result)
+        self.assertLessEqual(len(result["output"].encode("utf-8")),
+                             MAX_RAW_OUTPUT_FALLBACK_BYTES,
+                             "Oversized raw output must stay within the MED-03 cap")
+        self.assertIn("truncated", result["output"])
 
     def test_json_output_not_affected_by_cap(self):
         """Valid JSON output bypasses the raw-output path entirely."""
@@ -973,7 +979,10 @@ class TestIter4NonceFallbackWarning(unittest.TestCase):
             # so importlib.reload() is not needed and must not be used (it
             # re-creates all class objects and breaks isinstance checks in
             # other test modules that imported before the reload).
-            with patch.dict(sys.modules, {"a2a_nonce_store": None}):
+            # The in-memory fallback is fail-closed since 2026-06-25 and only
+            # reachable with the explicit operator opt-in this test sets.
+            with patch.dict(sys.modules, {"a2a_nonce_store": None}), \
+                    patch.dict(os.environ, {"CORVIN_A2A_ALLOW_EPHEMERAL_NONCE": "1"}):
                 with patch("sys.stderr", captured):
                     try:
                         RemoteTriggerReceiver(origins_dir=origins)
@@ -1139,7 +1148,10 @@ class TestIter5NonceFallbackNotStaticMethod(unittest.TestCase):
             origins = Path(td) / "origins"
             origins.mkdir()
             # Simulate import failure of a2a_nonce_store
-            with patch.dict(sys.modules, {"a2a_nonce_store": None}):
+            # The in-memory fallback is fail-closed since 2026-06-25 and only
+            # reachable with the explicit operator opt-in this test sets.
+            with patch.dict(sys.modules, {"a2a_nonce_store": None}), \
+                    patch.dict(os.environ, {"CORVIN_A2A_ALLOW_EPHEMERAL_NONCE": "1"}):
                 from remote_trigger_receiver import RemoteTriggerReceiver as _R
                 try:
                     receiver = _R(origins_dir=origins)

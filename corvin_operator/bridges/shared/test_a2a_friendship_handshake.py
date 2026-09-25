@@ -67,6 +67,45 @@ def tearDownModule() -> None:
             sys.modules[name] = mod
 
 
+# ── two instances, one process: distinct instance ids ─────────────────
+#
+# Acks carry an HMAC-covered sender_instance_id and a receiver refuses an ack
+# whose sender is ITSELF (reflection, 2026-09-25). Both in-process "instances"
+# would otherwise resolve the same process-wide instance id. Acks are only
+# ever PROCESSED by A (in its server threads, or on the main thread inside an
+# explicit ``as_side(IID_A)`` block) and SENT by B (main thread), so the id is
+# chosen per thread, with an explicit override for direct calls.
+import contextlib as _contextlib  # noqa: E402
+import threading as _threading  # noqa: E402
+
+IID_A = "11111111-1111-4111-8111-111111111111"
+IID_B = "22222222-2222-4222-8222-222222222222"
+_side_tls = _threading.local()
+
+
+def _fake_local_instance_id() -> str:
+    forced = getattr(_side_tls, "iid", None)
+    if forced is not None:
+        return forced
+    return IID_B if _threading.current_thread() is _threading.main_thread() else IID_A
+
+
+@_contextlib.contextmanager
+def as_side(iid: str):
+    prev = getattr(_side_tls, "iid", None)
+    _side_tls.iid = iid
+    try:
+        yield
+    finally:
+        _side_tls.iid = prev
+
+
+def patch_instance_ids(testcase: unittest.TestCase) -> None:
+    patcher = mock.patch.object(ft, "_local_instance_id", _fake_local_instance_id)
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
+
+
 @dataclass
 class _Instance:
     label: str
@@ -90,6 +129,10 @@ def _build_instance(label: str, tmpdir: Path) -> _Instance:
         endpoints_dir=endpoints,
         pending_dir=pending,
         nonce_store=rtr.NonceStore(),
+        # Distinct receiver identities for the two in-process instances: the
+        # sender refuses a signed response carrying its OWN instance id
+        # (reflection guard), which one shared process id would trip.
+        instance_id={"a": IID_A, "b": IID_B}.get(label),
     )
     a2a_http_server.serve_in_thread(server)
     host, port = server.server_address[:2]
@@ -117,6 +160,7 @@ class TestFriendshipHandshake(unittest.TestCase):
         # logic instead of re-proving the host classifier.
         self._gate_patch = mock.patch.object(ft, "_ack_url_rejection_reason", lambda url: None)
         self._gate_patch.start()
+        patch_instance_ids(self)
 
     def tearDown(self):
         self._gate_patch.stop()
@@ -192,7 +236,10 @@ class TestFriendshipHandshake(unittest.TestCase):
 
         # Declare a URL nothing listens on (closed port on loopback).
         dead_url = "http://127.0.0.1:1"
-        ack = ft.send_friendship_ack(redeemed, my_url=dead_url)
+        # Generous timeout: the issuer pings the dead URL back (and may try a
+        # relay if an earlier test in a full run left the flag on) before it
+        # answers; this test is about the resulting state, not latency.
+        ack = ft.send_friendship_ack(redeemed, my_url=dead_url, timeout_s=30)
         self.assertTrue(ack.get("ok"), msg=ack)
         self.assertFalse(ack.get("reachable"), msg=ack)
 
@@ -245,6 +292,7 @@ class TestRetryFriendshipAck(unittest.TestCase):
         self.B = _build_instance("b", self.tmpdir)
         self._gate_patch = mock.patch.object(ft, "_ack_url_rejection_reason", lambda url: None)
         self._gate_patch.start()
+        patch_instance_ids(self)
 
     def tearDown(self):
         self._gate_patch.stop()
@@ -321,10 +369,11 @@ class TestRetryFriendshipAck(unittest.TestCase):
             hmac_key, _recv_key = ft._derive_channel_keys(redeemed.key)
             plain = ft.decrypt_from_relay(hmac_key, nonce_hex, ciphertext_hex)
             req = json.loads(plain)
-            status, resp = ft.process_friendship_ack_request(
-                req, pending_dir=self.A.pending_dir,
-                origins_dir=self.A.origins_dir, endpoints_dir=self.A.endpoints_dir,
-            )
+            with as_side(IID_A):  # A processes the ack (on this thread)
+                status, resp = ft.process_friendship_ack_request(
+                    req, pending_dir=self.A.pending_dir,
+                    origins_dir=self.A.origins_dir, endpoints_dir=self.A.endpoints_dir,
+                )
             self.assertEqual(status, 200, msg=resp)
             n, c = ft.encrypt_for_relay(hmac_key, json.dumps(resp).encode("utf-8"))
             return {"nonce": n, "ciphertext": c}
@@ -377,19 +426,39 @@ class TestRepeatAck(unittest.TestCase):
         return redeemed
 
     def _signed_ack(self, kid: str, peer_url: str, *, issued_at: int | None = None,
-                    key: str | None = None) -> dict:
+                    key: str | None = None, sender: str | None = IID_B) -> dict:
+        """An ack as B builds it: legacy ``signature`` always, plus the v2
+        signature over ``sender_instance_id`` unless ``sender`` is None (an
+        ack from a previous-version peer)."""
         b_endpoint = json.loads((self.B.endpoints_dir / f"{kid}.json").read_text("utf-8"))
+        k = bytes.fromhex(key or b_endpoint["hmac_key"])
         body = {"kid": kid, "issued_at": issued_at or int(time.time()), "peer_url": peer_url}
         canon = json.dumps(body, separators=(",", ":"), sort_keys=True)
-        body["signature"] = hmac.new(
-            bytes.fromhex(key or b_endpoint["hmac_key"]), canon.encode(), "sha256").hexdigest()
+        body["signature"] = hmac.new(k, canon.encode(), "sha256").hexdigest()
+        if sender is not None:
+            v2 = dict(body, sender_instance_id=sender)
+            v2.pop("signature")
+            canon2 = json.dumps(v2, separators=(",", ":"), sort_keys=True)
+            body["sender_instance_id"] = sender
+            body["signature_v2"] = hmac.new(k, canon2.encode(), "sha256").hexdigest()
+            # v3 (ADR-2064): B's binding key + a MAC under the ECDH binding
+            # secret, which A requires for any change once it knows B's key.
+            # Both sides of this in-process sandbox share one key file, so
+            # the peer's public key is our own.
+            import a2a_binding as _bind
+            pub = _bind.local_bind_pub()
+            canon3 = ft._ack_canonical(kid, body["issued_at"], peer_url, None, sender, pub)
+            body["bind_pub"] = pub
+            body["signature_v3"] = hmac.new(k, canon3, "sha256").hexdigest()
+            body["bind_mac"] = _bind.bind_mac(pub, kid, canon3)
         return body
 
     def _process(self, req: dict):
-        return ft.process_friendship_ack_request(
-            req, pending_dir=self.A.pending_dir,
-            origins_dir=self.A.origins_dir, endpoints_dir=self.A.endpoints_dir,
-        )
+        with as_side(IID_A):  # A is the receiving side
+            return ft.process_friendship_ack_request(
+                req, pending_dir=self.A.pending_dir,
+                origins_dir=self.A.origins_dir, endpoints_dir=self.A.endpoints_dir,
+            )
 
     def test_repeat_ack_after_pending_consumed_succeeds(self):
         redeemed = self._pair()
@@ -407,7 +476,11 @@ class TestRepeatAck(unittest.TestCase):
         stale["state"] = "UNREACHABLE"
         ep_path.write_text(json.dumps(stale), encoding="utf-8")
 
-        status, resp = self._process(self._signed_ack(redeemed.kid, self.B.base_url))
+        # The loopback-only sandbox cannot satisfy the reconnect host gate
+        # (loopback is forbidden, as it must be); that gate is exercised with
+        # real address literals in test_a2a_friendship_security.py.
+        with mock.patch.object(ft, "_reconnect_url_rejection_reason", lambda new, prev: None):
+            status, resp = self._process(self._signed_ack(redeemed.kid, self.B.base_url))
         self.assertEqual(status, 200, resp)
         self.assertTrue(resp["reachable"])
         healed = json.loads(ep_path.read_text("utf-8"))

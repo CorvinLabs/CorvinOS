@@ -40,6 +40,7 @@ CI lint: module MUST NOT import the anthropic SDK.
 """
 from __future__ import annotations
 
+import functools
 import json
 import threading
 import time
@@ -55,7 +56,25 @@ from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 
 _MAX_QUEUE_PER_KID = 32          # bounded — a liveness bridge, not a mailbox
 _QUEUE_TTL_S = 300.0             # 5 min — long enough for a brief reconnect
-_MAX_MESSAGE_BYTES = 512 * 1024  # ciphertext + envelope overhead; generous
+# 2026-09-25 size alignment. The old single 512 KB frame cap could not carry
+# what the direct path carries: an A2A envelope may hold 1 MiB of attachments
+# (a2a_attachments.MAX_ATTACHMENTS_TOTAL_BYTES), base64-expanded to ~1.4 MB of
+# JSON, which encrypt_for_relay then HEX-encodes (x2) — ~2.8 MB on the wire.
+# Worse, _validate_deliver allowed 1 MB of ciphertext while the raw-frame
+# check had already refused anything above 512 KB, so the two limits
+# disagreed and the effective cap was undocumented. One chain now, derived
+# from the plaintext cap: the relay carries any payload the direct HTTP path
+# accepts (a2a_http_server's 4 MiB inbound body cap).
+_MAX_PLAINTEXT_BYTES = 4 * 1024 * 1024                  # == direct inbound cap
+_MAX_CIPHERTEXT_HEX = 2 * (_MAX_PLAINTEXT_BYTES + 16)    # hex(ciphertext || GCM tag)
+_FRAME_OVERHEAD_BYTES = 4096                             # type/kids/nonce/task_id/tags
+_MAX_MESSAGE_BYTES = _MAX_CIPHERTEXT_HEX + _FRAME_OVERHEAD_BYTES
+# websockets' client default max_size is 1 MiB: a listener or sender that
+# kept it would be torn down (close 1009) by the first legitimate large
+# frame. Every client connection in this module passes this explicitly.
+_WS_CLIENT_MAX_SIZE = _MAX_MESSAGE_BYTES + _FRAME_OVERHEAD_BYTES
+# One full-size frame per offline recipient (round 9); see RelayState._deliver.
+_MAX_QUEUE_BYTES_PER_KID = _MAX_MESSAGE_BYTES
 _MAX_KIDS_PER_CONNECTION = 64    # one operator process may pair with many peers
 # 2026-07-30 — memory-exhaustion DoS fix: `register()` accepted any
 # syntactically-valid kid from ANY unauthenticated caller (TOFU pinning is
@@ -90,6 +109,108 @@ _REPLY_KID_IDLE_TTL_S = 60.0               # an offline ephemeral reply slot aft
 # unbounded stale sockets: the oldest is un-claimed beyond this.
 _MAX_CONNECTIONS_PER_KID = 4
 
+# Receiver-side listener concurrency (2026-09-25). The listener used to await
+# each delivery inline, so one long worker run (bounded only by the envelope
+# ttl, 60 s by default) blocked every other peer's ping and task on the same
+# socket. Each delivery is now its own task; heavy dispatches (task envelopes,
+# friendship acks) are bounded by a semaphore, pings are not (they are cheap
+# and are exactly what must stay responsive). The in-flight cap bounds memory
+# if a peer floods the socket faster than we answer.
+_MAX_CONCURRENT_DELIVERIES = 16
+_MAX_INFLIGHT_DELIVERIES = 256
+
+async def _run_control(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Friendship acks / revoke notices: their own small executor, never
+    behind worker runs (round 3)."""
+    try:
+        import remote_trigger_receiver as _rtr  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        import asyncio as _aio  # noqa: PLC0415
+        return await _aio.to_thread(fn, *args, **kwargs)
+    return await _rtr.run_a2a_control(fn, *args, **kwargs)
+
+
+async def _run_work(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Heavy relay deliveries on the shared A2A work executor (never the
+    default pool pings use), with ContextVars carried like ``to_thread``."""
+    try:
+        import remote_trigger_receiver as _rtr  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — standalone relay process without receiver
+        import asyncio as _aio  # noqa: PLC0415
+        return await _aio.to_thread(fn, *args, **kwargs)
+    return await _rtr.run_a2a_work(fn, *args, **kwargs)
+
+
+# Prometheus label for relay-side metrics. The relay is not tenant-scoped (it
+# routes opaque ciphertext for any operator); the ADR-0007 default tenant is
+# used so the series line up with the collector's label schema.
+_METRICS_TENANT = "_default"
+
+# Closed set of relay error reasons a client may surface (ADR-0197
+# closed-template discipline: a relay-supplied string never flows verbatim).
+_RELAY_ERROR_REASONS = frozenset({
+    "message_too_large", "invalid_json", "envelope_not_object",
+    "invalid_register", "invalid_deliver", "unknown_message_type",
+})
+_REGISTER_REJECT_REASONS = frozenset({
+    "auth_key_mismatch", "too_many_kids", "relay_at_capacity",
+})
+
+
+def instance_tag(kid: str, instance_id: str) -> str:
+    """Per-kid pseudonymous tag for one INSTANCE's traffic on a shared kid.
+
+    A friendship kid (and its relay credential) is identical on both peers,
+    so the relay cannot tell the two peers' listeners apart. Both sides stamp
+    this tag — listeners on ``register`` (``instance_tag``), senders on
+    ``deliver`` (``from_instance_tag``) — so the relay can (a) skip the
+    sender's own listener and (b) QUEUE a delivery when the only live
+    connection is that own listener (the peer is reconnecting), instead of
+    reporting it "delivered" into a socket that drops it.
+
+    Derived with a label + the kid so the relay never learns the raw
+    instance_id and tags do not correlate across kids by value. Purely a
+    routing hint: a peer that lies about it can only hurt its own delivery.
+    Additive wire fields — an old relay ignores them, an old client omits
+    them (the relay then behaves exactly as before).
+    """
+    import hashlib as _hl  # noqa: PLC0415
+    return _hl.sha256(
+        f"a2a-relay-instance-tag-v1|{kid}|{instance_id}".encode("utf-8")
+    ).hexdigest()[:32]
+
+
+def _valid_tag(value: Any) -> str | None:
+    if isinstance(value, str) and 16 <= len(value) <= 64 and all(
+            c in "0123456789abcdef" for c in value):
+        return value
+    return None
+
+
+def _metrics_collector() -> Any:
+    """The process-wide relay metrics collector, or None (best-effort: a
+    metrics failure must never interrupt routing)."""
+    try:
+        import a2a_relay_metrics as _m  # type: ignore[import-not-found]  # noqa: PLC0415
+        return _m.get_relay_metrics()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _extract_task_id(raw: str) -> str | None:
+    """Best-effort task_id from an oversize frame WITHOUT parsing it.
+
+    json.dumps emits keys in insertion order and every sender in this module
+    puts ``task_id`` last, so it sits in the frame's tail; the head is checked
+    too for other key orders. Bounded scan, never a full parse of a frame we
+    are refusing for its size."""
+    import re as _re  # noqa: PLC0415
+    for part in (raw[-512:], raw[:512]):
+        m = _re.search(r'"task_id"\s*:\s*"([A-Za-z0-9_\-:.]{1,128})"', part)
+        if m:
+            return m.group(1)
+    return None
+
 
 def _is_reply_kid(kid: str) -> bool:
     """Ephemeral per-send reply slot minted by remote_trigger_sender._relay_post
@@ -109,16 +230,20 @@ class _QueuedMessage:
     payload: dict[str, Any]
     expires_at: float
     nbytes: int = 0
+    # instance_tag of the SENDER (from_instance_tag), when it declared one —
+    # a flush never hands a message back to the instance that sent it.
+    from_tag: str | None = None
 
 
 @dataclass
 class _KidSlot:
-    """One routing slot: the pinned auth credential, the live connection (if
+    """One routing slot: the pinned auth credential, the live connections (if
     any), and a bounded queue for delivery while the owner is offline."""
     auth_key: str
-    # insertion-ordered set of live connection ids (dict keys) — see
+    # insertion-ordered live connection ids -> that connection's declared
+    # instance_tag (None for a listener that predates tags) — see
     # _MAX_CONNECTIONS_PER_KID for why a slot is no longer single-owner.
-    connection_ids: dict[str, None] = field(default_factory=dict)
+    connection_ids: dict[str, str | None] = field(default_factory=dict)
     queue: deque[_QueuedMessage] = field(default_factory=lambda: deque(maxlen=_MAX_QUEUE_PER_KID))
     # monotonic timestamp of the last register/deliver touching this slot —
     # drives the idle-slot reaper (A2/A3).
@@ -129,13 +254,28 @@ class RelayState:
     """In-memory routing table. One instance per relay process — deliberately
     NOT persisted (see module docstring: a relay holds no durable state)."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, metrics: Any = None) -> None:
         self._slots: dict[str, _KidSlot] = {}
         # connection_id -> {WebSocket, set of kids registered on it}
         self._connections: dict[str, tuple[WebSocket, set[str]]] = {}
         # running total of bytes held across every slot's queue — enforces the
-        # global ceiling so bounded slots × 512 KB payloads cannot exhaust RAM.
+        # global ceiling so bounded slots × large payloads cannot exhaust RAM.
         self._queued_bytes = 0
+        # Injected collector (tests) or the process-wide one (lazy). 2026-09-25:
+        # record_registration/record_delivery had zero callers, so /metrics
+        # exported constant zeros; they are now fed from here.
+        self._metrics = metrics
+
+    def metrics(self) -> Any:
+        return self._metrics if self._metrics is not None else _metrics_collector()
+
+    def _record(self, fn: str, *args: Any, **kwargs: Any) -> None:
+        try:
+            m = self.metrics()
+            if m is not None:
+                getattr(m, fn)(_METRICS_TENANT, *args, **kwargs)
+        except Exception:  # noqa: BLE001 — metrics never break routing
+            pass
 
     # ── reaper (A2/A3) ───────────────────────────────────────────────
 
@@ -166,8 +306,12 @@ class RelayState:
 
     # ── registration ────────────────────────────────────────────────
 
-    def register(self, connection_id: str, kid: str, auth_key: str) -> str | None:
+    def register(self, connection_id: str, kid: str, auth_key: str,
+                 instance_tag: str | None = None) -> str | None:
         """Claim (or reclaim) the routing slot for ``kid`` on this connection.
+
+        ``instance_tag`` (optional, see :func:`instance_tag`) identifies which
+        instance this connection belongs to on a shared kid.
 
         Returns None on success, or a fixed rejection-reason string:
           - "auth_key_mismatch" — a DIFFERENT credential was already pinned
@@ -178,48 +322,83 @@ class RelayState:
             _MAX_TOTAL_SLOTS); only applies to a BRAND NEW kid, never to one
             already tracked (re-registering/reconnecting always succeeds).
         """
+        outcome = self._register(connection_id, kid, auth_key, _valid_tag(instance_tag))
+        self._record("record_registration", outcome or "success")
+        return outcome
+
+    def _register(self, connection_id: str, kid: str, auth_key: str,
+                  tag: str | None) -> str | None:
         self._prune()  # reclaim dead slots before deciding we're at capacity
         slot = self._slots.get(kid)
         if slot is None:
             if len(self._slots) >= _MAX_TOTAL_SLOTS:
                 return "relay_at_capacity"
-            self._slots[kid] = _KidSlot(auth_key=auth_key, connection_ids={connection_id: None})
+            self._slots[kid] = _KidSlot(auth_key=auth_key, connection_ids={connection_id: tag})
             return None
         if slot.auth_key != auth_key:
             return "auth_key_mismatch"
         # Join the slot (re-registration moves this connection to the newest
         # position); evict the oldest beyond the cap.
         slot.connection_ids.pop(connection_id, None)
-        slot.connection_ids[connection_id] = None
+        slot.connection_ids[connection_id] = tag
         while len(slot.connection_ids) > _MAX_CONNECTIONS_PER_KID:
             oldest = next(iter(slot.connection_ids))
             del slot.connection_ids[oldest]
         slot.last_active = time.monotonic()
         return None
 
-    def flush_queue(self, kid: str) -> list[dict[str, Any]]:
+    def flush_queue(self, kid: str, instance_tag: str | None = None) -> list[dict[str, Any]]:
         """Pop and return every non-expired queued message for ``kid``, in
-        delivery order. Called right after a successful registration."""
+        delivery order. Called right after a successful registration.
+
+        A message whose sender declared the SAME instance tag as the
+        registering connection stays queued: handing a peer's queued task to
+        the sender's own (reconnecting) listener would drop it — it is kept
+        for the peer's registration instead."""
         slot = self._slots.get(kid)
         if slot is None:
             return []
+        tag = _valid_tag(instance_tag)
         now = time.monotonic()
         out: list[dict[str, Any]] = []
+        keep: list[_QueuedMessage] = []
         while slot.queue:
             item = slot.queue.popleft()
+            if item.expires_at < now:
+                self._queued_bytes -= item.nbytes
+                continue
+            if tag is not None and item.from_tag == tag:
+                keep.append(item)
+                continue
             self._queued_bytes -= item.nbytes
-            if item.expires_at >= now:
-                out.append(item.payload)
+            out.append(item.payload)
+        slot.queue.extend(keep)
         return out
 
     # ── delivery ────────────────────────────────────────────────────
 
-    async def deliver(self, to_kid: str, payload: dict[str, Any]) -> str:
+    async def deliver(self, to_kid: str, payload: dict[str, Any], *,
+                      from_instance_tag: str | None = None) -> str:
         """Forward ``payload`` to every live connection of ``to_kid``, or queue it.
 
         Returns "delivered", "queued", or "dropped" (queue full / unknown
         kid with no prior registration at all — nothing to queue against).
+
+        ``from_instance_tag``: the sender's instance tag. A connection that
+        declared the same tag is the SENDER'S OWN listener on this shared kid;
+        it is skipped and never counts as a delivery. If it was the only live
+        connection, the message is queued for the peer's reconnect (2026-09-25:
+        it used to count as "delivered" and was silently dropped by that
+        listener's self-delivery guard, so the peer never got it).
         """
+        t0 = time.monotonic()
+        outcome = await self._deliver(to_kid, payload, _valid_tag(from_instance_tag))
+        self._record("record_delivery", outcome,
+                     latency_ms=(time.monotonic() - t0) * 1000.0)
+        return outcome
+
+    async def _deliver(self, to_kid: str, payload: dict[str, Any],
+                       from_tag: str | None) -> str:
         self._prune()  # keep expired items from counting against the byte budget
         slot = self._slots.get(to_kid)
         if slot is None:
@@ -230,7 +409,9 @@ class RelayState:
         if slot.connection_ids:
             text = json.dumps(payload)
             delivered = False
-            for cid in list(slot.connection_ids):
+            for cid, conn_tag in list(slot.connection_ids.items()):
+                if from_tag is not None and conn_tag == from_tag:
+                    continue  # the sender's own listener — not the recipient
                 conn = self._connections.get(cid)
                 if conn is None:
                     slot.connection_ids.pop(cid, None)
@@ -246,13 +427,20 @@ class RelayState:
         if len(slot.queue) >= _MAX_QUEUE_PER_KID:
             return "dropped"
         # Global byte-budget: bounded slot COUNT is not enough on its own — a
-        # cap of slots × 512 KB queued payloads would still be ~5 GB. Refuse to
-        # queue once the process-wide ceiling is reached (A2).
+        # cap of slots × large queued payloads would still be many GB. Refuse
+        # to queue once the process-wide ceiling is reached (A2).
         nbytes = len(json.dumps(payload))
         if self._queued_bytes + nbytes > _MAX_TOTAL_QUEUE_BYTES:
             return "dropped"
+        # Per-slot budget (round 9): with frames up to _MAX_MESSAGE_BYTES, one
+        # kid's 32 slots could hold several times the global ceiling, so a
+        # single self-registered kid filled the whole budget and every other
+        # offline peer's delivery was dropped for the queue TTL.
+        if sum(q.nbytes for q in slot.queue) + nbytes > _MAX_QUEUE_BYTES_PER_KID:
+            return "dropped"
         slot.queue.append(_QueuedMessage(
-            payload=payload, expires_at=time.monotonic() + _QUEUE_TTL_S, nbytes=nbytes))
+            payload=payload, expires_at=time.monotonic() + _QUEUE_TTL_S,
+            nbytes=nbytes, from_tag=from_tag))
         self._queued_bytes += nbytes
         return "queued"
 
@@ -261,6 +449,7 @@ class RelayState:
     def open_connection(self, ws: WebSocket) -> str:
         connection_id = uuid.uuid4().hex
         self._connections[connection_id] = (ws, set())
+        self._record("update_active_connections", len(self._connections))
         return connection_id
 
     def note_registered_kid(self, connection_id: str, kid: str) -> None:
@@ -276,6 +465,7 @@ class RelayState:
         conn = self._connections.pop(connection_id, None)
         if conn is None:
             return
+        self._record("update_active_connections", len(self._connections))
         _ws, kids = conn
         now = time.monotonic()
         for kid in kids:
@@ -317,14 +507,29 @@ def _validate_deliver(msg: dict[str, Any]) -> dict[str, Any] | None:
     task_id = msg.get("task_id")
     if not all(isinstance(v, str) and v for v in (to_kid, from_kid, nonce, ciphertext, task_id)):
         return None
-    if len(to_kid) > 128 or len(from_kid) > 128 or len(task_id) > 128:
+    if len(to_kid) > 128 or len(from_kid) > 128 or len(task_id) > 128 or len(nonce) > 64:
         return None
-    if len(ciphertext) > _MAX_MESSAGE_BYTES * 2:  # hex doubles byte length
+    # Same limit the sender pre-checks (relay_deliver_and_wait) — one chain,
+    # derived from _MAX_PLAINTEXT_BYTES; see the tunables block.
+    if len(ciphertext) > _MAX_CIPHERTEXT_HEX:
         return None
+    # The forwarded payload is rebuilt from known keys only; transport hints
+    # (from_instance_tag) are consumed by the relay, never forwarded.
     return {
         "type": "deliver", "to_kid": to_kid, "from_kid": from_kid,
         "nonce": nonce, "ciphertext": ciphertext, "task_id": task_id,
     }
+
+
+def _error_frame(reason: str, task_id: Any = None) -> str:
+    """Relay error frame. Echoes ``task_id`` when one is known (2026-09-25):
+    the frame used to carry no correlation, so a sender whose deliver was
+    refused (e.g. too large) ignored it and waited out its full timeout.
+    Additive field — an old client ignores it."""
+    frame: dict[str, Any] = {"type": "error", "reason": reason}
+    if isinstance(task_id, str) and 0 < len(task_id) <= 128:
+        frame["task_id"] = task_id
+    return json.dumps(frame)
 
 
 # ── FastAPI wiring ───────────────────────────────────────────────────────
@@ -343,18 +548,16 @@ def build_relay_router(state: RelayState) -> APIRouter:
             while True:
                 raw = await websocket.receive_text()
                 if len(raw) > _MAX_MESSAGE_BYTES:
-                    await websocket.send_text(json.dumps(
-                        {"type": "error", "reason": "message_too_large"}))
+                    await websocket.send_text(_error_frame(
+                        "message_too_large", _extract_task_id(raw)))
                     continue
                 try:
                     msg = json.loads(raw)
                 except (ValueError, TypeError):
-                    await websocket.send_text(json.dumps(
-                        {"type": "error", "reason": "invalid_json"}))
+                    await websocket.send_text(_error_frame("invalid_json"))
                     continue
                 if not isinstance(msg, dict):
-                    await websocket.send_text(json.dumps(
-                        {"type": "error", "reason": "envelope_not_object"}))
+                    await websocket.send_text(_error_frame("envelope_not_object"))
                     continue
 
                 msg_type = msg.get("type")
@@ -365,38 +568,39 @@ def build_relay_router(state: RelayState) -> APIRouter:
                         continue
                     parsed = _validate_register(msg)
                     if parsed is None:
-                        await websocket.send_text(json.dumps(
-                            {"type": "error", "reason": "invalid_register"}))
+                        await websocket.send_text(_error_frame("invalid_register"))
                         continue
                     kid, auth_key = parsed
-                    rejection = state.register(connection_id, kid, auth_key)
+                    tag = _valid_tag(msg.get("instance_tag"))
+                    rejection = state.register(connection_id, kid, auth_key, tag)
                     if rejection is not None:
                         await websocket.send_text(json.dumps(
                             {"type": "register_rejected", "kid": kid, "reason": rejection}))
                         continue
                     state.note_registered_kid(connection_id, kid)
                     await websocket.send_text(json.dumps({"type": "registered", "kid": kid}))
-                    for queued in state.flush_queue(kid):
+                    for queued in state.flush_queue(kid, tag):
                         await websocket.send_text(json.dumps(queued))
 
                 elif msg_type == "deliver":
                     parsed_deliver = _validate_deliver(msg)
                     if parsed_deliver is None:
-                        await websocket.send_text(json.dumps(
-                            {"type": "error", "reason": "invalid_deliver"}))
+                        await websocket.send_text(_error_frame(
+                            "invalid_deliver", msg.get("task_id")))
                         continue
                     # to_kid stays IN the forwarded payload (unlike an
                     # earlier draft that stripped it) — a listener that
                     # registered multiple kids on one connection needs it to
                     # know which of ITS kids an inbound "deliver" is for.
                     to_kid = parsed_deliver["to_kid"]
-                    outcome = await state.deliver(to_kid, parsed_deliver)
+                    outcome = await state.deliver(
+                        to_kid, parsed_deliver,
+                        from_instance_tag=msg.get("from_instance_tag"))
                     await websocket.send_text(json.dumps(
                         {"type": "deliver_ack", "task_id": parsed_deliver["task_id"], "outcome": outcome}))
 
                 else:
-                    await websocket.send_text(json.dumps(
-                        {"type": "error", "reason": "unknown_message_type"}))
+                    await websocket.send_text(_error_frame("unknown_message_type"))
         except WebSocketDisconnect:
             pass
         finally:
@@ -420,13 +624,36 @@ class RelayTransportError(Exception):
     rejected, delivery dropped, or no response within the timeout. The
     caller (remote_trigger_sender.py) maps this into the SAME TransportError
     taxonomy the direct-HTTP path already uses, so callers see one
-    consistent error shape regardless of which transport was attempted."""
+    consistent error shape regardless of which transport was attempted.
+
+    ``maybe_delivered`` (2026-09-25): False only when the relay provably did
+    NOT hand the envelope to the peer (connect/registration failed, the relay
+    refused or dropped the frame, local size check). True once the deliver
+    frame left this process and no refusal came back — the peer may be
+    executing it, so a caller must NOT retry with a new task (duplicate
+    execution) or re-send the same one (nonce replay).
+    """
+
+    def __init__(self, reason: str, *, maybe_delivered: bool = True) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.maybe_delivered = maybe_delivered
+
+
+def relay_frame_size(*, to_kid: str, from_kid: str, nonce_hex: str,
+                     ciphertext_hex: str, task_id: str) -> int:
+    """Byte size of the deliver frame :func:`relay_deliver_and_wait` sends
+    (without the optional instance tag, which the overhead budget covers)."""
+    return len(json.dumps({
+        "type": "deliver", "to_kid": to_kid, "from_kid": from_kid,
+        "nonce": nonce_hex, "ciphertext": ciphertext_hex, "task_id": task_id,
+    }))
 
 
 async def relay_deliver_and_wait(
     *, relay_url: str, my_kid: str, my_relay_auth_key: str,
     to_kid: str, nonce_hex: str, ciphertext_hex: str, task_id: str,
-    timeout_s: float,
+    timeout_s: float, from_instance_tag: str | None = None,
 ) -> dict[str, str]:
     """Sender-side: deliver one already-encrypted envelope via the relay and
     wait for the correlating encrypted response.
@@ -436,37 +663,86 @@ async def relay_deliver_and_wait(
     registration rejected (e.g. our OWN kid's auth_key mismatches what is
     already pinned — should not happen for a legitimate pairing, but a
     misconfigured/reused relay could hit this), delivery outcome "dropped",
-    or timeout waiting for the response.
+    a relay error frame for our deliver (fails immediately — e.g.
+    ``message_too_large`` from a relay with a smaller frame cap), or timeout
+    waiting for the response. ``timeout_s`` bounds the WHOLE exchange.
+
+    Reasons (closed set): ``message_too_large``, ``connect_failed:<Type>``,
+    ``registration_timeout``, ``registration_failed:<reason>``,
+    ``delivery_dropped``, ``relay_rejected:<reason>``, ``response_timeout``,
+    ``connection_lost``, ``malformed_response``.
     """
     import asyncio as _asyncio
     import websockets  # noqa: PLC0415
 
+    frame: dict[str, Any] = {
+        "type": "deliver", "to_kid": to_kid, "from_kid": my_kid,
+        "nonce": nonce_hex, "ciphertext": ciphertext_hex, "task_id": task_id,
+    }
+    tag = _valid_tag(from_instance_tag)
+    if tag is not None:
+        frame["from_instance_tag"] = tag  # additive; an old relay ignores it
+    deliver_text = json.dumps(frame)
+    # Local size gate BEFORE any network work: a frame the relay will refuse
+    # fails here with a typed reason instead of burning a connection (and,
+    # against an old relay that sent no task_id on its error frame, the whole
+    # timeout).
+    if len(ciphertext_hex) > _MAX_CIPHERTEXT_HEX or len(deliver_text) > _MAX_MESSAGE_BYTES:
+        raise RelayTransportError("message_too_large", maybe_delivered=False)
+
+    loop = _asyncio.get_running_loop()
+    deadline = loop.time() + max(0.1, float(timeout_s))
+
+    def _remaining() -> float:
+        return deadline - loop.time()
+
+    phase = "connect"
     try:
-        async with websockets.connect(relay_url, open_timeout=timeout_s) as ws:
+        async with websockets.connect(
+            relay_url, open_timeout=max(0.1, _remaining()),
+            max_size=_WS_CLIENT_MAX_SIZE,
+        ) as ws:
+            phase = "register"
             await ws.send(json.dumps(
                 {"type": "register", "kid": my_kid, "relay_auth_key": my_relay_auth_key}))
-            reg_resp = json.loads(await _asyncio.wait_for(ws.recv(), timeout=timeout_s))
-            if reg_resp.get("type") != "registered":
-                raise RelayTransportError(f"registration_failed:{reg_resp.get('reason', 'unknown')}")
-
-            await ws.send(json.dumps({
-                "type": "deliver", "to_kid": to_kid, "from_kid": my_kid,
-                "nonce": nonce_hex, "ciphertext": ciphertext_hex, "task_id": task_id,
-            }))
-
-            _loop = _asyncio.get_running_loop()  # get_event_loop() is deprecated inside a coroutine
-            deadline = _loop.time() + timeout_s
             while True:
-                remaining = deadline - _loop.time()
-                if remaining <= 0:
+                if _remaining() <= 0:
+                    raise RelayTransportError("registration_timeout", maybe_delivered=False)
+                reg_resp = json.loads(await _asyncio.wait_for(ws.recv(), timeout=_remaining()))
+                rtype = reg_resp.get("type") if isinstance(reg_resp, dict) else None
+                if rtype == "registered":
+                    break
+                if rtype in ("register_rejected", "error"):
+                    r = str(reg_resp.get("reason", ""))
+                    r = r if r in (_REGISTER_REJECT_REASONS | _RELAY_ERROR_REASONS) else "unknown"
+                    raise RelayTransportError(f"registration_failed:{r}", maybe_delivered=False)
+                # anything else before our registration completes: ignore
+
+            phase = "deliver"
+            await ws.send(deliver_text)
+            phase = "wait"
+            while True:
+                if _remaining() <= 0:
                     raise RelayTransportError("response_timeout")
-                raw = await _asyncio.wait_for(ws.recv(), timeout=remaining)
-                msg = json.loads(raw)
-                if msg.get("type") == "deliver_ack" and msg.get("task_id") == task_id:
+                msg = json.loads(await _asyncio.wait_for(ws.recv(), timeout=_remaining()))
+                if not isinstance(msg, dict):
+                    continue
+                mtype = msg.get("type")
+                if mtype == "deliver_ack" and msg.get("task_id") == task_id:
                     if msg.get("outcome") == "dropped":
-                        raise RelayTransportError("delivery_dropped")
+                        raise RelayTransportError("delivery_dropped", maybe_delivered=False)
                     continue  # "delivered" or "queued" — keep waiting for the actual response
-                if (msg.get("type") == "deliver" and msg.get("task_id") == task_id
+                if mtype == "error" and msg.get("task_id") in (None, task_id):
+                    # This short-lived connection carries exactly ONE deliver,
+                    # so an error frame after it is about that deliver — also
+                    # from an old relay that does not echo task_id. The relay
+                    # refused the frame; the peer never saw it.
+                    r = str(msg.get("reason", ""))
+                    if r == "message_too_large":
+                        raise RelayTransportError("message_too_large", maybe_delivered=False)
+                    r = r if r in _RELAY_ERROR_REASONS else "unknown"
+                    raise RelayTransportError(f"relay_rejected:{r}", maybe_delivered=False)
+                if (mtype == "deliver" and msg.get("task_id") == task_id
                         and msg.get("to_kid") == my_kid and msg.get("from_kid") == to_kid):
                     r_nonce, r_ct = msg.get("nonce"), msg.get("ciphertext")
                     if not (isinstance(r_nonce, str) and isinstance(r_ct, str)):
@@ -475,10 +751,33 @@ async def relay_deliver_and_wait(
                 # Anything else (a stale/unrelated message) — ignore and keep waiting.
     except RelayTransportError:
         raise
-    except _asyncio.TimeoutError as exc:
+    except (_asyncio.TimeoutError, TimeoutError) as exc:
+        if phase == "connect":
+            raise RelayTransportError("connect_failed:TimeoutError", maybe_delivered=False) from exc
+        if phase == "register":
+            raise RelayTransportError("registration_timeout", maybe_delivered=False) from exc
         raise RelayTransportError("response_timeout") from exc
-    except Exception as exc:  # noqa: BLE001 — connection refused, DNS, etc.
-        raise RelayTransportError(f"connect_failed:{type(exc).__name__}") from exc
+    except Exception as exc:  # noqa: BLE001 — connection refused, DNS, closed socket, bad JSON
+        if phase in ("connect", "register"):
+            raise RelayTransportError(
+                f"connect_failed:{_safe_type_name(exc)}", maybe_delivered=False) from exc
+        # "deliver": send() raised — the frame may or may not have left.
+        # "wait": the socket died after the frame left. Either way: unknown.
+        raise RelayTransportError("connection_lost") from exc
+
+
+_SAFE_EXC_NAMES = frozenset({
+    "OSError", "ConnectionError", "ConnectionRefusedError", "ConnectionResetError",
+    "ConnectionAbortedError", "TimeoutError", "gaierror", "SSLError",
+    "SSLCertVerificationError", "InvalidURI", "InvalidHandshake", "InvalidStatus",
+    "InvalidMessage", "ConnectionClosed", "ConnectionClosedError",
+    "ConnectionClosedOK", "ValueError", "JSONDecodeError",
+})
+
+
+def _safe_type_name(exc: BaseException) -> str:
+    name = type(exc).__name__
+    return name if name in _SAFE_EXC_NAMES else "internal_error"
 
 
 # ── Receiver-side client: persistent listener ───────────────────────────
@@ -549,14 +848,26 @@ class RelayListener:
     def __init__(
         self, *, relay_url: str, receiver: Any, origins_dir: "Any",
         pending_dir: "Any | None" = None, endpoints_dir: "Any | None" = None,
+        instance_id: "str | None" = None,
     ) -> None:
         self._relay_url = relay_url
+        # This instance's id for the self-delivery guard and the relay
+        # instance tag. None → the process identity (production); explicit
+        # only where several instances share one process (tests, e2e hosts).
+        self._instance_id = instance_id
         self._receiver = receiver
         self._origins_dir = origins_dir
         self._pending_dir = pending_dir
         self._endpoints_dir = endpoints_dir
         self._stop = False
         self._ws: Any = None
+        # Deliveries run concurrently (see _MAX_CONCURRENT_DELIVERIES); every
+        # in-flight task is tracked so it can outlive a reconnect and answer
+        # on the NEW socket (responses are routed by the sender's per-task
+        # reply kid, so any connection of ours can carry them).
+        self._inflight: set[Any] = set()
+        self._dispatch_sem: Any = None
+        self._register_sent_at: dict[str, float] = {}  # handshake latency metric
         # Diagnostics snapshot (the console's A2A diagnostics route reads it).
         self.status: dict[str, Any] = {
             "relay_url": relay_url, "connected": False, "registered": 0,
@@ -679,10 +990,15 @@ class RelayListener:
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger("corvin.a2a.relay-listener")
 
-        async with websockets.connect(self._relay_url, open_timeout=15) as ws:
+        my_instance = self._my_instance_id()
+
+        async with websockets.connect(
+            self._relay_url, open_timeout=15, max_size=_WS_CLIENT_MAX_SIZE,
+        ) as ws:
             self._ws = ws
             kids_by_id: dict[str, str] = {}
             _registered: set[str] = set()
+            self._register_sent_at = {}
 
             async def _register_new(current: list[tuple[str, str]]) -> None:
                 for kid, hmac_key in current:
@@ -690,8 +1006,15 @@ class RelayListener:
                         continue
                     kids_by_id[kid] = hmac_key
                     auth_key = _ft.derive_relay_auth_key(hmac_key)
-                    await ws.send(json.dumps(
-                        {"type": "register", "kid": kid, "relay_auth_key": auth_key}))
+                    reg: dict[str, Any] = {
+                        "type": "register", "kid": kid, "relay_auth_key": auth_key}
+                    if my_instance:
+                        # Lets the relay tell OUR listener from the peer's on
+                        # this shared kid (see instance_tag); ignored by an
+                        # old relay.
+                        reg["instance_tag"] = instance_tag(kid, my_instance)
+                    self._register_sent_at[kid] = time.monotonic()
+                    await ws.send(json.dumps(reg))
                 # A revoked connection stops being served immediately; the
                 # relay drops the slot on the next reconnect.
                 live = {kid for kid, _h in current}
@@ -721,20 +1044,51 @@ class RelayListener:
 
             refresher = _asyncio.create_task(_refresh_loop())
             try:
-                await self._serve(ws, kids_by_id, _registered, _log)
+                # drain=False: a delivery still running when this socket drops
+                # keeps running and answers on the next connection (self._ws)
+                # instead of holding the reconnect hostage for up to a ttl.
+                await self._serve(ws, kids_by_id, _registered, _log, drain=False)
             finally:
                 refresher.cancel()
-                self._ws = None
+                if self._ws is ws:
+                    self._ws = None
                 self.status.update(connected=False, registered=0)
 
+    def _record_handshake(self, kid: Any, outcome: str) -> None:
+        try:
+            sent = getattr(self, "_register_sent_at", {}).pop(kid, None)
+            m = _metrics_collector()
+            if m is not None:
+                latency = (time.monotonic() - sent) * 1000.0 if sent is not None else 0
+                m.record_handshake(_METRICS_TENANT, outcome, latency_ms=latency)
+        except Exception:  # noqa: BLE001 — metrics never break the listener
+            pass
+
     async def _serve(self, ws: Any, kids_by_id: dict[str, str],
-                     _registered: set[str], _log: Any) -> None:
+                     _registered: set[str], _log: Any, *, drain: bool = True) -> None:
+        """Read frames and dispatch each "deliver" as its OWN task.
+
+        2026-09-25: this used to ``await self._handle_deliver`` inline, so a
+        60 s worker run for one peer stalled every other frame on the socket —
+        pings timed out and the console marked healthy peers unreachable.
+        Responses need no ordering: each carries the request's task_id and is
+        addressed to that request's own reply kid (``<kid>:reply:<task_id>``),
+        which the sender matches on (relay_deliver_and_wait).
+
+        ``drain``: wait for in-flight deliveries before returning (tests and
+        direct callers). The reconnect loop passes False — see there.
+        """
+        import asyncio as _asyncio  # noqa: PLC0415
+        inflight: set[Any] = set()
+        try:
             async for raw in ws:
                 if self._stop:
                     return
                 try:
                     msg = json.loads(raw)
                 except (ValueError, TypeError):
+                    continue
+                if not isinstance(msg, dict):
                     continue
                 mtype = msg.get("type")
                 # A4 (2026-07-30 relay redesign): the old loop discarded every
@@ -748,9 +1102,11 @@ class RelayListener:
                     if isinstance(k, str):
                         _registered.add(k)
                         self.status["registered"] = len(_registered)
+                        self._record_handshake(k, "success")
                     continue
                 if mtype == "register_rejected":
                     self.status["rejected"] = int(self.status.get("rejected") or 0) + 1
+                    self._record_handshake(msg.get("kid"), "rejected")
                     _log.warning(
                         "relay rejected registration for kid=%s reason=%s — this "
                         "peer is UNREACHABLE via the relay until resolved",
@@ -759,7 +1115,19 @@ class RelayListener:
                     continue
                 if mtype != "deliver":
                     continue
-                await self._handle_deliver(ws, msg, kids_by_id)
+                if len(self._inflight) >= _MAX_INFLIGHT_DELIVERIES:
+                    _log.warning("relay listener: %d deliveries in flight — dropping "
+                                 "one (the sender times out and may retry)",
+                                 len(self._inflight))
+                    continue
+                task = _asyncio.create_task(self._handle_deliver(ws, msg, kids_by_id))
+                inflight.add(task)
+                self._inflight.add(task)
+                task.add_done_callback(inflight.discard)
+                task.add_done_callback(self._inflight.discard)
+        finally:
+            if drain and inflight and not self._stop:
+                await _asyncio.gather(*list(inflight), return_exceptions=True)
 
     async def _handle_deliver(self, ws: Any, msg: dict[str, Any], kids_by_id: dict[str, str]) -> None:
         import a2a_friendship as _ft  # noqa: PLC0415
@@ -775,17 +1143,24 @@ class RelayListener:
         if my_hmac_key is None:
             return  # not one of ours (should not happen — relay routes by registration)
 
-        try:
-            plaintext = _ft.decrypt_from_relay(my_hmac_key, nonce, ciphertext)
-            payload = json.loads(plaintext.decode("utf-8"))
-        except (_ft.RelayDecryptError, ValueError, UnicodeDecodeError):
-            return  # tampered/corrupt — silently drop, exactly like a bad HMAC on the direct path
+        import asyncio as _asyncio
+
+        def _decrypt() -> Any:
+            return json.loads(_ft.decrypt_from_relay(my_hmac_key, nonce, ciphertext).decode("utf-8"))
 
         try:
-            from instance_identity import get_instance_id as _gid  # noqa: PLC0415
-            _my_instance = _gid()
-        except Exception:  # noqa: BLE001
-            _my_instance = None
+            # A max-size frame is MBs of hex: decrypt+parse it off the loop so
+            # it cannot stall the other in-flight deliveries.
+            payload = (await _asyncio.to_thread(_decrypt)
+                       if len(ciphertext) > 256 * 1024 else _decrypt())
+        except (_ft.RelayDecryptError, ValueError, UnicodeDecodeError):
+            return  # tampered/corrupt — silently drop, exactly like a bad HMAC on the direct path
+        except Exception:  # noqa: BLE001 — never raise out of a delivery task
+            return
+        if not isinstance(payload, dict):
+            return
+
+        _my_instance = self._my_instance_id() or None
 
         # Adversarial review round 2 (2026-07-29): two fixes, unchanged below.
         # (1) RemoteTriggerReceiver.receive() is SYNC and does signature verify +
@@ -797,7 +1172,6 @@ class RelayListener:
         #     unhandled raise there tears down the WebSocket and forces a reconnect,
         #     so a peer replaying bad deliveries could keep us in a reconnect storm
         #     and offline. A dead socket is still noticed by the next `ws.recv()`.
-        import asyncio as _asyncio
         try:
             if "ping_id" in payload:
                 # Ping request (ADR-0199). No signed sender_instance_id slot
@@ -829,7 +1203,10 @@ class RelayListener:
                 # fallback calls asyncio.run() — which raises inside a running
                 # loop, so a relay-only redeemer could never be reported
                 # reachable, and the blocking ping stalled every other delivery.
-                _status, response_dict = await _asyncio.to_thread(
+                # Own small control executor (bounded by its 4 threads) and NOT
+                # the heavy-slot semaphore: a pairing ack must never wait
+                # behind task envelopes' worker runs (round 3).
+                _status, response_dict = await _run_control(
                     _pfar, payload, pending_dir=Path(self._pending_dir),
                     origins_dir=Path(self._origins_dir),
                     endpoints_dir=Path(self._endpoints_dir),
@@ -850,17 +1227,49 @@ class RelayListener:
                 # exactly the peer answer.
                 if _my_instance and payload.get("sender_instance_id") == _my_instance:
                     return  # our own task, routed back to us — never execute it
-                response = await _asyncio.to_thread(self._receiver.receive, payload)
+                async with self._heavy_slot():
+                    response = await _run_work(self._receiver.receive, payload)
                 response_dict = response.to_dict()
 
-            resp_nonce, resp_ct = _ft.encrypt_for_relay(
-                my_hmac_key, json.dumps(response_dict).encode("utf-8"))
-            await ws.send(json.dumps({
+            resp_plain = json.dumps(response_dict).encode("utf-8")
+            resp_nonce, resp_ct = await _asyncio.to_thread(
+                _ft.encrypt_for_relay, my_hmac_key, resp_plain)
+            frame = json.dumps({
                 "type": "deliver", "to_kid": from_kid, "from_kid": to_kid,
                 "nonce": resp_nonce, "ciphertext": resp_ct, "task_id": task_id,
-            }))
+            })
+            if len(frame) > _MAX_MESSAGE_BYTES:
+                import logging as _logging  # noqa: PLC0415
+                _logging.getLogger("corvin.a2a.relay-listener").warning(
+                    "relay listener: response for one delivery exceeds the relay "
+                    "frame limit (%d bytes) — not sent; the sender times out", len(frame))
+                return
+            # Answer on the CURRENT connection: a long delivery may outlive the
+            # socket it arrived on (reconnect), and the response is routed by
+            # the sender's reply kid, not by which of our sockets carries it.
+            target = self._ws if self._ws is not None else ws
+            await target.send(frame)
         except Exception:  # noqa: BLE001 — one bad delivery must not drop the socket
             return
+
+    def _my_instance_id(self) -> str:
+        return self._instance_id or _local_instance_id()
+
+    def _heavy_slot(self) -> Any:
+        """Semaphore bounding concurrent heavy dispatches (task envelopes,
+        friendship acks). Created lazily so it binds to the running loop."""
+        import asyncio as _asyncio  # noqa: PLC0415
+        if self._dispatch_sem is None:
+            self._dispatch_sem = _asyncio.Semaphore(_MAX_CONCURRENT_DELIVERIES)
+        return self._dispatch_sem
+
+
+def _local_instance_id() -> str:
+    try:
+        from instance_identity import get_instance_id as _gid  # noqa: PLC0415
+        return _gid() or ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def build_relay_app() -> FastAPI:
@@ -873,6 +1282,16 @@ def build_relay_app() -> FastAPI:
     @app.get("/healthz")
     def _healthz() -> dict[str, Any]:
         return {"ok": True, "kids_registered": len(state._slots)}
+
+    @app.get("/metrics")
+    def _metrics() -> Any:
+        # Prometheus text for THIS relay process (registrations, deliveries by
+        # outcome, active connections) — fed by RelayState since 2026-09-25.
+        from fastapi.responses import Response  # noqa: PLC0415
+        m = state.metrics()
+        body = (m.generate_metrics_text() if m is not None
+                else b"# A2A relay metrics unavailable\n")
+        return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     return app
 
@@ -891,7 +1310,10 @@ def main(argv: list[str] | None = None) -> int:
           f"(AEAD-encrypted end-to-end), but it CAN see routing metadata "
           f"(which kid talks to which, timing, volume). Only point paired "
           f"instances at a relay you operate or trust.", flush=True)
-    uvicorn.run(build_relay_app(), host=args.host, port=args.port)
+    # ws_max_size above the relay's own frame cap, so an oversize frame gets a
+    # correlated "message_too_large" error frame instead of a bare close 1009.
+    uvicorn.run(build_relay_app(), host=args.host, port=args.port,
+                ws_max_size=_WS_CLIENT_MAX_SIZE)
     return 0
 
 

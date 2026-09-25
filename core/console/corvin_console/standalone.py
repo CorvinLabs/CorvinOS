@@ -507,55 +507,33 @@ def create_app() -> FastAPI:
         except Exception:
             log.debug("bridge adapter ensure-at-boot skipped", exc_info=True)
 
-        # ADR-0258 Stage 3 — A2A relay listener (best-effort, never blocks
-        # startup). Inert unless BOTH the feature flag is on AND a relay URL
-        # is configured — the common case (flag off) does nothing here at
-        # all, matching every other ship-dark flag in this file.
-        # `_a2a_receiver`/`_a2a_available` are assigned later in create_app()
-        # (below, at the A2A route-wiring block) — valid: this closure is
-        # only CALLED by uvicorn after create_app() has fully returned, and
-        # Python resolves free variables in the enclosing scope by name at
-        # call time, not at definition time.
-        _relay_listener = None
-        _relay_task = None
+        # A2A connectivity manager (ADR-2059, wired 2026-09-25) — owns the
+        # ingress, the advertised URL, the relay listener (runtime start/stop
+        # when pairing enables the relay) and the per-connection upkeep. See
+        # corvin_gateway.app for why the old boot-only listener block was not
+        # enough. `_a2a_receiver`/`_a2a_available` are assigned later in
+        # create_app(); this closure only runs after create_app() returned.
+        _a2a_manager_started = False
         try:
-            import a2a_friendship as _relay_ft  # type: ignore[import-not-found]
+            if _a2a_available and _a2a_receiver is not None:
+                import a2a_connectivity as _a2a_conn  # type: ignore[import-not-found]
 
-            from corvin_core import feature_flags as _relay_ff
-            if _a2a_available and _a2a_receiver is not None and _relay_ff.is_enabled("a2a_relay_fallback"):
-                _relay_url = _relay_ft.get_my_relay_url()
-                if _relay_url:
-                    import asyncio as _relay_asyncio
-
-                    import a2a_relay as _relay_mod  # type: ignore[import-not-found]
-
-                    from .routes.a2a_pair import (
-                        _endpoints_dir as _relay_endpoints_dir,
-                    )
-                    from .routes.a2a_pair import (
-                        _origins_dir as _relay_origins_dir,
-                    )
-                    from .routes.a2a_pair import (
-                        _pending_friendships_dir as _relay_pending_dir,
-                    )
-                    # pending_dir/endpoints_dir (2026-08-02): without these,
-                    # the listener can still relay real task traffic but
-                    # silently drops friendship-ack deliveries (see
-                    # RelayListener._handle_deliver's "ack dispatch not
-                    # configured" inert-return) — a peer only reachable via
-                    # relay could complete a ping round trip but never finish
-                    # the initial reciprocal-ack handshake, leaving
-                    # `_peer_knows_us` stuck false forever.
-                    _relay_listener = _relay_mod.RelayListener(
-                        relay_url=_relay_url, receiver=_a2a_receiver,
-                        origins_dir=_relay_origins_dir(),
-                        pending_dir=_relay_pending_dir(),
-                        endpoints_dir=_relay_endpoints_dir(),
-                    )
-                    _relay_task = _relay_asyncio.create_task(_relay_listener.run_forever())
-                    log.info("A2A relay listener started: %s", _relay_url)
+                from .routes.a2a_pair import (
+                    _endpoints_dir as _conn_endpoints_dir,
+                )
+                from .routes.a2a_pair import (
+                    _origins_dir as _conn_origins_dir,
+                )
+                from .routes.a2a_pair import (
+                    _pending_friendships_dir as _conn_pending_dir,
+                )
+                await _a2a_conn.start_manager(
+                    receiver=_a2a_receiver, origins_dir=_conn_origins_dir(),
+                    endpoints_dir=_conn_endpoints_dir(), pending_dir=_conn_pending_dir(),
+                )
+                _a2a_manager_started = True
         except Exception:
-            log.exception("A2A relay listener failed to start (non-fatal)")
+            log.exception("A2A connectivity manager failed to start (non-fatal)")
 
         yield
         # Detach provider slots so a draining request cannot be routed into a
@@ -566,10 +544,12 @@ def create_app() -> FastAPI:
                 _plugin_shutdown(_plugins_loaded)
             except Exception:
                 pass
-        if _relay_listener is not None:
-            _relay_listener.stop()
-        if _relay_task is not None:
-            _relay_task.cancel()
+        if _a2a_manager_started:
+            try:
+                import a2a_connectivity as _a2a_conn  # type: ignore[import-not-found]
+                await _a2a_conn.stop_manager()
+            except Exception:
+                pass
 
     app = FastAPI(
         title="CorvinOS Console",
@@ -784,7 +764,14 @@ def create_app() -> FastAPI:
             body = await request.json()
         except Exception:
             raise HTTPException(status_code=400, detail={"reason": "invalid_json"})
-        response = _a2a_receiver.receive(body)
+        # receive() is SYNC and can run a worker for up to ttl_s: off the event
+        # loop, or one inbound task freezes the whole host (every console route,
+        # every other peer, the relay keepalive). Same idiom as friendship-ack.
+        import asyncio as _a2a_asyncio
+        import remote_trigger_receiver as _a2a_rtr  # type: ignore[import-not-found]
+        # Own executor (not the default pool pings use): a few concurrent
+        # worker runs must never starve liveness pings (2026-09-25).
+        response = await _a2a_rtr.run_a2a_work(_a2a_receiver.receive, body)
         return JSONResponse(content=response.to_dict())
 
     @app.post("/v1/a2a/ping", include_in_schema=False)
@@ -803,7 +790,10 @@ def create_app() -> FastAPI:
         except Exception:
             raise HTTPException(status_code=400, detail={"reason": "invalid_json"})
         from a2a_http_server import process_ping_request  # type: ignore[import-not-found]
-        status_code, payload = process_ping_request(body, _a2a_receiver)
+        import asyncio as _a2a_asyncio
+        status_code, payload = await _a2a_asyncio.to_thread(
+            process_ping_request, body, _a2a_receiver,
+            client_addr=(request.client.host if request.client else None))
         return JSONResponse(content=payload, status_code=status_code)
 
     @app.post("/v1/a2a/friendship-ack", include_in_schema=False)

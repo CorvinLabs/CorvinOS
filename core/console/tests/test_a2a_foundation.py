@@ -339,7 +339,7 @@ class TestA2ATaskEnvelopeDispatch:
     Integration tests (Tier 3) verify end-to-end with real RemoteTriggerSender.
     """
 
-    async def test_dispatch_handles_missing_sender(self):
+    def test_dispatch_handles_missing_sender(self):  # no awaits: plain test (no asyncio plugin here)
         """Test dispatch gracefully handles missing RemoteTriggerSender."""
         # This test verifies dispatch() doesn't crash when RemoteTriggerSender
         # is not available. The actual A2A send is tested in integration tests.

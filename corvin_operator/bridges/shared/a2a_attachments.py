@@ -194,7 +194,7 @@ def validate_attachment_name(name: str) -> str:
         raise AttachmentError("attachment_name_not_string")
     if not name or len(name) > MAX_ATTACHMENT_NAME_LEN:
         raise AttachmentError("attachment_name_length")
-    if not _NAME_RE.match(name):
+    if not _NAME_RE.fullmatch(name):  # `$` would admit a trailing "\n" (round 10)
         raise AttachmentError("attachment_name_chars")
     if ".." in name:
         # _NAME_RE already excludes "..", but defence-in-depth.
@@ -263,23 +263,23 @@ def effective_classification(attachments: list[Attachment]) -> str:
 def attachments_audit_details(attachments: list[Attachment]) -> dict[str, Any]:
     """Build the audit-allow-listed projection of an attachments list.
 
-    Includes counts, total bytes, sanitized name list, and digest
-    *prefix* (16 hex chars) — never content, never full digest.
+    Counts, total bytes and digest *prefixes* (16 hex chars) — never content,
+    never a full digest, and (since 2026-09-25) never the file NAMES: a name
+    is chosen by the remote party and can carry personal data
+    ("Kündigung_Max_Mustermann.pdf"), and the chain is a permanent record.
+    The allowlist dropped them anyway; now they are not emitted at all.
     """
     total = 0
-    names: list[str] = []
     digests: list[str] = []
     for att in attachments:
         # We trust the count_bytes from decode; in audit we recompute
         # cheaply from the b64 length (lower bound) to avoid re-decoding.
         # Use 3/4 of b64 length as a sufficient upper estimate.
         total += (len(att.content_b64) * 3) // 4
-        names.append(att.name)
         digests.append(att.sha256[:16])
     return {
         "attachments_count":       len(attachments),
         "attachments_total_bytes": total,
-        "attachment_names":        names,
         "attachment_sha_prefixes": digests,
     }
 

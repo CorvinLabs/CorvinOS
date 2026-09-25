@@ -34,6 +34,7 @@ Mapping (see ADR-0001):
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import re
@@ -47,6 +48,11 @@ from pathlib import Path
 from typing import Any, IO, Iterator
 
 from . import StreamEvent, parse_jsonl_line, terminate_process_tree
+
+#: Error text of the StreamEvent emitted when a spawn outlives its
+#: ``timeout``. Public so callers (a2a_worker) can map it to their own
+#: timeout status without string-duplicating it.
+STREAM_TIMEOUT_ERROR = "claude stream timeout"
 
 # ── debug logging ───────────────────────────────────────────────────────
 # Engine traces (argv, spawn, stderr-tail, naked-error enrichment) go to
@@ -440,6 +446,10 @@ class ClaudeCodeEngine:
         self._stderr_buf_chars: int = 0
         self._stderr_guard = threading.Lock()
         self._stderr_thread: threading.Thread | None = None
+        # True once the most recent spawn was ended by its wall-clock
+        # ``timeout`` (either the in-loop check or the watchdog kill).
+        # Reset at the start of every stream.
+        self.timed_out: bool = False
 
     # ------------------------------------------------------------------
     # Static argv builder (Phase 2.1 — extracted from adapter.py)
@@ -1046,41 +1056,80 @@ class ClaudeCodeEngine:
         proc = self._proc
         assert proc is not None and proc.stdout is not None
 
+        # Wall-clock watchdog. The in-loop check below only runs when a
+        # stdout line arrives, so a child that goes SILENT (hung tool call,
+        # stalled API, a sleep) used to run past ``timeout`` indefinitely —
+        # the deadline was never looked at again. The watchdog kills the
+        # whole process group AT the deadline, which EOFs stdout and lets
+        # the loop surface the timeout. Same semantics as the in-loop check:
+        # ``timeout`` is wall-clock seconds from spawn start. A non-finite
+        # timeout (``float("inf")`` — adapter / console chat, which own their
+        # own idle watchdog) or ``None`` arms nothing, exactly as before.
+        self.timed_out = False
+        fired = threading.Event()
+        watchdog: threading.Timer | None = None
+        if timeout is not None and math.isfinite(timeout):
+            def _on_deadline() -> None:
+                if proc.poll() is None:
+                    fired.set()
+                    _engine_log.warning(
+                        "spawn exceeded timeout=%.1fs — killing process tree "
+                        "pid=%s", timeout, proc.pid,
+                    )
+                    terminate_process_tree(proc)
+            remaining = max(0.0, start_time + timeout - time.time())
+            watchdog = threading.Timer(remaining, _on_deadline)
+            watchdog.daemon = True
+            watchdog.name = "claude-timeout-watchdog"
+            watchdog.start()
+
         completed = False
         terminal = False  # error event = stop the iterator immediately
-        for raw_line in proc.stdout:
-            if time.time() - start_time > timeout:
-                yield StreamEvent(type="error", error="claude stream timeout")
-                return
+        try:
+            for raw_line in proc.stdout:
+                if fired.is_set() or time.time() - start_time > timeout:
+                    self.timed_out = True
+                    yield StreamEvent(type="error", error=STREAM_TIMEOUT_ERROR)
+                    return
 
-            # text=True spawn → str; parse_jsonl_line handles both
-            # bytes and str transparently.
-            obj = parse_jsonl_line(raw_line)
-            if obj is None:
-                continue
+                # text=True spawn → str; parse_jsonl_line handles both
+                # bytes and str transparently.
+                obj = parse_jsonl_line(raw_line)
+                if obj is None:
+                    continue
 
-            for event in self._normalise_all(obj):
-                if event.type == "error":
-                    event = self._enrich_naked_error(event)
-                yield event
-                if event.type == "turn_completed":
-                    # Stream-json input keeps stdin open across turns
-                    # so mid-stream `/btw` injections can produce
-                    # further turn_completed events. Close stdin on
-                    # the FIRST completion (idempotent guard inside
-                    # close_stdin) so claude EOFs once any pending
-                    # buffered output has drained — but do NOT break.
-                    if prompt_via_stdin and self._stdin is not None:
-                        self.close_stdin()
-                    completed = True
-                elif event.type == "error":
-                    if prompt_via_stdin and self._stdin is not None:
-                        self.close_stdin()
-                    completed = True
-                    terminal = True
+                for event in self._normalise_all(obj):
+                    if event.type == "error":
+                        event = self._enrich_naked_error(event)
+                    yield event
+                    if event.type == "turn_completed":
+                        # Stream-json input keeps stdin open across turns
+                        # so mid-stream `/btw` injections can produce
+                        # further turn_completed events. Close stdin on
+                        # the FIRST completion (idempotent guard inside
+                        # close_stdin) so claude EOFs once any pending
+                        # buffered output has drained — but do NOT break.
+                        if prompt_via_stdin and self._stdin is not None:
+                            self.close_stdin()
+                        completed = True
+                    elif event.type == "error":
+                        if prompt_via_stdin and self._stdin is not None:
+                            self.close_stdin()
+                        completed = True
+                        terminal = True
+                        break
+                if terminal:
                     break
-            if terminal:
-                break
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+
+        if fired.is_set() and not completed:
+            # The watchdog killed a silent child: report the timeout, not the
+            # generic "exited without result" (which would read as a crash).
+            self.timed_out = True
+            yield StreamEvent(type="error", error=STREAM_TIMEOUT_ERROR)
+            return
 
         if not completed:
             # The drain thread is still consuming proc.stderr; ask it
