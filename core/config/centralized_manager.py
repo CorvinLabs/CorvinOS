@@ -429,10 +429,21 @@ class CentralizedConfigManager:
                 )
             elif actual_val != expected_val:
                 severity = "CRITICAL"
-                if has_overrides and current_path in self._instance_overrides.get(
-                    f"{tenant_id}:{instance_id}", {}
-                ):
-                    severity = "MEDIUM"
+                # Check if this path is in instance overrides (nested structure)
+                if has_overrides:
+                    overrides = self._instance_overrides.get(f"{tenant_id}:{instance_id}", {})
+                    # Navigate nested structure to check if this path is overridden
+                    path_parts = current_path.split(".")
+                    override_val = overrides
+                    for part in path_parts:
+                        if isinstance(override_val, dict) and part in override_val:
+                            override_val = override_val[part]
+                        else:
+                            override_val = None
+                            break
+                    # If override exists and matches actual, it's expected (MEDIUM severity)
+                    if override_val is not None:
+                        severity = "MEDIUM"
 
                 drifts.append(
                     ConfigDrift(

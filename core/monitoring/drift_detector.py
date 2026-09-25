@@ -267,9 +267,15 @@ class DriftDetectionService:
                         events.append(event)
                         self.monitoring_events.append(event)
 
-                        # Route alert based on severity
+                        # Route alert based on severity (with fallback to HIGH if invalid)
+                        try:
+                            severity = DriftSeverity[plugin_drift.severity]
+                        except KeyError:
+                            logger.warning(f"Invalid severity '{plugin_drift.severity}' for plugin drift, using HIGH")
+                            severity = DriftSeverity.HIGH
+
                         self.alert_with_severity(
-                            DriftSeverity[plugin_drift.severity],
+                            severity,
                             f"Plugin {plugin_drift.plugin_id}: {plugin_drift.drift_type}",
                             instance_id,
                             f"PLUGIN_{plugin_drift.drift_type}",
