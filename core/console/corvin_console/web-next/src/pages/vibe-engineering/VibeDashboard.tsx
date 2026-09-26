@@ -24,10 +24,12 @@ import { Loader2 } from 'lucide-react';
 import { MaturityDashboard } from './components/MaturityDashboard';
 import { MonitoringTab } from './tabs/MonitoringTab';
 import { LearningLoopsTab } from './tabs/LearningLoopsTab';
+import { LicensingAuditTab } from './tabs/LicensingAuditTab';
+import { ModelSelectionTab } from './tabs/ModelSelectionTab';
 
-type TabType = 'maturity' | 'loops' | 'metrics';
+type TabType = 'maturity' | 'loops' | 'metrics' | 'licensing' | 'models';
 
-const TAB_IDS: readonly TabType[] = ['maturity', 'loops', 'metrics'] as const;
+const TAB_IDS: readonly TabType[] = ['maturity', 'loops', 'metrics', 'licensing', 'models'] as const;
 const DEFAULT_TAB: TabType = 'maturity';
 const isTabId = (v: string | null): v is TabType =>
   v !== null && (TAB_IDS as readonly string[]).includes(v);
@@ -84,8 +86,9 @@ export function VibeDashboard() {
         <div className="flex gap-4 px-6 py-4">
           {[
             { id: 'maturity' as TabType, label: 'Maturity Metrics' },
-            { id: 'loops' as TabType, label: 'Learning Loops' },
+            { id: 'licensing' as TabType, label: 'Licensing Audit' },
             { id: 'metrics' as TabType, label: 'System Metrics' },
+            { id: 'loops' as TabType, label: 'Learning Loops' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -106,8 +109,9 @@ export function VibeDashboard() {
       <div className="min-h-screen">
         <Suspense fallback={<LoadingFallback />}>
           {activeTab === 'maturity' && <MaturityDashboard />}
-          {activeTab === 'loops' && <LearningLoopsTab />}
+          {activeTab === 'licensing' && <LicensingAuditTab />}
           {activeTab === 'metrics' && <MonitoringTab />}
+          {activeTab === 'loops' && <LearningLoopsTab />}
         </Suspense>
       </div>
 
