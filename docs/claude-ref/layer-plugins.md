@@ -102,6 +102,16 @@ the adapter calls `_apply_auto_routing()`, which in turn asks
     `ADAPTER_ROUTING_MODE=off`)
 - Low confidence OR router returns None → `fallback_persona`
   (default `assistant`, defined in `_ROUTING_DEFAULTS`).
+- **A turn without a pinned persona always leaves routing with a persona
+  identity** — also when the router is skipped (cowork/router not importable,
+  `routing.mode` = `"off"`, no routable personas installed) or the chosen
+  persona has no config on disk. In those cases `_fallback_identity()` sets only
+  `_auto_routed` (+ why/confidence) and merges no persona config: no prompt, no
+  tools, no reply prefix. Reason: the explicit-skill namespace gate
+  (`skill_inject._persona_namespace`) is fail-closed on an unresolved persona;
+  after every persona JSON was removed (c93ef9915) turns had NO persona and
+  every explicit skill request was refused as `persona_unresolved`
+  (2026-09-26). The gate stays closed outside the fallback's namespace.
 - The final reply is prefixed in `process_one` with `[<persona>] `
   (only the first chunk) when `_routing_show_prefix` is true.
 - Tests that verify legacy max-open behaviour MUST set

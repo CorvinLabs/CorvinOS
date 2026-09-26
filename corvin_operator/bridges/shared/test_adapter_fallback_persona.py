@@ -117,8 +117,29 @@ def test_gate_stays_closed_outside_the_namespace():
       diag.get("wrong_namespace", 0) >= 1 and diag.get("persona_unresolved", 0) == 0, detail=str(diag))
 
 
+def test_inactive_session_renewal_is_reported_once():
+    """ADR-0472: the renewal hook cannot load in the bridge. That used to be an
+    ``except ImportError: pass`` — now it is said once per process, never silent."""
+    print("\n[session auto-renewal inactive → one log line]")
+    import adapter  # the module _run_turn just loaded
+    lines: list[str] = []
+    orig = adapter.log
+    adapter.log = lambda *a: (lines.append(" ".join(str(x) for x in a)), orig(*a))[1]
+    try:
+        adapter._RENEWAL_INACTIVE_LOGGED = False
+        for _ in range(2):  # the production order: preflight registers, then account
+            adapter._budget_preflight("c-renew", "hello")
+            adapter._budget_account_turn("c-renew", "m-x", "hello", "world")
+    finally:
+        adapter.log = orig
+    hits = [ln for ln in lines if "session auto-renewal (ADR-0472) inactive" in ln]
+    t("inactive renewal reported exactly once", len(hits) == 1 and adapter._context_budget is not None,
+      detail=f"{len(hits)} line(s), context_budget={'yes' if adapter._context_budget else 'no'}")
+
+
 if __name__ == "__main__":
     test_fallback_identity_restored()
     test_gate_stays_closed_outside_the_namespace()
+    test_inactive_session_renewal_is_reported_once()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

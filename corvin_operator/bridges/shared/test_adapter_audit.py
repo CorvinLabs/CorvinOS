@@ -207,8 +207,15 @@ def test_chain_is_continuous_across_two_messages():
         if len(recv_events) >= 2:
             t("first prev_hash is a string",
               isinstance(recv_events[0].get("prev_hash"), str))
-            t("second prev_hash points at first hash",
-              recv_events[1].get("prev_hash") == recv_events[0].get("hash"))
+            # Other per-turn records (e.g. bridge.persona_routed for the fallback
+            # persona) sit between the two receives, so check the whole chain:
+            # every record links to the one before it, and the second receive
+            # comes after the first.
+            links_ok = all(events[i].get("prev_hash") == events[i - 1].get("hash")
+                           for i in range(1, len(events)))
+            t("every record's prev_hash points at the record before it", links_ok)
+            t("second recv follows the first in the chain",
+              events.index(recv_events[1]) > events.index(recv_events[0]))
 
         # And: the voice-audit verify CLI agrees
         import subprocess
