@@ -367,15 +367,20 @@ class TestBlenderHeadlessOrchestrator:
             bitrate_kbps=5000,
         )
 
+        from pathlib import Path
+
         script = await orchestrator._auto_generate_bpy_script(
             "/tmp/input.mp4",
             config,
+            Path("/tmp/output.mp4"),
         )
 
         assert "import bpy" in script
         assert "1920" in script
         assert "1080" in script
         assert "90" in script  # frame_count
+        assert "scene.render.filepath" in script
+        assert "/tmp/output.mp4" in script
 
     async def test_render_output_validation(self):
         """Test render output validation."""

@@ -188,6 +188,13 @@ voice = [
 browser = [
     "playwright >= 1.40",
 ]
+# Video Producer (Blender render path): ffmpeg-python wraps the `ffprobe` CLI
+# to read real stream metadata (duration/frame count) from a rendered file.
+# Requires a real `ffmpeg`/`ffprobe` binary on PATH — the bundled
+# imageio-ffmpeg wheel above only ships `ffmpeg`, not `ffprobe`.
+video = [
+    "ffmpeg-python >= 0.2.0",
+]
 all = [
     "whatsapp-web.py >= 0.1",
     "python-telegram-bot >= 20.0",
@@ -200,6 +207,7 @@ all = [
     "prometheus-client >= 0.19",
     "faster-whisper >= 1.0.0",
     "playwright >= 1.40",
+    "ffmpeg-python >= 0.2.0",
 ]
 
 [project.urls]

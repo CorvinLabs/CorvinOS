@@ -1,6 +1,10 @@
 # ── Trading backtest artifacts (binary parquet, too large for git) ───────────
 backtests/
 
+# ── Blender auto-backup files (written on every re-save, never intentional) ──
+*.blend1
+*.blend2
+
 # ── Secrets / personal data ─────────────────────────────────────────────────
 .env
 .env.local

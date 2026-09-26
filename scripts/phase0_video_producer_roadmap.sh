@@ -1,6 +1,14 @@
 #!/bin/bash
 # 🎬 PHASE 0 POC — VIDEO PRODUCER ROADMAP
 # Blender 3D → Learning Video (Oct 6 deadline)
+#
+# STALE (2026-09-26): this is a static status printout, not a check -- it
+# does not read the filesystem. The artifact directory it describes
+# (Corvin-Videos/blender_20260922_*, architecture_blender.mp4, etc.) does not
+# exist on this install. The real, verified Blender render path is now
+# core/skills/os_skills/video_producer/blender_cli.py against the fixture at
+# tests/fixtures/video_producer/simple_scene.blend -- see that directory's
+# README.md. Do not resume work from the "DONE"/"IN PROGRESS" claims below.
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'

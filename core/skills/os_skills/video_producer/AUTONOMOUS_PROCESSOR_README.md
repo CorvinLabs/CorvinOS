@@ -167,6 +167,8 @@ config = RenderConfig(
 result = await orchestrator.render_enhancement(
     input_video="/path/to/input.mp4",
     config=config,
+    output_path="/path/to/durable_output.mp4",  # optional; defaults to a
+    # tenant-scoped path under <corvin_home>/tenants/<tid>/global/video_producer/renders/
 )
 ```
 
@@ -175,8 +177,22 @@ result = await orchestrator.render_enhancement(
 - **Headless execution** (no Blender UI)
 - **Auto-script generation** (Python bpy API)
 - **Timeout protection** (default 10 min, configurable)
-- **Output validation** (checks for valid MP4)
-- **Audit trail** (all render operations logged)
+- **Output validation** (real `ffprobe` metadata -- `result.frame_count`/
+  `result.duration_sec` reflect what was actually rendered, not the request)
+- **Audit trail** (`blender.render_start` / `blender.bpy_script_generated` /
+  `blender.render_complete` / `blender.render_validation_failed` /
+  `blender.render_error`, hash-chained via `core.paths.tenant_audit_chain`)
+
+**CLI entry point (`blender_cli.py`):** the real, non-test way to drive this
+class end-to-end from the command line. fps/frame range/resolution are read
+directly from the `.blend` file's own scene (a real headless Blender
+subprocess probe), never guessed:
+
+```bash
+python3 -m core.skills.os_skills.video_producer.blender_cli \
+    --blend tests/fixtures/video_producer/simple_scene.blend \
+    --output /tmp/my_video.mp4
+```
 
 ### 4. Quality Validator
 

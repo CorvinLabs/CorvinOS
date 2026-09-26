@@ -881,6 +881,14 @@ EVENT_SEVERITY: dict[str, str] = {
     # Metadata only: plugin_id, error_class. NEVER: error text with sensitive content.
     "plugin.initialization_failed":     "WARNING", # L4: plugin boot error
     "plugin.execution_timeout":         "WARNING", # L4: plugin execution timeout
+    # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
+    # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
+    # NEVER: subprocess stdout/stderr, exception message text.
+    "blender.render_start":             "INFO",
+    "blender.bpy_script_generated":     "INFO",
+    "blender.render_complete":          "INFO",
+    "blender.render_validation_failed": "WARNING",
+    "blender.render_error":             "ERROR",
     # PHASE 3 — Audit Completeness (ADR-2040–2044, 2026-09-24)
     # ─────────────────────────────────────────────────────────────────────────
     # Layer 10 — Context Engineering Audit (corvin_operator/context_engineering/snapshot.py)
@@ -3281,6 +3289,24 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "plugin.execution_timeout": frozenset({
         "plugin_id", "boot_layer", "timeout_ms", "tenant_id",
+    }),
+    # Video Producer — Blender render path (mirrored in
+    # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).
+    "blender.render_start": frozenset({
+        "blend_file", "input_video", "resolution", "fps", "frame_count",
+        "output_codec", "bitrate_kbps", "timeout_sec", "tenant_id",
+    }),
+    "blender.bpy_script_generated": frozenset({
+        "script_lines", "tenant_id",
+    }),
+    "blender.render_complete": frozenset({
+        "output_file", "frame_count", "duration_sec", "tenant_id",
+    }),
+    "blender.render_validation_failed": frozenset({
+        "output_file", "tenant_id",
+    }),
+    "blender.render_error": frozenset({
+        "error_class", "tenant_id",
     }),
 }
 

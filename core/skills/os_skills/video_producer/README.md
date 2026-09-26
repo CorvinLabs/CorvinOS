@@ -1,7 +1,7 @@
 ---
 type: plugin-readme
 status: Phase 1 Week 2 (IN PROGRESS)
-last_updated: 2026-09-13
+last_updated: 2026-09-26
 ---
 
 # Video Producer Skill 2.0
@@ -33,9 +33,46 @@ print(result)
 # }
 ```
 
+## Three implementations live in this directory -- know which one you're touching
+
+This directory holds THREE separate, non-communicating video-production code
+paths. Extending the wrong one for a given task is easy to do by accident:
+
+| Implementation | Entry point | Input | Status |
+|---|---|---|---|
+| **PPT/slide pipeline** (this README's own Quick Start, below) | `orchestrator.py::VideoProducerOrchestrator` | PowerPoint/PDF + LLM storyboard | Partially stubbed (`_generate_storyboard` is an explicit placeholder) |
+| **Skill Forge v2.0 MVP** | `maestro.py::VideoProducerMaestro` | hand-rolled asset analysis | Phases 1-3 only, stubbed |
+| **Blender headless render path** | `blender_orchestrator.py::BlenderHeadlessOrchestrator`, driven via `blender_cli.py` | a `.blend` scene | **The one with a real, E2E-proven, autonomously-runnable output** (see below) |
+
+If the task is "render a Blender scene into a video," use the third one --
+`blender_cli.py` -- not the other two; they have no Blender awareness at all.
+
+### The Blender path: real, working, autonomously runnable
+
+```bash
+python3 -m core.skills.os_skills.video_producer.blender_cli \
+    --blend tests/fixtures/video_producer/simple_scene.blend \
+    --output /tmp/my_video.mp4
+```
+
+fps/frame range/resolution are read from the `.blend` file itself (a real,
+separate headless Blender subprocess probe) rather than guessed. The fixture
+at `tests/fixtures/video_producer/simple_scene.blend` (built by
+`tests/fixtures/video_producer/build_fixture_scene.py`) bakes a rotating cube
+plus a 2s sine-tone narration track, so a fresh render always produces a real
+h264 video stream + a real AAC audio stream, verifiable independently with
+`ffprobe`. Real E2E tests (no mocks of `subprocess`/`bpy`/`ffmpeg`) live in
+`tests/skills/video_producer/test_blender_orchestrator_e2e.py` and
+`test_blender_cli_e2e.py`.
+
+`scripts/phase0_video_producer_roadmap.sh`'s references to a prior
+`Corvin-Videos/blender_20260922_*` artifact directory are **stale** -- that
+directory does not exist on this install; the fixture + CLI above replace it
+as the way to produce and verify a Blender render.
+
 ## Architecture
 
-**7-Phase Pipeline:**
+**7-Phase Pipeline (PPT/slide implementation only -- see table above):**
 1. **Asset Ingestion** — Copy files, organize by type
 2. **Deep Analysis** — Extract structure, visuals, metadata (ADR-0693)
 3. **Storyboard Generation** — LLM-constrained to analysis facts
