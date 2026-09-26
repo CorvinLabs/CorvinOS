@@ -69,6 +69,9 @@ def _run_turn(text: str, mode: str) -> tuple[list[dict], dict]:
         "CORVIN_HOME": str(base / "home"),
         # No persona files anywhere — the state of this install since c93ef9915.
         "COWORK_USER_DIR": str(base / "cowork"),
+        # The args dump makes the fake path build the real argv — including the
+        # system prompt with the skill block — so the namespace gate runs.
+        "ADAPTER_FAKE_ARGS_DUMP": str(base / "args.jsonl"),
     }
     prev = {k: os.environ.get(k) for k in env}
     try:
@@ -79,7 +82,8 @@ def _run_turn(text: str, mode: str) -> tuple[list[dict], dict]:
         in_file = base / "inbox" / "m1.json"
         in_file.write_text(json.dumps({"id": "m1", "channel": "discord", "from": "u-1",
                                        "chat_id": "c-1", "text": text, "ts": time.time()}))
-        adapter.process_one(in_file, settings={"whitelist": ["u-1"]})
+        # No voice note: the summary step would otherwise call a real TTS provider.
+        adapter.process_one(in_file, settings={"whitelist": ["u-1"], "voice_summary_mode": "never"})
         events = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()] \
             if audit_path.exists() else []
         return events, dict(skill_inject._request_diag_counts)

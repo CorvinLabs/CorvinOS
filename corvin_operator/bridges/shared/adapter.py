@@ -1869,24 +1869,31 @@ def _apply_auto_routing(prompt: str, channel: str, chat_key: str,
     """Wenn der Chat keine Persona gepinnt hat und Router-Mode=auto ist:
     Haiku entscheiden lassen. Bei niedriger confidence / Router offline:
     Fallback-Persona (assistant). Liefert das ggf. um Persona-Felder
-    angereicherte Profile back (mit `_auto_routed`-Marker für die UI)."""
-    if _cowork is None or _router is None:
-        return profile
+    angereicherte Profile back (mit `_auto_routed`-Marker für die UI).
+
+    A turn without a pinned persona ALWAYS leaves here with a persona identity —
+    the fallback when nothing better is available, even when no persona config
+    exists at all (no cowork, no router, mode=off, empty pool). Since c93ef9915
+    removed every persona JSON, returning the profile untouched left the turn
+    with NO persona, and the explicit-skill namespace gate — fail-closed on an
+    unresolved persona, by design — refused every explicit skill request."""
     if profile.get("persona"):
         return profile  # explizit gepinnt — Auto-Routing umgehen
     cfg = _routing_config(shared_settings, profile)
+    if _cowork is None or _router is None:
+        return _fallback_identity(profile, cfg, "fallback (persona router unavailable)")
     if cfg.get("mode") == "off":
-        return profile
+        return _fallback_identity(profile, cfg, "fallback (routing off)")
 
     try:
         all_personas = _cowork.list_available()
     except Exception as e:  # noqa: BLE001
         log(f"router: cowork.list_available failed: {e}")
-        return profile
+        return _fallback_identity(profile, cfg, "fallback (persona list unavailable)")
     # Nur zero-config Personas sind router-pickable.
     pool = [p for p in all_personas if p.get("zero_config")]
     if not pool:
-        return profile
+        return _fallback_identity(profile, cfg, "fallback (no routable personas installed)")
 
     chosen_name = None
     confidence = 0.0
@@ -1965,7 +1972,20 @@ def _apply_auto_routing(prompt: str, channel: str, chat_key: str,
     except Exception as e:  # noqa: BLE001
         log(f"router: cowork.resolve({chosen_name!r}) failed: {e}")
 
-    return profile
+    # The chosen persona has no config on disk (or resolve failed): keep the
+    # identity so the turn is still attributed and namespace-gated as it.
+    return _fallback_identity(profile, cfg, why or "fallback (persona config unavailable)",
+                              persona=chosen_name, confidence=confidence)
+
+
+def _fallback_identity(profile: dict, cfg: dict, why: str, *,
+                       persona: str | None = None, confidence: float = 0.0) -> dict:
+    """The profile, marked as routed to *persona* (default: the configured
+    fallback) WITHOUT merging any persona config — there is none to merge.
+    Sets only the identity fields; no reply prefix, no tools, no prompt."""
+    name = persona or cfg.get("fallback_persona") or "assistant"
+    return {**profile, "_auto_routed": name, "_auto_routed_why": why,
+            "_auto_routed_confidence": confidence}
 
 
 def _persona_has_namespace_gate(persona_name: str | None) -> bool:
