@@ -281,9 +281,18 @@ def _budget_account_turn(chat_key: str, msg_id: str,
                 log(f"[SessionRenewal] Token warning: chat {chat_key} at 85%+")
             elif action == "critical":
                 log(f"[SessionRenewal] Token critical: chat {chat_key} at 95%+, will split next turn")
-        except ImportError:
-            # session_auto_renewal_hook not available; skip
-            pass
+        except ImportError as renewal_imp:
+            # ADR-0472 is NOT active in the bridge: the hook uses package-relative
+            # imports and cannot load as the top-level module the adapter imports,
+            # and even loaded it could not switch the real `claude --continue`
+            # session (the new session id is only logged). Say so once per process
+            # instead of passing silently — a swallowed ImportError here is how the
+            # feature read as "wired" while it never ran.
+            global _RENEWAL_INACTIVE_LOGGED
+            if not _RENEWAL_INACTIVE_LOGGED:
+                _RENEWAL_INACTIVE_LOGGED = True
+                log(f"session auto-renewal (ADR-0472) inactive in the bridge: "
+                    f"{type(renewal_imp).__name__}: {renewal_imp}")
         except Exception as renewal_exc:
             log(f"session_auto_renewal_hook failed (non-fatal): {renewal_exc}")
 
@@ -451,6 +460,9 @@ if _MCP_MANAGER_ROOT.is_dir():
 # operator/cowork/lib/resolver.py existiert), nutzt der Adapter es zum
 # resolves a persona; otherwise the `persona` field in chat_profiles
 # is simply ignored. Voice remains fully usable without cowork.
+# Set once the ADR-0472 session auto-renewal hook has been reported inactive.
+_RENEWAL_INACTIVE_LOGGED = False
+
 _COWORK_LIB = ROOT.parent.parent / "cowork" / "lib"
 _cowork = None
 if (_COWORK_LIB / "resolver.py").is_file():
