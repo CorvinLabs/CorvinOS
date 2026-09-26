@@ -11,7 +11,7 @@ Architecture:
 - SessionMessageEnvelope - dataclass for final response with state
 - Must include task_id, phase, plan state, artifacts for continuation
 
-Based on ADR-0542 (Message Completeness Protocol).
+Based on ADR-2077 (Message Completeness Protocol; filed as ADR-0542 until 2026-09-27, renumbered — 0542 is the phase-gate validator).
 Depends on: ADR-0541 (Session Bridging), ADR-0314 (Learning Events)
 """
 
