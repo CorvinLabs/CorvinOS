@@ -899,6 +899,14 @@ def create_app() -> FastAPI:
     from .middleware.routing_disclosure_headers import RoutingDisclosureHeadersMiddleware
     _app.add_middleware(RoutingDisclosureHeadersMiddleware)
 
+    # Phase 3: OTEL Multi-Tenant Instrumentation (ADR-0232, ADR-0297)
+    # Adds tenant_id context to all spans, no PII in telemetry
+    try:
+        from .otel_instrumentation import OTELTenantMiddleware
+        _app.add_middleware(OTELTenantMiddleware)
+    except ImportError:
+        pass  # OTEL optional for backward compatibility
+
     # Phase 5.1.3: Marketplace SLO monitoring (p99 <500ms, error <0.1%, circuit breaker)
     # Tracks latency + errors for /api/v1/marketplace/* endpoints
     from starlette.middleware.base import BaseHTTPMiddleware
