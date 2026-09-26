@@ -881,6 +881,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # Metadata only: plugin_id, error_class. NEVER: error text with sensitive content.
     "plugin.initialization_failed":     "WARNING", # L4: plugin boot error
     "plugin.execution_timeout":         "WARNING", # L4: plugin execution timeout
+    "plugin.health_check_failed":       "WARNING", # L4: plugin health check failed (ADR-0923)
     # PHASE 3 — Audit Completeness (ADR-2040–2044, 2026-09-24)
     # ─────────────────────────────────────────────────────────────────────────
     # Layer 10 — Context Engineering Audit (corvin_operator/context_engineering/snapshot.py)
@@ -2864,6 +2865,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source", "reason",
     }),
     "plugin.boot_layer_rejected": frozenset({"plugin_id", "tenant_id", "declared_boot_layer", "reason"}),
+    "plugin.health_check_failed": frozenset({
+        "plugin_id", "error_type", "tenant_id",
+    }),
     # Layer 18 — read-only member drop: counts/prefixes only, never the text.
     "bridge.read_only_drop": frozenset({
         "first_drop", "text_len", "tenant_id", "channel", "chat_id_prefix", "chat_key", "user", "persona",

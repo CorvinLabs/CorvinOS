@@ -206,6 +206,52 @@ def _emit_execution_timeout(
         log.error("plugin.execution_timeout audit could not be written for %r", plugin_id)
 
 
+def _emit_plugin_executed(
+    ctx: Any, plugin_id: str, latency_ms: int, success: bool, error_type: str | None = None
+) -> None:
+    """Record ``plugin.executed`` event for learning infrastructure (ADR-0923).
+
+    Emits both audit event and learning event for plugin execution tracking.
+    Used to feed the plugin confidence calculator and execution history.
+    Guarded: audit/learning failures must not affect plugin execution.
+    """
+    if ctx is None:
+        return
+    try:
+        ctx.audit_emit("plugin.executed", {
+            "plugin_id": str(plugin_id)[:128],
+            "latency_ms": int(latency_ms),
+            "success": bool(success),
+            "error_type": str(error_type)[:64] if error_type else None,
+            "tenant_id": getattr(ctx, "tenant_id", ""),
+        })
+    except Exception:  # noqa: BLE001 - audit must not affect execution
+        log.error("plugin.executed audit could not be written for %r", plugin_id)
+
+    # Emit learning event (fire-and-forget, async)
+    try:
+        from core.learning import learning_events
+        from core.learning.event_persistence import EventStore
+
+        tenant_id = getattr(ctx, "tenant_id", "_default")
+        event = learning_events.LearningEvent.create(
+            event_type=learning_events.EventType.PLUGIN_EXECUTED,
+            skill_id=f"plugin.{plugin_id}",
+            tenant_id=tenant_id,
+            signal={
+                "plugin_id": str(plugin_id),
+                "latency_ms": int(latency_ms),
+                "success": bool(success),
+                "error_type": error_type,
+            },
+            lom="plugins.registry._emit_plugin_executed",
+        )
+        store = EventStore(tenant_id=tenant_id)
+        store.write_event(event)
+    except Exception:  # noqa: BLE001 - learning must not affect execution
+        log.error("plugin.executed learning event could not be written for %r", plugin_id)
+
+
 def _detach_provider_slot(plugin: CorvinPlugin) -> None:
     """Release every provider slot ``plugin`` took, by plugin identity.
 
