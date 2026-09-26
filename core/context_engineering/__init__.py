@@ -5,7 +5,7 @@ resolvers, auth decorators) was removed with the Personas Elimination
 (commit e7e3560e); capability checks are served by the ``os.capabilities`` Skill.
 """
 
-from .capabilities import Capability, Persona, Role, Tier
+from .capabilities import Capability, Role, Tier
 from .execution_context import (
     ContextStack,
     ContextStackFrame,
@@ -22,7 +22,6 @@ from .memory_coordinator import (
 )
 
 __all__ = [
-    "Persona",
     "Role",
     "Tier",
     "Capability",

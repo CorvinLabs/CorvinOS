@@ -1,19 +1,14 @@
 """
-Capability and Persona/Role enums.
+Capability and Role enums.
+
+The ``Persona`` enum was removed 2026-09-27 (ADR-0537 over ADR-0302: the persona
+system is eliminated; nothing used the enum).
 
 Load-bearing: deny-by-default capabilities. A capability not in the registry is always False.
 """
 
 from dataclasses import dataclass
 from enum import Enum
-
-
-class Persona(Enum):
-    """Persona represents how CorvinOS is accessed."""
-    CONSOLE_OPERATOR = "console_operator"
-    VOICE_USER = "voice_user"
-    BRIDGE_ADAPTER = "bridge_adapter"
-    MCP_TOOL = "mcp_tool"
 
 
 class Role(Enum):
