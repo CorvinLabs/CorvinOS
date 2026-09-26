@@ -289,12 +289,18 @@ Response:
 
 ### Approve Remediation
 
+All remediation routes require a console session (401 without one). Approve and
+reject also require the `X-CSRF-Token` header and an owner/admin tier. The
+decider is taken from the session (`console:<sid_fingerprint>`); an
+`approved_by` / `rejected_by` field in the body is ignored. Deciding a request
+that is no longer pending returns 409.
+
 ```bash
 POST /v1/console/remediation/approve/apr-abc123
+X-CSRF-Token: <token>
 
 Payload:
 {
-  "approved_by": "user@example.com",
   "reason": "Verified and safe"
 }
 
@@ -302,7 +308,7 @@ Response:
 {
   "request_id": "apr-abc123",
   "state": "approved",
-  "approved_by": "user@example.com",
+  "decided_by": "console:3f9c…",
   "decision_at": "2026-09-26T12:05:00"
 }
 ```
@@ -311,10 +317,10 @@ Response:
 
 ```bash
 POST /v1/console/remediation/reject/apr-abc123
+X-CSRF-Token: <token>
 
 Payload:
 {
-  "rejected_by": "user@example.com",
   "reason": "Need more testing"
 }
 ```
