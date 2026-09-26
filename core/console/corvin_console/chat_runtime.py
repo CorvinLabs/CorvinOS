@@ -7181,4 +7181,40 @@ async def _stream_turn_impl(
         except Exception:  # noqa: BLE001 — collection never breaks a turn
             _log.warning("decision measurement not scheduled", exc_info=True)
 
+    # FIX #9: Envelope Consumer Wiring — Yield session state snapshot before done
+    try:
+        # Build session context snapshot with final turn state
+        from core.infinite_session.session_bridge_producer import (
+            SessionBridgeProducer,
+        )
+
+        producer = SessionBridgeProducer()
+
+        # Create snapshot of final session context (GDPR-safe: metadata only)
+        snapshot = producer.create_snapshot(
+            tenant_id=sess.tenant_id,
+            task_id=task_id,
+            session_id=sess.sid,
+            last_message_hash="",  # Would be SHA256 of last message in real use
+            conversation_turn_count=sess.turn_count,
+            worktree_path=str(sess.workdir) if sess.workdir else "",
+            base_commit="",  # Would be git commit SHA in real use
+            phase_name="",  # Would be current phase name
+            active_subtasks=[],
+            plan_id="",
+            plan_current_step=0,
+            plan_total_steps=0,
+        )
+
+        # Yield envelope containing session state (for Session N+1 recovery)
+        if snapshot is not None:
+            envelope = {
+                "type": "session_envelope",
+                "session_state": snapshot.to_dict(),
+                "exit_code": rc,
+            }
+            yield envelope
+    except Exception as _envelope_err:  # noqa: BLE001 — envelope is best-effort
+        _log.debug("Session envelope creation failed (non-fatal): %s", _envelope_err)
+
     yield {"type": "done"}

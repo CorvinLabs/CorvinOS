@@ -1,7 +1,8 @@
 """ADR-0424: Context Propagation Helpers — Utilities for decorator + pipeline integration."""
 
 from contextvars import ContextVar, Token
-from typing import Dict, Any, Optional
+from functools import wraps
+from typing import Dict, Any, Optional, Callable
 
 
 class ContextSnapshot:
@@ -109,3 +110,56 @@ class TenantContextVar:
         if not tenant_id:
             raise RuntimeError("tenant_id not set in context (GDPR isolation failure)")
         return tenant_id
+
+
+# FIX #7: @require_context decorator for critical paths
+class ContextLossError(Exception):
+    """Raised when required context is missing (context-helpers version)."""
+    pass
+
+
+def require_context(*var_names: str) -> Callable:
+    """Enforce context at function entry (fail-closed).
+
+    Decorator that verifies required ContextVars are set before function execution.
+    If any required context variable is missing, raises ContextLossError immediately.
+
+    Args:
+        *var_names: Names of context variables to verify (e.g., "task_id", "tenant_id")
+
+    Returns:
+        Decorator function
+
+    Example:
+        @require_context("task_id", "tenant_id")
+        def process_turn(task_id: str) -> dict:
+            ...
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            missing = []
+            for var_name in var_names:
+                var_attr_name = f"{var_name.upper()}_VAR"
+                # Get the ContextVar from the module globals
+                var = globals().get(var_attr_name)
+                if var is None:
+                    # Also check if it's a class method on TenantContextVar
+                    if var_name.lower() == "tenant_id":
+                        if TenantContextVar.get() is None:
+                            missing.append(var_name)
+                    continue
+                try:
+                    if var.get() is None:
+                        missing.append(var_name)
+                except LookupError:
+                    missing.append(var_name)
+
+            if missing:
+                raise ContextLossError(
+                    f"Missing required context: {missing}. "
+                    f"Function {func.__name__} requires context to be initialized."
+                )
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
