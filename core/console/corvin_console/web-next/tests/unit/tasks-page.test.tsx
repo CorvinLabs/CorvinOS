@@ -294,6 +294,24 @@ describe("regressions from the adversarial review", () => {
     const rows = buildTree([item("p", { deadline: "2026-09-25" }), item("q", { deadline: "9999-01-01" })], EMPTY_FILTERS, new Set());
     expect(buildTimeline(rows, Date.parse(NOW)).ticks.length).toBeLessThanOrEqual(8);
   });
+
+  // 2026-09-27: a raw-SQL migration wrote kind='decision' / status='unknown' into
+  // the store, and `STATUS_META[x].label` threw "Cannot read properties of
+  // undefined (reading 'label')" — the whole panel went down for one bad row.
+  it.each(["tree", "board", "timeline", "table", "graph"])("renders out-of-enum store values in the %s view", async (view) => {
+    const odd = item("odd", {
+      kind: "decision" as unknown as Item["kind"], status: "unknown" as unknown as Item["status"],
+      priority: "urgent" as unknown as Item["priority"], title: "Odd row", deadline: "2026-09-25T00:00:00Z",
+    });
+    const list = { ...LIST, items: [...ITEMS, odd] };
+    server.use(
+      http.get("/v1/console/task-tracking/items", () => HttpResponse.json(list)),
+      http.get("/v1/console/task-tracking/items/:id", () => HttpResponse.json(DETAIL(odd))),
+    );
+    renderIt(`/app/initiatives?view=${view}&item=odd`);
+    expect(await screen.findByTestId("detail-drawer")).toBeTruthy();
+    expect(screen.queryByText(/Cannot read properties/)).toBeNull();
+  });
 });
 
 describe("live data", () => {

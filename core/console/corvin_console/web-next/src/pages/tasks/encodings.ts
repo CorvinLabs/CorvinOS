@@ -45,6 +45,25 @@ export const KIND_META: Record<ItemKind, { label: string; container: boolean }> 
   proposal: { label: "Proposal", container: false },
 };
 
+/**
+ * Lookups for values that come FROM THE STORE. The store has no CHECK on these
+ * columns, and a raw-SQL writer once filled it with `kind='decision'` and
+ * `status='unknown'` — a bare `STATUS_META[x].label` then threw and took the
+ * whole panel down. An unknown value renders as itself, neutrally styled.
+ * Lookups keyed on the *_ORDER lists stay direct: those keys are ours.
+ */
+export function statusMeta(s: string): (typeof STATUS_META)[ItemStatus] {
+  return STATUS_META[s as ItemStatus] ?? { label: s || "Unknown", badge: "secondary", fill: null };
+}
+
+export function priorityMeta(p: string): (typeof PRIORITY_META)[Priority] {
+  return PRIORITY_META[p as Priority] ?? { label: p || "Unknown", short: "P?", rank: PRIORITY_ORDER.length, stripe: null };
+}
+
+export function kindMeta(k: string): (typeof KIND_META)[ItemKind] {
+  return KIND_META[k as ItemKind] ?? { label: k || "Unknown", container: false };
+}
+
 /** Which parent kinds a new item of `kind` may sit under — mirrors models.PARENT_RULES. */
 export const PARENT_RULES: Record<ItemKind, (ItemKind | null)[]> = {
   initiative: [null],
@@ -206,13 +225,14 @@ export function buildTree(items: Item[], f: Filters, collapsed: Set<string>): Tr
 export function boardColumns(items: Item[], f: Filters): Record<ItemStatus, Item[]> {
   const cols = Object.fromEntries(STATUS_ORDER.map((s) => [s, [] as Item[]])) as Record<ItemStatus, Item[]>;
   for (const it of items) {
-    if (KIND_META[it.kind].container || !matches(it, f)) continue;
-    cols[it.status].push(it);
+    if (kindMeta(it.kind).container || !matches(it, f)) continue;
+    // A status outside the enum has no lane to sit in (the tree and table still show it).
+    cols[it.status]?.push(it);
   }
   const dl = (i: Item) => (i.deadline ? Date.parse(i.deadline) : Number.POSITIVE_INFINITY);
   for (const s of STATUS_ORDER) {
     cols[s].sort((a, b) => Number(b.overdue) - Number(a.overdue)
-      || PRIORITY_META[a.priority].rank - PRIORITY_META[b.priority].rank
+      || priorityMeta(a.priority).rank - priorityMeta(b.priority).rank
       || dl(a) - dl(b));
   }
   return cols;

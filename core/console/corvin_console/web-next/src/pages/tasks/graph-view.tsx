@@ -26,7 +26,7 @@ import { Crosshair, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Item } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
-import { KIND_META, STATUS_META, deadlineText, displayProgress } from "./encodings";
+import { deadlineText, displayProgress, kindMeta, statusMeta } from "./encodings";
 import {
   NODE_H, NODE_W, STATE_META, breakdownStats, externalIds, graphChoices, nodeState, scopeItems,
   stateCounts, treeLayout, type GraphLayout, type NodeState,
@@ -60,7 +60,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 };
 
 function typeLabel(it: Item): string {
-  return (it.category && CATEGORY_LABEL[it.category]) || KIND_META[it.kind].label;
+  return (it.category && CATEGORY_LABEL[it.category]) || kindMeta(it.kind).label;
 }
 
 const HANDLE = "!h-1.5 !w-1.5 !min-h-0 !min-w-0 !border-0 !bg-border";
@@ -71,7 +71,7 @@ function TaskNode({ data }: NodeProps<NodeData>) {
   const done = state === "done";
   const tip = [
     item.title, external ? "Outside this initiative — shown because something here waits for it" : null,
-    `${typeLabel(item)} · ${STATUS_META[item.status].label}`,
+    `${typeLabel(item)} · ${statusMeta(item.status).label}`,
     state !== "done" ? STATE_META[state].label : null, due,
     ...(item.live_run_titles ?? []),
   ].filter(Boolean).join("\n");
@@ -156,7 +156,7 @@ function plural(n: number, word: string): string {
 }
 
 function typeName(key: string): string {
-  return CATEGORY_LABEL[key] ?? KIND_META[key as Item["kind"]]?.label ?? key;
+  return CATEGORY_LABEL[key] ?? kindMeta(key).label;
 }
 
 export default function GraphView({ items, now, selectedId, onSelect }: {
@@ -180,7 +180,7 @@ export default function GraphView({ items, now, selectedId, onSelect }: {
     };
     return graphChoices(items).map((c) => {
       const all = subtree(c.roots);
-      const work = all.filter((i) => !KIND_META[i.kind].container);
+      const work = all.filter((i) => !kindMeta(i.kind).container);
       const root = c.roots.length === 1 ? c.roots[0] : null;
       const done = work.filter((i) => CLOSED.has(i.status)).length;
       return {
@@ -217,7 +217,7 @@ export default function GraphView({ items, now, selectedId, onSelect }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [structureKey(inScope), [...external].sort().join(",")]);
   const byId = useMemo(() => new Map(inScope.map((i) => [i.id, i])), [inScope]);
-  const counts = useMemo(() => stateCounts(inScope.filter((i) => !external.has(i.id)), (i) => KIND_META[i.kind].container),
+  const counts = useMemo(() => stateCounts(inScope.filter((i) => !external.has(i.id)), (i) => kindMeta(i.kind).container),
     [inScope, external]);
   const stats = useMemo(() => breakdownStats(layout, byId), [layout, byId]);
   const current = choices.find((c) => c.id === scope) ?? null;
@@ -234,7 +234,7 @@ export default function GraphView({ items, now, selectedId, onSelect }: {
       out.push({
         id: p.id, type: "task", position: { x: p.x, y: p.y }, draggable: false, connectable: false,
         data: {
-          item: it, state: nodeState(it), progress: displayProgress(it), container: KIND_META[it.kind].container,
+          item: it, state: nodeState(it), progress: displayProgress(it), container: kindMeta(it.kind).container,
           root: p.depth === 0, hasProgress: closed || it.progress != null || it.child_ids.length > 0,
           due: deadlineText(it.deadline, now, closed), selected: it.id === selectedId, external: external.has(it.id),
         } satisfies NodeData,

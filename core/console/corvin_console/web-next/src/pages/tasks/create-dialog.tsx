@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Item, ItemCreateBody, ItemKind, Priority } from "@/lib/api/task-tracking";
-import { KIND_META, KIND_ORDER, PARENT_RULES, PRIORITY_META, PRIORITY_ORDER } from "./encodings";
+import { KIND_META, KIND_ORDER, PARENT_RULES, PRIORITY_META, PRIORITY_ORDER, kindMeta } from "./encodings";
 
 const inputCls = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
@@ -63,7 +63,7 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
             <label className="space-y-1 text-xs text-muted-foreground">Parent
               <select aria-label="Parent" className={inputCls} value={parent} onChange={(e) => setParent(e.target.value)}>
                 {allowed.includes(null) ? <option value="">None (top level)</option> : <option value="">Choose a parent…</option>}
-                {parents.map((p) => <option key={p.id} value={p.id}>{KIND_META[p.kind].label}: {p.title}</option>)}
+                {parents.map((p) => <option key={p.id} value={p.id}>{kindMeta(p.kind).label}: {p.title}</option>)}
               </select>
             </label>
           </div>

@@ -5,7 +5,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { Evidence, Item, ItemStatus, Priority } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
-import { CATEGORY_LABEL, KIND_META, PRIORITY_META, STATUS_META, deadlineText } from "./encodings";
+import { CATEGORY_LABEL, deadlineText, kindMeta, priorityMeta, statusMeta } from "./encodings";
 import { evidenceText, formatAgo } from "./format";
 
 export function StatusIcon({ status, className }: { status: ItemStatus; className?: string }) {
@@ -18,12 +18,12 @@ export function StatusIcon({ status, className }: { status: ItemStatus; classNam
 }
 
 export function StatusBadge({ status }: { status: ItemStatus }) {
-  const m = STATUS_META[status];
+  const m = statusMeta(status);
   return <Badge variant={m.badge} className="gap-1 whitespace-nowrap"><StatusIcon status={status} className="h-3 w-3" />{m.label}</Badge>;
 }
 
 export function PriorityChip({ priority, compact }: { priority: Priority; compact?: boolean }) {
-  const m = PRIORITY_META[priority];
+  const m = priorityMeta(priority);
   return (
     <span data-testid="priority-chip" title={`${m.label} priority`}
       className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded border px-1.5 text-[11px] font-medium leading-5",
@@ -39,13 +39,13 @@ export function KindTag({ item }: { item: Pick<Item, "kind" | "category"> }) {
   return (
     <span className="whitespace-nowrap text-[11px] uppercase tracking-wide text-muted-foreground">
       {cat && item.category === "gate" && <Flag className="mr-0.5 inline h-3 w-3" />}
-      {cat ?? KIND_META[item.kind].label}
+      {cat ?? kindMeta(item.kind).label}
     </span>
   );
 }
 
 export function ProgressBar({ value, status, className }: { value: number; status: ItemStatus; className?: string }) {
-  const fill = STATUS_META[status].fill ?? "hsl(var(--muted-foreground))";
+  const fill = statusMeta(status).fill ?? "hsl(var(--muted-foreground))";
   return (
     <div className={cn("flex items-center gap-2", className)}>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" role="progressbar"

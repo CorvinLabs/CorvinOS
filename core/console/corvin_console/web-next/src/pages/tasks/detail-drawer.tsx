@@ -13,7 +13,7 @@ import {
   restoreTaskItem, unlinkTaskRun, type HistoryEntry, type Item, type ItemDetail, type ItemPatchBody,
 } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
-import { KIND_META, PRIORITY_ORDER, PRIORITY_META, STATUS_META, STATUS_ORDER, displayProgress } from "./encodings";
+import { PRIORITY_ORDER, PRIORITY_META, STATUS_META, STATUS_ORDER, displayProgress, kindMeta } from "./encodings";
 import { evidenceText, formatAgo, formatUtc } from "./format";
 import { LIVE_QUERY } from "./live";
 import { ApprovalTag, Deadline, EvidenceBadge, KindTag, ProgressBar, StatusBadge, StatusIcon } from "./parts";
@@ -330,7 +330,7 @@ export function DetailDrawer({ id, csrf, items, onClose, onSelect, onAddChild, o
             <div className="flex gap-1">
               <select aria-label="Add dependency" className={cn(inputCls, "flex-1")} value={depPick} onChange={(e) => setDepPick(e.target.value)}>
                 <option value="">Add a dependency…</option>
-                {candidates.map((c) => <option key={c.id} value={c.id}>{KIND_META[c.kind].label}: {c.title}</option>)}
+                {candidates.map((c) => <option key={c.id} value={c.id}>{kindMeta(c.kind).label}: {c.title}</option>)}
               </select>
               <Button size="sm" variant="outline" disabled={!depPick || busy}
                 onClick={() => { const v = depPick; setDepPick(""); act.mutate(() => addTaskDependency(it.id, v, csrf)); }}>Add</Button>

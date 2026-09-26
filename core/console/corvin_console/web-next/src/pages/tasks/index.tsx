@@ -37,7 +37,7 @@ import { CreateDialog } from "./create-dialog";
 import { DetailDrawer } from "./detail-drawer";
 import {
   EMPTY_FILTERS, KIND_META, KIND_ORDER, PRIORITY_META, PRIORITY_ORDER, STATUS_META, WORK_KINDS, buildTree,
-  filtersActive, filtersFromQuery, filtersToQuery, matches, type Filters,
+  filtersActive, filtersFromQuery, filtersToQuery, kindMeta, matches, type Filters,
 } from "./encodings";
 import { clockSkewMs, formatUtc } from "./format";
 import { LIVE_QUERY, freshness } from "./live";
@@ -442,7 +442,7 @@ export default function TasksPage() {
           <select aria-label="Task to link" className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={linkTarget}
             onChange={(e) => setLinkTarget(e.target.value)}>
             <option value="">Choose a task…</option>
-            {items.filter((i) => !i.deleted_at).map((i) => <option key={i.id} value={i.id}>{KIND_META[i.kind].label}: {i.title}</option>)}
+            {items.filter((i) => !i.deleted_at).map((i) => <option key={i.id} value={i.id}>{kindMeta(i.kind).label}: {i.title}</option>)}
           </select>
           {linkError && <p role="alert" className="text-xs text-destructive">{linkError}</p>}
           <div className="flex justify-end gap-2">

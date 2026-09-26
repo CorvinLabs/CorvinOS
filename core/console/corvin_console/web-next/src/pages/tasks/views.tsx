@@ -4,8 +4,8 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Link2, User } from "luci
 import type { Item, ItemStatus } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
 import {
-  BOARD_COLUMNS, KIND_META, PRIORITY_META, STATUS_META, boardColumns, buildTimeline, displayProgress, formatDeadline,
-  itemSpan, type Filters, type TreeRow,
+  BOARD_COLUMNS, STATUS_META, boardColumns, buildTimeline, displayProgress, formatDeadline,
+  itemSpan, kindMeta, priorityMeta, statusMeta, type Filters, type TreeRow,
 } from "./encodings";
 import { formatUtc } from "./format";
 import { ApprovalTag, Deadline, EvidenceBadge, KindTag, PriorityChip, ProgressBar, StatusBadge, StatusIcon } from "./parts";
@@ -36,7 +36,7 @@ export function TreeView({ rows, now, selected, onSelect, collapsed, onToggle, f
   return (
     <ul className="divide-y rounded-lg border" data-testid="tree-view" role="tree">
       {rows.map(({ item, depth, hasChildren, matched }) => {
-        const container = KIND_META[item.kind].container || hasChildren;
+        const container = kindMeta(item.kind).container || hasChildren;
         const counts = item.rollup?.counts ?? {};
         const total = item.rollup?.descendants ?? 0;
         const done = counts.complete ?? 0;
@@ -128,7 +128,7 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy }:
                   onDragStart={(e) => e.dataTransfer.setData("text/plain", it.id)}
                   onClick={() => onSelect(it.id)}
                   className="rounded-md border border-l-4 bg-background p-2 text-left shadow-sm transition-colors hover:bg-muted/40"
-                  style={{ borderLeftColor: PRIORITY_META[it.priority].stripe ?? "hsl(var(--border))" }}>
+                  style={{ borderLeftColor: priorityMeta(it.priority).stripe ?? "hsl(var(--border))" }}>
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-sm font-medium leading-snug">{it.title}</span>
                     <PriorityChip priority={it.priority} compact />
@@ -188,8 +188,8 @@ export function TimelineView({ rows, now, onSelect, selected }: {
           </div>
           {tl.rows.map((r) => {
             const { start, end } = itemSpan(r.item);
-            const fill = STATUS_META[r.item.status].fill;
-            const container = KIND_META[r.item.kind].container;
+            const fill = statusMeta(r.item.status).fill;
+            const container = kindMeta(r.item.kind).container;
             return (
               <div key={r.item.id} className="contents">
                 <button type="button" onClick={() => onSelect(r.item.id)}
@@ -202,7 +202,7 @@ export function TimelineView({ rows, now, onSelect, selected }: {
                   {tl.ticks.map((t) => <span key={t.at} aria-hidden className="absolute inset-y-0 border-l" style={{ left: pct(t.x), borderColor: "var(--viz-grid)" }} />)}
                   {r.x0 !== null && r.x1 !== null && (
                     <span role="img" data-testid={`bar-${r.item.id}`}
-                      aria-label={`${r.item.title}: ${STATUS_META[r.item.status].label}, ${formatUtc(start ? new Date(start).toISOString() : null)} to ${formatUtc(end ? new Date(end).toISOString() : null)}`}
+                      aria-label={`${r.item.title}: ${statusMeta(r.item.status).label}, ${formatUtc(start ? new Date(start).toISOString() : null)} to ${formatUtc(end ? new Date(end).toISOString() : null)}`}
                       onMouseEnter={(e) => setHover({ id: r.item.id, x: e.clientX, y: e.clientY })}
                       onMouseMove={(e) => setHover({ id: r.item.id, x: e.clientX, y: e.clientY })}
                       onMouseLeave={() => setHover(null)}
@@ -214,7 +214,7 @@ export function TimelineView({ rows, now, onSelect, selected }: {
                   )}
                   {r.point !== null && (
                     <span role="img" data-testid={`point-${r.item.id}`}
-                      aria-label={`${r.item.title}: ${STATUS_META[r.item.status].label}, ${formatUtc(end ? new Date(end).toISOString() : null)}`}
+                      aria-label={`${r.item.title}: ${statusMeta(r.item.status).label}, ${formatUtc(end ? new Date(end).toISOString() : null)}`}
                       onMouseEnter={(e) => setHover({ id: r.item.id, x: e.clientX, y: e.clientY })}
                       onMouseLeave={() => setHover(null)}
                       onClick={() => onSelect(r.item.id)}
@@ -260,7 +260,7 @@ export function TableView({ items, now, onSelect, selected }: {
   const sorted = useMemo(() => {
     const val = (it: Item): string | number => {
       switch (sort.key) {
-        case "priority": return PRIORITY_META[it.priority].rank;
+        case "priority": return priorityMeta(it.priority).rank;
         case "status": return ["blocked", "in_progress", "open", "complete", "archived"].indexOf(it.status);
         case "progress": return displayProgress(it);
         case "deadline": return it.deadline ? Date.parse(it.deadline) : Number.POSITIVE_INFINITY;
