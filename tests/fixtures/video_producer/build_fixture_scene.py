@@ -18,8 +18,12 @@ carry a real audio stream end-to-end without depending on a TTS worker.
 
 import math
 import os
+import sys
 
 import bpy
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/../../..")
+from core.skills.os_skills.video_producer import blender_scene_kit as kit  # noqa: E402
 
 FPS = 25
 DURATION_SEC = 2
@@ -30,17 +34,12 @@ def build() -> None:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
 
-    scene.render.engine = 'CYCLES'
-    scene.cycles.device = 'CPU'
-    scene.cycles.samples = 4  # smoke-test fixture, not a quality render
-
-    scene.render.fps = FPS
-    scene.frame_start = 1
-    scene.frame_end = FRAME_END
-
-    scene.render.resolution_x = 320
-    scene.render.resolution_y = 240
-    scene.render.resolution_percentage = 100
+    # samples=4, motion_blur=False -- this is a 2s smoke-test fixture proving
+    # the render path works end-to-end, not a quality render.
+    kit.configure_render_basics(
+        scene, resolution=(320, 240), fps=FPS, frame_end=FRAME_END,
+        samples=4, motion_blur=False,
+    )
 
     bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
     cube = bpy.context.active_object
@@ -50,9 +49,7 @@ def build() -> None:
     cube.keyframe_insert(data_path="rotation_euler", frame=scene.frame_start)
     cube.rotation_euler = (0, 0, math.radians(360))
     cube.keyframe_insert(data_path="rotation_euler", frame=scene.frame_end)
-    for fcurve in cube.animation_data.action.fcurves:
-        for kp in fcurve.keyframe_points:
-            kp.interpolation = 'LINEAR'
+    kit.set_linear_interpolation(cube)
 
     bpy.ops.object.camera_add(
         location=(4, -4, 3),
