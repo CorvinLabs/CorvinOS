@@ -8,18 +8,20 @@ Depends on: ADR-0424 (Context Propagation), ADR-0232 (Audit Chain)
 """
 
 import logging
-from contextvars import ContextVar
 from contextlib import contextmanager
 from typing import Dict, Any, Generator
 
-logger = logging.getLogger(__name__)
+# FIX #2: Import shared ContextVars from canonical location (not local copies)
+from core.concurrency.context_helpers import (
+    TASK_ID_VAR,
+    WORKTREE_PATH_VAR,
+    BASE_COMMIT_VAR,
+    PHASE_NAME_VAR,
+    SESSION_ID_VAR,
+    TenantContextVar,
+)
 
-# Placeholder ContextVars (real implementation in core/concurrency/context_helpers.py)
-_task_id_var = ContextVar("task_id", default=None)
-_tenant_id_var = ContextVar("tenant_id", default=None)
-_worktree_var = ContextVar("worktree_path", default=None)
-_base_commit_var = ContextVar("base_commit", default=None)
-_phase_var = ContextVar("phase_name", default=None)
+logger = logging.getLogger(__name__)
 
 
 class ContextLossSentinel:
@@ -36,7 +38,7 @@ class ContextLossSentinel:
         Raises:
             ContextLossError if task_id is None (context lost)
         """
-        task_id = _task_id_var.get(None)
+        task_id = TASK_ID_VAR.get(None)
         if task_id is None:
             logger.error(
                 "CONTEXT LOSS DETECTED: task_id is None at critical path. "
@@ -51,7 +53,7 @@ class ContextLossSentinel:
     @staticmethod
     def assert_tenant_context() -> str:
         """Assert tenant_id is set, raise if missing."""
-        tenant_id = _tenant_id_var.get(None)
+        tenant_id = TenantContextVar.get()
         if tenant_id is None:
             logger.error("CONTEXT LOSS DETECTED: tenant_id is None at critical path")
             raise ContextLossError(
@@ -71,11 +73,11 @@ class ContextLossSentinel:
             ContextLossError if any are missing
         """
         vars_dict = {
-            "task_id": _task_id_var.get(None),
-            "tenant_id": _tenant_id_var.get(None),
-            "worktree_path": _worktree_var.get(None),
-            "base_commit": _base_commit_var.get(None),
-            "phase_name": _phase_var.get(None),
+            "task_id": TASK_ID_VAR.get(None),
+            "tenant_id": TenantContextVar.get(),
+            "worktree_path": WORKTREE_PATH_VAR.get(None),
+            "base_commit": BASE_COMMIT_VAR.get(None),
+            "phase_name": PHASE_NAME_VAR.get(None),
         }
 
         missing = [k for k, v in vars_dict.items() if v is None]
@@ -122,15 +124,15 @@ class ContextLossSentinel:
             # Set all context vars from dict
             for var_name, var_value in context_dict.items():
                 if var_name == "task_id" and var_value:
-                    tokens.append(("task_id", _task_id_var.set(var_value)))
+                    tokens.append(("task_id", TASK_ID_VAR.set(var_value)))
                 elif var_name == "tenant_id" and var_value:
-                    tokens.append(("tenant_id", _tenant_id_var.set(var_value)))
+                    tokens.append(("tenant_id", TenantContextVar.set(var_value)))
                 elif var_name == "worktree_path" and var_value:
-                    tokens.append(("worktree", _worktree_var.set(var_value)))
+                    tokens.append(("worktree", WORKTREE_PATH_VAR.set(var_value)))
                 elif var_name == "base_commit" and var_value:
-                    tokens.append(("commit", _base_commit_var.set(var_value)))
+                    tokens.append(("commit", BASE_COMMIT_VAR.set(var_value)))
                 elif var_name == "phase_name" and var_value:
-                    tokens.append(("phase", _phase_var.set(var_value)))
+                    tokens.append(("phase", PHASE_NAME_VAR.set(var_value)))
 
             logger.debug(f"Context propagated to child task: {len(tokens)} vars")
             yield
