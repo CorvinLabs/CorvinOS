@@ -1,0 +1,715 @@
+/**
+ * VideoStoryboardTimeline.module.css — Phase 6c Storyboard Visualization
+ *
+ * Styles for timeline visualization with:
+ * - Responsive frame cards
+ * - Progress indicators
+ * - Skill confidence badges
+ * - Credential status icons
+ * - Dark/Light theme support
+ */
+
+/* ============================================================================
+   Root Variables
+   ============================================================================ */
+
+:root {
+  --color-pending: #6b7280;
+  --color-running: #3b82f6;
+  --color-completed: #10b981;
+  --color-error: #ef4444;
+  --color-default: #9ca3af;
+
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9fafb;
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --border-color: #e5e7eb;
+
+  --transition-smooth: all 0.3s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #1f2937;
+    --bg-secondary: #111827;
+    --text-primary: #f3f4f6;
+    --text-secondary: #9ca3af;
+    --border-color: #374151;
+  }
+}
+
+/* ============================================================================
+   Container & Layout
+   ============================================================================ */
+
+.container {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: var(--text-primary);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.header h2 {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  user-select: none;
+}
+
+.controls input[type='checkbox'] {
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+}
+
+.status {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background-color: var(--bg-secondary);
+}
+
+/* ============================================================================
+   Progress Section
+   ============================================================================ */
+
+.progressSection {
+  margin-bottom: 24px;
+}
+
+.progressBar {
+  width: 100%;
+  height: 12px;
+  background-color: var(--bg-secondary);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #10b981);
+  transition: width 0.3s ease;
+  border-radius: 6px;
+}
+
+.progressText {
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.failedCount {
+  font-size: 12px;
+  color: var(--color-error);
+  margin-top: 4px;
+}
+
+/* ============================================================================
+   Metrics Panel (ADR-0314)
+   ============================================================================ */
+
+.metricsPanel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 16px;
+  background-color: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.metricItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.metricItem > span,
+.metricItem svg {
+  flex-shrink: 0;
+  font-size: 20px;
+}
+
+.metricItem > div {
+  flex: 1;
+}
+
+.metricItem label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.metricValue {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ============================================================================
+   Timeline & Frames
+   ============================================================================ */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.frameContainer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.frameCard {
+  flex: 1;
+  padding: 16px;
+  background-color: var(--bg-secondary);
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.frameCard:hover {
+  border-color: var(--text-secondary);
+  background-color: var(--bg-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.frameCard.status-completed {
+  border-color: var(--color-completed);
+}
+
+.frameCard.status-running {
+  border-color: var(--color-running);
+  background-color: var(--bg-primary);
+}
+
+.frameCard.status-error {
+  border-color: var(--color-error);
+}
+
+.frameCard.status-pending {
+  border-color: var(--color-pending);
+  opacity: 0.7;
+}
+
+/* ============================================================================
+   Frame Status Icon
+   ============================================================================ */
+
+.statusIcon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.statusIcon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--color-running);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.circle {
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-pending);
+  border-radius: 50%;
+}
+
+/* ============================================================================
+   Frame Details
+   ============================================================================ */
+
+.frameDetails {
+  flex: 1;
+  min-width: 0;
+}
+
+.frameHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.frameIcon {
+  font-size: 18px;
+}
+
+.frameId {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.workerType {
+  font-size: 12px;
+  padding: 2px 8px;
+  background-color: var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: capitalize;
+}
+
+.status-pending {
+  background-color: rgba(107, 114, 128, 0.2);
+  color: var(--color-pending);
+}
+
+.status-running {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: var(--color-running);
+}
+
+.status-completed {
+  background-color: rgba(16, 185, 129, 0.2);
+  color: var(--color-completed);
+}
+
+.status-error {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: var(--color-error);
+}
+
+/* ============================================================================
+   Frame Progress (running frames)
+   ============================================================================ */
+
+.frameProgress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.frameProgress .progressBar {
+  flex: 1;
+  height: 6px;
+  margin: 0;
+}
+
+.frameProgress span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  min-width: 40px;
+}
+
+/* ============================================================================
+   Skill & Credential Badges
+   ============================================================================ */
+
+.skillBadge {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background-color: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.confidence {
+  color: var(--color-running);
+}
+
+.trend {
+  font-size: 10px;
+  color: var(--color-running);
+}
+
+.credentialIcon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background-color: rgba(107, 114, 128, 0.1);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+/* ============================================================================
+   Expand Button & Arrow
+   ============================================================================ */
+
+.expandButton {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background-color: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--text-secondary);
+  transition: transform 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.expandButton:hover {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.arrow {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+/* ============================================================================
+   Expanded Frame Details
+   ============================================================================ */
+
+.frameExpanded {
+  grid-column: 1 / -1;
+  padding: 16px;
+  background-color: var(--bg-primary);
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  margin-top: -12px;
+  margin-bottom: 12px;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.expandedSection {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.expandedSection:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.expandedSection h4 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0 0 8px 0;
+}
+
+.infoGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.infoGrid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.infoGrid label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.infoGrid span {
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+/* ============================================================================
+   Audit Hash Display
+   ============================================================================ */
+
+.auditHash {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.auditHash code {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auditLink {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--color-running);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.auditLink:hover {
+  text-decoration: underline;
+}
+
+/* ============================================================================
+   Error Display
+   ============================================================================ */
+
+.errorMessage {
+  padding: 8px;
+  background-color: rgba(239, 68, 68, 0.1);
+  border-left: 3px solid var(--color-error);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  font-family: 'Monaco', 'Courier New', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.retryButton {
+  padding: 6px 12px;
+  background-color: var(--color-running);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.retryButton:hover {
+  background-color: #2563eb;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+}
+
+/* ============================================================================
+   Controls & Actions
+   ============================================================================ */
+
+.button {
+  padding: 8px 16px;
+  background-color: var(--color-running);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.button:hover:not(:disabled) {
+  background-color: #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button + .button {
+  margin-left: 8px;
+}
+
+/* ============================================================================
+   Audit Summary Footer
+   ============================================================================ */
+
+.auditSummary {
+  padding: 12px;
+  background-color: var(--bg-secondary);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.auditSummary p {
+  margin: 0;
+}
+
+.hashCode {
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 10px;
+  padding: 2px 6px;
+  background-color: var(--bg-primary);
+  border-radius: 3px;
+  color: var(--text-secondary);
+}
+
+/* ============================================================================
+   Loading & Error States
+   ============================================================================ */
+
+.loading,
+.error {
+  padding: 32px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+  background-color: var(--bg-secondary);
+  border-radius: 8px;
+  margin: 24px 0;
+}
+
+.error {
+  color: var(--color-error);
+  border-left: 4px solid var(--color-error);
+}
+
+/* ============================================================================
+   Responsive Design
+   ============================================================================ */
+
+@media (max-width: 768px) {
+  .container {
+    padding: 16px;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .frameCard {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .frameHeader {
+    width: 100%;
+  }
+
+  .metricsPanel {
+    grid-template-columns: 1fr;
+  }
+
+  .frameExpanded {
+    margin-left: -16px;
+    margin-right: -16px;
+    border-radius: 0;
+  }
+
+  .infoGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    padding: 12px;
+  }
+
+  .header h2 {
+    font-size: 18px;
+  }
+
+  .frameId {
+    font-size: 12px;
+  }
+
+  .workerType,
+  .status {
+    font-size: 10px;
+  }
+
+  .button {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+}
