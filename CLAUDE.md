@@ -54,7 +54,14 @@ under the maintainer account. Confirmation is not required.
 
 ## ADR-0516: Knowledge Graph Foundation (LOAD-BEARING RULE — Active)
 
-**Status:** 🟢 **LIVE & PRODUCTION-READY** (activated 2026-09-25)
+**Status:** 🟡 **PARTIAL — the single-source RULE is live; the graph AUTOMATION is not** (verified 2026-09-26)
+
+Verified on this host 2026-09-26: the centralisation is done (`docs/decisions/` holds only
+a README, `corvin_decisions/` is the submodule). NOT running: no post-commit hook exists in
+any of the four repos, the webhook (`:8000/v1/sync/webhook`) and dashboard (`:3000`) do not
+answer, and `Corvin-Knowledge/graph/` holds only `entities.jsonl`, last built 2026-09-18,
+no `relations.jsonl`. 96 ADR numbers are carried by two files each. Don't cite the graph as
+live until those are fixed — ADR-0516 stays PROPOSED.
 
 **Canonical Location:** `/home/shumway/projects/Corvin-ADR/decisions/` (SINGLE SOURCE OF TRUTH)
 
@@ -78,18 +85,21 @@ ALL architectural decisions for CorvinOS belong in **ONE place only:**
 
 | Mechanism | What | Where |
 |---|---|---|
-| **Migration** | All ADRs from CorvinOS/outputs → Corvin-ADR/decisions | `scripts/migrate_local_adrs_to_corvin_adr.py` |
-| **Validation** | ADR-0264 frontmatter check (id, status, depends_on, paths, docs, commits) | `scripts/verify_adr_0516_compliance.py` |
-| **Audit** | Circular dep detection, dangling links, duplicate check | `scripts/adr_lifecycle_activation.py` |
-| **Sync** | Post-commit webhooks trigger on every git commit in Corvin-ADR | `.git/hooks/post-commit` (installed in all repos) |
-| **Graph** | Knowledge graph auto-built from canonical ADRs | `/home/shumway/projects/Corvin-Knowledge/graph/` |
+| **Migration** | All ADRs from CorvinOS/outputs → Corvin-ADR/decisions | `Corvin-Knowledge/scripts/migrate_local_adrs_to_corvin_adr.py` |
+| **Validation** | ADR-0264 frontmatter check (id, status, depends_on, paths, docs, commits) | `Corvin-Knowledge/scripts/verify_adr_0516_compliance.py` |
+| **Audit** | Circular dep detection, dangling links, duplicate check | `Corvin-Knowledge/scripts/adr_lifecycle_activation.py` |
+| **Sync** | Post-commit webhooks on every commit in Corvin-ADR | **NOT INSTALLED** — no `.git/hooks/post-commit` in any repo (2026-09-26) |
+| **Graph** | Knowledge graph built from canonical ADRs | `Corvin-Knowledge/graph/` — **stale** (entities only, 2026-09-18) |
+
+The three scripts live in `/home/shumway/projects/Corvin-Knowledge/scripts/`, NOT in
+`CorvinOS/scripts/`.
 
 ### Workflow (Session-Proof)
 
 1. **Write ADR locally** (anywhere, optional) — NOT required
 2. **MIGRATE to Corvin-ADR/decisions/** — REQUIRED before merge
    ```bash
-   python3 scripts/migrate_local_adrs_to_corvin_adr.py
+   python3 /home/shumway/projects/Corvin-Knowledge/scripts/migrate_local_adrs_to_corvin_adr.py
    cd /home/shumway/projects/Corvin-ADR
    git add decisions/ADR-XXXX.md
    git commit -m "adr: add ADR-XXXX — [title]"
@@ -97,10 +107,10 @@ ALL architectural decisions for CorvinOS belong in **ONE place only:**
    ```
 3. **VALIDATE frontmatter** (ADR-0264 compliance) — REQUIRED before merge
    ```bash
-   python3 scripts/verify_adr_0516_compliance.py
+   python3 /home/shumway/projects/Corvin-Knowledge/scripts/verify_adr_0516_compliance.py
    ```
-4. **Webhook auto-triggers** → graph updates live
-5. **Verify in Dashboard** — http://localhost:3000/entities → search for ADR-XXXX
+4. **Webhook / dashboard** — NOT running on this host (2026-09-26); the graph is not
+   updated by a commit. Don't claim a graph update as proof of anything.
 
 ### Absolute Must-NOT
 
@@ -110,9 +120,10 @@ ALL architectural decisions for CorvinOS belong in **ONE place only:**
 - ❌ Edit ADRs locally and sync manually — always work in Corvin-ADR location only
 - ❌ Create duplicate ADR-XXXX files (git/filesystem will reject, but check frontmatter `id`)
 
-### Auto-Sync (Always Active)
+### Auto-Sync (designed, NOT active — verified 2026-09-26)
 
-Every git commit in these repos triggers webhook:
+Intended: every git commit in these repos triggers the webhook. Today no repo has the
+post-commit hook and nothing listens on the endpoint:
 - `/home/shumway/projects/Corvin-ADR/decisions/` ← commit triggers POST /v1/sync/webhook
 - `/home/shumway/projects/CorvinOS/` (on docs/implementation changes)
 - `/home/shumway/projects/Corvin-Marketplace/` (on plugin docs)
@@ -121,17 +132,19 @@ Every git commit in these repos triggers webhook:
 **Graph location:** `/home/shumway/projects/Corvin-Knowledge/graph/`  
 **Dashboard:** http://localhost:3000/entities
 
-### Go-Live Status (2026-09-25)
+### Verified Status (2026-09-26 — replaces the 2026-09-25 "go-live" list, which overstated it)
 
-✅ 1013+ ADRs inventoried  
-✅ Knowledge Graph built (entities.jsonl + relations.jsonl)  
-✅ ADR-0264 compliance validated (no gaps, no duplicates)  
-✅ Circular dependency detection active  
-✅ Auto-sync webhooks live  
-✅ Dashboard live at http://localhost:3000  
-✅ SINGLE SOURCE OF TRUTH enforced
+✅ ADRs centralised in Corvin-ADR (1062 files in `decisions/`)  
+⚠️ Knowledge Graph: `entities.jsonl` only, last built 2026-09-18; no `relations.jsonl`  
+⚠️ ADR-0264 frontmatter: 17 ADRs incomplete; 96 numbers carried by two files each  
+❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  
+❌ Dashboard at http://localhost:3000: not running  
+✅ SINGLE SOURCE OF TRUTH rule: in force (this is the load-bearing part)
 
-**Next Task:** Immediately uses a consistent, production-ready Knowledge Graph. No setup needed.
+**Task-manager consequence:** the Task-Tracking sync (`corvin_console/task_tracking_git_sync.py`)
+reads an ADR's status from its file. Where a number has two files it now ignores superseded
+siblings and reads two disagreeing live siblings as open (never done), and it keeps items
+whose commits left the 7-day window following their record.
 
 ---
 
@@ -1678,7 +1691,11 @@ corvin audit trace skill os.delegation_router --task=<task_id>
 
 ## Audit Chain Completeness — 100% Coverage (ADR-2040–2044, Load-Bearing)
 
-**Status:** 🟢 **PHASE 1 COMPLETE (2026-09-24)** — 545 events registered, 98%+ coverage achieved
+**Status:** 🟡 **PARTIAL (verified 2026-09-26)** — the rule below is load-bearing; the
+completeness it claims is NOT achieved. Measured: 467 `EVENT_SEVERITY` entries, 268
+`_EVENT_ALLOWLIST` entries; 231 events are in `EVENT_SEVERITY` without an allowlist entry
+(32 the reverse), so `scripts/verify_audit_event_completeness.py` FAILS. ADR-2040 stays
+PROPOSED. The per-subsystem percentages in the table below are self-reported, not measured.
 
 **RULE: ALL Subsystems MUST Audit 100% of Actions. Zero silent operations.**
 
@@ -1692,7 +1709,7 @@ corvin audit trace skill os.delegation_router --task=<task_id>
 | **Plugins (L4)** | Lifecycle | 4 | ✅ Complete | ADR-2043 | 100% |
 | **Skills 2.0 (ACP)** | Routing/Learning | 6+ | 🟡 Partial | ADR-2044 | 80% |
 
-**Total Events:** 545+ registered in EVENT_SEVERITY + _EVENT_ALLOWLIST
+**Total Events (measured 2026-09-26):** 467 in EVENT_SEVERITY, 268 in _EVENT_ALLOWLIST — not in sync
 
 ### Audit Event Registration (MANDATORY)
 
@@ -1715,24 +1732,24 @@ corvin audit trace skill os.delegation_router --task=<task_id>
 
 **Failure to register → audit event silently dropped → compliance gap.**
 
-### Phase 1 Critical Events (Implemented & Wired)
+### Phase 1 Critical Events (Registered; 3/8 Wired — verified 2026-09-26)
 
-**Layer 10 (Context Engineering):** 4 events
-- `context.snapshot_created` — wired in `session_checkpoint.py::save_checkpoint()`
-- `context.snapshot_restored` — wired in `session_checkpoint.py::load_checkpoint()`
-- (2 more in progress)
+Same distinction as Phase 2 below: "registered" is not "wired". The earlier text named
+call sites that do not exist — the only non-test, non-registry occurrence of the five
+NOT WIRED names is the checklist in `scripts/verify_audit_completeness.py`.
 
-**Layer 22 (Compute Safety):** 3 events
-- `compute.checkpoint_corrupted` — wired in compute runner exception handler
-- `compute.deadlock_detected` — wired in worker heartbeat timeout handler
-- `compute.iteration_diverged` — wired in loss divergence checker
+**Layer 10 (Context Engineering):**
+- `context.snapshot_created`, `context.snapshot_restored` — **NOT WIRED** (`session_checkpoint.py` makes no audit call)
 
-**Layer 25 (ACS L34):** 1 event
-- `acs.l34_gate_passed` — wired in acs_runtime.py post-execution
+**Layer 22 (Compute Safety):**
+- `compute.checkpoint_corrupted`, `compute.deadlock_detected`, `compute.iteration_diverged` — **NOT WIRED** (no emitter)
 
-**Layer 36 (Erasure):** 2 events
-- `erasure.tenant_boundary_checked` — wired in erasure_orchestrator.py
-- `erasure.cross_tenant_detected` — wired in erasure pre-check
+**Layer 25 (ACS L34):**
+- `acs.l34_gate_passed` — **WIRED** in `acs_runtime.py` post-execution
+
+**Layer 36 (Erasure):**
+- `erasure.tenant_boundary_checked` — **WIRED** in `erasure_orchestrator.py`
+- `erasure.cross_tenant_detected` — **WIRED** in the erasure pre-check
 
 ### Phase 2 Extended Events (Registered, 4/8 Wired — verified 2026-09-26)
 
@@ -1753,31 +1770,25 @@ emits `plugin_disabled`, and nothing imports that module).
 - `plugin.execution_timeout` — **WIRED**: `registry.py` `on_load` (`LOAD_DEADLINE_S`) and `health_check` (`HEALTH_CHECK_DEADLINE_S`) deadline overruns. Proof: `core/plugins/tests/test_plugin_execution_timeout_audit.py`
 - `plugin.initialization_failed` — **NOT WIRED** (`corvin_plugins.audit.emit_initialization_failed` has no caller; load failures are recorded as `plugin.load_failed`)
 
-### Pre-Commit Hook (ENFORCEMENT)
+### Pre-Commit Hook (NOT BUILT — verified 2026-09-26)
 
-**Location:** `.git/hooks/pre-commit` (installed at 2026-09-24)
-
-Rejects commits that:
+The installed `.git/hooks/pre-commit` does not check audit events. The rejection rules
+below are the intended design, not current behaviour:
 - Add new subsystem changes WITHOUT audit.emit() calls
 - Reference unregistered events in EVENT_SEVERITY
 - Carry incomplete audit event payloads
 
-```bash
-# Hook will validate all commits
-# Violation → rejection with message pointing to this rule
-# Example: "❌ AUDIT HOOK: File compute/audit.py adds new functions but no audit events registered"
-```
-
 ### CI/CD Gate (ENFORCEMENT)
 
-**Workflow:** `.github/workflows/audit-completeness.yml` (active on all PRs)
+**Workflow:** `.github/workflows/audit-completeness.yml` — exists; as of 2026-09-26 it
+would FAIL (EVENT_SEVERITY ↔ _EVENT_ALLOWLIST out of sync, see above)
 
 Fails if:
 - EVENT_SEVERITY registry incomplete
 - _EVENT_ALLOWLIST has PII-risk fields (grep for secrets, emails, tokens)
 - Audit tests failing (50+ tests, all must pass)
 
-### Testing Requirements (30+ Tests, All Passing)
+### Testing Requirements (measured 2026-09-26: `test_phase1_audit_events.py` 13 passed / 1 error; the other two files below do not exist)
 
 **Unit Tests:** Event emission + field validation
 **Functional Tests:** Audit chain integrity verification
@@ -1810,17 +1821,16 @@ pytest tests/adversarial/test_audit_integrity.py -v
 | **GDPR Art. 32** | Security (hash-chained, fail-closed) | ✅ | ADR-0233 |
 | **EU AI Act 50** | Transparency (action attribution) | ✅ | ADR-2040–2044 |
 
-### Go-Live Status (2026-09-24)
+### Verified Status (2026-09-26 — replaces the 2026-09-24 "go-live" list, which was not true)
 
-✅ Phase 1: 10 events implemented + wired + tested  
-✅ Phase 2a: 8 events registered + tested  
-✅ Phase 2b: 2 events wired + tested  
-✅ Coverage: 545 events (98%+)  
-✅ Pre-commit hook: Functional  
-✅ CI/CD gate: Functional  
-✅ Tests: 50+ all passing  
+⚠️ Phase 1: 3 of 8 events wired (acs + 2× erasure); 5 registered only  
+⚠️ Phase 2: 4 of 8 wired (see Phase 2 list)  
+❌ Registry sync: 231 EVENT_SEVERITY events lack an allowlist entry  
+❌ Pre-commit audit hook: not built  
+⚠️ CI gate: exists, would fail  
+⚠️ Tests: `test_phase1_audit_events.py` 13 passed / 1 error; `test_audit_chain_100_e2e.py`, `test_audit_integrity.py` missing
 
-**Result:** 🟢 **100% AUDIT COMPLETENESS ACHIEVED — PRODUCTION-READY**
+**Result:** 🟡 **NOT complete. ADR-2040 is PROPOSED.** Don't cite "100% audit completeness".
 
 → ADRs: ADR-2040 (OS-Kern) · ADR-2041 (Worker) · ADR-2042 (A2A) · ADR-2043 (Plugins) · ADR-2044 (Skills)
 
