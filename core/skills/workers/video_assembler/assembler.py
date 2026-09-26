@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional, Any
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 import sys
 # Imported by the package's REAL path. A sys.path.insert of <repo>/core/skills
@@ -17,19 +20,21 @@ import sys
 # codebase holds are different classes and isinstance() is False across the
 # seam (2026-09-20 review).
 from core.skills.os_skills.video_producer.types import Storyboard
-from core.learning.event_emitter import EventEmitter  # ADR-0314 feedback
+from core.learning.learning_events import EventType
+from core.skills.workers._learning_emit import build_event_emitter, emit_worker_event
 from .filter_graph import FilterGraph
 
 
 class VideoAssembler:
     """Worker for FFmpeg video assembly from slides + audio."""
 
-    def __init__(self, workdir: str | Path):
+    def __init__(self, workdir: str | Path, tenant_id: str = "_default"):
         """Initialize with working directory."""
         self.workdir = Path(workdir)
         self.video_dir = self.workdir / "video"
         self.video_dir.mkdir(parents=True, exist_ok=True)
-        self.event_emitter = EventEmitter()  # For QualityFeedbackEvent
+        self.tenant_id = tenant_id
+        self.event_emitter = build_event_emitter(tenant_id)
 
     async def assemble_video(
         self,
@@ -114,7 +119,7 @@ class VideoAssembler:
         try:
             await self._run_ffmpeg(
                 filter_graph=ffmpeg_filter,
-                audio_files=list(audio_dir.glob("*.mp3")),
+                input_args=filter_graph.get_input_args(),
                 output_path=output_path,
             )
             encoding_latency_ms = int((time.time() - start_time) * 1000)
@@ -152,15 +157,38 @@ class VideoAssembler:
         return results
 
     async def _load_timings(self, audio_dir: Path) -> dict[str, float]:
-        """Load audio timings from timings.json."""
+        """Per-scene audio durations in milliseconds.
+
+        Prefers a precomputed ``timings.json`` (an upstream TTS step's own
+        measurement) when present; otherwise probes each audio file's REAL
+        duration via ffprobe. Until this fallback existed, an absent
+        timings.json silently made ``_validate_timing`` compare every scene
+        against 0ms -- the "audio longer than its slide" check could never
+        fire, regardless of what the audio files actually contained.
+        """
         timings_file = audio_dir.parent / "timings.json"
         if timings_file.exists():
             try:
                 with open(timings_file) as f:
                     return json.load(f)
             except Exception:
-                return {}
-        return {}
+                pass
+
+        timings: dict[str, float] = {}
+        try:
+            import ffmpeg
+        except ImportError:
+            return timings
+
+        for audio_path in audio_dir.glob("*.mp3"):
+            try:
+                probe = ffmpeg.probe(str(audio_path))
+                duration_s = float(probe.get("format", {}).get("duration", 0.0))
+                timings[audio_path.stem] = duration_s * 1000
+            except Exception as e:
+                logger.warning(f"Failed to probe audio duration for {audio_path}: {e}")
+
+        return timings
 
     async def _validate_timing(
         self,
@@ -186,13 +214,13 @@ class VideoAssembler:
     async def _run_ffmpeg(
         self,
         filter_graph: str,
-        audio_files: list[Path],
+        input_args: list[str],
         output_path: Path,
     ) -> None:
         """
         Execute ffmpeg encoding (real implementation).
 
-        Invokes: ffmpeg -filter_complex "$filter_graph" -c:v libx264 -c:a aac -preset medium -b:v 7200k -y output.mp4
+        Invokes: ffmpeg <input_args> -filter_complex "$filter_graph" -map "[outv]" -map "[outa]" -c:v libx264 -c:a aac -preset medium -b:v 7200k -y output.mp4
 
         Raises:
             RuntimeError if ffmpeg fails
@@ -207,11 +235,19 @@ class VideoAssembler:
             output_path.write_bytes(mp4_stub)
             return
 
-        # Build ffmpeg command
+        # Build ffmpeg command. -map is required: with a filter_complex whose
+        # outputs are explicitly labelled ([outv]/[outa]), ffmpeg does not
+        # infer them automatically the way it does for a single unlabelled
+        # filter chain.
         cmd = [
             "ffmpeg",
+            *input_args,
             "-filter_complex",
             filter_graph,
+            "-map",
+            "[outv]",
+            "-map",
+            "[outa]",
             "-c:v",
             "libx264",
             "-c:a",
@@ -310,7 +346,10 @@ class VideoAssembler:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        try:
-            await self.event_emitter.emit("video_assembled", event_data)
-        except Exception as e:
-            print(f"Failed to emit video_assembled event: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.SCENE_RENDERED,
+            skill_id="os.video_producer.video_assembler",
+            tenant_id=self.tenant_id,
+            signal={"milestone": "video_assembled", **event_data},
+        )

@@ -473,13 +473,14 @@ class TestPhase2QA:
         with tempfile.TemporaryDirectory() as tmpdir:
             synth = VoiceSynthesizer(tmpdir)
 
-            # Track emitted events
+            # Track emitted events -- EventEmitter.emit() is synchronous and
+            # takes one real LearningEvent (ADR-0314), not an (event_type, data)
+            # pair.
             events = []
-            original_emit = synth.event_emitter.emit
 
-            async def capture_emit(event_type, data):
-                events.append({"event_type": event_type, "data": data})
-                # Don't actually emit to avoid missing EventEmitter
+            def capture_emit(event):
+                events.append(event)
+                return True
 
             synth.event_emitter.emit = capture_emit
 

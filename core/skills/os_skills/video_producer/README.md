@@ -33,19 +33,38 @@ print(result)
 # }
 ```
 
-## Three implementations live in this directory -- know which one you're touching
+## Consolidation status (2026-09-26) -- know which implementation you're touching
 
-This directory holds THREE separate, non-communicating video-production code
-paths. Extending the wrong one for a given task is easy to do by accident:
+This directory (plus two sibling trees) used to hold FIVE separate,
+non-communicating video-production code paths, discovered and consolidated
+over two sessions:
 
-| Implementation | Entry point | Input | Status |
-|---|---|---|---|
-| **PPT/slide pipeline** (this README's own Quick Start, below) | `orchestrator.py::VideoProducerOrchestrator` | PowerPoint/PDF + LLM storyboard | Partially stubbed (`_generate_storyboard` is an explicit placeholder) |
-| **Skill Forge v2.0 MVP** | `maestro.py::VideoProducerMaestro` | hand-rolled asset analysis | Phases 1-3 only, stubbed |
-| **Blender headless render path** | `blender_orchestrator.py::BlenderHeadlessOrchestrator`, driven via `blender_cli.py` | a `.blend` scene | **The one with a real, E2E-proven, autonomously-runnable output** (see below) |
+| Implementation | Entry point | Status |
+|---|---|---|
+| **PPT/slide pipeline** (this README's own Quick Start, below) | `orchestrator.py::VideoProducerOrchestrator` + `core/skills/workers/*` | **The canonical path.** `EventEmitter`/`TaskManager` construction bugs fixed across all 5 workers, video assembly now has real ffmpeg `-i` wiring + a real multi-scene filter graph (was a discarded-then-hardcoded stub), voice synthesis is real edge-tts (was silence), YouTube upload is honest local-only mode (was a hardcoded fake video id). `_generate_storyboard` (the LLM call) is still a placeholder -- the one open stub in this path. |
+| **Skill Forge v2.0 MVP** | `maestro.py::VideoProducerMaestro` | **Deprecated** (`DeprecationWarning` on construction) -- Phases 1-3 only, stubbed, no unique capability over the canonical path. Kept in place, not deleted, pending a release cycle with no external callers found. |
+| **Blender headless render path** | `blender_orchestrator.py::BlenderHeadlessOrchestrator`, driven via `blender_cli.py` | Real, E2E-proven, autonomously runnable (see below) -- a Blender-specific enhancement layer, not a competing pipeline. |
+| **Generic topic->video generator** (`core/skills/video_producer/`, a *different* package from this one) | `maestro.py::MaestroOrchestrator` | Not part of this consolidation; reachable only from demo scripts, not any live API. Its real (non-mocked) espeak-ng TTS and Playwright screenshot logic were the model for this session's edge-tts port, but the package itself was left alone. |
+| **Director Mode** (`src/director/` here + a second independent copy at `core/skills/director_mode/`) | narrative/visual/pacing optimizers | **Deleted**, both copies (2026-09-26). Zero production call sites ever existed -- only each copy's own test suite exercised it. ADR-0696 claimed `status: IMPLEMENTED`; corrected to `superseded` in the same change. |
 
-If the task is "render a Blender scene into a video," use the third one --
-`blender_cli.py` -- not the other two; they have no Blender awareness at all.
+The console's live video-producer API (`core/console/corvin_console/routes/video_producer_api.py`)
+still resolves a SIXTH, separately-versioned implementation from the
+Corvin-Marketplace plugin repo via `importlib` -- that one is what an
+operator using the console UI actually reaches today. It was deliberately
+**not** touched this session: it already solves job persistence,
+async progress tracking and console reachability (models.py/storage.py/
+async_runner.py) that the canonical path doesn't attempt, and replacing it
+outright would have meant rebuilding that whole layer from scratch rather
+than finishing already-declared work. The console's `VideoProducerPage`
+panel itself was dead UI until this session (imported in `registry.tsx` but
+never routed, no `NAV_GROUPS` entry) -- now wired, though unverified: this
+environment has no Node.js, so the frontend change is source-correct but
+**not build/runtime-proven** (see CLAUDE.md's console-frontend proof
+requirements, which this explicitly could not satisfy).
+
+If the task is "render a Blender scene into a video," use `blender_cli.py`.
+For everything else (PPT ingestion, TTS, assembly, upload), use
+`orchestrator.py`.
 
 ### The Blender path: real, working, autonomously runnable
 
@@ -78,7 +97,15 @@ as the way to produce and verify a Blender render.
 3. **Storyboard Generation** — LLM-constrained to analysis facts
 4. **Parallel Workers** — Slides + Audio + Screenshots (ADR-0694)
 5. **Video Assembly** — FFmpeg orchestration (ADR-0695)
-6. **YouTube Upload** — Async, non-blocking upload
+6. **YouTube Upload** — Async, non-blocking upload. **Local-only by default**:
+   uploading to YouTube requires an operator-provisioned Google Cloud OAuth2
+   client (own console project, consent screen, a stored token at
+   `CORVIN_YOUTUBE_TOKEN_PATH`) — an agent/installer cannot provision that.
+   Without it, the pipeline still produces the final MP4 + generated
+   title/description/tags locally; `enqueue_upload`/`upload_video` report
+   `status: "not_configured"` with a `reason`, never a fabricated video id
+   (until 2026-09-26 this always returned a hardcoded fake id). See
+   `core/skills/workers/youtube_uploader/youtube_api.py`'s module docstring.
 7. **Feedback Collection** — Operator feedback → learning (Phase 4b)
 
 **See Also:**

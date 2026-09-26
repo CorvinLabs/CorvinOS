@@ -1,6 +1,15 @@
 """
 Video Producer Maestro (Orchestrator) — Skill Forge v2.0 Compliance
 
+DEPRECATED (2026-09-26): this was an early, parallel "Skill Forge v2.0 MVP"
+attempt at the same 7-phase pipeline ``orchestrator.py::VideoProducerOrchestrator``
+already implements against real, now-fixed-and-tested workers (see
+``core/skills/workers/*`` and this session's video_producer consolidation).
+This module only ever reached phases 1-3, against hand-rolled/stubbed data,
+with no Blender awareness, and has no production call sites (only its own
+tests/demo script). Use ``VideoProducerOrchestrator`` instead. Kept in place
+(not deleted) pending a release cycle with no external callers found.
+
 Coordinates the 7-phase video production pipeline:
 1. Asset ingestion + analysis
 2. Storyboard generation
@@ -16,6 +25,7 @@ Phase 1 includes: orchestrator bootstrap, worker registration, Phases 1-3 execut
 import asyncio
 import json
 import logging
+import warnings
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, Dict
@@ -43,6 +53,13 @@ class VideoProducerMaestro:
         Args:
             project_dir: Project root (assets, audio, screenshots, output stored here)
         """
+        warnings.warn(
+            "VideoProducerMaestro is deprecated; use "
+            "core.skills.os_skills.video_producer.orchestrator.VideoProducerOrchestrator "
+            "instead (see this module's docstring).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.project_dir = Path(project_dir)
         self.project_dir.mkdir(parents=True, exist_ok=True)
 

@@ -287,6 +287,10 @@ class TestYouTubeUploaderPhase4a:
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
             uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader.youtube_api.upload_video = AsyncMock(
+                return_value={"status": "uploaded", "video_id": "test123",
+                              "url": "https://youtube.com/watch?v=test123"}
+            )
 
             metadata = {"title": "Test Video"}
             result = await uploader.enqueue_upload(video_path, metadata)
@@ -309,6 +313,10 @@ class TestYouTubeUploaderPhase4a:
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
             uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader.youtube_api.upload_video = AsyncMock(
+                return_value={"status": "uploaded", "video_id": "test123",
+                              "url": "https://youtube.com/watch?v=test123"}
+            )
 
             metadata = {"title": "Test Video"}
             result = await uploader.enqueue_upload(video_path, metadata)
@@ -336,6 +344,10 @@ class TestYouTubeUploaderPhase4a:
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
             uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader.youtube_api.upload_video = AsyncMock(
+                return_value={"status": "uploaded", "video_id": "test123",
+                              "url": "https://youtube.com/watch?v=test123"}
+            )
 
             metadata = {"title": "Test Video"}
             result = await uploader.enqueue_upload(video_path, metadata)

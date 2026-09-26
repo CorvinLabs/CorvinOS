@@ -23,6 +23,7 @@ import pytest
 from core.skills.workers.slide_renderer import SlideRenderer
 from core.skills.workers.video_assembler import VideoAssembler, FilterGraph
 from core.skills.os_skills.video_producer.types import Scene, Storyboard
+from tests.skills.video_producer_media_fixtures import write_real_png, write_real_audio
 
 
 class TestSlideRendererPhase3:
@@ -242,8 +243,8 @@ class TestVideoAssemblerPhase3:
             slides_dir.mkdir()
             audio_dir.mkdir()
 
-            (slides_dir / "s01.png").write_bytes(b"PNG" + b"\x00" * 2000000)
-            (audio_dir / "s01.mp3").write_bytes(b"MP3" + b"\x00" * 1000000)
+            write_real_png(slides_dir / "s01.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=5.0)
 
             scene = Scene(id="s01", kind="card", duration_seconds=5.0)
             storyboard = Storyboard(metadata={"scene_count": 1}, scenes=[scene])
@@ -275,8 +276,8 @@ class TestVideoAssemblerPhase3:
             slides_dir.mkdir()
             audio_dir.mkdir()
 
-            (slides_dir / "s01.png").write_bytes(b"PNG" + b"\x00" * 2000000)
-            (audio_dir / "s01.mp3").write_bytes(b"MP3" + b"\x00" * 1000000)
+            write_real_png(slides_dir / "s01.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=5.0)
 
             scene = Scene(id="s01", kind="card", duration_seconds=5.0)
             storyboard = Storyboard(metadata={"scene_count": 1}, scenes=[scene])
@@ -290,7 +291,12 @@ class TestVideoAssemblerPhase3:
             if result.get("video_path"):
                 video_path = Path(result["video_path"])
                 assert video_path.exists()
-                assert video_path.stat().st_size > 100000
+                # A real, well-compressed 5s single-still-image encode is
+                # genuinely small (tens of KB) -- the old ">100000" threshold
+                # was calibrated to the previous stub path's fixed 1MB dummy
+                # file, not to a real encode. 10KB still rules out an
+                # empty/corrupt output.
+                assert video_path.stat().st_size > 10_000
 
     @pytest.mark.asyncio
     async def test_filter_graph_basic_composition(self):
@@ -332,13 +338,11 @@ class TestVideoProducerPhase3E2E:
             slides_dir.mkdir()
             audio_dir.mkdir()
 
-            # Create slide files
-            (slides_dir / "s01.png").write_bytes(b"PNG" + b"\x00" * 2000000)
-            (slides_dir / "s02.png").write_bytes(b"PNG" + b"\x00" * 2000000)
-
-            # Create audio files
-            (audio_dir / "s01.mp3").write_bytes(b"MP3" + b"\x00" * 1000000)
-            (audio_dir / "s02.mp3").write_bytes(b"MP3" + b"\x00" * 1000000)
+            # Real, genuinely decodable slide + audio files
+            write_real_png(slides_dir / "s01.png")
+            write_real_png(slides_dir / "s02.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=5.0)
+            write_real_audio(audio_dir / "s02.mp3", duration=5.0)
 
             # Create storyboard
             scenes = [
@@ -355,7 +359,7 @@ class TestVideoProducerPhase3E2E:
                 audio_dir,
             )
 
-            assert result["status"] in ["success", "partial"]
+            assert result["status"] == "success"
             assert result["encoding_latency_ms"] > 0
 
     @pytest.mark.asyncio

@@ -98,6 +98,14 @@ class TestYouTubeUploader:
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
             uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            # Real credentials are needed to reach enqueue_upload's
+            # is_authenticated() precondition, but the actual network call
+            # is a test double -- this test is about the queue/status
+            # mechanics, not a live YouTube round trip.
+            uploader.youtube_api.upload_video = AsyncMock(
+                return_value={"status": "uploaded", "video_id": "test123",
+                              "url": "https://youtube.com/watch?v=test123"}
+            )
 
             metadata = {"title": "Test"}
 
@@ -185,9 +193,11 @@ class TestYouTubeAPI:
     """YouTube API Stub Tests."""
 
     def test_api_init(self):
-        """Test YouTubeAPI initialization."""
+        """Test YouTubeAPI initialization -- an injected token constructs a
+        real (if short-lived) google.oauth2.credentials.Credentials object."""
         api = YouTubeAPI(oauth_token="test_token")
-        assert api.oauth_token == "test_token"
+        assert api._credentials is not None
+        assert api._credentials.token == "test_token"
 
     @pytest.mark.asyncio
     async def test_authentication_check(self):
@@ -202,9 +212,10 @@ class TestYouTubeAPI:
         assert is_auth is False
 
     @pytest.mark.asyncio
-    async def test_upload_video_stub(self):
-        """Test video upload (stub returns expected format)."""
-        api = YouTubeAPI(oauth_token="test_token")
+    async def test_upload_video_not_configured(self):
+        """No CORVIN_YOUTUBE_TOKEN_PATH / injected token -> "local-only mode":
+        a clear not_configured status, never a fabricated video id."""
+        api = YouTubeAPI()  # no token at all
 
         result = await api.upload_video(
             video_path="/path/to/video.mp4",
@@ -213,32 +224,34 @@ class TestYouTubeAPI:
             tags=["test"],
         )
 
-        assert "video_id" in result
-        assert "url" in result
+        assert result["status"] == "not_configured"
+        assert result["video_id"] is None
+        assert result["url"] is None
+        assert result["reason"]
 
     @pytest.mark.asyncio
-    async def test_update_metadata(self):
-        """Test metadata update."""
-        api = YouTubeAPI(oauth_token="test_token")
+    async def test_update_metadata_not_configured(self):
+        """Not configured -> False, not a fabricated success."""
+        api = YouTubeAPI()
 
         result = await api.update_video_metadata(
             video_id="test_id",
             metadata={"title": "New Title"},
         )
 
-        assert result is True
+        assert result is False
 
     @pytest.mark.asyncio
-    async def test_upload_captions(self):
-        """Test SRT caption upload."""
-        api = YouTubeAPI(oauth_token="test_token")
+    async def test_upload_captions_not_configured(self):
+        """Not configured -> False, not a fabricated success."""
+        api = YouTubeAPI()
 
         result = await api.upload_captions(
             video_id="test_id",
             srt_path="/path/to/captions.srt",
         )
 
-        assert result is True
+        assert result is False
 
 
 class TestPhase4E2E:
@@ -357,12 +370,15 @@ An agentic operating system
 
             uploader = YouTubeUploader(project_dir, oauth_token="test_token")
 
-            # Track emitted events
+            # Track emitted events -- EventEmitter.emit() is synchronous and
+            # takes one real LearningEvent (ADR-0314), not an (event_type, data)
+            # pair; all youtube_uploader stages share EventType.UPLOAD_PROGRESS,
+            # distinguished by signal["status"].
             events = []
-            original_emit = uploader.event_emitter.emit
 
-            async def capture_emit(event_type, data):
-                events.append({"event_type": event_type, "data": data})
+            def capture_emit(event):
+                events.append(event)
+                return True
 
             uploader.event_emitter.emit = capture_emit
 
@@ -374,9 +390,8 @@ An agentic operating system
 
             # Verify events were emitted
             assert len(events) > 0
-            # Should have upload_enqueued + progress events
-            event_types = [e["event_type"] for e in events]
-            assert "upload_enqueued" in event_types
+            statuses = [e.signal.get("status") for e in events]
+            assert "enqueued" in statuses
 
 
 class TestPhase4Learning:

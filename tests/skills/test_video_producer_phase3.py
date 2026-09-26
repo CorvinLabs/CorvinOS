@@ -22,6 +22,7 @@ import pytest
 from core.skills.workers.slide_renderer import SlideRenderer
 from core.skills.workers.video_assembler import VideoAssembler, FilterGraph
 from core.skills.os_skills.video_producer.types import Scene, Storyboard
+from tests.skills.video_producer_media_fixtures import write_real_png, write_real_audio
 
 
 class TestSlideRenderer:
@@ -214,9 +215,10 @@ class TestVideoAssembler:
             slides_dir.mkdir()
             audio_dir.mkdir()
 
-            # Create mock slide + audio
-            (slides_dir / "s01.png").write_bytes(b"PNG..." + b"\x00" * 1000)
-            (audio_dir / "s01.mp3").write_bytes(b"ID3..." + b"\x00" * 1000)
+            # Real, genuinely decodable slide + audio (not fake bytes -- see
+            # video_producer_media_fixtures.py docstring).
+            write_real_png(slides_dir / "s01.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=5.0)
 
             assembler = VideoAssembler(project_dir)
 
@@ -447,11 +449,11 @@ class TestPhase3E2E:
             slides_dir.mkdir()
             audio_dir.mkdir()
 
-            # Create mock slides + audio for assembly
-            (slides_dir / "s01.png").write_bytes(b"PNG..." + b"\x00" * 1000)
-            (slides_dir / "s02.png").write_bytes(b"PNG..." + b"\x00" * 1000)
-            (audio_dir / "s01.mp3").write_bytes(b"ID3..." + b"\x00" * 1000)
-            (audio_dir / "s02.mp3").write_bytes(b"ID3..." + b"\x00" * 1000)
+            # Real, genuinely decodable slides + audio for assembly
+            write_real_png(slides_dir / "s01.png")
+            write_real_png(slides_dir / "s02.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=5.0)
+            write_real_audio(audio_dir / "s02.mp3", duration=5.0)
 
             # Create storyboard
             scenes = [
@@ -511,8 +513,8 @@ class TestPhase3E2E:
             slides_dir.mkdir()
             audio_dir.mkdir()
 
-            (slides_dir / "s01.png").write_bytes(b"PNG..." + b"\x00" * 1000)
-            (audio_dir / "s01.mp3").write_bytes(b"ID3..." + b"\x00" * 3000)
+            write_real_png(slides_dir / "s01.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=5.0)
 
             scene = Scene(
                 id="s01",

@@ -150,6 +150,7 @@ class SceneFeedbackRequest(BaseModel):
     feedback_type: str  # "approve" | "reject"
     reason: Optional[str] = None
     confidence: float = 0.5
+    quality_rating: Optional[int] = None  # 1-5 stars; forwarded to emit_feedback_event
 
 
 class SettingsRequest(BaseModel):
@@ -522,7 +523,10 @@ async def get_scene_slide(job_id: str, index: int):
 
 @router.post("/jobs/{job_id}/scenes/{scene_id}/feedback")
 async def submit_scene_feedback(
-    job_id: str, scene_id: str, feedback: SceneFeedbackRequest
+    job_id: str,
+    scene_id: str,
+    feedback: SceneFeedbackRequest,
+    rec=Depends(require_session_csrf_on_mutation),
 ):
     """Submit operator feedback for a scene (approve/reject/reason).
 
@@ -562,9 +566,9 @@ async def submit_scene_feedback(
         emitted = await emit_feedback_event(
             skill_id="os.video_producer",
             task_id=job_id,
-            tenant_id="_default",  # TODO: extract from session context when auth is wired
+            tenant_id=rec.tenant_id,
             outcome_feedback=outcome_feedback,
-            quality_rating=None,  # TODO: add quality_rating field to SceneFeedbackRequest
+            quality_rating=feedback.quality_rating,
             reason=feedback.reason,
             confidence=feedback.confidence,
             source="user",

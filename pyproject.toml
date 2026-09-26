@@ -195,6 +195,15 @@ browser = [
 video = [
     "ffmpeg-python >= 0.2.0",
 ]
+# Video Producer YouTube upload: real YouTube Data API v3 client. Structurally
+# requires an operator-provisioned Google Cloud OAuth2 client (own console
+# project, consent screen, token) — these libraries alone are not a working
+# credential. Without them (or without a token file), the uploader reports
+# "not configured" rather than fabricating a video id.
+youtube = [
+    "google-api-python-client >= 2.100",
+    "google-auth-oauthlib >= 1.0",
+]
 all = [
     "whatsapp-web.py >= 0.1",
     "python-telegram-bot >= 20.0",
@@ -208,6 +217,8 @@ all = [
     "faster-whisper >= 1.0.0",
     "playwright >= 1.40",
     "ffmpeg-python >= 0.2.0",
+    "google-api-python-client >= 2.100",
+    "google-auth-oauthlib >= 1.0",
 ]
 
 [project.urls]

@@ -277,6 +277,12 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/ldd",            label: "Quality",            icon: Boxes },
       // Ex-"Observability" group, moved here so it sits directly above Settings.
       { to: "/app/quality",        label: "Quality Gates",      icon: CheckCircle },
+      // Both panels were registered in PANELS (registry.tsx) with a comment
+      // claiming a NAV_GROUPS entry already existed here -- it never did,
+      // so both were unreachable from the sidebar despite a working route
+      // (2026-09-26 video_producer consolidation).
+      { to: "/app/video-producer",        label: "Video Producer", icon: Video },
+      { to: "/app/video-quality-metrics", label: "Video Quality",  icon: Gauge },
       { to: "/app/sync-monitor",   label: "Sync Monitor",       icon: Activity },
       { to: "/app/otel-telemetry", label: "OTEL Telemetry",     icon: Gauge },
       { to: "/app/settings",       label: "Settings",           icon: Settings },

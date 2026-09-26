@@ -17,19 +17,26 @@ import sys
 # codebase holds are different classes and isinstance() is False across the
 # seam (2026-09-20 review).
 from core.skills.os_skills.video_producer.types import Scene, Storyboard
-from core.learning.event_emitter import EventEmitter  # ADR-0314 feedback
+from core.learning.learning_events import EventType
+from core.skills.workers._learning_emit import build_event_emitter, emit_worker_event
 
 
 class ScreenshotCapturer:
     """Worker for browser-based screenshot capture."""
 
-    def __init__(self, workdir: str | Path, console_url: str = "http://127.0.0.1:8765"):
+    def __init__(
+        self,
+        workdir: str | Path,
+        console_url: str = "http://127.0.0.1:8765",
+        tenant_id: str = "_default",
+    ):
         """Initialize with working directory and console URL."""
         self.workdir = Path(workdir)
         self.screenshots_dir = self.workdir / "screenshots"
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
         self.console_url = console_url
-        self.event_emitter = EventEmitter()  # For SceneRenderedEvent emission
+        self.tenant_id = tenant_id
+        self.event_emitter = build_event_emitter(tenant_id)
 
     async def capture_scenes(
         self,
@@ -287,9 +294,10 @@ class ScreenshotCapturer:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        # Fire-and-forget to event emitter
-        try:
-            await self.event_emitter.emit("scene_screenshot_captured", event_data)
-        except Exception as e:
-            # Emit failure doesn't block workflow (fail-closed: log, continue)
-            print(f"Failed to emit screenshot event for {scene_id}: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.SCENE_RENDERED,
+            skill_id="os.video_producer.screenshot_capturer",
+            tenant_id=self.tenant_id,
+            signal={"milestone": "scene_screenshot_captured", **event_data},
+        )

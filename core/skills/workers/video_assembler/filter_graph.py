@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+import functools
+import logging
+import re
+import subprocess
 from pathlib import Path
 from typing import Optional, Any
 import json
+
+# scene.id becomes an ffmpeg filtergraph LABEL ([scaled_<id>] etc, see build()
+# below) -- unlike narration text it isn't wrapped in any quoting ffmpeg
+# would otherwise parse, so a stray `]`/`;`/`:` in it would corrupt the graph
+# outright rather than just mis-render. Scene ids are assigned by the
+# storyboard generator, not typed freely, so this is a defensive floor, not
+# the primary escaping concern (that's narration text -- see
+# _get_caption_filter's textfile= rewrite).
+_SAFE_SCENE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 import sys
 # Imported by the package's REAL path. A sys.path.insert of <repo>/core/skills
@@ -13,6 +26,26 @@ import sys
 # codebase holds are different classes and isinstance() is False across the
 # seam (2026-09-20 review).
 from core.skills.os_skills.video_producer.types import Storyboard
+
+logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1)
+def _drawtext_available() -> bool:
+    """Some static ffmpeg builds (e.g. the johnvansickle build this repo's
+    ``video`` extra bundles) link libfreetype/fontconfig for OTHER filters but
+    still ship without ``drawtext`` compiled in -- burning captions in on such
+    a build doesn't degrade quality, it fails the WHOLE encode ("Filter not
+    found"). Checked once per process via ``ffmpeg -filters``, not assumed.
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return "drawtext" in result.stdout
+    except Exception:  # noqa: BLE001 -- absent/broken ffmpeg is handled elsewhere
+        return False
 
 
 class FilterGraph:
@@ -42,42 +75,79 @@ class FilterGraph:
         3. Add captions if scene.captions
         4. Concatenate all scenes into final video
 
+        Input index convention (must match ``get_input_args()``): scene i's
+        image is input ``2*i``, its audio is input ``2*i + 1``.
+
         Returns:
-            FFmpeg filter_complex string, or None if invalid
+            FFmpeg filter_complex string ending in ``[outv][outa]`` labels,
+            or None if invalid.
         """
         if not self.storyboard.scenes:
             return None
 
-        # Stub implementation: return minimal filter graph
-        # Real: build concat filter, overlay captions, etc.
-
         filters = []
-        input_count = 0
+        video_labels: list[str] = []
+        audio_labels: list[str] = []
 
-        for scene in self.storyboard.scenes:
-            # Input 0: slide image
-            # Input 1: audio
-            # Output: scene_1, scene_2, etc.
+        for i, scene in enumerate(self.storyboard.scenes):
+            if not _SAFE_SCENE_ID.match(scene.id):
+                raise ValueError(
+                    f"unsafe scene id for ffmpeg filtergraph label: {scene.id!r}"
+                )
+            v_in, a_in = 2 * i, 2 * i + 1
 
-            # Scale slide to 1920x1080
-            slide_filter = f"[{input_count}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[scaled_{scene.id}]"
-            filters.append(slide_filter)
+            scaled = f"scaled_{scene.id}"
+            filters.append(
+                f"[{v_in}:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[{scaled}]"
+            )
 
-            # Overlay captions if needed
-            if scene.captions and scene.narration:
-                # Add text overlay (stub)
-                caption_text = scene.narration[:50]  # First 50 chars
-                caption_filter = f"[scaled_{scene.id}]drawtext=text='{caption_text}':fontsize=24:fontcolor=white[with_caption_{scene.id}]"
-                filters.append(caption_filter)
-                last_output = f"with_caption_{scene.id}"
+            if scene.captions and scene.narration and _drawtext_available():
+                caption_filter = self._get_caption_filter(scene.narration[:50], scene.id)
+                capped = f"capped_{scene.id}"
+                filters.append(f"[{scaled}]{caption_filter}[{capped}]")
+                video_label = capped
             else:
-                last_output = f"scaled_{scene.id}"
+                if scene.captions and scene.narration:
+                    logger.warning(
+                        f"Scene {scene.id}: captions requested but this ffmpeg "
+                        "build has no 'drawtext' filter -- rendering without "
+                        "burned-in captions."
+                    )
+                video_label = scaled
 
-            input_count += 1
+            out_label = f"vout_{scene.id}"
+            filters.append(f"[{video_label}]format=yuv420p[{out_label}]")
+            video_labels.append(out_label)
+            audio_labels.append(f"{a_in}:a")
 
-        # Stub: just return a basic description
-        # Real: return actual FFmpeg filter_complex string
-        return "[0:v]scale=1920:1080[v];[v][1:a]concat=n=1:v=1:a=1[out]"
+        concat_inputs = "".join(
+            f"[{v}][{a}]" for v, a in zip(video_labels, audio_labels)
+        )
+        filters.append(
+            f"{concat_inputs}concat=n={len(video_labels)}:v=1:a=1[outv][outa]"
+        )
+
+        return ";".join(filters)
+
+    def get_input_args(self) -> list[str]:
+        """Ordered ffmpeg ``-i``/``-loop`` input args matching ``build()``'s
+        ``2*i`` (image) / ``2*i + 1`` (audio) index convention.
+
+        A still image has no intrinsic duration, so it must be looped
+        (``-loop 1``) and cut (``-t <seconds>``) to the scene's own
+        ``duration_seconds`` (default 5.0) -- otherwise ffmpeg reads exactly
+        one frame of it and the concat filter starves for video on that
+        segment.
+        """
+        args: list[str] = []
+        for scene in self.storyboard.scenes:
+            slide_path = self.slides_dir / f"{scene.id}.png"
+            audio_path = self.audio_dir / f"{scene.id}.mp3"
+            duration = scene.duration_seconds or 5.0
+            args += ["-loop", "1", "-t", str(duration), "-i", str(slide_path)]
+            args += ["-i", str(audio_path)]
+        return args
 
     def _validate_scenes(self) -> bool:
         """Validate that all scenes have corresponding files."""
@@ -96,11 +166,31 @@ class FilterGraph:
         # Real: use ffprobe to get actual duration
         return 5000.0
 
-    def _get_caption_filter(self, text: str, font_size: int = 24) -> str:
-        """Generate drawtext filter for captions."""
-        # Escape text for shell
-        safe_text = text.replace("'", "\\'").replace('"', '\\"')
-        return f"drawtext=text='{safe_text}':fontsize={font_size}:fontcolor=white:x=(w-text_w)/2:y=h-50"
+    def _get_caption_filter(self, text: str, scene_id: str, font_size: int = 24) -> str:
+        """Generate a drawtext filter for captions via ``textfile=``, not
+        ``text=``.
+
+        ``scene.narration`` is untrusted content (may come from an
+        LLM-generated storyboard). ffmpeg's filtergraph description
+        language treats `:`, `,`, `[`, `]`, `;` and `\\` as syntax --
+        putting narration text directly into ``text='...'`` (escaping only
+        quotes, as this used to) lets narration text like "Hello, friend:
+        watch this" break out of the value and be re-parsed as additional
+        filter options or a new filter/label. ``textfile=`` reads the raw
+        file content with none of that re-parsing -- only the FILE PATH
+        (which this code generates, not the caller) needs filtergraph
+        escaping.
+        """
+        caption_dir = self.slides_dir.parent / "captions"
+        caption_dir.mkdir(parents=True, exist_ok=True)
+        caption_path = caption_dir / f"{scene_id}.txt"
+        caption_path.write_text(text)
+
+        escaped_path = str(caption_path).replace("\\", "\\\\").replace(":", "\\:")
+        return (
+            f"drawtext=textfile='{escaped_path}':fontsize={font_size}:"
+            f"fontcolor=white:x=(w-text_w)/2:y=h-50"
+        )
 
     def _get_concat_filter(self, scene_ids: list[str], segment_count: int) -> str:
         """Generate concat filter for joining scenes."""

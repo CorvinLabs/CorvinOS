@@ -52,9 +52,10 @@ logger = logging.getLogger(__name__)
 class VideoProducerOrchestrator:
     """Main orchestrator for video production workflow."""
 
-    def __init__(self, project_dir: str | Path):
+    def __init__(self, project_dir: str | Path, tenant_id: str = "_default"):
         """Initialize orchestrator with project directory."""
         self.project_dir = Path(project_dir)
+        self.tenant_id = tenant_id
         self.assets_dir = self.project_dir / "assets"
         self.analysis_path = self.project_dir / "analysis.json"
         self.storyboard_path = self.project_dir / "storyboard.json"
@@ -256,9 +257,9 @@ class VideoProducerOrchestrator:
             ppt_path = storyboard.metadata.get("ppt_asset_path", self.project_dir / "input.pptx")
 
             # Initialize workers
-            slide_renderer = SlideRenderer(str(self.project_dir))
-            voice_synthesizer = VoiceSynthesizer(str(self.project_dir))
-            screenshot_capturer = ScreenshotCapturer(str(self.project_dir))
+            slide_renderer = SlideRenderer(str(self.project_dir), tenant_id=self.tenant_id)
+            voice_synthesizer = VoiceSynthesizer(str(self.project_dir), tenant_id=self.tenant_id)
+            screenshot_capturer = ScreenshotCapturer(str(self.project_dir), tenant_id=self.tenant_id)
 
             # Execute in parallel
             tasks = [
@@ -335,7 +336,7 @@ class VideoProducerOrchestrator:
                 }
 
             # Initialize video assembler
-            assembler = VideoAssembler(str(self.project_dir))
+            assembler = VideoAssembler(str(self.project_dir), tenant_id=self.tenant_id)
 
             # Load timing data
             timings_file = self.project_dir / "timings.json"
@@ -466,7 +467,7 @@ class VideoProducerOrchestrator:
         try:
             from core.skills.workers.youtube_uploader import YouTubeUploader
 
-            uploader = YouTubeUploader(str(self.project_dir))
+            uploader = YouTubeUploader(str(self.project_dir), tenant_id=self.tenant_id)
 
             # Precondition: quality_score ≥ 0.70
             video_metadata = video_metadata or {}

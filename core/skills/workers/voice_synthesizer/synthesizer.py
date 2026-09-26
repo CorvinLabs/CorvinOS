@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Any
@@ -17,19 +19,33 @@ import sys
 # codebase holds are different classes and isinstance() is False across the
 # seam (2026-09-20 review).
 from core.skills.os_skills.video_producer.types import Scene, Storyboard
-from core.learning.event_emitter import EventEmitter  # ADR-0314 feedback
+from core.learning.learning_events import EventType
+from core.skills.workers._learning_emit import build_event_emitter, emit_worker_event
+
+logger = logging.getLogger(__name__)
+
+# Same defaults as corvin_operator/bridges/shared/adapter.py::_EDGE_TTS_VOICES
+# (a smaller subset -- video_producer only needs a default per top-level
+# language code, not the bridge's full locale table).
+_EDGE_TTS_VOICES = {
+    "en": "en-US-AriaNeural",
+    "de": "de-DE-KatjaNeural",
+    "es": "es-ES-ElviraNeural",
+    "fr": "fr-FR-DeniseNeural",
+}
 
 
 class VoiceSynthesizer:
     """Worker for voice synthesis from narration text."""
 
-    def __init__(self, workdir: str | Path):
+    def __init__(self, workdir: str | Path, tenant_id: str = "_default"):
         """Initialize with working directory."""
         self.workdir = Path(workdir)
         self.audio_dir = self.workdir / "audio"
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.lexicon: dict[str, str] = {}
-        self.event_emitter = EventEmitter()  # For SceneRenderedEvent emission
+        self.tenant_id = tenant_id
+        self.event_emitter = build_event_emitter(tenant_id)
 
     async def synthesize_scenes(
         self,
@@ -112,8 +128,9 @@ class VoiceSynthesizer:
                 tail_ms=200,
             )
 
-            # 4. Write audio file
-            audio_path = self.audio_dir / f"{scene.id}.wav"
+            # 4. Write audio file (.mp3 -- video_assembler's FilterGraph/
+            # _load_timings glob for audio_dir/{scene_id}.mp3)
+            audio_path = self.audio_dir / f"{scene.id}.mp3"
             await self._write_audio_file(audio_with_silence, audio_path)
 
             # 5. Measure actual timing
@@ -152,21 +169,44 @@ class VoiceSynthesizer:
         self,
         narration_text: str,
         scene_id: str,
+        lang: str = "en",
     ) -> bytes:
         """
         Call TTS engine to generate audio.
 
-        Stub: generates silence instead of real audio.
-        Production: integrate Azure Speech Services / Google Cloud TTS / Anthropic Audio
-        """
-        # Stub: generate synthetic audio duration based on text length
-        # ~150 words per minute = ~2.5 chars per second
-        estimated_duration_s = len(narration_text) / 2.5
+        edge-tts (Microsoft Neural TTS over HTTPS, no API key) -- the same
+        engine + calling convention already used by the voice bridge
+        (corvin_operator/bridges/shared/adapter.py::_try_edge_tts). Real MP3
+        bytes out, not synthetic silence.
 
-        # Return dummy WAV bytes
-        # In production: call real TTS engine
-        silence_duration_bytes = int(estimated_duration_s * 16000 * 2)  # 16kHz, 16-bit
-        return b'\x00' * silence_duration_bytes
+        Disabled under the EU local-only egress guarantee
+        (CORVIN_TTS_LOCAL_ONLY=1) -- narration text must not leave the host
+        under that mode. There is currently no local (Piper/espeak-ng)
+        fallback wired here; a disabled/failed synthesis raises so the
+        caller's existing except-and-count-as-failed path handles it, rather
+        than silently writing fabricated audio.
+        """
+        import os as _os
+
+        if _os.environ.get("CORVIN_TTS_LOCAL_ONLY") == "1":
+            raise RuntimeError(
+                "edge-tts disabled under CORVIN_TTS_LOCAL_ONLY=1 and no local "
+                "TTS engine is wired for video_producer yet"
+            )
+
+        import edge_tts
+
+        voice = _EDGE_TTS_VOICES.get(lang.lower(), "en-US-AriaNeural")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mp3_path = Path(tmpdir) / f"{scene_id}.mp3"
+            communicate = edge_tts.Communicate(narration_text, voice)
+            await asyncio.wait_for(communicate.save(str(mp3_path)), timeout=30)
+
+            if not mp3_path.exists() or mp3_path.stat().st_size == 0:
+                raise RuntimeError(f"edge-tts produced no audio for scene {scene_id}")
+
+            return mp3_path.read_bytes()
 
     async def _add_silence(
         self,
@@ -174,36 +214,52 @@ class VoiceSynthesizer:
         lead_in_ms: int = 500,
         tail_ms: int = 200,
     ) -> bytes:
-        """Insert lead-in and tail silence."""
-        # Stub: just prepend/append silence markers
-        # Production: use wave/pydub to properly insert silence
-        lead_in_samples = (lead_in_ms * 16000) // 1000
-        tail_samples = (tail_ms * 16000) // 1000
+        """Insert lead-in and tail silence via a real ffmpeg re-encode.
 
-        return (
-            b'\x00' * (lead_in_samples * 2)  # 16-bit = 2 bytes per sample
-            + audio_data
-            + b'\x00' * (tail_samples * 2)
-        )
+        ``audio_data`` is a real MP3 stream now (not raw PCM), so silence
+        can no longer be byte-concatenated onto it -- that produced a file
+        whose header described audio that wasn't there. ``adelay`` shifts
+        the whole stream by ``lead_in_ms``; ``apad`` extends the tail.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            in_path = Path(tmpdir) / "in.mp3"
+            out_path = Path(tmpdir) / "out.mp3"
+            in_path.write_bytes(audio_data)
+
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", str(in_path),
+                "-af", f"adelay={lead_in_ms}|{lead_in_ms},apad=pad_dur={tail_ms / 1000}",
+                str(out_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0 or not out_path.exists():
+                raise RuntimeError(
+                    f"ffmpeg silence-padding failed: {stderr.decode(errors='replace')[-300:]}"
+                )
+            return out_path.read_bytes()
 
     async def _write_audio_file(
         self,
         audio_data: bytes,
         path: Path,
     ) -> None:
-        """Write audio data to WAV file."""
-        # Stub: write raw bytes (real implementation would create proper WAV container)
+        """Write real MP3 bytes to disk."""
         path.write_bytes(audio_data)
 
     async def _measure_audio_duration(self, audio_path: Path) -> float:
-        """Measure actual audio duration in milliseconds."""
-        # Stub: estimate from file size (16kHz, 16-bit stereo)
-        # Real: use librosa, pydub, or ffprobe
-        file_size_bytes = audio_path.stat().st_size
-        samples = file_size_bytes // 2
-        sample_rate = 16000
-        duration_s = samples / sample_rate
-        return duration_s * 1000
+        """Measure REAL audio duration (ms) via ffprobe -- never estimated
+        from file size, which assumed a raw-PCM format this file never was."""
+        import ffmpeg
+
+        try:
+            probe = ffmpeg.probe(str(audio_path))
+            duration_s = float(probe.get("format", {}).get("duration", 0.0))
+            return duration_s * 1000
+        except Exception as e:
+            logger.warning(f"Failed to probe audio duration for {audio_path}: {e}")
+            return 0.0
 
     async def _emit_scene_rendered_event(
         self,
@@ -225,10 +281,10 @@ class VoiceSynthesizer:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        # Fire-and-forget to event emitter
-        # (ADR-0314: EventEmitter has async queue; non-blocking)
-        try:
-            await self.event_emitter.emit("scene_rendered", event_data)
-        except Exception as e:
-            # Emit failure doesn't block workflow (fail-closed: log, continue)
-            print(f"Failed to emit SceneRenderedEvent for {scene_id}: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.SCENE_RENDERED,
+            skill_id="os.video_producer.voice_synthesizer",
+            tenant_id=self.tenant_id,
+            signal={"milestone": "scene_rendered", **event_data},
+        )

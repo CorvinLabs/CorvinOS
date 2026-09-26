@@ -18,7 +18,8 @@ import sys
 # codebase holds are different classes and isinstance() is False across the
 # seam (2026-09-20 review).
 from core.skills.os_skills.video_producer.types import Storyboard, Scene
-from core.learning.event_emitter import EventEmitter  # ADR-0314 feedback
+from core.learning.learning_events import EventType
+from core.skills.workers._learning_emit import build_event_emitter, emit_worker_event
 
 try:
     from pptx import Presentation
@@ -37,12 +38,13 @@ except ImportError:
 class SlideRenderer:
     """Worker for rendering PowerPoint slides to PNG."""
 
-    def __init__(self, workdir: str | Path):
+    def __init__(self, workdir: str | Path, tenant_id: str = "_default"):
         """Initialize with working directory."""
         self.workdir = Path(workdir)
         self.slides_dir = self.workdir / "slides"
         self.slides_dir.mkdir(parents=True, exist_ok=True)
-        self.event_emitter = EventEmitter()  # For QualityFeedbackEvent
+        self.tenant_id = tenant_id
+        self.event_emitter = build_event_emitter(tenant_id)
 
     async def render_slides(
         self,
@@ -252,13 +254,29 @@ class SlideRenderer:
                 # If anything fails, fall through to stub
                 pass
 
-        # Fallback: generate stub PNG (1920x1080 @ 150 DPI)
-        # Simulated PNG size: ~2MB (compressed PNG data)
-        simulated_size = 2_000_000
-        # Create a minimal valid PNG header + data
-        png_header = b'\x89PNG\r\n\x1a\n'
-        png_data = png_header + (b'\x00' * (simulated_size - len(png_header)))
-        return png_data
+        # Fallback: neither a real python-pptx presentation nor a working
+        # LibreOffice conversion was available. A raw PNG magic-number prefix
+        # padded with zero bytes used to be written here -- it satisfied
+        # nothing downstream: a real encoder (ffmpeg) cannot decode it, it is
+        # not a placeholder a human could look at, and its fixed ~2MB size
+        # was calibrated to LOOK like a real render in size-based assertions
+        # while being invalid data. Render a genuinely valid, if plain,
+        # placeholder slide instead.
+        if PIL_AVAILABLE:
+            from io import BytesIO
+
+            image = Image.new("RGB", (1920, 1080), color=(30, 30, 40))
+            buf = BytesIO()
+            image.save(buf, format="PNG")
+            return buf.getvalue()
+
+        # No Pillow either: a 1x1 real (still genuinely valid, still
+        # ffmpeg-decodable) PNG rather than fabricated bytes.
+        return (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf"
+            b"\xc0\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
 
     async def _extract_speaker_notes(
         self,
@@ -332,9 +350,10 @@ class SlideRenderer:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        # Fire-and-forget to event emitter
-        try:
-            await self.event_emitter.emit("slide_rendered", event_data)
-        except Exception as e:
-            # Emit failure doesn't block workflow (fail-closed: log, continue)
-            print(f"Failed to emit slide_rendered event for {scene_id}: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.SCENE_RENDERED,
+            skill_id="os.video_producer.slide_renderer",
+            tenant_id=self.tenant_id,
+            signal={"milestone": "slide_rendered", **event_data},
+        )

@@ -12,21 +12,33 @@ from datetime import datetime
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from core.learning.event_emitter import EventEmitter  # ADR-0314 feedback
+from core.learning.learning_events import EventType
+from core.skills.workers._learning_emit import build_event_emitter, emit_worker_event
 from .youtube_api import YouTubeAPI
 
 
 class YouTubeUploader:
     """Worker for async YouTube video upload."""
 
-    def __init__(self, workdir: str | Path, oauth_token: Optional[str] = None):
+    def __init__(
+        self,
+        workdir: str | Path,
+        oauth_token: Optional[str] = None,
+        tenant_id: str = "_default",
+    ):
         """Initialize with working directory and OAuth token."""
         self.workdir = Path(workdir)
         self.upload_dir = self.workdir / "youtube"
         self.upload_dir.mkdir(parents=True, exist_ok=True)
-        self.event_emitter = EventEmitter()
+        self.tenant_id = tenant_id
+        self.event_emitter = build_event_emitter(tenant_id)
         self.youtube_api = YouTubeAPI(oauth_token=oauth_token)
         self.active_uploads = {}  # task_id → upload_status
+        # asyncio only holds a WEAK reference to a bare create_task() result --
+        # without keeping a strong reference somewhere, the task can be
+        # garbage-collected before it runs. Keyed by task_id so it can be
+        # dropped once the upload finishes.
+        self._background_tasks: dict[str, asyncio.Task] = {}
 
     async def enqueue_upload(
         self,
@@ -90,10 +102,12 @@ class YouTubeUploader:
             }
 
         # 3. Estimate upload time
-        # YouTube throttles at ~5 Mbps average; calculate ETA
-        bitrate_mbps = 5.0
+        # Assumed average effective upload throughput: 5 MB/minute.
+        # (A stray extra "* 60" here used to divide the result by another 60x,
+        # turning a real "10MB ~= 2 minutes" estimate into ~0.03 minutes.)
+        throughput_mb_per_minute = 5.0
         file_size_mb = video_path.stat().st_size / (1024**2)
-        estimated_minutes = file_size_mb / (bitrate_mbps * 60)
+        estimated_minutes = file_size_mb / throughput_mb_per_minute
 
         # 4. Create upload tracking record
         upload_record = {
@@ -123,17 +137,10 @@ class YouTubeUploader:
             estimated_minutes=estimated_minutes,
         )
 
-        # 7. Enqueue upload via Task API (non-blocking)
-        # This ensures upload happens in background via dedicated task worker
-        try:
-            from corvin_core.task_manager import TaskManager
-            task_mgr = TaskManager()
-            # Create a background task for the upload
-            # The task will be picked up by worker processes
-            background_task = asyncio.create_task(self._upload_background(task_id))
-        except ImportError:
-            # Fallback if Task API not available: use asyncio directly
-            background_task = asyncio.create_task(self._upload_background(task_id))
+        # 7. Enqueue upload in the background (non-blocking)
+        background_task = asyncio.create_task(self._upload_background(task_id))
+        self._background_tasks[task_id] = background_task
+        background_task.add_done_callback(lambda _t: self._background_tasks.pop(task_id, None))
 
         return {
             "status": "queued",
@@ -170,32 +177,42 @@ class YouTubeUploader:
             srt_path = upload_record.get("srt_path")
             metadata = upload_record["metadata"]
 
-            # Real implementation: call YouTube API
-            # For now, simulate with progress tracking
-            for progress in [10, 30, 50, 70, 90, 100]:
-                await asyncio.sleep(0.5)  # Simulate work (real: actual upload)
-                upload_record["progress_percent"] = progress
+            await self._emit_upload_progress(task_id=task_id, progress_percent=10)
+            upload_record["progress_percent"] = 10
 
-                if progress < 100:
-                    # Emit progress event
-                    await self._emit_upload_progress(
-                        task_id=task_id,
-                        progress_percent=progress,
-                    )
-
-            # Upload completion (real: get video_id from YouTube API response)
-            upload_record["status"] = "completed"
-            upload_record["completed_at"] = datetime.utcnow().isoformat() + "Z"
-
-            # Generate mock YouTube URL (real: from API response)
-            video_id = task_id.replace("_", "").upper()[:11]
-            upload_record["youtube_url"] = f"https://youtube.com/watch?v={video_id}"
-
-            # Emit completion event
-            await self._emit_upload_completed(
-                task_id=task_id,
-                youtube_url=upload_record["youtube_url"],
+            # Real call -- never fabricates a video id. `status` is one of
+            # "uploaded" (real id), "not_configured" (no credentials -- the
+            # local-only mode default), or "error" (a real API failure).
+            api_result = await self.youtube_api.upload_video(
+                video_path=str(video_path),
+                title=metadata.get("title", ""),
+                description=metadata.get("description", ""),
+                tags=metadata.get("tags", []),
+                privacy=metadata.get("privacy", "private"),
             )
+
+            upload_record["progress_percent"] = 100
+            upload_record["completed_at"] = datetime.utcnow().isoformat() + "Z"
+            upload_record["youtube_video_id"] = api_result.get("video_id")
+            upload_record["youtube_url"] = api_result.get("url")
+
+            if api_result["status"] == "uploaded":
+                if srt_path:
+                    await self.youtube_api.upload_captions(api_result["video_id"], str(srt_path))
+                upload_record["status"] = "completed"
+                await self._emit_upload_completed(
+                    task_id=task_id, youtube_url=upload_record["youtube_url"],
+                )
+            elif api_result["status"] == "not_configured":
+                upload_record["status"] = "skipped"
+                upload_record["error"] = api_result.get("reason")
+                await self._emit_upload_error(
+                    task_id=task_id, error=f"skipped: {api_result.get('reason')}",
+                )
+            else:
+                upload_record["status"] = "failed"
+                upload_record["error"] = api_result.get("reason")
+                await self._emit_upload_error(task_id=task_id, error=str(api_result.get("reason")))
 
         except Exception as e:
             upload_record["status"] = "failed"
@@ -290,10 +307,13 @@ class YouTubeUploader:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        try:
-            await self.event_emitter.emit("upload_enqueued", event_data)
-        except Exception as e:
-            print(f"Failed to emit upload_enqueued event: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.UPLOAD_PROGRESS,
+            skill_id="os.video_producer.youtube_uploader",
+            tenant_id=self.tenant_id,
+            signal={"status": "enqueued", **event_data},
+        )
 
     async def _emit_upload_progress(
         self,
@@ -308,10 +328,13 @@ class YouTubeUploader:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        try:
-            await self.event_emitter.emit("upload_progress", event_data)
-        except Exception as e:
-            print(f"Failed to emit upload_progress event: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.UPLOAD_PROGRESS,
+            skill_id="os.video_producer.youtube_uploader",
+            tenant_id=self.tenant_id,
+            signal={"status": "progress", **event_data},
+        )
 
     async def _emit_upload_completed(
         self,
@@ -326,10 +349,13 @@ class YouTubeUploader:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        try:
-            await self.event_emitter.emit("upload_completed", event_data)
-        except Exception as e:
-            print(f"Failed to emit upload_completed event: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.UPLOAD_PROGRESS,
+            skill_id="os.video_producer.youtube_uploader",
+            tenant_id=self.tenant_id,
+            signal={"status": "completed", **event_data},
+        )
 
     async def _emit_upload_error(
         self,
@@ -344,7 +370,10 @@ class YouTubeUploader:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
-        try:
-            await self.event_emitter.emit("upload_error", event_data)
-        except Exception as e:
-            print(f"Failed to emit upload_error event: {str(e)}")
+        emit_worker_event(
+            self.event_emitter,
+            event_type=EventType.UPLOAD_PROGRESS,
+            skill_id="os.video_producer.youtube_uploader",
+            tenant_id=self.tenant_id,
+            signal={"status": "error", **event_data},
+        )

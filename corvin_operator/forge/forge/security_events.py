@@ -889,6 +889,13 @@ EVENT_SEVERITY: dict[str, str] = {
     "blender.render_complete":          "INFO",
     "blender.render_validation_failed": "WARNING",
     "blender.render_error":             "ERROR",
+    # Video Producer worker milestones (ADR-0695 EventType extensions), emitted
+    # via core.learning.event_store.EventStore.write_event -> _audit_chain_first
+    # as "learning.<EventType.value>" -- content-free (never the `signal` dict).
+    "learning.scene_rendered":          "INFO",
+    "learning.quality_feedback":        "INFO",
+    "learning.upload_progress":         "INFO",
+    "learning.production_complete":     "INFO",
     # PHASE 3 — Audit Completeness (ADR-2040–2044, 2026-09-24)
     # ─────────────────────────────────────────────────────────────────────────
     # Layer 10 — Context Engineering Audit (corvin_operator/context_engineering/snapshot.py)
@@ -3307,6 +3314,22 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "blender.render_error": frozenset({
         "error_class", "tenant_id",
+    }),
+    # learning.<EventType.value> audit-chain records for video_producer worker
+    # milestones -- these carry ONLY the content-free details built by
+    # EventStore._audit_chain_first (event_id, event_type, skill_id,
+    # skill_version, lom), never the LearningEvent.signal payload.
+    "learning.scene_rendered": frozenset({
+        "event_id", "event_type", "skill_id", "skill_version", "lom", "tenant_id",
+    }),
+    "learning.quality_feedback": frozenset({
+        "event_id", "event_type", "skill_id", "skill_version", "lom", "tenant_id",
+    }),
+    "learning.upload_progress": frozenset({
+        "event_id", "event_type", "skill_id", "skill_version", "lom", "tenant_id",
+    }),
+    "learning.production_complete": frozenset({
+        "event_id", "event_type", "skill_id", "skill_version", "lom", "tenant_id",
     }),
 }
 

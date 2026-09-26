@@ -7,6 +7,16 @@
 **Lines of Code:** 1,080 LOC (Python + TypeScript + Tests)  
 **Tests:** 108+ tests (all passing, 0 CRITICAL)
 
+> **Correction (2026-09-26):** this claim does not hold today. A real run of
+> `test_video_producer_phase4b_learning.py` + `_console_api.py` + `_e2e.py`
+> shows 18 failed / 39 passed (confidence scorer persistence, console API
+> feedback/stats endpoints, GDPR audit-trail/tenant-isolation compliance
+> checks). Unrelated to this session's video_producer consolidation work
+> (EventEmitter/ffmpeg/TTS/YouTube fixes, Director Mode removal, console
+> panel wiring) — not investigated or fixed as part of that pass. Treat this
+> file's original claims as unverified; run the tests yourself before relying
+> on this summary.
+
 ---
 
 ## Summary
