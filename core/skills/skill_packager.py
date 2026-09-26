@@ -99,16 +99,18 @@ class SkillPackager:
         audit_trail = self._create_audit_trail(skill_folder, manifest)
         checksums = self._compute_checksums(skill_folder)
 
-        # Write metadata files
-        (forge_dir / "generation_context.json").write_text(
-            json.dumps(generation_context, indent=2)
-        )
-        (forge_dir / "audit_trail.jsonl").write_text(
-            "\n".join(json.dumps(e) for e in audit_trail)
-        )
-        (forge_dir / "checksum.sha256").write_text(
-            "\n".join(f"{h} {p}" for p, h in checksums.items())
-        )
+        # Write metadata files (fixes H2: File Permissions)
+        gen_ctx_path = forge_dir / "generation_context.json"
+        gen_ctx_path.write_text(json.dumps(generation_context, indent=2))
+        gen_ctx_path.chmod(0o600)  # owner read+write only
+
+        audit_path = forge_dir / "audit_trail.jsonl"
+        audit_path.write_text("\n".join(json.dumps(e) for e in audit_trail))
+        audit_path.chmod(0o600)
+
+        checksum_path = forge_dir / "checksum.sha256"
+        checksum_path.write_text("\n".join(f"{h} {p}" for p, h in checksums.items()))
+        checksum_path.chmod(0o600)
 
         # Create ZIP archive
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -198,12 +200,31 @@ class SkillPackager:
         return events
 
     def _compute_checksums(self, skill_folder: Path) -> Dict[str, str]:
-        """Compute SHA256 checksums for all files in Skill folder."""
+        """Compute SHA256 checksums for all files in Skill folder (fixes C4: Symlink Traversal)."""
         checksums = {}
+        skill_folder_resolved = skill_folder.resolve()
 
         for file_path in skill_folder.rglob("*"):
-            if file_path.is_file() and ".forge" not in file_path.parts:
+            if ".forge" in file_path.parts:
                 # Exclude .forge dir from checksum computation (it's being generated)
+                continue
+
+            # FIX C4: Reject symlinks (prevent symlink traversal)
+            if file_path.is_symlink():
+                logger.warning(f"Skipping symlink (not allowed): {file_path}")
+                continue
+
+            if file_path.is_file():
+                # Verify resolved path stays within skill_folder (redundant but safe)
+                try:
+                    file_path_resolved = file_path.resolve()
+                    if not str(file_path_resolved).startswith(str(skill_folder_resolved)):
+                        logger.warning(f"Skipping file outside skill folder: {file_path}")
+                        continue
+                except (OSError, RuntimeError):
+                    logger.warning(f"Cannot resolve path: {file_path}")
+                    continue
+
                 relative_path = file_path.relative_to(skill_folder)
                 checksum = self._compute_file_hash(file_path)
                 checksums[str(relative_path)] = checksum
