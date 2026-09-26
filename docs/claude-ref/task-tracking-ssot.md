@@ -128,7 +128,15 @@ doing it — was invisible. Two run sources and one writer close that:
   rejected/superseded/… → archived, else or no file → in progress). The ADR
   checkout is `resolve_adr_root()` (`CORVIN_ADR_ROOT` → sibling `Corvin-ADR` →
   submodule); both naming schemes (`ADR-NNNN-slug.md`, `NNNN-slug.md`) resolve.
-  Every such commit is linked as a run, and so is each agent session whose
+  **When one number is carried by more than one file**, superseded/rejected
+  siblings are ignored while a live one exists, and among live siblings the one
+  that is NOT done decides — two live records that disagree read as open, never
+  complete; the description names every file and the one the status was read
+  from. **Items whose commits left the window** keep following their record:
+  each run re-reads the record for every existing `git:<repo>#ADR-*` item not in
+  the plan and patches title/status/description under the same ownership rule
+  (reported as `refreshed`); without this an item froze at its last in-window
+  value. Every such commit is linked as a run, and so is each agent session whose
   transcript ran a `git commit` carrying that commit's subject within the
   session's lifetime.
 - **Operator edits win.** Insert-only via `import_items`; fields are patched only

@@ -69,26 +69,46 @@ def status_for(adr_status: str | None) -> str:
     return "in_progress"
 
 
-def adr_meta(adr: str, root: Path | None) -> dict[str, Any] | None:
-    """``{status, title}`` from the decision record's file, or None when absent."""
-    if root is None:
-        return None
-    d = root / "decisions"
-    num = adr.split("-", 1)[1]
-    # Two naming schemes live side by side: ADR-NNNN-slug.md and (older) NNNN-slug.md.
-    files = [f for pat in (f"{adr}-*.md", f"{adr}.md", f"{num}-*.md", f"{num}.md") for f in sorted(d.glob(pat))]
-    if not files:
-        return None
+def _read_record(path: Path) -> dict[str, Any] | None:
     from core.quality_gates.artifacts import parse_frontmatter  # noqa: PLC0415
 
     try:
-        text = files[0].read_text(encoding="utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     fm, body = parse_frontmatter(text)
     m = _HEADING_RE.search(body)
     title = _TITLE_PREFIX_RE.sub("", m.group(1)).strip() if m else ""
-    return {"status": str(fm.get("status") or "").strip() or None, "title": title or None}
+    return {"status": str(fm.get("status") or "").strip() or None, "title": title or None, "file": path.name}
+
+
+def adr_meta(adr: str, root: Path | None) -> dict[str, Any] | None:
+    """``{status, title, file, siblings}`` from the decision record's file, or None when absent.
+
+    One number can be carried by more than one file (two naming schemes, plus
+    duplicate numbering in the record repo). The record that decides is chosen so
+    that a stale sibling can never mark work done: superseded/rejected siblings are
+    ignored while a live one exists, and among live siblings the one that is NOT
+    done wins — two live records that disagree read as open, and ``siblings``
+    names every file so the description can say so."""
+    if root is None:
+        return None
+    d = root / "decisions"
+    num = adr.split("-", 1)[1]
+    # Two naming schemes live side by side: ADR-NNNN-slug.md and (older) NNNN-slug.md.
+    files = list(dict.fromkeys(
+        f for pat in (f"{adr}-*.md", f"{adr}.md", f"{num}-*.md", f"{num}.md") for f in sorted(d.glob(pat))))
+    records = [r for r in (_read_record(f) for f in files) if r is not None]
+    if not records:
+        return None
+
+    def rank(i_r: tuple[int, dict[str, Any]]) -> tuple[int, int, int]:
+        i, r = i_r
+        state = status_for(r["status"])
+        return (state == "archived", state == "complete", i)
+
+    chosen = min(enumerate(records), key=rank)[1]
+    return {**chosen, "siblings": [r["file"] for r in records]}
 
 
 def _adr_root() -> Path | None:
@@ -105,9 +125,20 @@ def _description(repo: str, adr: str, meta: dict[str, Any] | None) -> str:
         state = "The decision record was not found, so the status stays in progress."
     else:
         state = f"Status follows the decision record's own status (currently {meta['status'] or 'unset'})."
+        if len(meta.get("siblings") or []) > 1:
+            state += (f" {len(meta['siblings'])} files carry this number ({', '.join(meta['siblings'])}); "
+                      f"status is read from {meta['file']}.")
     return (f"Work in {repo} whose commits reference {adr}. {state} Linked runs are the commits and the "
             "Claude Code sessions that made them. Edit this item and the sync stops changing it; "
             "new commits are still linked.")
+
+
+def _task_fields(repo: str, adr: str, meta: dict[str, Any] | None) -> dict[str, Any]:
+    """The record-derived fields of an ADR task: what both the in-window plan and
+    the out-of-window refresh write."""
+    status = status_for(meta["status"]) if meta else "in_progress"
+    title = f"{adr} · {meta['title']}" if meta and meta.get("title") else adr
+    return {"title": title[:200], "status": status, "description": _description(repo, adr, meta)}
 
 
 def plan(tenant_id: str, *, now: float | None = None, repo: Path | None = None,
@@ -129,7 +160,7 @@ def plan(tenant_id: str, *, now: float | None = None, repo: Path | None = None,
     specs: list[dict[str, Any]] = []
     links: dict[str, set[tuple[str, str]]] = {}
     if not by_adr:
-        return {"repo": slug, "specs": specs, "links": links, "commits": len(commits)}
+        return {"repo": slug, "specs": specs, "links": links, "commits": len(commits), "adr_root": root}
     specs.append({
         "external_ref": container_ref(slug), "kind": "initiative",
         "title": f"{slug} — engineering work (from git)"[:200], "status": "in_progress",
@@ -140,14 +171,12 @@ def plan(tenant_id: str, *, now: float | None = None, repo: Path | None = None,
     })
     for adr in sorted(by_adr, key=lambda a: -max(c["ts"] for c in by_adr[a])):
         cs = by_adr[adr]
-        meta = adr_meta(adr, root)
-        status = status_for(meta["status"]) if meta else "in_progress"
-        title = f"{adr} · {meta['title']}" if meta and meta.get("title") else adr
+        fields = _task_fields(slug, adr, adr_meta(adr, root))
+        status = fields["status"]
         ref = adr_ref(slug, adr)
         specs.append({
             "external_ref": ref, "parent_ref": container_ref(slug), "kind": "task",
-            "title": title[:200], "status": status, "category": "adr", "labels": ["git"],
-            "description": _description(slug, adr, meta),
+            **fields, "category": "adr", "labels": ["git"],
             "start_at": _iso(min(c["ts"] for c in cs)),
             "completed_at": _iso(max(c["ts"] for c in cs)) if status == "complete" else None,
         })
@@ -156,10 +185,39 @@ def plan(tenant_id: str, *, now: float | None = None, repo: Path | None = None,
             want.add(("commit", f"commit:{slug}:{c['short']}"))
             for sid in made_by.get(c["sha"], []):
                 want.add(("agent", f"agent:{sid}"))
-    return {"repo": slug, "specs": specs, "links": links, "commits": len(commits)}
+    return {"repo": slug, "specs": specs, "links": links, "commits": len(commits), "adr_root": root}
 
 
 _PATCHED = ("title", "status", "description", "category")
+
+
+def _refresh_out_of_window(tenant_id: str, p: dict[str, Any], current: dict[str, dict[str, Any]],
+                           out: dict[str, Any], *, dry_run: bool) -> None:
+    """Keep ADR items whose commits left the window following their record.
+
+    The plan only covers records referenced in the last ``WINDOW_S`` of commits;
+    without this, an item froze at whatever its record said when its last commit
+    aged out — a record accepted (or superseded) later never reached the item.
+    Same ownership rule as the in-window patch: an operator-edited item is left alone."""
+    from core.task_tracking import service  # noqa: PLC0415
+    from core.task_tracking.models import ItemPatch  # noqa: PLC0415
+
+    in_plan = {s["external_ref"] for s in p["specs"]}
+    head = container_ref(p["repo"]) + "#"
+    for ref, cur in current.items():
+        if ref in in_plan or not ref.startswith(head) or cur["deleted_at"] or cur.get("category") != "adr":
+            continue
+        adr = ref[len(head):]
+        fields = _task_fields(p["repo"], adr, adr_meta(adr, p.get("adr_root")))
+        changed = {k: v for k, v in fields.items() if cur.get(k) != v}
+        if not changed:
+            continue
+        if cur["foreign_edit"]:
+            out["kept_operator_edits"] += 1
+            continue
+        out["refreshed"] += 1
+        if not dry_run:
+            service.update(tenant_id, cur["id"], ItemPatch(version=cur["version"], **changed), actor=ACTOR)
 
 
 def run(tenant_id: str, *, now: float | None = None, dry_run: bool = False, **plan_kw: Any) -> dict[str, Any]:
@@ -170,11 +228,13 @@ def run(tenant_id: str, *, now: float | None = None, dry_run: bool = False, **pl
         return {"skipped": f"host-level sync runs for tenant {ha.HOST_TENANT!r} only"}
     p = plan(tenant_id, now=now, **plan_kw)
     out: dict[str, Any] = {"repo": p["repo"], "commits": p["commits"], "planned": len(p["specs"]),
-                           "inserted": 0, "updated": 0, "kept_operator_edits": 0, "linked": 0}
-    if not p["specs"]:
-        return out
+                           "inserted": 0, "updated": 0, "kept_operator_edits": 0, "linked": 0,
+                           "refreshed": 0}
     prefix = container_ref(p["repo"])
     current = service.synced_items(tenant_id, prefix, actor=ACTOR)
+    _refresh_out_of_window(tenant_id, p, current, out, dry_run=dry_run)
+    if not p["specs"]:
+        return out
     new_specs = [s for s in p["specs"] if s["external_ref"] not in current]
     if dry_run:
         out.update(inserted=len(new_specs), dry_run=True,

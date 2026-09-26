@@ -224,6 +224,44 @@ class HostSyncTest(unittest.TestCase):
             refs = {r["run_ref"] for r in client.get(f"{ITEMS}/items/{prop['id']}").json()["runs"]}
             self.assertIn(f"commit:Proj:{sha_c[:12]}", refs)
 
+    def test_duplicate_numbered_records_resolve_deterministically(self):
+        """Two files carrying one ADR number: a superseded sibling never decides the
+        status, and two live siblings that disagree read as open (never done)."""
+        with self._env() as (client, _csrf, _home, _):
+            # ADR-9001: the ADR- prefixed file is a superseded stub, the bare file the real record.
+            (self.adr / "decisions" / "ADR-9001-x.md").write_text(
+                "---\nid: ADR-9001\nstatus: SUPERSEDED\n---\n\n# ADR-9001: Stub\n")
+            (self.adr / "decisions" / "9001-real.md").write_text(
+                "---\nid: ADR-9001\nstatus: ACCEPTED\n---\n\n# ADR-9001: The first thing\n")
+            # ADR-9002: two live records disagree.
+            (self.adr / "decisions" / "9002-other.md").write_text(
+                "---\nid: ADR-9002\nstatus: ACCEPTED\n---\n\n# ADR-9002: Another take\n")
+            self._sync()
+            items = {i["external_ref"]: i for i in client.get(f"{ITEMS}/items").json()["items"]}
+            first, second = items["git:Proj#ADR-9001"], items["git:Proj#ADR-9002"]
+            self.assertEqual((first["status"], first["title"]), ("complete", "ADR-9001 · The first thing"))
+            self.assertEqual(second["status"], "in_progress")
+            detail = client.get(f"{ITEMS}/items/{second['id']}").json()["item"]["description"]
+            self.assertIn("9002-other.md", detail)
+
+    def test_items_outside_the_commit_window_still_follow_their_record(self):
+        """An item whose commits aged out of the window keeps following the record's
+        status and title instead of freezing at its last in-window value."""
+        with self._env() as (client, _csrf, _home, _):
+            from corvin_console import task_tracking_git_sync as g
+            self._sync()
+            items = {i["external_ref"]: i for i in client.get(f"{ITEMS}/items").json()["items"]}
+            prop = items["git:Proj#ADR-9002"]
+            self.assertEqual(prop["status"], "in_progress")
+            self._adr(9002, "ACCEPTED", "The other thing, renamed")
+            later = time.time() + 30 * 86400  # every commit is now outside the window
+            res = g.run("_default", adr_root=self.adr, now=later)
+            self.assertEqual(res["refreshed"], 1, res)
+            item = client.get(f"{ITEMS}/items/{prop['id']}").json()["item"]
+            self.assertEqual((item["status"], item["title"]), ("complete", "ADR-9002 · The other thing, renamed"))
+            # Idempotent: a second run writes nothing.
+            self.assertEqual(g.run("_default", adr_root=self.adr, now=later)["refreshed"], 0)
+
     def test_deleted_item_is_not_recreated(self):
         with self._env() as (client, csrf, _home, _):
             self._sync()
