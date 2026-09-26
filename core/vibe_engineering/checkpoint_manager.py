@@ -4,7 +4,7 @@ Sprint 1: CheckpointManager
 Full-state serialization and persistence for autonomous resume.
 Guarantees idempotent checkpoint round-trip (serialize → deserialize = identity).
 
-Security: Checkpoint Integrity Binding (Merkle Root + Tenant Key) — ADR-0XXX
+Security: Checkpoint Integrity Binding (Merkle Root + Tenant Key) — ADR-0892
 - Every checkpoint includes merkle_root (hash tree of all weights + audit log)
 - tenant_signature (HMAC-SHA256 of merkle_root with tenant key)
 - restore_checkpoint() verifies both; fail-closed on mismatch
