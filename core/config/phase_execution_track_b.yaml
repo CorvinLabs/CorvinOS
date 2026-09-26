@@ -1,0 +1,9 @@
+# Track B: Phase 6→7 Sequential (Option B)
+phase_6_mode: "sequential"
+track: "option_b"
+track_name: "feature/phase6-phase7-option-b"
+enable_phase6_now: true
+enable_phase7_prep: true
+enable_phase3_verification: true
+created_at: "2026-09-26T00:00:00Z"
+target_gate: "60+ tests passing + Phase 3 verification complete"
