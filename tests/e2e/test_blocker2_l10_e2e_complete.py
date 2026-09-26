@@ -2,7 +2,7 @@
 
 Proves that os.context_adapter Skill is invoked through the real CEL pipeline by:
 1. Running full pipeline with L10 stage enabled
-2. Verifying adapted_context field is populated in bundle
+2. Verifying the shadow summary (scratch["l10_shadow"]) is recorded; the brief is untouched
 3. Checking audit trail contains L10 execution event
 4. Confirming topological order (L10 after graph, before synthesis)
 
@@ -221,10 +221,10 @@ class TestBlocker2L10CompleteE2E:
         assert "graph" in l10.requires, "L10 must declare graph as requirement"
 
     def test_10_l10_outputs_available(self):
-        """GATE 10: L10 stage output (adapted_context) is available for downstream.
+        """GATE 10: L10 records a content-free SHADOW summary, nothing more.
 
-        If L10 runs successfully, bundle.scratch['adapted_context'] should be
-        populated so downstream stages (synthesis, etc.) can use it.
+        If L10 runs successfully, bundle.scratch['l10_shadow'] holds the
+        content-free summary; the brief itself is never modified (shadow mode).
         """
         from corvin_operator.context_engineering.stages import (
             get_stage, ContextBundle, StageCtx
@@ -238,15 +238,11 @@ class TestBlocker2L10CompleteE2E:
             result = l10.run(bundle, ctx)
             if result:
                 returned_bundle, telemetry = result
-                # If execution succeeded, adapted_context should be in scratch
                 if telemetry.status == "ok":
-                    assert "adapted_context" in returned_bundle.scratch, (
-                        "L10 successful execution must populate adapted_context"
+                    assert "l10_shadow" in returned_bundle.scratch, (
+                        "L10 successful execution must record its shadow summary"
                     )
-                    logger.info(
-                        f"✓ adapted_context in bundle.scratch: "
-                        f"{returned_bundle.scratch['adapted_context'].keys()}"
-                    )
+                    assert returned_bundle.brief is None, "shadow mode never touches the brief"
         except Exception as e:
             # Tolerate errors (e.g., no skills registry); focus on interface
             logger.info(f"L10 run raised (expected): {type(e).__name__}: {e}")
@@ -303,17 +299,17 @@ class TestBlocker2SpecCompliance:
     """Verify BLOCKER 2 spec compliance (Phase 2 requirements)."""
 
     def test_l10_fail_closed_on_timeout(self):
-        """L10 adapter must fail-closed (never crash pipeline) on timeout."""
-        from corvin_operator.context_engineering.stages import get_stage
+        """L10 adapter must degrade (never crash the pipeline) on timeout/error.
 
-        l10 = get_stage("l10_adapter")
+        The registry enforces the timeout itself (a timed-out Skill returns a
+        ``timeout`` result, audited); the stage bounds it well below the
+        registry default and catches everything else.
+        """
+        from corvin_operator.context_engineering.stages import l10_adapter
 
-        # The stage's timeout handling is in the try/except blocks
-        src_file = Path(__file__).resolve().parents[2] / \
-            "corvin_operator/context_engineering/stages/l10_adapter.py"
-        src = src_file.read_text()
-
-        assert "TimeoutError" in src, "L10 must handle TimeoutError"
+        assert l10_adapter._TIMEOUT_MS <= 2000, "L10 is advisory: keep its budget small"
+        src = Path(l10_adapter.__file__).read_text()
+        assert "timeout_ms=_TIMEOUT_MS" in src, "L10 must pass its bounded timeout"
         assert "except Exception" in src, "L10 must have fallback exception handler"
 
     def test_l10_does_not_require_audit_backend(self):

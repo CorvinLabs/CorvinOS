@@ -1419,10 +1419,10 @@ is NOT thereby wired. Two of the five have no production caller at all, and sayi
 otherwise is what made a whole "E2E wiring proof" suite vacuous (2026-09-07 round-4
 review, F6). Update this column in the same commit that adds or removes a call site.
 
-| Layer | Today | Tomorrow (Skills 2.0) | Status (2026-09-07) | ADR | Timeline |
+| Layer | Today | Tomorrow (Skills 2.0) | Status (2026-09-26) | ADR | Timeline |
 |---|---|---|---|---|---|
 | **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | **WIRED, shadow mode** — `delegation_policy.py::_acp_shadow_route`; the bundled engine still stands (ADR-0613) | ADR-0532 Phase 1 | Weeks 2–4 |
-| **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | **NOT WIRED** — registered at every boot, called by nothing. `adapt_context_l10` has zero production call sites; the CEL context pipeline does not consult it. Fenced by `tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10HasNoProductionCallSite` | ADR-0532 Phase 1 | Weeks 2–4 |
+| **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | **WIRED, shadow mode** (2026-09-26) — CEL stage `l10_adapter` (`corvin_operator/context_engineering/stages/l10_adapter.py`, in DEFAULT + ACTIVE pipeline) calls `adapt_context_l10` per turn via `pipeline.build_context` when `vibe_engineering` is on. Audited (`skill.executed` + `context.adapted`), never changes the served brief. Runs ONLY where `boot_skills` booted an audited registry for the turn tenant (gateway/console); the bridge adapter never boots Skills, so there it is `skipped: skills_not_booted`. E2E: `tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10ProductionCallSite` | ADR-0532 Phase 1 | Weeks 2–4 |
 | **L22: Workflow** | Stateless request/response | `os.workflow_optimizer` Skill (learns execution chains) | not built | ADR-0532 Phase 2 | Weeks 6–10 |
 | **L16: Security** | Config-driven gates | `os.security_orchestrator` Skill (learns attack patterns) | not built | ADR-0532 Phase 3 | Weeks 11–18 |
 | **L34: Data Flow** | Hardcoded validators | `os.flow_guard` Skill (learns safe data shapes) | not built | ADR-0532 Phase 4 | Weeks 19–24 |
@@ -1431,7 +1431,7 @@ review, F6). Update this column in the same commit that adds or removes a call s
 
 **Phase 1 (Weeks 1–4): Foundation**
 - Deliver `os.delegation_router` Skill + `os.context_adapter` Skill (2 minimal skills)
-- Wire into L5 (auto-routing) + L10 (context engineering) — **L5 done (shadow), L10 outstanding**
+- Wire into L5 (auto-routing) + L10 (context engineering) — **L5 + L10 done (shadow); L10 not yet on the bridge path (no Skills boot there)**
 - Prove E2E: real requests flow through Skills, learning events emitted to ADR-0314
 - Tests: 25 E2E, 12 adversarial (crash recovery, timeout isolation, PII leakage)
 - Blocker: ADR-0532 Phase 1 + ADR-0533 manifest schema + ADR-0534 feedback integration ready
@@ -1734,19 +1734,24 @@ corvin audit trace skill os.delegation_router --task=<task_id>
 - `erasure.tenant_boundary_checked` — wired in erasure_orchestrator.py
 - `erasure.cross_tenant_detected` — wired in erasure pre-check
 
-### Phase 2 Extended Events (Registered, 2/8 Wired)
+### Phase 2 Extended Events (Registered, 4/8 Wired — verified 2026-09-26)
+
+"Registered" (EVENT_SEVERITY + `_EVENT_ALLOWLIST`) is NOT "wired". The earlier
+statuses here named call sites that did not exist (`lifecycle_loader.py:74`
+emits `plugin_disabled`, and nothing imports that module).
 
 **Layer 22 (Worker Lifecycle):** 3 events
-- `compute.worker_spawn_initiated`, `compute.worker_heartbeat`, `compute.worker_terminated`
-- Status: Partially wired (heartbeat + spawn ready, terminated pending)
+- `compute.worker_terminated` — **WIRED**: `WorkerServer.stop()` (`core/compute/corvin_compute/worker.py`); `corvin-compute serve` now routes SIGTERM (what `systemctl stop` sends) through that path. Proof: `tests/security/test_wave1c_audit_wiring_e2e.py`
+- `compute.worker_spawn_initiated`, `compute.worker_heartbeat` — **NOT WIRED** (no emitter; the compute worker has no spawn/heartbeat concept to hang them on)
 
 **Layer 38 (A2A NBAC):** 3 events
-- `a2a.genesis_block_created`, `a2a.offline_pair_initiated`, `a2a.nonce_collision_detected`
-- Status: 2 wired (nonce_collision at remote_trigger_receiver.py:1680), 1 pending
+- `a2a.nonce_collision_detected` — **WIRED**: `remote_trigger_receiver.py` replay branch
+- `a2a.offline_pair_initiated` — **WIRED, audit-first**: `corvin_a2a.py pair --offline-pair` records before writing the origin and refuses the pair if the record cannot commit
+- `a2a.genesis_block_created` — **NO SUBJECT**: no production code creates an NBAC genesis block (`nbac.sign_genesis_block` has no caller). Fenced by `test_genesis_block_has_no_production_creator`; wire it in the same commit that adds a creator
 
 **Layer 4 (Plugins):** 2 events
-- `plugin.initialization_failed`, `plugin.execution_timeout`
-- Status: 1 wired (init_failed at lifecycle_loader.py:74), 1 pending
+- `plugin.execution_timeout` — **WIRED**: `registry.py` `on_load` (`LOAD_DEADLINE_S`) and `health_check` (`HEALTH_CHECK_DEADLINE_S`) deadline overruns. Proof: `core/plugins/tests/test_plugin_execution_timeout_audit.py`
+- `plugin.initialization_failed` — **NOT WIRED** (`corvin_plugins.audit.emit_initialization_failed` has no caller; load failures are recorded as `plugin.load_failed`)
 
 ### Pre-Commit Hook (ENFORCEMENT)
 

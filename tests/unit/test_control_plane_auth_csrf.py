@@ -248,8 +248,8 @@ class TestPluginManagerAuth:
     """Test authentication & CSRF on plugin routes."""
 
     @pytest.mark.asyncio
-    async def test_install_plugin_requires_csrf(self):
-        """PUT /plugins/install should require CSRF."""
+    async def test_plugin_mutations_require_csrf(self):
+        """Plugin mutations (enable/disable/uninstall) require CSRF."""
         from fastapi import HTTPException, status
 
         with pytest.raises(HTTPException) as exc_info:
@@ -452,7 +452,6 @@ class TestAuthCsrfCoverage:
             ("/v1/console/control-plane/snapshots/{id}/restore", "POST"),
             ("/v1/console/control-plane/snapshots/{id}", "DELETE"),
             # Plugins
-            ("/v1/console/control-plane/plugins/install", "PUT"),
             ("/v1/console/control-plane/plugins/{id}/enable", "PATCH"),
             ("/v1/console/control-plane/plugins/{id}/disable", "PATCH"),
             ("/v1/console/control-plane/plugins/{id}", "DELETE"),
@@ -464,7 +463,9 @@ class TestAuthCsrfCoverage:
         ]
 
         # All mutations should require CSRF
-        assert len(mutation_endpoints) == 15
+        # 14: the control-plane PUT /plugins/install was removed 2026-09-26
+        # (ADR-0892 — one plugin install route, the marketplace's).
+        assert len(mutation_endpoints) == 14
         for endpoint, method in mutation_endpoints:
             assert method in ["POST", "PUT", "PATCH", "DELETE"]
 

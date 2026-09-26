@@ -169,32 +169,9 @@ async def test_tags_endpoint(client, sample_index):
     assert isinstance(data["tags"], dict)
 
 
-@pytest.mark.asyncio
-async def test_plugin_details_endpoint(client, sample_index):
-    """Test /plugins/{id} details endpoint."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
-    set_marketplace_index_path(sample_index)
-
-    response = client.get(
-        "/api/v1/marketplace/plugins/plugin:buildin-model-selector",
-        headers={"Authorization": "Bearer test_token"}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Model Selector"
-    assert "metrics" in data
-    assert "versions" in data
-    assert "reviews" in data
-
-
-@pytest.mark.asyncio
-async def test_plugin_details_not_found(client):
-    """Test /plugins/{id} with nonexistent plugin."""
-    response = client.get(
-        "/api/v1/marketplace/plugins/plugin:nonexistent",
-        headers={"Authorization": "Bearer test_token"}
-    )
-    assert response.status_code == 404
+# /plugins/{id} details: removed from marketplace_discovery_routes (it was shadowed
+# by marketplace.py's identical route and never dispatched). The canonical route
+# is covered by tests/e2e/test_marketplace_single_install_route.py.
 
 
 @pytest.mark.asyncio

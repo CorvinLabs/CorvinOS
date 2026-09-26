@@ -1,225 +1,163 @@
-"""E2E Wiring Proof: L10 Context Adapter is wired into CEL pipeline (ADR-0532).
+"""UNIT: the L10AdapterStage contract (shadow mode, ADR-0532 Phase 1 / ADR-0613 shape).
 
-Proves that the L10 adapter is actually called from production, not just unit-tested.
+These supply a fake booted integration and call ``stage.run`` directly — they
+prove behaviour-when-called, NOT reachability. The production-boundary E2E
+(``pipeline.build_brief`` → stage → Skill → hash-chained audit) is
+``tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10ProductionCallSite``.
+
+(The previous version of this file patched a module attribute
+``l10_adapter.adapt_context_l10`` that never existed, so five of its tests
+errored before reaching the stage.)
 """
-import json
-import logging
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from __future__ import annotations
 
 import pytest
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-_log = logging.getLogger(__name__)
+from corvin_operator.context_engineering.stages import ContextBundle, StageCtx
+from corvin_operator.context_engineering.stages import l10_adapter
+from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
+from corvin_operator.context_engineering.stages._util import task_adapter
 
 
-class TestL10ContextAdapterWiring:
-    """E2E wiring proof: L10 adapter runs from build_context() pipeline."""
+class _FakeRegistry:
+    def __init__(self, audited=True, has_skill=True):
+        self.audit_backend = object() if audited else None
+        self._has = has_skill
 
-    @pytest.fixture
-    def mock_context(self):
-        """Mock context for testing."""
-        return {
-            "tenant_id": "test_tenant",
-            "user_id": "alice",
-            "task_type": "feature_implementation",
-            "complexity": 7,
-            "priority": 5,
-            "description": "Test task",
-        }
-
-    @pytest.fixture
-    def mock_context_bundle(self):
-        """Mock ContextBundle (mimics core/context_engineering/pipeline.py structure)."""
-        return MagicMock(
-            brief={
-                "tenant_id": "test_tenant",
-                "user_id": "alice",
-                "base_context": "loaded",
-            },
-            scratch={},
-        )
-
-    @pytest.fixture
-    def mock_stage_ctx(self):
-        """Mock StageCtx (mimics stage execution context)."""
-        return MagicMock(
-            tenant_id="test_tenant",
-            task_obj=MagicMock(
-                complexity=7,
-                task_type="feature_implementation",
-                description="Test task",
-                priority=5,
-                user_context={},
-            ),
-        )
-
-    def test_l10_adapter_stage_exists(self):
-        """Phase 1: Verify L10AdapterStage exists and is importable."""
-        try:
-            from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
-            assert L10AdapterStage is not None
-            assert hasattr(L10AdapterStage, "run")
-            assert L10AdapterStage.id == "l10_adapter"
-            _log.info("✅ L10AdapterStage exists and has run() method")
-        except ImportError as exc:
-            pytest.fail(f"L10AdapterStage import failed: {exc}")
-
-    def test_l10_adapter_stage_is_registered(self):
-        """Phase 1: Verify L10AdapterStage is registered in stage registry."""
-        try:
-            from corvin_operator.context_engineering.stages import registry
-
-            # Check if l10_adapter is in registry
-            stages = registry._STAGES if hasattr(registry, "_STAGES") else {}
-
-            # Alternative: check if it was registered via __init__.py imports
-            from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
-
-            # Verify it's a proper stage
-            assert hasattr(L10AdapterStage, "id")
-            assert hasattr(L10AdapterStage, "requires")
-            assert hasattr(L10AdapterStage, "effect")
-            assert hasattr(L10AdapterStage, "trust")
-
-            _log.info("✅ L10AdapterStage is properly registered")
-        except (ImportError, AttributeError) as exc:
-            pytest.fail(f"L10AdapterStage registration failed: {exc}")
-
-    def test_l10_adapter_run_executes(self, mock_context_bundle, mock_stage_ctx):
-        """Phase 2: Verify L10AdapterStage.run() executes without error."""
-        from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
-
-        stage = L10AdapterStage()
-
-        # Mock the Skill import to avoid circular dependencies
-        with patch("corvin_operator.context_engineering.stages.l10_adapter.adapt_context_l10") as mock_skill:
-            mock_skill.return_value = {
-                "vibe_score": 0.7,
-                "origin": "l10_adapted",
-                "context": {"adapted": True},
-            }
-
-            # Execute stage
-            result_bundle, telemetry = stage.run(mock_context_bundle, mock_stage_ctx)
-
-            # Verify execution
-            assert mock_skill.called, "L10 Skill was not called"
-            assert result_bundle is not None
-            assert telemetry is not None
-            assert telemetry.stage == "l10_adapter"
-            assert telemetry.status == "ok"
-
-            _log.info("✅ L10AdapterStage.run() executes successfully")
-
-    def test_l10_adapter_emits_telemetry(self, mock_context_bundle, mock_stage_ctx):
-        """Verify L10 adapter emits StageTelemetry."""
-        from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
-
-        stage = L10AdapterStage()
-
-        with patch("corvin_operator.context_engineering.stages.l10_adapter.adapt_context_l10") as mock_skill:
-            mock_skill.return_value = {
-                "vibe_score": 0.8,
-                "origin": "l10_adapted",
-            }
-
-            _, telemetry = stage.run(mock_context_bundle, mock_stage_ctx)
-
-            # Verify telemetry structure
-            assert hasattr(telemetry, "stage")
-            assert hasattr(telemetry, "status")
-            assert hasattr(telemetry, "confidence_tier")
-            assert hasattr(telemetry, "sources")
-
-            assert telemetry.stage == "l10_adapter"
-            assert telemetry.status == "ok"
-            assert telemetry.confidence_tier == "high"
-            assert len(telemetry.sources) > 0
-
-            _log.info("✅ L10AdapterStage emits proper telemetry")
-
-    def test_l10_adapter_fail_closed(self, mock_context_bundle, mock_stage_ctx):
-        """Verify L10 adapter fails closed on Skill error."""
-        from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
-
-        stage = L10AdapterStage()
-
-        with patch("corvin_operator.context_engineering.stages.l10_adapter.adapt_context_l10") as mock_skill:
-            mock_skill.side_effect = Exception("Skill error")
-
-            # Should not raise; should return base context with failed telemetry
-            result_bundle, telemetry = stage.run(mock_context_bundle, mock_stage_ctx)
-
-            # Verify fail-closed behavior
-            assert result_bundle is not None  # Base context returned
-            assert telemetry.status == "failed"
-            assert telemetry.confidence_tier == "low"
-
-            _log.info("✅ L10AdapterStage fails closed on Skill error")
-
-    def test_l10_adapter_in_pipeline_execution(self, mock_context_bundle, mock_stage_ctx):
-        """Phase 2: Verify L10 adapter is called from CEL pipeline.
-
-        This is the real E2E proof: the stage is called from build_context() pipeline.
-        """
-        from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
-        from corvin_operator.context_engineering.stages.base import StageTelemetry
-
-        stage = L10AdapterStage()
-
-        # Simulate pipeline execution
-        with patch("corvin_operator.context_engineering.stages.l10_adapter.adapt_context_l10") as mock_skill:
-            mock_skill.return_value = {
-                "vibe_score": 0.75,
-                "origin": "l10_adapted",
-                "adjusted_priority": 6,
-            }
-
-            # This is the real call: pipeline.build_context() → stage.run()
-            result_bundle, telemetry = stage.run(mock_context_bundle, mock_stage_ctx)
-
-            # Proof 1: Skill was called (real call site)
-            assert mock_skill.called
-            call_args = mock_skill.call_args
-            assert call_args[1]["tenant_id"] == "test_tenant"
-            assert call_args[1]["task_type"] == "feature_implementation"
-
-            # Proof 2: Context was adapted
-            assert "adapted_context" in result_bundle.brief
-
-            # Proof 3: Audit telemetry emitted
-            assert isinstance(telemetry, StageTelemetry)
-            assert telemetry.stage == "l10_adapter"
-
-            _log.info("✅ L10AdapterStage is wired into CEL pipeline (REAL CALL SITE VERIFIED)")
-
-    def test_l10_adapter_audit_event_would_be_emitted(self, mock_context_bundle, mock_stage_ctx):
-        """Verify audit event would be emitted (ADR-0232 compliance)."""
-        from corvin_operator.context_engineering.stages.l10_adapter import L10AdapterStage
-
-        stage = L10AdapterStage()
-
-        with patch("corvin_operator.context_engineering.stages.l10_adapter.adapt_context_l10") as mock_skill:
-            mock_skill.return_value = {
-                "vibe_score": 0.8,
-                "origin": "l10_adapted",
-            }
-
-            _, telemetry = stage.run(mock_context_bundle, mock_stage_ctx)
-
-            # The telemetry contains everything needed for an audit event
-            assert telemetry.stage == "l10_adapter"
-            assert telemetry.status == "ok"
-            assert telemetry.sources is not None
-            assert len(telemetry.sources) > 0
-
-            # A future audit emitter would use this telemetry to create an event
-            # "stage_executed" → {stage: "l10_adapter", status: "ok", sources: [...]}
-
-            _log.info("✅ L10AdapterStage telemetry ready for audit emission")
+    def get(self, skill_id):
+        return object() if (self._has and skill_id == "os.context_adapter") else None
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+class _FakeIntegration:
+    def __init__(self, registry, tenant_id="_default", result=None, exc=None):
+        self.registry = registry
+        self.tenant_id = tenant_id
+        self.result = result
+        self.exc = exc
+        self.calls = []
+
+    def adapt_context_l10(self, **kw):
+        self.calls.append(kw)
+        if self.exc:
+            raise self.exc
+        return self.result
+
+
+_RESULT = {
+    "base_tier": {"engine": "claude-sonnet-4", "priority": 5},
+    "injected_tier": {"engine": "claude-sonnet-4", "priority": 6},
+    "merged_tier": {"engine": "claude-sonnet-4", "priority": 6},
+    "skill_executed": True,
+    "error": None,
+}
+
+
+@pytest.fixture
+def fake_boot(monkeypatch):
+    """Install a fake booted integration into the real modules the stage reads."""
+    from core.skills import os_skills_integration as integ_mod
+    from core.skills import skill_registry_phase1 as reg_mod
+
+    def _install(integration, registry):
+        monkeypatch.setattr(reg_mod, "_global_registry", registry)
+        monkeypatch.setattr(integ_mod, "_integration_instance", integration)
+        # The stage imports the module-level entry point; route it to the fake.
+        monkeypatch.setattr(integ_mod, "adapt_context_l10",
+                            lambda **kw: integration.adapt_context_l10(**kw))
+        return integration
+
+    return _install
+
+
+@pytest.fixture
+def audit_sink(monkeypatch):
+    written = []
+
+    def _emit(tenant_id, summary):
+        written.append((tenant_id, dict(summary)))
+        return True
+
+    monkeypatch.setattr(l10_adapter, "_emit_context_adapted", _emit)
+    return written
+
+
+def _run(tenant="_default", task="Some task text"):
+    bundle = ContextBundle(task=task, brief=object())
+    ctx = StageCtx(tenant_id=tenant, task_obj=task_adapter(task))
+    brief_before = bundle.brief
+    out, tel = L10AdapterStage().run(bundle, ctx)
+    assert out is bundle and out.brief is brief_before, "shadow: brief object untouched"
+    return out, tel
+
+
+def test_stage_metadata():
+    stage = L10AdapterStage()
+    assert stage.id == "l10_adapter"
+    assert stage.requires == ("graph",)
+    assert stage.effect == "pure" and stage.trust == "builtin"
+
+
+def test_executes_in_shadow_and_audits(fake_boot, audit_sink):
+    reg = _FakeRegistry()
+    integ = fake_boot(_FakeIntegration(reg, result=_RESULT), reg)
+    out, tel = _run(task="Secret customer name Zyx")
+    assert tel.status == "ok" and tel.reason == "shadow"
+    assert len(integ.calls) == 1
+    call = integ.calls[0]
+    assert call["tenant_id"] == "_default"
+    assert call["task_description"] == "" and call["user_context"] == {}, (
+        "task text must never reach the Skill")
+    assert call["timeout_ms"] == l10_adapter._TIMEOUT_MS
+    assert out.scratch["l10_shadow"] == {
+        "skill_executed": True, "engine": "claude-sonnet-4", "priority": 6,
+        "injected": True, "audited": True,
+    }
+    assert audit_sink and audit_sink[0][0] == "_default"
+
+
+def test_skipped_when_skills_not_booted(fake_boot, audit_sink):
+    fake_boot(None, None)
+    out, tel = _run()
+    assert (tel.status, tel.reason) == ("skipped", "skills_not_booted")
+    assert "l10_shadow" not in out.scratch and not audit_sink
+
+
+def test_skipped_when_registry_has_no_audit_backend(fake_boot, audit_sink):
+    reg = _FakeRegistry(audited=False)
+    integ = fake_boot(_FakeIntegration(reg, result=_RESULT), reg)
+    _out, tel = _run()
+    assert (tel.status, tel.reason) == ("skipped", "skills_not_booted")
+    assert not integ.calls, "an unaudited registry must never execute the Skill"
+
+
+def test_skipped_for_a_tenant_the_registry_was_not_booted_for(fake_boot, audit_sink):
+    reg = _FakeRegistry()
+    integ = fake_boot(_FakeIntegration(reg, tenant_id="_default", result=_RESULT), reg)
+    _out, tel = _run(tenant="acme")
+    assert (tel.status, tel.reason) == ("skipped", "tenant_not_booted")
+    assert not integ.calls and not audit_sink
+
+
+def test_skill_error_degrades_without_breaking_the_turn(fake_boot, audit_sink):
+    reg = _FakeRegistry()
+    fake_boot(_FakeIntegration(reg, exc=RuntimeError("boom")), reg)
+    out, tel = _run()
+    assert tel.status == "failed" and tel.confidence_tier == "low" and tel.reason == "error"
+    assert "l10_shadow" not in out.scratch
+
+
+def test_audit_write_failure_is_surfaced_not_swallowed(fake_boot, monkeypatch, caplog):
+    reg = _FakeRegistry()
+    fake_boot(_FakeIntegration(reg, result=_RESULT), reg)
+
+    import forge.security_events as se
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(se, "write_event", _boom)
+    with caplog.at_level("ERROR"):
+        out, tel = _run()
+    assert tel.status == "failed" and tel.reason == "audit_write_failed"
+    assert out.scratch["l10_shadow"]["audited"] is False
+    assert any("AUDIT-WRITE FAILED" in r.getMessage() for r in caplog.records)

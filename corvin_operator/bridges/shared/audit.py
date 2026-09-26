@@ -410,7 +410,16 @@ def audit_event(
     # changing the chain character (metadata only, no PII).
     if tenant_id:
         body["tenant_id"] = tenant_id
-    effective_severity = (severity.upper() if severity else None) or _VOICE_EVENT_SEVERITY.get(event_type) or "INFO"
+    # Fall back to the CANONICAL registry (security_events.EVENT_SEVERITY)
+    # before "INFO": without it every event not in the bridge-local table —
+    # e.g. plugin.execution_timeout (WARNING) via PluginContext.audit_emit —
+    # was recorded as INFO, contradicting its registration.
+    effective_severity = (
+        (severity.upper() if severity else None)
+        or _VOICE_EVENT_SEVERITY.get(event_type)
+        or getattr(_se, "EVENT_SEVERITY", {}).get(event_type)
+        or "INFO"
+    )
     core_write_committed = False
     try:
         # Tenant isolation (ADR-0007) is enforced INSIDE write_event (F-A6):

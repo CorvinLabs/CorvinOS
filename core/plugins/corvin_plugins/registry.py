@@ -182,6 +182,30 @@ def _call_with_deadline(
         pool.shutdown(wait=False)
 
 
+def _emit_execution_timeout(
+    ctx: Any, plugin_id: str, boot_layer: "BootLayer", deadline_s: float
+) -> None:
+    """Record ``plugin.execution_timeout`` on the plugin's tenant chain.
+
+    Fired by the two real deadline sites — ``on_load`` (:data:`LOAD_DEADLINE_S`)
+    and ``health_check`` (:data:`HEALTH_CHECK_DEADLINE_S`). Fields match the
+    ``_EVENT_ALLOWLIST`` entry exactly (plugin_id, boot_layer, timeout_ms,
+    tenant_id); no exception text, which may carry paths or record fragments.
+    Guarded: an audit failure must not change the caller's verdict/rollback.
+    """
+    if ctx is None:
+        return
+    try:
+        ctx.audit_emit("plugin.execution_timeout", {
+            "plugin_id": str(plugin_id)[:128],
+            "boot_layer": str(getattr(boot_layer, "value", boot_layer))[:32],
+            "timeout_ms": int(deadline_s * 1000),
+            "tenant_id": getattr(ctx, "tenant_id", ""),
+        })
+    except Exception:  # noqa: BLE001 - audit must not change the verdict
+        log.error("plugin.execution_timeout audit could not be written for %r", plugin_id)
+
+
 def _detach_provider_slot(plugin: CorvinPlugin) -> None:
     """Release every provider slot ``plugin`` took, by plugin identity.
 
@@ -608,7 +632,15 @@ class PluginRegistry:
                     what="on_load",
                     timeout_exc=PluginLoadTimeout,
                 )
-        except Exception:
+        except Exception as load_exc:
+            # A deadline overrun is a distinct compliance fact from "on_load
+            # raised": the plugin's code may still be running in the abandoned
+            # worker. Record it as plugin.execution_timeout (ADR-2043) —
+            # metadata only, the audit write must never change the rollback.
+            if isinstance(load_exc, PluginLoadTimeout):
+                _emit_execution_timeout(
+                    ctx, plugin.plugin_id, resolved, LOAD_DEADLINE_S
+                )
             # on_load failed — roll back EVERYTHING it managed to take, not just
             # the registry maps. A half-loaded plugin can already hold a provider
             # slot, an extension hook (on the fail-closed workflow gate, with the
@@ -1005,6 +1037,11 @@ class PluginRegistry:
                         "plugin_id": pid,
                         "error_type": type(exc).__name__,  # class name only — no PII
                     })
+                    if isinstance(exc, HealthCheckTimeout):
+                        _emit_execution_timeout(
+                            ctx, pid, layers.get(pid, BootLayer.INSTALLED),
+                            HEALTH_CHECK_DEADLINE_S,
+                        )
                 # Exception CLASS only. str(exc) reaches the Console and the logs;
                 # a plugin's message routinely carries a path, a host or a record
                 # fragment, and this surface must stay PII-free.

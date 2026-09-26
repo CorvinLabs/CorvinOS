@@ -197,33 +197,9 @@ class TestSnapshotEndpointsAuth:
 class TestPluginManagerEndpointsAuth:
     """E2E tests for plugin manager endpoint auth."""
 
-    def test_install_plugin_without_session_returns_401(self, client):
-        """PUT /control-plane/plugins/install without session should return 401."""
-        response = client.put(
-            "/v1/console/control-plane/plugins/install",
-            json={
-                "plugin_id": "test_plugin",
-                "name": "Test Plugin",
-                "version": "1.0.0",
-                "boot_layer": "installed"
-            }
-        )
-        assert response.status_code == 401
-
-    def test_install_plugin_without_csrf_returns_403(self, client, mock_session):
-        """PUT /control-plane/plugins/install without CSRF should return 403."""
-        with patch('core.console.corvin_console.auth.load_session', return_value=mock_session):
-            response = client.put(
-                "/v1/console/control-plane/plugins/install",
-                json={
-                    "plugin_id": "test_plugin",
-                    "name": "Test Plugin",
-                    "version": "1.0.0",
-                    "boot_layer": "installed"
-                },
-                cookies={"corvin_console_sid": "test_session_id"}
-            )
-            assert response.status_code == 403
+    # No install tests here: the control-plane PUT /plugins/install was removed
+    # 2026-09-26 (ADR-0892 — the one plugin install route is the marketplace's;
+    # tests/e2e/test_marketplace_single_install_route.py fences it).
 
     def test_list_plugins_without_session_returns_401(self, client):
         """GET /control-plane/plugins without session should return 401."""
@@ -352,7 +328,6 @@ class TestAuthCsrfMatrix:
         ("/v1/console/control-plane/snapshots/id/restore", "POST", True),
         ("/v1/console/control-plane/snapshots/id", "DELETE", True),
         # Plugins
-        ("/v1/console/control-plane/plugins/install", "PUT", True),
         ("/v1/console/control-plane/plugins/id/enable", "PATCH", True),
         ("/v1/console/control-plane/plugins/id/disable", "PATCH", True),
         ("/v1/console/control-plane/plugins/id", "DELETE", True),

@@ -9,11 +9,17 @@ What is PRODUCTION-WIRED (verified 2026-09-16, Phase 2 Blocker 2 FIX):
   _acp_shadow_route`` — the bundled engine stands, the Skill's advice is audited
   and learned from. ``route_task_l5`` below is the direct (non-shadow) entry
   point; it has no production caller today and is exercised by tests only.
-- L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` IS NOW WIRED into the
-  CEL pipeline via ``corvin_operator/context_engineering/stages/l10_adapter.py:68``
-  (Blocker 2 fix, 2026-09-16). The L10AdapterStage runs after the graph stage (pre-Gate-1)
-  and executes the context_adapter Skill to learn context adjustments (vibe_score,
-  priority, attention_budget) from feedback. E2E proof: tests/e2e/test_l10_adapter_e2e.py.
+- L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` runs in SHADOW mode
+  from the CEL ``l10_adapter`` stage
+  (``corvin_operator/context_engineering/stages/l10_adapter.py::L10AdapterStage.run``),
+  reached per turn via ``pipeline.build_context`` from the bridge adapter and the
+  console chat_runtime when the ``vibe_engineering`` flag is on. The Skill's advice
+  is audited (``skill.executed`` + ``context.adapted``) and never changes the served
+  brief/prompt. It runs ONLY where ``boot_skills`` booted an audited registry for the
+  turn's tenant (the gateway/console host); in a non-booted process (the bridge
+  adapter today) the stage reports ``skipped: skills_not_booted`` rather than run an
+  unaudited Skill. E2E proof: ``tests/e2e/test_os_skills_l5_l10_wiring.py::
+  TestL10ProductionCallSite`` (verified 2026-09-26).
 - Learning loop integration (ADR-0314): every execution through the registry.
 
 Design:
@@ -176,6 +182,8 @@ class SkillsIntegrationLayer:
         priority_hint: int = 5,
         user_context: Optional[Dict[str, Any]] = None,
         tenant_id: Optional[str] = None,
+        *,
+        timeout_ms: int = 5000,
     ) -> Dict[str, Any]:
         """L10 Entry Point: Adapt context for task + agent (3-tier hybrid model, ADR-0555).
 
@@ -222,7 +230,7 @@ class SkillsIntegrationLayer:
         result = self.registry.execute(
             "os.context_adapter",
             input_data,
-            timeout_ms=5000,
+            timeout_ms=timeout_ms,
             lom=_lom("adapt_context_l10"),
             tenant_id=effective_tenant_id,
         )
@@ -348,9 +356,18 @@ def adapt_context_l10(
     priority_hint: int = 5,
     user_context: Optional[Dict[str, Any]] = None,
     tenant_id: Optional[str] = None,
+    *,
+    timeout_ms: int = 5000,
 ) -> Dict[str, Any]:
-    """L10 Context Adaptation via global integration layer."""
+    """L10 Context Adaptation via global integration layer.
+
+    NOTE: ``get_integration()`` lazily initialises an UNAUDITED integration in a
+    process that never booted Skills. The production caller (the CEL
+    ``l10_adapter`` stage) therefore checks for a booted, audited registry
+    before calling this.
+    """
     integration = get_integration()
     return integration.adapt_context_l10(
-        complexity, task_type, task_description, priority_hint, user_context, tenant_id
+        complexity, task_type, task_description, priority_hint, user_context, tenant_id,
+        timeout_ms=timeout_ms,
     )

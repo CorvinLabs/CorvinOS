@@ -20,10 +20,17 @@ What this file now contains, labelled:
   the ``route_task_l5`` / ``adapt_context_l10`` entry points (fallback, tenant
   isolation, 3-tier shape). They supply their own caller, on purpose, and prove
   behaviour-when-called — never reachability.
-* ``TestL10HasNoProductionCallSite`` — a reachability FENCE. L10 is not wired.
-  The fence fails the moment a production call site appears, forcing the docs
-  (this file, ``os_skills_integration.py``, CLAUDE.md's ADR-0532 table) to be
-  corrected in the same commit.
+* ``TestL10HasProductionCallSite`` — a reachability GATE (flipped from the old
+  "no call site" fence). It fails if the CEL ``l10_adapter`` stage stops calling
+  ``adapt_context_l10``.
+* ``TestL10ProductionCallSite`` — the L10 E2E (2026-09-26). It drives the REAL
+  per-turn boundary, ``context_engineering.pipeline.build_brief`` (what the
+  bridge adapter and the console chat_runtime call), against a production-booted
+  registry (``boot_skills`` + the bootstrap's own ``_default_audit_emit``) and a
+  temp tenant chain, and asserts: the Skill ran, ``skill.executed`` and
+  ``context.adapted`` landed in the tenant chain, the chain verifies, no task
+  text reached either record, and the served brief is byte-identical to the
+  un-booted run (shadow mode).
 * ``TestPIIScrubbing`` — GDPR Art. 32 scrubbing guard, through the real registry.
 """
 
@@ -371,15 +378,16 @@ class TestL5ProductionCallSite:
 
 
 class TestL10HasProductionCallSite:
-    """E2E GATE (FLIPPED from "no production call site" as of 2026-09-16).
+    """Reachability GATE (flipped from "no production call site").
 
-    L10 IS now wired via:
-      1. L10AdapterStage in corvin_operator/context_engineering/stages/l10_adapter.py
-      2. Registered in stages/__init__.py
-      3. In ACTIVE_PIPELINE config.py
-      4. Calls adapt_context_l10 when the stage executes (line 68)
+    L10 is wired, in SHADOW mode, via:
+      1. ``L10AdapterStage.run`` in corvin_operator/context_engineering/stages/l10_adapter.py
+      2. registered by stages/__init__.py, listed in DEFAULT_PIPELINE and ACTIVE_PIPELINE
+      3. run per turn by ``pipeline.build_context`` (bridge adapter + console
+         chat_runtime, ``vibe_engineering`` flag)
 
-    This gate flips to REQUIRE production call sites and fails if they disappear.
+    The functional proof is ``TestL10ProductionCallSite`` below; this class only
+    fails if the static call site disappears.
     """
 
     def _production_call_sites(self) -> list[str]:
@@ -435,14 +443,13 @@ class TestL10HasProductionCallSite:
         """GATE FLIP: L10 must NOW have call sites (was "no call sites" pre-2026-09-16)."""
         hits = self._production_call_sites()
         assert hits, (
-            "L10 adapter Skill was wired on 2026-09-16 but is now unwired! "
-            "Call sites were: corvin_operator/context_engineering/stages/l10_adapter.py:68 "
-            "did you remove it?"
+            "L10 is unwired: no production call of adapt_context_l10 / "
+            "execute('os.context_adapter') remains. The call site was "
+            "corvin_operator/context_engineering/stages/l10_adapter.py::L10AdapterStage.run"
         )
-        # Verify the primary call site is still there
         adapter_hits = [h for h in hits if "l10_adapter.py" in h and "adapt_context_l10" in h]
         assert adapter_hits, (
-            f"Primary L10 call site (corvin_operator/context_engineering/stages/l10_adapter.py:68) "
+            "Primary L10 call site (stages/l10_adapter.py::L10AdapterStage.run) "
             f"is missing. Found: {hits}"
         )
 
@@ -456,6 +463,149 @@ class TestL10HasProductionCallSite:
             if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "adapt_context_l10"
         ]
         assert found, "the AST detector used by the fence does not match a real call"
+
+
+_L10_TASK = "Refactor the zebracorn billing module for Mrs Quibbleworth"
+
+
+def _chain_records(chain):
+    import json
+
+    if not chain.exists():
+        return []
+    return [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+
+
+def _l10_trace(trace):
+    hits = [s for s in trace.get("stages", []) if s.get("stage") == "l10_adapter"]
+    assert len(hits) == 1, f"l10_adapter must run exactly once per turn: {trace.get('stages')}"
+    return hits[0]
+
+
+@pytest.fixture
+def booted_l10(tmp_path, monkeypatch):
+    """A production-booted Skills registry writing into a TEMP tenant chain.
+
+    Boots exactly like ``corvin_plugins.bootstrap._boot_skills_registry`` does
+    (``boot_skills`` + the bootstrap's ``_default_audit_emit``), with
+    ``CORVIN_HOME`` and the process chain redirected into ``tmp_path``. The
+    previous global registry/integration are restored afterwards.
+    """
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from forge.paths import tenant_audit_chain
+
+    chain = tenant_audit_chain("_default")
+    chain.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
+
+    from core.skills import os_skills_integration as integ_mod
+    from core.skills import skill_registry_phase1 as reg_mod
+    from core.skills.boot import boot_skills
+    from corvin_plugins.bootstrap import _default_audit_emit
+
+    prev = (reg_mod._global_registry, integ_mod._integration_instance)
+    boot_skills(tenant_id="_default", audit_emit=_default_audit_emit("_default"),
+                wire_learning=False)
+    try:
+        yield chain
+    finally:
+        reg_mod._global_registry, integ_mod._integration_instance = prev
+
+
+class TestL10ProductionCallSite:
+    """E2E: the REAL per-turn boundary for L10 (shadow mode).
+
+    Drives ``pipeline.build_brief`` — the function the bridge adapter
+    (``adapter.py``) and the console (``chat_runtime.py``) call on every turn
+    when ``vibe_engineering`` is on — never the stage or ``adapt_context_l10``
+    directly.
+    """
+
+    def test_build_brief_executes_and_audits_the_context_adapter(self, booted_l10):
+        from corvin_operator.context_engineering import pipeline
+        from forge.security_events import verify_chain
+
+        chain = booted_l10
+        before = len(_chain_records(chain))
+        brief, trace = pipeline.build_brief(_L10_TASK, "_default", None, meter=False)
+
+        assert brief is not None
+        tel = _l10_trace(trace)
+        assert tel["status"] == "ok" and tel.get("reason") == "shadow", tel
+
+        new = _chain_records(chain)[before:]
+        executed = [r for r in new if r.get("event_type") == "skill.executed"
+                    and r.get("details", {}).get("skill_id") == "os.context_adapter"]
+        adapted = [r for r in new if r.get("event_type") == "context.adapted"]
+        assert len(executed) == 1, [r.get("event_type") for r in new]
+        assert executed[0]["details"]["status"] == "success"
+        assert executed[0]["details"]["lom"].startswith(
+            "core/skills/os_skills_integration.py:adapt_context_l10:")
+        assert executed[0]["details"]["lom_hash"]
+        assert len(adapted) == 1, [r.get("event_type") for r in new]
+        d = adapted[0]["details"]
+        assert d["adaptation_type"] == "l10_shadow"
+        assert d["tenant_id"] == "_default"
+        assert d["delta_summary"].startswith("served=unchanged;skill=ok;")
+        assert "_dropped_fields" not in d, d
+
+        # Content-free: no task text reached any record this turn wrote.
+        import json
+        blob = json.dumps(new)
+        for word in ("zebracorn", "Quibbleworth", "billing"):
+            assert word not in blob, f"task text {word!r} leaked into the audit chain"
+
+        ok, problems = verify_chain(chain)
+        assert ok, problems
+
+    def test_shadow_mode_never_changes_the_served_brief(self, booted_l10, monkeypatch):
+        from corvin_operator.context_engineering import pipeline
+        from core.skills import skill_registry_phase1 as reg_mod
+
+        booted_brief, booted_trace = pipeline.build_brief(_L10_TASK, "_default", None, meter=False)
+        assert _l10_trace(booted_trace)["status"] == "ok"
+
+        chain = booted_l10
+        before = len(_chain_records(chain))
+        monkeypatch.setattr(reg_mod, "_global_registry", None)  # un-booted process
+        plain_brief, plain_trace = pipeline.build_brief(_L10_TASK, "_default", None, meter=False)
+        tel = _l10_trace(plain_trace)
+        assert tel["status"] == "skipped" and tel["reason"] == "skills_not_booted", tel
+        assert len(_chain_records(chain)) == before, "a skipped stage must not audit"
+
+        assert not hasattr(booted_brief, "adapted_context")
+        assert (pipeline.render_brief_to_text(booted_brief)
+                == pipeline.render_brief_to_text(plain_brief)), (
+            "L10 is shadow-only: the served brief must be identical with and without it")
+
+    def test_unbooted_process_never_lazily_builds_an_unaudited_registry(self, booted_l10,
+                                                                        monkeypatch):
+        """The bridge adapter never runs boot_platform. The stage must not call
+        get_integration() there — that lazily builds a registry with NO audit
+        backend and runs the Skill unaudited (the pre-2026-09-26 behaviour)."""
+        from corvin_operator.context_engineering import pipeline
+        from core.skills import os_skills_integration as integ_mod
+        from core.skills import skill_registry_phase1 as reg_mod
+
+        monkeypatch.setattr(reg_mod, "_global_registry", None)
+        monkeypatch.setattr(integ_mod, "_integration_instance", None)
+        _brief, trace = pipeline.build_brief(_L10_TASK, "_default", None, meter=False)
+        assert _l10_trace(trace)["reason"] == "skills_not_booted"
+        assert integ_mod._integration_instance is None, "stage lazily initialised Skills"
+        assert reg_mod._global_registry is None
+
+    def test_other_tenant_is_skipped_not_cross_written(self, booted_l10):
+        from corvin_operator.context_engineering import pipeline
+        from forge.paths import tenant_audit_chain
+
+        chain = booted_l10
+        before = len(_chain_records(chain))
+        _brief, trace = pipeline.build_brief(_L10_TASK, "acme", None, meter=False)
+        tel = _l10_trace(trace)
+        assert tel["status"] == "skipped" and tel["reason"] == "tenant_not_booted", tel
+        assert len(_chain_records(chain)) == before
+        assert not [r for r in _chain_records(tenant_audit_chain("acme"))
+                    if r.get("event_type") in ("skill.executed", "context.adapted")]
 
 
 class TestPIIScrubbing:

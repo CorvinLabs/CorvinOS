@@ -92,7 +92,6 @@ class TestCSRFProtectionRequirements:
         """All mutation routes must require CSRF."""
         # These routes MUST have @Depends(require_csrf)
         mutation_routes = {
-            "PUT /v1/console/control-plane/plugins/install": "plugin install",
             "PATCH /v1/console/control-plane/plugins/{id}/enable": "plugin enable",
             "PATCH /v1/console/control-plane/plugins/{id}/disable": "plugin disable",
             "DELETE /v1/console/control-plane/plugins/{id}": "plugin delete",

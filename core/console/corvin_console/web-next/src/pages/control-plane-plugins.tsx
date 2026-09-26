@@ -5,17 +5,12 @@
 
 import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Power, PowerOff, AlertTriangle, Check } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Plus, Trash2, Power, PowerOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 
 const API_BASE = "/v1/console/control-plane/plugins";
@@ -31,13 +26,6 @@ interface Plugin {
 export default function ControlPlanePluginsPage() {
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = React.useState("");
-  const [installDialogOpen, setInstallDialogOpen] = React.useState(false);
-  const [newPlugin, setNewPlugin] = React.useState({
-    plugin_id: "",
-    name: "",
-    version: "1.0.0",
-    boot_layer: "bundled",
-  });
 
   // Fetch plugins
   const { data: plugins, isLoading } = useQuery<Plugin[]>({
@@ -49,26 +37,11 @@ export default function ControlPlanePluginsPage() {
     },
   });
 
-  // Install plugin
-  const installMutation = useMutation({
-    mutationFn: async (plugin: typeof newPlugin) => {
-      const res = await fetch(`${API_BASE}/install`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(plugin),
-      });
-      if (!res.ok) throw new Error("Failed to install plugin");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["control-plane-plugins"] });
-      setInstallDialogOpen(false);
-      toast({ title: "Plugin installed successfully" });
-    },
-    onError: () => {
-      toast({ title: "Failed to install plugin", variant: "destructive" });
-    },
-  });
+  // There is no install here. A plugin is installed through the ONE marketplace
+  // install route (POST /api/v1/marketplace/plugins/{id}/install, ADR-0892): it
+  // resolves real source from the marketplace checkout, runs the manifest and
+  // licence gates and writes the tenant registry. The PUT /install this page used
+  // to call recorded an operator-typed id/name/version and installed no code.
 
   // Enable/Disable plugin
   const toggleMutation = useMutation({
@@ -132,8 +105,10 @@ export default function ControlPlanePluginsPage() {
             Manage CorvinOS plugins and integrations
           </p>
         </div>
-        <Button onClick={() => setInstallDialogOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" /> Install Plugin
+        <Button asChild>
+          <Link to="/app/marketplace?tab=browse">
+            <Plus className="mr-2 h-4 w-4" /> Install from Marketplace
+          </Link>
         </Button>
       </div>
 
@@ -228,80 +203,6 @@ export default function ControlPlanePluginsPage() {
         )}
       </div>
 
-      {/* Install Dialog */}
-      <Dialog open={installDialogOpen} onOpenChange={setInstallDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Install Plugin</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">Plugin ID</label>
-              <Input
-                placeholder="e.g., os.delegation_router"
-                value={newPlugin.plugin_id}
-                onChange={(e) =>
-                  setNewPlugin({ ...newPlugin, plugin_id: e.target.value })
-                }
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Name</label>
-              <Input
-                placeholder="Plugin name"
-                value={newPlugin.name}
-                onChange={(e) =>
-                  setNewPlugin({ ...newPlugin, name: e.target.value })
-                }
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Version</label>
-              <Input
-                placeholder="1.0.0"
-                value={newPlugin.version}
-                onChange={(e) =>
-                  setNewPlugin({ ...newPlugin, version: e.target.value })
-                }
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Boot Layer</label>
-              <select
-                className="w-full rounded border p-2"
-                value={newPlugin.boot_layer}
-                onChange={(e) =>
-                  setNewPlugin({ ...newPlugin, boot_layer: e.target.value })
-                }
-              >
-                <option value="bundled">Bundled</option>
-                <option value="installed">Installed</option>
-                <option value="community">Community</option>
-              </select>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                onClick={() =>
-                  installMutation.mutate(newPlugin)
-                }
-                disabled={
-                  installMutation.isPending ||
-                  !newPlugin.plugin_id ||
-                  !newPlugin.name
-                }
-              >
-                Install
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setInstallDialogOpen(false)}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

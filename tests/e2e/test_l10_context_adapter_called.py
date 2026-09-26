@@ -171,21 +171,27 @@ class TestL10IntegrationLayerMethod:
 class TestL10AuditEventEmission:
     """Test L10 context adapter emits audit events (GDPR Art. 30/32)."""
 
-    @patch("core.security.audit_logger.audit_event")
-    def test_l10_audit_event_on_success(self, mock_audit_event):
-        """Verify audit event is emitted on successful L10 adaptation."""
-        integration = get_integration()
-        result = integration.adapt_context_l10(
-            complexity=5,
-            task_type="analysis",
-            task_description="Test",
-            tenant_id="_default",
-        )
+    def test_l10_audit_event_on_success(self):
+        """UNIT: a successful adaptation hands the registry's audit backend a
+        SKILL_EXECUTED record (the chained write is proven end-to-end by
+        test_os_skills_l5_l10_wiring.py::TestL10ProductionCallSite)."""
+        from core.skills.os_skills_integration import SkillsIntegrationLayer
 
-        # We can't guarantee audit_event was called without deeper mocking,
-        # but we can verify the result structure supports audit logging
-        assert result["skill_executed"] in [True, False]
-        # In real production, audit events are emitted; this test verifies the structure
+        class _Capture:
+            def __init__(self):
+                self.events = []
+
+            def write_event(self, event):
+                self.events.append(event)
+
+        backend = _Capture()
+        integration = SkillsIntegrationLayer(audit_backend=backend, tenant_id="_default")
+        result = integration.adapt_context_l10(
+            complexity=5, task_type="analysis", task_description="Test", tenant_id="_default",
+        )
+        assert result["skill_executed"] is True
+        ev = [e for e in backend.events if e.get("skill_id") == "os.context_adapter"]
+        assert ev and ev[-1]["event_type"] == "SKILL_EXECUTED" and ev[-1]["status"] == "success"
 
 
 class TestL10FailClosedSemantics:
@@ -393,14 +399,22 @@ class TestL10WiringReadiness:
         """Verify LoM (Line of Moral Responsibility) is preserved (ADR-0537)."""
         # L10 adapter emits audit events with LoM binding
         # This is verified indirectly through the adapter's internal logic
-        integration = get_integration()
+        from core.skills.os_skills_integration import SkillsIntegrationLayer
 
-        # The adapter's _emit_audit_event method includes lom in the call
-        # We can't directly test this without diving into internals,
-        # but the existence of the method proves the infrastructure is there
-        assert hasattr(
-            integration, "_emit_audit_event"
-        ), "Integration must have audit emission method"
+        class _Capture:
+            def __init__(self):
+                self.events = []
+
+            def write_event(self, event):
+                self.events.append(event)
+
+        backend = _Capture()
+        integration = SkillsIntegrationLayer(audit_backend=backend, tenant_id="_default")
+        integration.adapt_context_l10(complexity=5, task_type="analysis",
+                                      task_description="", tenant_id="_default")
+        ev = [e for e in backend.events if e.get("skill_id") == "os.context_adapter"][-1]
+        assert ev["lom"].startswith("core/skills/os_skills_integration.py:adapt_context_l10:")
+        assert ev["lom_hash"], "LoM must bind to source (ADR-0537)"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

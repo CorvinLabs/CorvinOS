@@ -71,7 +71,6 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
-import { AgentHubChat } from "@/components/agent-hub/chat-interface";
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -2216,18 +2215,13 @@ export function AgentHubPage() {
         </p>
       </header>
 
-      <Tabs defaultValue="chat">
+      <Tabs defaultValue="feed">
         <TabsList className="flex-wrap h-auto gap-1">
-          <TabsTrigger value="chat">💬 Chat (MVP)</TabsTrigger>
           <TabsTrigger value="feed">Live Feed</TabsTrigger>
           <TabsTrigger value="peers">Peers</TabsTrigger>
           <TabsTrigger value="connect">Connect</TabsTrigger>
           <TabsTrigger value="audit">Audit trail</TabsTrigger>
         </TabsList>
-
-        <TabsContent value="chat" className="mt-4">
-          <AgentHubChat />
-        </TabsContent>
 
         <TabsContent value="peers" className="mt-4">
           <PeersTab />

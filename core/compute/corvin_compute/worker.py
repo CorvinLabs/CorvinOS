@@ -186,6 +186,10 @@ class WorkerServer:
             pass
 
     async def stop(self) -> None:
+        # Idempotent: the CLI calls stop() from a finally, a host may call it
+        # again — one termination is one chain record.
+        if self._stopped.is_set():
+            return
         if self._server is not None:
             self._server.close()
             try:
@@ -193,10 +197,25 @@ class WorkerServer:
             except Exception:  # noqa: BLE001
                 pass
         # Cancel in-flight tasks
+        aborted = 0
         async with self._runs_lock:
             for entry in self._runs.values():
                 if entry.task and not entry.task.done():
                     entry.run.request_abort()
+                    aborted += 1
+        # ADR-2041: worker termination is a processing-record fact (GDPR
+        # Art. 30). Metadata only; best-effort like every compute.* emit, so
+        # an audit failure never blocks shutdown.
+        try:
+            self.audit_emit(
+                "compute.worker_terminated",
+                worker_id=f"compute:{os.getpid()}",
+                termination_reason=(
+                    "shutdown_inflight_aborted" if aborted else "shutdown"
+                ),
+            )
+        except Exception:  # noqa: BLE001 — observability is best-effort
+            pass
         # Best-effort socket cleanup
         try:
             if self.socket_path.exists():

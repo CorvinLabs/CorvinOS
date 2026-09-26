@@ -241,10 +241,12 @@ class TestIssue6_PluginsAuthFixed:
         from corvin_console.routes import control_plane_plugins
         import inspect
 
-        # Check install_plugin
-        sig = inspect.signature(control_plane_plugins.install_plugin)
+        # install_plugin was removed 2026-09-26 (ADR-0892: one install route, the
+        # marketplace's) — check the remaining mutation instead.
+        assert not hasattr(control_plane_plugins, "install_plugin")
+        sig = inspect.signature(control_plane_plugins.enable_plugin)
         params = list(sig.parameters.keys())
-        assert 'session' in params, "install_plugin must require authentication"
+        assert 'session' in params, "enable_plugin must require authentication"
 
 
 class TestIssue7_SubsystemsAuthFixed:
