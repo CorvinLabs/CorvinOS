@@ -27,6 +27,17 @@ from plugin import CorvinKnowledgePlugin, execute, KnowledgeMeshSDK
 # FIXTURES
 # ────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    """Every test runs with a throwaway HOME. The plugin's ``config`` command writes
+    ``~/.claude/plugins/corvin-knowledge.json``; run against the real HOME, this
+    suite overwrote the operator's config with test values (2026-09-26)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    yield home
+
+
 @pytest.fixture
 def temp_repo():
     """Create a temporary knowledge repository for testing"""
@@ -305,9 +316,16 @@ class TestPluginConfiguration:
     """Prove plugin configuration works"""
 
     @pytest.mark.asyncio
-    async def test_config_command_saves_settings(self):
-        """mesh config updates plugin configuration"""
-        with tempfile.TemporaryDirectory() as tmpdir:
+    async def test_config_command_saves_settings(self, monkeypatch):
+        """mesh config updates plugin configuration — in an isolated HOME.
+
+        ``handle_config`` writes ``~/.claude/plugins/corvin-knowledge.json``. Without
+        the HOME patch this test overwrote the operator's real file with a /tmp repo
+        path and https://test.git (found 2026-09-26)."""
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as fake_home:
+            monkeypatch.setenv("HOME", fake_home)
+            real_file = Path(os.path.expanduser("~")) / ".claude" / "plugins" / "corvin-knowledge.json"
+            assert str(real_file).startswith(fake_home), "HOME isolation did not take effect"
             config = {
                 "repo_path": "~/.default",
                 "remote_url": "https://default.git",
@@ -315,15 +333,14 @@ class TestPluginConfiguration:
                 "consistency_level": "warn"
             }
 
-            # Patch home dir for test
-            original_home = os.path.expanduser("~")
-
             result = await execute("config", {
                 "repo_path": str(tmpdir),
                 "remote_url": "https://test.git"
             }, config)
 
             assert result["status"] == "configured"
+            written = json.loads((Path(fake_home) / ".claude" / "plugins" / "corvin-knowledge.json").read_text())
+            assert written["remote_url"] == "https://test.git"
 
     @pytest.mark.asyncio
     async def test_all_commands_callable_via_runtime(self, plugin_config):
