@@ -66,21 +66,43 @@ def app():
     the SPA and every operator actually call. A fixture serving the bare
     console app would make tests green on URLs that 404 in production, so this
     reproduces the gateway's mount instead.
+
+    Authentication: We override ALL auth-related dependencies, both at the FastAPI
+    level AND by patching the functions themselves, because some code paths call
+    these functions directly instead of through dependency injection.
     """
     from fastapi import FastAPI
 
     from corvin_console import app as console_module
 
+    fake_rec = fake_session_record("_default")
     test_app = FastAPI()
     test_app.include_router(console_module.router, prefix="/v1/console")
-    test_app.dependency_overrides[console_deps.require_session] = (
-        lambda: fake_session_record("_default")
-    )
-    test_app.dependency_overrides[console_deps.require_csrf] = lambda: None
+
+    # Override dependencies at the FastAPI level
+    test_app.dependency_overrides[console_deps.require_session] = lambda: fake_rec
+    test_app.dependency_overrides[console_deps.require_csrf] = lambda: fake_rec
+    test_app.dependency_overrides[console_deps.require_session_csrf_on_mutation] = lambda: fake_rec
+
+    # ALSO patch the functions themselves in the deps module, because
+    # require_session_csrf_on_mutation calls require_session/require_csrf directly
+    import core.console.corvin_console.deps as deps_module
+    original_require_session = deps_module.require_session
+    original_require_csrf = deps_module.require_csrf
+    original_require_session_csrf_on_mutation = deps_module.require_session_csrf_on_mutation
+
+    deps_module.require_session = lambda corvin_console_sid=None: fake_rec
+    deps_module.require_csrf = lambda corvin_console_sid=None, x_csrf_token=None: fake_rec
+    deps_module.require_session_csrf_on_mutation = lambda request, corvin_console_sid=None, x_csrf_token=None: fake_rec
+
     try:
         yield test_app
     finally:
         test_app.dependency_overrides.clear()
+        # Restore original functions
+        deps_module.require_session = original_require_session
+        deps_module.require_csrf = original_require_csrf
+        deps_module.require_session_csrf_on_mutation = original_require_session_csrf_on_mutation
 
 
 @pytest.fixture

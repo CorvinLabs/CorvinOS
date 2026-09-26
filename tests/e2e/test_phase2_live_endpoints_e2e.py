@@ -196,14 +196,3 @@ class TestPhase2LiveEndpoints:
                        len(data.get("metrics", [])) == 0 or \
                        len(data.get("models", [])) == 0, \
                     f"{endpoint} returned both unavailable=False AND data (should be empty on fail)"
-
-
-# Fixture for async client (requires app fixture)
-@pytest.fixture
-async def async_client():
-    """Provide async HTTP client for testing."""
-    from core.console.corvin_console.app import app
-    from httpx import AsyncClient
-
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        yield client
