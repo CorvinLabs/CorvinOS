@@ -233,6 +233,8 @@ from .routes import (
     cost_insights_routes as cost_insights_route,
     skill_manager as skill_manager_route,
     marketplace_routes as marketplace_skill_routes,
+    # ADR-0721/0722/0723 — Definition-of-Done Verifier Skill Dashboard (Wave 3)
+    dod_verifier_dashboard as dod_verifier_dashboard_route,
 )
 
 
@@ -347,6 +349,8 @@ router.include_router(ldd_route.router, tags=["console-ldd"])
 router.include_router(quality_layers_route.router, tags=["console-quality-layers"])
 # Quality Gates System (Phase 2.1, ADR-0688) — API endpoints for gate status, execution, history.
 router.include_router(quality_gates_route.router, tags=["console-quality-gates"])
+# ADR-0721/0722/0723 — Definition-of-Done Verifier Dashboard (Wave 3 sign-off verification)
+router.include_router(dod_verifier_dashboard_route.router, tags=["console-dod"])
 # Phase C: Real-time Health Monitoring (ADR-0231/0232) — latency, throughput, error rate, resources.
 router.include_router(quality_health_monitor_route.router, tags=["console-quality-health"])
 # Telemetry transparency — what this install collects and sends (compliance-baseline § Mechanisms).
