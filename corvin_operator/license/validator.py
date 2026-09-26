@@ -244,6 +244,12 @@ _REVOCATION_CACHE_TTL_SECONDS: float = 3600.0  # 1 hour
 _CORVIN_HOME_SNAPSHOT: "Path | None" = None
 _CONFIG_DIR_SNAPSHOT: "Path | None" = None
 _AUDIT_PATH_SNAPSHOT: "Path | None" = None
+# (tier, DNA seed) last written to the chain as license.chain_dna_seeded. Those
+# records (and the CLAG gate's audit.cit_issued) mark a licence TAKING EFFECT, so
+# they are written only when this changes. reload_from_disk() runs on every
+# authenticated console request (one per 5 s throttle window); re-seeding the
+# same token wrote ~1 350 identical records/hour on 2026-09-26.
+_LAST_SEEDED_STATE: "tuple[str, str] | None" = None
 _LICENSE_INITIALIZED: bool = False  # ADR-0138 M1 F2: idempotency guard
 
 # ADR-0138 review: snapshot CORVIN_INTEGRATION_TEST at module import time so
@@ -1286,6 +1292,8 @@ def load_license_from_env(*, force: bool = False) -> None:
                 "seed_prefix": _dna_seed[:16],
             },
         )
+        global _LAST_SEEDED_STATE
+        _LAST_SEEDED_STATE = (str(validated.get("tier", "")), _dna_seed)
     except Exception as _lsad_exc:  # noqa: BLE001
         log.warning("LSAD seed setup failed (non-fatal): %s", _lsad_exc)
 
@@ -1546,14 +1554,20 @@ def _reload_from_disk_locked() -> None:
                 _rld_clag_clear()
             except Exception:  # noqa: BLE001
                 pass
-            _rld_audit_p = _AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None else (
-                _rld_corvin_home() / "global" / "forge" / "audit.jsonl"
-            )
-            _rld_write(
-                _rld_audit_p,
-                "license.chain_dna_seeded",
-                details={"tier": validated.get("tier", ""), "seed_prefix": _rld_seed[:16]},
-            )
+            _rld_state = (str(validated.get("tier", "")), _rld_seed)
+            global _LAST_SEEDED_STATE
+            if _rld_state != _LAST_SEEDED_STATE:
+                _rld_audit_p = _AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None else (
+                    _rld_corvin_home() / "global" / "forge" / "audit.jsonl"
+                )
+                _rld_write(
+                    _rld_audit_p,
+                    "license.chain_dna_seeded",
+                    details={"tier": validated.get("tier", ""), "seed_prefix": _rld_seed[:16]},
+                )
+                _LAST_SEEDED_STATE = _rld_state
+            # else: same licence, same seed — nothing took effect, nothing to record;
+            # _rld_audit_p stays None, so the CLAG gate below is skipped too.
         except Exception as _rld_exc:  # noqa: BLE001
             log.warning("LSAD seed setup at reload failed (non-fatal): %s", _rld_exc)
         try:

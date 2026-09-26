@@ -1081,6 +1081,18 @@ When any condition is true but the import fails → `ChainIntegrityFailureGateUn
 (CRITICAL log + fail-closed). When all three are false → WARNING + fail-open
 (forge genuinely absent, minimal deployment).
 
+### Licence reload writes only on a change
+
+`license.validator.reload_from_disk()` runs on every authenticated console
+request (`auth.py::_compute_lic_proof`), one per 5 s throttle window. It
+re-derives and re-sets the DNA seed in-process every time, but writes
+`license.chain_dna_seeded` and runs the `L16.license_reload` CLAG gate
+(`audit.cit_issued`) **only when `(tier, seed)` differs from what was last
+recorded** (`_LAST_SEEDED_STATE`, also set by the boot path). Re-seeding the same
+token used to write ~1 350 identical records/hour on a host with one open console
+tab (measured 2026-09-26, 97 % of that chain's records). A licence that takes
+effect — new token, tier change — is still recorded.
+
 ### Audit event fields (allow-list)
 
 - `audit.cit_issued`: `layer_id`, `epoch`, `tail_hash_prefix` (16 hex), `dna_prefix` (16 hex), `cit_fp`, `ttl`
