@@ -332,6 +332,17 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
         extra_engines=[pipeline_engine, hac_engine, *_plugin_engines],
     )
     print(f"[corvin-compute] serving tenant={args.tenant!r} at {socket_path}")
+    # systemd stops corvin-compute@.service with SIGTERM, whose default action
+    # kills the process before the `finally` below runs — no in-flight abort,
+    # no socket cleanup, no compute.worker_terminated record. Route it through
+    # the same cancellation path Ctrl-C takes.
+    import signal as _signal
+    _task = asyncio.current_task()
+    if _task is not None:
+        try:
+            asyncio.get_running_loop().add_signal_handler(_signal.SIGTERM, _task.cancel)
+        except (NotImplementedError, RuntimeError):  # non-Unix loop
+            pass
     try:
         await server.serve_forever()
     except KeyboardInterrupt:

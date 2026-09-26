@@ -1,7 +1,6 @@
 """
 Control Plane Routes — Plugin Management Stream 1.
 
-PUT    /v1/console/control-plane/plugins/install
 GET    /v1/console/control-plane/plugins
 GET    /v1/console/control-plane/plugins/<id>
 PATCH  /v1/console/control-plane/plugins/<id>/enable
@@ -10,13 +9,21 @@ DELETE /v1/console/control-plane/plugins/<id>
 GET    /v1/console/control-plane/plugins/audit-log
 
 ADR-2029: User-Centric CorvinOS Control Plane — Stream 1
+
+There is deliberately NO install route here. ADR-0892 allows exactly one plugin
+install path: ``POST /api/v1/marketplace/plugins/{id}/install``
+(``marketplace_install.py``), which resolves real source from the marketplace
+checkout, runs the manifest + licence gates and writes the tenant registry. The
+``PUT /install`` that lived here recorded an operator-typed id/name/version in a
+separate store and installed no code — a second install path, removed
+2026-09-26. Guard: ``tests/e2e/test_marketplace_single_install_route.py``.
 """
 
 from typing import Optional, List, Dict, Any, Annotated
 from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
-from corvin_console.control_plane.plugin_manager import PluginManager, PluginInfo, BootLayer
+from corvin_console.control_plane.plugin_manager import PluginManager, PluginInfo
 from corvin_console.deps import require_session, require_csrf, consent_required
 from corvin_console import auth as session_auth
 
@@ -37,72 +44,11 @@ def get_plugin_manager() -> PluginManager:
     return _plugin_manager
 
 
-class PluginInstallRequest(BaseModel):
-    """Request to install a plugin."""
-    plugin_id: str
-    name: str
-    version: str
-    boot_layer: str  # bundled, installed, community
-
-    @field_validator("boot_layer")
-    @classmethod
-    def validate_boot_layer(cls, v: str) -> str:
-        """Validate boot_layer is a recognized value."""
-        try:
-            BootLayer(v)
-        except (ValueError, KeyError):
-            raise ValueError(f"Invalid boot_layer: {v}. Must be one of: {', '.join([bl.value for bl in BootLayer])}")
-        return v
-
-
 class PluginOperationResponse(BaseModel):
     """Response from plugin operation."""
     status: str  # success, error, warning
     message: str
     code: Optional[int] = None
-
-
-@router.put("/install")
-async def install_plugin(
-    req: PluginInstallRequest,
-    session: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
-) -> PluginOperationResponse:
-    """
-    Install a plugin from marketplace (tenant-scoped, CSRF-protected).
-
-    Args:
-        req: PluginInstallRequest
-        session: Session record (extracted from CSRF-protected cookie)
-
-    Returns:
-        Installation result
-
-    Raises:
-        HTTPException: If plugin installation fails
-    """
-    manager = get_plugin_manager()
-    try:
-        result = await manager.install_plugin(
-            plugin_id=req.plugin_id,
-            name=req.name,
-            version=req.version,
-            boot_layer=req.boot_layer,
-            tenant_id=session.tenant_id,
-            operator_id=session.sid
-        )
-    except ValueError as e:
-        # Validation error (invalid boot_layer, tenant_id, etc)
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if result["status"] == "error":
-        status_code = result.get("code", 400)
-        raise HTTPException(status_code=status_code, detail=result["message"])
-
-    return PluginOperationResponse(
-        status=result["status"],
-        message=result["message"]
-    )
 
 
 @router.get("")

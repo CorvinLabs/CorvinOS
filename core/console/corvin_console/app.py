@@ -434,8 +434,10 @@ router.include_router(marketplace_custom_repos_route.router,
 # history — so the import raised ImportError at module scope, and the gateway's
 # opt-in `try: from corvin_console import app` (ADR-0015) therefore dropped /console
 # AND every /v1/console/* route from the process. One absent file took the whole
-# console down. Re-add the include_router line in the same commit that adds the
-# module. Guard: tests/test_console_app_importable.py.
+# console down. Guard: tests/test_console_app_importable.py. The module later
+# landed unmounted with a simulated install; it was deleted on 2026-09-26 — do NOT
+# re-add it: ADR-0892 allows ONE install route (marketplace_install.py), fenced by
+# tests/e2e/test_marketplace_single_install_route.py.
 # Corvin-Knowledge Marketplace Plugin API (Graph visualization, settings, sync)
 router.include_router(plugins_corvin_knowledge_api_route.router, tags=["console-corvin-knowledge"])
 # ADR-2028 — Natural Language Intent Router (Phase 9a)

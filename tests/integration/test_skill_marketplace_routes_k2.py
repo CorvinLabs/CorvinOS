@@ -48,20 +48,20 @@ def sample_registry():
 
 @pytest.fixture
 def marketplace_routes(sample_registry):
-    """Initialize marketplace routes with sample registry."""
-    from core.console.corvin_console.routes.skill_marketplace_routes import (
-        init_marketplace,
-        get_marketplace,
-    )
+    """A SkillMarketplaceIndex over the sample registry.
+
+    Built directly: the unmounted route module that used to wrap it
+    (routes/skill_marketplace_routes.py, a stub install router) was deleted
+    2026-09-26 under ADR-0892 — what this suite tests is the index.
+    """
+    from core.skills.skill_marketplace import SkillMarketplaceIndex
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(sample_registry, f)
         registry_path = f.name
 
     try:
-        init_marketplace(registry_path)
-        marketplace = get_marketplace()
-        yield marketplace
+        yield SkillMarketplaceIndex(Path(registry_path), ttl_seconds=300)
     finally:
         Path(registry_path).unlink()
 

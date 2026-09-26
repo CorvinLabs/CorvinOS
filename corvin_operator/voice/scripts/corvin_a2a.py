@@ -254,6 +254,19 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     # origins explicitly opt-out; the HMAC is still the primary gate but
     # forged-SesT protection is absent. See ADR-0140 for threat model.
     if getattr(args, "offline_pair", False):
+        # Audit-FIRST (ADR-2042): an offline pair switches network attestation
+        # off for this origin — a deliberate security downgrade. It must be on
+        # the tenant chain BEFORE the origin file exists; if the record cannot
+        # be committed, the pairing is refused (fail-closed).
+        if not _audit_offline_pair_initiated(
+            peer_id=peer, pairing_id=pairing_id, ttl_s=args.max_ttl_s,
+        ):
+            print(
+                "error: could not record a2a.offline_pair_initiated in the audit "
+                "chain; offline pairing refused (audit-first).",
+                file=sys.stderr,
+            )
+            return 1
         origin_cfg["require_network_attestation"] = False
         print(
             "WARNING (ADR-0103): --offline-pair disables network membership "
@@ -305,6 +318,40 @@ def _cmd_pair(args: argparse.Namespace) -> int:
 
 
 _A2A_FEATURES_SERVER_PROD = "https://corvin-features-production.up.railway.app"
+
+
+def _audit_offline_pair_initiated(*, peer_id: str, pairing_id: str, ttl_s: int) -> bool:
+    """Write ``a2a.offline_pair_initiated`` to THE tenant chain; True iff committed.
+
+    Goes through ``a2a_audit.emit`` so the payload is
+    validated against the event's allow-list (tenant_id, peer_id, pairing_id,
+    ttl_s — no keys, no URL). ``a2a_audit.emit`` logs and swallows a writer
+    failure, so success is observed through the injected writer instead.
+    """
+    try:
+        import a2a_audit  # type: ignore[import-not-found]
+        import paths as _paths  # type: ignore[import-not-found]
+
+        se = getattr(rts, "_forge_se", None)
+        if se is None:
+            return False
+        tenant_id = _paths._resolve_tenant_id(None)
+        chain = _paths.tenant_audit_chain(tenant_id)
+        chain.parent.mkdir(parents=True, exist_ok=True)
+        committed: list[bool] = []
+
+        def _write(path: Path, event: str, *, details: dict, severity: str | None = None) -> None:
+            se.write_event(path, event, severity=severity, details=details, hash_chain=True)
+            committed.append(True)
+
+        a2a_audit.emit(
+            "a2a.offline_pair_initiated", path=chain, tenant_id=tenant_id,
+            write_event_fn=_write, peer_id=str(peer_id)[:128],
+            pairing_id=str(pairing_id)[:64], ttl_s=int(ttl_s),
+        )
+        return bool(committed)
+    except Exception:  # noqa: BLE001 — caller treats False as refuse
+        return False
 
 
 def _a2a_features_url() -> str:

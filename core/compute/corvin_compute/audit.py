@@ -53,6 +53,11 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "compute.run_aborted": frozenset({
         "run_id", "tenant_id", "engine_id", "iterations_done",
     }),
+    # ADR-2041 — the compute worker process shut down (WorkerServer.stop()).
+    # worker_id is process-scoped ("compute:<pid>"), never a path or socket.
+    "compute.worker_terminated": frozenset({
+        "run_id", "tenant_id", "worker_id", "termination_reason",
+    }),
     # ADR-0099 — Anthropic Batch API backend events.
     # batch_id_prefix: first 16 chars only (never full batch_id).
     "compute.batch_submitted": frozenset({

@@ -3,7 +3,7 @@
 Proves that os.context_adapter Skill is invoked through the real CEL pipeline,
 not just defined/registered, by:
 1. Running a full pipeline with the L10 stage enabled
-2. Verifying the adapted_context field is populated in the bundle
+2. Verifying the stage runs in shadow mode (scratch["l10_shadow"], brief untouched)
 3. Checking that the audit trail contains the L10 execution event
 """
 import pytest
@@ -20,7 +20,7 @@ class TestL10ContextAdapterE2E:
         1. Creates a minimal ContextBundle and StageCtx
         2. Resolves the CEL pipeline (should include "l10_adapter")
         3. Executes the pipeline through topo_order
-        4. Verifies the l10_adapter stage ran and populated adapted_context
+        4. Verifies the l10_adapter stage ran and recorded its shadow summary
         """
         from corvin_operator.context_engineering.stages import (
             get_stage, resolve_pipeline, topo_order, ContextBundle, StageCtx
@@ -212,15 +212,17 @@ class TestL10ContextAdapterFullPipeline:
 
         # Verify the L10 adapter stage ran successfully (or at least was attempted)
         l10_trace = stage_trace[0]
-        assert l10_trace.get("status") in ("ok", "degraded", "failed"), (
+        # Un-booted process (no boot_skills here) → skipped, never an
+        # unaudited execution. The booted, audited path is proven by
+        # tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10ProductionCallSite.
+        assert l10_trace.get("status") in ("ok", "skipped"), (
             f"L10 adapter status unexpected: {l10_trace}"
         )
-
-        # Verify adapted_context was added to bundle
-        assert hasattr(bundle, "scratch"), "Bundle must have scratch dict"
-        if l10_trace.get("status") == "ok":
-            assert "adapted_context" in bundle.scratch, (
-                "L10 adapter must populate bundle.scratch['adapted_context']"
+        if l10_trace.get("status") == "skipped":
+            assert l10_trace.get("reason") in ("skills_not_booted", "tenant_not_booted")
+        else:
+            assert "l10_shadow" in bundle.scratch, (
+                "L10 adapter must record its shadow summary in bundle.scratch['l10_shadow']"
             )
 
     def test_l10_adapter_before_synthesis(self):

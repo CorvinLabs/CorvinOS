@@ -300,8 +300,14 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
 
 ## Known limits (stated, not hidden)
 
-* The L10 entry point `adapt_context_l10` (`os.context_adapter`) is still not
-  called from a production path — only L5 is shadow-wired (ADR-0613 scope).
+* The L10 entry point `adapt_context_l10` (`os.context_adapter`) is shadow-wired
+  since 2026-09-26: the CEL stage `l10_adapter` calls it once per turn from
+  `pipeline.build_context`, audits `skill.executed` + `context.adapted`
+  (`adaptation_type=l10_shadow`) and never changes the served brief. The Skill
+  receives content-free inputs only (no task text), so its advice carries almost
+  no signal yet. It runs only in a process where `boot_skills` booted an audited
+  registry for the turn tenant; the bridge adapter does not boot Skills, so its
+  turns record `skipped: skills_not_booted` rather than an unaudited execution.
 * `DelegationRouterSkill` advises in model tiers (`claude-haiku-4 / sonnet-4 /
   opus-5`), not in `delegation_policy` engine ids (`native / acs / tde`); the
   shadow record carries both so agreement is measurable, but the advice cannot

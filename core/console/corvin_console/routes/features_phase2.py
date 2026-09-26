@@ -353,42 +353,9 @@ async def save_model_config(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Marketplace — the real implementation lives under /api/v1/marketplace
+# Marketplace — NOT served here. The three 501 stand-ins that used to live here
+# (GET /marketplace/skills, GET /marketplace/skills/{id}, POST /marketplace/install)
+# were removed 2026-09-26: a registered install route that installs nothing is
+# still a second install route (ADR-0892 allows one). The marketplace API is
+# /v1/console/api/v1/marketplace/ (marketplace.py + marketplace_install.py).
 # ─────────────────────────────────────────────────────────────────────────
-
-_MARKETPLACE_DETAIL = (
-    "Not served here. The marketplace API is /v1/console/api/v1/marketplace/ "
-    "(index, plugins, search, install), which reads the real catalogue and "
-    "installed set."
-)
-
-
-@router.get("/marketplace/skills", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
-async def list_marketplace_skills(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> dict[str, Any]:
-    """Was a two-entry literal ({skill-forge, datahub}) unrelated to the catalogue."""
-    raise HTTPException(status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-                        detail=_MARKETPLACE_DETAIL)
-
-
-@router.get("/marketplace/skills/{skill_id}", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
-async def get_marketplace_skill(
-    skill_id: str,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> dict[str, Any]:
-    """Was a generator: ANY id returned a 200 describing a skill that need not exist,
-    with a fabricated source_url on a domain this install never contacts."""
-    raise HTTPException(status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-                        detail=_MARKETPLACE_DETAIL)
-
-
-@router.post("/marketplace/install", status_code=http_status.HTTP_501_NOT_IMPLEMENTED)
-async def install_marketplace_skill(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    skill_id: str,
-    version: str = "latest",
-) -> dict[str, Any]:
-    """Was ``{"success": True, "message": "Installed ..."}`` — installing nothing."""
-    raise HTTPException(status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-                        detail=_MARKETPLACE_DETAIL)

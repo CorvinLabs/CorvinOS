@@ -17,7 +17,7 @@ import {
   DashboardPage, SettingsPage,
   ComputePage, BridgesPage, DiscoveryPage, VoicePage, ForgePage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
-  AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
+  AgentHubPage, SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
@@ -50,6 +50,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   FilesPage,
   MemoryPage,
   AgentHubPage,
+  SkillManagerPage,
   ConnectorsPage,
   ApiKeysPage,
   OrgsPage,
@@ -124,6 +125,7 @@ export const PANELS: ConsolePanel[] = [
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
   rc("agent-hub", "Agent Hub", AgentHubPage, { nav: { label: "Agent Hub", icon: "Globe2", group: "network" } }),
+  rc("skill-manager", "Skills", SkillManagerPage, { nav: { label: "Skills", icon: "Zap", group: "build" } }),
   rc("connectors", "Connectors", ConnectorsPage, { nav: { label: "Connectors", icon: "Plug", group: "network" } }),
   rc("api-keys", "API Keys", ApiKeysPage, { nav: { label: "API Keys", icon: "KeyRound", group: "system" } }),
   rc("orgs", "Orgs", OrgsPage, { nav: { label: "Orgs", icon: "" } }), // hidden from nav (for future)

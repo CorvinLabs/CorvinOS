@@ -6,9 +6,14 @@ Exposes discovery, search, filtering, and collection endpoints.
 Routes:
   GET  /api/v1/marketplace/search       → Full-text search with filters
   GET  /api/v1/marketplace/collections  → Pre-curated skill bundles
-  GET  /api/v1/marketplace/plugins/{id} → Skill details + history
   GET  /api/v1/marketplace/categories   → Available categories + counts
   GET  /api/v1/marketplace/tags         → Available tags + counts
+
+``GET /api/v1/marketplace/plugins/{id}`` is served by ``marketplace.py`` ONLY.
+This router used to declare the same method + path; ``marketplace.py`` is
+included first, so this handler was never reached and its tests passed against
+a router production never dispatched to. Removed 2026-09-26 (ADR-0892: one
+route per operation). Guard: ``tests/e2e/test_marketplace_single_install_route.py``.
 """
 
 from __future__ import annotations
@@ -26,7 +31,6 @@ from .marketplace_discovery import (
     SearchQuery,
     SortBy,
     SkillCollection,
-    SkillDetails,
 )
 from .marketplace import _index_manager, _tenant_install_state, _local_state
 
@@ -142,98 +146,6 @@ async def search(
             "tiers": engine.get_tiers(),
             "tags": engine.get_tags(),
         },
-    }
-
-
-@router.get("/plugins/{plugin_id}")
-async def get_plugin_details(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    plugin_id: str,
-) -> Dict[str, Any]:
-    """
-    Get complete skill details with version history and reviews.
-
-    Returns:
-    {
-      "id": "plugin:buildin-...",
-      "name": "...",
-      "version": "...",
-      "author": "...",
-      "description": "...",
-      "long_description": "...",
-      "category": "...",
-      "tier": "...",
-      "license": "...",
-      "tags": [...],
-      "dependencies": [...],
-      "metrics": {
-        "downloads": int,
-        "installs": int,
-        "rating": float,
-        "review_count": int,
-        "success_rate": float,
-        "avg_latency_ms": float,
-        "last_updated": "..."
-      },
-      "versions": [...],
-      "reviews": [...]
-    }
-    """
-    engine = get_discovery_engine()
-    details = engine.get_plugin_details(plugin_id)
-
-    if not details:
-        raise HTTPException(status_code=404, detail=f"Plugin {plugin_id} not found")
-
-    # Audit the view
-    console_audit.system_event(
-        tenant_id=rec.tenant_id,
-        event="marketplace.view_details",
-        details={
-            "tenant_id": rec.tenant_id,
-            "plugin_id": plugin_id,
-        },
-    )
-
-    return {
-        "id": details.id,
-        "name": details.name,
-        "version": details.version,
-        "author": details.author,
-        "description": details.description,
-        "long_description": details.long_description,
-        "category": details.category,
-        "tier": details.tier,
-        "license": details.license,
-        "tags": details.tags,
-        "dependencies": details.dependencies,
-        "requires_version": details.requires_version,
-        "boot_layer": details.boot_layer,
-        "sla_level": details.sla_level,
-        "readme_url": details.readme_url,
-        "source_url": details.source_url,
-        "documentation_url": details.documentation_url,
-        "support_url": details.support_url,
-        "metrics": {
-            "downloads": details.metrics.downloads,
-            "installs": details.metrics.installs,
-            "rating": details.metrics.rating,
-            "review_count": details.metrics.review_count,
-            "success_rate": details.metrics.success_rate,
-            "avg_latency_ms": details.metrics.avg_latency_ms,
-            "last_updated": details.metrics.last_updated,
-        },
-        "versions": [
-            {
-                "version": v.version,
-                "release_date": v.release_date,
-                "release_notes": v.release_notes,
-                "downloads": v.downloads,
-                "required_version": v.required_version,
-            }
-            for v in details.versions
-        ],
-        "reviews": details.reviews,
     }
 
 

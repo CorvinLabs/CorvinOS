@@ -81,6 +81,10 @@ export const AgentHubPage = React.lazy(() =>
   import("@/pages/agent-hub").then((m) => ({ default: m.AgentHubPage }))
 );
 
+export const SkillManagerPage = React.lazy(() =>
+  import("@/pages/admin/skill-manager").then((m) => ({ default: m.SkillManager }))
+);
+
 export const ConnectorsPage = React.lazy(() =>
   import("@/pages/connectors").then((m) => ({ default: m.ConnectorsPage }))
 );
