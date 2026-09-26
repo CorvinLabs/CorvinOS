@@ -933,12 +933,19 @@ class CheckpointManager:
             CheckpointKeyUnavailable: If lock file cannot be created/opened
 
         Implementation note:
-            Uses fcntl.flock (POSIX) for file-level locking. Lock is held in memory
-            until release_lock() is called. Concurrent readers will block on the lock,
-            enforcing write-exclusivity at the file level.
+            Uses platform-specific file locking:
+            - POSIX (Linux, macOS): fcntl.flock for exclusive locks
+            - Windows: msvcrt.locking or threading.Lock fallback
+            Lock is held in memory until release_lock() is called.
         """
-        import fcntl
         import time
+        import sys
+
+        # Platform-specific imports
+        if sys.platform == 'win32':
+            import msvcrt
+        else:
+            import fcntl
 
         lock_file = self.checkpoint_dir / f".lock.{checkpoint_id}"
         lock_file.parent.mkdir(parents=True, exist_ok=True)
