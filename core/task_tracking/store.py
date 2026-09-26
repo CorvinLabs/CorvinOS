@@ -94,6 +94,19 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_item ON events(tenant_id, item_id, ts);
 
+-- Snapshot index: tracks key versions for fast rollback lookups.
+-- One entry per SNAPSHOT_INTERVAL (e.g., every 10th version).
+-- Immutable: snapshots are never updated, only appended.
+CREATE TABLE IF NOT EXISTS snapshot_index (
+    tenant_id   TEXT NOT NULL,
+    item_id     TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    snapshot_ts TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, item_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_item ON snapshot_index(tenant_id, item_id, version);
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
