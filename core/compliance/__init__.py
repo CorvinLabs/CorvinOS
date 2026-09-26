@@ -1,9 +1,12 @@
-"""Compliance Layer — GDPR + EU AI Act enforcement (load-bearing)."""
-
-from .consent import consent_required, ConsentError, CONSENT_SCOPES
+"""CorvinOS Compliance Core — ADR-0232 Implementation."""
 
 __all__ = [
-    "consent_required",
-    "ConsentError",
-    "CONSENT_SCOPES",
+    "AuditTrail",
+    "AuditRecord",
+    "BootTripwire",
+    "ComplianceError",
 ]
+
+from .audit_trail import AuditTrail, AuditRecord
+from .boot_tripwire import BootTripwire
+from .exceptions import ComplianceError
