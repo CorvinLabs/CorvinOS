@@ -49,8 +49,24 @@ BOARD = {"version": 1, "initiatives": [{
 
 
 def _task(home: Path, tid: str) -> dict:
-    b = json.loads((home / "tenants/_default/global/initiatives.json").read_text())
-    return next(t for t in b["initiatives"][0]["tasks"] if t["id"] == tid)
+    """The task as the runner sees it — read back from the Task-Tracking SSOT."""
+    os.environ["CORVIN_HOME"] = str(home)
+    board = pipe.Board("_default", "loop-a")
+    t = board.task(tid)
+    assert t is not None, f"task {tid} missing from the SSOT"
+    return t
+
+
+def _seed_board(home: Path) -> None:
+    """The board as production has it: initiatives.json imported once into the SSOT."""
+    (home / "tenants/_default/global").mkdir(parents=True, exist_ok=True)
+    (home / "tenants/_default/global/initiatives.json").write_text(json.dumps(BOARD))
+    env = {**os.environ, "CORVIN_HOME": str(home), "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
+           "PYTHONPATH": os.pathsep.join([str(REPO / "core/console"), str(REPO / "corvin_operator/forge"),
+                                          str(REPO), os.environ.get("PYTHONPATH", "")])}
+    p = subprocess.run([sys.executable, "-m", "corvin_console.task_tracking_import", "--tenant", "_default", "--apply"],
+                       capture_output=True, text=True, env=env, timeout=120, cwd=str(REPO))
+    assert p.returncode == 0, p.stderr[-2000:]
 
 
 def _run(home: Path, concept: Path, out: Path, budget: int) -> dict:
@@ -67,8 +83,7 @@ def _run(home: Path, concept: Path, out: Path, budget: int) -> dict:
 
 def test_mini_concept_runs_to_a_video_on_its_own(tmp_path):
     home = tmp_path / "home"
-    (home / "tenants/_default/global").mkdir(parents=True)
-    (home / "tenants/_default/global/initiatives.json").write_text(json.dumps(BOARD))
+    _seed_board(home)
     concept = tmp_path / "mini.yaml"
     concept.write_text(MINI)
     out = tmp_path / "out"

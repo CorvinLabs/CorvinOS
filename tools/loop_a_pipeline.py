@@ -17,8 +17,9 @@ last one stopped and works for at most ``--budget-s`` seconds:
   #5 Study,      need people (45 participants) and their data. The runner does not
   #6 Analysis    pretend: it marks them blocked with the reason and stops there.
 
-Every step reports to the initiatives board (status, progress, note) through
-``initiatives.update_task`` and writes one content-free audit record per stage
+Every step reports to the Task-Tracking SSOT (ADR-2056; status, progress, note)
+on the items imported from the frozen initiatives board
+(``initiatives.json#<initiative>/task/<id>``) and writes one content-free audit record per stage
 transition (``loop_a.stage``). Output lives next to the generator's:
 ``<CORVIN_HOME>/tenants/<tid>/video_library/<slug>/``.
 
@@ -49,35 +50,66 @@ NARRATION_TAIL_S = 0.8  # silence after the narration before the scene ends
 
 # ── infrastructure ───────────────────────────────────────────────────────────
 
+# The runner speaks the old board vocabulary; the SSOT has its own.
+_TO_SSOT = {"pending": "open", "running": "in_progress", "done": "complete", "blocked": "blocked"}
+_FROM_SSOT = {v: k for k, v in _TO_SSOT.items()}
+
+
 class Board:
-    """Reports to the initiatives board; a no-op when there is no board."""
+    """Reports to the Task-Tracking SSOT; a no-op when the store or the item is absent.
+
+    ``initiatives.json`` is frozen since ADR-2056 (its writer ``update_task`` is
+    gone); its tasks were imported once as ``initiatives.json#<initiative>/task/<id>``.
+    Writes go through ``core.task_tracking.service`` — audit-first like a console edit."""
+
+    ACTOR = "automation:loop_a"
 
     def __init__(self, tenant: str, initiative: str, enabled: bool = True):
         self.tenant, self.initiative, self.enabled = tenant, initiative, enabled
-        self._mod = None
+        self._svc = self._patch = None
         if enabled:
             try:
-                sys.path.insert(0, str(REPO / "core" / "console"))
-                from corvin_console import initiatives  # noqa: PLC0415
-                self._mod = initiatives
+                for p in (REPO, REPO / "core" / "console"):
+                    if str(p) not in sys.path:
+                        sys.path.insert(0, str(p))
+                from core.task_tracking import service  # noqa: PLC0415
+                from core.task_tracking.models import ItemPatch  # noqa: PLC0415
+                self._svc, self._patch = service, ItemPatch
             except Exception as exc:  # noqa: BLE001
                 print(f"board unavailable: {exc}", file=sys.stderr)
 
-    def task(self, tid: str) -> dict | None:
-        if not self._mod:
+    def _item(self, tid: str) -> dict | None:
+        if not self._svc:
             return None
+        ref = f"initiatives.json#{self.initiative}/task/{tid}"
         try:
-            b = self._mod.board(self.tenant)
+            it = self._svc.synced_items(self.tenant, ref, actor=self.ACTOR).get(ref)
         except Exception:  # noqa: BLE001
             return None
-        ini = next((i for i in b["initiatives"] if i["id"] == self.initiative), None)
-        return next((t for t in (ini or {}).get("tasks", []) if t["id"] == tid), None)
+        return None if it is None or it["deleted_at"] else it
+
+    def task(self, tid: str) -> dict | None:
+        it = self._item(tid)
+        if it is None:
+            return None
+        return {"id": tid, "status": _FROM_SSOT.get(it["status"], it["status"]),
+                "progress": it["progress"], "note": it["status_reason"] or it["description"]}
 
     def update(self, tid: str, **kw) -> None:
-        if not self._mod:
+        it = self._item(tid)
+        if it is None:
+            if self._svc:
+                print(f"board item missing for task {tid}", file=sys.stderr)
             return
+        fields: dict = {}
+        if "status" in kw:
+            fields["status"] = _TO_SSOT.get(kw["status"], kw["status"])
+        if "progress" in kw:
+            fields["progress"] = kw["progress"]
+        if "note" in kw:
+            fields["status_reason"] = str(kw["note"])[:500]
         try:
-            self._mod.update_task(self.tenant, self.initiative, tid, **kw)
+            self._svc.update(self.tenant, it["id"], self._patch(version=it["version"], **fields), actor=self.ACTOR)
         except Exception as exc:  # noqa: BLE001 — never lose work over a board write
             print(f"board update failed for {tid}: {exc}", file=sys.stderr)
 
