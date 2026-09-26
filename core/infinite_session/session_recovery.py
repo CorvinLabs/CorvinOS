@@ -27,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from core.infinite_session.key_management import KeyManagementConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,6 +78,16 @@ class ContextLossError(Exception):
     pass
 
 
+class SnapshotVerificationError(Exception):
+    """Raised when snapshot signature verification fails."""
+    pass
+
+
+class SnapshotExpiredError(Exception):
+    """Raised when snapshot is stale (> 24h old)."""
+    pass
+
+
 @dataclass(frozen=True)
 class SnapshotVerificationResult:
     """Result of snapshot signature verification."""
@@ -94,18 +106,25 @@ class SnapshotVerifier:
         self,
         snapshot_dict: Dict[str, Any],
         signature: Optional[str] = None,
-        external_key: str = "default-key",  # In production, from HSM
+        external_key: Optional[str] = None,  # From KeyManagementConfig if None
     ) -> SnapshotVerificationResult:
         """Verify HMAC-SHA256 signature of snapshot (fail-closed).
 
         Args:
             snapshot_dict: The snapshot to verify
             signature: Expected signature (from bridge event)
-            external_key: HMAC key (from external key store / HSM)
+            external_key: HMAC key (from external key store / HSM). If None, gets from KeyManagementConfig.
 
         Returns:
             SnapshotVerificationResult with is_valid flag
+
+        Raises:
+            ValueError: If no valid key can be obtained from KeyManagementConfig
         """
+
+        # Get key from config if not provided (fail-closed rejection of hardcoded keys)
+        if external_key is None:
+            external_key = KeyManagementConfig.get_snapshot_key()
 
         # Compute expected signature
         payload = json.dumps({
@@ -260,7 +279,7 @@ class SessionRecoveryManager:
         )
         if not sig_result.is_valid:
             logger.error(f"Snapshot signature verification FAILED: {sig_result.reason}")
-            return None
+            raise SnapshotVerificationError(sig_result.reason)
 
         # 3. Verify tenant isolation (fail-closed)
         tenant_result = self.verifier.verify_tenant_isolation(
@@ -271,6 +290,23 @@ class SessionRecoveryManager:
             logger.error(f"Tenant isolation check FAILED: {tenant_result.reason}")
             raise ContextLossError(
                 f"Cross-tenant snapshot detected: {tenant_result.reason}"
+            )
+
+        # FIX #6: Timestamp validation (< 24h staleness)
+        snapshot_age_hours = (
+            (datetime.utcnow() - datetime.fromisoformat(snapshot_dict.get("timestamp", "")))
+            .total_seconds() / 3600
+        )
+        if snapshot_age_hours > 24:
+            raise SnapshotExpiredError(
+                f"Snapshot stale ({snapshot_age_hours:.1f}h old, max 24h)"
+            )
+
+        # FIX #6: Destination session validation
+        dest_session_id = snapshot_dict.get("dest_session_id")
+        if dest_session_id and dest_session_id != task_id:
+            raise ContextLossError(
+                f"Snapshot destination mismatch: {dest_session_id} != {task_id}"
             )
 
         # 4. Restore ContextVars ACTIVELY
