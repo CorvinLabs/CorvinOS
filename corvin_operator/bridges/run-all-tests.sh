@@ -12,6 +12,31 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 GREEN='\033[1;32m'; RED='\033[1;31m'; CYAN='\033[1;36m'; NC='\033[0m'
 
+# Suite isolation — the suite must never read or write the live install.
+# Without this, suites that do not sandbox themselves resolved CORVIN_HOME to
+# the checkout's live .corvin: they read the operator's feature flags (e.g.
+# bridge_tde_execution → parity tests failed on a dev box and passed in CI),
+# logged into .corvin/logs/corvin.log, wrote "chain REPLACED" markers into live
+# chain files, and synthesised voice notes through the real OpenAI key from the
+# operator's vault (observed 2026-09-26). A test that sets its own CORVIN_HOME
+# still wins. VOICE_AUDIT_PATH is deliberately NOT set suite-wide: tests read
+# back their own chain file, and one shared file would mix their records.
+_SUITE_SANDBOX="$(mktemp -d -t corvin-bridge-suite.XXXXXX)"
+trap 'rm -rf "$_SUITE_SANDBOX"' EXIT
+export CORVIN_HOME="$_SUITE_SANDBOX/corvin_home"
+mkdir -p "$CORVIN_HOME"
+# No real provider credentials: XDG_CONFIG_HOME points into the sandbox, so the
+# voice config dir (<XDG>/corvin-voice: vault, service.env, every TTS/LLM key)
+# resolves there. XDG, not VOICE_CONFIG_DIR: VOICE_CONFIG_DIR outranks XDG and
+# would override the per-test XDG_CONFIG_HOME isolation several suites use
+# (profile/lang tests then leak state between cases). Tests that exercise a
+# provider path stub it. CORVIN_TTS_LOCAL_ONLY is NOT used — it disables the
+# OpenAI code path those stubbed tests cover. Unpinned synthesis without a key
+# can still fall through to keyless edge-tts with fixture text.
+export XDG_CONFIG_HOME="$_SUITE_SANDBOX/xdg_config"
+mkdir -p "$XDG_CONFIG_HOME"
+unset VOICE_CONFIG_DIR OPENAI_API_KEY CORVIN_TTS_OPENAI_KEY ELEVENLABS_API_KEY
+
 # Resolve pytest: prefer project .venv, then AWP venv, then system
 PYTEST=$(command -v pytest 2>/dev/null \
   || ls ../../.venv/bin/pytest $HOME/.awp/venv/bin/pytest \

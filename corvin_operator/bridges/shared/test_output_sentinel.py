@@ -33,6 +33,19 @@ PASS = 0
 FAIL = 0
 
 
+
+# The CORVIN_HOME this process started with (the suite runner sets a sandbox).
+# Restore it after each case instead of unsetting it: with the variable gone,
+# corvin_home() falls back to the checkout's live .corvin (observed 2026-09-27).
+_ORIG_CORVIN_HOME = os.environ.get("CORVIN_HOME")
+
+
+def _restore_corvin_home() -> None:
+    if _ORIG_CORVIN_HOME is None:
+        os.environ.pop("CORVIN_HOME", None)
+    else:
+        os.environ["CORVIN_HOME"] = _ORIG_CORVIN_HOME
+
 def t(label: str, ok: bool, *, detail: str = "") -> None:
     global PASS, FAIL
     suffix = f" — {detail}" if detail else ""
@@ -257,7 +270,7 @@ def section_active_gate() -> None:
               osen.is_sentinel_active("coder",
                                        {"output_sentinel": True}))
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +308,7 @@ def section_audit() -> None:
                 for forbidden in ("prompt", "output", "verdict_text"):
                     t(f"no {forbidden} in details", forbidden not in d)
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
             os.environ.pop("CORVIN_SENTINEL_FAKE", None)
 
     # Forbidden-field rejection at boundary
@@ -339,7 +352,7 @@ def section_audit() -> None:
             t("clean + audit_passed=True → sentinel_passed event",
               ev == "engine.sentinel_passed")
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
             os.environ.pop("CORVIN_SENTINEL_FAKE", None)
 
 
@@ -473,7 +486,7 @@ def section_adapter_wiring() -> None:
             finally:
                 ad._output_sentinel = saved
         finally:
-            os.environ.pop("CORVIN_HOME", None)
+            _restore_corvin_home()
 
 
 # ---------------------------------------------------------------------------
