@@ -218,29 +218,30 @@ def _validate_and_rotate_csrf(
 
 
 def _get_current_canary_state(tenant_id: str) -> Optional[CanaryStateResponse]:
-    """Fetch current canary state from monitoring backend.
+    """The tenant's active canary deployment, or None.
 
-    In production, this would query:
-      - Prometheus for latency/error/confidence metrics
-      - Deployment state from skill registry
-      - Canary config from tenant.corvin.yaml
-
-    For now, returns a mock state for integration testing.
+    No canary monitor exists on this build (nothing deploys a canary, and there is
+    no metrics source for confidence / latency / error rate), so there is never an
+    active canary and this returns None — the route answers 404 "No active canary
+    deployment". It used to return a hard-coded ``os.delegation_router 2.1.0,
+    confidence 0.92`` canary, which the console must never show (ADR-0763: never
+    fabricate). Wire a real CanaryMonitor here; do not reintroduce sample data.
     """
-    # TODO: Wire into CanaryMonitor (Phase 7 monitoring layer)
-    # For E2E tests, return a mock state
-    return CanaryStateResponse(
-        skill_id="os.delegation_router",
-        version="2.1.0",
-        status="canary",
-        confidence=0.92,
-        latency_p95_ms=48.5,
-        error_rate=0.002,
-        traffic_percent=15,
-        time_remaining_sec=3600,
-        created_at=datetime.utcnow(),
-        tenant_id=tenant_id,
-    )
+    return None
+
+
+def _require_active_canary(tenant_id: str, skill_id: str) -> None:
+    """Refuse a canary decision when there is no canary to decide on (409).
+
+    Approve / defer / rollback used to write an audit record and answer as if a
+    rollout had happened ("rolled_out_at") while nothing was deployed. A decision
+    is recorded only against a real active canary for the same skill."""
+    state = _get_current_canary_state(tenant_id)
+    if state is None or state.skill_id != skill_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No active canary deployment for this skill — nothing to decide",
+        )
 
 
 def _get_canary_history(tenant_id: str, limit: int = 10) -> HistoryResponse:
@@ -270,10 +271,9 @@ def _get_manifest(skill_id: str, version: str, tenant_id: str) -> Optional[Manif
     SECURITY: Validates skill_id and version to prevent path traversal (OWASP A01:2021).
     Fail-closed: Invalid inputs → return None.
 
-    In production, this would read from:
-      <tenant_home>/skill-forge/<skill_id>/<version>/skill.json
-
-    For now, returns a mock manifest for integration testing.
+    Reads ``<tenant_home>/skill-forge/<skill_id>/<version>/skill.json``; the
+    resolved path must stay under the tenant's skill-forge directory. An absent
+    or unreadable manifest is None (404) — never a generated placeholder.
     """
     # Validate skill_id to prevent path traversal (../../ escape)
     if not validate_skill_id(skill_id):
@@ -285,24 +285,25 @@ def _get_manifest(skill_id: str, version: str, tenant_id: str) -> Optional[Manif
         log.warning(f"Invalid version in _get_manifest: {version} (tenant {tenant_id})")
         return None
 
-    # TODO: Read manifest from tenant skill forge directory
-    # Path construction (fail-closed on invalid input):
-    # tenant_home = tenant_paths.tenant_home(tenant_id)
-    # manifest_path = tenant_home / "skill-forge" / skill_id / version / "skill.json"
-    # Verify manifest_path doesn't escape tenant_home (os.path.realpath check)
+    try:
+        from core.paths import tenant_home  # noqa: PLC0415
 
+        base = Path(tenant_home(tenant_id)).resolve() / "skill-forge"
+        manifest_path = (base / skill_id / version / "skill.json").resolve()
+        if base not in manifest_path.parents or not manifest_path.is_file():
+            return None
+        import json as _json  # noqa: PLC0415
+
+        skill_json = _json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — unreadable/absent manifest = not found
+        log.info(f"manifest unavailable for {skill_id} v{version} (tenant {tenant_id}): {type(exc).__name__}")
+        return None
+    if not isinstance(skill_json, dict):
+        return None
     return ManifestResponse(
-        skill_json={
-            "id": skill_id,
-            "version": version,
-            "author": "autonomous-forge",
-            "description": f"Auto-generated skill {skill_id} v{version}",
-        },
-        generation_context={
-            "loss_signal": "confidence_below_threshold",
-            "confidence_threshold": 0.8,
-        },
-        timestamp=datetime.utcnow(),
+        skill_json=skill_json,
+        generation_context=skill_json.get("generation_context") or {},
+        timestamp=datetime.utcfromtimestamp(manifest_path.stat().st_mtime),
     )
 
 
@@ -406,6 +407,7 @@ def approve_skill(
     """
     tenant_id = rec.tenant_id
     operator_id = rec.sid_fingerprint  # Enforce: operator_id from auth, not body
+    _require_active_canary(tenant_id, body.skill_id)
 
     # CRITICAL SECURITY: Validate CSRF token with session binding
     valid, error_reason, new_nonce = _validate_and_rotate_csrf(
@@ -533,6 +535,7 @@ def defer_skill(
     """
     tenant_id = rec.tenant_id
     operator_id = rec.sid_fingerprint
+    _require_active_canary(tenant_id, body.skill_id)
 
     if operator_id != body.operator_id:
         raise HTTPException(
@@ -755,6 +758,7 @@ def rollback_skill(
     """
     tenant_id = rec.tenant_id
     operator_id = rec.sid_fingerprint
+    _require_active_canary(tenant_id, body.skill_id)
 
     if operator_id != body.operator_id:
         raise HTTPException(
