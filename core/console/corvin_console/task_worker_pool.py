@@ -843,7 +843,12 @@ async def main():
     def make_taskmanager(tasks_dir):
         return TaskManager(tasks_dir)
 
-    pool = TaskWorkerPool(queue, taskmanager_factory=make_taskmanager)
+    # ✅ NEW (2026-09-26): Injiziere TaskPubSub für Live WebSocket-Push
+    # ADR-0168 M3, ADR-0081 M2.0 — enables real-time task progress to all WebSocket subscribers
+    from .task_pubsub import TaskPubSub
+    pubsub = TaskPubSub()
+
+    pool = TaskWorkerPool(queue, taskmanager_factory=make_taskmanager, pubsub_factory=lambda: pubsub)
 
     loop = asyncio.get_running_loop()
 
