@@ -40,6 +40,11 @@ class EventType(str, Enum):
     UPLOAD_PROGRESS = "upload_progress"  # YouTube upload progress tracking
     PRODUCTION_COMPLETE = "production_complete"  # Video production finished
 
+    # ADR-0923: Plugin Learning Events (Wave 2, k=6)
+    PLUGIN_EXECUTED = "plugin_executed"  # Plugin executed with latency + success status
+    PLUGIN_CONFIDENCE_UPDATED = "plugin_confidence_updated"  # Plugin confidence score changed
+    PLUGIN_ERROR_RECOVERED = "plugin_error_recovered"  # Plugin recovered from error (retry success)
+
 
 @dataclass(frozen=True)
 class LearningEvent:
