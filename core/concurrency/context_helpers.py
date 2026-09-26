@@ -40,6 +40,15 @@ class ContextSnapshot:
         return dict(self.values)
 
 
+# FIX #2: Canonical ContextVar definitions (single source of truth)
+# All modules import these, preventing module-isolation bugs
+TASK_ID_VAR: ContextVar = ContextVar("task_id", default=None)
+WORKTREE_PATH_VAR: ContextVar = ContextVar("worktree_path", default=None)
+BASE_COMMIT_VAR: ContextVar = ContextVar("base_commit", default=None)
+PHASE_NAME_VAR: ContextVar = ContextVar("phase_name", default=None)
+SESSION_ID_VAR: ContextVar = ContextVar("session_id", default=None)
+
+
 class TenantContextVar:
     """Specialized ContextVar for tenant_id (load-bearing for GDPR isolation)."""
 

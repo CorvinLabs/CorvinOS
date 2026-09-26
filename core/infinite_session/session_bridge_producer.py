@@ -204,6 +204,32 @@ class SessionBridgeProducer:
             SessionContextSnapshot ready for serialization and bridge event emission.
         """
 
+        # FIX #1: Compute hash BEFORE creating frozen dataclass (not after)
+        # Dataclass is frozen=True, so cannot mutate fields after creation
+        temp_dict = {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "session_id": session_id,
+            "last_message_hash": last_message_hash,
+            "conversation_turn_count": conversation_turn_count,
+            "worktree_path": worktree_path,
+            "base_commit": base_commit,
+            "phase_name": phase_name,
+            "active_subtasks": active_subtasks or [],
+            "current_file_being_edited": current_file_being_edited,
+            "plan_id": plan_id,
+            "plan_current_step": plan_current_step,
+            "plan_total_steps": plan_total_steps,
+            "open_tool_calls": open_tool_calls or {},
+            "last_artifact_id": last_artifact_id,
+            "prev_snapshot_hash": prev_snapshot.content_hash if prev_snapshot else None,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        # Compute hash from dict before creating frozen dataclass
+        payload = json.dumps(temp_dict, sort_keys=True)
+        content_hash = hashlib.sha256(payload.encode()).hexdigest()
+
         snapshot = SessionContextSnapshot(
             tenant_id=tenant_id,
             task_id=task_id,
@@ -222,10 +248,8 @@ class SessionBridgeProducer:
             last_artifact_id=last_artifact_id,
             prev_snapshot_hash=prev_snapshot.content_hash if prev_snapshot else None,
             timestamp=datetime.utcnow().isoformat(),
+            content_hash=content_hash,  # ← Set immutably here
         )
-
-        # Compute final content hash
-        snapshot.content_hash = snapshot.compute_content_hash()
 
         logger.info(
             f"Snapshot created for task={task_id}, session={session_id}, "
