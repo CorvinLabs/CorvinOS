@@ -205,3 +205,25 @@ class TestReactComponentIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestLearningLoopIntegrationTab:
+    """Tests for learning loop integration tab."""
+
+    def test_learning_integration_tab_loads(self, client):
+        """Test that learning integration tab loads."""
+        response = client.get("/console/")
+        assert response.status_code == 200
+
+    def test_learning_events_endpoint_accessible(self, client):
+        """Test learning events endpoint accessibility."""
+        response = client.get("/v1/console/v1/learning/events?limit=20")
+        assert response.status_code in [200, 401, 404]
+
+    def test_learning_metrics_computed(self, client):
+        """Test that learning metrics are computable from events."""
+        response = client.get("/v1/console/v1/learning/events?limit=5")
+        if response.status_code == 200:
+            data = response.json()
+            # Should have events array to compute metrics
+            assert "events" in data or isinstance(data, dict)

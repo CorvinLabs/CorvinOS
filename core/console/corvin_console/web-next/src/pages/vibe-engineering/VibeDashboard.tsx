@@ -26,10 +26,11 @@ import { MonitoringTab } from './tabs/MonitoringTab';
 import { LearningLoopsTab } from './tabs/LearningLoopsTab';
 import { LicensingAuditTab } from './tabs/LicensingAuditTab';
 import { ModelSelectionTab } from './tabs/ModelSelectionTab';
+import { LearningLoopIntegrationTab } from './tabs/LearningLoopIntegrationTab';
 
-type TabType = 'maturity' | 'loops' | 'metrics' | 'licensing' | 'models';
+type TabType = 'maturity' | 'loops' | 'metrics' | 'licensing' | 'models' | 'learning-integration';
 
-const TAB_IDS: readonly TabType[] = ['maturity', 'loops', 'metrics', 'licensing', 'models'] as const;
+const TAB_IDS: readonly TabType[] = ['maturity', 'loops', 'metrics', 'licensing', 'models', 'learning-integration'] as const;
 const DEFAULT_TAB: TabType = 'maturity';
 const isTabId = (v: string | null): v is TabType =>
   v !== null && (TAB_IDS as readonly string[]).includes(v);
@@ -90,6 +91,7 @@ export function VibeDashboard() {
             { id: 'metrics' as TabType, label: 'System Metrics' },
             { id: 'loops' as TabType, label: 'Learning Loops' },
             { id: 'models' as TabType, label: 'Model Selection' },
+            { id: 'learning-integration' as TabType, label: 'Learning Events' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -114,6 +116,7 @@ export function VibeDashboard() {
           {activeTab === 'metrics' && <MonitoringTab />}
           {activeTab === 'loops' && <LearningLoopsTab />}
           {activeTab === 'models' && <ModelSelectionTab />}
+          {activeTab === 'learning-integration' && <LearningLoopIntegrationTab />}
         </Suspense>
       </div>
 
