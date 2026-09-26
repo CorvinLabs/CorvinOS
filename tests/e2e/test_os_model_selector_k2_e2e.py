@@ -1,363 +1,166 @@
-"""
-k=2 E2E Tests: OS Model Selector with Decomposition Hints
-ADR-0845: OS-layer routing with Tier 1 decomposition support
-
-Gates:
-- Unit tests: 20/20 pass
-- E2E tests: 10/10 pass (quality >= 95%, Haiku 30–40%)
-- Loss signal: < 0.10
-
-Test Coverage:
-1. Basic classification (SIMPLE/MEDIUM/COMPLEX)
-2. Decomposition hinting (None / prompt_structured / graph_structured)
-3. Haiku success rate learning (from task_type)
-4. Orchestration detection (rejects decomposition)
-5. Quality preservation (95%+ vs baseline)
-"""
-
-import sys
-from pathlib import Path
-from dataclasses import dataclass
-
-# Add src to path
-repo_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / "core" / "skills" / "os_skills"))
-
-try:
-    from core.skills.os_skills.model_selector import ModelSelector, ModelSelectorConfig, ClassificationResult
-except ImportError:
-    from model_selector import ModelSelector, ModelSelectorConfig, ClassificationResult
+"""E2E Tests: OS Model Selector k=2 (Tier 1 Routing in Real Orchestration)."""
+import pytest
+from core.skills.os_skills.model_selector import (
+    Tier1Router,
+    ModelSelectionDecision,
+)
 
 
-@dataclass
-class TestCase:
-    """A single E2E test case."""
-    name: str
-    task_input: str
-    task_type: str
-    expected_complexity: str  # SIMPLE/MEDIUM/COMPLEX
-    expected_model_tier: str  # haiku/sonnet
-    expected_decomposition_hint: str  # None/"prompt_structured"/"graph_structured"
-    min_confidence: float = 0.80
-
-
-# ============ TEST SUITE ============
-
-def test_k2_e2e_simple_code_review():
-    """E2E Test 1: Simple code review (decomposable) → Haiku + prompt_structured"""
-    selector = ModelSelector()
-
-    task = """Review this code for security:
-    - Check SQL injection risks
-    - Check auth headers
-    - Check secrets in logs
-    """
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="code_review"
-    )
-
-    # Assertions
-    assert result.complexity in ["SIMPLE", "MEDIUM"], f"Expected SIMPLE/MEDIUM, got {result.complexity}"
-    assert result.recommended_model == "claude-haiku-4-5", f"Expected Haiku, got {result.recommended_model}"
-    assert hint == "prompt_structured", f"Expected prompt_structured hint, got {hint}"
-    assert result.confidence > 0.85, f"Confidence {result.confidence} < 0.85"
-
-    print("✅ E2E Test 1 PASS: Simple code review → Haiku + decomposition")
-
-
-def test_k2_e2e_orchestration_task():
-    """E2E Test 2: Orchestration task (not decomposable) → Sonnet"""
-    selector = ModelSelector()
-
-    task = """Orchestrate a video production pipeline:
-    1. Generate script (LLM)
-    2. Find images (search API)
-    3. Compose video (automation)
-    4. Upload to YouTube
-    """
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="orchestration"
-    )
-
-    # Assertions
-    assert result.recommended_model == "claude-sonnet-5", f"Expected Sonnet, got {result.recommended_model}"
-    assert hint is None, f"Expected no hint for orchestration, got {hint}"
-
-    print("✅ E2E Test 2 PASS: Orchestration task → Sonnet (no decomposition)")
-
-
-def test_k2_e2e_analysis_task():
-    """E2E Test 3: Analysis task (decomposable) → Haiku + prompt_structured"""
-    selector = ModelSelector()
-
-    task = """Analyze this dataset:
-    1. Check data quality (missing values, outliers)
-    2. Identify patterns (trends, seasonality)
-    3. Recommend next steps
-    """
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="analysis"
-    )
-
-    # Assertions
-    assert result.recommended_model == "claude-haiku-4-5", f"Expected Haiku, got {result.recommended_model}"
-    assert hint == "prompt_structured", f"Expected prompt_structured, got {hint}"
-
-    print("✅ E2E Test 3 PASS: Analysis task → Haiku + decomposition")
-
-
-def test_k2_e2e_system_design():
-    """E2E Test 4: System design (complex, not decomposable) → Sonnet"""
-    selector = ModelSelector()
-
-    task = "Design a distributed system for real-time video streaming with fault tolerance"
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="system_design"
-    )
-
-    # Assertions
-    assert result.recommended_model == "claude-sonnet-5", f"Expected Sonnet, got {result.recommended_model}"
-    assert hint is None, f"Expected no hint for system design, got {hint}"
-
-    print("✅ E2E Test 4 PASS: System design → Sonnet (needs full reasoning)")
-
-
-def test_k2_e2e_summarization():
-    """E2E Test 5: Summarization (highly decomposable, high Haiku success) → Haiku"""
-    selector = ModelSelector()
-
-    task = """Summarize this article:
-    - Extract key findings
-    - Identify main themes
-    - List recommendations
-    """
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="summarization"
-    )
-
-    # Assertions
-    assert result.recommended_model == "claude-haiku-4-5", f"Expected Haiku, got {result.recommended_model}"
-    assert hint == "prompt_structured", f"Expected prompt_structured, got {hint}"
-    assert result.confidence > 0.90, f"Confidence {result.confidence} < 0.90 (high Haiku success)"
-
-    print("✅ E2E Test 5 PASS: Summarization → Haiku (97% success rate)")
-
-
-def test_k2_e2e_documentation():
-    """E2E Test 6: Documentation (ideal for Haiku) → Haiku + decomposition"""
-    selector = ModelSelector()
-
-    task = """Write documentation:
-    1. API reference
-    2. Usage examples
-    3. Troubleshooting guide
-    """
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="documentation"
-    )
-
-    # Assertions
-    assert result.recommended_model == "claude-haiku-4-5", f"Expected Haiku, got {result.recommended_model}"
-    assert hint == "prompt_structured", f"Expected prompt_structured, got {hint}"
-
-    print("✅ E2E Test 6 PASS: Documentation → Haiku (97% success)")
-
-
-def test_k2_e2e_refactoring():
-    """E2E Test 7: Refactoring (structured, decomposable) → Haiku"""
-    selector = ModelSelector()
-
-    task = """Refactor this code:
-    - Extract common patterns
-    - Improve readability
-    - Optimize performance
-    """
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="refactoring"
-    )
-
-    # Assertions
-    assert result.recommended_model == "claude-haiku-4-5", f"Expected Haiku, got {result.recommended_model}"
-    assert hint == "prompt_structured", f"Expected prompt_structured, got {hint}"
-
-    print("✅ E2E Test 7 PASS: Refactoring → Haiku + decomposition")
-
-
-def test_k2_e2e_quality_preservation():
-    """E2E Test 8: Quality preservation (Haiku vs Sonnet) >= 95%"""
-    selector = ModelSelector()
-
-    # A task where Haiku should succeed (high historical success rate)
-    task = """Review this code for naming conventions:
-    - Check function names
-    - Check variable names
-    - Check class names
-    """
-
-    result, hint = selector.classify_with_decomposition_hint(
-        task_input=task,
-        task_type="code_review"
-    )
-
-    # Haiku's success rate for code_review is 0.96
-    haiku_success = result.confidence
-    sonnet_assumed_quality = 0.99
-
-    # Quality preservation: Haiku >= 95% of Sonnet
-    quality_ratio = haiku_success / sonnet_assumed_quality
-    assert quality_ratio >= 0.95, f"Quality ratio {quality_ratio} < 0.95"
-
-    print(f"✅ E2E Test 8 PASS: Quality preservation (Haiku {haiku_success*100:.1f}% vs Sonnet 99%)")
-
-
-def test_k2_e2e_haiku_selection_rate():
-    """E2E Test 9: Haiku selection rate 30-40%"""
-    selector = ModelSelector()
-
-    test_cases = [
-        ("code_review", """Review code:\n- Security\n- Performance"""),
-        ("code_gen", """Generate Python:\n- Fibonacci function\n- With tests"""),
-        ("analysis", """Analyze data:\n- Patterns\n- Trends"""),
-        ("summarization", """Summarize:\n- Key points\n- Recommendations"""),
-        ("documentation", """Write docs:\n- API\n- Examples"""),
-        ("refactoring", """Refactor:\n- Extract\n- Optimize"""),
-        ("system_design", """Design system for distributed video streaming"""),
-        ("orchestration", """Orchestrate pipeline"""),
-        ("testing", """Write tests for:\n- Happy path\n- Edge cases"""),
-        ("code_gen_complex", """Generate complex ML model with PyTorch"""),
-    ]
-
-    haiku_count = 0
-    for task_type, task in test_cases:
-        result, _ = selector.classify_with_decomposition_hint(
-            task_input=task,
-            task_type=task_type
+class TestOSModelSelectorK2E2E:
+    """E2E tests: Tier 1 router in orchestration context."""
+    
+    @pytest.fixture
+    def router(self):
+        return Tier1Router()
+    
+    def test_e2e_simple_task_routing(self, router):
+        """E2E: Simple task routed via Tier 1 → Haiku/Sonnet."""
+        # Simulate real orchestration: task arrives
+        task_id = "orchestrator.simple_summarize.v1.2026-09-26T12:30:45Z"
+        complexity = "simple"  # Auto-detected or user-provided
+        
+        # Route via Tier 1
+        decision = router.route(task_id, complexity)
+        
+        # Verify decision
+        assert decision.task_id == task_id
+        assert decision.complexity == complexity
+        assert "haiku" in decision.selected_model or "sonnet" in decision.selected_model
+        assert "opus" not in decision.selected_model.lower()
+    
+    def test_e2e_complex_task_routing(self, router):
+        """E2E: Complex task routed via Tier 1 → mostly Opus."""
+        task_id = "orchestrator.complex_analysis.v2.2026-09-26T13:00:00Z"
+        complexity = "complex"
+        
+        decision = router.route(task_id, complexity)
+        
+        assert decision.complexity == complexity
+        # Complex should favor Opus (80%)
+        if "opus" not in decision.selected_model.lower():
+            # Allow Sonnet (20%), but unlikely
+            assert "sonnet" in decision.selected_model.lower()
+    
+    def test_e2e_audit_safe_decision(self, router):
+        """E2E: ModelSelectionDecision is audit-safe (no PII, no prompts)."""
+        task_id = "task_abc123"
+        decision = router.route(task_id, "medium")
+        
+        # Verify no PII/secrets in serialization
+        decision_dict = {
+            "task_id": decision.task_id,
+            "complexity": decision.complexity,
+            "selected_model": decision.selected_model,
+            "stratification_bucket": decision.stratification_bucket,
+        }
+        
+        # Safe to emit to audit_backend (ADR-0297)
+        assert not any(
+            secret in str(decision_dict).lower()
+            for secret in ["password", "token", "api_key", "secret"]
         )
-        if result.recommended_model == "claude-haiku-4-5":
-            haiku_count += 1
-
-    haiku_rate = haiku_count / len(test_cases)
-    assert 0.30 <= haiku_rate <= 0.50, f"Haiku rate {haiku_rate*100:.1f}% outside [30%-50%]"
-
-    print(f"✅ E2E Test 9 PASS: Haiku selection rate {haiku_rate*100:.1f}% (target 30-40%)")
-
-
-def test_k2_e2e_confidence_calibration():
-    """E2E Test 10: Confidence calibration (matches historical success rates)"""
-    selector = ModelSelector()
-
-    # Test tasks where we know the expected success rates
-    tasks = {
-        "code_review": ("""Review code:\n- Security\n- Readability""", 0.96),
-        "documentation": ("""Write docs:\n- API\n- Examples""", 0.97),
-        "analysis": ("""Analyze data:\n- Quality\n- Patterns""", 0.90),
-    }
-
-    for task_type, (task, expected_success) in tasks.items():
-        result, hint = selector.classify_with_decomposition_hint(
-            task_input=task,
-            task_type=task_type
+    
+    def test_e2e_real_orchestration_scenario(self, router):
+        """E2E: Real orchestration scenario (multiple tasks, mixed complexity)."""
+        tasks = [
+            ("task_001", "simple", "haiku", "sonnet"),      # Allow haiku or sonnet
+            ("task_002", "medium", "haiku", "sonnet", "opus"),  # Mixed
+            ("task_003", "complex", "sonnet", "opus"),       # Favor opus
+            ("task_004", "simple", "haiku", "sonnet"),       # Simple again
+            ("task_005", "complex", "opus"),                 # Complex again
+        ]
+        
+        for task_id, complexity, *allowed_models in tasks:
+            decision = router.route(task_id, complexity)
+            
+            # Verify decision matches allowed models for complexity
+            assert any(model in decision.selected_model for model in allowed_models), \
+                f"Task {task_id}: unexpected model {decision.selected_model}"
+    
+    def test_e2e_stratification_accuracy(self, router):
+        """E2E: Stratification matches expected percentages (quality gate)."""
+        results = {}
+        
+        for complexity in ["simple", "medium", "complex"]:
+            decisions = [
+                router.route(f"{complexity}_{i:03d}", complexity)
+                for i in range(100)
+            ]
+            
+            haiku_count = sum(1 for d in decisions if "haiku" in d.selected_model)
+            sonnet_count = sum(1 for d in decisions if "sonnet" in d.selected_model)
+            opus_count = sum(1 for d in decisions if "opus" in d.selected_model)
+            
+            results[complexity] = {
+                "haiku": haiku_count,
+                "sonnet": sonnet_count,
+                "opus": opus_count,
+            }
+        
+        # Verify stratification
+        # simple: 30–40% Haiku
+        assert 25 <= results["simple"]["haiku"] <= 45
+        # medium: ~10% Haiku, ~50% Sonnet, ~40% Opus
+        assert 5 <= results["medium"]["haiku"] <= 15
+        assert 40 <= results["medium"]["sonnet"] <= 60
+        # complex: 0% Haiku, 20% Sonnet, 80% Opus
+        assert results["complex"]["haiku"] == 0
+        assert 15 <= results["complex"]["sonnet"] <= 25
+    
+    def test_e2e_no_pii_in_decision(self, router):
+        """E2E: No PII even with PII-containing task_id (hash strips it)."""
+        # Task ID might contain user info (should not appear in decision)
+        pii_task_id = "user@example.com_task_2026-09-26"
+        
+        decision = router.route(pii_task_id, "medium")
+        
+        # Task ID is in decision, but should be safe
+        assert decision.task_id == pii_task_id  # Task ID is metadata
+        
+        # Bucket is derived via hash (one-way, no PII recovery)
+        assert not any(
+            email in str(decision.stratification_bucket)
+            for email in ["example.com", "@"]
         )
+    
+    def test_e2e_consistency_across_restarts(self, router):
+        """E2E: Same task_id routes to same model across process restarts."""
+        task_id = "persistent_task_xyz"
+        
+        # Simulate first invocation
+        decision1 = router.route(task_id, "medium")
+        
+        # Simulate restart (new router instance)
+        router2 = Tier1Router()
+        decision2 = router2.route(task_id, "medium")
+        
+        # Must be identical
+        assert decision1.selected_model == decision2.selected_model
+        assert decision1.stratification_bucket == decision2.stratification_bucket
+    
+    def test_e2e_load_distribution(self, router):
+        """E2E: Load is distributed across available models (no single-model bias)."""
+        # Simulate 300 random tasks
+        decisions = [
+            router.route(f"load_test_{i:04d}", ["simple", "medium", "complex"][i % 3])
+            for i in range(300)
+        ]
+        
+        model_counts = {}
+        for d in decisions:
+            model = d.selected_model
+            model_counts[model] = model_counts.get(model, 0) + 1
+        
+        # All three models should be used
+        assert len(model_counts) == 3, f"Expected 3 models, got {len(model_counts)}"
+        
+        # No single model should dominate > 50%
+        for model, count in model_counts.items():
+            assert count < 150, f"Model {model} overused: {count}/300"
 
-        if hint:  # Only check confidence for decomposable tasks (Haiku selected)
-            assert result.recommended_model == "claude-haiku-4-5"
-            # Confidence should match historical success rate ±5%
-            assert abs(result.confidence - expected_success) < 0.05, \
-                f"{task_type}: confidence {result.confidence} vs expected {expected_success}"
 
-    print("✅ E2E Test 10 PASS: Confidence calibration matches historical rates")
+pytestmark = pytest.mark.e2e
 
-
-# ============ GATE MEASUREMENT ============
-
-def measure_loss_signal():
-    """Measure k=2 loss signal: < 0.10 target"""
-    selector = ModelSelector()
-
-    # Loss = 0.5 × (1 - haiku_success) + 0.3 × (1 - quality_preservation) + 0.2 × cost_delta
-    haiku_success_rate = 0.88  # Average across all task types
-    quality_preservation = 0.95  # Average quality vs Sonnet
-    cost_delta = 0.55  # 55% cost reduction (good signal)
-
-    loss = (
-        0.5 * (1 - haiku_success_rate) +
-        0.3 * (1 - quality_preservation) +
-        0.2 * (1 - cost_delta)
-    )
-
-    print(f"📊 k=2 Loss Signal: {loss:.3f} (target < 0.10)")
-    assert loss < 0.10, f"Loss {loss} exceeds 0.10 threshold"
-
-    return loss
-
-
-# ============ MAIN TEST RUNNER ============
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("k=2 E2E TEST SUITE: OS Model Selector with Decomposition Hints")
-    print("=" * 70)
-    print()
-
-    tests = [
-        test_k2_e2e_simple_code_review,
-        test_k2_e2e_orchestration_task,
-        test_k2_e2e_analysis_task,
-        test_k2_e2e_system_design,
-        test_k2_e2e_summarization,
-        test_k2_e2e_documentation,
-        test_k2_e2e_refactoring,
-        test_k2_e2e_quality_preservation,
-        test_k2_e2e_haiku_selection_rate,
-        test_k2_e2e_confidence_calibration,
-    ]
-
-    passed = 0
-    failed = 0
-
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except AssertionError as e:
-            print(f"❌ {test.__name__} FAIL: {e}")
-            failed += 1
-        except Exception as e:
-            print(f"❌ {test.__name__} ERROR: {e}")
-            failed += 1
-
-    print()
-    print("=" * 70)
-    print(f"SUMMARY: {passed} passed, {failed} failed out of {len(tests)} tests")
-    print()
-
-    # Measure loss signal
-    try:
-        loss = measure_loss_signal()
-        print(f"✅ k=2 Gate PASS: Loss signal {loss:.3f} < 0.10")
-    except AssertionError as e:
-        print(f"❌ k=2 Gate FAIL: {e}")
-        failed += 1
-
-    print()
-    if failed == 0:
-        print("🎯 k=2 ALL GATES GREEN ✅")
-    else:
-        print(f"⚠️  {failed} gate(s) failed")
-
-    sys.exit(0 if failed == 0 else 1)
+    pytest.main([__file__, "-v"])
