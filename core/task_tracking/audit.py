@@ -443,3 +443,124 @@ def verify_audit_chain(chain_path: Path, *, tenant_id: str) -> bool:
         raise ValueError(f"Invalid JSON in audit chain at line {line_num}: {e}") from e
 
     return True
+
+
+async def emit_approval_decision_event(
+    task_id: str,
+    actor: str,
+    decision: str,
+    *,
+    tenant_id: str,
+    rationale: str = "",
+    validator_ids_applied: list[str] | None = None,
+    validation_results: dict[str, bool] | None = None,
+    store=None,  # Optional task_tracking.store for DB reference
+) -> str:
+    """Emit an approval decision audit event (EU AI Act Art. 50 compliant).
+
+    Records which validators ran, their results, the actor, and the decision.
+    Every approval decision is immutable in the chain (source of truth).
+
+    Args:
+      task_id: task ID being approved
+      actor: who made the decision (user/system)
+      decision: 'approve' | 'reject'
+      tenant_id: tenant context (keyword-only)
+      rationale: decision reason (PII-scrubbed before persistence)
+      validator_ids_applied: which validators ran (empty list if none registered)
+      validation_results: {validator_id: passed} dict (all validators)
+      store: optional task_tracking.store for DB reference
+
+    Returns:
+      The event's chain_hash (cryptographic commitment).
+
+    Raises:
+      ValueError: If tenant_id or task_id missing.
+      OSError: If audit chain write fails (fail-closed, ADR-0232).
+
+    Compliance:
+      - EU AI Act Art. 50: Approval decision attribution (actor + validators recorded)
+      - GDPR Art. 30: Immutable audit trail (hash-chain)
+      - GDPR Art. 32: Fail-closed on chain write (no approval without audit)
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        raise ValueError("tenant_id is required (keyword-only)")
+
+    if not task_id:
+        raise ValueError("task_id is required")
+
+    # Step 1: Scrub PII from rationale (fail-closed)
+    rationale_scrubbed = rationale
+    if rationale:
+        detector = PIIDetector()
+        if detector.has_pii(rationale):
+            rationale_scrubbed = "[REDACTED: PII detected in rationale]"
+
+    # Step 2: Build approval delta (validator context + decision)
+    delta = {
+        "approval_decision": decision,
+        "actor": actor,
+        "validators_applied": validator_ids_applied or [],
+        "validation_results": validation_results or {},
+        "rationale": rationale_scrubbed,
+    }
+
+    # Step 3: Create AuditEvent with approval context
+    now = datetime.now(timezone.utc).isoformat()
+    event = AuditEvent(
+        event_type="task_item.approval_decided",
+        task_id=task_id,
+        tenant_id=tenant_id,
+        actor=actor,
+        action="approve",  # Standardized action
+        delta=delta,
+        timestamp=now,
+    )
+
+    # Step 4: Write to core audit chain (source of truth)
+    # This is audit-FIRST: if chain write fails, approval is NOT recorded
+    # and caller must retry or error out (fail-closed, ADR-0232)
+    from core.audit.chain import write_entry  # noqa: PLC0415
+
+    try:
+        entry = await write_entry(
+            event_type=event.event_type,
+            tenant_id=tenant_id,
+            details={
+                "task_id": task_id,
+                "decision": decision,
+                "actor": actor,
+                "validators_applied": validator_ids_applied or [],
+                "validation_results": validation_results or {},
+            },
+        )
+        chain_hash = entry.get("hash") if isinstance(entry, dict) else str(entry)
+    except Exception as e:  # noqa: BLE001
+        # Fail-closed: no approval without audit chain record
+        raise OSError(f"Audit chain write failed for approval: {e}") from e
+
+    # Step 5: Store reference in task_tracking DB (non-canonical)
+    if store:
+        try:
+            with store.connect(tenant_id) as conn:
+                conn.execute(
+                    "INSERT INTO events(event_id, tenant_id, item_id, event_type, ts, actor, delta, chain_hash) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        f"e_{task_id}_{decision}",
+                        tenant_id,
+                        task_id,
+                        event.event_type,
+                        now,
+                        actor,
+                        json.dumps(delta, default=str),
+                        chain_hash,
+                    ),
+                )
+                conn.commit()
+        except Exception as e:  # noqa: BLE001
+            # Log DB error but don't fail (chain is the source of truth)
+            import logging
+            logging.exception(f"Failed to record approval decision in DB: {e}")
+
+    return chain_hash

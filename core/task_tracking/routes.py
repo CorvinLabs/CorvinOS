@@ -139,12 +139,18 @@ async def approve_task(
     Steps:
     1. Load task
     2. Request approval_state must be "pending"
-    3. Run validators (fail-closed)
-    4. Call service.decide(decision="approved")
-    5. Return updated task
+    3. Run validators (fail-closed, 5s timeout per validator)
+    4. Emit approval decision to audit chain (EU AI Act Art. 50, GDPR Art. 30)
+    5. Call service.decide(decision="approved")
+    6. Return updated task
 
     Returns:
         {task: {...}, approval_state, decision_result: {...}}
+
+    Compliance:
+        - Timeout guards: validators fail-closed on 5s timeout
+        - Audit logging: approval decision recorded immutably in chain
+        - Validator orchestration: concurrent timeouts don't corrupt state
     """
     try:
         # Step 1: Validate request
@@ -156,21 +162,64 @@ async def approve_task(
                 detail=f"Cannot approve: approval_state is '{task['approval_state']}', not 'pending'",
             )
 
-        # Step 2: Run validators
+        # Step 2: Run validators (with timeout guards)
         registry = governance.get_registry()
         policy = await registry.check_approval_allowed(task_id, request.actor, "approve")
 
         if not policy.approved:
+            # Blocked by validator(s) — emit rejection to audit trail
+            from core.task_tracking.audit import emit_approval_decision_event  # noqa: PLC0415
+            try:
+                await emit_approval_decision_event(
+                    task_id=task_id,
+                    actor=request.actor,
+                    decision="rejected",
+                    tenant_id=tenant_id,
+                    rationale=f"Validator blocked: {policy.reason}",
+                    validator_ids_applied=policy.validators_run,
+                    validation_results={
+                        v_id: result.passed
+                        for v_id, result in policy.validation_results.items()
+                    },
+                )
+            except Exception as e:  # noqa: BLE001
+                # Audit failure is critical (fail-closed) but don't block rejection response
+                import logging
+                logging.exception(f"Failed to audit rejection for {task_id}: {e}")
+
             return {
                 "task": task,
                 "decision_result": {
                     "approved": False,
                     "reason": policy.reason,
                     "blocked_by": policy.blocked_by,
+                    "validators_run": policy.validators_run,
                 },
             }
 
-        # Step 3: Execute approval
+        # Step 3: All validators passed — emit approval to audit chain
+        from core.task_tracking.audit import emit_approval_decision_event  # noqa: PLC0415
+        try:
+            await emit_approval_decision_event(
+                task_id=task_id,
+                actor=request.actor,
+                decision="approve",
+                tenant_id=tenant_id,
+                rationale=request.rationale,
+                validator_ids_applied=policy.validators_run,
+                validation_results={
+                    v_id: result.passed
+                    for v_id, result in policy.validation_results.items()
+                },
+            )
+        except OSError as e:
+            # Audit-first: if chain write fails, approval cannot proceed (fail-closed)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Approval decision cannot be recorded (audit unavailable): {e}",
+            ) from e
+
+        # Step 4: Execute approval
         approved_task = service.decide(
             tenant_id, task_id, "approved", version=request.version, actor=request.actor
         )
@@ -190,6 +239,8 @@ async def approve_task(
         raise HTTPException(status_code=409, detail=str(e))
     except service.TaskTrackingError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise  # Pass through HTTP exceptions
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
