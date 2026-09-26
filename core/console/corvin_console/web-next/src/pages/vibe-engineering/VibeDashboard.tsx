@@ -89,6 +89,7 @@ export function VibeDashboard() {
             { id: 'licensing' as TabType, label: 'Licensing Audit' },
             { id: 'metrics' as TabType, label: 'System Metrics' },
             { id: 'loops' as TabType, label: 'Learning Loops' },
+            { id: 'models' as TabType, label: 'Model Selection' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -112,6 +113,7 @@ export function VibeDashboard() {
           {activeTab === 'licensing' && <LicensingAuditTab />}
           {activeTab === 'metrics' && <MonitoringTab />}
           {activeTab === 'loops' && <LearningLoopsTab />}
+          {activeTab === 'models' && <ModelSelectionTab />}
         </Suspense>
       </div>
 
