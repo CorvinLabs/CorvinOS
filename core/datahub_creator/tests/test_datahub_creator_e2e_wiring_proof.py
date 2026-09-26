@@ -52,7 +52,7 @@ def fastapi_client():
     from core.console.corvin_console import deps as console_deps
 
     app = FastAPI()
-    app.include_router(datahub_creator_routes.router)
+    app.include_router(datahub_creator_routes.router, prefix="/v1/console")  # as corvin_console.app mounts it
     # The router requires a console session (+ CSRF on mutations); this test
     # proves the datahub wiring, so the guard is satisfied with a stub session.
     # The guard itself is covered by core/console/tests/test_route_auth_guard.py.

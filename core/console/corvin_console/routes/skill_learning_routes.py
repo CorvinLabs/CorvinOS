@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/v1/console/skills", tags=["learning"])
+router = APIRouter(prefix="/skills", tags=["learning"])
 
 
 class SkillLearningMetrics(BaseModel):

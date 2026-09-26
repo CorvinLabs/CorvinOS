@@ -119,7 +119,7 @@ def _discover_peers() -> list[PeerInfo]:
 
 # ── router ────────────────────────────────────────────────────────────
 
-router = APIRouter(prefix="/v1/console/discovery", tags=["discovery"])
+router = APIRouter(prefix="/discovery", tags=["discovery"])
 
 
 @router.get("/peers", response_model=PeerListResponse)

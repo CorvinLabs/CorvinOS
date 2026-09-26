@@ -24,7 +24,7 @@ from ..deps import require_session
 from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
-router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/feedback", tags=["feedback"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/feedback", tags=["feedback"])
 
 
 # ============================================================================

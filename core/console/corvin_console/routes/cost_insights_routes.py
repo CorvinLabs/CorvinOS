@@ -24,7 +24,7 @@ from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/cost", tags=["cost"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/cost", tags=["cost"])
 
 
 # Pydantic models for request/response

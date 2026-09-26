@@ -158,7 +158,7 @@ def get_metrics_aggregator_factory():
 # ENDPOINTS: 6-PHASE DASHBOARD
 # ============================================================================
 
-@router.post("/v1/console/datahub/projects", response_model=ProjectResponse, tags=["datahub-creator"])
+@router.post("/datahub/projects", response_model=ProjectResponse, tags=["datahub-creator"])
 async def create_project(
     req: ProjectCreateRequest,
     store = Depends(get_project_store),
@@ -202,7 +202,7 @@ async def create_project(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/v1/console/datahub/projects", response_model=List[ProjectResponse], tags=["datahub-creator"])
+@router.get("/datahub/projects", response_model=List[ProjectResponse], tags=["datahub-creator"])
 async def list_projects(
     store = Depends(get_project_store),
 ) -> List[ProjectResponse]:
@@ -229,7 +229,7 @@ async def list_projects(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/v1/console/datahub/projects/{project_id}", response_model=ProjectDetailResponse, tags=["datahub-creator"])
+@router.get("/datahub/projects/{project_id}", response_model=ProjectDetailResponse, tags=["datahub-creator"])
 async def get_project_detail(
     project_id: str,
     store = Depends(get_project_store),
@@ -282,7 +282,7 @@ async def get_project_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/v1/console/datahub/projects/{project_id}", response_model=ProjectResponse, tags=["datahub-creator"])
+@router.patch("/datahub/projects/{project_id}", response_model=ProjectResponse, tags=["datahub-creator"])
 async def update_project(
     project_id: str,
     req: UpdateProjectRequest,
@@ -335,7 +335,7 @@ async def update_project(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/v1/console/datahub/projects/{project_id}/export", response_model=ExportResponse, tags=["datahub-creator"])
+@router.get("/datahub/projects/{project_id}/export", response_model=ExportResponse, tags=["datahub-creator"])
 async def export_project(
     project_id: str,
     format: str = "jsonl",
@@ -368,7 +368,7 @@ async def export_project(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/v1/console/datahub/projects/{project_id}/collaborate", response_model=CollaborationResponse, tags=["datahub-creator"])
+@router.post("/datahub/projects/{project_id}/collaborate", response_model=CollaborationResponse, tags=["datahub-creator"])
 async def add_collaborator(
     project_id: str,
     req: CollaborationRequest,

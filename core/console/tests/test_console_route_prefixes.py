@@ -28,13 +28,30 @@ from test_admin_route import _audit_events, _sandbox  # noqa: E402
 
 # Route groups still mounted under a doubled prefix on 2026-09-26. Shrink this
 # set when a group is fixed; never grow it — a new entry is a new bug.
+#
+# The five remaining groups are served at /v1/console/v1/<x> CONSISTENTLY: the UI
+# calls them as api("/v1/engine/...") (api() prepends /v1/console) or as literal
+# "/v1/console/v1/licensing|models|monitoring/..." — renaming them is cosmetic and
+# needs a coordinated frontend change. The /v1/console/v1/console/* groups were
+# real bugs (the UI called the single-prefix path and got 404) and are fixed.
 _KNOWN_DOUBLED = {
-    "/v1/console/v1/console/cost", "/v1/console/v1/console/datahub",
-    "/v1/console/v1/console/discovery", "/v1/console/v1/console/feedback",
-    "/v1/console/v1/console/learning", "/v1/console/v1/console/skills",
     "/v1/console/v1/engine", "/v1/console/v1/licensing", "/v1/console/v1/models",
     "/v1/console/v1/monitoring", "/v1/console/v1/skill-forge",
 }
+
+# Paths the web UI calls with a plain fetch() of the single-prefix form; all
+# used to 404 because their routers carried prefix="/v1/console/...".
+_UI_CALLED = [
+    ("GET", "/v1/console/datahub/projects/{project_id}"),
+    ("GET", "/v1/console/datahub/projects/{project_id}/export"),
+    ("POST", "/v1/console/learning/feedback/submit"),
+    ("POST", "/v1/console/learning/hotfix/{hotfix_id}/approve"),
+    ("POST", "/v1/console/learning/hotfix/{hotfix_id}/deploy"),
+    ("GET", "/v1/console/learning/optimizer/dashboard"),
+    ("GET", "/v1/console/skills/{skill_id}/learning"),
+    ("GET", "/v1/console/skills/{skill_id}/feedback/history"),
+    ("GET", "/v1/console/skills/{skill_id}/optimization/proposals"),
+]
 
 
 async def _noop() -> None:
@@ -103,6 +120,18 @@ class RoutePrefixTest(unittest.TestCase):
             self.assertEqual(doubled - _KNOWN_DOUBLED, set(), "new doubled /v1/console prefix")
             self.assertNotIn("/v1/console/v1/console/intents", doubled)
             self.assertNotIn("/v1/console/v1/console/control-plane", doubled)
+            self.assertFalse({g for g in doubled if g.startswith("/v1/console/v1/console/")},
+                             "a /v1/console/v1/console/* group is back")
+
+    def test_ui_called_paths_are_in_the_route_table(self):
+        with _sandbox(Path(tempfile.mkdtemp())):
+            from corvin_console.app import router
+            from fastapi import FastAPI
+            app = FastAPI()
+            app.include_router(router, prefix="/v1/console")
+            spec = app.openapi()["paths"]
+            missing = [(m, p) for m, p in _UI_CALLED if m.lower() not in spec.get(p, {})]
+            self.assertEqual(missing, [], "UI calls a path the console does not serve")
 
 
 if __name__ == "__main__":
