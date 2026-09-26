@@ -295,6 +295,15 @@ class SessionBridgeProducer:
         # Compute this event's hash
         bridge_event.hash = bridge_event.compute_hash()
 
+        # FIX #3: Persist snapshot to disk BEFORE audit event
+        try:
+            self._persist_snapshot_to_disk(snapshot)
+        except Exception as e:
+            logger.error(f"Failed to persist snapshot: {e}", exc_info=True)
+            raise RuntimeError(
+                f"Session snapshot persistence failed (fail-closed): {e}"
+            ) from e
+
         # Emit to audit trail (fail-closed if audit write fails)
         try:
             self._write_audit_event(bridge_event)
@@ -310,6 +319,30 @@ class SessionBridgeProducer:
 
         return bridge_event
 
+    def _persist_snapshot_to_disk(self, snapshot: SessionContextSnapshot) -> None:
+        """FIX #3: Persist snapshot to disk for next session recovery.
+
+        Stores snapshot at tenant-scoped location:
+        ~/.corvin/tenants/{tenant_id}/infinite_session/snapshots/{task_id}/latest.json
+        """
+        snapshot_dir = (
+            Path.home()
+            / ".corvin" / "tenants" / snapshot.tenant_id
+            / "infinite_session" / "snapshots" / snapshot.task_id
+        )
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        snapshot_file = snapshot_dir / "latest.json"
+        snapshot_data = {
+            "snapshot": snapshot.to_dict(),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        with open(snapshot_file, "w") as f:
+            json.dump(snapshot_data, f, indent=2)
+
+        logger.info(f"Snapshot persisted: {snapshot_file}")
+
     def _write_audit_event(self, event: SessionBridgeEvent) -> None:
         """Write bridge event to audit trail (append-only).
 
@@ -317,9 +350,17 @@ class SessionBridgeProducer:
         the central audit backend (ADR-0232), not directly to a file.
 
         For now, we write to the EventStore file for verification.
+
+        FIX #5: Tenant-scoped audit path isolation.
         """
 
-        self.event_store_path.parent.mkdir(parents=True, exist_ok=True)
+        # FIX #5: Use tenant-scoped path for audit trail
+        event_store_path = (
+            Path.home()
+            / ".corvin" / "tenants" / event.tenant_id
+            / "global" / "forge" / "audit.jsonl"
+        )
+        event_store_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Serialize event
         event_dict = {
@@ -335,7 +376,7 @@ class SessionBridgeProducer:
         }
 
         # Append to audit trail (append-only, one JSON per line)
-        with open(self.event_store_path, "a") as f:
+        with open(event_store_path, "a") as f:
             f.write(json.dumps(event_dict) + "\n")
 
 
