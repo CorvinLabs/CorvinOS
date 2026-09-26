@@ -28,7 +28,7 @@ from corvin_console.deps import require_session, require_csrf, consent_required
 from corvin_console import auth as session_auth
 
 router = APIRouter(
-    prefix="/v1/console/control-plane/plugins",
+    prefix="/control-plane/plugins",
     tags=["control-plane-plugins"]
 )
 
@@ -86,6 +86,33 @@ async def list_plugins(
         }
         for p in plugins
     ]
+
+
+# Declared before the parameterised routes: FastAPI matches in declaration
+# order, so a later static path is captured as an id and never reached.
+@router.get("/audit-log")
+async def get_audit_log(
+    limit: int = Query(10, ge=1, le=100),
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
+    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get plugin operation audit log for a tenant (read-only, immutable, tenant-scoped).
+
+    Args:
+        limit: Max results (1-100)
+        session: Session record (extracted from session cookie)
+
+    Returns:
+        List of audit events for this tenant only
+    """
+    manager = get_plugin_manager()
+    try:
+        events = manager.get_audit_log(tenant_id=session.tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return events[-limit:]  # Return last N events
 
 
 @router.get("/{plugin_id}")
@@ -250,28 +277,3 @@ async def uninstall_plugin(
         status=result["status"],
         message=result["message"]
     )
-
-
-@router.get("/audit-log")
-async def get_audit_log(
-    limit: int = Query(10, ge=1, le=100),
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
-    _: Annotated[None, Depends(consent_required("plugin_management"))] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get plugin operation audit log for a tenant (read-only, immutable, tenant-scoped).
-
-    Args:
-        limit: Max results (1-100)
-        session: Session record (extracted from session cookie)
-
-    Returns:
-        List of audit events for this tenant only
-    """
-    manager = get_plugin_manager()
-    try:
-        events = manager.get_audit_log(tenant_id=session.tenant_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    return events[-limit:]  # Return last N events

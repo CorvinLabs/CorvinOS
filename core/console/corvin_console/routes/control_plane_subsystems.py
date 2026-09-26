@@ -22,7 +22,7 @@ from corvin_console.deps import require_session, require_csrf, consent_required
 from corvin_console import auth as session_auth
 
 router = APIRouter(
-    prefix="/v1/console/control-plane/subsystems",
+    prefix="/control-plane/subsystems",
     tags=["control-plane-subsystems"]
 )
 
@@ -57,6 +57,35 @@ class SubsystemStatusResponse(BaseModel):
     started_at: Optional[str]
     paused_at: Optional[str]
     stopped_at: Optional[str]
+
+
+# Declared before the parameterised routes: FastAPI matches in declaration
+# order, so a later static path is captured as an id and never reached.
+@router.get("/audit-log", tags=["audit"])
+async def get_subsystem_audit_log(
+    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
+) -> Dict[str, Any]:
+    """
+    Get subsystem audit trail for a tenant (read-only, immutable, tenant-scoped).
+
+    Args:
+        session: Session record (extracted from session cookie)
+
+    Returns:
+        Audit events for this tenant only
+    """
+    manager = get_subsystem_manager()
+    try:
+        audit_log = manager.get_audit_log(tenant_id=session.tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "tenant_id": session.tenant_id,
+        "events": audit_log,
+        "count": len(audit_log)
+    }
 
 
 @router.patch("/{subsystem_id}/start")
@@ -301,31 +330,4 @@ async def get_subsystem_logs(
         "logs": [
             f"[2026-09-22T12:34:56Z] Subsystem {subsystem_id} is {status['state']}"
         ]
-    }
-
-
-@router.get("/audit-log", tags=["audit"])
-async def get_subsystem_audit_log(
-    session: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    _: Annotated[None, Depends(consent_required("subsystem_control"))] = None
-) -> Dict[str, Any]:
-    """
-    Get subsystem audit trail for a tenant (read-only, immutable, tenant-scoped).
-
-    Args:
-        session: Session record (extracted from session cookie)
-
-    Returns:
-        Audit events for this tenant only
-    """
-    manager = get_subsystem_manager()
-    try:
-        audit_log = manager.get_audit_log(tenant_id=session.tenant_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    return {
-        "tenant_id": session.tenant_id,
-        "events": audit_log,
-        "count": len(audit_log)
     }

@@ -32,7 +32,7 @@ from core.control_plane.override_authority import (
 )
 from ..deps import require_session_csrf_on_mutation
 
-router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/control-plane/overrides", tags=["control-plane"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/control-plane/overrides", tags=["control-plane"])
 
 # Singleton instance — in production, inject via dependency
 _authority: Optional[OverrideAuthority] = None
@@ -155,6 +155,40 @@ async def list_overrides(
     )
 
     return {"overrides": pending, "count": len(pending)}
+
+
+# Declared before the parameterised routes: FastAPI matches in declaration
+# order, so a later static path is captured as an id and never reached.
+@router.get("/audit")
+async def get_audit_log(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
+    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
+) -> dict[str, Any]:
+    """Get override audit trail (read-only).
+
+    Args:
+        rec: Authenticated session record
+
+    Returns:
+        Audit events for tenant
+    """
+    authority = get_authority()
+
+    events = await authority.get_audit_log(rec.tenant_id)
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="override.audit_view",
+        target_kind="system",
+        target_id="override_audit",
+    )
+
+    return {
+        "tenant_id": rec.tenant_id,
+        "events": events,
+        "count": len(events),
+    }
 
 
 @router.get("/{override_id}")
@@ -347,35 +381,3 @@ async def interrupt_override(
     )
 
     return result
-
-
-@router.get("/audit")
-async def get_audit_log(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = ...,
-    _: Annotated[None, Depends(consent_required("control_plane_override_operations"))] = None,
-) -> dict[str, Any]:
-    """Get override audit trail (read-only).
-
-    Args:
-        rec: Authenticated session record
-
-    Returns:
-        Audit events for tenant
-    """
-    authority = get_authority()
-
-    events = await authority.get_audit_log(rec.tenant_id)
-
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="override.audit_view",
-        target_kind="system",
-        target_id="override_audit",
-    )
-
-    return {
-        "tenant_id": rec.tenant_id,
-        "events": events,
-        "count": len(events),
-    }

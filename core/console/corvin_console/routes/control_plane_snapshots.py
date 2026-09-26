@@ -26,7 +26,7 @@ from ..deps import require_session_csrf_on_mutation
 
 router = APIRouter(
     dependencies=[Depends(require_session_csrf_on_mutation)],
-    prefix="/v1/console/control-plane/snapshots",
+    prefix="/control-plane/snapshots",
     tags=["control-plane-snapshots"]
 )
 

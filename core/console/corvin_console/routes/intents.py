@@ -9,6 +9,7 @@ ADR-2028: Natural Language Intent Router
 
 import asyncio
 import json
+import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,15 +20,17 @@ from corvin_console.intent_router import (
     IntentType,
     IntentClassification
 )
-from corvin_plugins.providers import audit_backend
 from core.compliance.consent import consent_required
 from core.paths import tenant_audit_chain
 
+from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_session
 from ..deps import require_session_csrf_on_mutation
 
-router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/console/intents", tags=["intents"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/intents", tags=["intents"])
 
 
 class IntentClassifyRequest(BaseModel):
@@ -95,25 +98,19 @@ async def classify_user_intent(
         else:
             status = "success"
 
-        # Emit audit event (immutable, hash-chained)
-        audit_event = {
-            "tenant_id": tenant_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "event_type": result.audit_event_type,
-            "input_text": req.text[:100],  # Truncate for privacy
-            "intent_type": result.intent_type.value,
-            "confidence": float(result.confidence),
-            "classifier_stage": result.classifier_stage,
-            "latency_ms": float(result.latency_ms),
-            "status": status,
-        }
-
-        # Write to audit chain (FAIL-CLOSED if chain fails)
-        audit_chain_path = tenant_audit_chain(tenant_id)
-        audit_backend.write_event(
-            event_type=result.audit_event_type,
-            payload=audit_event,
-            tenant_id=tenant_id
+        # Audit (hash-chained, session tenant). Content-free: the classification
+        # and its measurements only — never the user's text (PII floor).
+        console_audit.system_event(
+            tenant_id=tenant_id,
+            event=result.audit_event_type,
+            details={
+                "intent_type": result.intent_type.value,
+                "confidence": float(result.confidence),
+                "classifier_stage": result.classifier_stage,
+                "latency_ms": float(result.latency_ms),
+                "status": status,
+                "text_len": len(req.text),
+            },
         )
 
         return IntentClassifyResponse(
@@ -125,24 +122,19 @@ async def classify_user_intent(
         )
 
     except Exception as e:
-        # Log error + emit audit event
-        import traceback
-        logger_msg = f"Intent classification failed: {str(e)}"
-        traceback.print_exc()
-
-        audit_event = {
-            "tenant_id": tenant_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "event_type": "intent_classification_error",
-            "error": str(e),
-        }
-
-        audit_backend.write_event(
-            event_type="intent_classification_error",
-            payload=audit_event,
-            tenant_id=tenant_id
-        )
-
+        # Record the failure content-free (error TYPE only — a message can carry
+        # the user's text) and answer 500 without echoing internals.
+        logger.exception("Intent classification failed")
+        try:
+            console_audit.system_event(
+                tenant_id=tenant_id,
+                event="intent_classification_error",
+                details={"error_type": type(e).__name__},
+                severity="WARNING",
+            )
+        except Exception:  # noqa: BLE001 — the 500 below is the answer either way
+            logger.exception("intent_classification_error audit write failed")
+        logger_msg = "Intent classification failed"
         raise HTTPException(status_code=500, detail=logger_msg)
 
 
