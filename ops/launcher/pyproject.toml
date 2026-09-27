@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "corvinos"
 version = "0.1.0"
-description = "Corvin launcher — one-command setup and run your local AI assistant with Ollama"
+description = "Corvin launcher — one-command setup and run your AI assistant"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = []
-keywords = ["ai", "assistant", "ollama", "llm", "discord", "telegram", "local-ai", "corvin"]
+keywords = ["ai", "assistant", "llm", "discord", "telegram", "local-ai", "corvin"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",

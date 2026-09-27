@@ -379,11 +379,10 @@ exclude = [
     "core/license/tests/**",
     "core/console/systemd/**",
     # ops/ ships only the launcher Python package; strip its build artifacts,
-    # nested pyproject, shell installers, and the Go-based ollama-pr subtree.
+    # nested pyproject and shell installers.
     "ops/launcher/dist/**",
     "ops/launcher/build/**",
     "ops/launcher/pyproject.toml",
-    "ops/ollama-pr/**",
     "**/*.go",
     "**/install.sh",
     "**/install.ps1",

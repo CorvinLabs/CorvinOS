@@ -8,8 +8,8 @@
 |---|---|
 | **Python** | not required up front — the installer bootstraps its own via `uv` (3.10+ if you install manually) |
 | **OS** | Linux (Ubuntu 22.04+ recommended), macOS 12+ (Monterey), Windows 10 build 19041+ or Windows 11 |
-| **Disk** | 2–7 GB (the local Hermes model is 1.4–5.2 GB; plus the Whisper STT + Piper TTS voice models) |
-| **RAM** | 4 GB minimum. The installer picks the local model by available RAM — under ~6 GB it installs the lighter `qwen3:1.7b`, 6–12 GB gets the mid-size `qwen3:4b`, and ≥12 GB gets `qwen3:8b`; the running engine automatically uses whichever model is actually installed. |
+| **Disk** | ~1–2 GB (CorvinOS plus the Whisper STT + Piper TTS voice models) |
+| **RAM** | 4 GB minimum. CorvinOS runs no local LLM inference (ADR-2087); the AI engine is Claude Code, which runs against the Anthropic API. |
 
 > **Bridges only** (Discord, WhatsApp, Telegram, Slack, Email) additionally require Node.js 20+
 > and systemd (Linux) or launchd (macOS). On Windows, bridges require WSL2.
@@ -46,8 +46,9 @@ irm https://corvin-labs.com/install.ps1 | iex
 
 Both one-liners bootstrap the `uv` runtime (which brings its own Python — no system Python, pip, or
 package manager needed), then `uv tool install corvinos` into an isolated tool environment and add
-it to your PATH. They also provision the local Hermes model and the voice (STT + TTS) models so the
-install is voice-ready out of the box.
+it to your PATH. They also install the Claude Code CLI (skip with `--no-claude-code`) and provision
+the voice (STT + TTS) models so the install is voice-ready out of the box. No local LLM model is
+downloaded — local Ollama inference was removed in ADR-2087.
 
 What the one-liners download, and how it is verified:
 
@@ -55,7 +56,6 @@ What the one-liners download, and how it is verified:
 |---|---|---|
 | `uv` installer | yes — exact version, immutable GitHub release asset | SHA-256 of the installer script is checked before it runs; the script then verifies the `uv` binary against its embedded checksums |
 | `corvinos` (PyPI) | version **floor** (`corvinos>=<this release>`), deliberately not an exact pin | an exact pin would land in the uv receipt and freeze `uv tool upgrade` (the console's auto-update) — see the script header (INST-1) |
-| Ollama (Linux) | no — `https://ollama.com/install.sh` is unversioned | runs only when `ollama` is absent; opt out with `--no-hermes`; its full output is kept in `$TMPDIR/corvinos-install.log` (override: `CORVIN_INSTALL_LOG`). macOS uses Homebrew, Windows uses winget (signed package) |
 
 `sudo` is used in exactly two places on Linux: to `apt-get`/`yum install curl` when neither curl nor
 wget exists, and for `--always-on` (system-level service, ADR-0184 Stufe 2). Nothing else elevates.
@@ -73,8 +73,9 @@ corvinos-serve          # opens http://localhost:8765
 (With a system Python + pip you can also `pip install corvinos`, but the `uv` path above is what the
 one-liners use and needs no pre-installed Python.)
 
-**Hermes (local AI, no cloud required)** is automatically detected. If Ollama is not yet installed,
-the console's Settings → Engine page has a one-click bootstrap button.
+**AI engine:** the default engine is Claude Code. Log in once with `claude` (or configure an API key /
+cloud platform in the console's Settings → AI Engines). If Claude Code is missing or not logged in,
+a chat turn answers with an error that points at Setup — there is no automatic fallback engine.
 
 ---
 
@@ -86,28 +87,14 @@ pip install corvinos
 corvinos-serve          # web console at http://localhost:8765
 ```
 
-> **Note:** `corvinos-serve` (web console + Hermes auto-detect) and `corvin-install` (voice model
+> **Note:** `corvinos-serve` (web console) and `corvin-install` (voice model
 > provisioning, API keys, login autostart, messaging-bridge daemons + their system services) both
 > work from the pip wheel — the one-liners run `corvin-install` from the `uv tool install`, no
 > checkout involved. The bridge daemons are vendored inside the wheel
 > (`corvin_core/_vendor/corvin_operator/bridges/`) and need Node.js 20+ at runtime. A git checkout
-> (Method 3) is only needed to develop CorvinOS or rebuild the console frontend.
+> (Method 2) is only needed to develop CorvinOS or rebuild the console frontend.
 
-### Method 2: With Hermes (fully local, no API key required)
-```bash
-# Install Ollama first
-curl -fsSL https://ollama.com/install.sh | sh   # Linux
-brew install ollama                              # macOS
-# Windows: winget install Ollama.Ollama
-
-# Then install CorvinOS and start
-pip install corvinos
-corvinos-serve
-# The console auto-detects Ollama and selects the right model for your RAM.
-# Or use the one-click bootstrap: Settings → Engine → Bootstrap Hermes
-```
-
-### Method 3: From Source (development)
+### Method 2: From Source (development)
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
@@ -251,7 +238,6 @@ launchctl start com.corvin.adapter
 |---|---|
 | `pip install corvinos` | ✅ Supported |
 | `corvinos-serve` (web console) | ✅ Opens browser at http://localhost:8765 |
-| Hermes / Ollama | ✅ `winget install Ollama.Ollama` |
 | Bridges (Discord / WhatsApp / Telegram / …) | ⚠️ Requires WSL2 — see below |
 
 **Quick start (native):**
@@ -270,14 +256,6 @@ corvinos-serve
 > The one-liner installer (`irm https://corvin-labs.com/install.ps1 | iex`) handles PATH
 > setup automatically.
 
-**Hermes (local AI, no API key required):**
-```powershell
-winget install Ollama.Ollama
-pip install corvinos
-corvinos-serve
-# Or: Settings → Engine → Bootstrap Hermes in the browser
-```
-
 **Bridges on Windows → WSL2:**
 
 Bridges require bash and systemd, which are not available on native Windows. Install them via
@@ -294,7 +272,7 @@ corvin-install
 **Health check:**
 ```powershell
 curl http://localhost:8765/v1/console/healthz   # Is the console running? (bare /healthz is 404)
-ollama list                                     # Is Ollama running?
+claude --version                                # Is the Claude Code CLI installed?
 ```
 
 ---
@@ -541,5 +519,4 @@ corvin-install
 ## Related Documentation
 
 - **[INSTALL-UNIVERSAL.md](docs/INSTALL-UNIVERSAL.md)** — Detailed platform guide
-- **[OLLAMA-RELEASE.md](docs/OLLAMA-RELEASE.md)** — Release & publishing
 - **[audit-and-compliance.md](docs/audit-and-compliance.md)** — GDPR & compliance

@@ -67,47 +67,6 @@ def check_http_packages() -> DiagnosisResult:
         return DiagnosisResult("HTTP packages", False, f"Error checking: {e}")
 
 
-def check_ollama_running() -> DiagnosisResult:
-    """Check if Ollama is running and reachable."""
-    try:
-        import urllib.request
-        import urllib.error
-        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
-        return DiagnosisResult("Ollama running", True, "http://localhost:11434 responding")
-    except (urllib.error.URLError, Exception):
-        return DiagnosisResult(
-            "Ollama running",
-            False,
-            "Not reachable on http://localhost:11434 — "
-            "Start Ollama or register Scheduled Task for autostart",
-        )
-
-
-def check_ollama_autostart() -> DiagnosisResult:
-    """Check if Ollama is registered for autostart (Windows only)."""
-    if sys.platform != "win32":
-        return DiagnosisResult("Ollama autostart (Windows)", True, "Not applicable on this OS")
-
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["powershell", "-Command", "Get-ScheduledTask -TaskName Ollama-Autostart -ErrorAction SilentlyContinue"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if "Ollama-Autostart" in result.stdout:
-            return DiagnosisResult("Ollama autostart", True, "Scheduled Task registered")
-        else:
-            return DiagnosisResult(
-                "Ollama autostart",
-                False,
-                "No Scheduled Task — Run PowerShell recovery script in docs/windows-installation-errors.md",
-            )
-    except Exception as e:
-        return DiagnosisResult("Ollama autostart", False, f"Error checking: {e}")
-
-
 def check_corvin_task() -> DiagnosisResult:
     """Check if CorvinOS-Console Scheduled Task exists (Windows only)."""
     if sys.platform != "win32":
@@ -182,8 +141,6 @@ def cmd_diagnose_windows(args) -> int:
 
     results = [
         check_http_packages(),
-        check_ollama_running(),
-        check_ollama_autostart(),
         check_corvin_task(),
         check_piper_models(),
         check_pywin32(),

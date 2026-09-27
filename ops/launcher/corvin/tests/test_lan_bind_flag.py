@@ -71,7 +71,6 @@ class TestCmdServeHostResolution:
         monkeypatch.setattr(cli.serve_backend, "is_available", lambda: True)
         monkeypatch.setattr(cli.serve_backend, "console_url", lambda port: "http://x:8765")
         monkeypatch.setattr(cli, "_onboarding_complete", lambda: True)
-        monkeypatch.setattr(cli, "_print_hermes_status", lambda: None)
 
         def _fake_start(**kwargs):
             captured.update(kwargs)

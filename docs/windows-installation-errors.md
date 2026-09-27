@@ -65,63 +65,13 @@ python -c "import httpcore; import httpx; print(f'httpcore: {httpcore.__version_
 
 ---
 
-## 🟠 HIGH — Ollama Not in Windows Autostart
+## ℹ️ Removed — Ollama Not in Windows Autostart
 
-### Symptom
-- First run after installation: Hermes works ("self-heals")
-- Restart machine: `corvin serve` hangs at "Starting Ollama..." or fails
-- `curl http://localhost:11434/api/tags` times out or refuses connection
-
-### Root Cause
-Windows does not automatically start the Ollama service at boot.
-The assumption "self-heals on first run" is often false when Ollama is never launched.
-
-### Impact
-**High.** Hermes (qwen3:8b) unavailable on restart; TTS synthesis fails; `corvin serve` hangs.
-
-### Diagnosis
-
-```powershell
-# Check if Ollama is running
-curl -s http://localhost:11434/api/tags
-
-# If it times out or refuses, Ollama is not running
-# Check Scheduled Tasks
-Get-ScheduledTask -TaskName "*Ollama*" -ErrorAction SilentlyContinue
-
-# If nothing returned, Ollama is not in autostart
-```
-
-### Recovery
-
-```powershell
-# Step 1: Start Ollama manually (as a test)
-Start-Process "C:\Users\$env:USERNAME\AppData\Local\Programs\Ollama\ollama.exe"
-Start-Sleep -Seconds 5
-
-# Step 2: Verify it responds
-curl -s http://localhost:11434/api/tags | jq '.models[] | .name'
-# Expected: qwen3:8b
-
-# Step 3: Register as Scheduled Task (autostart at login)
-$taskName = "Ollama-Autostart"
-$taskPath = "\CorvinOS\"
-$ollamaPath = "C:\Users\$env:USERNAME\AppData\Local\Programs\Ollama\ollama.exe"
-
-$action = New-ScheduledTaskAction -Execute $ollamaPath
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -RunLevel Highest
-
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -TaskPath $taskPath -Force
-
-# Step 4: Verify registration
-Get-ScheduledTask -TaskName "Ollama-Autostart" | Select-Object State, TaskPath, LastTaskResult
-# Expected: State = Ready, LastTaskResult = 0 or empty
-```
-
-### Prevention
-- After installation, restart Windows once to test autostart
-- Verify `corvin serve` completes startup without "Starting Ollama..." hanging
+This category no longer applies. CorvinOS does not use a local Ollama server
+since ADR-2087 (the Hermes engine and all local inference were removed), so
+`corvin serve` neither starts nor waits for Ollama. An `Ollama-Autostart`
+scheduled task left over from an older install is not used by CorvinOS and can
+be deleted (`Unregister-ScheduledTask -TaskName Ollama-Autostart`).
 
 ---
 
@@ -300,14 +250,11 @@ python -c "import win32com.client; print('✓ COM registered')"
 # 1. Verify all packages
 pip list | Select-String -Pattern "httpcore|httpx|pywin32"
 
-# 2. Start Ollama
-Start-Process "C:\Users\$env:USERNAME\AppData\Local\Programs\Ollama\ollama.exe"
-Start-Sleep -Seconds 3
-curl -s http://localhost:11434/api/tags | jq '.models[] | .name'
+# 2. Check the Claude Code CLI (the default AI engine)
+claude --version
 
 # 3. Check Scheduled Tasks
 Get-ScheduledTask -TaskName "CorvinOS-Console"
-Get-ScheduledTask -TaskName "Ollama-Autostart"
 
 # 4. Test Piper model
 ls "$env:USERPROFILE\.config\corvin-voice\piper\*.onnx"
@@ -321,14 +268,13 @@ corvin serve
 
 ## Future Work: `corvin diagnose windows` (M2)
 
-**Planned:** Add CLI command to auto-detect all five error categories and suggest fixes programmatically.
+**Planned:** Add CLI command to auto-detect all four error categories and suggest fixes programmatically.
 
 ```bash
 # Future (not yet implemented):
 corvin diagnose windows
 # Output:
 # ✓ HTTP packages: OK (httpcore 1.0.9, httpx 0.28.1)
-# ✗ Ollama autostart: MISSING — Run: Register-ScheduledTask -TaskName Ollama-Autostart ...
 # ✗ CorvinOS task: MISSING — Run: Register-ScheduledTask -TaskName CorvinOS-Console ...
 # ✓ Piper models: OK (de_DE-kerstin-high)
 # ✓ pywin32: OK (registered)

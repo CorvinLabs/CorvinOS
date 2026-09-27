@@ -134,8 +134,8 @@ jobs:
           # failure by running its file alone.
           #
           # The --deselect names ONE test rather than dropping its file: it calls
-          # the real, unmocked ACO heal cycle (network probes plus an Ollama
-          # start attempt, no timeout) and blocks indefinitely — over 50 minutes
+          # the real, unmocked ACO heal cycle (network probes, no timeout)
+          # and blocks indefinitely — over 50 minutes
           # observed locally, at 3% of the suite. It is NOT the only blocker in
           # here, which is why the bound exists as well as the deselect.
           # Bounding the heal cycle itself is a product change, tracked

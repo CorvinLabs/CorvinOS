@@ -95,7 +95,7 @@ class TelemetryConfigSetTests(unittest.TestCase):
         false confidence. The actual `corvin config set telemetry.ping_enabled
         false` command line failed with argparse's own "invalid choice" usage
         error (exit code 2) BEFORE cmd_config_set ever ran, because the `key`
-        argument had `choices=["ollama-url", "model", "bridge", "image"]`.
+        argument had a fixed `choices=[...]` list of launcher keys.
         This test goes through the real parser to close that gap."""
         from corvin_operator.forge.forge.paths import corvin_home
         from corvin_console.aco.htrace_consent import ping_enabled
@@ -107,15 +107,15 @@ class TelemetryConfigSetTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertFalse(ping_enabled(corvin_home()))
 
-    def test_real_cli_parser_still_accepts_the_original_four_keys(self) -> None:
+    def test_real_cli_parser_still_accepts_the_launcher_keys(self) -> None:
         parser = cli._build_parser()
-        for key in ("ollama-url", "model", "bridge", "image"):
+        for key in ("bridge", "image"):
             args = parser.parse_args(["config", "set", key, "x"])
             self.assertEqual(args.key, key)
 
     def test_non_telemetry_keys_still_use_launcher_config(self) -> None:
         """Regression guard: the telemetry special-case must not swallow the
-        normal ollama-url/model/bridge/image keys, which belong in the
+        normal bridge/image keys, which belong in the
         corvin-launcher config.json, not tenant.corvin.yaml. Patches the
         launcher config path so this test never touches the real
         ~/.config/corvin-launcher/config.json on the machine running it."""
@@ -125,9 +125,9 @@ class TelemetryConfigSetTests(unittest.TestCase):
         orig_path = launcher_cfg._CONFIG_PATH
         launcher_cfg._CONFIG_PATH = fake_path
         try:
-            rc = cli.cmd_config_set(argparse.Namespace(key="model", value="qwen3:14b"))
+            rc = cli.cmd_config_set(argparse.Namespace(key="image", value="example/corvinos:test"))
             self.assertEqual(rc, 0)
-            self.assertEqual(launcher_cfg.get("model"), "qwen3:14b")
+            self.assertEqual(launcher_cfg.get("image"), "example/corvinos:test")
             self.assertTrue(fake_path.exists())
         finally:
             launcher_cfg._CONFIG_PATH = orig_path

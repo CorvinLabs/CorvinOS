@@ -1,4 +1,4 @@
-"""Corvin launcher — install and run Corvin with Ollama."""
+"""Corvin launcher — install and run Corvin."""
 try:
     from importlib.metadata import version as _dist_version
 

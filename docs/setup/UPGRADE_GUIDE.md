@@ -99,7 +99,7 @@ corvinos run                 # headless: OS + API + bridges, no console
 
 ```bash
 curl -s http://localhost:8765/v1/console/healthz         # "version" is the new release
-corvinos status                                          # gateway + Ollama state
+corvinos status                                          # gateway + console state
 corvinos audit verify                                    # chain still intact
 corvinos diagnose                                        # installation / runtime self-check
 ```
@@ -149,6 +149,40 @@ upgrade itself):
 - `~/.config/corvin-voice/` — installer config, preferences, `service.env`
 - `~/.config/corvin-launcher/config.json` — launcher settings (auto-update flag)
 - bridge settings under `~/.corvin/bridges/<bridge>/settings.json`
+
+### Upgrading past the Hermes / local-Ollama removal (ADR-2087)
+
+This release removes the Hermes engine and every path that ran inference on a
+local Ollama server. Nothing needs to be migrated by hand, but note:
+
+- **Stored engine choices are mapped, never rejected.** A `default_engine`,
+  `worker_engine`, per-chat engine pin or `/engine` argument equal to `hermes`,
+  `hermes-*`, `local`, `ollama`, `opencode_ollama` or `claude_code_local` is
+  read as `claude_code` (one WARNING `engine.legacy_mapped` per value in the
+  log). `spec.hermes_model` and `spec.engine_models.hermes` are ignored. Pick
+  another engine in Settings if Claude Code is not what you want.
+- **Remove the old health timer.** `corvin-hermes-health.{service,timer}` are
+  no longer installed. On Linux hosts that have them, run `bridge.sh down`
+  followed by `bridge.sh up` — both remove the legacy units (stop, disable,
+  delete; silent if absent).
+- **Removed environment variables** (now ignored): `CORVIN_HERMES_URL`,
+  `CORVIN_HERMES_BASE_URL`, `CORVIN_HERMES_MODEL`, `CORVIN_OLLAMA_BASE_URL`,
+  `CORVIN_HOUSE_RULES_HERMES_TIMEOUT_S`, `CORVIN_HOUSE_RULES_DISABLE_HERMES`,
+  `CORVIN_HOUSE_RULES_KEEP_ALIVE`, `CORVIN_HOUSE_RULES_MODEL`,
+  `CORVIN_DELEGATE_HERMES_ZONE`, `CORVIN_VOICE_PREWARM`.
+- **Launcher.** `corvin setup` no longer has an Ollama step, and its
+  `--ollama-url` / `--model` options are gone; `ollama_url` / `model` keys in
+  `~/.config/corvin-launcher/config.json` are dropped on read. `install.sh`
+  no longer accepts `--no-hermes` (it now exits with "Unknown argument").
+- **Egress-restricted tenants.** A tenant whose egress policy does not admit
+  `api.anthropic.com` has no bundled engine it may use; the L44 house-rules
+  gate runs `floor_only` for it (deny patterns deny, every other task
+  escalates). Such a tenant needs a user-defined engine on an admitted
+  endpoint. CONFIDENTIAL data is admissible only on `opencode_http` or a
+  tenant-declared engine; SECRET data has no bundled admissible engine.
+- **Ollama itself** is a separate program; CorvinOS does not uninstall it or
+  its models. Remove it with your package manager if nothing else uses it.
+  The hosted `ollama_cloud` provider is unaffected.
 
 Restoring a tenant bundle on another machine:
 
@@ -212,10 +246,11 @@ pre-upgrade check. If the chain verified before and not after, stop the
 instance and consult `docs/audit-and-compliance.md` before anything else; a
 broken chain is a CRITICAL security event, not a cosmetic one.
 
-**Hermes / Ollama model missing after upgrade** — models are stored by Ollama,
-not by CorvinOS, and survive package upgrades. `ollama list`; if empty,
-`ollama pull qwen3:4b` (or the model the installer chose for your RAM), or use
-Settings → Engine → Bootstrap Hermes in the console.
+**Chat reports that Claude Code is not installed or not logged in after
+upgrading from a Hermes install** — the Hermes engine was removed (ADR-2087) and a stored
+`hermes` engine is now read as `claude_code`. There is no automatic fallback
+engine: install the Claude Code CLI and log in (`claude`), or pick another
+engine in Settings.
 
 **Something else** — `corvinos diagnose` (Windows: `corvinos diagnose windows`)
 prints a self-check; `~/.corvin/logs/console.log` has the server log.

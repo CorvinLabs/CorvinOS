@@ -5,7 +5,7 @@ Commands:
   corvin start                         Smart start: setup if needed, then launch + open browser
   corvin stop                          Shut Corvin down (console + bridges); restart with `corvin serve`
   corvin open                          Open the web console in your browser
-  corvin setup [--yes] [--model TAG] [--profile eu-production]
+  corvin setup [--yes] [--profile eu-production]
   corvin gateway start
   corvin gateway stop
   corvin gateway setup
@@ -27,7 +27,6 @@ from typing import Any, Optional
 from . import config as cfg
 from . import diagnose as _diagnose_cmd
 from . import docker_backend
-from . import ollama as oll
 from . import serve_backend
 
 
@@ -165,35 +164,6 @@ def cmd_detect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_hermes_status() -> None:
-    """Print a one-line Hermes/Ollama availability hint at console start."""
-    try:
-        try:
-            from corvin_console.hermes_bootstrap import (  # noqa: PLC0415
-                is_ollama_installed, get_available_ram_gb, select_model_for_ram,
-            )
-        except ImportError:
-            import sys as _sys
-            from pathlib import Path as _Path
-            _shared = _Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
-            if str(_shared) not in _sys.path:
-                _sys.path.insert(0, str(_shared))
-            from hermes_bootstrap import (  # noqa: PLC0415
-                is_ollama_installed, get_available_ram_gb, select_model_for_ram,
-            )
-        if is_ollama_installed():
-            model = select_model_for_ram(get_available_ram_gb())
-            print(f"  {_green('●')} Hermes (Ollama) ready  — engine: hermes  model: {_bold(model)}")
-        else:
-            # NB: f-prefix is load-bearing here — without it {_bold(...)} would
-            # print literally. `corvin setup --hermes` was never a real command
-            # (setup has no --hermes flag); point at the actual Ollama install.
-            print(f"  {_yellow('○')} Hermes (Ollama) not found  — "
-                  f"install Ollama from {_bold('https://ollama.com/download')} to enable it")
-    except Exception:
-        pass  # Hermes status is informational; never block console start
-
-
 def _default_bind_host() -> str:
     """127.0.0.1 unless the operator opted in to a2a_lan_bind (Settings ->
     Features), in which case 0.0.0.0 — best-effort, never raises: any
@@ -249,7 +219,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
     print(f"  {_green('●')} Starting on {_bold(base_url)} …")
     if not _onboarding_complete():
         print(f"  {_yellow('First run')} — opening setup wizard at {_bold(base_url + open_path)}")
-    _print_hermes_status()
     print(f"  Press Ctrl-C to stop.\n")
 
     return serve_backend.start(port=port, open_browser=not no_browser, open_path=open_path, host=host)
@@ -272,7 +241,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"\n  {_bold('CorvinOS — headless')}")
     print(f"  {_green('●')} OS + API + bridges on {_bold(f'http://{host}:{port}')}  "
           f"{_yellow('(no browser console)')}")
-    _print_hermes_status()
     print("  Press Ctrl-C to stop.\n")
     return serve_backend.start(port=port, open_browser=False, host=host, headless=True)
 
@@ -298,7 +266,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     # ── Docker path (existing behaviour) ────────────────────────────────
     conf = cfg.load()
-    is_configured = bool(conf.get("ollama_url") and conf.get("model"))
+    is_configured = cfg.is_configured()
 
     if not is_configured:
         print(_yellow("  Not configured yet — running setup first.\n"))
@@ -343,7 +311,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"\n{_bold('Corvin Setup')}\n")
 
     # ── 1. Docker check ───────────────────────────────────────────────────────
-    print(_bold("Step 1/4 — Docker"))
+    print(_bold("Step 1/2 — Docker"))
     if not docker_backend.is_docker_available():
         print(_red("  Docker is not running or not installed."))
         print("  Install Docker Desktop: https://www.docker.com/products/docker-desktop/")
@@ -351,44 +319,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return 1
     print(_green("  Docker is available."))
 
-    # ── 2. Ollama detection ───────────────────────────────────────────────────
-    print(f"\n{_bold('Step 2/4 — Ollama')}")
-    ollama_url_hint = getattr(args, "ollama_url", None) or cfg.get("ollama_url")
-    ollama_url = oll.detect_url(hint=ollama_url_hint)
-    if not ollama_url:
-        print(_red("  Ollama is not reachable."))
-        print("  Start Ollama first: https://ollama.com/download")
-        if not args.yes:
-            custom = _ask("Or enter Ollama URL manually", "")
-            if custom:
-                ollama_url = custom.rstrip("/")
-            else:
-                return 1
-        else:
-            return 1
-    print(_green(f"  Ollama found at {ollama_url}"))
-
-    # ── 3. Model selection ────────────────────────────────────────────────────
-    print(f"\n{_bold('Step 3/4 — Model')}")
-    pulled_models = oll.list_models(ollama_url)
-    current_model = cfg.get("model")
-
-    if args.model:
-        model = args.model
-        print(f"  Using model: {model}")
-    elif args.yes:
-        model = current_model
-        print(f"  Using model: {model}")
-    else:
-        suggestions = pulled_models[:8] if pulled_models else oll._DEFAULT_MODELS[:5]
-        if not pulled_models:
-            print(_yellow("  No models pulled yet. Showing suggestions (run 'ollama pull <model>' first)."))
-        model = _ask_choice("Select a model:", suggestions, default=current_model if current_model in suggestions else (suggestions[0] if suggestions else "qwen3:8b"))
-
-    # ── 4. Bridge selection ───────────────────────────────────────────────────
+    # ── 2. Bridge selection ───────────────────────────────────────────────────
+    # The AI engine (Claude Code) is configured in the console setup wizard;
+    # the launcher no longer probes a local Ollama server (ADR-2087).
     bridge = cfg.get("bridge")
     if not args.yes:
-        print(f"\n{_bold('Step 4/4 — Messaging bridge')}")
+        print(f"\n{_bold('Step 2/2 — Messaging bridge')}")
         bridges = ["discord", "telegram", "slack", "whatsapp", "email", "none"]
         bridge = _ask_choice(
             "Which messaging platform do you want to connect?",
@@ -400,12 +336,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # ── EU production profile ─────────────────────────────────────────────────
     if getattr(args, "profile", None) == "eu-production":
-        print(f"\n  {_green('EU-production profile activated')} — local Ollama only, no cloud egress.")
+        print(f"\n  {_green('EU-production profile selected.')}")
 
     # ── Save config ───────────────────────────────────────────────────────────
     conf = cfg.load()
-    conf["ollama_url"] = ollama_url
-    conf["model"] = model
     conf["bridge"] = bridge
     cfg.save(conf)
 
@@ -416,8 +350,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return 1
 
     print(f"\n{_green(_bold('Setup complete!'))}")
-    print(f"  Ollama:  {ollama_url}")
-    print(f"  Model:   {model}")
     print(f"  Bridge:  {bridge or '(none)'}")
     print(f"\n  Run  {_bold('corvin gateway start')}  to launch Corvin.")
     print(f"  The console opens automatically at  "
@@ -429,7 +361,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 def cmd_gateway_start(args: argparse.Namespace) -> int:
     conf = cfg.load()
-    if not conf.get("ollama_url") or not conf.get("model"):
+    if not cfg.is_configured():
         print(_red("Not configured yet. Run: corvin setup"))
         return 1
 
@@ -654,8 +586,6 @@ def cmd_config_set(args: argparse.Namespace) -> int:
     if args.key.startswith("features."):
         return _set_feature_flag_config(args.key, args.value)
     key_map = {
-        "ollama-url": "ollama_url",
-        "model":      "model",
         "bridge":     "bridge",
         "image":      "image",
     }
@@ -679,7 +609,6 @@ def cmd_config_show(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     conf = cfg.load()
     running = docker_backend.is_running(conf["container_name"])
-    ollama_url = oll.detect_url(conf["ollama_url"])
 
     # Mode-aware (ADR-0352 P2.3b): probe the running process's root — a headless
     # launch answers {"ui":"headless"} and serves no browser Console.
@@ -700,8 +629,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  Console:  {_yellow('— (headless: OS + API + bridges, no browser UI)')}")
     else:
         print(f"  Console:  {_green(docker_backend.console_url()) if running else '—'}")
-    print(f"  Ollama:   {_green(ollama_url) if ollama_url else _red('unreachable')}")
-    print(f"  Model:    {conf.get('model', '—')}")
     print(f"  Bridge:   {conf.get('bridge') or '—'}")
     print()
     return 0
@@ -727,7 +654,7 @@ def _build_parser() -> argparse.ArgumentParser:
               corvin stop                  Shut Corvin down (console + bridges)
               corvin open                  Open the web console in your browser
               corvin setup                 Interactive configuration wizard
-              corvin setup --yes --model qwen3:8b   Non-interactive (for ollama launch)
+              corvin setup --yes           Non-interactive
               corvin gateway start         Start the gateway (foreground)
               corvin gateway setup         Connect a messaging platform
               corvin status                Show running state
@@ -760,8 +687,6 @@ def _build_parser() -> argparse.ArgumentParser:
     # start
     st = sub.add_parser("start", help="Setup if needed, start gateway, open browser")
     st.add_argument("--yes", "-y", action="store_true", help="Non-interactive setup")
-    st.add_argument("--model", metavar="TAG", help="Ollama model tag")
-    st.add_argument("--ollama-url", metavar="URL", help="Ollama base URL")
     st.add_argument("--profile", choices=["eu-production"], help="Config preset")
     st.add_argument("--port", "-p", type=int, default=8765, metavar="PORT",
                     help="Port for native mode (default: 8765)")
@@ -777,8 +702,6 @@ def _build_parser() -> argparse.ArgumentParser:
     # setup
     s = sub.add_parser("setup", help="Configure and pull Corvin")
     s.add_argument("--yes", "-y", action="store_true", help="Non-interactive (skip all prompts)")
-    s.add_argument("--model", metavar="TAG", help="Ollama model tag to use")
-    s.add_argument("--ollama-url", metavar="URL", help="Ollama base URL (default: auto-detect)")
     s.add_argument("--profile", choices=["eu-production"], help="Apply a config preset")
 
     # detect (ADR-0120 M3 — engine binary detection)
@@ -800,15 +723,14 @@ def _build_parser() -> argparse.ArgumentParser:
     co = sub.add_parser("config", help="Read and write configuration")
     co_sub = co.add_subparsers(dest="config_cmd", metavar="subcommand")
     cs = co_sub.add_parser("set", help="Set a config value")
-    # No `choices=` restriction here (was: ["ollama-url", "model", "bridge",
-    # "image"]) — that rejected `telemetry.*` keys with argparse's own usage
+    # No `choices=` restriction here (was: ["bridge", "image", ...]) — that rejected `telemetry.*` keys with argparse's own usage
     # error BEFORE cmd_config_set ever ran, so the exact opt-out command this
     # software prints to users ("corvin config set telemetry.ping_enabled
     # false") failed outright (adversarial review finding). cmd_config_set
     # already validates/dispatches unknown keys safely.
     cs.add_argument(
         "key", metavar="KEY",
-        help="ollama-url | model | bridge | image | telemetry.<subkey> "
+        help="bridge | image | telemetry.<subkey> "
              "(e.g. telemetry.ping_enabled) | features.<flag_id> "
              "(e.g. features.headless_api_mode — the off-ramp when a flag has "
              "removed the Console UI)",
@@ -817,7 +739,7 @@ def _build_parser() -> argparse.ArgumentParser:
     co_sub.add_parser("show", help="Print current configuration")
 
     # status
-    sub.add_parser("status", help="Show gateway and Ollama status")
+    sub.add_parser("status", help="Show gateway and console status")
 
     # secrets (Phase 1b) — manage encrypted secrets
     from . import secrets_cmd as _secrets_cmd

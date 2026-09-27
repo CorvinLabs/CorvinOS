@@ -173,7 +173,7 @@ esac
 """,
     )
     # Fake curl: report the console healthz probe as instantly ready, fail
-    # every other URL (PyPI version lookup, Ollama, etc.) so the script is
+    # every other URL (PyPI version lookup, etc.) so the script is
     # forced down its real fail-soft / already-satisfied branches instead of
     # touching the network.
     _write_stub(

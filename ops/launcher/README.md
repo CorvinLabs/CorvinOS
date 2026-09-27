@@ -1,7 +1,7 @@
 # corvin-launcher
 
-Thin CLI launcher for [CorvinOS](https://github.com/CorvinLabs/CorvinOS) — enables
-`ollama launch corvinos` and standalone setup via `pip install corvinos`.
+Thin CLI launcher for [CorvinOS](https://github.com/CorvinLabs/CorvinOS) — standalone
+setup via `pip install corvinos`.
 
 ## Install
 
@@ -30,7 +30,7 @@ corvin start
 
 # Or step by step:
 corvin setup                         # interactive wizard
-corvin setup --yes --model qwen3:8b  # non-interactive (used by ollama launch)
+corvin setup --yes                   # non-interactive
 corvin gateway start                 # start the gateway (foreground)
 corvin gateway setup                 # connect Discord / Telegram / Slack / …
 corvin open                          # open the web console in your browser
@@ -46,4 +46,4 @@ pip install corvinos && corvin start
 
 - Python 3.10+
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS) or Docker Engine (Linux)
-- [Ollama](https://ollama.com/download) running locally
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — the AI engine, configured in the console setup wizard

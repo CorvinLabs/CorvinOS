@@ -71,8 +71,6 @@ def is_available() -> bool:
 def start(foreground: bool = True) -> int:
     conf = cfg.load()
     env = os.environ.copy()
-    env["CORVIN_OLLAMA_BASE_URL"] = conf["ollama_url"]
-    env["CORVIN_HERMES_MODEL"] = conf["model"]
     if conf.get("bridge"):
         env[f"CORVIN_BRIDGE_{conf['bridge'].upper()}"] = "true"
 

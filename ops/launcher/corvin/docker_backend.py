@@ -1,6 +1,5 @@
 """Docker-based Corvin backend."""
 import subprocess
-import sys
 import threading
 import time
 import urllib.request
@@ -9,7 +8,6 @@ from typing import Optional
 from pathlib import Path
 
 from . import config as cfg
-from . import ollama as oll
 
 CONSOLE_PORT = 8000
 CONSOLE_PATH = "/console/"
@@ -81,38 +79,21 @@ def stop(container_name: Optional[str] = None) -> None:
 
 def _build_run_cmd(
     image: str,
-    ollama_url: str,
-    model: str,
     bridge: Optional[str],
     data_dir: str,
     container_name: str,
     console_port: int = CONSOLE_PORT,
     extra_env: Optional[dict] = None,
 ) -> list[str]:
-    docker_ollama_url = oll.host_url_for_docker(ollama_url)
-
-    use_host_network = (
-        sys.platform == "linux"
-        and ("localhost" in ollama_url or "127.0.0.1" in ollama_url)
-    )
-
     cmd = [
         _docker(), "run", "--rm",
         "--name", container_name,
-        "-e", f"CORVIN_OLLAMA_BASE_URL={docker_ollama_url}",
-        "-e", f"CORVIN_HERMES_MODEL={model}",
         "-e", "CORVIN_GATEWAY_ENABLED=true",
         "-v", f"{data_dir}:/home/corvin",
+        # Port mapping for the WebUI console. (Host networking was only used
+        # to reach a local Ollama server, removed by ADR-2087.)
+        "-p", f"{console_port}:{CONSOLE_PORT}",
     ]
-
-    # Port mapping for the WebUI console.
-    # --network host already exposes all ports on Linux; explicit -p is needed
-    # on macOS / Windows Docker Desktop.
-    if not use_host_network:
-        cmd += ["-p", f"{console_port}:{CONSOLE_PORT}"]
-
-    if use_host_network:
-        cmd += ["--network", "host"]
 
     # Enable the selected bridge
     if bridge and bridge in _BRIDGE_ENV_KEYS:
@@ -134,8 +115,6 @@ def start(
 ) -> int:
     conf = cfg.load()
     image = conf["image"]
-    ollama_url = conf["ollama_url"]
-    model = conf["model"]
     bridge = conf.get("bridge")
     data_dir = conf["data_dir"]
     container_name = conf["container_name"]
@@ -149,7 +128,7 @@ def start(
         return 0
 
     cmd = _build_run_cmd(
-        image, ollama_url, model, bridge, data_dir, container_name,
+        image, bridge, data_dir, container_name,
         console_port=console_port, extra_env=extra_env,
     )
 

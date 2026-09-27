@@ -38,7 +38,6 @@ def run_validation(
 
     # ── Chat Engine ────────────────────────────────────────────────────────
     has_claude = bool(shutil.which("claude") or shutil.which("claude-code"))
-    has_ollama = bool(shutil.which("ollama"))
     if has_claude:
         print("✓ claude CLI found")
         plugins = _list_plugins()
@@ -50,13 +49,9 @@ def run_validation(
             print("✓ cowork plugin registered")
         else:
             print("  cowork plugin not found (optional)")
-    elif has_ollama:
-        print("✓ Hermes engine (Ollama) available — chat works without Claude CLI")
-        print("  ℹ To use Claude: install claude CLI from https://claude.ai/code")
     else:
         print("⚠ No chat engine found")
-        print("  Option A: Install claude CLI from https://claude.ai/code")
-        print("  Option B: Install Ollama from https://ollama.com (free, local, no API key)")
+        print("  Install claude CLI from https://claude.ai/code")
         print("  CorvinOS will guide you through engine setup on first run.")
         # NOT a fatal failure — the web UI guides users through setup on first visit
 
