@@ -351,15 +351,29 @@ def _read_channel_whitelist(channel: str) -> list[str]:
 
 
 def is_intrinsic_owner(channel: str, uid: str) -> bool:
-    """``uid`` is on the channel's whitelist => owner. Empty whitelist =
-    DEV-mode (matches auth.js fail-open behaviour) — every uid is owner.
+    """``uid`` is on the channel's whitelist => owner (WhatsApp JIDs compared
+    without their per-device suffix).
+
+    An EMPTY whitelist makes NOBODY an owner — never everyone. The old
+    "DEV-mode parity with auth.js" fail-open is gone here as it is in
+    disclosure.py (F-A19): owner status unlocks /grant, /revoke and waives the
+    disclosure card, and since this module reads the daemon's real settings
+    file (2026-09-27), an empty list would have made every stranger an owner.
+    auth.js itself fails closed on an empty list for hardened channels and
+    auto-claims the first sender on the others, so the list does not stay
+    empty on a used bridge.
     """
     if not uid:
         return False
     wl = _read_channel_whitelist(channel)
     if not wl:
-        return True   # DEV-mode parity with auth.js
-    return uid in wl
+        return False
+    return _norm_jid(uid) in {_norm_jid(x) for x in wl}
+
+
+def _norm_jid(uid: str) -> str:
+    """adapter._normalize_jid: drop a WhatsApp per-device suffix (``:11@``)."""
+    return re.sub(r":[0-9]+@", "@", str(uid))
 
 
 # ── Public API ─────────────────────────────────────────────────────────

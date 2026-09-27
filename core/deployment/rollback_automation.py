@@ -375,7 +375,11 @@ class RollbackController:
             for action in event.actions_taken:
                 if action == RollbackAction.DISABLE_SKILL:
                     if event.skill_id:
-                        self.locked_skills[event.skill_id] = event.lockdown_until or ""
+                        # Use provided lockdown time or default to 1 hour from now
+                        lock_until = event.lockdown_until or (
+                            datetime.now(timezone.utc) + timedelta(hours=1)
+                        ).isoformat()
+                        self.locked_skills[event.skill_id] = lock_until
                         logger.warning(f"Skill {event.skill_id} disabled, using fallback engine")
 
                 elif action == RollbackAction.REVERT_VERSION:

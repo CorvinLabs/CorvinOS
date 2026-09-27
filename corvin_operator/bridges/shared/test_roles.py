@@ -1,6 +1,6 @@
 """test_roles.py — Layer 18 capability-bundle role system.
 
-Covers parse_ttl, bundle catalog, intrinsic-owner DEV-mode parity,
+Covers parse_ttl, bundle catalog, intrinsic-owner (empty whitelist = nobody),
 effective_role with lazy prune, grant input validation, grant authority
 matrix, TTL clamps + indefinite, revoke authority, owner-not-revocable,
 leave (multiple sub-paths), status, list_roles, CLI round-trip via
@@ -140,11 +140,15 @@ class IntrinsicOwnerTests(_RolesTestBase):
     def test_stranger_not_intrinsic(self):
         self.assertFalse(roles.is_intrinsic_owner(CHANNEL, STRANGER_UID))
 
-    def test_dev_mode_empty_whitelist(self):
-        # Empty whitelist = DEV mode = every uid classifies as owner. This
-        # mirrors auth.js's fail-open contract.
+    def test_empty_whitelist_makes_nobody_owner(self):
+        # An empty whitelist is NOT dev-mode any more (F-A19 parity with
+        # disclosure.py): a stranger on an unconfigured channel is no owner.
         self._channel_settings.write_text(json.dumps({"whitelist": []}))
-        self.assertTrue(roles.is_intrinsic_owner(CHANNEL, "anyone"))
+        self.assertFalse(roles.is_intrinsic_owner(CHANNEL, "anyone"))
+
+    def test_whatsapp_device_suffix_is_the_same_owner(self):
+        self._channel_settings.write_text(json.dumps({"whitelist": ["4917000@s.whatsapp.net"]}))
+        self.assertTrue(roles.is_intrinsic_owner(CHANNEL, "4917000:11@s.whatsapp.net"))
 
     def test_blank_uid_never_owner(self):
         self.assertFalse(roles.is_intrinsic_owner(CHANNEL, ""))

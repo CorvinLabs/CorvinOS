@@ -15,7 +15,7 @@ Compliance: GDPR (Art. 5/6/30/32), EU AI Act (Art. 5/50), audit-first (ADR-0232/
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import logging
 from pathlib import Path
@@ -269,7 +269,7 @@ class ADRComplianceValidator:
 
     def validate_adr_0186_heartbeat(
         self,
-        heartbeat_metrics: Dict[str, any],
+        heartbeat_metrics: Dict[str, Any],
     ) -> List[ADRComplianceCheck]:
         """
         Validate ADR-0186: Presence Heartbeat compliance.
@@ -316,7 +316,7 @@ class ADRComplianceValidator:
 
     def validate_adr_0369_edge_cases(
         self,
-        rollback_metrics: Dict[str, any],
+        rollback_metrics: Dict[str, Any],
     ) -> List[ADRComplianceCheck]:
         """
         Validate ADR-0369: Edge Cases & Contingency compliance.
@@ -363,7 +363,7 @@ class ADRComplianceValidator:
         self,
         week_number: int,
         phase: str,
-        metrics: Dict[str, any],
+        metrics: Dict[str, Any],
     ) -> WeeklyComplianceReport:
         """
         Generate comprehensive weekly compliance report across all ADRs.

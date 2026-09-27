@@ -397,7 +397,8 @@ def _is_intrinsic_owner(channel: str, uid: str) -> bool:
         # skipped the bot-disclosure for every stranger on an unconfigured
         # channel. (The old "DEV-mode parity with auth.js" fail-open is gone.)
         return False
-    return uid in wl
+    norm = lambda u: re.sub(r":[0-9]+@", "@", str(u))  # noqa: E731 — adapter._normalize_jid
+    return norm(uid) in {norm(x) for x in wl}
 
 
 # ── Public API ─────────────────────────────────────────────────────────

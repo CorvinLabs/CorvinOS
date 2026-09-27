@@ -673,6 +673,58 @@ class TaskManager:
             return None
         return pid
 
+    def _owner(self, task_id: str) -> tuple[int | None, str | None]:
+        """(owner_pid, owner_start) from the task's ``task.started`` event —
+        the process that owns a task before (or without) an engine process:
+        a bridge turn preparing its context, or one on an engine that runs no
+        subprocess (ADR-2081)."""
+        events_path = self._events_path(task_id)
+        try:
+            with events_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    if '"owner_pid"' not in line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("event") == "task.started" and isinstance(ev.get("owner_pid"), int):
+                        start = ev.get("owner_start")
+                        return ev["owner_pid"], (str(start) if start else None)
+        except OSError:
+            pass
+        return None, None
+
+    @staticmethod
+    def _proc_start(pid: int) -> str | None:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            return None
+        rest = stat[stat.rfind(")") + 2:].split()
+        return rest[19] if len(rest) > 19 else None
+
+    def _owner_alive(self, task_id: str) -> bool:
+        """True iff the task's owning process still runs — the SAME process:
+        pid alive and, where /proc exists, the same kernel start time (a
+        recycled pid is a different process)."""
+        pid, start = self._owner(task_id)
+        if pid is None or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass
+        except OSError:
+            return False
+        if start is not None:
+            now_start = self._proc_start(pid)
+            if now_start is not None and now_start != start:
+                return False
+        return True
+
     def _task_pid_alive(self, task_id: str) -> bool:
         """True iff the task's recorded engine process is still alive.
 
@@ -746,8 +798,9 @@ class TaskManager:
             if meta.get("status") not in ("running", "pending"):
                 continue
             task_id = meta_file.stem
-            # Never reap a task whose engine process is still alive.
-            if self._task_pid_alive(task_id):
+            # Never reap a task whose engine process — or, before/without an
+            # engine process, its owning process — is still alive.
+            if self._task_pid_alive(task_id) or self._owner_alive(task_id):
                 continue
             try:
                 self.record_event(task_id, {

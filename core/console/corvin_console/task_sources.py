@@ -175,28 +175,47 @@ def _corvin_root() -> Path:
 _CHANNEL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
-def _operator_uids(channel: str) -> frozenset[str]:
-    """Senders EXPLICITLY on a bridge's whitelist — the operator's own accounts.
+class _OwnerRules:
+    """A bridge's operator rule, read once per scan: the uids EXPLICITLY on its
+    whitelist, and which chats are opened to everyone (``audience: all`` — no
+    operator there; ``default`` applies to chats without a profile). Mirrors
+    the adapter's ``_sender_is_operator``."""
 
-    Read from the settings file the bridge daemon itself uses, resolved by
-    ``paths.resolve_bridge_settings_file`` (forge mirror — the one resolver;
-    ADR-0008 §8.3). Only an explicit entry counts: an empty whitelist, or a
-    chat opened to everyone (``audience: all``), makes nobody the operator.
-    Not cached across calls — the file also holds the bridge token, which must
-    not sit in a module-level cache; callers memoise per scan."""
+    def __init__(self, uids: frozenset[str], profiles: dict[str, Any]):
+        self.uids, self.profiles = uids, profiles
+
+    def chat_is_open(self, chat_id: Any) -> bool:
+        for key in (str(chat_id) if chat_id else None, _norm_uid(chat_id) if chat_id else None, "default"):
+            prof = self.profiles.get(key) if key else None
+            if isinstance(prof, dict) and "audience" in prof:
+                return prof.get("audience") == "all"
+        return False
+
+
+def _operator_uids(channel: str) -> _OwnerRules:
+    """The operator rule of a bridge, from the settings file its daemon uses
+    (``paths.resolve_bridge_settings_file``, forge mirror — ADR-0008 §8.3).
+    Only an explicit whitelist entry counts; an empty whitelist makes nobody
+    the operator. Not cached across calls — the file also holds the bridge
+    token, which must not sit in a module-level cache; callers memoise per scan."""
+    none = _OwnerRules(frozenset(), {})
     if not _CHANNEL_RE.match(channel or ""):
-        return frozenset()
+        return none
     try:
         from forge import paths as _forge_paths  # noqa: PLC0415
 
         settings = _forge_paths.resolve_bridge_settings_file(channel)
         if settings is None:
-            return frozenset()
+            return none
         data = json.loads(settings.read_text(encoding="utf-8"))
     except (ImportError, AttributeError, OSError, ValueError):
-        return frozenset()
-    wl = data.get("whitelist") if isinstance(data, dict) else None
-    return frozenset(_norm_uid(x) for x in wl if x) if isinstance(wl, list) else frozenset()
+        return none
+    if not isinstance(data, dict):
+        return none
+    wl = data.get("whitelist")
+    uids = frozenset(_norm_uid(x) for x in wl if x) if isinstance(wl, list) else frozenset()
+    profiles = data.get("chat_profiles") if isinstance(data.get("chat_profiles"), dict) else {}
+    return _OwnerRules(uids, profiles)
 
 
 _JID_DEVICE_RE = re.compile(r":[0-9]+@")
@@ -209,17 +228,18 @@ def _norm_uid(uid: Any) -> str:
     return _JID_DEVICE_RE.sub("@", str(uid))
 
 
-def _is_operator(channel: str, sender: Any, cache: dict[str, frozenset[str]]) -> bool:
+def _is_operator(channel: str, sender: Any, cache: dict[str, "_OwnerRules"], chat_id: Any = None) -> bool:
     """The operator's own work: anything from the console or the terminal
     (``web``/``cli``, as for chat turns), or a bridge sender explicitly on
-    that bridge's whitelist."""
+    that bridge's whitelist — never in a chat opened to everyone."""
     if channel in ("web", "cli"):
         return True
     if not sender:
         return False
     if channel not in cache:
         cache[channel] = _operator_uids(channel)
-    return _norm_uid(sender) in cache[channel]
+    rules = cache[channel]
+    return not rules.chat_is_open(chat_id) and _norm_uid(sender) in rules.uids
 
 
 # ── subagents inside a turn (Claude Code transcripts) ────────────────────────
@@ -746,7 +766,7 @@ def _background_registry(home: Path, now: float) -> Iterator[dict]:
     qdir = _corvin_root() / "pending_notifications"
     if not qdir.is_dir():
         return
-    operators: dict[str, frozenset[str]] = {}   # one settings read per channel per scan
+    operators: dict[str, _OwnerRules] = {}   # one settings read per channel per scan
     for f in qdir.glob("*.json"):
         d = _read_json(f)
         if not isinstance(d, dict) or not d.get("id") or str(d.get("tenant_id") or "_default") != home.name:
@@ -758,7 +778,7 @@ def _background_registry(home: Path, now: float) -> Iterator[dict]:
         if status == "done" and d.get("ok") is False:
             status = "failed"
         channel = str(d.get("channel") or "")
-        owned = _is_operator(channel, d.get("sender"), operators)
+        owned = _is_operator(channel, d.get("sender"), operators, d.get("chat_id"))
         title = _preview(d.get("label")) if owned and d.get("label") else \
             f"{channel.capitalize() or 'Background'} background task"
         yield _record(id=f"background:{d['id']}", type="background", subtype=channel or None,

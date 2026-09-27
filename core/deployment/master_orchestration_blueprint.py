@@ -360,7 +360,7 @@ class MasterRolloutOrchestrator:
     def _transition_phase_1_to_2a(self) -> None:
         """Execute Phase 1 → Phase 2a transition"""
         self.base_orch.operator_approve(
-            OperatorApprovalGate.PHASE_2A_START,
+            OperatorApprovalGate.PHASE_1_TO_2A,
             approved_by="system",
             reason="Automated phase transition"
         )

@@ -1417,7 +1417,22 @@ def inject_btw(chat_key: str, text: str) -> bool:
             return False
 
 
+# chat_keys whose running turn the operator stopped (/cancel, /stop). Set by
+# _cancel_chat from the command's thread, consumed by the turn's own wrapper:
+# a subprocess-less engine (hermes/opencode/codex) that is cancelled usually
+# ends with no error and an empty reply, indistinguishable from a silent
+# failure without this.
+_TURN_CANCEL_REQUESTS: set[str] = set()
+_TURN_CANCEL_LOCK = threading.Lock()
+
+
 def _cancel_chat(chat_key: str) -> int:
+    with _TURN_CANCEL_LOCK:
+        _TURN_CANCEL_REQUESTS.add(str(chat_key))
+    return _cancel_chat_impl(chat_key)
+
+
+def _cancel_chat_impl(chat_key: str) -> int:
     """SIGTERM every running claude subprocess for a chat (escalating to
     SIGKILL), AND cancel() any registered subprocess-less engine.
 
@@ -1561,7 +1576,7 @@ def _bridge_settings_file(channel: str) -> "Path | None":
         return None
 
 
-def _sender_is_operator(channel: str, sender: str | None) -> bool:
+def _sender_is_operator(channel: str, sender: str | None, chat_key: str | None = None) -> bool:
     """True only when *sender* is EXPLICITLY on the channel whitelist of the
     settings file the bridge DAEMON reads — ``<corvin_home>/bridges/<channel>/
     settings.json`` (ADR-0008 §8.3), else the legacy in-repo file, the same
@@ -1575,7 +1590,18 @@ def _sender_is_operator(channel: str, sender: str | None) -> bool:
     if not sender or not channel or "/" in channel or ".." in channel:
         return False
     data = _load_channel_settings(channel)
-    wl = data.get("whitelist") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return False
+    # A chat opened to everyone (audience: all) has no operator: its replies
+    # routinely carry other members' content, so nothing is titled or kept.
+    profiles = data.get("chat_profiles") if isinstance(data.get("chat_profiles"), dict) else {}
+    for key in (chat_key, _normalize_jid(str(chat_key)) if chat_key else None, "default"):
+        prof = profiles.get(key) if key else None
+        if isinstance(prof, dict) and "audience" in prof:
+            if prof.get("audience") == "all":
+                return False
+            break
+    wl = data.get("whitelist")
     if not isinstance(wl, list):
         return False
     allowed = {_normalize_jid(str(x)) for x in wl if x}
@@ -5463,6 +5489,10 @@ def _call_claude_streaming_via_engine(
         _turn = None
     if _turn is not None:
         tm, task_id = _turn.tm, _turn.task_id
+        # Every retry — through call_claude_streaming OR straight back into this
+        # function (model escalation, stale resume marker) — advances the
+        # attempt; the attempt that answers is the one whose outcome counts.
+        _turn.attempt = max(_turn.attempt, _retry_count)
     elif _task_manager is not None:
         try:
             tasks_dir = workdir / "tasks"
@@ -5473,7 +5503,7 @@ def _call_claude_streaming_via_engine(
                 persona=persona,
                 channel=channel,
                 msg_id=msg_id,
-                from_operator=_sender_is_operator(channel, (env or {}).get("CORVIN_ORIGIN_SENDER")),
+                from_operator=_sender_is_operator(channel, (env or {}).get("CORVIN_ORIGIN_SENDER"), chat_key),
             )
         except Exception as e:  # noqa: BLE001
             # Task tracking is best-effort; don't fail the turn if it breaks
@@ -6028,6 +6058,7 @@ def _call_claude_streaming_via_engine(
                             mode=mode, add_dir=add_dir, on_status=on_status,
                             status_mode=status_mode, profile=profile,
                             _retry_count=_retry_count + 1, msg_id=msg_id,
+                            sender=(env or {}).get("CORVIN_ORIGIN_SENDER", ""),
                         )
 
             err_lower = error_text.lower()
@@ -6142,6 +6173,7 @@ def _call_claude_streaming_via_engine(
                     mode=mode, add_dir=add_dir, on_status=on_status,
                     status_mode=status_mode, profile=profile,
                     _retry_count=_retry_count + 1, msg_id=msg_id,
+                    sender=(env or {}).get("CORVIN_ORIGIN_SENDER", ""),
                 )
             if (
                 rc < 0
@@ -6242,7 +6274,13 @@ def _call_claude_streaming_via_engine(
                         "error": error_text[:100] if error_text else "",
                         "timed_out": timed_out,
                     }
-                    if _turn is not None:
+                    _user_cancel = (rc is not None and rc < 0 and not timed_out
+                                    and abs(rc) in (signal.SIGTERM, signal.SIGKILL))
+                    if _turn is not None and _user_cancel:
+                        # /cancel (SIGTERM/SIGKILL from _cancel_chat) — the
+                        # operator stopped it; not a model failure.
+                        _turn_refused("cancelled", _retry_count, cancelled=True)
+                    elif _turn is not None:
                         _turn.report(_retry_count, _failed_evt)
                     else:
                         tm.record_event(task_id, _failed_evt)
@@ -6545,6 +6583,7 @@ def _call_codex_streaming_via_engine(
     _emit_os_turn_event("os_turn.started", _cx_turn_id, chat_key, _cx_persona,
                         engine="codex_cli")
     _cx_turn_started = True
+    _turn_engine_started("codex_cli", getattr(proc, "pid", None))
 
     accumulated: list[str] = []
     error_text: str | None = None
@@ -6845,6 +6884,7 @@ def _call_opencode_streaming_via_engine(
     _emit_os_turn_event("os_turn.started", _oc_turn_id, chat_key, _oc_persona,
                         engine="opencode")
     _oc_turn_started = True
+    _turn_engine_started("opencode", getattr(proc, "pid", None))
 
     accumulated: list[str] = []
     error_text: str | None = None
@@ -7203,6 +7243,7 @@ def _call_hermes_streaming_via_engine(
     _emit_os_turn_event("os_turn.started", _h_turn_id, chat_key, _h_persona,
                         engine="hermes")
     _h_turn_started = True
+    _turn_engine_started("hermes")
     thread.start()
 
     accumulated: list[str] = []
@@ -7408,8 +7449,10 @@ class _TurnTask:
     each attempt's reported outcome is kept apart, and the LAST attempt's
     decides — whatever order the attempts' ``finally`` blocks run in."""
 
-    def __init__(self, tm, task_id: str, tasks_dir: Path, workdir: Path, *, owned: bool):
+    def __init__(self, tm, task_id: str, tasks_dir: Path, workdir: Path, *, owned: bool,
+                 chat_key: str = ""):
         self.tm, self.task_id, self.tasks_dir, self.workdir = tm, task_id, tasks_dir, workdir
+        self.chat_key = str(chat_key)
         self.owned = owned
         self.started = time.monotonic()
         self.attempt = 0
@@ -7450,6 +7493,34 @@ def _turn_refused(reason: str, retry_count: "int | None" = None, *, cancelled: b
     turn.report(retry_count, event)
 
 
+def _turn_engine_started(engine: str, pid: "int | None" = None) -> None:
+    """Log the engine start on the current turn (``task.engine_started``,
+    no state change): the console shows "engine running" instead of
+    "preparing context", and the boot reaper sees the engine pid when there
+    is one. The claude path logs it itself with the process pid."""
+    turn = _current_turn_task()
+    if turn is None:
+        return
+    event: dict = {"event": "task.engine_started", "engine": engine}
+    if isinstance(pid, int) and pid > 0:
+        event["pid"] = pid
+    try:
+        turn.tm.record_event(turn.task_id, event)
+    except Exception:  # noqa: BLE001 — task tracking never breaks a turn
+        pass
+
+
+def _proc_start_time(pid: int) -> "str | None":
+    """Kernel start time of *pid* (/proc/<pid>/stat field 22) — with the pid it
+    identifies ONE process, so a recycled pid is not mistaken for the owner."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    rest = stat[stat.rfind(")") + 2:].split()
+    return rest[19] if len(rest) > 19 else None
+
+
 def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict | None,
                     msg_id: str | None, sender: str) -> "_TurnTask | None":
     if _task_manager is None:
@@ -7458,15 +7529,24 @@ def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict |
         workdir = _session_dir(channel, chat_key)
         tasks_dir = workdir / "tasks"
         tm = _task_manager.TaskManager(tasks_dir)
-        owned = _sender_is_operator(channel, sender)
+        owned = _sender_is_operator(channel, sender, chat_key)
         task_id = tm.create_task(
             chat_key=chat_key, instruction=prompt,
             persona=str((profile or {}).get("persona") or "assistant"),
             channel=channel, msg_id=msg_id, from_operator=owned,
         )
         # Running from pickup: context assembly is part of the turn's work.
-        tm.record_event(task_id, {"event": "task.started", "stage": "preparing"})
-        return _TurnTask(tm, task_id, tasks_dir, workdir, owned=owned)
+        # The owning process (this adapter / bg worker) is recorded so a boot
+        # reaper in ANOTHER process never takes a live turn that has no engine
+        # pid yet (preparing, or an engine without a subprocess) for an orphan.
+        started = {"event": "task.started", "stage": "preparing", "owner_pid": os.getpid()}
+        _st = _proc_start_time(os.getpid())
+        if _st:
+            started["owner_start"] = _st
+        tm.record_event(task_id, started)
+        with _TURN_CANCEL_LOCK:
+            _TURN_CANCEL_REQUESTS.discard(str(chat_key))   # a stale request is not this turn's
+        return _TurnTask(tm, task_id, tasks_dir, workdir, owned=owned, chat_key=chat_key)
     except Exception as e:  # noqa: BLE001 — task tracking never breaks a turn
         log_debug(f"turn task creation failed (non-blocking): {e}")
         return None
@@ -7484,7 +7564,12 @@ def _close_turn_task(turn: "_TurnTask | None", answer: "str | None",
     status = "failed"
     try:
         reported = turn.final_outcome()
-        if exc is not None:
+        with _TURN_CANCEL_LOCK:
+            cancel_requested = turn.chat_key in _TURN_CANCEL_REQUESTS
+            _TURN_CANCEL_REQUESTS.discard(turn.chat_key)
+        if cancel_requested and (reported is None or reported.get("event") != "task.completed"):
+            event = {"event": "task.cancelled", "reason": "cancelled"}
+        elif exc is not None:
             # An exception after the engine answered still means no reply was
             # delivered — it outranks whatever the engine reported.
             event = {"event": "task.failed", "exit_code": 1, "error": type(exc).__name__}
@@ -7492,6 +7577,9 @@ def _close_turn_task(turn: "_TurnTask | None", answer: "str | None",
             event = dict(reported)
         elif answer is None or str(answer).startswith(_TURN_FAILED_PREFIXES):
             event = {"event": "task.failed", "exit_code": 1, "error": _summary(answer)[:100]}
+        elif not str(answer).strip():
+            # No reply at all and nobody cancelled: the engine failed silently.
+            event = {"event": "task.failed", "exit_code": 1, "error": "empty_reply"}
         else:
             event = {"event": "task.completed", "exit_code": 0}
         if event["event"] == "task.completed":
