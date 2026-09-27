@@ -72,29 +72,31 @@ class TestInMemoryStore:
         assert store.is_available() is True
 
 
-class TestSQLiteStoreFallback:
-    """Phase 3a: SQLite store with fallback"""
+class TestSQLiteStoreFailsClosed:
+    """The persistent store is NOT implemented (2026-09-27).
 
-    def test_sqlite_fallback_to_memory(self):
-        """Test: SQLite falls back to in-memory when DB unavailable"""
-        store = SQLiteStore()
+    It used to accept writes and keep them in memory while presenting itself as
+    persistent storage — data a caller believed durable vanished on restart.
+    These tests pinned that behaviour; they now pin the refusal.
+    """
 
-        # Phase 3a: DB not implemented yet, so fallback is active
-        assert store.is_available() is False
+    def test_sqlite_store_refuses_construction(self):
+        with pytest.raises(NotImplementedError):
+            SQLiteStore()
 
-        # But fallback store works
-        session = store.create_session("sess-fallback", "_default")
-        assert session["session_id"] == "sess-fallback"
+    def test_factory_sqlite_mode_refuses(self):
+        import core.console.corvin_console.services.voice_session_store as m
 
-    def test_sqlite_get_from_fallback(self):
-        """Test: Get session from fallback store"""
-        store = SQLiteStore()
+        m._store = None
+        with pytest.raises(NotImplementedError):
+            get_voice_session_store(store_type="sqlite")
 
-        store.create_session("sess-fb", "_default")
-        retrieved = store.get_session("sess-fb")
-
-        assert retrieved is not None
-        assert retrieved["session_id"] == "sess-fb"
+    def test_list_limit_applies_after_tenant_filter(self):
+        store = InMemoryStore()
+        for i in range(3):
+            store.create_session(f"o{i}", "tenant-2")
+        store.create_session("mine", "tenant-1")
+        assert [x["session_id"] for x in store.list_sessions("tenant-1", limit=1)] == ["mine"]
 
 
 class TestStoreFactory:
@@ -102,13 +104,20 @@ class TestStoreFactory:
 
     def test_factory_memory_mode(self):
         """Test: Factory creates in-memory store"""
+        import core.console.corvin_console.services.voice_session_store as m
+
+        m._store = None
         store = get_voice_session_store(store_type="memory")
         assert isinstance(store, InMemoryStore)
         assert store.is_available() is True
 
     def test_factory_auto_mode(self):
-        """Test: Factory auto-detects DB, falls back to memory"""
+        """Test: Factory auto mode uses the (non-persistent) in-memory store"""
+        import core.console.corvin_console.services.voice_session_store as m
+
+        m._store = None
         store = get_voice_session_store(store_type="auto")
+        assert isinstance(store, InMemoryStore)
         # Phase 3a: DB not available, so should get in-memory
         assert store.is_available() is True
 
@@ -122,42 +131,3 @@ class TestStoreFactory:
         """Test: Availability check"""
         available = is_store_available()
         assert available is True  # Fallback store always available
-
-
-class TestMigrationStrategy:
-    """Phase 3a: Zero-downtime migration plan"""
-
-    def test_dual_write_simulation(self):
-        """Test: Simulate dual-write during migration"""
-        memory_store = InMemoryStore()
-        sqlite_store = SQLiteStore()
-
-        # Phase 3 migration: write to both stores
-        session_id = "migration-test"
-        tenant_id = "_default"
-
-        mem_session = memory_store.create_session(session_id, tenant_id)
-        db_session = sqlite_store.create_session(session_id, tenant_id)
-
-        # Both stores have the data
-        assert memory_store.get_session(session_id) is not None
-        # SQLite falls back, so also has it
-        assert sqlite_store.get_session(session_id) is not None
-
-    def test_fallback_on_db_failure(self):
-        """Test: System gracefully handles DB failure"""
-        store = SQLiteStore()
-
-        # Create in fallback
-        store.create_session("fail-test", "_default")
-
-        # Simulate DB failure
-        store._available = False
-
-        # Operations still work via fallback
-        session = store.get_session("fail-test")
-        assert session is not None
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

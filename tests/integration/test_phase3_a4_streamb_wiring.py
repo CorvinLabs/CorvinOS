@@ -1,26 +1,27 @@
 """
-Phase 3 K=3 Integration Tests: A4 MetaOptimizer + Stream B Audit Events
+Phase 3: A4 MetaOptimizer + Stream B enrichment.
 
-Validates:
-1. A3→A4 message contract (ConfidenceScore → OptimizerConfig)
-2. A2+A3→B message contract (Enriched outcome event)
-3. Non-blocking + tenant isolation
-4. Audit-first semantics
-
+Rewritten 2026-09-27 (adversarial review): both modules returned a stub uuid
+as "audit_ref"; they now commit to the tenant's core audit chain. These tests
+assert the formulas, the chain records, fail-closed on audit failure, and
+refusal of another tenant's score.
 References: ADR-2086 (A3), ADR-2087 (A4), ADR-2088 (Stream B)
 """
+from __future__ import annotations
 
-import pytest
+import json
 from dataclasses import dataclass
 from datetime import datetime
 
-from core.learning.meta_optimizer_a4 import MetaOptimizer
+import pytest
+
 from core.learning.audit_event_enricher_b import AuditEventEnricher
+from core.learning.meta_optimizer_a4 import MetaOptimizer
+from core.paths import tenant_audit_chain
 
 
 @dataclass(frozen=True)
-class MockConfidenceScore:
-    """Mock A3 output"""
+class Score:
     skill_id: str = "os.skill"
     outcome_count: int = 10
     success_count: int = 9
@@ -33,151 +34,77 @@ class MockConfidenceScore:
 
 
 @dataclass(frozen=True)
-class MockOutcomeRecord:
-    """Mock A2 output"""
+class Outcome:
     skill_id: str = "os.skill"
     outcome_count: int = 10
     avg_confidence: float = 0.85
     audit_ref: str = "a2_audit_456"
 
 
-class TestPhase3A4Integration:
-    """A4 MetaOptimizer integration tests"""
-
-    def test_a4_config_delta_formula(self):
-        """A4 computes config_delta = confidence_delta × learning_rate"""
-        optimizer = MetaOptimizer(tenant_id="_test", learning_rate=0.1)
-        score = MockConfidenceScore(confidence_delta=0.75)
-
-        config = optimizer.optimize(score)
-
-        assert config is not None
-        expected_delta = 0.75 * 0.1  # 0.075
-        assert abs(config.config_delta - expected_delta) < 0.001
-
-    def test_a4_confidence_projection(self):
-        """A4 projects confidence_after correctly"""
-        optimizer = MetaOptimizer(tenant_id="_test")
-        score = MockConfidenceScore(confidence_delta=0.5)
-
-        config = optimizer.optimize(score)
-
-        assert config is not None
-        assert config.confidence_before == 0.5
-        assert config.confidence_after > config.confidence_before  # Should improve
-
-    def test_a4_delta_clamping(self):
-        """A4 clamps config_delta to [-0.5, 0.5]"""
-        optimizer = MetaOptimizer(tenant_id="_test", learning_rate=10.0)
-        score = MockConfidenceScore(confidence_delta=0.9)
-
-        config = optimizer.optimize(score)
-
-        assert config is not None
-        assert -0.5 <= config.config_delta <= 0.5
-
-    def test_a4_audit_event_emitted(self):
-        """A4 emits audit event with all fields"""
-        optimizer = MetaOptimizer(tenant_id="_test")
-        score = MockConfidenceScore(skill_id="test_skill")
-
-        config = optimizer.optimize(score)
-
-        assert config.audit_ref is not None
-        assert config.skill_id == "test_skill"
-
-    def test_a4_tenant_isolation(self):
-        """A4 maintains tenant isolation"""
-        opt1 = MetaOptimizer(tenant_id="tenant_a")
-        opt2 = MetaOptimizer(tenant_id="tenant_b")
-
-        score = MockConfidenceScore()
-        config1 = opt1.optimize(score)
-        config2 = opt2.optimize(score)
-
-        assert config1.tenant_id == "tenant_a"
-        assert config2.tenant_id == "tenant_b"
+@pytest.fixture(autouse=True)
+def _tenant(monkeypatch):
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_test")
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
 
 
-class TestPhase3StreamBIntegration:
-    """Stream B Audit Event Enrichment tests"""
-
-    def test_b_enrichment_combines_fields(self):
-        """Stream B combines A2 + A3 fields correctly"""
-        enricher = AuditEventEnricher(tenant_id="_test")
-        outcome = MockOutcomeRecord()
-        score = MockConfidenceScore()
-
-        event = enricher.enrich(outcome, score)
-
-        assert event is not None
-        # A2 fields present
-        assert event.outcome_count == 10
-        assert event.avg_confidence == 0.85
-        # A3 fields present
-        assert event.confidence_delta == 0.75
-        assert event.trend == "improving"
-
-    def test_b_skill_correlation_check(self):
-        """Stream B validates skill_id correlation"""
-        enricher = AuditEventEnricher(tenant_id="_test")
-        outcome = MockOutcomeRecord(skill_id="skill_a")
-        score = MockConfidenceScore(skill_id="skill_b")
-
-        event = enricher.enrich(outcome, score)
-
-        # Should fail on skill mismatch
-        assert event is None
-
-    def test_b_audit_refs_preserved(self):
-        """Stream B preserves both A2 and A3 audit refs"""
-        enricher = AuditEventEnricher(tenant_id="_test")
-        outcome = MockOutcomeRecord(audit_ref="a2_ref_123")
-        score = MockConfidenceScore(audit_ref="a3_ref_456")
-
-        event = enricher.enrich(outcome, score)
-
-        assert event.a2_audit_ref == "a2_ref_123"
-        assert event.a3_audit_ref == "a3_ref_456"
-
-    def test_b_tenant_isolation(self):
-        """Stream B maintains tenant isolation"""
-        enr1 = AuditEventEnricher(tenant_id="tenant_x")
-        enr2 = AuditEventEnricher(tenant_id="tenant_y")
-
-        outcome = MockOutcomeRecord()
-        score = MockConfidenceScore()
-
-        event1 = enr1.enrich(outcome, score)
-        event2 = enr2.enrich(outcome, score)
-
-        assert event1.tenant_id == "tenant_x"
-        assert event2.tenant_id == "tenant_y"
+def _last(event_type, tid="_test"):
+    p = tenant_audit_chain(tid)
+    recs = [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()]
+    return [r for r in recs if r["event_type"] == event_type][-1]
 
 
-class TestPhase3A4StreamBComposition:
-    """Integration: A4 output flows into Stream B"""
-
-    def test_composition_a4_to_b_flow(self):
-        """A3→A4→B message flow works end-to-end"""
-        # Setup
-        optimizer = MetaOptimizer(tenant_id="_test")
-        enricher = AuditEventEnricher(tenant_id="_test")
-
-        # Phase: A3 → A4
-        score = MockConfidenceScore()
-        config = optimizer.optimize(score)
-        assert config is not None
-
-        # Phase: A2 + A3 → B
-        outcome = MockOutcomeRecord()
-        event = enricher.enrich(outcome, score)
-        assert event is not None
-
-        # Verify composition
-        assert event.confidence_delta == score.confidence_delta
-        assert event.skill_id == config.skill_id
+def test_a4_config_delta_formula_and_projection():
+    config = MetaOptimizer(tenant_id="_test", learning_rate=0.1).optimize(Score(confidence_delta=0.5))
+    assert config.config_delta == pytest.approx(0.05)
+    assert config.confidence_after == pytest.approx(0.55)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-xvs"])
+def test_a4_delta_clamped():
+    config = MetaOptimizer(tenant_id="_test", learning_rate=10.0).optimize(Score(confidence_delta=0.9))
+    assert config.config_delta == 0.5
+
+
+def test_a4_recommendation_is_on_the_chain():
+    config = MetaOptimizer(tenant_id="_test").optimize(Score(skill_id="test_skill"))
+    rec = _last("learning.optimizer_config_updated")
+    assert rec["details"]["audit_ref"] == config.audit_ref
+    assert rec["details"]["skill_id"] == "test_skill"
+    assert rec["details"]["source_audit_ref"] == "a3_audit_123"
+
+
+def test_a4_refuses_another_tenants_score():
+    assert MetaOptimizer(tenant_id="_test").optimize(Score(tenant_id="tenant_b")) is None
+
+
+def test_a4_audit_failure_propagates(monkeypatch):
+    import core.learning.event_persistence as ep
+
+    monkeypatch.setattr(ep, "core_audit_event",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no commit")))
+    with pytest.raises(RuntimeError):
+        MetaOptimizer(tenant_id="_test").optimize(Score())
+
+
+def test_b_enrichment_combines_fields_and_commits():
+    event = AuditEventEnricher(tenant_id="_test").enrich(Outcome(), Score())
+    assert (event.outcome_count, event.avg_confidence) == (10, 0.85)
+    assert (event.confidence_delta, event.trend) == (0.75, "improving")
+    assert (event.a2_audit_ref, event.a3_audit_ref) == ("a2_audit_456", "a3_audit_123")
+    rec = _last("learning.enriched_outcome_event")
+    assert rec["details"]["audit_ref"] == event.audit_ref
+    assert rec["details"]["a2_audit_ref"] == "a2_audit_456"
+
+
+def test_b_skill_mismatch_rejected():
+    assert AuditEventEnricher(tenant_id="_test").enrich(Outcome(skill_id="a"), Score(skill_id="b")) is None
+
+
+def test_b_refuses_another_tenants_score():
+    assert AuditEventEnricher(tenant_id="_test").enrich(Outcome(), Score(tenant_id="tenant_y")) is None
+
+
+def test_composition_a4_to_b():
+    config = MetaOptimizer(tenant_id="_test").optimize(Score())
+    event = AuditEventEnricher(tenant_id="_test").enrich(Outcome(), Score())
+    assert event.skill_id == config.skill_id
+    assert event.audit_ref != config.audit_ref

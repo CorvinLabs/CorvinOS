@@ -1,4 +1,10 @@
-"""HealthCheckMonitor — K=3 latency-based escalation detection (ADR-2084)."""
+"""HealthCheckMonitor — K=3 latency-based escalation detection (ADR-2084).
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
+``p99_projection`` is a HEURISTIC extrapolation of one task's elapsed time
+(elapsed x 1.5), not a measured p99 of anything.
+"""
 
 import asyncio
 import time
@@ -19,6 +25,7 @@ class TaskHealthState:
     sla_target_ms: int = 600
     escalated: bool = False
     p99_projection: Optional[float] = None
+    pinned: bool = False  # operator pin: never escalated
 
 
 class HealthCheckMonitor:
@@ -36,18 +43,28 @@ class HealthCheckMonitor:
         self.health_check_task = asyncio.create_task(self._health_check_loop())
 
     async def stop(self):
-        """Stop health check loop."""
+        """Stop health check loop and wait until it has actually stopped.
+
+        Cancelling without awaiting returned while the loop was still running
+        (the task was only "cancelling").
+        """
         if self.health_check_task:
             self.health_check_task.cancel()
+            try:
+                await self.health_check_task
+            except asyncio.CancelledError:
+                pass
 
-    def register_task(self, task_id: str, model: str, sla_target_ms: Optional[int] = None):
-        """Register task for health monitoring."""
+    def register_task(self, task_id: str, model: str, sla_target_ms: Optional[int] = None,
+                      pinned: bool = False):
+        """Register task for health monitoring (``pinned`` tasks are never escalated)."""
         target = sla_target_ms or self.sla_target_ms
         self.running_tasks[task_id] = TaskHealthState(
             task_id=task_id,
             model=model,
             start_time=time.time(),
             sla_target_ms=target,
+            pinned=pinned,
         )
 
     def unregister_task(self, task_id: str):
@@ -73,11 +90,15 @@ class HealthCheckMonitor:
             elapsed_ms = (current_time - task_state.start_time) * 1000
             check_threshold = task_state.sla_target_ms * 0.5
 
+            if task_state.pinned:
+                continue  # an operator pin is never overridden
             if elapsed_ms > check_threshold and not task_state.escalated:
                 p99_projection = self._estimate_p99(elapsed_ms)
                 task_state.p99_projection = p99_projection
 
-                if p99_projection > 600:  # Escalation threshold
+                # Compare against THIS task's SLA — a literal 600 ignored
+                # every per-task ``sla_target_ms``.
+                if p99_projection > task_state.sla_target_ms:
                     await self._trigger_escalation(task_id, task_state, p99_projection)
 
     def _estimate_p99(self, elapsed_ms: float) -> float:
@@ -87,7 +108,14 @@ class HealthCheckMonitor:
     async def _trigger_escalation(self, task_id: str, task_state: TaskHealthState, p99_projection: float):
         """Trigger escalation: old_model → new_model."""
         old_model = task_state.model
+        if task_state.pinned:
+            return  # an operator pin is never overridden
         new_model = self._escalate_model(old_model)
+        if new_model == old_model:
+            # Nothing to escalate to (top tier / unknown id): recording an
+            # "escalation" opus → opus would be a fabricated event.
+            task_state.escalated = True
+            return
 
         task_state.escalated = True
         task_state.model = new_model
@@ -111,7 +139,7 @@ class HealthCheckMonitor:
         logger.info(f"Escalation: {old_model} → {new_model} (p99={p99_projection:.0f}ms)")
 
     def _escalate_model(self, current_model: str) -> str:
-        """Escalate model: haiku→sonnet→opus."""
+        """Escalate model: haiku→sonnet→opus (unknown ids are left unchanged)."""
         return {"haiku": "sonnet", "sonnet": "opus", "opus": "opus"}.get(current_model, current_model)
 
     async def get_escalation_events(self) -> List[Dict]:

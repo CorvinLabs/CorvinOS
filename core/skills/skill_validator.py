@@ -224,6 +224,18 @@ class SkillValidator:
             report.blockers.append("Manifest must be a YAML object")
             return report
 
+        self._check_manifest(manifest, report)
+        report.affected_paths = [str(manifest_path)]
+        return report
+
+    def _check_manifest(self, manifest: Dict[str, Any], report: SkillValidationReport) -> None:
+        """Checks 2–13 + full JSON Schema validation, shared by BOTH entry points.
+
+        ``validate_manifest_dict`` used to run only the JSON Schema and the DAG
+        check, so the same manifest could pass as a dict and fail as a file
+        (e.g. an unparseable ``scoring_rule`` or unknown trigger phase), and the
+        two paths reported the same defect with different messages.
+        """
         report.skill_id = manifest.get("name")
         report.version = manifest.get("version")
 
@@ -246,11 +258,12 @@ class SkillValidator:
                 report.is_valid = False
                 report.blockers.append(f"Missing required field: {field}")
 
-        if not report.is_valid:
-            return report  # Stop here if critical fields missing
+        # No early return: a manifest missing ``scope`` must still be told its
+        # version is malformed. Every check below tolerates absent/mistyped
+        # fields (the JSON Schema pass reports the type errors).
 
         # Check 3: Version format (semver)
-        if not SEMVER_PATTERN.match(manifest.get("version", "")):
+        if "version" in manifest and not SEMVER_PATTERN.match(str(manifest["version"])):
             report.is_valid = False
             report.blockers.append(
                 f"Invalid version format: {manifest.get('version')} "
@@ -258,17 +271,22 @@ class SkillValidator:
             )
 
         # Check 4: input_schema is JSON Schema compliant
-        if not self._is_valid_json_schema(manifest.get("input_schema", {})):
+        if "input_schema" in manifest and not self._is_valid_json_schema(manifest["input_schema"]):
             report.is_valid = False
             report.blockers.append("input_schema is not valid JSON Schema")
 
         # Check 5: output_schema is JSON Schema compliant
-        if not self._is_valid_json_schema(manifest.get("output_schema", {})):
+        if "output_schema" in manifest and not self._is_valid_json_schema(manifest["output_schema"]):
             report.is_valid = False
             report.blockers.append("output_schema is not valid JSON Schema")
 
         # Check 6: Trigger event types
-        for i, trigger in enumerate(manifest.get("triggers", [])):
+        triggers = manifest.get("triggers", [])
+        for i, trigger in enumerate(triggers if isinstance(triggers, list) else []):
+            if not isinstance(trigger, dict):
+                report.is_valid = False
+                report.blockers.append(f"triggers[{i}] must be an object")
+                continue
             event_type = trigger.get("event_type")
             if event_type not in ALLOWED_TRIGGER_TYPES:
                 report.blockers.append(
@@ -294,8 +312,12 @@ class SkillValidator:
 
         # Check 7: Learning signal has required PII patterns
         learning_signal = manifest.get("learning_signal", {})
+        if not isinstance(learning_signal, dict):
+            learning_signal = {}
         sanitization = learning_signal.get("sanitization", {})
-        pii_patterns = set(sanitization.get("pii_patterns", []))
+        if not isinstance(sanitization, dict):
+            sanitization = {}
+        pii_patterns = set(p for p in sanitization.get("pii_patterns", []) or [] if isinstance(p, str))
 
         missing_pii = REQUIRED_PII_PATTERNS - pii_patterns
         if missing_pii:
@@ -319,7 +341,12 @@ class SkillValidator:
                 report.blockers.append(f"Dependency cycle detected: {' -> '.join(cycle)}")
 
         # Check 9: Dependency version constraints are valid semver
-        for dep in manifest.get("depends_on", []):
+        deps = manifest.get("depends_on", [])
+        for dep in deps if isinstance(deps, list) else []:
+            if not isinstance(dep, dict):
+                report.is_valid = False
+                report.blockers.append("depends_on entries must be objects")
+                continue
             version_constraint = dep.get("version", "")
             if not self._is_valid_semver_range(version_constraint):
                 report.is_valid = False
@@ -330,7 +357,7 @@ class SkillValidator:
 
         # Check 10: boot_layer in allowed values
         boot_layer = manifest.get("boot_layer")
-        if boot_layer not in ["compliance", "core", "bundled", "installed"]:
+        if "boot_layer" in manifest and boot_layer not in ["compliance", "core", "bundled", "installed"]:
             report.is_valid = False
             report.blockers.append(
                 f"boot_layer '{boot_layer}' not in "
@@ -339,7 +366,7 @@ class SkillValidator:
 
         # Check 11: origin in allowed values
         origin = manifest.get("origin")
-        if origin not in ["builtin", "vetted", "community"]:
+        if "origin" in manifest and origin not in ["builtin", "vetted", "community"]:
             report.is_valid = False
             report.blockers.append(
                 f"origin '{origin}' not in [builtin, vetted, community]"
@@ -347,7 +374,7 @@ class SkillValidator:
 
         # Check 12: Score rule is parseable
         score_rule = learning_signal.get("scoring_rule", "")
-        if not SCORING_RULE_PATTERN.match(score_rule):
+        if not SCORING_RULE_PATTERN.match(str(score_rule)):
             report.is_valid = False
             report.blockers.append(
                 f"Invalid scoring_rule: '{score_rule}' "
@@ -370,11 +397,6 @@ class SkillValidator:
                 path = ".".join(str(p) for p in error.absolute_path) or "root"
                 report.blockers.append(f"{path}: {error.message}")
 
-        # Set affected paths
-        report.affected_paths = [str(manifest_path)]
-
-        return report
-
     def validate_manifest_dict(self, manifest: Dict[str, Any]) -> SkillValidationReport:
         """
         Validate a manifest as a dictionary (already parsed).
@@ -386,38 +408,11 @@ class SkillValidator:
             SkillValidationReport
         """
         report = SkillValidationReport(is_valid=True)
-        report.skill_id = manifest.get("name")
-        report.version = manifest.get("version")
-
-        # Comprehensive JSON Schema validation
-        validation_errors = list(self.validator.iter_errors(manifest))
-        if validation_errors:
+        if not isinstance(manifest, dict):
             report.is_valid = False
-            for error in validation_errors:
-                path = ".".join(str(p) for p in error.absolute_path) or "root"
-                report.blockers.append(f"{path}: {error.message}")
+            report.blockers.append("Manifest must be a YAML object")
             return report
-
-        # Additional semantic checks (not in JSON Schema)
-        # Check for PII patterns
-        learning_signal = manifest.get("learning_signal", {})
-        sanitization = learning_signal.get("sanitization", {})
-        pii_patterns = set(sanitization.get("pii_patterns", []))
-
-        missing_pii = REQUIRED_PII_PATTERNS - pii_patterns
-        if missing_pii:
-            report.warnings.append(
-                f"learning_signal.sanitization missing PII patterns: {sorted(missing_pii)}"
-            )
-
-        # DAG check for dependencies
-        deps_graph = self._build_dependency_graph(manifest)
-        cycles = self._find_cycles(deps_graph)
-        if cycles:
-            report.is_valid = False
-            for cycle in cycles:
-                report.blockers.append(f"Dependency cycle detected: {' -> '.join(cycle)}")
-
+        self._check_manifest(manifest, report)
         return report
 
     @staticmethod
@@ -469,8 +464,10 @@ class SkillValidator:
         skill_name = manifest.get("name", "unknown")
         graph[skill_name] = set()
 
-        for dep in manifest.get("depends_on", []):
-            graph[skill_name].add(dep.get("name", ""))
+        deps = manifest.get("depends_on", [])
+        for dep in deps if isinstance(deps, list) else []:
+            if isinstance(dep, dict):
+                graph[skill_name].add(dep.get("name", ""))
 
         return graph
 

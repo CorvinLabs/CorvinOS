@@ -14,7 +14,9 @@ Tests:
   11. Kid-based instance identity consistency
   12. Token import with key derivation
 
-All tests are green (12/12 passing).
+2026-09-27 (adversarial review round 2): the handshake transport is NOT
+implemented — the default ``_perform_handshake`` raises and the pairing FAILS
+closed. The state-machine / backoff tests inject a transport explicitly.
 """
 import os
 import time
@@ -283,18 +285,35 @@ class TestHandshakeStateMachine:
         record.next_retry_at = time.time() - 1  # Retry eligible
         coord.pairings[record.kid] = record
 
-        # First attempt: simulated failure
-        result1 = coord.attempt_handshake(record.kid)
-        assert result1 is False
-        assert record.state == PairingState.PENDING
-        assert record.retry_count == 1
+        # Injected transport: temporary failure, then a verified answer.
+        with mock.patch.object(coord, "_perform_handshake", side_effect=[False, True]):
+            result1 = coord.attempt_handshake(record.kid)
+            assert result1 is False
+            assert record.state == PairingState.PENDING
+            assert record.retry_count == 1
 
-        # Second attempt: should succeed (simulated)
-        record.retry_count = 1  # Move past initial delay
-        record.next_retry_at = time.time() - 1
-        result2 = coord.attempt_handshake(record.kid)
+            record.next_retry_at = time.time() - 1
+            result2 = coord.attempt_handshake(record.kid)
         assert result2 is True
         assert record.state == PairingState.ACTIVE
+
+    @mock.patch("core.discovery.discovery_coordinator.DiscoveryCoordinator._emit_audit_event")
+    def test_default_transport_fails_closed(self, mock_emit):
+        """Without a transport the pairing FAILS — never a fabricated ACTIVE."""
+        from core.discovery.discovery_coordinator import HANDSHAKE_NOT_IMPLEMENTED
+
+        coord = DiscoveryCoordinator(InstanceIdentity("org", "inst", "a" * 64))
+        record = PairingRecord(kid="kid-001", peer_label="peer",
+                               state=PairingState.PENDING, tenant_id="tenant")
+        coord.pairings[record.kid] = record
+        for _ in range(3):
+            record.next_retry_at = time.time() - 1
+            assert coord.attempt_handshake(record.kid) is False
+        assert record.state == PairingState.FAILED
+        assert record.last_error == HANDSHAKE_NOT_IMPLEMENTED
+        emitted = [c.kwargs.get("event_type") or c.args[0] for c in mock_emit.call_args_list]
+        assert "discovery.peer_paired" not in emitted
+        assert emitted == ["discovery.peer_pairing_failed"]
 
     @mock.patch("core.discovery.discovery_coordinator.DiscoveryCoordinator._emit_audit_event")
     def test_attempt_handshake_respects_retry_delay(self, mock_emit):
@@ -346,17 +365,15 @@ class TestRetryLogic:
         coord.pairings[record.kid] = record
 
         delays = []
-        for i in range(5):
-            record.next_retry_at = time.time() - 1
-            coord.attempt_handshake(record.kid)
-            delays.append(record.retry_delay_s)
+        with mock.patch.object(coord, "_perform_handshake", return_value=False):
+            for i in range(5):
+                record.next_retry_at = time.time() - 1
+                t0 = time.time()
+                coord.attempt_handshake(record.kid)
+                delays.append(round(record.next_retry_at - t0))
 
-        # Verify exponential progression
-        assert delays[0] == 1.0
-        assert delays[1] == 2.0
-        assert delays[2] == 4.0
-        assert delays[3] == 8.0
-        assert delays[4] == 16.0
+        # Verify exponential progression of the scheduled waits (1s first)
+        assert delays == [1, 2, 4, 8, 16]
 
     @mock.patch("core.discovery.discovery_coordinator.DiscoveryCoordinator._emit_audit_event")
     def test_max_retries_transitions_to_failed(self, mock_emit):
@@ -375,7 +392,8 @@ class TestRetryLogic:
         coord.pairings[record.kid] = record
 
         record.next_retry_at = time.time() - 1
-        result = coord.attempt_handshake(record.kid)
+        with mock.patch.object(coord, "_perform_handshake", return_value=False):
+            result = coord.attempt_handshake(record.kid)
 
         assert result is False
         assert record.state == PairingState.FAILED
@@ -400,7 +418,8 @@ class TestRetryLogic:
         coord.pairings[record.kid] = record
 
         record.next_retry_at = time.time() - 1
-        coord.attempt_handshake(record.kid)
+        with mock.patch.object(coord, "_perform_handshake", return_value=False):
+            coord.attempt_handshake(record.kid)
 
         # Delay should not exceed MAX_DELAY_S
         assert record.retry_delay_s <= RetryStrategy.MAX_DELAY_S.value
@@ -409,24 +428,23 @@ class TestRetryLogic:
 class TestAuditEventEmission:
     """Test audit event format and emission."""
 
-    @mock.patch("core.discovery.discovery_coordinator.security_events.emit_discovery_event")
+    @mock.patch("core.discovery.discovery_coordinator.audit_sink.emit")
     def test_emit_audit_event_includes_required_fields(self, mock_emit):
-        """_emit_audit_event includes kid_hash, tenant_id, timestamp, lom."""
+        """_emit_audit_event routes kid_hash + lom to the tenant chain sink."""
         inst = InstanceIdentity("org", "inst", "a" * 64)
         coord = DiscoveryCoordinator(inst, tenant_id="test-tenant")
 
         coord._emit_audit_event(
-            event_type="discovery.test_event",
+            event_type="discovery.peer_paired",
             payload={"kid_hash": "abc123"},
             lom="test.py:func:100",
         )
 
         assert mock_emit.called
-        call_args = mock_emit.call_args[0][0]
-        assert call_args["event_type"] == "discovery.test_event"
-        assert call_args["tenant_id"] == "test-tenant"
-        assert call_args["lom"] == "test.py:func:100"
-        assert "timestamp" in call_args
+        args, kwargs = mock_emit.call_args
+        assert args[0] == "discovery.peer_paired"
+        assert args[1] == {"kid_hash": "abc123", "lom": "test.py:func:100"}
+        assert kwargs["tenant_id"] == "test-tenant"
 
     def test_emit_audit_event_fails_on_missing_tenant_id(self):
         """_emit_audit_event raises ValueError on missing tenant_id."""

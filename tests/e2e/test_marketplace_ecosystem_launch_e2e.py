@@ -42,20 +42,33 @@ from core.marketplace.ecosystem_monitoring import (
 )
 
 
-class MockAuditCallback:
-    """Mock audit callback for testing."""
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    """Every test writes to a scratch CORVIN_HOME — never ~/.corvin."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    yield
 
-    def __init__(self):
-        self.events = []
 
-    def __call__(self, event: dict[str, Any]) -> None:
-        self.events.append({
-            **event,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+def chain_events(event_type: str, tenant: str = "_default") -> list[dict]:
+    """``details`` of every record of ``event_type`` on the REAL tenant chain."""
+    from forge import paths as fp
 
-    def get_events_by_type(self, event_type: str) -> list[dict]:
-        return [e for e in self.events if e.get("event_type") == event_type]
+    chain = fp.tenant_audit_chain(tenant)
+    if not chain.exists():
+        return []
+    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return [r["details"] for r in recs if r["event_type"] == event_type]
+
+
+def as_tenant(monkeypatch, tenant: str) -> None:
+    """Switch the process tenant — the audit writer refuses a record for any
+    other tenant (ADR-0007), so a per-tenant action runs as that tenant."""
+    monkeypatch.setenv("CORVIN_TENANT_ID", tenant)
 
 
 @pytest.fixture
@@ -115,18 +128,13 @@ def temp_marketplace():
 @pytest.fixture
 def launcher(temp_marketplace):
     """Create SkillEcosystemLauncher with temp marketplace."""
-    audit_callback = MockAuditCallback()
-    return SkillEcosystemLauncher(
-        marketplace_root=temp_marketplace,
-        audit_callback=audit_callback,
-    )
+    return SkillEcosystemLauncher(marketplace_root=temp_marketplace)
 
 
 @pytest.fixture
-def monitor():
+def monitor(tmp_path):
     """Create EcosystemMonitor."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        return EcosystemMonitor(data_dir=Path(tmpdir))
+    return EcosystemMonitor(data_dir=tmp_path / "ecosystem-metrics")
 
 
 class TestSkillDiscovery:
@@ -191,9 +199,34 @@ class TestSkillDiscovery:
         """Test audit event for index load."""
         launcher.load_marketplace_index()
 
-        audit_events = launcher.audit_callback.get_events_by_type("marketplace_index_loaded")
+        audit_events = chain_events("marketplace.index_loaded")
         assert len(audit_events) == 1
-        assert audit_events[0]["total_skills"] >= 2
+        assert audit_events[0]["total_skills"] == 2
+        assert audit_events[0]["buildin_count"] == 1
+        assert audit_events[0]["contributor_count"] == 1
+
+    def test_invalid_manifest_is_skipped_and_audited(self, launcher, temp_marketplace):
+        bad = temp_marketplace / "plugins" / "contributor" / "memory" / "broken"
+        bad.mkdir(parents=True)
+        (bad / "skill.json").write_text("{not json")
+
+        index = launcher.load_marketplace_index()
+        assert index.total_skills == 2
+        invalid = chain_events("marketplace.manifest_invalid")
+        assert invalid == [{**invalid[0], "tier": "contributor", "reason": "JSONDecodeError"}]
+        assert str(bad) not in json.dumps(invalid)
+        assert chain_events("marketplace.index_loaded")[0]["invalid_count"] == 1
+
+    def test_directory_decides_tier(self, launcher, temp_marketplace):
+        """A contributor manifest claiming ``buildin`` is indexed as contributor."""
+        d = temp_marketplace / "plugins" / "contributor" / "memory" / "liar"
+        d.mkdir(parents=True)
+        (d / "skill.json").write_text(json.dumps({
+            "id": "skill:liar", "name": "Liar", "version": "1.0.0", "author": "x",
+            "license": "MIT", "tier": "buildin", "category": "memory", "description": "d",
+        }))
+        launcher.load_marketplace_index()
+        assert launcher.get_skill_details("skill:liar").tier == SkillTier.CONTRIBUTOR
 
 
 class TestSkillInstallation:
@@ -248,13 +281,38 @@ class TestSkillInstallation:
         )
 
         # Check for installation events
-        started = launcher.audit_callback.get_events_by_type("skill_installation_started")
-        completed = launcher.audit_callback.get_events_by_type("skill_installation_completed")
+        started = chain_events("marketplace.skill_installation_started")
+        completed = chain_events("marketplace.skill_installation_completed")
 
         assert len(started) == 1
         assert len(completed) == 1
         assert started[0]["skill_id"] == "skill:buildin-memory-cel_session_memory"
         assert completed[0]["skill_id"] == "skill:buildin-memory-cel_session_memory"
+
+    def test_audit_failure_blocks_installation(self, launcher, monkeypatch):
+        """No chain commit → no installation (audit-first, fail-closed)."""
+        from core.deployment.audit_sink import AuditWriteFailed
+
+        launcher.load_marketplace_index()
+
+        def boom(*a, **k):
+            raise AuditWriteFailed("disk full")
+
+        monkeypatch.setattr("core.marketplace.skill_ecosystem_launcher.audit_sink.emit", boom)
+        with pytest.raises(AuditWriteFailed):
+            launcher.install_skill("_default", "skill:buildin-memory-cel_session_memory")
+        assert launcher.list_tenant_skills("_default") == []
+        assert launcher.community_framework.get_install_count(
+            "skill:buildin-memory-cel_session_memory") == 0
+
+    def test_install_for_foreign_tenant_is_refused(self, launcher):
+        """A _default process cannot write tenant-z's audit → install refused."""
+        from core.deployment.audit_sink import AuditWriteFailed
+
+        launcher.load_marketplace_index()
+        with pytest.raises(AuditWriteFailed):
+            launcher.install_skill("tenant-z", "skill:buildin-memory-cel_session_memory")
+        assert launcher.list_tenant_skills("tenant-z") == []
 
     def test_list_tenant_skills(self, launcher):
         """Test listing skills installed in a tenant."""
@@ -277,15 +335,17 @@ class TestSkillInstallation:
 class TestTenantIsolation:
     """Test tenant isolation (ADR-0007)."""
 
-    def test_tenant_isolation_different_installs(self, launcher):
+    def test_tenant_isolation_different_installs(self, launcher, monkeypatch):
         """Test that different tenants have isolated skill installations."""
         launcher.load_marketplace_index()
 
         # Install same skill in two tenants
+        as_tenant(monkeypatch, "tenant-a")
         launcher.install_skill(
             tenant_id="tenant-a",
             skill_id="skill:buildin-memory-cel_session_memory",
         )
+        as_tenant(monkeypatch, "tenant-b")
         launcher.install_skill(
             tenant_id="tenant-b",
             skill_id="skill:buildin-memory-cel_session_memory",
@@ -300,6 +360,9 @@ class TestTenantIsolation:
 
         # But they have different installation IDs
         assert a_skills[0].installation_id != b_skills[0].installation_id
+        # ...and each tenant's record sits on its own chain only
+        assert len(chain_events("marketplace.skill_installation_completed", "tenant-a")) == 1
+        assert len(chain_events("marketplace.skill_installation_completed", "tenant-b")) == 1
 
     def test_tenant_isolation_registry_separate(self, launcher):
         """Test that tenant registries are separate."""
@@ -310,15 +373,17 @@ class TestTenantIsolation:
         assert registry_a.tenant_id == "tenant-a"
         assert registry_b.tenant_id == "tenant-b"
 
-    def test_tenant_isolation_config_separate(self, launcher):
+    def test_tenant_isolation_config_separate(self, launcher, monkeypatch):
         """Test that skill configs are tenant-specific."""
         launcher.load_marketplace_index()
 
         # Install same skill in two tenants
+        as_tenant(monkeypatch, "tenant-a")
         launcher.install_skill(
             tenant_id="tenant-a",
             skill_id="skill:buildin-memory-cel_session_memory",
         )
+        as_tenant(monkeypatch, "tenant-b")
         launcher.install_skill(
             tenant_id="tenant-b",
             skill_id="skill:buildin-memory-cel_session_memory",
@@ -358,13 +423,15 @@ class TestCommunityFramework:
         )
         assert rating == 4.5
 
-    def test_multiple_ratings_average(self, launcher):
+    def test_multiple_ratings_average(self, launcher, monkeypatch):
         """Test averaging multiple ratings."""
+        as_tenant(monkeypatch, "tenant-a")
         launcher.rate_skill(
             tenant_id="tenant-a",
             skill_id="skill:buildin-memory-cel_session_memory",
             rating=5.0,
         )
+        as_tenant(monkeypatch, "tenant-b")
         launcher.rate_skill(
             tenant_id="tenant-b",
             skill_id="skill:buildin-memory-cel_session_memory",
@@ -376,14 +443,26 @@ class TestCommunityFramework:
         )
         assert rating == 4.0  # Average of 5.0 and 3.0
 
-    def test_install_tracking(self, launcher):
+    def test_rating_mean_over_three(self, launcher):
+        """Arithmetic mean, not ``(old + new) / 2`` (which gave 2.5 here)."""
+        for r in (5.0, 3.0, 1.0):
+            assert launcher.rate_skill("_default", "skill:x", r) is True
+        assert launcher.community_framework.get_skill_rating("skill:x") == pytest.approx(3.0)
+
+    def test_out_of_range_rating_rejected_and_not_audited(self, launcher):
+        assert launcher.rate_skill("_default", "skill:x", 9.0) is False
+        assert chain_events("marketplace.skill_rated") == []
+
+    def test_install_tracking(self, launcher, monkeypatch):
         """Test install count tracking."""
         launcher.load_marketplace_index()
 
+        as_tenant(monkeypatch, "tenant-a")
         launcher.install_skill(
             tenant_id="tenant-a",
             skill_id="skill:buildin-memory-cel_session_memory",
         )
+        as_tenant(monkeypatch, "tenant-b")
         launcher.install_skill(
             tenant_id="tenant-b",
             skill_id="skill:buildin-memory-cel_session_memory",
@@ -402,7 +481,7 @@ class TestCommunityFramework:
             rating=4.5,
         )
 
-        audit_events = launcher.audit_callback.get_events_by_type("skill_rated")
+        audit_events = chain_events("marketplace.skill_rated")
         assert len(audit_events) == 1
         assert audit_events[0]["rating"] == 4.5
 
@@ -519,7 +598,12 @@ class TestEcosystemMonitoring:
             )
 
         alerts = monitor.get_alerts("_default")
-        assert any(a.category == "high_error_rate" for a in alerts)
+        # exactly ONE open alert for the condition, not one per failing run
+        assert [a.category for a in alerts] == ["high_error_rate"]
+        raised = chain_events("marketplace.ecosystem_alert_raised")
+        assert len(raised) == 1
+        assert raised[0]["category"] == "high_error_rate"
+        assert raised[0]["alert_id"] == alerts[0].alert_id
 
     def test_trending_skills(self, monitor):
         """Test trending skill computation."""
@@ -546,14 +630,16 @@ class TestEcosystemMonitoring:
         assert len(trending) >= 2
         assert trending[0][0] == "skill-1"  # skill-1 is trending
 
-    def test_tenant_isolation_monitoring(self, monitor):
+    def test_tenant_isolation_monitoring(self, monitor, monkeypatch):
         """Test that monitoring respects tenant isolation."""
+        as_tenant(monkeypatch, "tenant-a")
         monitor.record_skill_execution(
             tenant_id="tenant-a",
             skill_id="skill-1",
             latency_ms=100.0,
             success=True,
         )
+        as_tenant(monkeypatch, "tenant-b")
         monitor.record_skill_execution(
             tenant_id="tenant-b",
             skill_id="skill-1",
@@ -614,8 +700,53 @@ class TestLearningLoopIntegration:
         )
 
         metrics = monitor.get_metrics("_default", "skill-1")
-        # Confidence starts at 1.0 (no feedback)
-        assert metrics.confidence_score == 1.0
+        # Nothing measured a confidence → None, never a fabricated 1.0
+        assert metrics.confidence_score is None
+
+    def test_unmeasured_skill_is_not_healthy(self, monitor):
+        monitor.record_skill_rating("_default", "skill-1", 4.0)
+        assert monitor.get_metrics("_default", "skill-1").status == HealthStatus.NOT_MEASURED
+
+    def test_execution_keeps_ratings_and_feedback(self, monitor):
+        """An execution used to rebuild the record and reset rating/feedback."""
+        monitor.record_skill_rating("_default", "skill-1", 4.0)
+        monitor.record_feedback("_default", "skill-1", "outcome", 0.5)
+        monitor.record_skill_execution("_default", "skill-1", latency_ms=10.0, success=True)
+        m = monitor.get_metrics("_default", "skill-1")
+        assert m.rating_count == 1 and m.average_rating == 4.0
+        assert m.feedback_count == 1 and m.improvement_trend == 0.5
+
+    def test_p99_is_a_real_percentile(self, monitor):
+        """p99 used to be max(prev, latency*0.95) and could never go down."""
+        for ms in [10.0] * 99 + [1000.0]:
+            monitor.record_skill_execution("_default", "skill-1", latency_ms=ms, success=True)
+        m = monitor.get_metrics("_default", "skill-1")
+        assert m.p99_latency_ms == 10.0
+        assert m.p95_latency_ms == 10.0
+        assert m.max_latency_ms == 1000.0
+
+    def test_snapshot_roundtrip_restores_metrics(self, monitor, tmp_path):
+        monitor.record_skill_execution("_default", "skill-1", latency_ms=20.0, success=True)
+        monitor.record_skill_rating("_default", "skill-1", 5.0)
+        path = monitor.save_metrics_snapshot("_default")
+
+        fresh = EcosystemMonitor(data_dir=tmp_path / "other")
+        assert fresh.load_metrics_snapshot(path) is True
+        m = fresh.get_metrics("_default", "skill-1")
+        assert m.total_executions == 1 and m.average_rating == 5.0
+        assert m.status == HealthStatus.HEALTHY
+
+    def test_corrupt_snapshot_load_fails(self, monitor, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text(json.dumps({"tenant_id": "_default", "metrics": {"s": {"skill_id": "s"}}}))
+        assert monitor.load_metrics_snapshot(bad) is False
+        assert monitor.get_metrics("_default", "s") is None
+
+    def test_default_data_dir_is_tenant_scoped(self, tmp_path):
+        mon = EcosystemMonitor()
+        mon.record_skill_execution("_default", "skill-1", latency_ms=1.0, success=True)
+        path = mon.save_metrics_snapshot("_default")
+        assert str(path).startswith(str(tmp_path / "corvin" / "tenants" / "_default" / "global"))
 
 
 class TestAuditTrailCompleteness:
@@ -630,20 +761,23 @@ class TestAuditTrailCompleteness:
         launcher.rate_skill("_default", "skill:buildin-memory-cel_session_memory", 4.5)
         launcher.uninstall_skill("_default", "skill:buildin-memory-cel_session_memory")
 
-        # Check audit trail
-        all_events = launcher.audit_callback.events
+        # Check the REAL chain — and that it still verifies
+        from forge import paths as fp
+        from forge import security_events as se
 
-        event_types = {e["event_type"] for e in all_events}
-        assert "marketplace_index_loaded" in event_types
-        assert "skill_installation_started" in event_types
-        assert "skill_installation_completed" in event_types
-        assert "skill_rated" in event_types
-        assert "skill_uninstalled" in event_types
+        for et in ("marketplace.index_loaded", "marketplace.skill_installation_started",
+                   "marketplace.skill_installation_completed", "marketplace.skill_rated",
+                   "marketplace.skill_uninstalled"):
+            assert len(chain_events(et)) == 1, et
+        ok, issues = se.verify_chain(fp.tenant_audit_chain("_default"))
+        assert ok, issues
 
-    def test_audit_includes_tenant_id(self, launcher):
-        """Test that audit events include tenant_id."""
+    def test_audit_includes_tenant_id(self, launcher, monkeypatch):
+        """Test that audit events include tenant_id and land on that tenant's chain."""
         launcher.load_marketplace_index()
+        as_tenant(monkeypatch, "tenant-x")
         launcher.install_skill("tenant-x", "skill:buildin-memory-cel_session_memory")
 
-        audit_events = launcher.audit_callback.get_events_by_type("skill_installation_completed")
+        audit_events = chain_events("marketplace.skill_installation_completed", "tenant-x")
         assert audit_events[0]["tenant_id"] == "tenant-x"
+        assert chain_events("marketplace.skill_installation_completed", "_default") == []

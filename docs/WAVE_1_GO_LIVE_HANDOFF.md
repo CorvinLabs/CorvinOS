@@ -1,5 +1,7 @@
 # 🚀 Wave 1 GO-LIVE Handoff Summary
 
+> **Status note (2026-09-27, adversarial review):** `plugin.execution_timeout` is emitted by `core/plugins/corvin_plugins/registry.py` (`on_load` / `health_check` deadline overruns), not by `lifecycle.py`. `core/plugins/corvin_plugins/lifecycle.py` has no production caller.
+
 **Launch Date:** 2026-09-26 (TODAY)  
 **Team:** [Audit/Security], [Console/Frontend], [Architecture/Infrastructure]  
 **Orchestrator:** Claude (daily coordination + Wave 2 planning)

@@ -211,37 +211,74 @@ class TestEventQueueBasics:
 
 
 class TestBackpressure:
-    """Test queue backpressure for HIGH priority events."""
+    """Bounded queue: LOW shed from 80 %, HIGH refused only when full."""
 
     @pytest.fixture
     def temp_queue(self, tmp_path):
-        """Create temporary queue for testing."""
-        db_path = tmp_path / "test_backpressure.db"
-        return EventQueue(db_path)
+        return EventQueue(tmp_path / "test_backpressure.db", max_pending=10)
 
-    def test_backpressure_triggers_at_80_percent(self, temp_queue):
-        """HIGH priority events fail when queue > 80% full."""
-        # Fill queue with LOW priority events
-        for i in range(100):
-            temp_queue.enqueue({
-                'event_type': 'plugin_loaded',
-                'plugin_id': f'plugin{i}',
-                'tenant_id': '_default',
-                'timestamp': f'2026-09-27T00:00:{i%60:02d}Z',
-                'priority': 'LOW',
-            })
-
-        # Now try to add HIGH priority event (should fail)
-        high_event = {
-            'event_type': 'plugin_executed',
-            'plugin_id': 'test',
+    @staticmethod
+    def _ev(i, priority, event_type='plugin_loaded'):
+        return {
+            'event_type': event_type,
+            'plugin_id': f'plugin{i}',
             'tenant_id': '_default',
-            'timestamp': '2026-09-27T00:01:00Z',
-            'priority': 'HIGH',
+            'timestamp': f'2026-09-27T00:00:{i:02d}Z',
+            'priority': priority,
         }
 
+    def test_low_is_shed_at_80_percent_high_still_accepted(self, temp_queue):
+        for i in range(8):
+            assert temp_queue.enqueue(self._ev(i, 'LOW')) is True
+        assert temp_queue.enqueue(self._ev(8, 'LOW')) is False  # shed
+        # HIGH keeps the remaining headroom
+        assert temp_queue.enqueue(self._ev(20, 'HIGH', 'plugin_executed')) is True
+        assert temp_queue.enqueue(self._ev(21, 'HIGH', 'plugin_executed')) is True
+        assert temp_queue.stats().pending_count == 10
+
+    def test_high_refused_only_when_full(self, temp_queue):
+        for i in range(10):
+            assert temp_queue.enqueue(self._ev(i, 'HIGH', 'plugin_executed')) is True
         with pytest.raises(QueueFullError):
-            temp_queue.enqueue(high_event)
+            temp_queue.enqueue(self._ev(30, 'HIGH', 'plugin_executed'))
+
+    def test_first_high_event_is_never_refused(self, tmp_path):
+        """Regression: the old check (pending > 0.8 * total) refused every HIGH
+        event once a single row was pending and none had been emitted."""
+        q = EventQueue(tmp_path / "bp_regression.db")
+        assert q.enqueue(self._ev(0, 'LOW')) is True
+        assert q.enqueue(self._ev(1, 'HIGH', 'plugin_executed')) is True
+
+    def test_drain_frees_capacity(self, temp_queue):
+        for i in range(10):
+            temp_queue.enqueue(self._ev(i, 'HIGH', 'plugin_executed'))
+        temp_queue.drain(batch_size=50, timeout_sec=5.0)
+        assert temp_queue.enqueue(self._ev(40, 'HIGH', 'plugin_executed')) is True
+
+
+class TestQueueLocation:
+    """The default queue lives under the TENANT's home, resolved at call time."""
+
+    def test_default_path_is_tenant_scoped_and_honours_corvin_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "ch"))
+        q = EventQueue(tenant_id="acme")
+        assert q.db_path == tmp_path / "ch" / "tenants" / "acme" / "global" / "plugin_events.db"
+
+    def test_invalid_tenant_rejected(self):
+        with pytest.raises(Exception):
+            EventQueue(tenant_id="../escape")
+
+    def test_malformed_timestamp_rejected_at_enqueue(self, tmp_path):
+        q = EventQueue(tmp_path / "ts.db")
+        with pytest.raises(ValueError):
+            q.enqueue({'event_type': 'plugin_loaded', 'plugin_id': 'p', 'tenant_id': '_default',
+                       'timestamp': '2026-09-27T00:000Z', 'priority': 'LOW'})
+        assert q.stats().total_events == 0
+
+    def test_mark_emitted_is_not_a_public_shortcut(self, tmp_path):
+        q = EventQueue(tmp_path / "m.db")
+        with pytest.raises(NotImplementedError):
+            q.mark_emitted([1])
 
 
 class TestPriorityOrdering:

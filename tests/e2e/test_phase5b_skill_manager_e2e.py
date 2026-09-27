@@ -1,167 +1,113 @@
-"""Phase 5b: Skill Manager E2E Tests (Upload UI + Panel Integration)
+"""Phase 5b: Skill Manager E2E Tests (ADR-0681).
 
-Tests verify end-to-end Skill Manager functionality:
-  - Panel registration (routing, nav)
-  - API routes (installed, install, uninstall, health)
-  - React component (upload form, progress, list view)
-  - Integration with Phase 4 SkillInstaller
+Drives the REAL console router (``/v1/console/skills-manager/*``) over HTTP with
+a real console session + CSRF token against a scratch CORVIN_HOME: list, health,
+install (real ZIP), duplicate refusal, uninstall, and the auth doors.
 
-Compliance: ADR-0681 (Console Skill Manager)
+Rewritten 2026-09-27 (adversarial review): the previous file requested an
+``async_client`` fixture that exists nowhere (11 setup errors — nothing ran),
+and half of its tests grepped the SPA shell HTML for component text the
+server never renders. The panel's registration is covered by
+``test_phase5_skill_manager_wiring.py``. The Phase 5 stub file
+(``test_phase5_skill_manager_e2e.py``, 25 bodies of ``pass`` against the
+never-mounted ``/v1/skills/*`` mock router) was deleted: its subject does not
+exist.
 """
+from __future__ import annotations
+
+import io
+import zipfile
+
 import pytest
-import json
-import tempfile
-from pathlib import Path
-from httpx import AsyncClient
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+P = "/v1/console/skills-manager/skills"
 
 
-class TestPhase5bSkillManagerE2E:
-    """Phase 5b Skill Manager E2E Tests"""
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_panel_registered(self, async_client: AsyncClient):
-        """E2E: Skill Manager panel is registered and accessible."""
-        # Test route exists
-        response = await async_client.get("/app/skill-manager")
-        assert response.status_code == 200
-        html = response.text
-        # Should render the SkillManager component
-        assert "Skill Manager" in html or "Install New Skill" in html
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_api_list_endpoint(self, async_client: AsyncClient):
-        """E2E: GET /v1/console/skills-manager/skills/installed returns skill list."""
-        response = await async_client.get("/v1/console/skills-manager/skills/installed")
-        assert response.status_code == 200
-        data = response.json()
-
-        # Schema validation
-        assert isinstance(data, dict)
-        assert "skills" in data
-        assert "total" in data
-        assert isinstance(data["skills"], list)
-        assert isinstance(data["total"], int)
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_health_endpoint(self, async_client: AsyncClient):
-        """E2E: GET /v1/console/skills-manager/skills/health returns health status."""
-        response = await async_client.get("/v1/console/skills-manager/skills/health")
-        assert response.status_code == 200
-        data = response.json()
-
-        # Schema validation
-        assert "status" in data
-        assert data["status"] == "ok"
-        assert "installed_count" in data
-        assert "registry_path" in data
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_install_endpoint_validates_zip(self, async_client: AsyncClient):
-        """E2E: POST /v1/console/skills-manager/skills/install validates ZIP files."""
-        # Test with non-ZIP file
-        with tempfile.NamedTemporaryFile(suffix=".txt") as tmp:
-            tmp.write(b"not a zip file")
-            tmp.flush()
-
-            with open(tmp.name, "rb") as f:
-                response = await async_client.post(
-                    "/v1/console/skills-manager/skills/install",
-                    data={
-                        "skill_id": "test-skill",
-                        "version": "1.0.0"
-                    },
-                    files={"file": f}
-                )
-
-            # Should reject non-ZIP files
-            assert response.status_code == 400
-            data = response.json()
-            assert "ZIP" in data.get("detail", "") or "must be ZIP" in str(data)
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_upload_form_fields(self, async_client: AsyncClient):
-        """E2E: Upload form includes skill_id, version, file picker."""
-        response = await async_client.get("/app/skill-manager")
-        assert response.status_code == 200
-        html = response.text
-
-        # Should have form fields
-        assert "skill_id" in html.lower() or "skill id" in html.lower()
-        assert "version" in html.lower()
-        assert "file" in html.lower() or "upload" in html.lower().replace("\n", " ")
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_installed_skills_list(self, async_client: AsyncClient):
-        """E2E: Installed skills list renders with boot_layer and verified status."""
-        response = await async_client.get("/app/skill-manager")
-        assert response.status_code == 200
-        html = response.text
-
-        # Should have list section
-        assert "Installed Skills" in html or "installed" in html.lower()
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_uninstall_endpoint(self, async_client: AsyncClient):
-        """E2E: DELETE /v1/console/skills-manager/skills/uninstall/{id}/{version} exists."""
-        # Test with non-existent skill (should fail gracefully)
-        response = await async_client.delete(
-            "/v1/console/skills-manager/skills/uninstall/nonexistent-skill/1.0.0"
-        )
-        # Should return 400 or 404 (graceful failure)
-        assert response.status_code in [400, 404]
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_progress_bar_ui(self, async_client: AsyncClient):
-        """E2E: Upload form includes progress bar and upload status indicator."""
-        response = await async_client.get("/app/skill-manager")
-        assert response.status_code == 200
-        html = response.text
-
-        # Should have upload status elements
-        assert "Upload" in html or "upload" in html.lower()
-        assert "progress" in html.lower() or "installing" in html.lower()
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_success_message_ui(self, async_client: AsyncClient):
-        """E2E: Upload form shows success/error messages."""
-        response = await async_client.get("/app/skill-manager")
-        assert response.status_code == 200
-        html = response.text
-
-        # Should have alert/message elements
-        assert "success" in html.lower() or "error" in html.lower() or "alert" in html.lower()
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_refresh_button(self, async_client: AsyncClient):
-        """E2E: Refresh button to reload skill list exists."""
-        response = await async_client.get("/app/skill-manager")
-        assert response.status_code == 200
-        html = response.text
-
-        # Should have refresh capability
-        assert "Refresh" in html or "refresh" in html.lower()
-
-    @pytest.mark.asyncio
-    async def test_skill_manager_api_routes_prefix(self, async_client: AsyncClient):
-        """E2E: All API routes are under /v1/console/skills-manager prefix."""
-        # Test various endpoints with correct prefix
-        routes = [
-            "/v1/console/skills-manager/skills/installed",
-            "/v1/console/skills-manager/skills/health",
-        ]
-
-        for route in routes:
-            response = await async_client.get(route)
-            # Should not be 404 (route exists)
-            assert response.status_code != 404, f"Route {route} not found"
-
-
-# Fixture for async client (requires app fixture)
 @pytest.fixture
-async def async_client():
-    """Provide async HTTP client for testing."""
-    from core.console.corvin_console.app import app
-    from httpx import AsyncClient
+def ctx(tmp_path, monkeypatch):
+    home = tmp_path / "corvin_home"
+    for sub in ("auth", "forge", "console/sessions"):
+        (home / "tenants" / "_default" / "global" / sub).mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        yield client
+    from core.console.corvin_console import auth as _auth
+    from core.console.corvin_console.app import router
+
+    rec = _auth.create_session(tenant_id="_default", token_fingerprint="test-fp")
+    app = FastAPI()
+    app.include_router(router, prefix="/v1/console")
+    c = TestClient(app, raise_server_exceptions=False)
+    c.cookies.set("corvin_console_sid", rec.sid)
+    csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+    return c, csrf, home
+
+
+def _zip_bytes() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("SKILL.md", "# demo\n")
+    return buf.getvalue()
+
+
+def test_list_and_health_on_empty_install(ctx):
+    c, _, _ = ctx
+    r = c.get(f"{P}/installed")
+    assert r.status_code == 200
+    assert r.json() == {"skills": [], "total": 0}
+    r = c.get(f"{P}/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok" and body["installed_count"] == 0
+    assert "registry_path" not in body  # no host path to the client
+
+
+def test_requires_session_and_csrf(ctx):
+    c, csrf, _ = ctx
+    files = {"file": ("demo.zip", _zip_bytes(), "application/zip")}
+    data = {"skill_id": "demo_skill", "version": "1.0.0"}
+    assert c.post(f"{P}/install", data=data, files=files).status_code == 403  # no CSRF
+    c.cookies.clear()
+    assert c.get(f"{P}/installed").status_code == 401
+
+
+def test_install_list_duplicate_uninstall_roundtrip(ctx):
+    c, csrf, home = ctx
+    h = {"X-CSRF-Token": csrf}
+    data = {"skill_id": "demo_skill", "version": "1.0.0"}
+
+    r = c.post(f"{P}/install", data=data, headers=h,
+               files={"file": ("demo.zip", _zip_bytes(), "application/zip")})
+    assert r.status_code == 200, r.text
+    assert (home / "skills_installed" / "demo_skill" / "1.0.0" / "SKILL.md").is_file()
+
+    listed = c.get(f"{P}/installed").json()
+    assert listed["total"] == 1 and listed["skills"][0]["skill_id"] == "demo_skill"
+
+    r = c.post(f"{P}/install", data=data, headers=h,
+               files={"file": ("demo.zip", _zip_bytes(), "application/zip")})
+    assert r.status_code == 400 and "already installed" in r.json()["detail"]
+
+    r = c.delete(f"{P}/uninstall/demo_skill/1.0.0", headers=h)
+    assert r.status_code == 200, r.text
+    assert c.get(f"{P}/installed").json()["total"] == 0
+
+
+def test_install_rejects_non_zip_and_traversal_ids(ctx):
+    c, csrf, home = ctx
+    h = {"X-CSRF-Token": csrf}
+    r = c.post(f"{P}/install", data={"skill_id": "x", "version": "1.0.0"}, headers=h,
+               files={"file": ("x.txt", b"nope", "text/plain")})
+    assert r.status_code == 400
+    r = c.post(f"{P}/install", data={"skill_id": "../../evil", "version": "1.0.0"}, headers=h,
+               files={"file": ("demo.zip", _zip_bytes(), "application/zip")})
+    assert r.status_code == 400
+    assert not (home / "evil").exists()
+
+
+def test_uninstall_unknown_is_400(ctx):
+    c, csrf, _ = ctx
+    r = c.delete(f"{P}/uninstall/nope/1.0.0", headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 400

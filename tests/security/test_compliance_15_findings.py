@@ -23,12 +23,59 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
+from unittest.mock import patch
+
+from core.deployment import audit_sink
 from core.deployment.incident_response_procedures import (
     Incident,
     IncidentType,
     IncidentSeverity,
     IncidentNotifier,
 )
+
+
+# Adversarial review 2026-09-27: IncidentNotifier no longer writes a
+# hand-composed ``orchestrator_audit.jsonl``; incidents are committed to the
+# ONE tenant audit chain (forge write_event via core.deployment.audit_sink),
+# content-free (codes/ids/numbers — never the free-text message or details).
+# These tests read that chain back.
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    yield
+
+
+def _incidents_on_chain(tenant):
+    se, fp = audit_sink._forge()
+    path = fp.tenant_audit_chain(tenant)
+    if not path.exists():
+        return [], True
+    recs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    ok, _ = se.verify_chain(path)
+    return [r for r in recs if r["event_type"] == "deployment.incident_detected"], ok
+
+
+def _incident(i="test-1", tenant="_default", **kw):
+    base = dict(
+        incident_id=i,
+        incident_type=IncidentType.LATENCY_SPIKE,
+        severity=IncidentSeverity.WARNING,
+        detected_at=datetime.now(timezone.utc).isoformat(),
+        message="Latency spike detected",
+        details={"baseline_ms": 100},
+        metric_name="latency_p99_ms",
+        actual_value=150.0,
+        threshold=100.0,
+        tenant_id=tenant,
+    )
+    base.update(kw)
+    return Incident(**base)
 
 
 class TestFinding1GDPRArt5:
@@ -70,340 +117,137 @@ class TestFinding1GDPRArt5:
 
 
 class TestFinding2Compliance:
-    """FINDING #2: Audit-First (Write to audit backend before notifications)"""
+    """FINDING #2: Audit-First (write to the tenant chain before notifications)"""
 
-    def test_incident_written_to_audit_trail(self, tmp_path):
-        """Incidents are written to audit trail (fail-closed if write fails)"""
-        audit_path = tmp_path / "orchestrator_audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
+    def test_incident_written_to_audit_chain(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant-123")
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        incident = _incident(tenant="tenant-123")
 
-        incident = Incident(
-            incident_id="test-1",
-            incident_type=IncidentType.LATENCY_SPIKE,
-            severity=IncidentSeverity.WARNING,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-            message="Latency spike detected",
-            details={"baseline_ms": 100},
-            metric_name="latency_p99_ms",
-            actual_value=150.0,
-            threshold=100.0,
-            tenant_id="tenant-123",
-        )
-
-        # Write to audit
-        success = notifier._write_incident_to_audit(incident)
-
-        assert success
-        assert audit_path.exists()
-        assert incident.audit_event_id is not None
-
-        # Verify written correctly
-        with open(audit_path, 'r') as f:
-            events = [json.loads(line) for line in f if line.strip()]
-
+        assert notifier._write_incident_to_audit(incident)
+        events, ok = _incidents_on_chain("tenant-123")
+        assert ok
         assert len(events) == 1
-        assert events[0]["incident_id"] == "test-1"
-        assert events[0]["tenant_id"] == "tenant-123"
-        assert events[0]["event_type"] == "incident_detected"
+        d = events[0]["details"]
+        assert d["incident_id"] == "test-1"
+        assert d["tenant_id"] == "tenant-123"
+        assert incident.audit_event_id == events[0]["hash"]
 
-    def test_audit_write_failure_causes_notify_to_fail(self, tmp_path):
-        """notify() fails if audit write fails (fail-closed)"""
-        audit_path = tmp_path / "read_only" / "audit.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        audit_path.touch()
-        audit_path.chmod(0o000)  # Make read-only
-
-        notifier = IncidentNotifier(audit_path)
-
-        incident = Incident(
-            incident_id="test-1",
-            incident_type=IncidentType.LATENCY_SPIKE,
-            severity=IncidentSeverity.WARNING,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-            message="Test",
-            details={},
-            metric_name="latency",
-            actual_value=150.0,
-            threshold=100.0,
-            tenant_id="tenant-123",
-        )
-
-        # notify() should fail due to audit write failure
-        result = notifier.notify(incident, slack_webhook="http://test")
-
-        assert result is False  # Fail-closed
-
-        # Restore permissions for cleanup
-        audit_path.chmod(0o644)
+    def test_audit_write_failure_causes_notify_to_fail(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        with patch.object(audit_sink, "emit", side_effect=audit_sink.AuditWriteFailed("x")):
+            with patch.object(notifier, "_send_slack_notification", return_value=True) as slack:
+                assert notifier.notify(_incident(), slack_webhook="http://test") is False
+        slack.assert_not_called()
 
 
 class TestFinding3Compliance:
     """FINDING #3-4: Tenant Isolation (ADR-0563)"""
 
-    def test_incident_audit_event_includes_tenant_id(self, tmp_path):
-        """Every audit event includes tenant_id"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
+    def test_incident_lands_on_its_own_tenant_chain(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant-a")
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        assert notifier._write_incident_to_audit(_incident("inc-a", tenant="tenant-a"))
+        a, _ = _incidents_on_chain("tenant-a")
+        b, _ = _incidents_on_chain("tenant-b")
+        assert [e["details"]["incident_id"] for e in a] == ["inc-a"]
+        assert b == []
 
-        for tenant in ["tenant-A", "tenant-B"]:
-            incident = Incident(
-                incident_id=f"incident-{tenant}",
-                incident_type=IncidentType.CONFIDENCE_REGRESSION,
-                severity=IncidentSeverity.WARNING,
-                detected_at=datetime.now(timezone.utc).isoformat(),
-                message="Test",
-                details={},
-                metric_name="confidence",
-                actual_value=0.85,
-                threshold=0.70,
-                tenant_id=tenant,
-            )
-            notifier._write_incident_to_audit(incident)
-
-        # Verify all events have tenant_id
-        with open(audit_path, 'r') as f:
-            events = [json.loads(line) for line in f if line.strip()]
-
-        assert len(events) == 2
-        for event in events:
-            assert event.get("tenant_id") in ["tenant-A", "tenant-B"]
-            assert event.get("tenant_id") is not None
-
-    def test_cross_tenant_filtering(self, tmp_path):
-        """Queries should filter by tenant_id (no cross-tenant leakage)"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
-
-        # Create incidents for two tenants
-        for tenant in ["tenant-A", "tenant-B"]:
-            incident = Incident(
-                incident_id=f"incident-{tenant}",
-                incident_type=IncidentType.LATENCY_SPIKE,
-                severity=IncidentSeverity.WARNING,
-                detected_at=datetime.now(timezone.utc).isoformat(),
-                message="Test",
-                details={},
-                metric_name="latency",
-                actual_value=150.0,
-                threshold=100.0,
-                tenant_id=tenant,
-            )
-            notifier._write_incident_to_audit(incident)
-
-        # Manually read events for tenant-A only
-        tenant_a_events = []
-        with open(audit_path, 'r') as f:
-            for line in f:
-                if line.strip():
-                    event = json.loads(line)
-                    if event.get("tenant_id") == "tenant-A":
-                        tenant_a_events.append(event)
-
-        # Verify only tenant-A events loaded
-        assert len(tenant_a_events) == 1
-        assert tenant_a_events[0]["tenant_id"] == "tenant-A"
+    def test_foreign_tenant_incident_is_refused(self, monkeypatch):
+        """A tenant-b incident in a tenant-a process is refused at the chokepoint."""
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant-a")
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        assert notifier._write_incident_to_audit(_incident("inc-b", tenant="tenant-b")) is False
+        b, _ = _incidents_on_chain("tenant-b")
+        assert b == []
 
 
 class TestFinding5Compliance:
     """FINDING #5: Audit Chain Integrity (ADR-0232)"""
 
-    def test_audit_events_have_unique_ids(self, tmp_path):
-        """Every audit event has unique event_id"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
-
-        event_ids = set()
+    def test_audit_events_have_unique_ids_and_chain_verifies(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        ids = set()
         for i in range(5):
-            incident = Incident(
-                incident_id=f"test-{i}",
-                incident_type=IncidentType.LATENCY_SPIKE,
-                severity=IncidentSeverity.WARNING,
-                detected_at=datetime.now(timezone.utc).isoformat(),
-                message="Test",
-                details={},
-                metric_name="latency",
-                actual_value=150.0,
-                threshold=100.0,
-                tenant_id="tenant-123",
-            )
-            notifier._write_incident_to_audit(incident)
-            if incident.audit_event_id:
-                event_ids.add(incident.audit_event_id)
+            inc = _incident(f"test-{i}")
+            assert notifier._write_incident_to_audit(inc)
+            ids.add(inc.audit_event_id)
+        assert len(ids) == 5
+        events, ok = _incidents_on_chain("_default")
+        assert ok and len(events) == 5
 
-        # All event IDs should be unique
-        assert len(event_ids) == 5
-
-    def test_audit_events_are_immutable(self, tmp_path):
-        """Audit events are append-only (no modification)"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
-
-        incident = Incident(
-            incident_id="test-1",
-            incident_type=IncidentType.LATENCY_SPIKE,
-            severity=IncidentSeverity.WARNING,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-            message="Original message",
-            details={},
-            metric_name="latency",
-            actual_value=150.0,
-            threshold=100.0,
-            tenant_id="tenant-123",
-        )
-
-        notifier._write_incident_to_audit(incident)
-
-        # Read first event
-        with open(audit_path, 'r') as f:
-            first_event = json.loads(f.readline())
-
-        original_message = first_event["message"]
-
-        # Attempt to write another event
-        incident2 = Incident(
-            incident_id="test-2",
-            incident_type=IncidentType.CONFIDENCE_REGRESSION,
-            severity=IncidentSeverity.WARNING,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-            message="Second message",
-            details={},
-            metric_name="confidence",
-            actual_value=0.85,
-            threshold=0.70,
-            tenant_id="tenant-123",
-        )
-        notifier._write_incident_to_audit(incident2)
-
-        # Read first event again
-        with open(audit_path, 'r') as f:
-            re_read_event = json.loads(f.readline())
-
-        # First event should be unchanged
-        assert re_read_event["message"] == original_message
+    def test_tampering_is_detected(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        notifier._write_incident_to_audit(_incident("test-1"))
+        notifier._write_incident_to_audit(_incident("test-2"))
+        se, fp = audit_sink._forge()
+        path = fp.tenant_audit_chain("_default")
+        lines = path.read_text().splitlines()
+        rec = json.loads(lines[0])
+        rec["details"]["actual_value"] = 1.0
+        lines[0] = json.dumps(rec)
+        path.write_text("\n".join(lines) + "\n")
+        _, ok = _incidents_on_chain("_default")
+        assert ok is False
 
 
 class TestFinding6Compliance:
-    """FINDING #6: EU AI Act Art. 50 - Rollback Transparency"""
+    """FINDING #6: EU AI Act Art. 50 — rollback transparency, content-free"""
 
-    def test_rollback_incident_has_reason(self, tmp_path):
-        """Auto-rollback incidents include reason (EU AI Act Art. 50)"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
-
-        incident = Incident(
-            incident_id="rollback-1",
+    def test_rollback_incident_record_is_attributable_but_content_free(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        inc = _incident(
+            "rollback-1",
             incident_type=IncidentType.CONFIDENCE_REGRESSION,
             severity=IncidentSeverity.CRITICAL,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-            message="Automatic rollback triggered",
-            details={
-                "reason": "Confidence dropped below 0.70",
-                "prior_confidence": 0.95,
-                "actual_confidence": 0.65,
-                "operator_notified": True,
-                "rollback_time": datetime.now(timezone.utc).isoformat(),
-            },
-            metric_name="confidence",
-            actual_value=0.65,
-            threshold=0.70,
-            tenant_id="tenant-123",
+            message="Automatic rollback triggered for bob@example.com",
+            details={"reason": "free text with bob@example.com"},
+            metric_name="confidence", actual_value=0.65, threshold=0.70,
         )
-
-        notifier._write_incident_to_audit(incident)
-
-        # Verify rollback reason in audit
-        with open(audit_path, 'r') as f:
-            event = json.loads(f.readline())
-
-        assert event["details"]["reason"] == "Confidence dropped below 0.70"
-        assert event["details"]["operator_notified"] is True
+        assert notifier._write_incident_to_audit(inc)
+        events, _ = _incidents_on_chain("_default")
+        d = events[0]["details"]
+        assert d["incident_type"] == "confidence_regression"
+        assert d["incident_severity"] == "critical"
+        assert d["metric_name"] == "confidence"
+        assert "bob@example.com" not in json.dumps(events[0])
 
 
 class TestFinding8Compliance:
     """FINDING #8: Failure Handling in notify()"""
 
-    def test_notify_with_all_channels_success(self, tmp_path):
-        """notify() returns True if all channels succeed"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
+    def test_notify_without_channels_is_not_success(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        assert notifier.notify(_incident()) is False
+        events, _ = _incidents_on_chain("_default")
+        assert len(events) == 1  # audit-first still happened
 
-        incident = Incident(
-            incident_id="test-1",
-            incident_type=IncidentType.LATENCY_SPIKE,
-            severity=IncidentSeverity.WARNING,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-            message="Test",
-            details={},
-            metric_name="latency",
-            actual_value=150.0,
-            threshold=100.0,
-            tenant_id="tenant-123",
-        )
-
-        # Mock notify - should succeed with audit write
-        result = notifier.notify(incident)
-
-        # Should return False because we didn't provide actual webhooks
-        # but audit should be written
-        assert audit_path.exists()
+    def test_notify_with_all_channels_success(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        with patch.object(notifier, "_send_slack_notification", return_value=True):
+            assert notifier.notify(_incident(), slack_webhook="http://test") is True
 
 
 class TestFinding9Compliance:
     """FINDING #9: Deduplication + Rate Limiting"""
 
-    def test_deduplication_window(self, tmp_path):
-        """IR-003: Incidents deduplicated within 5-minute window"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
+    def test_deduplication_window(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        inc = _incident()
+        with patch.object(notifier, "_send_slack_notification", return_value=True):
+            assert notifier.notify(inc, slack_webhook="http://test") is True
+            assert notifier.notify(inc, slack_webhook="http://test") is False
 
-        incident = Incident(
-            incident_id="test-1",
-            incident_type=IncidentType.LATENCY_SPIKE,
-            severity=IncidentSeverity.WARNING,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-            message="Test",
-            details={},
-            metric_name="latency",
-            actual_value=150.0,
-            threshold=100.0,
-            tenant_id="tenant-123",
-        )
-
-        # First notification
-        first = notifier.notify(incident)
-
-        # Try to notify same incident again (should be deduped)
-        second = notifier.notify(incident)
-
-        # Both should return False (first due to audit, second due to dedup)
-        # but dedup should have worked
-        assert notifier._check_dedup(incident.incident_id) is False
-
-    def test_rate_limiting(self, tmp_path):
-        """IR-003: Rate limiting at 10 alerts/minute"""
-        audit_path = tmp_path / "audit.jsonl"
-        notifier = IncidentNotifier(audit_path)
-
-        # Create 11 unique incidents
-        for i in range(11):
-            incident = Incident(
-                incident_id=f"test-{i}",
-                incident_type=IncidentType.LATENCY_SPIKE,
-                severity=IncidentSeverity.WARNING,
-                detected_at=datetime.now(timezone.utc).isoformat(),
-                message="Test",
-                details={},
-                metric_name="latency",
-                actual_value=150.0 + i,
-                threshold=100.0,
-                tenant_id="tenant-123",
-            )
-
-            result = notifier.notify(incident)
-
-            # First 10 should succeed (audit write), 11th should be rate-limited
-            # Note: actual result depends on webhook availability
-            # but we're testing the dedup/rate limit logic
+    def test_rate_limiting(self):
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        with patch.object(notifier, "_send_slack_notification", return_value=True):
+            results = [
+                notifier.notify(_incident(f"test-{i}", actual_value=150.0 + i), slack_webhook="http://test")
+                for i in range(11)
+            ]
+        assert results[:10] == [True] * 10
+        assert results[10] is False
+        assert notifier.failed_notifications_queue.qsize() == 1
 
 
 if __name__ == "__main__":

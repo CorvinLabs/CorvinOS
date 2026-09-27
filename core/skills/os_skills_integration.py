@@ -128,7 +128,7 @@ class SkillsIntegrationLayer:
 
         Returns:
             {
-                "engine": str (e.g., "claude-opus-5"),
+                "decision": str ("native" | "acs" | "tde"),
                 "confidence": float (0.0-1.0),
                 "reasoning": str,
                 "skill_executed": bool,
@@ -255,7 +255,7 @@ class SkillsIntegrationLayer:
         )
         fallback_base = {
             "tier_name": "base",
-            "engine": "claude-sonnet-4",  # Safe default
+            "engine": "native",  # the degrade floor, same vocabulary as the Skill
             "priority": priority_hint,
             "context_fields": {
                 "task_type": task_type,
@@ -281,40 +281,22 @@ class SkillsIntegrationLayer:
 
     @staticmethod
     def _fallback_routing(complexity: int, task_type: str) -> Dict[str, Any]:
-        """Deterministic fallback routing (no Skill).
+        """Deterministic fallback routing (no Skill), used when the Skill fails.
 
-        Hardcoded heuristic, used when DelegationRouterSkill fails.
-
-        Args:
-            complexity: 1-10
-            task_type: Task type
-
-        Returns:
-            Routing decision (same format as DelegationRouterSkill)
+        Returns the SAME shape and vocabulary as ``os.delegation_router``
+        (``decision`` ∈ native | acs | tde). It used to answer
+        ``{"engine": "claude-sonnet-4", ...}`` — a model id under a different
+        key — so a caller reading ``decision`` got a KeyError exactly when the
+        Skill had failed, and one reading ``engine`` got a model name where an
+        engine was meant. ``native`` is the universal degrade floor
+        (delegation_policy: "every degrade ends at native") and the Skill's own
+        failure answer; confidence 0.5 marks it as a fallback.
         """
-        if complexity >= 8:
-            engine = "claude-opus-5"
-            confidence = 0.95
-            reasoning = "Fallback: high complexity requires Opus"
-        elif complexity >= 5:
-            engine = "claude-sonnet-4"
-            confidence = 0.85
-            reasoning = "Fallback: medium-high complexity routed to Sonnet"
-        else:
-            engine = "claude-haiku-4"
-            confidence = 0.90
-            reasoning = "Fallback: low-medium complexity uses Haiku"
-
-        # Task-type overrides
-        if task_type == "code" and complexity < 7:
-            engine = "claude-sonnet-4"
-            confidence = 0.80
-            reasoning = "Fallback: code tasks prefer Sonnet"
-
+        del complexity, task_type  # the floor does not depend on the task shape
         return {
-            "engine": engine,
-            "confidence": confidence,
-            "reasoning": reasoning,
+            "decision": "native",
+            "confidence": 0.5,
+            "reasoning": "Fallback: os.delegation_router unavailable, conservative native",
         }
 
 

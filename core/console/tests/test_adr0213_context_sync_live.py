@@ -71,6 +71,9 @@ def _maybe_skip() -> bool:
 
 async def main() -> int:
     tmp = tempfile.TemporaryDirectory()
+    # Real `claude -p` workers write files (lighthouse.txt) relative to their
+    # cwd; never let that be the repo checkout.
+    os.chdir(tmp.name)
     os.environ["CORVIN_HOME"] = tmp.name
     os.environ["CORVIN_TENANT_ID"] = "_default"
     os.environ.pop("VOICE_AUDIT_PATH", None)
@@ -97,6 +100,14 @@ async def main() -> int:
 
     cr = chat_runtime
     cr._delegation_enabled = lambda tenant_id: True  # type: ignore[assignment]
+    # The ADR-0213 sync call is behind the `acs_context_sync` flag, which ships
+    # dark: without it the sync never ran, turn_count stayed 0 and this test
+    # failed on the flag, not on the claim. Enable it through the operator's own
+    # path (the console overlay under the scratch CORVIN_HOME), not a monkeypatch.
+    from corvin_core import feature_flags as _ff  # noqa: PLC0415
+
+    _ff.set_enabled("acs_context_sync", True, "_default")
+    assert _ff.is_enabled("acs_context_sync", "_default")
     sess = cr.create_session("_default")
 
     prompt = (
@@ -162,7 +173,11 @@ async def main() -> int:
 def test_live_adr0213_context_sync_end_to_end():
     """pytest-discoverable entry point — see module docstring for why this
     was added. Delegates to the same main() the standalone script uses."""
-    rc = asyncio.run(main())
+    cwd = os.getcwd()
+    try:
+        rc = asyncio.run(main())
+    finally:
+        os.chdir(cwd)
     assert rc == 0, "see printed PASS/FAIL diagnostic above for the failure reason"
 
 

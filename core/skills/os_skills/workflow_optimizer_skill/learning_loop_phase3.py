@@ -1,5 +1,9 @@
 """Stream 1 Phase 3: Learning Loop E2E (Days 1–4 of Week 3).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Only
+tests drive it, on SYNTHETIC tasks and simulated feedback — its accuracy
+figures are a simulation, never a measurement of live routing.
+
 End-to-end proof of concept: baseline routing → collect operator feedback →
 learned weights → improved accuracy (target >5% improvement).
 
@@ -101,14 +105,22 @@ class WorkflowOptimizerLearningLoop:
             skill_id=skill_id,
             skill_version=skill_version,
         )
-        self.confidence_calculator = confidence_calculator or ConfidenceCalculator(
-            event_store=event_store,
-            tenant_id=tenant_id,
-            skill_id=skill_id,
-            skill_version=skill_version,
-        )
+        if confidence_calculator is None:
+            # This loop learns from SYNTHETIC tasks. Its weights must never
+            # land in the tenant's live ``workflow_optimizer_config/``
+            # routing_weights.json, which L5AgentSelectorLearned routes from.
+            from core.paths.tenant import tenant_home
 
-    async def run_learning_loop(
+            confidence_calculator = ConfidenceCalculator(
+                event_store=event_store,
+                tenant_id=tenant_id,
+                config_dir=Path(tenant_home(tenant_id)) / "workflow_optimizer_simulation",
+                skill_id=skill_id,
+                skill_version=skill_version,
+            )
+        self.confidence_calculator = confidence_calculator
+
+    def run_learning_loop(
         self,
         baseline_task_count: int = 100,
         feedback_sample_size: int = 50,
@@ -154,13 +166,24 @@ class WorkflowOptimizerLearningLoop:
             feedback_quality=feedback_quality,
         )
 
-        # Process each feedback event
-        for task, feedback_type in feedback_list:
+        # Process each feedback event. Feedback is about the decision the
+        # baseline router ACTUALLY made. It used to record every task as
+        # routed to its ground-truth model ("assume baseline routed
+        # correctly"), which made every feedback event a statement about the
+        # oracle, not the router — the "learned" weights then measured nothing.
+        # ``simulate_feedback`` reports whether the operator's feedback is
+        # truthful ("correct") or mistaken ("incorrect").
+        baseline_weights = RoutingWeights().weights
+        for task, truthfulness in feedback_list:
+            routed_model = self._predict(task, baseline_weights)
+            was_correct = routed_model == task.correct_model
+            if truthfulness != "correct":
+                was_correct = not was_correct
             feedback_obj = RoutingFeedback(
                 task_id=task.task_id,
-                routed_model=task.correct_model,  # Assume baseline routed correctly
+                routed_model=routed_model,
                 task_complexity=task.complexity.value,
-                feedback_type=FeedbackType(feedback_type),
+                feedback_type=FeedbackType("correct" if was_correct else "incorrect"),
                 confidence_score=feedback_quality,
                 tenant_id=self.tenant_id,
             )
@@ -238,8 +261,11 @@ class WorkflowOptimizerLearningLoop:
             lom="workflow_optimizer_skill.learning_loop_phase3:run_learning_loop:L140",
         )
 
+        # EventStore.write_event is SYNCHRONOUS and takes the event only (the
+        # tenant is on the event). The 2026-09 "fix" awaited it with a second
+        # argument: against the real store that raised TypeError on every run.
         try:
-            await self.event_store.write_event(outcome_event, self.tenant_id)
+            self.event_store.write_event(outcome_event)
         except (RuntimeError, IOError) as e:
             logger.error(f"Failed to write learning outcome: {e}")
             raise
@@ -295,22 +321,16 @@ class WorkflowOptimizerLearningLoop:
         Returns:
             Accuracy [0.0, 1.0]
         """
-        predictions = []
-        ground_truths = []
-
-        for task in tasks:
-            complexity = task.complexity.value
-            models = ["haiku", "sonnet", "opus"]
-
-            # Compute confidence for each model
-            confidences = {}
-            for model in models:
-                key = f"{complexity}_{model}"
-                confidences[model] = weights.get(key, 0.5)
-
-            # Pick model with highest confidence
-            predicted_model = max(confidences, key=confidences.get)
-            predictions.append(predicted_model)
-            ground_truths.append(task.correct_model)
-
+        predictions = [self._predict(task, weights) for task in tasks]
+        ground_truths = [task.correct_model for task in tasks]
         return calculate_accuracy(predictions, ground_truths)
+
+    @staticmethod
+    def _predict(task: SyntheticTask, weights: Dict[str, float]) -> str:
+        """Pick the model with the highest P(correct | complexity, model)."""
+        complexity = task.complexity.value
+        confidences = {
+            model: weights.get(f"{complexity}_{model}", 0.5)
+            for model in ("haiku", "sonnet", "opus")
+        }
+        return max(confidences, key=confidences.get)

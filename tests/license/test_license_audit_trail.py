@@ -11,8 +11,9 @@ Tests that license operations are logged to the audit trail:
 
 Audit events are immutable, append-only, and cryptographically verified.
 """
-import pytest
 from __future__ import annotations
+
+import pytest
 
 import json
 import os
@@ -378,16 +379,9 @@ class TestBootTripwire(unittest.TestCase):
         # Verification would fail at the third event
         self.assertNotEqual(corrupted_chain[2]["prev_hash"], corrupted_chain[1]["hash"])
 
-    def test_tripwire_runs_before_plugins(self):
-        """Boot tripwire runs first: audit chain verified before plugin load."""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-        # The sequence is:
-        # 1. Parse CORVIN_HOME/global/forge/audit.jsonl
-        # 2. Verify chain (tripwire)
-        # 3. If chain is broken, STOP (fail-closed)
-        # 4. Only then load plugins, features, etc.
-
-        # This is a structural guarantee, not a test, but we can assert the order
+    # test_tripwire_runs_before_plugins (an empty skip stub) was removed: the
+    # ordering it described is proven through the real boot path by
+    # core/plugins/tests/test_boot_platform_call_site.py.
 
 
 if __name__ == "__main__":

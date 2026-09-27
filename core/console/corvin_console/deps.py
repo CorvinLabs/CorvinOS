@@ -15,10 +15,10 @@ from __future__ import annotations
 import hmac
 from typing import Annotated
 
-from fastapi import Cookie, Header, HTTPException, Request, status
+from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 
 from . import auth as session_auth
-from core.compliance.consent import consent_required
+from core.compliance.consent import consent_required as _core_consent_required
 
 
 def require_session(
@@ -155,3 +155,22 @@ PUBLIC_PATH_PREFIXES: tuple[str, ...] = (
     "/ws-live/",
     "/.well-known/",
 )
+
+
+def consent_required(consent_scope: str = "default"):
+    """Console dependency: the GDPR Art. 6 consent gate bound to the SESSION.
+
+    ``core.compliance.consent.consent_required(scope)`` returns a checker whose
+    only parameter is ``rec: Optional[Any] = None``. Used directly as
+    ``Depends(consent_required(scope))`` — as every control-plane route did —
+    FastAPI read ``rec`` from the QUERY STRING: absent, the check denied every
+    request with 403 (the whole control plane was unreachable); present
+    (``?rec=x``), it crashed on ``"x".tenant_id`` (500). This wrapper feeds it
+    the authenticated session record instead. Deny-by-default is unchanged.
+    """
+    checker = _core_consent_required(consent_scope)
+
+    async def _verify(rec: Annotated[session_auth.SessionRecord, Depends(require_session)]) -> None:
+        await checker(rec)
+
+    return _verify

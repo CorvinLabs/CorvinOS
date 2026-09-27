@@ -1,5 +1,7 @@
 # Skills Observability Dashboard — Design Specification (ADR-0722)
 
+> **Status note (2026-09-27, adversarial review):** the API specified here, `core/console/corvin_console/routes/skills_observability_api.py` (`/v1/skills-observability/*`), has no production caller — the console does not mount it. Every metrics endpoint answers 501 `not_implemented` and `/health` reports `not_implemented` instead of an unconditional "healthy".
+
 **Status:** Design Phase (K=1 Dialectical Complete)  
 **Loss Signal:** ADR-0722 (skills learning loop closure)  
 **Compliance:** GDPR Art. 5/30/32, ADR-0763 (console production surface)  

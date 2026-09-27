@@ -1,6 +1,13 @@
 /**
  * Learning Loops Dashboard — Console Panel
  * ADR-0906 Feature 1: UI wiring for learning loop manifest + health
+ *
+ * NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Only
+ * pages/index.ts re-exports it and nothing imports that barrel; the mounted
+ * learning-loops surface is components/learning-loops-view.tsx (Learnings
+ * dashboard, "Learning Loops" tab). /v1/console/learning/loops is a Flask
+ * blueprint (routes/learning_loops.py) the FastAPI console never mounts, so a
+ * 404 renders "not available on this build" instead of an error.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -34,6 +41,7 @@ export function LearningLoopsDashboard() {
   const [loops, setLoops] = useState<LearningLoop[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     fetchLearningLoops();
@@ -43,6 +51,12 @@ export function LearningLoopsDashboard() {
     try {
       setLoading(true);
       const response = await fetch('/v1/console/learning/loops');
+      if (response.status === 404) {
+        setUnavailable(true);
+        setLoops([]);
+        setError(null);
+        return;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       setLoops(data.learning_loops || []);
@@ -114,8 +128,14 @@ export function LearningLoopsDashboard() {
       {/* Loading State */}
       {loading && <p className="text-gray-500">Loading learning loops...</p>}
 
+      {unavailable && !loading && (
+        <p className="text-sm text-gray-500" data-testid="learning-loops-unavailable">
+          Learning loops are not available on this build.
+        </p>
+      )}
+
       {/* Empty State */}
-      {!loading && loops.length === 0 && (
+      {!loading && !unavailable && !error && loops.length === 0 && (
         <Card>
           <CardContent className="pt-6">
             <p className="text-gray-600">No learning loops registered yet.</p>

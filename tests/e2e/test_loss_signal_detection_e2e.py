@@ -219,7 +219,7 @@ class TestSignalAuditIntegration(unittest.TestCase):
     
     def test_critical_signals_retrieval(self):
         self.emitter.emit_ab_test_signal("_default", 100.0, 102.0, -1.0, 5.0)
-        critical = self.emitter.get_critical_signals()
+        critical = self.emitter.get_critical_signals(tenant_id="_default")
         self.assertEqual(len(critical), 1)
 
 

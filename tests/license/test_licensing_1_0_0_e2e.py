@@ -1,241 +1,113 @@
-"""E2E Tests for Licensing 1.0.0 (ADR-0700/0701/0702/0703/0704)
+"""Licensing 1.0.0 — the capability-verification endpoint, over HTTP, in-process.
 
-5-Gate LDD Cycle Test Suite:
-- GATE 1: Dialectical Reasoning ✅ (design validated)
-- GATE 2: E2E Wiring Proof (THIS FILE)
-- GATE 3: Red→Green Iteration
-- GATE 4: Adversarial Scenarios
-- GATE 5: Docs-as-Definition-of-Done
+The previous version of this file (and of the gate3/gate4 files) sent ``requests``
+to a live service on ``localhost:8765``. Tests never talk to a running install;
+this drives the real console router in a scratch CORVIN_HOME instead.
 
-This file covers GATE 2 skeleton + GATE 3 implementation.
+Where the endpoint actually lives
+---------------------------------
+``routes/licensing_verify.py`` declares ``APIRouter(prefix="/v1/licensing")`` and
+``corvin_console/app.py`` includes it in the console router — which both hosts
+mount under ``/v1/console``. The reachable URL is therefore
+``/v1/console/v1/licensing/verify``; ``/v1/licensing/verify`` (the URL the old
+tests used) is not served by either host.
 
-License: Apache-2.0
+What it answers today (KNOWN BUG, pinned)
+-----------------------------------------
+``verify_capability`` passes ``tenant_id=tenant_id`` where no ``tenant_id`` is in
+scope (it never takes the session: ``session = None  # Placeholder``). The
+NameError is swallowed by its fail-closed ``except Exception`` and EVERY request
+— baseline capabilities, member tier, anything — answers
+``allowed: false, reason: "enforcement_unavailable", tier: "free"``. It fails
+closed, so nothing is over-granted, but the endpoint carries no information.
+The capability semantics it was meant to expose are tested directly against
+``require_capability`` in test_licensing_1_0_0_gate3_red_green.py.
 """
+from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import pytest
-import requests
-import json
-from typing import Dict, Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _license_console_sandbox import console, member_tier  # noqa: E402
+
+import corvin_operator.license.capability_api as capability_api  # noqa: E402
+
+VERIFY = "/v1/console/v1/licensing/verify"
 
 
-class TestCapabilityVerificationEndpoint:
-    """Test the /v1/licensing/verify endpoint."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_e2e_verify_compute_run_free_tier_denied(self):
-        """Free tier cannot run compute (10/day limit applies locally)."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "capability": "compute.run",
-                "tier": "free",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-        assert data["reason"] == "not_available_in_tier"  # Free tier has limit, not unlimited
-    
-    def test_e2e_verify_compute_run_member_tier_allowed(self):
-        """Member tier can run unlimited compute."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "capability": "compute.run",
-                "tier": "member",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == True
-    
-    def test_e2e_verify_forge_create_free_tier_denied(self):
-        """Free tier cannot create Forges."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "capability": "forge.create",
-                "tier": "free",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-        assert "forge" in data["reason"].lower() or data["reason"] == "not_available_in_tier"
-    
-    def test_e2e_verify_forge_create_member_tier_allowed(self):
-        """Member tier can create Forges."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "capability": "forge.create",
-                "tier": "member",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == True
-    
-    def test_e2e_verify_a2a_network_free_tier_denied(self):
-        """Free tier cannot join A2A network."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "capability": "a2a.network",
-                "tier": "free",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-    
-    def test_e2e_verify_a2a_network_member_tier_allowed(self):
-        """Member tier can join A2A network."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "capability": "a2a.network",
-                "tier": "member",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == True
-    
-    def test_e2e_verify_unknown_capability_denied(self):
-        """Unknown capabilities are denied."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "capability": "unknown.capability",
-                "tier": "member",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-        assert "unknown" in data["reason"].lower()
-    
-    def test_e2e_verify_missing_capability_field(self):
-        """Missing capability field returns 400."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={
-                "tier": "member",
-                "requested": 1
-            },
-            timeout=5
-        )
-        assert response.status_code == 422  # Pydantic validation error
+@pytest.fixture
+def con(tmp_path):
+    with console(tmp_path) as c:
+        yield c
 
 
-class TestCapabilityQuotaEnforcement:
-    """Test class-L quota enforcement (offline, per-installation, per-day)."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_e2e_quota_compute_run_free_10_per_day(self):
-        """Free tier has 10 compute runs/day quota."""
-        # TODO: Requires compute.run entrypoint to be properly instrumented
-        # This test verifies the quota counter is enforced
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_e2e_quota_compute_run_member_unlimited(self):
-        """Member tier has unlimited compute runs."""
-        # TODO: Wire to actual compute endpoint
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_e2e_quota_resets_at_utc_midnight(self):
-        """Quota counter resets at UTC midnight (not local time)."""
-        # TODO: Time-dependent test; mock or use system time
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_endpoint_is_only_reachable_under_the_doubled_prefix(con):
+    body = {"capability": "chat.turns"}
+    assert con.client.post("/v1/licensing/verify", json=body, headers=con.h).status_code == 404
+    assert con.client.post("/v1/console/licensing/verify", json=body, headers=con.h).status_code == 404
+    assert con.client.post(VERIFY, json=body, headers=con.h).status_code == 200
 
 
-class TestCapabilityAuditTrail:
-    """Test that capability decisions are logged to hash-chain (ADR-0232/0233)."""
-    
-    def test_e2e_capability_decision_audited(self):
-        """Every require_capability() call emits an audit event."""
-        # TODO: Requires audit chain reader
-        # Verify that calling require_capability() for compute.run logs:
-        # {
-        #    "event_type": "license.capability_decision",
-        #    "capability": "compute.run",
-        #    "tier": "free|member",
-        #    "decision": "allow|deny",
-        #    "lom": "file:line"
-        # }
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_e2e_audit_chain_integrity(self):
-        """Audit events form a valid hash-chain (no gaps, no tampering)."""
-        # TODO: Requires audit chain verifier
-        # run: verify_audit_chain.py --tenant=_default --since=<start_time>
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_requires_a_session(con):
+    resp = con.anonymous().post(VERIFY, json={"capability": "chat.turns"}, headers=con.h)
+    assert resp.status_code == 401, resp.text
 
 
-class TestTierEnforcement:
-    """Test tier vocabulary and entitlement matrix (ADR-0700 §2.1)."""
-    
-    def test_free_tier_capabilities(self):
-        """Free tier has exactly these capabilities: baseline + telemetry opt-out."""
-        free_capabilities = {
-            "chat.turns": True,
-            "voice.summaries": True,
-            "bridges.all": True,
-            "engines.all": True,
-            "skills.run_vetted": True,
-            "skills.run_local": True,
-            "telemetry.opt_out": True,
-            "forge.create": False,
-            "a2a.network": False,
-            "marketplace.publish": False,
-        }
-        # TODO: Query CAPABILITIES matrix and assert
-        pass
-    
-    def test_member_tier_capabilities(self):
-        """Member tier has all capabilities."""
-        # TODO: Query CAPABILITIES matrix
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_tier_vocabulary_only_free_member(self):
-        """Only 'free' and 'member' tiers exist (no 'universal', 'starter', etc.)."""
-        # TODO: Query active_tier() and assert no legacy tier strings
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_requires_csrf(con):
+    resp = con.client.post(VERIFY, json={"capability": "chat.turns"})
+    assert resp.status_code == 403, resp.text
 
 
-class TestIntegrationWithMarketplace:
-    """Test integration with Track D (Marketplace Hub)."""
-    
-    def test_marketplace_install_free_tier_denied(self):
-        """Free tier cannot install plugins (requires forge.create)."""
-        # TODO: POST to marketplace install endpoint with free credential
-        # Expect: 402 or 403 Forbidden
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_marketplace_install_member_tier_allowed(self):
-        """Member tier can install plugins."""
-        # TODO: POST to marketplace install endpoint with member credential
-        # Expect: 200 OK
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_missing_capability_field_is_422(con):
+    resp = con.client.post(VERIFY, json={"requested": 1}, headers=con.h)
+    assert resp.status_code == 422, resp.text
 
 
-if __name__ == "__main__":
-    # Run with: pytest tests/license/test_licensing_1_0_0_e2e.py -v
-    pytest.main([__file__, "-v"])
+def test_every_answer_is_enforcement_unavailable_KNOWN_BUG(con):
+    """KNOWN BUG (module docstring): undefined ``tenant_id`` → fail-closed deny for
+    everything. When fixed, chat.turns must answer allowed=true on both tiers and
+    forge.create allowed=true only for the member."""
+    def ask(capability):
+        resp = con.client.post(VERIFY, json={"capability": capability}, headers=con.h)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    for capability in ("chat.turns", "compute.run", "forge.create", "a2a.network",
+                       "no.such.capability"):
+        free = ask(capability)
+        with member_tier():
+            member = ask(capability)
+        for data in (free, member):
+            assert data == {
+                "allowed": False, "capability": capability, "requested": 1,
+                "tier": "free", "quota_remaining": None,
+                "reason": "enforcement_unavailable", "upgrade_url": None,
+            }
+
+
+def test_body_tier_field_cannot_elevate(con):
+    """The request's ``tier`` is never honoured — the tier comes from the licence."""
+    resp = con.client.post(VERIFY, json={"capability": "forge.create", "tier": "member"},
+                           headers=con.h)
+    assert resp.status_code == 200
+    assert resp.json()["allowed"] is False and resp.json()["tier"] == "free"
+
+
+def test_capability_decisions_never_reach_the_audit_chain_KNOWN_BUG(con):
+    """KNOWN BUG: ``_audit_capability_decision`` imports ``forge.audit`` (no such
+    module) and treats ``tenant_audit_chain()`` (which returns a Path) as a writer,
+    then swallows the error. ``license.capability_decision`` is also absent from
+    EVENT_SEVERITY / _EVENT_ALLOWLIST. Denials — here a real 402 from G3 — leave no
+    decision record; only the route's own events land in the chain."""
+    resp = con.client.post("/v1/console/panels",
+                           json={"id": "x", "title": "x", "html": "<p/>"}, headers=con.h)
+    assert resp.status_code == 402
+    with pytest.raises(capability_api.LicenseDenied):
+        capability_api.require_capability("forge.create", tenant_id="_default",
+                                          entry_point="test")
+    chain = con.audit_chain()
+    text = chain.read_text() if chain.exists() else ""
+    assert "license.capability_decision" not in text

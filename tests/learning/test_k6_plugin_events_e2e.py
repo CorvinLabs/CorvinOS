@@ -3,9 +3,19 @@
 4 test cases covering real plugin execution and audit chain integration.
 """
 
+import json
 import pytest
 from pathlib import Path
 from unittest import mock
+
+from forge import paths as forge_paths
+
+
+def _chain_records(tenant_id="_default"):
+    chain = forge_paths.tenant_audit_chain(tenant_id)
+    if not chain.exists():
+        return []
+    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
 
 from core.plugins.corvin_plugins.lifecycle import (
     emit_plugin_loaded,
@@ -83,13 +93,15 @@ class TestMultiPluginExecution:
             stats = temp_queue.stats()
             assert stats.total_events == 2
 
-            # Verify no raw data in queue
             drained = temp_queue.drain(batch_size=50, timeout_sec=2.0)
-            for event in drained:
-                # Should have hashes, not raw payloads
-                if 'input_hash' in event:
-                    assert isinstance(event.get('input_hash'), str)
-                    assert len(event['input_hash']) == 64  # SHA256
+            assert len(drained) == 2
+            recs = [r for r in _chain_records() if r["event_type"] == "plugin.lifecycle_executed"]
+            assert sorted(r["details"]["plugin_id"] for r in recs) == ["plugin1", "plugin2"]
+            for r in recs:
+                assert len(r["details"]["input_hash"]) == 64  # SHA256, never the payload
+                assert "hash" in r and "prev_hash" in r
+            chain_text = forge_paths.tenant_audit_chain("_default").read_text()
+            assert "secret1" not in chain_text and "secret2" not in chain_text
 
 
 class TestAuditChainIntegration:
@@ -126,12 +138,19 @@ class TestAuditChainIntegration:
 
         drained = temp_queue.drain(batch_size=50, timeout_sec=2.0)
 
-        # Both events should be drained
-        assert len(drained) >= 1
+        # HIGH first, then LOW; both written to the tenant chain
+        assert [e['event_type'] for e in drained] == ['plugin_executed', 'plugin_loaded']
+        types = [r["event_type"] for r in _chain_records()]
+        assert types == ["plugin.lifecycle_executed", "plugin.lifecycle_loaded"]
+        assert temp_queue.stats().pending_count == 0
+        # a second drain writes nothing again
+        assert temp_queue.drain(batch_size=50, timeout_sec=2.0) == []
+        assert len(_chain_records()) == 2
 
-        # Events should have required chain fields
-        for event in drained:
-            assert event['event_type'] is not None
-            assert event['plugin_id'] is not None
-            assert event['tenant_id'] is not None
-            assert event['timestamp'] is not None
+    def test_emitter_uses_the_events_own_tenant_queue(self, tmp_path):
+        """An event for tenant B lands in B's queue, never the _default one."""
+        emit_plugin_loaded('p-b', 'tenant-b', version='1.0.0')
+        queue_b = EventQueue(tenant_id='tenant-b')
+        assert queue_b.db_path == forge_paths.tenant_global_dir('tenant-b') / 'plugin_events.db'
+        assert queue_b.stats().pending_count == 1
+        assert EventQueue(tenant_id='_default').stats().total_events == 0

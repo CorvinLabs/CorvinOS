@@ -1,5 +1,7 @@
 # Phase 3 Learning Loop Closure — Deliverables Summary
 
+> **Status note (2026-09-27, adversarial review):** `core/learning/skill_optimizer_loop.py` (`SkillOptimizerLoop`) and `core/learning/confidence_scoreboard.py` (`ConfidenceScoreboard`) have no production caller; `skill_optimizer_loop.py` did not even import before 2026-09-27. The ✅ marks below do not mean these run in the product.
+
 **Completion Date:** 2026-09-27  
 **Status:** ✅ COMPLETE (All 5 Deliverables + Comprehensive Docs)  
 **Implementation Model:** Claude Haiku 4.5 (Agent)  

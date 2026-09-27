@@ -75,7 +75,7 @@ function baseHandlers(over: Partial<{ toolsStatus: number; installed: ReturnType
       polls += 1;
       return HttpResponse.json(polls < 2
         ? { job_id: "install_1", plugin_id: "plugin:buildin-memory-recall", tenant_id: "_default", status: "installing", progress: 45, message: "Validating the manifest (ADR-0247 gate)", created_at: "", updated_at: "", error: null }
-        : { job_id: "install_1", plugin_id: "plugin:buildin-memory-recall", tenant_id: "_default", status: "completed", progress: 100, message: "Installation completed", created_at: "", updated_at: "", error: null });
+        : { job_id: "install_1", plugin_id: "plugin:buildin-memory-recall", tenant_id: "_default", status: "completed", progress: 100, message: "Installation completed", created_at: "", updated_at: "", error: null, registry_id: "recall", requires_consent: false });
     }),
     http.get("/v1/console/plugins", () => HttpResponse.json({ plugins: installed, total: installed.length, lifecycle_enabled: true })),
     http.get("/v1/console/plugins/health", () => HttpResponse.json({ monitoring_enabled: false, breakers: {} })),
@@ -132,7 +132,14 @@ describe("Marketplace — tab ↔ URL", () => {
 
 describe("Browse", () => {
   it("shows the two tiers, installs through the job with CSRF, renders the real phases, then offers Enable now", async () => {
-    server.use(...baseHandlers());
+    server.use(
+      http.get("/v1/console/api/v1/marketplace/plugins/:id/dependencies", ({ params }) => HttpResponse.json({
+        root_id: params.id, root_plugin_id: "recall",
+        dependency_tree: { plugin_id: "recall", index_id: params.id, version: "1.0.0", installed: false, missing: false, children: [] },
+        to_install: [], already_installed: [], total_new: 0, total_existing: 0,
+      })),
+      ...baseHandlers(),
+    );
     renderAt("/app/marketplace?tab=browse");
     const recall = await screen.findByTestId("index-card-plugin:buildin-memory-recall");
     // two tiers, the contributor one explained as community + consent
@@ -144,15 +151,23 @@ describe("Browse", () => {
     expect(Array.from(slack.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Install")).toBe(true);
     expect(screen.getByTestId("index-card-plugin:buildin-observability-otel").textContent).toMatch(/Manage on the Installed tab/);
 
+    // Install opens the stepped install flow (978c2e0ba): dependencies →
+    // version → review → execute → confirm. Nothing is POSTed before the
+    // operator confirms on the review step.
     fireEvent.click(Array.from(recall.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Install") as HTMLButtonElement);
+    await screen.findByText(/No additional dependencies required/);
+    fireEvent.click(await screen.findByRole("button", { name: /Next: Choose version/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Next: Review/ }));
+    expect(seen).toHaveLength(0);
+    fireEvent.click(await screen.findByRole("button", { name: /Install now/ }));
     await waitFor(() => expect(seen[0]).toMatchObject({ method: "POST", path: "/v1/console/api/v1/marketplace/plugins/plugin:buildin-memory-recall/install", csrf: "csrf-test", body: { version: "1.0.0", wait: false } }));
     // the phase the backend reached is what the bar shows
     await screen.findByText(/Validating the manifest \(ADR-0247 gate\) · 45%/);
-    expect(screen.getByTestId("install-progress-plugin:buildin-memory-recall").querySelector('[role="progressbar"]')).toHaveAttribute("aria-valuenow", "45");
-    await screen.findByText(/Installed — disabled until you enable it/);
-    // the card now offers the second step; the (builtin) enable needs no consent flag
-    fireEvent.click(await screen.findByTestId("enable-now-plugin:buildin-memory-recall"));
-    await screen.findByText(/Enabled — audited\. A panel this plugin declares is now in the sidebar/);
+    await screen.findByText(/Installation completed/);
+    expect(screen.getByText(/Installed, but not yet enabled/)).toBeInTheDocument();
+    // the (builtin) enable is offered in place and needs no consent flag
+    fireEvent.click(await screen.findByRole("button", { name: "Enable now" }));
+    await screen.findByText(/Enabled — its panel, if it has one, is already in the sidebar/);
     await waitFor(() => expect(seen.length).toBe(2));
     expect(seen[1]).toMatchObject({ method: "POST", path: "/v1/console/plugins/recall/enable", csrf: "csrf-test", body: { consent_granted: false } });
   });

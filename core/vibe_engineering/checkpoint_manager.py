@@ -340,9 +340,17 @@ class CheckpointManager:
                 ``tenant_home(tenant_id) / "vibe" / "checkpoints"`` (honours
                 ``CORVIN_HOME``; never ``Path.home()/.corvin``).
             tenant_id: Keyword-only, REQUIRED (ADR-0007). Empty/None raises.
-            audit_writer: Optional AuditChainWriter for integrity verification events.
+            audit_writer: AuditChainWriter for checkpoint events. Defaults to the
+                tenant's canonical chain writer — before 2026-09-27 the default
+                was ``None``, and since no production constructor passes one,
+                ``checkpoint_integrity_failed`` (a tamper signal) was never
+                audited (adversarial review).
         """
         self.tenant_id = _require_tenant_id(tenant_id)
+        if audit_writer is None:
+            from core.compliance.audit_chain_provider import get_audit_chain_writer
+
+            audit_writer = get_audit_chain_writer(self.tenant_id)
         self.audit_writer = audit_writer
 
         if checkpoint_dir is None:
@@ -476,7 +484,7 @@ class CheckpointManager:
                 user_id=None,
                 timestamp=datetime.now().isoformat(),
                 details={
-                    "checkpoint_path": str(filepath),
+                    "checkpoint_file": Path(filepath).name,  # never the full path (it names the user's home)
                     "checkpoint_id": checkpoint_id,
                     "task_id": task_id,
                     "operation": "write_persisted"
@@ -803,7 +811,7 @@ class CheckpointManager:
                 user_id=None,
                 timestamp=datetime.now().isoformat(),
                 details={
-                    "checkpoint_path": str(filepath),
+                    "checkpoint_file": Path(filepath).name,  # never the full path (it names the user's home)
                     "reason": reason
                 },
                 severity="critical"

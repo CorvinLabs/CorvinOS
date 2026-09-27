@@ -1,6 +1,8 @@
 # Wave 1b: Design Phase for Streams B, C, D
 
 > **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** Test files named for T12/T16 (`tests/skills/test_l10_reachability_e2e.py`, `tests/console/test_marketplace_single_path.py`) and `services/agent_hub_store.py` do not exist.
+>
+> **Status note (2026-09-27, adversarial review):** the `plugin.execution_timeout` emitter named below (`lifecycle.py::PluginExecutor.run_with_timeout()`) does not exist; the event is emitted from `core/plugins/corvin_plugins/registry.py`, and `lifecycle.py` has no production caller.
 
 **Status:** DESIGN COMPLETE (Ready for Implementation Gate)  
 **Date:** 2026-09-26  

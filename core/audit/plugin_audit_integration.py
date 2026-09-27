@@ -1,7 +1,10 @@
 """Plugin audit integration — ADR-0682 (Learning k=6).
 
-Bridges plugin lifecycle events to audit chain.
-Provides emit_to_queue() and PII redaction fail-closed wrapper.
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
+Stages plugin lifecycle events in the tenant's durable queue
+(``core.audit.event_queue``); they reach the audit chain only when that queue
+is drained. Provides emit_to_queue() and a PII-hashing wrapper.
 
 GDPR Art. 30, 32: Every plugin event is audit-logged, immutable, tenant-scoped.
 """
@@ -117,12 +120,11 @@ def emit_to_queue(
         if reason is not None:
             event_dict["reason"] = reason
 
-        # Enqueue to durable queue
-        queue = EventQueue()
-        queue.enqueue(event_dict)
+        # Enqueue to the event's OWN tenant queue (ADR-0007)
+        EventQueue(tenant_id=tenant_id).enqueue(event_dict)
 
     except Exception as e:
-        logger.warning(f"Failed to emit audit event for {plugin_id}: {e}")
+        logger.warning("Failed to queue plugin event %s: %s", event_type, type(e).__name__)
         # Non-blocking: continue
 
 

@@ -1,242 +1,114 @@
-"""Phase 2 Forge Gate Tests (ADR-0701)
+"""ADR-0701 G2 — the SkillForge write path, and its fail-closed contract.
 
-E2E tests for all forge chokepoints (G1–G5). Each test verifies:
-1. Free tier gets HTTP 402 or MCP error
-2. Member tier gets 200 OK
-3. Audit event is emitted
-4. Error handling is fail-closed
+G2 is ``skill_forge/registry.py::SkillRegistry.create`` (via
+``_require_forge_create_licence``): the single generation write path that the
+L7 MCP ``skill_create``/``skill_promote`` tools, ``MultiSkillRegistry.promote``,
+``update_body`` (the console manual editor) and the Skill-Creator all funnel
+into. Its HTTP face is covered in test_forge_create_real_flow.py; G1/G4/G5 in
+test_adr0701_gates_g1_g4_g5.py; G3 in test_g3_gates_e2e.py.
+
+The earlier version of this file was 27 empty ``pytest.skip`` bodies plus four
+requests to ``/v1/skill-creator/...``-style paths that exist nowhere (404).
+Stubs whose subject does not exist in the product were dropped rather than kept
+as skips — they are listed in the review report: ``SkillRegistry.create(files=…)``
+(multi-file skills — not implemented), forge provenance signing
+(``forge.artifact_provenance_signed`` — not emitted anywhere), the forge MCP stdio
+transport, and grep-based "no bypass" guards.
 """
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from unittest import mock
 
 import pytest
-import json
-from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _license_console_sandbox import member_tier  # noqa: E402
+
+from skill_forge.multi_registry import MultiSkillRegistry  # noqa: E402
+from skill_forge.registry import SkillRegistry  # noqa: E402
+
+BODY = "# G2 skill\n\nDoes one small thing."
 
 
-class TestG1ForgeToolMCP:
-    """G1: MCP forge_tool gate (Registry.create)"""
-
-    @pytest.mark.asyncio
-    async def test_forge_tool_denied_on_free_tier(self):
-        """Free tier attempt to create tool → license_required error"""
-        # Setup: free tier context
-        # Call: MCP forge_tool
-        # Expect: license_required error, audit event emitted
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    @pytest.mark.asyncio
-    async def test_forge_tool_allowed_on_member_tier(self):
-        """Member tier creates tool → 200 OK, tool registered"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    @pytest.mark.asyncio
-    async def test_forge_promote_denied_on_free_tier(self):
-        """Free tier attempt to promote → license_required error"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    @pytest.mark.asyncio
-    async def test_forge_promote_allowed_on_member_tier(self):
-        """Member tier promotes tool → 200 OK"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_audit_event_emitted_on_deny(self):
-        """Every forge denial emits license.capability_decision audit event"""
-        # Verify audit trail contains: capability, tier, decision, reason, entry_point
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_enforcement_error_fails_closed(self):
-        """If require_capability raises, deny (fail-closed)"""
-        # Setup: require_capability ImportError
-        # Call: forge_tool
-        # Expect: tool_error, not created
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    h = tmp_path / "corvin_home"
+    h.mkdir()
+    monkeypatch.setenv("CORVIN_HOME", str(h))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    return h
 
 
-class TestG2SkillForgeRegistry:
-    """G2: SkillRegistry.create and promote gates"""
-
-    @pytest.mark.asyncio
-    async def test_skill_create_denied_on_free(self):
-        """Free tier can't create skills via registry"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    @pytest.mark.asyncio
-    async def test_skill_create_with_files_denied_on_free(self):
-        """Free tier can't create multi-file skills"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    @pytest.mark.asyncio
-    async def test_multi_skill_promote_denied_on_free(self):
-        """Free tier can't promote via MultiSkillRegistry"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def _reg(home: Path) -> SkillRegistry:
+    root = home / "skill-forge-root"
+    root.mkdir(parents=True, exist_ok=True)
+    return SkillRegistry(root, audit_path=home / "audit.jsonl")
 
 
-class TestG3ConsoleRoutes:
-    """G3: FastAPI console routes for forge creation"""
-
-    @pytest.mark.asyncio
-    async def test_skill_creator_generate_returns_402_on_free(self, client):
-        """POST /skill-creator/generate → 402 Payment Required"""
-        response = client.post(
-            "/v1/skill-creator/generate",
-            json={"prompt": "create a CSV reader", "context": {}},
-            headers={"X-Corvin-Tenant-ID": "_default"}
-        )
-        assert response.status_code == 402
-        assert "license_required" in response.json()["detail"]["error"]
-
-    @pytest.mark.asyncio
-    async def test_skills_manual_put_returns_402_on_free(self, client):
-        """PUT /skills/manual/{name} → 402 on free tier"""
-        response = client.put(
-            "/v1/skills/manual/my-skill",
-            json={"body": "# My Skill"},
-            headers={"X-Corvin-Tenant-ID": "_default"}
-        )
-        assert response.status_code == 402
-
-    @pytest.mark.asyncio
-    async def test_panels_post_returns_402_on_free(self, client):
-        """POST /panels (forge) → 402 on free tier"""
-        response = client.post(
-            "/v1/panels",
-            json={"name": "my-panel", "type": "custom"},
-            headers={"X-Corvin-Tenant-ID": "_default"}
-        )
-        assert response.status_code == 402
-
-    @pytest.mark.asyncio
-    async def test_tools_promote_returns_402_on_free(self, client):
-        """POST /tools/{name}/promote → 402 on free tier"""
-        response = client.post(
-            "/v1/tools/my-tool/promote",
-            json={},
-            headers={"X-Corvin-Tenant-ID": "_default"}
-        )
-        assert response.status_code == 402
+def _create(reg: SkillRegistry, name: str = "g2_skill"):
+    return reg.create(name=name, type="learned-experience", body_md=BODY,
+                      description="g2", scope="user")
 
 
-class TestG4PluginBuilder:
-    """G4: Plugin Builder chat interface gate"""
-
-    @pytest.mark.asyncio
-    async def test_plugin_builder_chat_denied_on_free(self, client):
-        """/plugin-builder command → chat message: license required"""
-        # Setup: free tier, plugin_builder_enabled deleted (use capability gate only)
-        # Call: /chat with message "/plugin-builder create my-plugin"
-        # Expect: chat response with upgrade link
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_plugin_builder_enabled_flag_deleted(self):
-        """Feature flag plugin_builder_enabled is removed from codebase"""
-        # Verify grep: plugin_builder_enabled → 0 results (except in this test file)
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_free_tier_cannot_create_a_skill(home):
+    reg = _reg(home)
+    with pytest.raises(ValueError, match=r"^license_required: .*forge\.create.*tier=free"):
+        _create(reg)
+    assert reg.get("g2_skill") is None
 
 
-class TestG5QuotaGate:
-    """G5: Brain v0.2 quota gate (skeleton, no production caller)"""
-
-    def test_brain_quota_gate_wired_to_forge_create(self):
-        """quota_gate.increment_and_check for forge keys calls require_capability"""
-        # Currently: no production caller (Brain v0.2 is unused)
-        # But skeleton is wired for future use
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-
-class TestAuditTrail:
-    """Audit trail verification for all gates"""
-
-    def test_every_deny_emits_license_capability_decision(self):
-        """All G1–G5 denials appear in audit.jsonl"""
-        # Verify: event_type = "license.capability_decision"
-        # Fields: capability, tier, decision, reason, entry_point, tenant_id, lom
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_forge_provenance_events_emitted_on_create(self):
-        """forge.artifact_provenance_signed event on successful create"""
-        # Fields: artifact_kind, artifact_id, seat_fp, instance_id, binding_hash
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_audit_events_are_immutable_and_hashchained(self):
-        """Audit events cannot be modified after commit"""
-        # Verify via tenant_audit_chain() entries
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_member_can_create_a_skill(home):
+    reg = _reg(home)
+    with member_tier():
+        spec = _create(reg)
+    assert spec.name == "g2_skill"
+    assert reg.get("g2_skill") is not None
+    assert "Does one small thing." in (reg.get_body("g2_skill") or "")
 
 
-class TestErrorHandling:
-    """Error handling and fail-closed behavior"""
-
-    def test_invalid_tier_fails_closed(self):
-        """Unknown tier value → deny (free allowance)"""
-        # e.g., tier = "platinum" (not recognized)
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_require_capability_exception_fails_closed(self):
-        """If require_capability raises any exception → deny"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_missing_tenant_id_fails_closed(self):
-        """If tenant_id is missing/invalid → deny"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_licensing_module_unavailable_fails_closed(home):
+    """An ImportError of the licensing API must refuse, never allow."""
+    reg = _reg(home)
+    with mock.patch.dict(sys.modules, {"corvin_operator.license.capability_api": None}):
+        with pytest.raises(ValueError, match="licensing module unavailable"):
+            _create(reg)
+    assert reg.get("g2_skill") is None
 
 
-class TestGuardTests:
-    """Code-level guard tests to prevent bypasses"""
-
-    def test_every_forge_writer_reaches_registry_create(self):
-        """All code paths that write tools/skills go through Registry.create or install()"""
-        # Grep: Registry.create|SkillRegistry.create calls
-        # Guard: no direct writes to .forge/tools or .forge/skills directories
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_every_skill_body_reader_uses_registry_get_body(self):
-        """All code that reads skill implementations go through get_body()"""
-        # Verify: routes/workflows.py readers use SkillRegistry.get_body
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_no_forge_create_bypass_paths(self):
-        """Grep for direct artifact creation outside gated chokepoints"""
-        # Should return 0: direct writes to registry.json, SKILL.md, etc.
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_invalid_tenant_fails_closed(home, monkeypatch):
+    """An invalid tenant yields ENFORCEMENT_UNAVAILABLE (a returned decision, not
+    an exception). G2 reads the verdict, so this refuses — even for a member."""
+    monkeypatch.setenv("CORVIN_TENANT_ID", "../escape")
+    reg = _reg(home)
+    with member_tier():
+        with pytest.raises(ValueError, match="license_required: forge.create enforcement_unavailable"):
+            _create(reg)
+    assert reg.get("g2_skill") is None
 
 
-class TestEndToEnd:
-    """Full E2E scenarios"""
+def test_multi_registry_promote_after_downgrade_is_refused(home, tmp_path):
+    """Member creates in session scope; after the licence lapses, promotion
+    (which re-creates in the target scope through G2) is refused and the
+    original copy is untouched."""
+    multi = MultiSkillRegistry(tenant_id="_default", channel_id="chan", task_id="task",
+                               project_root=tmp_path / "project")
+    with member_tier():
+        multi.create(scope="session", name="promo_skill", type="learned-experience",
+                     body_md=BODY, description="p")
+    assert multi.find_scope("promo_skill") == "session"
 
-    @pytest.mark.asyncio
-    async def test_free_user_forge_workflow_denied_at_first_gate(self):
-        """Free user attempts: forge create → denied, no artifact created"""
-        # 1. POST /forge_tool (MCP)
-        # 2. Verify: license_required error
-        # 3. Verify: tool not added to registry
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    @pytest.mark.asyncio
-    async def test_member_user_forge_workflow_succeeds(self):
-        """Member user: forge create → succeed, artifact created, audit logged"""
-        # 1. POST /forge_tool (MCP) with member token
-        # 2. Verify: 200 OK, tool created
-        # 3. Verify: audit event emitted
-        # 4. Verify: tool callable via MCP
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    @pytest.mark.asyncio
-    async def test_member_downgrade_to_free_revokes_capability(self):
-        """Member → free: artifact remains, but forge creation denied"""
-        # Scenario: license revoked mid-session
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+    with pytest.raises(ValueError, match="^license_required:"):
+        multi.promote("promo_skill", to="user", force=True)
+    assert multi.find_scope("promo_skill") == "session"
 
 
-class TestCompliance:
-    """GDPR & audit compliance"""
-
-    def test_audit_events_carry_tenant_id(self):
-        """All events include tenant_id for isolation"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_audit_events_carry_lom(self):
-        """All events include lom (line of moral responsibility)"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-
-    def test_no_pii_in_audit_events(self):
-        """Audit events contain no PII (customer name, email, etc.)"""
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_multi_registry_promote_as_member_moves_the_skill(home, tmp_path):
+    multi = MultiSkillRegistry(tenant_id="_default", channel_id="chan", task_id="task",
+                               project_root=tmp_path / "project")
+    with member_tier():
+        multi.create(scope="session", name="promo_ok", type="learned-experience",
+                     body_md=BODY, description="p")
+        multi.promote("promo_ok", to="user", force=True)
+    assert multi.find_scope("promo_ok") == "user"

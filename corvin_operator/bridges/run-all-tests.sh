@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# run-all-tests.sh — alle Bridge-Tests auf einen Schlag.
+# run-all-tests.sh — every bridge test in one go.
 #
-# Setup-Anforderungen:
-#   - python3 mit dem `openai`-Paket
-#   - node mit den daemon-Dependencies (`npm install` in jedem
-#     bridges/<channel>/ — der test_daemon_boot.sh braucht diese um
-#     overhaupt zu booten)
+# Setup requirements:
+#   - python3 with the `openai` package
+#   - node with the daemon dependencies (`npm install` in every
+#     bridges/<channel>/ — test_daemon_boot.sh needs them to boot at all)
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -36,10 +35,113 @@ mkdir -p "$CORVIN_HOME"
 export XDG_CONFIG_HOME="$_SUITE_SANDBOX/xdg_config"
 mkdir -p "$XDG_CONFIG_HOME"
 unset VOICE_CONFIG_DIR OPENAI_API_KEY CORVIN_TTS_OPENAI_KEY ELEVENLABS_API_KEY
+# HOME and the audit anchor key are sandboxed too: the core audit writer keeps
+# sidecars under $HOME/.config/corvin-voice and reads the anchor key from
+# CORVIN_AUDIT_ANCHOR_KEY. Live suites (CLAUDE_LIVE_E2E=1) need the real HOME
+# for the `claude` CLI login, so HOME is only replaced when they are not run.
+export CORVIN_AUDIT_ANCHOR_KEY="$_SUITE_SANDBOX/audit_anchor.key"
+# The forge registry root (and before 2026-09-27 the forge MCP server's audit
+# chain) is FORGE_ROOT, else the scope of the cwd — for a cwd in this checkout
+# `<checkout>/.corvin/forge`, whatever CORVIN_HOME says. core/delegate's live
+# E2E spawned the real server from the repo and appended to that live file.
+export FORGE_ROOT="$_SUITE_SANDBOX/forge_root"
+mkdir -p "$FORGE_ROOT"
+unset VOICE_AUDIT_PATH
+_REAL_HOME="$HOME"
+if [[ "${CLAUDE_LIVE_E2E:-}" != "1" ]]; then
+  export HOME="$_SUITE_SANDBOX/home"
+  mkdir -p "$HOME"
+fi
+# Import THIS checkout, never another tree on the caller's PYTHONPATH or the
+# venv's editable .pth (whose repo-marker home may be a live install: a run
+# that imported corvin_operator from the live checkout wrote 34 foreign-MAC
+# records into the live tenant chain, 2026-09-27). Every suite below that sets
+# its own PYTHONPATH keeps "$_REPO_ROOT" first for the same reason.
+# `$_REPO_ROOT/corvin_operator` is deliberately NOT listed: it makes
+# `corvin_operator/forge/` importable as a `forge` NAMESPACE package, which then
+# shadows the real `forge` package for the rest of a pytest process.
+export _REPO_ROOT="$(cd ../.. && pwd)"
+export PYTHONPATH="$_REPO_ROOT:$_REPO_ROOT/core/console:$_REPO_ROOT/core/gateway:$_REPO_ROOT/core/plugins:$_REPO_ROOT/core/compliance:$_REPO_ROOT/core/compute:$_REPO_ROOT/core/delegate:$_REPO_ROOT/core/orchestration:$_REPO_ROOT/core/workflows:$_REPO_ROOT/core/observability:$_REPO_ROOT/core/awpkg${PYTHONPATH:+:$PYTHONPATH}"
+
+# Protected-chain tripwire. Snapshot size + tail of every hash-chained audit
+# file of the live installs this run could reach — this checkout's .corvin and
+# the account's ~/.corvin — and fail the run if any record written while it ran
+# carries an instance_id other than that install's own (read from the tail of
+# its canonical tenant chain before the run). A live service appending with its
+# own instance_id is fine; a test process appending is exactly the incident.
+# Also protected: the checkout owning the python3 venv (its editable .pth is
+# how a worktree run reached the live checkout's chain) and any extra homes in
+# CORVIN_TEST_PROTECTED_HOMES (the root conftest honours the same variable).
+_CHAIN_SNAPSHOT="$_SUITE_SANDBOX/protected_chains.json"
+_VENV_CHECKOUT="$(dirname "$(python3 -I -c 'import sys; print(sys.prefix)')")"
+IFS=':' read -r -a _EXTRA_PROTECTED <<< "${CORVIN_TEST_PROTECTED_HOMES:-}"
+_protected_chains() {
+  python3 -I - "$1" "$_CHAIN_SNAPSHOT" "$_REPO_ROOT/.corvin" "$_REAL_HOME/.corvin" \
+    "$_VENV_CHECKOUT/.corvin" ${_EXTRA_PROTECTED[@]+"${_EXTRA_PROTECTED[@]}"} <<'PY'
+import glob, json, os, sys
+mode, snap, homes = sys.argv[1], sys.argv[2], sys.argv[3:]
+
+def chains(home):
+    pats = ("tenants/*/global/forge/audit.jsonl", "global/forge/audit.jsonl",
+            "forge/audit.jsonl", "tenants/*/global/audit.jsonl",
+            "tenants/*/forge/audit.jsonl", "tenants/*/audit.jsonl")
+    return sorted({p for pat in pats for p in glob.glob(os.path.join(home, pat))})
+
+def tail_id(path):
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2); size = fh.tell(); fh.seek(max(0, size - 65536))
+            for line in reversed(fh.read().splitlines()):
+                try:
+                    iid = json.loads(line).get("instance_id")
+                except ValueError:
+                    continue
+                if iid:
+                    return iid
+    except OSError:
+        pass
+    return None
+
+if mode == "before":
+    out = {}
+    for home in dict.fromkeys(os.path.realpath(h) for h in homes if h):
+        if not os.path.isdir(home):
+            continue
+        live = tail_id(os.path.join(home, "tenants", "_default", "global", "forge", "audit.jsonl"))
+        out[home] = {"live": live,
+                     "sizes": {p: os.path.getsize(p) for p in chains(home)}}
+    json.dump(out, open(snap, "w"))
+    sys.exit(0)
+
+before, bad = json.load(open(snap)), []
+for home, rec in before.items():
+    for path in chains(home):
+        start = rec["sizes"].get(path, 0)
+        if os.path.getsize(path) <= start:
+            continue
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            for line in fh.read().splitlines():
+                try:
+                    iid = json.loads(line).get("instance_id")
+                except ValueError:
+                    iid = "<unparseable>"
+                if rec["live"] is None or iid != rec["live"]:
+                    bad.append(f"{path}: instance_id={iid} (live={rec['live']})")
+if bad:
+    print("PROTECTED CHAIN WRITTEN BY THIS RUN — foreign records:", file=sys.stderr)
+    for b in bad[:20]:
+        print("  " + b, file=sys.stderr)
+    print(f"  ({len(bad)} record(s))", file=sys.stderr)
+    sys.exit(1)
+print(f"protected chains untouched by foreign writers ({sum(len(r['sizes']) for r in before.values())} file(s))")
+PY
+}
+_protected_chains before || { echo "protected-chain snapshot failed" >&2; exit 2; }
 
 # Resolve pytest: prefer project .venv, then AWP venv, then system
 PYTEST=$(command -v pytest 2>/dev/null \
-  || ls ../../.venv/bin/pytest $HOME/.awp/venv/bin/pytest \
+  || ls ../../.venv/bin/pytest \
      $HOME/anaconda3/bin/pytest 2>/dev/null | head -1 \
   || echo "")
 export PYTEST
@@ -123,6 +225,7 @@ run "Python: tts hard cap"       python3 shared/test_adapter_tts_cap.py >/dev/nu
 run "Python: voice audience"     python3 shared/test_adapter_voice_audience.py >/dev/null || fails=$((fails+1))
 run "Python: voice override"     python3 shared/test_adapter_voice_override.py >/dev/null || fails=$((fails+1))
 run "Python: engine-fallback voice text (2026-07-12)" python3 shared/test_adapter_engine_fallback_voice.py >/dev/null || fails=$((fails+1))
+run "Python: no undefined names in adapter/session_reset/acs_validator (2026-09-27)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_bridge_undefined_names.py shared/test_session_reset_dialectic_tenant.py shared/test_acs_validator.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: voice output-language escape hatch (2026-07-12)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_adapter_voice_lang_detect.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: profile display_language validation (2026-07-12)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../voice/scripts/test_profile_cli_lang.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: lang_cli malformed-profile guard (2026-07-13)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../voice/scripts/test_lang_cli.py -q >/dev/null 2>&1' || fails=$((fails+1))
@@ -144,10 +247,10 @@ run "Python: bg-task completion notification E2E (real worker)" python3 shared/t
 run "Python: LIVE LLM adapter E2E (CLAUDE_LIVE_E2E=1 only, skips otherwise)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_adapter_live_llm_e2e.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: HTTP-error reset (transient)"  python3 shared/test_adapter_http_reset.py >/dev/null || fails=$((fails+1))
 run "Python: boot self-test"     python3 shared/test_self_test.py >/dev/null || fails=$((fails+1))
-run "Python: artifacts lib (L33)"  env PYTHONPATH=../forge python3 ../forge/tests/test_artifacts.py >/dev/null || fails=$((fails+1))
-run "Python: artifacts E2E (L33)"  env PYTHONPATH=../forge:shared python3 ../forge/tests/test_artifact_e2e.py >/dev/null || fails=$((fails+1))
-run "Python: compute_submit/gate wiring (ADR-0190 M2)" env PYTHONPATH=../forge:../../core/compute python3 ../forge/tests/test_compute_engine_tools.py >/dev/null || fails=$((fails+1))
-run "Python: datasource_connect GA tool (ADR-0190 M3)" env PYTHONPATH=../forge:../../core/compute python3 ../forge/tests/test_datasource_connect.py >/dev/null || fails=$((fails+1))
+run "Python: artifacts lib (L33)"  env PYTHONPATH="$_REPO_ROOT:../forge" python3 ../forge/tests/test_artifacts.py >/dev/null || fails=$((fails+1))
+run "Python: artifacts E2E (L33)"  env PYTHONPATH="$_REPO_ROOT:../forge:shared" python3 ../forge/tests/test_artifact_e2e.py >/dev/null || fails=$((fails+1))
+run "Python: compute_submit/gate wiring (ADR-0190 M2)" env PYTHONPATH="$_REPO_ROOT:../forge:../../core/compute" python3 ../forge/tests/test_compute_engine_tools.py >/dev/null || fails=$((fails+1))
+run "Python: datasource_connect GA tool (ADR-0190 M3)" env PYTHONPATH="$_REPO_ROOT:../forge:../../core/compute" python3 ../forge/tests/test_datasource_connect.py >/dev/null || fails=$((fails+1))
 run "Python: artifact-register hook (L33)" python3 ../voice/hooks/test_artifact_register.py >/dev/null || fails=$((fails+1))
 run "Python: consent gate (L17)" python3 shared/test_consent_gate.py >/dev/null || fails=$((fails+1))
 run "Python: roles (L18)"        python3 shared/test_roles.py >/dev/null || fails=$((fails+1))
@@ -186,7 +289,7 @@ run "Python: delegate resolver (L29)" python3 ../cowork/test/test_resolver_deleg
 run "Python: capability registry (ADR-0190)" python3 ../cowork/test/test_capability_registry.py >/dev/null || fails=$((fails+1))
 run "Python: capability-registry-matches-reality (ADR-0190 CI gate)" python3 ../cowork/test/test_capability_registry_matches_reality.py >/dev/null || fails=$((fails+1))
 run "Python: capability-awareness resolver injection (ADR-0190)" python3 ../cowork/test/test_resolver_capability_awareness.py >/dev/null || fails=$((fails+1))
-run "Python: orchestration MCP server (ADR-0190 M4/M5/M6)" env PYTHONPATH=../../core/orchestration:../../core/workflows:shared:../forge python3 ../../core/orchestration/tests/test_mcp_server.py >/dev/null || fails=$((fails+1))
+run "Python: orchestration MCP server (ADR-0190 M4/M5/M6)" env PYTHONPATH="$_REPO_ROOT:../../core/orchestration:../../core/workflows:shared:../forge" python3 ../../core/orchestration/tests/test_mcp_server.py >/dev/null || fails=$((fails+1))
 run "Python: orchestration resolver injection (ADR-0190 M4/M5/M6)" python3 ../cowork/test/test_resolver_orchestration.py >/dev/null || fails=$((fails+1))
 run "Python: E2E fictional-task routing (ADR-0190)" python3 ../cowork/test/test_e2e_fictional_tasks.py >/dev/null || fails=$((fails+1))
 run "Python: delegate output-judge (L29.3a)" python3 ../../core/delegate/tests/test_output_judge.py >/dev/null || fails=$((fails+1))
@@ -231,7 +334,7 @@ run "Python: tenant migration→state-store roundtrip (ADR-0007 Phase 1.3+1.4)" 
 # failed for a reason that does not exist in production. Mirror the unit's PYTHONPATH
 # here so the harness tests the app the way it actually runs.
 _REPO_ABS="$(cd ../.. && pwd)"
-GW_PYTHONPATH="${_REPO_ABS}/corvin_operator/bridges/shared:${_REPO_ABS}/corvin_operator/forge:${_REPO_ABS}/core/console:${_REPO_ABS}/core/gateway:${_REPO_ABS}/core/license:${_REPO_ABS}/core/compliance:${_REPO_ABS}/corvin_operator/skill-forge"
+GW_PYTHONPATH="${_REPO_ABS}:${_REPO_ABS}/corvin_operator/bridges/shared:${_REPO_ABS}/corvin_operator/forge:${_REPO_ABS}/core/console:${_REPO_ABS}/core/gateway:${_REPO_ABS}/core/license:${_REPO_ABS}/core/compliance:${_REPO_ABS}/corvin_operator/skill-forge"
 export GW_PYTHONPATH
 
 # Gateway suites: the guard below asks whether the venv WORKS, not whether it
@@ -727,8 +830,8 @@ run "Python: L39 federation E2E two-node (ADR-0053)"         python3 shared/test
 run "Python: L41 social capability grants (ADR-0054)"  python3 shared/test_social_capability.py >/dev/null  || fails=$((fails+1))
 
 run "Python: content marking Art.50§4 (ADR-0057 M1)"  python3 shared/test_content_marking.py >/dev/null   || fails=$((fails+1))
-run "Python: incident tracker L40 (ADR-0057 M6)"       bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; PYTHONPATH=shared "$PYTEST" shared/test_incident_tracker.py -q >/dev/null 2>&1' || fails=$((fails+1))
-run "Python: operator decl. gate (ADR-0057 M7)"        bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; PYTHONPATH=shared "$PYTEST" shared/test_operator_declaration.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: incident tracker L40 (ADR-0057 M6)"       bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; PYTHONPATH="$_REPO_ROOT:shared" "$PYTEST" shared/test_incident_tracker.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: operator decl. gate (ADR-0057 M7)"        bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; PYTHONPATH="$_REPO_ROOT:shared" "$PYTEST" shared/test_operator_declaration.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: annex IV generator (ADR-0057 M8)"         python3 ../voice/scripts/test_corvin_annex_iv.py >/dev/null || fails=$((fails+1))
 run "Python: Prometheus label PII linter (ADR-0073 G-017)" python3 shared/check_prometheus_labels.py --root ../.. >/dev/null || fails=$((fails+1))
 run "Python: compliance gaps G-006/G-008/G-009/G-010 (ADR-0073)" python3 shared/test_compliance_g006_g008_g009_g010.py >/dev/null || fails=$((fails+1))
@@ -741,6 +844,8 @@ run "Python: compliance gaps G-006/G-008/G-009/G-010 (ADR-0073)" python3 shared/
 run "Python: plugin system (L4, ADR-0233/0345)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../core/plugins/tests -q --import-mode=importlib >/dev/null 2>&1' || fails=$((fails+1))
 
 run "daemon boot smoke-test"     bash test_daemon_boot.sh >/dev/null                  || fails=$((fails+1))
+
+run "Protected chains: no foreign-instance record appended by this run" _protected_chains after || fails=$((fails+1))
 
 total=$(grep -c '^run ' "$(basename "${BASH_SOURCE[0]}")")
 if [[ $fails -eq 0 ]]; then

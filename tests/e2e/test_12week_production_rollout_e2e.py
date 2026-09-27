@@ -11,6 +11,18 @@ Comprehensive E2E Tests for 12-Week Production Rollout
 - Full 12-week simulation with metrics
 
 Compliance: GDPR (Art. 5/6/30/32), EU AI Act (Art. 5/50), audit-first (ADR-0232/0233)
+
+Adversarial review 2026-09-27: the orchestration modules are NOT WIRED (no
+production caller). Every test runs in its own CORVIN_HOME because audit records
+now go to the real tenant chain. Canary/skill-primary tests supply a MEASURED
+Phase 1 latency baseline explicitly — without one the orchestrator rolls back
+(``BASELINE_NOT_MEASURED``) instead of comparing against an invented 100 ms.
+Removed test classes that exercised APIs which do not exist
+(``_evaluate_phase_gate``, ``_get_audit_events``, ``_validate_metrics``,
+``validate_metric_validity``, ``revoke_approval``, ``_detect_incidents``,
+``status["all_clear"]``, ``SkillMetrics(audit_chain_verified=...)``) — they had
+no subject; the real behaviour they gestured at is tested below against the
+real API.
 """
 
 import pytest
@@ -40,8 +52,38 @@ from core.deployment.rollback_automation import (
 from core.deployment.phase3_rollout_orchestrator import (
     Phase,
     SkillMetrics,
+    SkillMode,
     RolloutOrchestrator,
+    Phase1Evaluator,
+    RollbackReason,
 )
+from core.deployment import audit_sink
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime(tmp_path, monkeypatch):
+    """Each test has its own CORVIN_HOME/HOME — the audit chain is real."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    yield
+
+
+def _canary_metrics(**kw):
+    base = dict(agreement_rate=0.99, confidence=0.90, confidence_sigma=0.02,
+                latency_p99_ms=105.0, feedback_count=50000, correctness_delta=0.0)
+    base.update(kw)
+    return {"os.delegation_router": SkillMetrics(
+        skill_id="os.delegation_router", phase=Phase.PHASE_2A_CANARY, **base)}
+
+
+def _shadow_metrics():
+    return {"os.delegation_router": SkillMetrics(
+        skill_id="os.delegation_router", phase=Phase.PHASE_1_SHADOW,
+        agreement_rate=0.99, confidence=0.90, confidence_sigma=0.02,
+        latency_p99_ms=100.0, feedback_count=2000)}
 
 
 class TestPhase1ShadowMode:
@@ -69,8 +111,8 @@ class TestPhase1ShadowMode:
         """Test Phase 1 collects baseline metrics for 14 days"""
         orchestrator = MasterRolloutOrchestrator()
 
-        # Simulate 14 days of Phase 1
-        for day in range(1, 15):
+        # Advance from day 1 to day 14 (13 daily steps)
+        for day in range(2, 15):
             metrics = {
                 "os.delegation_router": SkillMetrics(
                     skill_id="os.delegation_router",
@@ -94,8 +136,11 @@ class TestPhase1ShadowMode:
 
             orchestrator.advance_day(metrics)
 
-        # Check Phase 1 gate passes after 14 days
+        # Day 14 reached; the Phase 1→2a approval is requested; the shadow
+        # latency baseline was MEASURED from the supplied metrics.
         assert orchestrator.state.base_state.day_number == 14
+        assert orchestrator.state.base_state.approval_required_for == "phase_1_to_2a"
+        assert orchestrator.state.base_state.baseline_latency_p99_ms == pytest.approx(97.5)
 
     def test_phase_1_success_criteria_met(self):
         """Test Phase 1 success: 14+ days, 1k+ feedback, 98%+ agreement, converged"""
@@ -142,6 +187,7 @@ class TestPhase2aCanaryTraffic:
         orchestrator.state.base_state.day_number = 20
         orchestrator.state.base_state.week_number = 3
         orchestrator.state.base_state.current_traffic_percentage = 1
+        orchestrator.state.base_state.baseline_latency_p99_ms = 100.0  # measured in Phase 1
 
         # Week 3 metrics (should pass gate → escalate to 10%)
         metrics = {
@@ -179,38 +225,63 @@ class TestPhase2aCanaryTraffic:
 
         checks = validator.validate_adr_0206_canary(week_number=4, metrics=metrics["canary_metrics"], baseline_latency_ms=100.0)
 
-        # Should have a latency check that fails
+        # 125 ms is over the 115 ms threshold: never a PASS (it lands in the
+        # 10% WARNING band, which still blocks an ADR-0206 transition).
         latency_checks = [c for c in checks if c.check_name == "latency_p99"]
-        assert any(c.status == ComplianceStatus.FAIL for c in latency_checks)
+        assert latency_checks and all(c.status != ComplianceStatus.PASS for c in latency_checks)
+
+    def test_latency_check_fails_without_measured_baseline(self):
+        """No Phase 1 baseline → the latency check FAILS (no 100 ms default)."""
+        validator = ADRComplianceValidator()
+        checks = validator.validate_adr_0206_canary(
+            week_number=4,
+            metrics={"agreement_rate": 0.99, "latency_p99_ms": 50.0, "correctness_delta": 0.0},
+            baseline_latency_ms=None,
+        )
+        lat = [c for c in checks if c.check_name == "latency_p99"]
+        assert lat and lat[0].status == ComplianceStatus.FAIL
+        assert "not measured" in lat[0].message
+
+    def test_missing_canary_metrics_fail_not_pass(self):
+        """Absent latency/correctness used to default to 0 → PASS."""
+        validator = ADRComplianceValidator()
+        checks = validator.validate_adr_0206_canary(
+            week_number=4, metrics={"agreement_rate": 0.99}, baseline_latency_ms=100.0,
+        )
+        by_name = {c.check_name: c.status for c in checks}
+        assert by_name["latency_p99"] == ComplianceStatus.FAIL
+        assert by_name["correctness_delta"] == ComplianceStatus.FAIL
 
     def test_phase_2a_traffic_escalation_full_sequence(self):
-        """Test full 4-week traffic escalation: 1%→10%→50%→100%"""
+        """Full canary: 1% (wk3) → 10% (wk4) → 50% (wk5) → 100% (wk6), then 2b approval."""
         orchestrator = MasterRolloutOrchestrator()
-        orchestrator.state.base_state.phase = Phase.PHASE_2A_CANARY
+        while orchestrator.state.base_state.day_number < 14:
+            orchestrator.advance_day(_shadow_metrics())
+        assert orchestrator.operator_approve(OperatorApprovalGate.PHASE_1_TO_2A, approved_by="ops")
 
-        traffic_sequence = []
+        traffic_at = {}
+        while orchestrator.state.base_state.day_number < 42:
+            orchestrator.advance_day(_canary_metrics())
+            d = orchestrator.state.base_state.day_number
+            if d % 7 == 0:
+                traffic_at[d] = orchestrator.state.base_state.current_traffic_percentage
 
-        for week in range(3, 7):
-            orchestrator.state.base_state.week_number = week
-            orchestrator.state.base_state.day_number = week * 7
+        assert orchestrator.state.base_state.phase == Phase.PHASE_2A_CANARY
+        assert traffic_at == {21: 1, 28: 10, 35: 50, 42: 100}
+        assert orchestrator.state.base_state.pending_operator_approval
+        ok, issues = orchestrator.verify_audit_chain()
+        assert ok, issues
 
-            metrics = {
-                "os.delegation_router": SkillMetrics(
-                    skill_id="os.delegation_router",
-                    phase=Phase.PHASE_2A_CANARY,
-                    agreement_rate=0.98,
-                    confidence=0.80,
-                    confidence_sigma=0.03,
-                    latency_p99_ms=110.0,
-                    feedback_count=10000,
-                ),
-            }
-
-            orchestrator.advance_day(metrics)
-            traffic_sequence.append(orchestrator.state.base_state.current_traffic_percentage)
-
-        # Should have escalated in sequence
-        assert 1 in traffic_sequence or 10 in traffic_sequence
+    def test_canary_without_baseline_rolls_back(self):
+        """A canary with no measured Phase 1 baseline cannot detect a latency
+        spike, so it rolls back instead of running blind."""
+        orchestrator = MasterRolloutOrchestrator()
+        st = orchestrator.state.base_state
+        st.phase = Phase.PHASE_2A_CANARY
+        st.day_number = 20
+        orchestrator.advance_day(_canary_metrics())
+        assert st.phase == Phase.ROLLED_BACK
+        assert all(m == SkillMode.FALLBACK for m in st.skill_states.values())
 
 
 class TestPhase2bSkillActivation:
@@ -221,6 +292,7 @@ class TestPhase2bSkillActivation:
         orchestrator = MasterRolloutOrchestrator()
         orchestrator.state.base_state.phase = Phase.PHASE_2B_SKILL_PRIMARY
         orchestrator.state.base_state.day_number = 70  # At 100% traffic
+        orchestrator.state.base_state.baseline_latency_p99_ms = 100.0  # measured in Phase 1
 
         # High confidence should trigger activation
         metrics = {
@@ -237,9 +309,11 @@ class TestPhase2bSkillActivation:
 
         orchestrator.advance_day(metrics)
 
-        # Should have attempted to activate skill
+        # Confidence clears 0.85, but audit-violation count and latency
+        # stability are NOT MEASURED by anything → activation is refused.
         status = orchestrator.get_status()
-        # (Would be PRIMARY if thresholds met, but skill_states updates depend on gate evaluation)
+        assert status["phase"] == Phase.PHASE_2B_SKILL_PRIMARY.value
+        assert status["skill_states"]["os.delegation_router"] != SkillMode.PRIMARY.value
 
     def test_phase_2b_skill_selective_activation(self):
         """Test Phase 2b can activate skills independently"""
@@ -651,391 +725,124 @@ class TestFullRolloutSimulation:
         # Phase 1 should be ready for approval
         assert orchestrator.state.base_state.pending_operator_approval
 
-    def test_phase_2a_traffic_escalation_sequence(self):
-        """Simulate Phase 2a: 4 weeks traffic escalation"""
-        orchestrator = MasterRolloutOrchestrator()
-        orchestrator.state.base_state.phase = Phase.PHASE_2A_CANARY
-        orchestrator.state.base_state.current_traffic_percentage = 1
-
-        # Weeks 3-6: 1%→10%→50%→100%
-        for week in range(3, 7):
-            for day in range((week - 3) * 7 + 1, (week - 2) * 7 + 1):
-                orchestrator.state.base_state.day_number = day
-                orchestrator.state.base_state.week_number = week
-
-                metrics = {
-                    "os.delegation_router": SkillMetrics(
-                        skill_id="os.delegation_router",
-                        phase=Phase.PHASE_2A_CANARY,
-                        agreement_rate=0.98,
-                        confidence=0.80,
-                        confidence_sigma=0.02,
-                        latency_p99_ms=110.0,
-                        feedback_count=50000 + (day * 1000),
-                    ),
-                }
-
-                orchestrator.advance_day(metrics)
-
     def test_phase_2b_skill_activation_convergence(self):
-        """Simulate Phase 2b: Skill activation with convergence"""
+        """Phase 2b days 64-84: confidence converges, yet no skill is promoted
+        to PRIMARY because audit-violation counts and latency stability are
+        not measured by anything (fail-closed, never assumed zero/stable)."""
         orchestrator = MasterRolloutOrchestrator()
-        orchestrator.state.base_state.phase = Phase.PHASE_2B_SKILL_PRIMARY
-        orchestrator.state.base_state.current_traffic_percentage = 100
+        st = orchestrator.state.base_state
+        st.phase = Phase.PHASE_2B_SKILL_PRIMARY
+        st.current_traffic_percentage = 100
+        st.baseline_latency_p99_ms = 100.0  # measured in Phase 1
 
-        # Days 64-84: Skill convergence and activation
         for day in range(64, 85):
-            orchestrator.state.base_state.day_number = day
-
+            st.day_number = day - 1
             metrics = {
                 "os.delegation_router": SkillMetrics(
                     skill_id="os.delegation_router",
                     phase=Phase.PHASE_2B_SKILL_PRIMARY,
-                    agreement_rate=0.98,
-                    confidence=0.75 + (0.15 * ((day - 63) / 21)),  # Converging to 0.90
-                    confidence_sigma=0.05 * (1 - (day - 63) / 21),  # Sigma → 0
+                    agreement_rate=0.99,
+                    confidence=0.90,
+                    confidence_sigma=0.01,
                     latency_p99_ms=100.0,
                     feedback_count=100000 + (day * 5000),
                 ),
             }
-
             orchestrator.advance_day(metrics)
+
+        assert st.phase == Phase.PHASE_2B_SKILL_PRIMARY
+        assert st.skill_states["os.delegation_router"] != SkillMode.PRIMARY
 
 
 class TestCriticalCoverageFixes:
-    """Test Coverage Gaps 1-5: Critical E2E scenarios"""
+    """Coverage gaps, retargeted at the real API."""
 
-    # FINDING 1: Metrics-out-of-order scenario
-    def test_gate_blocks_on_incomplete_metrics(self):
-        """Test: Confidence arrives before Agreement → gate BLOCKS escalation"""
-        orchestrator = MasterRolloutOrchestrator()
-        orchestrator.state.base_state.phase = Phase.PHASE_2A_CANARY
-        orchestrator.state.base_state.week_number = 3
-
-        # Only confidence metric available (missing agreement_rate)
-        incomplete_metrics = {
-            "os.delegation_router": SkillMetrics(
-                skill_id="os.delegation_router",
-                phase=Phase.PHASE_2A_CANARY,
-                confidence=0.80,
-                confidence_sigma=0.02,
-                latency_p99_ms=110.0,
-                feedback_count=5000,
-                agreement_rate=None,  # Missing critical metric
-            ),
-        }
-
-        gate_result = orchestrator._evaluate_phase_gate(incomplete_metrics)
-
-        # Gate must BLOCK on incomplete metrics
-        assert gate_result == PhaseGateResult.FAIL
-        assert not orchestrator.state.base_state.current_traffic_percentage > 1
-
-    # FINDING 2: Approval gate mismatch
     def test_operator_approval_gate_mismatch_rejected(self):
-        """Test: Operator approves PHASE_2A_TO_2B when PHASE_1_TO_2A pending → REJECT"""
+        """Approving PHASE_2A_TO_2B while PHASE_1_TO_2A is pending → refused."""
         orchestrator = MasterRolloutOrchestrator()
         orchestrator._request_operator_approval(OperatorApprovalGate.PHASE_1_TO_2A)
-
-        # Try to approve wrong gate
-        with pytest.raises(ValueError):
-            orchestrator.operator_approve(
-                OperatorApprovalGate.PHASE_2A_TO_2B,  # Wrong gate
-                approved_by="ops-lead",
-                reason="Metrics look good",
-            )
-
-        # System must still be waiting for PHASE_1_TO_2A
+        assert orchestrator.operator_approve(OperatorApprovalGate.PHASE_2A_TO_2B, approved_by="ops") is False
         assert orchestrator.state.base_state.approval_required_for == "phase_1_to_2a"
+        assert orchestrator.state.base_state.phase == Phase.PHASE_1_SHADOW
 
-    # FINDING 3: Concurrent transition race
-    def test_concurrent_phase_transitions_idempotent(self):
-        """Test: advance_day() + operator_approve() concurrent → idempotent"""
+    def test_double_approval_transitions_once(self):
         orchestrator = MasterRolloutOrchestrator()
         orchestrator._request_operator_approval(OperatorApprovalGate.PHASE_1_TO_2A)
+        assert orchestrator.operator_approve(OperatorApprovalGate.PHASE_1_TO_2A, approved_by="ops")
+        assert orchestrator.operator_approve(OperatorApprovalGate.PHASE_1_TO_2A, approved_by="ops")
+        granted = [e for e in orchestrator.audit_trail if e["event"] == "operator_approval_granted"]
+        assert len(granted) == 1
+        assert orchestrator.state.base_state.phase == Phase.PHASE_2A_CANARY
 
-        phase_before = orchestrator.state.base_state.phase
-
-        # Simulate concurrent approval + auto-advance
-        orchestrator.operator_approve(
-            OperatorApprovalGate.PHASE_1_TO_2A,
-            approved_by="ops-lead",
-            reason="Ready",
-        )
-
-        # Only ONE phase transition should occur
-        phase_after = orchestrator.state.base_state.phase
-        assert phase_after == Phase.PHASE_2A_CANARY or phase_after == phase_before
-        assert orchestrator.state.base_state.phase != phase_before  # Must advance
-
-    # FINDING 4: Audit trail coverage (5% → 100%)
-    def test_audit_trail_verified_in_all_tests(self):
-        """Test: All 60+ tests verify audit events emitted"""
+    def test_audit_records_are_on_the_tenant_chain(self):
         orchestrator = MasterRolloutOrchestrator()
+        orchestrator.advance_day(_shadow_metrics())
+        assert orchestrator.audit_trail
+        assert all(e["tenant_id"] == "_default" and e["hash"] for e in orchestrator.audit_trail)
+        ok, issues = orchestrator.verify_audit_chain()
+        assert ok, issues
 
-        # Run one day with audit enabled
-        metrics = {
-            "os.delegation_router": SkillMetrics(
-                skill_id="os.delegation_router",
-                phase=Phase.PHASE_1_SHADOW,
-                agreement_rate=0.98,
-                confidence=0.80,
-                confidence_sigma=0.05,
-                feedback_count=1000,
-                latency_p99_ms=100.0,
-            ),
-        }
-
-        orchestrator.advance_day(metrics)
-
-        # Verify audit events were recorded
-        audit_events = orchestrator._get_audit_events()
-        assert len(audit_events) > 0
-        assert all(e.get("tenant_id") is not None for e in audit_events)
-
-        # Verify hash chain integrity
-        valid_chain = orchestrator.verify_audit_chain()
-        assert valid_chain[0] or len(valid_chain[1]) == 0
-
-    # FINDING 5: Audit chain break recovery
     def test_audit_chain_break_fails_closed(self):
-        """Test: Chain break mid-phase → system FAILS-CLOSED (not proceed)"""
+        """A tampered tenant chain mid-canary → rollback (AUDIT_CHAIN_BREAK)."""
         orchestrator = MasterRolloutOrchestrator()
-        orchestrator.state.base_state.phase = Phase.PHASE_2A_CANARY
+        st = orchestrator.state.base_state
+        st.phase = Phase.PHASE_2A_CANARY
+        st.day_number = 20
+        st.baseline_latency_p99_ms = 100.0
+        st.prior_mean_confidence = 0.90
+        orchestrator.advance_day(_canary_metrics())
+        assert st.phase == Phase.PHASE_2A_CANARY
 
-        # Simulate chain break
-        orchestrator.state.audit_chain_verified = False
+        se, fp = audit_sink._forge()
+        chain = fp.tenant_audit_chain("_default")
+        lines = chain.read_text().splitlines()
+        rec = json.loads(lines[0])
+        rec["details"]["day"] = 999
+        lines[0] = json.dumps(rec)
+        chain.write_text("\n".join(lines) + "\n")
 
-        metrics = {
-            "os.delegation_router": SkillMetrics(
-                skill_id="os.delegation_router",
-                phase=Phase.PHASE_2A_CANARY,
-                agreement_rate=0.98,
-                confidence=0.80,
-                confidence_sigma=0.02,
-                latency_p99_ms=110.0,
-                feedback_count=5000,
-                audit_chain_verified=False,  # CRITICAL
-            ),
-        }
-
-        # Attempt to advance with broken chain
-        result = orchestrator.advance_day(metrics)
-
-        # Must fail-closed: no phase progression
-        assert result is False or orchestrator.state.base_state.phase == Phase.PHASE_2A_CANARY
-        # Alert must be triggered
-        incident = orchestrator._detect_incidents(metrics)
-        assert any(i.incident_type == IncidentType.AUDIT_CHAIN_BREAK for i in incident)
+        orchestrator.advance_day(_canary_metrics())
+        assert st.phase == Phase.ROLLED_BACK
+        assert orchestrator.base_orch.rollback_history[-1][1] == RollbackReason.AUDIT_CHAIN_BREAK
 
 
 class TestMetricValidationFixes:
-    """Findings 10-12: Metric validation & negative value handling"""
-
-    # FINDING 10: Unhardcode Phase 1 feedback check
     def test_phase1_feedback_gate_computed(self):
-        """Test: Phase 1 feedback check is COMPUTED, not hardcoded"""
-        orchestrator = MasterRolloutOrchestrator()
-        orchestrator.state.base_state.phase = Phase.PHASE_1_SHADOW
-        orchestrator.state.base_state.day_number = 15
-
-        # Case 1: feedback_count >= 1000 → PASS
-        metrics_pass = {
-            "os.delegation_router": SkillMetrics(
-                skill_id="os.delegation_router",
-                phase=Phase.PHASE_1_SHADOW,
-                agreement_rate=0.98,
-                confidence=0.80,
-                confidence_sigma=0.02,
-                feedback_count=1500,  # >= 1000
-                latency_p99_ms=100.0,
-            ),
-        }
-
-        gate_result_pass = orchestrator._evaluate_phase_gate(metrics_pass)
-        assert gate_result_pass == PhaseGateResult.PASS
-
-        # Case 2: feedback_count < 1000 → FAIL
-        metrics_fail = {
-            "os.delegation_router": SkillMetrics(
-                skill_id="os.delegation_router",
-                phase=Phase.PHASE_1_SHADOW,
-                agreement_rate=0.98,
-                confidence=0.80,
-                confidence_sigma=0.02,
-                feedback_count=500,  # < 1000
-                latency_p99_ms=100.0,
-            ),
-        }
-
-        gate_result_fail = orchestrator._evaluate_phase_gate(metrics_fail)
-        assert gate_result_fail == PhaseGateResult.FAIL
-
-    # FINDING 11: Validate metrics (no negative, no >1.0, no NaN)
-    def test_invalid_metrics_rejected(self):
-        """Test: Gateway rejects invalid metrics (negative, >1.0, NaN)"""
-        validator = ADRComplianceValidator()
-
-        # Case 1: Negative latency
-        invalid_latency = {
-            "latency_p99_ms": -10.0,
-            "agreement_rate": 0.98,
-        }
-        result_latency = validator.validate_metric_validity(invalid_latency)
-        assert result_latency["valid"] == False
-
-        # Case 2: agreement_rate > 1.0
-        invalid_agreement = {
-            "latency_p99_ms": 100.0,
-            "agreement_rate": 1.05,
-        }
-        result_agreement = validator.validate_metric_validity(invalid_agreement)
-        assert result_agreement["valid"] == False
-
-        # Case 3: confidence with NaN
-        import math
-        invalid_confidence = {
-            "latency_p99_ms": 100.0,
-            "agreement_rate": 0.98,
-            "confidence": math.nan,
-        }
-        result_confidence = validator.validate_metric_validity(invalid_confidence)
-        assert result_confidence["valid"] == False
-
-    # FINDING 12: Latency negative value handling
-    def test_negative_latency_rejected(self):
-        """Test: UI/Gateway validation: latency must be > 0, show error if negative"""
-        orchestrator = MasterRolloutOrchestrator()
-
-        metrics_negative_latency = {
-            "os.delegation_router": SkillMetrics(
-                skill_id="os.delegation_router",
-                phase=Phase.PHASE_2A_CANARY,
-                agreement_rate=0.98,
-                confidence=0.80,
-                confidence_sigma=0.02,
-                latency_p99_ms=-50.0,  # INVALID: negative
-                feedback_count=5000,
-            ),
-        }
-
-        # Validation must catch this
-        validation_result = orchestrator._validate_metrics(metrics_negative_latency)
-        assert validation_result["valid"] == False
-        assert "latency" in validation_result.get("error_field", "")
+        """Phase 1 feedback criterion is computed from the supplied counts."""
+        def m(fb):
+            return {"os.delegation_router": SkillMetrics(
+                skill_id="os.delegation_router", agreement_rate=0.99,
+                confidence_sigma=0.02, feedback_count=fb)}
+        passed, _ = Phase1Evaluator.evaluate(m(1500), days_elapsed=14, rollback_count=0)
+        assert passed
+        passed, reasons = Phase1Evaluator.evaluate(m(500), days_elapsed=14, rollback_count=0)
+        assert not passed
+        assert any("feedback 500/1000" in r for r in reasons)
 
 
 class TestDashboardApprovalFlow:
-    """Findings 13-16: Dashboard UX & approval workflow"""
-
-    # FINDING 13: Approval buttons clickable
-    def test_approval_buttons_clickable_on_dashboard(self):
-        """Test: ApprovalAlert has Approve/Reject buttons on dashboard"""
+    def test_pending_approval_visible_in_status(self):
         orchestrator = MasterRolloutOrchestrator()
         orchestrator._request_operator_approval(OperatorApprovalGate.PHASE_1_TO_2A)
-
         status = orchestrator.get_status()
-
-        # Status must include approval gate info
-        assert status["pending_operator_approval"] == True
+        assert status["pending_operator_approval"] is True
         assert status["approval_required_for"] == "phase_1_to_2a"
-        # Dashboard will render buttons based on these fields
-        assert "approval_buttons" in status or status["pending_operator_approval"]
 
-    # FINDING 14: Link compliance violations to approval gate
     def test_compliance_approval_linked(self):
-        """Test: CompliancePanel + ApprovalAlert show connection"""
+        """Blocking ADR violations are reported by name and block the transition."""
         validator = ADRComplianceValidator()
-
         metrics = {
             "canary_metrics": {
-                "agreement_rate": 0.95,  # VIOLATION: < 98%
+                "agreement_rate": 0.95,  # VIOLATION: < 99% at week 3
                 "latency_p99_ms": 100.0,
                 "correctness_delta": 0.01,
             },
             "baseline_latency_ms": 100.0,
         }
-
-        report = validator.generate_weekly_report(
-            week_number=3,
-            phase="PHASE_2A_CANARY",
-            metrics=metrics,
-        )
-
-        # Report must show blocking violations
-        blocking = [c for c in report.checks if c.status == ComplianceStatus.FAIL]
-        assert len(blocking) > 0
-
-        # Blocking reason must be extractable
-        for check in blocking:
-            assert check.check_name is not None
-            assert check.message is not None
-
-    # FINDING 15: Approval revocation (immutability concern)
-    def test_approval_revocation_creates_new_event(self):
-        """Test: Approval revocation creates new audit event (not overwrite)"""
-        orchestrator = MasterRolloutOrchestrator()
-        orchestrator._request_operator_approval(OperatorApprovalGate.PHASE_1_TO_2A)
-
-        # Approve
-        orchestrator.operator_approve(
-            OperatorApprovalGate.PHASE_1_TO_2A,
-            approved_by="ops-lead",
-            reason="Ready",
-        )
-
-        approval_events_before = len(orchestrator._get_audit_events())
-
-        # Revoke (if within time window)
-        can_revoke = orchestrator.can_revoke_approval(OperatorApprovalGate.PHASE_1_TO_2A)
-        if can_revoke:
-            orchestrator.revoke_approval(
-                OperatorApprovalGate.PHASE_1_TO_2A,
-                revoked_by="ops-lead",
-                reason="Need more review",
-            )
-
-            approval_events_after = len(orchestrator._get_audit_events())
-
-            # Must create a NEW event (not overwrite)
-            assert approval_events_after > approval_events_before
-
-            # Original approval event must still exist
-            events = orchestrator._get_audit_events()
-            approval_count = len([e for e in events if e.get("event_type") == "approval"])
-            assert approval_count >= 2  # Original + revocation
-
-    # FINDING 16: "All clear" status
-    def test_all_clear_status_shown(self):
-        """Test: No incidents → show ✓ 'All clear (last checked Nm ago)'"""
-        orchestrator = MasterRolloutOrchestrator()
-        orchestrator.state.base_state.phase = Phase.PHASE_2A_CANARY
-
-        metrics = {
-            "os.delegation_router": SkillMetrics(
-                skill_id="os.delegation_router",
-                phase=Phase.PHASE_2A_CANARY,
-                agreement_rate=0.98,
-                confidence=0.80,
-                confidence_sigma=0.02,
-                latency_p99_ms=110.0,
-                feedback_count=5000,
-                audit_chain_verified=True,
-            ),
-        }
-
-        orchestrator.advance_day(metrics)
-
-        # Get status
-        status = orchestrator.get_status()
-
-        # Should NOT have open incidents
-        incidents = orchestrator._detect_incidents(metrics)
-        open_incidents = [i for i in incidents if i.severity != IncidentSeverity.INFO]
-
-        if len(open_incidents) == 0:
-            # Dashboard should show "all clear"
-            assert status.get("all_clear") == True or "all_clear" in str(status)
+        report = validator.generate_weekly_report(week_number=3, phase="PHASE_2A_CANARY", metrics=metrics)
+        assert "ADR-0206/agreement_rate" in report.blocking_violations
+        can, reasons = validator.can_proceed_with_phase_transition(3)
+        assert can is False and reasons
 
 
 if __name__ == "__main__":

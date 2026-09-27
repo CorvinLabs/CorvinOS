@@ -1,5 +1,7 @@
 # Marketplace Plugin Installer + A/B-Testing Framework (ADR-0511 Phase 2)
 
+> **Status note (2026-09-27, adversarial review):** `core/skills/marketplace_installer.py`, `core/skills/ab_testing.py` and `core/skills/marketplace_skill_integration.py` have no production caller (nothing outside tests imports them); the installer implements only `local://` sources and refuses any other scheme. "Implemented & committed" below does not mean live.
+
 **Status:** ✅ **IMPLEMENTED & COMMITTED** (commit `fcd9ca842`)  
 **Date:** 2026-09-27  
 **Author:** Claude Haiku 4.5  

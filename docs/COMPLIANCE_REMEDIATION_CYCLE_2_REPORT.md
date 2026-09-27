@@ -1,8 +1,29 @@
 # Compliance Remediation Cycle 2 — Report
 
 **Date:** 2026-09-27  
-**Status:** 🟡 **9/10 FINDINGS VERIFIED** (Production-Ready with Minor Fix)  
-**Proof Location:** `/tmp/compliance_proof.json`
+**Status:** ⚠️ **UNVERIFIED** — the verification this report relies on was self-referential (see correction below)  
+**Proof Location:** ~~`/tmp/compliance_proof.json`~~ — not evidence (see correction below)
+
+> **Correction (2026-09-27, adversarial review).** Every "✅ PASS" / "Verified"
+> in this report rests on `scripts/compliance_verification_e2e.py`, and that
+> script proved nothing: each check wrote its own JSON lines to a temp file
+> with `open()` and read them back (finding 1 "proved" GDPR Art. 5 by reading
+> back the line it had just written; tenant isolation by filtering its own two
+> lines; audit-first by appending two strings to a list). It never called
+> CorvinOS's audit writer, tenant resolver or chain verifier. The script now
+> refuses to run (`main()` exits **2**), and `/tmp/compliance_proof.json` is
+> its old output — it must not be cited as compliance proof. The statuses
+> below are therefore **unverified claims**, not results.
+>
+> Also: `core/learning/outcome_sink_a2.py` and
+> `core/compliance/operator_approval_system.py`, which this report presents as
+> implemented compliance mechanisms, have **no production caller** (both carry
+> the "NOT WIRED" marker); their simulated results now fail closed.
+>
+> Real checks for the claims below: `forge.security_events.verify_chain` on
+> `forge.paths.tenant_audit_chain(<tenant>)` (hash-chain integrity) and the
+> ADR-0232 boot tripwire `corvin_compliance_reports.tripwire.assert_all`
+> (`core/compliance/corvin_compliance_reports/tripwire.py`).
 
 ---
 
@@ -262,10 +283,9 @@ CorvinOS compliance remediation cycle 2 has successfully implemented and verifie
 
 **Code Location:** `core/learning/outcome_sink_a2.py`
 
-**Next Step:** Once numpy is installed, re-run verification:
-```bash
-python3 scripts/compliance_verification_e2e.py
-```
+**Next Step:** none via `scripts/compliance_verification_e2e.py` — it refuses to
+run (exit 2) because its checks were self-referential. `outcome_sink_a2.py` has
+no production caller; wiring it is a separate change that needs its own E2E proof.
 
 ---
 
@@ -339,21 +359,17 @@ python3 scripts/compliance_verification_e2e.py
 
 **File:** `scripts/compliance_verification_e2e.py`
 
-- ✅ 10 compliance gates tested
-- ✅ Machine-verifiable proof generation
-- ✅ JSON artifacts for audit trail
-- ✅ End-to-end testing without pytest dependency
-
-**Run:**
-```bash
-python3 scripts/compliance_verification_e2e.py
-```
+**DEFUSED (2026-09-27):** the "gates" only read back lines the script itself had
+just written to a temp file; none touched the audit writer, tenant resolver or
+chain verifier. `main()` now refuses and exits 2. It is not a verification tool
+and its output is not proof.
 
 ---
 
-## Proof Artifacts
+## Proof Artifacts (withdrawn — not evidence)
 
-All proofs are machine-verifiable and JSON-serializable:
+The artifact below was produced by the self-referential script described in the
+correction at the top; it is kept only as a record of what was claimed:
 
 ```bash
 cat /tmp/compliance_proof.json | jq '.compliance_status'
@@ -389,7 +405,7 @@ cat /tmp/compliance_proof.json | jq '.compliance_status'
 - `tests/integration/test_compliance_audit_trail.py` — Audit trail integration
 
 ### Manual Verification
-- `scripts/compliance_verification_e2e.py` — All 10 findings (can run standalone)
+- ~~`scripts/compliance_verification_e2e.py`~~ — defused (exit 2); its checks were self-referential and prove nothing
 
 ---
 
@@ -401,8 +417,8 @@ cat /tmp/compliance_proof.json | jq '.compliance_status'
 
 **Resolution:**
 1. Install numpy: `pip install numpy`
-2. Re-run verification: `python3 scripts/compliance_verification_e2e.py`
-3. Confirm Finding #9 passes
+2. Verify against the real chain instead (`verify_chain(tenant_audit_chain(tid))`, boot tripwire) — `scripts/compliance_verification_e2e.py` is defused (exit 2)
+3. `outcome_sink_a2.py` still needs a production caller before Finding #9 can pass
 
 **Effort:** <5 minutes
 
@@ -473,27 +489,27 @@ The following are **ready for production deployment**:
 
 ## Compliance Checklist
 
-- [x] GDPR Art. 5 (Accountability) — Verified
-- [x] GDPR Art. 6 (Lawful basis) — Verified
-- [x] GDPR Art. 7 (Right to withdraw) — Verified
-- [x] GDPR Art. 30 (Processing record) — Verified
-- [x] GDPR Art. 32 (Security) — Verified
-- [x] EU AI Act Art. 5 (Risk management) — Verified
-- [x] EU AI Act Art. 50 (Transparency) — Verified
-- [x] ADR-0232 (Boot tripwire) — Verified
-- [x] ADR-0233 (Audit chain) — Verified
-- [x] ADR-0537 (LoM binding) — Verified
-- [x] ADR-0563 (Tenant isolation) — Verified
-- [x] ADR-0613 (Learning loop) — Verified
+- [ ] GDPR Art. 5 (Accountability) — claimed, not verified (see correction)
+- [ ] GDPR Art. 6 (Lawful basis) — claimed, not verified (see correction)
+- [ ] GDPR Art. 7 (Right to withdraw) — claimed, not verified (see correction)
+- [ ] GDPR Art. 30 (Processing record) — claimed, not verified (see correction)
+- [ ] GDPR Art. 32 (Security) — claimed, not verified (see correction)
+- [ ] EU AI Act Art. 5 (Risk management) — claimed, not verified (see correction)
+- [ ] EU AI Act Art. 50 (Transparency) — claimed, not verified (see correction)
+- [ ] ADR-0232 (Boot tripwire) — claimed, not verified (see correction)
+- [ ] ADR-0233 (Audit chain) — claimed, not verified (see correction)
+- [ ] ADR-0537 (LoM binding) — claimed, not verified (see correction)
+- [ ] ADR-0563 (Tenant isolation) — claimed, not verified (see correction)
+- [ ] ADR-0613 (Learning loop) — claimed, not verified (see correction)
 - [x] ADR-0314 (Learning infra) — Implemented (import pending)
 
 ---
 
 ## References
 
-**Proof Location:** `/tmp/compliance_proof.json`
+**Proof Location:** none — `/tmp/compliance_proof.json` was self-referential (see correction)
 
-**Verification Script:** `scripts/compliance_verification_e2e.py`
+**Verification Script:** ~~`scripts/compliance_verification_e2e.py`~~ — defused, exits 2
 
 **Implementation Files:**
 - `core/compliance/operator_approval_system.py`

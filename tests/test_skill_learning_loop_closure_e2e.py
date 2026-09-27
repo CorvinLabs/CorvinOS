@@ -216,11 +216,11 @@ class TestWindowAggregation:
                 event_type=EventType.OUTCOME,
                 skill_id=skill_id,
                 tenant_id=tenant_id,
+                # Outcome-only events with a clear majority: latency/cost votes
+                # count EVERY event, so mixing them in makes LATENCY_FAST win.
                 signal={
                     "task_id": f"task-{i}",
-                    "success": i % 2 == 0,  # 5 successes, 5 failures
-                    "duration_ms": 100 * i,
-                    "cost": 0.01 * i,
+                    "success": i < 7,  # 7 successes, 3 failures
                 },
             )
             signal = await ingester.ingest_event(event)
@@ -230,7 +230,9 @@ class TestWindowAggregation:
                 # 10th event should close window
                 assert signal is not None
                 assert signal.signal_type == FeedbackSignalType.OUTCOME_SUCCESS
-                assert signal.strength > 0.3  # Some success
+                # strength = success_rate * sqrt(n / 100) = 0.7 * sqrt(0.1)
+                assert signal.strength == pytest.approx(0.7 * (0.1 ** 0.5))
+                datetime.fromisoformat(signal.timestamp.replace("Z", "+00:00"))
 
     @pytest.mark.asyncio
     async def test_deduplication_by_event_id(self, ingester, tenant_id, skill_id):
@@ -275,8 +277,9 @@ class TestConfidenceScoring:
 
         detector = ConvergenceDetector()
 
-        # Add high success rates
-        for _ in range(20):
+        # Add high success rates — a full window (50). The sample-size factor
+        # is sqrt(n/100), so 20 samples cap confidence near 0.75.
+        for _ in range(50):
             detector.add_sample(0.95)
 
         confidence = detector.compute_confidence()
@@ -363,6 +366,7 @@ class TestParameterOptimization:
             signal_type=FeedbackSignalType.OUTCOME_SUCCESS,
             strength=0.8,
             count=50,
+            timestamp="2026-09-27T12:00:00Z",
         )
 
         current_config = {"routing_threshold": 0.7, "context_weight": 0.5}
@@ -390,6 +394,7 @@ class TestParameterOptimization:
             signal_type=FeedbackSignalType.OUTCOME_FAILURE,
             strength=0.1,  # Very low confidence
             count=100,
+            timestamp="2026-09-27T12:00:00Z",
         )
 
         current_config = {"routing_threshold": 0.7}
@@ -414,6 +419,7 @@ class TestParameterOptimization:
             signal_type=FeedbackSignalType.OUTCOME_SUCCESS,
             strength=0.9,
             count=50,
+            timestamp="2026-09-27T12:00:00Z",
         )
 
         # Config with email (PII)
@@ -462,7 +468,12 @@ class TestConfigUpdate:
             validation_passed=True,
         )
 
-        # Apply update
+        # Without a committed audit record the update is refused (fail-closed)
+        assert not await optimizer.apply_config_update(decision, manifest_path)
+        assert json.loads(manifest_path.read_text())["config"]["routing_threshold"] == 0.7
+
+        # With one it is applied
+        decision.audit_ref = "committed-ref"
         success = await optimizer.apply_config_update(decision, manifest_path)
 
         assert success
@@ -506,6 +517,7 @@ class TestAuditTrail:
             signal_type=FeedbackSignalType.OUTCOME_SUCCESS,
             strength=0.85,
             count=50,
+            timestamp="2026-09-27T12:00:00Z",
         )
 
         current_config = {"threshold": 0.7}
@@ -515,6 +527,9 @@ class TestAuditTrail:
             signal, current_config, outcomes
         )
 
+        # A config-changing decision carries a committed core-chain record
+        if decision.should_update:
+            assert decision.audit_ref
         # Audit event should be emitted
         assert decision.audit_event is not None
         assert decision.audit_event.event_type in (
@@ -610,6 +625,31 @@ class TestEndToEndLoopClosure:
 
 class TestComplianceAndSafety:
     """Test compliance requirements (GDPR Art. 5/30/32, EU AI Act)."""
+
+    def test_skill_id_cannot_escape_the_manifest_dir(self, tenant_id):
+        for bad in ("../../etc/x", "a/b", "", "..", "x" * 200):
+            with pytest.raises(ValueError):
+                SkillOptimizerLoop(tenant_id=tenant_id, skill_id=bad)
+
+    @pytest.mark.asyncio
+    async def test_update_refused_when_audit_does_not_commit(self, tenant_id, skill_id, monkeypatch):
+        import core.learning.event_persistence as ep
+        from core.learning.skill_feedback_ingester import FeedbackSignal
+
+        def boom(*a, **k):
+            raise RuntimeError("core audit write did not commit")
+
+        monkeypatch.setattr(ep, "core_audit_event", boom)
+        opt = SkillOptimizerLoop(tenant_id=tenant_id, skill_id=skill_id)
+        for rate in (0.3, 0.5, 0.7, 0.8):  # rising, not yet converged
+            opt.convergence_detector.add_sample(rate)
+        sig = FeedbackSignal(signal_id="s", skill_id=skill_id, tenant_id=tenant_id,
+                             signal_type=FeedbackSignalType.OUTCOME_SUCCESS, strength=0.8,
+                             count=10, timestamp="2026-09-27T12:00:00Z")
+        decision = await opt.execute_optimization_epoch(
+            sig, {"routing_threshold": 0.7}, [{"success": True}] * 17 + [{"success": False}] * 3)
+        assert decision.reason == "audit_unavailable"
+        assert not decision.should_update
 
     def test_events_are_immutable(self, tenant_id, skill_id):
         """Verify LearningEvent dataclass is frozen."""

@@ -182,28 +182,21 @@ class TestAuditEventAggregation:
         assert window.throughput_events_per_sec == pytest.approx(10.0, rel=0.1)
 
     @pytest.mark.asyncio
-    async def test_processed_hashes_prevents_duplicates(self):
-        """Consumer tracks processed hashes to prevent re-processing."""
+    async def test_processed_events_are_not_reread(self, monkeypatch):
+        """A second read returns nothing already consumed — also for rows
+        without a chain hash (they used to collide on "" and be dropped)."""
+        from core.task_tracking import service
+        from core.task_tracking.models import ItemCreate
+
+        monkeypatch.setattr(service, "chain_writer", lambda tid, et, d: None)  # no hash
+        for i in range(3):
+            service.create("_default", ItemCreate(title=f"t{i}", kind="task"), actor="user:alice")
+
         consumer = AuditEventConsumer()
-
-        # Simulate processing a hash
-        consumer._processed_hashes.add("hash_123")
-
-        # Try to read an event with that hash (mocked)
-        event = AuditEventSummary(
-            event_id="evt-123",
-            event_type="task_created",
-            task_id="task-456",
-            tenant_id="_default",
-            actor="user-1",
-            action="create",
-            timestamp="2026-09-27T12:00:00Z",
-            chain_hash="hash_123",
-        )
-
-        # In a real scenario, read_unprocessed_events would skip this
-        # For now, just verify the hash is in the set
-        assert "hash_123" in consumer._processed_hashes
+        first = await consumer.read_unprocessed_events("_default")
+        assert len(first) == 3
+        assert {e.actor for e in first} == {"user"}  # actor kind, never the id
+        assert await consumer.read_unprocessed_events("_default") == []
 
 
 class TestAuditEventConsumerIntegration:
@@ -221,14 +214,19 @@ class TestAuditEventConsumerIntegration:
         assert events == []
 
     @pytest.mark.asyncio
-    async def test_process_until_window_complete_timeout(self):
-        """process_until_window_complete returns None if timeout with no events."""
-        consumer = AuditEventConsumer(window_seconds=1)  # 1-second window
+    async def test_window_seconds_is_clamped(self):
+        assert AuditEventConsumer(window_seconds=1).window_seconds == 30
+        assert AuditEventConsumer(window_seconds=99999).window_seconds == 3600
 
-        # With no events in DB, should timeout and return None
+    @pytest.mark.asyncio
+    async def test_process_until_window_complete_timeout(self):
+        """process_until_window_complete returns None if the window expires with no events."""
+        consumer = AuditEventConsumer()
+        consumer.window_seconds = 1  # below the constructor clamp, to keep the test fast
+
         window = await asyncio.wait_for(
             consumer.process_until_window_complete("_nonexistent_tenant"),
-            timeout=3.0,
+            timeout=5.0,
         )
 
         assert window is None

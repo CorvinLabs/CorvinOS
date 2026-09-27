@@ -4,12 +4,18 @@
  * Tab-based skill management interface following ADR-2080 Vibe Dashboard pattern.
  * Tabs: Installed | Available | Upload
  * State: Shared InstallationProgress (visible across all tabs)
- * Auth: Admin-only gates (placeholder for ADR-0007 RBAC)
+ * Auth: install/uninstall/upload need an owner or admin session — the same
+ *       gate routes/skill_manager.py and routes/plugin_upload.py enforce.
+ *
+ * NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+ * nothing imports pages/skills/**; the mounted "skill-manager" panel is
+ * pages/admin/skill-manager.tsx.
  */
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 import { SkillManagerProvider, useSkillManager } from './SkillManagerContext';
 import { InstalledSkillsTab } from './tabs/InstalledSkillsTab';
 import { AvailableSkillsTab } from './tabs/AvailableSkillsTab';
@@ -28,21 +34,19 @@ const LoadingFallback = () => (
   </div>
 );
 
-interface Capabilities {
-  user?: {
-    is_admin?: boolean;
-  };
-}
-
 function SkillManagerContent() {
   const { installation } = useSkillManager();
   const [params, setParams] = useSearchParams();
-  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
-  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
+  const { session, status } = useAuth();
+  const capabilitiesLoading = status === 'loading';
 
   const raw = params.get('tab');
   const activeTab: TabType = isTabId(raw) ? raw : DEFAULT_TAB;
-  const canInstall = capabilities?.user?.is_admin ?? false;
+  // The capability manifest carries no `user.is_admin` field, so reading it
+  // there made every operator a non-admin. The session tier is what the
+  // backend checks.
+  const tier = (session as { tier?: string } | null)?.tier;
+  const canInstall = tier === 'owner' || tier === 'admin';
 
   // Sync tab param to state (canonicalize missing/unknown tab)
   useEffect(() => {
@@ -52,22 +56,6 @@ function SkillManagerContent() {
       setParams(next, { replace: true });
     }
   }, [raw, activeTab, params, setParams]);
-
-  // Fetch capabilities on mount
-  useEffect(() => {
-    setCapabilitiesLoading(true);
-    fetch('/v1/console/capabilities/manifest')
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status}`);
-        return r.json();
-      })
-      .then((cap) => setCapabilities(cap))
-      .catch((err) => {
-        console.error('Failed to load capabilities:', err);
-        setCapabilities(null);
-      })
-      .finally(() => setCapabilitiesLoading(false));
-  }, []);
 
   const setActiveTab = useCallback(
     (tab: TabType) => {
@@ -81,7 +69,7 @@ function SkillManagerContent() {
   return (
     <div data-testid="skill-manager-dashboard" className="min-h-screen bg-background text-foreground">
       {/* Installation progress banner (visible across all tabs) */}
-      {installation.taskId && <InstallationProgress />}
+      {installation.status !== 'idle' && <InstallationProgress />}
 
       {/* Tab navigation */}
       <div className="border-b bg-muted/50">

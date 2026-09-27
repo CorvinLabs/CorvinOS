@@ -108,16 +108,19 @@ class TestPhase6Orchestration:
         orchestrator.add_frame(frame)
         commands = orchestrator.build_execution_plan()
 
-        # Execute first command
+        # Execute first command. The Phase 6b workers have no backend, so the
+        # frame must FAIL closed (it used to be a stub reporting "completed").
         result = orchestrator.execute_frame(commands[0])
 
-        assert result["status"] == "completed"
+        assert result["status"] == "failed"
         assert result["frame_id"] == "frame-exec-001"
-        assert len(orchestrator.execution_trace) > 0
+        assert result["output"] is None
+        assert result["errors"] and result["errors"][0].startswith("not_implemented")
 
-        # Verify audit events
-        events = [e for e in orchestrator.execution_trace if e["event"] == "frame_execution_completed"]
-        assert len(events) >= 1
+        # The trace records the failure, never a completion
+        events = [e["event"] for e in orchestrator.execution_trace]
+        assert "frame_execution_failed" in events
+        assert "frame_execution_completed" not in events
 
     def test_phase6_orchestration_summary(self, orchestrator):
         """Test 6: Orchestration summary with execution hash."""
@@ -199,7 +202,7 @@ class TestPhase6Orchestration:
         for cmd in commands:
             result = orchestrator.execute_frame(cmd)
             results.append(result)
-            assert result["status"] == "completed"
+            assert result["status"] == "failed"  # no worker backend: fail closed
 
         assert len(results) == 3
 
@@ -369,10 +372,17 @@ class TestCheckpointPersistence:
         # Corrupt the merkle_root field
         checkpoint_data["merkle_root"] = "corrupted_hash_value"
 
-        # Verification should fail (in real implementation)
-        # This test verifies the structure is present for validation
-        assert checkpoint_data["merkle_root"] != "abc123"
-        assert "tenant_signature" in checkpoint_data
+        # Restoration must refuse it (fail-closed), and restore nothing
+        fresh = VideoOrchestrator("fresh")
+        with pytest.raises(CheckpointIntegrityError):
+            fresh.restore_from_checkpoint_data(checkpoint_data)
+        assert fresh.storyboard == [] and fresh.project_id == "fresh"
+
+        # A tampered state with the original root is refused as well
+        tampered = orchestrator_with_checkpoints.serialize_to_checkpoint(checkpoint_id)
+        tampered["storyboard"][0]["description"] = "rewritten"
+        with pytest.raises(CheckpointIntegrityError):
+            fresh.restore_from_checkpoint_data(tampered)
 
     def test_checkpoint_resume_from_saved_state(self, orchestrator_with_checkpoints):
         """Test 16: Resume orchestration from checkpoint state."""
@@ -403,9 +413,13 @@ class TestCheckpointPersistence:
         recovered_orch = VideoOrchestrator("test-project-checkpoint")
         recovered_orch.restore_from_checkpoint_data(checkpoint_data)
 
-        # Verify state was recovered
+        # Verify state was recovered verbatim
         assert len(recovered_orch.storyboard) == 3
-        assert len(recovered_orch.execution_trace) == 2  # First 2 frames executed
+        assert recovered_orch.execution_trace == orchestrator_with_checkpoints.execution_trace
+        assert [c.command_id for c in recovered_orch.commands] == [c.command_id for c in commands]
+        executed = [e for e in recovered_orch.execution_trace
+                    if e["event"] == "frame_execution_started"]
+        assert len(executed) == 2  # first 2 frames were attempted
 
     def test_checkpoint_recovery_point_calculation(self, orchestrator_with_checkpoints):
         """Test 17: Recovery point correctly calculated after checkpoint load."""

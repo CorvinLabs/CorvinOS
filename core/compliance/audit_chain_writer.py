@@ -1,30 +1,54 @@
-"""AuditChainWriter — hash-chained audit logging (Phase 0).
+"""AuditChainWriter — facade over THE forge audit writer (ADR-0232/0650).
 
-Implements:
-1. Append-only hash-chained audit log
-2. GDPR Art. 30/32 requirements (record-keeping, integrity)
-3. Tamper detection via continuous verification
-4. RFC 3161 timestamp server integration (future)
+Until 2026-09-27 this class wrote its OWN record format (``sha256(prev_hash +
+event_json)``, no forge canonical hash, no MAC, no flock, no PII floor, raw
+``user_id``) straight into the canonical tenant chain it is handed by
+``audit_chain_provider``. One intent classification or control-plane override
+from the console then made ``forge.security_events.verify_chain`` report the
+chain as tampered, which the ADR-0232 boot tripwire (``audit_chain_intact``)
+refuses on the next boot (adversarial review round 2).
+
+Every record now goes through ``forge.security_events.write_event`` — the one
+writer: canonical hash over ``prev_hash``, keyed MAC where configured, file
+lock, the metadata-only floor, the tenant check. The user id rides in the
+reserved ``user`` key, which the writer pseudonymises when it has a PII shape.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import sys
 import threading
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
 
+def _forge():
+    """``(security_events, paths)`` of the one forge writer."""
+    try:
+        from forge import paths as fp  # type: ignore[import-not-found]
+        from forge import security_events as se  # type: ignore[import-not-found]
+    except ImportError:
+        forge_root = Path(__file__).resolve().parents[2] / "corvin_operator" / "forge"
+        if str(forge_root) not in sys.path:
+            sys.path.insert(0, str(forge_root))
+        cached = sys.modules.get("forge")
+        if cached is not None and getattr(cached, "__file__", None) is None:
+            del sys.modules["forge"]
+        from forge import paths as fp  # type: ignore[import-not-found]
+        from forge import security_events as se  # type: ignore[import-not-found]
+    return se, fp
+
+
 @dataclass(frozen=True)
 class AuditEvent:
-    """Immutable audit event for hash-chaining."""
+    """Immutable audit event (input to :meth:`AuditChainWriter.write_event`)."""
 
     event_id: str
-    event_type: str  # "access", "modify", "delete", "auth", "error", etc.
+    event_type: str
     tenant_id: str
     user_id: Optional[str]
     timestamp: str  # ISO 8601
@@ -32,108 +56,48 @@ class AuditEvent:
     severity: Optional[str] = None  # "info", "warning", "error", "critical"
 
     def to_json(self) -> str:
-        """Serialize to JSON (deterministic for hashing)."""
-        data = asdict(self)
-        return json.dumps(data, sort_keys=True, separators=(",", ":"))
+        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
 
 
 class AuditChainWriter:
-    """Hash-chained audit logger (GDPR Art. 30, 32).
+    """Writes through ``forge.security_events.write_event`` onto ``log_path``.
 
-    Guarantees:
-    - Events are immutable (append-only)
-    - Hash-chained for tamper detection
-    - Atomic writes (no partial records)
-    - Fail-closed (raise exception on write failure)
+    ``log_path`` is the tenant chain (``audit_chain_provider`` passes
+    ``tenant_audit_chain(tenant)``); tests may pass a scratch file. Fail-closed:
+    a record that does not commit raises.
     """
 
-    GENESIS_HASH = hashlib.sha256(b"audit.chain.genesis").hexdigest()
-    VERSION = "1.0"
+    GENESIS_HASH = ""  # forge chains start from an empty prev_hash
+    VERSION = "2.0"
 
     def __init__(self, log_path: str | Path):
-        """Initialize audit chain writer.
-
-        Args:
-            log_path: Path to audit.jsonl file
-        """
         self.log_path = Path(log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-
         self._lock = threading.RLock()
-        self._last_hash = self.GENESIS_HASH
-        self._event_count = 0
-
-        # Load existing chain state on init
-        self._load_chain_state()
-
-    def _load_chain_state(self) -> None:
-        """Load the last hash from existing chain."""
-        if not self.log_path.exists():
-            return
-
-        try:
-            with open(self.log_path, "r") as f:
-                lines = f.readlines()
-
-            if lines:
-                last_line = lines[-1].strip()
-                if last_line:
-                    last_entry = json.loads(last_line)
-                    self._last_hash = last_entry.get("hash", self.GENESIS_HASH)
-                    self._event_count = len(lines)
-
-        except (json.JSONDecodeError, IOError) as e:
-            raise ValueError(f"Failed to load audit chain: {e}")
 
     def write_event(self, event: AuditEvent) -> str:
-        """Write audit event with hash-chaining.
-
-        Args:
-            event: AuditEvent to write
-
-        Returns:
-            Hash of the written event
+        """Append ``event`` via the forge writer; return the record's chain hash.
 
         Raises:
-            IOError: If write fails (fail-closed)
+            IOError: the record did not commit (fail-closed).
         """
+        se, _ = _forge()
+        details = dict(event.details or {})
+        details["tenant_id"] = event.tenant_id
+        details["event_id"] = event.event_id
+        if event.user_id:
+            details["user"] = str(event.user_id)
+        sev = str(event.severity).upper() if event.severity else None
         with self._lock:
-            # Serialize event
-            event_json = event.to_json()
-
-            # Compute hash: H(prev_hash || event_json)
-            combined = (self._last_hash + event_json).encode("utf-8")
-            event_hash = hashlib.sha256(combined).hexdigest()
-
-            # Create audit record
-            record = {
-                "event_id": event.event_id,
-                "event_type": event.event_type,
-                "tenant_id": event.tenant_id,
-                "user_id": event.user_id,
-                "timestamp": event.timestamp,
-                "details": event.details,
-                "severity": event.severity,
-                "hash": event_hash,
-                "prev_hash": self._last_hash,
-                "sequence": self._event_count,
-            }
-
-            # Append to file (atomic single write)
             try:
-                with open(self.log_path, "a") as f:
-                    f.write(json.dumps(record) + "\n")
-                    f.flush()  # Ensure data is written to disk
-
-                # Update in-memory state
-                self._last_hash = event_hash
-                self._event_count += 1
-
-                return event_hash
-
-            except IOError as e:
-                # Fail-closed: raise exception, don't silently fail
-                raise IOError(f"Failed to write audit event: {e}")
+                rec = se.write_event(self.log_path, event.event_type, severity=sev,
+                                     details=details)
+            except Exception as e:  # noqa: BLE001 - fail-closed
+                raise IOError(f"Failed to write audit event: {type(e).__name__}: {e}") from e
+        h = rec.get("hash") if isinstance(rec, dict) else None
+        if not h:
+            raise IOError("Failed to write audit event: writer returned no chain hash")
+        return h
 
     def write_event_dict(
         self,
@@ -144,158 +108,100 @@ class AuditChainWriter:
         severity: Optional[str] = None,
     ) -> str:
         """Convenience method to write event from dict."""
-        event = AuditEvent(
+        return self.write_event(AuditEvent(
             event_id=str(uuid4()),
             event_type=event_type,
             tenant_id=tenant_id,
             user_id=user_id,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             details=details or {},
             severity=severity,
-        )
-        return self.write_event(event)
+        ))
 
     # ``enforce_retention`` (delete-and-rehash of old records) was REMOVED on
     # 2026-09-07 (F-A13): an audit chain is append-only; retention is the
-    # sealed-segment rotation in ``corvin_operator/bridges/shared/audit_sealer.py``
-    # (``voice-audit rotate``), which never rewrites a record's hash.
+    # sealed-segment rotation in ``corvin_operator/bridges/shared/audit_sealer.py``.
 
     def verify_chain(self) -> bool:
-        """Verify hash chain integrity.
-
-        Returns:
-            True if chain is valid, False if corrupted
-        """
-        with self._lock:
-            if not self.log_path.exists():
-                return True  # Empty chain is valid
-
-            try:
-                with open(self.log_path, "r") as f:
-                    lines = f.readlines()
-
-                prev_hash = self.GENESIS_HASH
-
-                for line_idx, line in enumerate(lines):
-                    if not line.strip():
-                        continue
-
-                    entry = json.loads(line)
-                    stored_hash = entry.get("hash")
-                    expected_prev = entry.get("prev_hash")
-
-                    # Verify previous hash
-                    if expected_prev != prev_hash:
-                        print(
-                            f"ERROR: Chain broken at line {line_idx}: "
-                            f"expected prev={prev_hash}, got {expected_prev}"
-                        )
-                        return False
-
-                    # Reconstruct event and recompute hash
-                    event = AuditEvent(
-                        event_id=entry["event_id"],
-                        event_type=entry["event_type"],
-                        tenant_id=entry["tenant_id"],
-                        user_id=entry.get("user_id"),
-                        timestamp=entry["timestamp"],
-                        details=entry.get("details", {}),
-                        severity=entry.get("severity"),
-                    )
-                    event_json = event.to_json()
-
-                    combined = (prev_hash + event_json).encode("utf-8")
-                    computed_hash = hashlib.sha256(combined).hexdigest()
-
-                    # Compare
-                    if computed_hash != stored_hash:
-                        print(
-                            f"ERROR: Hash mismatch at line {line_idx}: "
-                            f"expected {stored_hash}, computed {computed_hash}"
-                        )
-                        return False
-
-                    prev_hash = stored_hash
-
-                return True
-
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"ERROR: Failed to verify chain: {e}")
-                return False
+        """Verify the file with the forge verifier (the one the tripwire uses)."""
+        if not self.log_path.exists():
+            return True
+        se, _ = _forge()
+        try:
+            ok, _problems = se.verify_chain(self.log_path)
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(ok)
 
     def get_last_hash(self) -> str:
-        """Get the hash of the most recent event."""
-        return self._last_hash
+        """Hash of the most recent record (``""`` for an empty chain)."""
+        if not self.log_path.exists():
+            return self.GENESIS_HASH
+        se, _ = _forge()
+        return se.get_audit_chain_tail(self.log_path) or self.GENESIS_HASH
+
+    def _records(self):
+        if not self.log_path.exists():
+            return
+        with open(self.log_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict):
+                    yield rec
 
     def get_event_count(self) -> int:
-        """Get total event count."""
-        return self._event_count
+        with self._lock:
+            return sum(1 for _ in self._records())
 
     def read_events(self, tenant_id: Optional[str] = None, limit: int = 1000) -> list[AuditEvent]:
-        """Read audit events, optionally filtered by tenant."""
+        """Read records back as :class:`AuditEvent` (optionally one tenant)."""
+        events: list[AuditEvent] = []
         with self._lock:
-            if not self.log_path.exists():
-                return []
-
-            events = []
-
-            try:
-                with open(self.log_path, "r") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-
-                        entry = json.loads(line)
-
-                        if tenant_id and entry.get("tenant_id") != tenant_id:
-                            continue
-
-                        event = AuditEvent(
-                            event_id=entry["event_id"],
-                            event_type=entry["event_type"],
-                            tenant_id=entry["tenant_id"],
-                            user_id=entry.get("user_id"),
-                            timestamp=entry["timestamp"],
-                            details=entry.get("details", {}),
-                            severity=entry.get("severity"),
-                        )
-                        events.append(event)
-
-                        if len(events) >= limit:
-                            break
-
-                return events
-
-            except (json.JSONDecodeError, IOError):
-                return []
+            for rec in self._records():
+                d = rec.get("details") if isinstance(rec.get("details"), dict) else {}
+                tid = d.get("tenant_id", "")
+                if tenant_id and tid != tenant_id:
+                    continue
+                ts = rec.get("ts")
+                events.append(AuditEvent(
+                    event_id=str(d.get("event_id", "")),
+                    event_type=str(rec.get("event_type", "")),
+                    tenant_id=str(tid),
+                    user_id=d.get("user"),
+                    timestamp=(datetime.fromtimestamp(ts, timezone.utc).isoformat()
+                               if isinstance(ts, (int, float)) else ""),
+                    details={k: v for k, v in d.items()
+                             if k not in ("tenant_id", "event_id", "user")},
+                    severity=str(rec.get("severity", "")).lower() or None,
+                ))
+                if len(events) >= limit:
+                    break
+        return events
 
     def get_stats(self) -> dict[str, Any]:
-        """Get audit chain statistics."""
+        """Audit chain statistics."""
+        by_type: dict[str, int] = {}
+        by_tenant: dict[str, int] = {}
+        total = 0
         with self._lock:
-            events_by_type = {}
-            events_by_tenant = {}
-
-            try:
-                with open(self.log_path, "r") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-
-                        entry = json.loads(line)
-                        event_type = entry.get("event_type")
-                        tenant_id = entry.get("tenant_id")
-
-                        events_by_type[event_type] = events_by_type.get(event_type, 0) + 1
-                        events_by_tenant[tenant_id] = events_by_tenant.get(tenant_id, 0) + 1
-
-            except (json.JSONDecodeError, IOError):
-                pass
-
-            return {
-                "total_events": self._event_count,
-                "events_by_type": events_by_type,
-                "events_by_tenant": events_by_tenant,
-                "last_hash": self._last_hash,
-                "log_path": str(self.log_path),
-                "chain_verified": self.verify_chain(),
-            }
+            for rec in self._records():
+                total += 1
+                et = rec.get("event_type")
+                d = rec.get("details") if isinstance(rec.get("details"), dict) else {}
+                tid = d.get("tenant_id")
+                by_type[et] = by_type.get(et, 0) + 1
+                by_tenant[tid] = by_tenant.get(tid, 0) + 1
+        return {
+            "total_events": total,
+            "events_by_type": by_type,
+            "events_by_tenant": by_tenant,
+            "last_hash": self.get_last_hash(),
+            "log_path": str(self.log_path),
+            "chain_verified": self.verify_chain(),
+        }

@@ -17,6 +17,18 @@ Ground truth is determined post-hoc from the outcome:
 - If the delegated request succeeded → real routing was correct
 - If the native request succeeded but delegated failed → real might be wrong
   (but could also be a transient failure, so we use outcome confidence)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+``dual_write.record_routing_outcome`` — this tracker's only feed — has no
+caller, and Phase 2 routing is refused in ``delegation_policy`` until one
+exists (``_PHASE2_ROLLBACK_GUARD_WIRED``).
+
+Baseline (2026-09-27 review): the rollback baseline used to be captured from
+the FIRST sample alone (0.0 or 1.0), so one early failure made the gate
+un-triggerable and one early success made any single miss look like a
+collapse. It is now the correctness of the first ``bootstrap_samples``
+outcomes, and the drop is measured over the outcomes recorded AFTER it —
+never before ``bootstrap_samples`` of them exist.
 """
 from __future__ import annotations
 
@@ -94,8 +106,12 @@ class CorrectnessTracker:
         self._correct_decisions: deque[bool] = deque(maxlen=window_size)
         self._confidence_scores: deque[float] = deque(maxlen=window_size)
 
-        # Baseline (captured at first successful sample)
+        # Baseline: correctness of the first ``bootstrap_samples`` outcomes.
+        # (The attribute keeps its historical name; it is the dashboard's
+        # ``shadow_correctness`` field.)
         self._shadow_baseline_correctness: float | None = None
+        self._baseline_samples: list[bool] = []
+        self._post_baseline: deque[bool] = deque(maxlen=window_size)
         self._samples_since_baseline: int = 0
 
         # State machine for rollback triggers
@@ -106,25 +122,28 @@ class CorrectnessTracker:
         """Record a routing outcome (real vs shadow).
 
         This is called post-execution when we know the ground truth (which engine
-        was correct). It updates the rolling window and checks for rollback triggers.
+        was correct). A decision counts as correct only when it picked the
+        ground-truth engine AND the request succeeded.
         """
-        is_correct = outcome.real_decision.engine == outcome.ground_truth
+        is_correct = bool(outcome.success) and outcome.real_decision.engine == outcome.ground_truth
         self._outcomes.append(outcome)
         self._correct_decisions.append(is_correct)
         self._confidence_scores.append(outcome.real_decision.confidence)
 
-        self._samples_since_baseline += 1
-
-        # Capture baseline on first sample
         if self._shadow_baseline_correctness is None:
-            self._shadow_baseline_correctness = float(is_correct)
-            _log.info(
-                "Correctness baseline established: %s (sample 1)",
-                self._shadow_baseline_correctness,
-            )
-
-        # Check for rollback trigger (every 100 samples or after 1000 total samples)
-        if self._samples_since_baseline % 100 == 0 or len(self._outcomes) == self.window_size:
+            self._baseline_samples.append(is_correct)
+            if len(self._baseline_samples) >= max(1, self.bootstrap_samples):
+                self._shadow_baseline_correctness = (
+                    sum(self._baseline_samples) / len(self._baseline_samples)
+                )
+                _log.info(
+                    "Correctness baseline established: %.3f over %d samples",
+                    self._shadow_baseline_correctness,
+                    len(self._baseline_samples),
+                )
+        else:
+            self._post_baseline.append(is_correct)
+            self._samples_since_baseline += 1
             self._check_rollback_trigger()
 
         # Persist to disk if path provided
@@ -132,33 +151,40 @@ class CorrectnessTracker:
             self._persist_outcome(outcome)
 
     def _check_rollback_trigger(self) -> None:
-        """Check if correctness has dropped too much; emit rollback signal if so."""
-        if len(self._correct_decisions) < self.bootstrap_samples:
-            _log.debug(
-                "Correctness check: %d/%d bootstrap samples, skipping trigger",
-                len(self._correct_decisions),
-                self.bootstrap_samples,
-            )
+        """Compare post-baseline correctness with the baseline; flag a >2% drop.
+
+        Evaluated only once at least ``bootstrap_samples`` outcomes exist on
+        BOTH sides of the baseline, so a single sample can never trip it.
+        """
+        if self._shadow_baseline_correctness is None:
+            return
+        if len(self._post_baseline) < max(1, self.bootstrap_samples):
             return
 
-        metrics = self.current_metrics()
-        drop = self._shadow_baseline_correctness - metrics.correctness
+        recent = self.recent_correctness()
+        drop = self._shadow_baseline_correctness - recent
 
-        _log.info(
-            "Correctness check: %.2f (baseline %.2f, drop %.2f%%, threshold 2.0%%)",
-            metrics.correctness,
+        _log.debug(
+            "Correctness check: %.3f (baseline %.3f, drop %.2f%%, threshold 2.0%%)",
+            recent,
             self._shadow_baseline_correctness,
             drop * 100,
         )
 
         # ADR-0532 synthesis: auto-rollback if > 2% drop
-        if drop > 0.02:  # 2% threshold from synthesis
+        if drop > 0.02 + 1e-9 and self._is_above_threshold:  # epsilon: 1.0-0.98 > 0.02 in floats
             self._is_above_threshold = False
             self._rollback_triggered_at = time.time()
             _log.error(
                 "ROLLBACK TRIGGERED: correctness dropped %.1f%% (threshold 2.0%%)",
                 drop * 100,
             )
+
+    def recent_correctness(self) -> float | None:
+        """Correctness over the outcomes recorded after the baseline (or None)."""
+        if not self._post_baseline:
+            return None
+        return sum(self._post_baseline) / len(self._post_baseline)
 
     def current_metrics(self) -> CorrectnessMetrics:
         """Get current correctness metrics snapshot."""
@@ -202,7 +228,10 @@ class CorrectnessTracker:
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
             line = json.dumps(
                 {
-                    "timestamp": outcome.timestamp,
+                    # RoutingOutcome carries no timestamp of its own; reading
+                    # ``outcome.timestamp`` raised AttributeError on every
+                    # write, so nothing was ever persisted.
+                    "timestamp": outcome.real_decision.timestamp,
                     "request_id": outcome.request_id,
                     "real_engine": outcome.real_decision.engine,
                     "shadow_engine": outcome.shadow_decision.engine,
@@ -218,9 +247,15 @@ class CorrectnessTracker:
 
 
 def load_tracker_from_disk(storage_path: Path) -> CorrectnessTracker:
-    """Reconstruct CorrectnessTracker from persisted outcomes."""
-    tracker = CorrectnessTracker(storage_path=storage_path)
+    """Reconstruct CorrectnessTracker from persisted outcomes.
+
+    Replays WITHOUT a storage path and attaches it afterwards: replaying through
+    ``record_outcome`` with the path set appended every loaded line to the same
+    file again, doubling it on each load.
+    """
+    tracker = CorrectnessTracker(storage_path=None)
     if not storage_path.exists():
+        tracker.storage_path = storage_path
         return tracker
 
     try:
@@ -257,4 +292,5 @@ def load_tracker_from_disk(storage_path: Path) -> CorrectnessTracker:
     except Exception as exc:  # noqa: BLE001
         _log.warning("Failed to load tracker from disk: %s", exc)
 
+    tracker.storage_path = storage_path
     return tracker

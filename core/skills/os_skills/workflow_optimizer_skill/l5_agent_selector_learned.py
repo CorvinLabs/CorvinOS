@@ -85,7 +85,11 @@ class L5AgentSelectorLearned:
             config_dir: Config directory (default: tenant home)
         """
         self.tenant_id = tenant_id
-        self.config_persistence = ConfigPersistence(config_dir=config_dir)
+        # Pass the tenant: without it ConfigPersistence resolved _default's
+        # weights file for EVERY tenant (cross-tenant read, review 2026-09-27).
+        self.config_persistence = ConfigPersistence(
+            tenant_id=tenant_id, config_dir=config_dir
+        )
         self.weights: Optional[RoutingWeights] = None
         self._load_weights_lazy()
 

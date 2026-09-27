@@ -23,15 +23,16 @@ from typing import Literal, Optional
 
 from core.tenants.validation import validate_tenant_id
 
-# Import for consent checking (will be injected at runtime)
-try:
-    from core.consent.manager import get_consent_manager
-except ImportError:
-    # Fallback for environments without consent manager
-    def get_consent_manager(*args, **kwargs):
-        return None
+#: Consent scope checked before feedback is turned into config hypotheses.
+#: Resolved against the ONE console consent store
+#: (``core.compliance.consent_store`` — the same store the console's
+#: ``core.compliance.consent.consent_required`` gate reads). Until 2026-09-27
+#: this module imported ``core.consent.manager``, which does not exist, so
+#: every check raised and ``POST /v1/console/learning/feedback`` answered 500.
+LEARNING_FEEDBACK_CONSENT_SCOPE = "learning_feedback"
 
 __all__ = [
+    "LEARNING_FEEDBACK_CONSENT_SCOPE",
     "UserFeedback",
     "ConfigHypothesis",
     "FeedbackInterpreter",
@@ -155,44 +156,37 @@ class FeedbackInterpreter:
         },
     ]
 
-    def check_consent(self, feedback: UserFeedback) -> bool:
-        """
-        Check if user has given consent for feedback processing.
+    def check_consent(self, feedback: UserFeedback, *, user_id: Optional[str] = None) -> bool:
+        """Require an active ``learning_feedback`` consent for ``user_id``.
 
-        Args:
-            feedback: UserFeedback to check
+        Deny-by-default: no ``user_id``, no active (granted, unexpired,
+        unrevoked) record in the tenant's consent store, or ANY error while
+        reading it → ``PermissionError``. Callers map that to HTTP 403.
 
         Returns:
-            True if user has consent, False otherwise
+            True when consent is active.
 
         Raises:
-            PermissionError: If user has not given consent (fail-closed)
+            PermissionError: consent missing, expired, revoked or unverifiable.
         """
+        if not user_id:
+            raise PermissionError("Feedback rejected: no user identity for the consent check")
         try:
-            consent_manager = get_consent_manager(tenant_id=feedback.tenant_id)
-            if consent_manager is None:
-                # No consent manager available; default to deny (fail-closed)
-                raise PermissionError(
-                    f"Feedback rejected: No consent manager available for user processing"
-                )
+            from core.compliance.consent_store import get_consent_store
 
-            # Check if user has given consent for feedback/learning
-            # User ID would need to be available in a real implementation
-            # For now, we check the tenant-level consent flag
-            has_consent = consent_manager.has_learning_consent()
-            if not has_consent:
-                raise PermissionError(
-                    f"Feedback rejected: User has not given consent for learning/feedback processing"
-                )
+            store = get_consent_store(tenant_id=feedback.tenant_id)
+            granted = store.get_consent(user_id=user_id, scope=LEARNING_FEEDBACK_CONSENT_SCOPE)
+        except Exception as exc:  # noqa: BLE001 — fail-closed
+            raise PermissionError(
+                f"Feedback rejected: consent check failed ({type(exc).__name__})"
+            ) from None
+        if not granted:
+            raise PermissionError(
+                "Feedback rejected: no active consent for learning/feedback processing"
+            )
+        return True
 
-            return True
-        except Exception as e:
-            # Fail-closed: any error in consent check → deny
-            if isinstance(e, PermissionError):
-                raise
-            raise PermissionError(f"Feedback rejected: Consent check failed: {str(e)}")
-
-    def interpret(self, feedback: UserFeedback) -> list[ConfigHypothesis]:
+    def interpret(self, feedback: UserFeedback, *, user_id: Optional[str] = None) -> list[ConfigHypothesis]:
         """Convert feedback into hypotheses.
 
         Each matching rule generates one hypothesis. Multiple rules can fire
@@ -202,7 +196,7 @@ class FeedbackInterpreter:
             PermissionError: If user has not given consent (403)
         """
         # Check consent first (fail-closed)
-        self.check_consent(feedback)
+        self.check_consent(feedback, user_id=user_id)
 
         hypotheses = []
 

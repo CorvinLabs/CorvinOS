@@ -220,7 +220,7 @@ groups:
         annotations:
           summary: "Claude Haiku API errors (ALL fallbacks exhausted)"
           description: |
-            {{ $value | humanize }} Haiku API errors in last 5 minutes.
+            {{ $value | humanize }} Haiku API errors in last 5 minutes (threshold: 5, fires on >5 errors).
             CRITICAL: This is the last fallback model. If Haiku fails, NO models work.
 
             Immediate actions:

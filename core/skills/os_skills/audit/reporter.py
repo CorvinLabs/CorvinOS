@@ -1,9 +1,11 @@
 """GDPR-Compliant Compliance Reporting & Bias Detection.
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
 Features:
 - PII redaction (no user data in exports)
 - User ID masking (hash-based, consistent)
-- Retention policy enforcement (delete events >90 days)
+- Retention: REFUSED (a hash chain is never trimmed — see enforce_retention)
 - Bias detection (flag skills with skewed feedback patterns)
 """
 from __future__ import annotations
@@ -20,14 +22,16 @@ from typing import Optional
 from .trail import AuditEvent, AuditTrail
 
 # Regex patterns for PII detection (conservative, comprehensive)
-# Order matters: IBAN first (more specific), then phone, then others
+# Order matters (first match wins): IBAN, then the fixed-shape card/SSN
+# patterns, then the broad phone pattern — which, run before them, swallowed
+# card numbers and labelled them [REDACTED_PHONE] (adversarial review 2026-09-27).
 PII_PATTERNS = {
     'iban': r'\b[A-Z]{2}[0-9]{2}[0-9A-Z]{1,30}\b',  # Any IBAN: 2 letters + 2 digits + 1-30 alphanumeric
     'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-    # Phone: Multiple formats — US: (555) 123-4567, 555-1234, +1-555-1234567; DE: +49 123 456789, (030) 123456, 030/123456
-    'phone': r'(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)*\d{3,4}[\s.-]?\d{3,4}(?=\s|$|[^\d])',
     'credit_card': r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',
     'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
+    # Phone: Multiple formats — US: (555) 123-4567, 555-1234, +1-555-1234567; DE: +49 123 456789, (030) 123456, 030/123456
+    'phone': r'(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)*\d{3,4}[\s.-]?\d{3,4}(?=\s|$|[^\d])',
 }
 
 
@@ -127,65 +131,22 @@ class ComplianceReporter:
         return json.dumps(asdict(event), default=str)
 
     def enforce_retention(self) -> int:
+        """REFUSED — retention must never delete or rewrite hash-chained records.
+
+        This used to read the chain, drop events older than ``retention_days``
+        and REWRITE the file with a recomputed chain — silently erasing audit
+        history and re-signing what was left. An audit chain is append-only
+        (CLAUDE.md § Usage Counting Epoch / ADR-0232); retention is the sealed
+        segment rotation of L37 (``corvin_operator/bridges/shared/audit_sealer.py``)
+        and erasure is L36. Defused 2026-09-27 (adversarial review).
+
+        Raises:
+            NotImplementedError: always.
         """
-        Delete audit events older than retention_days (GDPR Art. 5).
-
-        Returns:
-            Number of events deleted
-        """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.retention_days)
-
-        # Read all events, filter, rewrite
-        if not self.audit_trail.chain_path.exists():
-            return 0
-
-        import json
-
-        kept_events = []
-        deleted_count = 0
-
-        with open(self.audit_trail.chain_path, 'r') as f:
-            for line in f:
-                if not line.strip():
-                    continue
-
-                try:
-                    event_data = json.loads(line)
-                    event = AuditEvent(**event_data)
-
-                    event_ts = datetime.fromisoformat(event.timestamp)
-                    if event_ts < cutoff:
-                        deleted_count += 1
-                    else:
-                        kept_events.append(event)
-
-                except (json.JSONDecodeError, TypeError):
-                    continue
-
-        # Rewrite chain (this is expensive, so log it)
-        if deleted_count > 0:
-            with open(self.audit_trail.chain_path, 'w') as f:
-                # Rebuild with corrected prev_hash chain
-                prev_hash = ""
-                for event in kept_events:
-                    # Update prev_hash
-                    updated_event = AuditEvent(
-                        event_type=event.event_type,
-                        tenant_id=event.tenant_id,
-                        timestamp=event.timestamp,
-                        skill_id=event.skill_id,
-                        skill_version=event.skill_version,
-                        payload=event.payload,
-                        prev_hash=prev_hash,
-                    )
-                    f.write(self._event_to_json_line(updated_event) + '\n')
-                    prev_hash = updated_event.hash
-
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"Retention: deleted {deleted_count} events older than {self.retention_days}d")
-
-        return deleted_count
+        raise NotImplementedError(
+            "audit retention by rewriting the chain is refused; use the L37 "
+            "sealed-segment rotation"
+        )
 
     def detect_bias(self) -> dict[str, list[str]]:
         """

@@ -822,10 +822,10 @@ class TestE2EWorkflowOptimizer:
 
     def test_e2e_multi_tenant_isolation(self, optimizer):
         """Multi-tenant routing is independent."""
-        input_data_base = RoutingInput(
-            task_id="task_001",
-            task_content="simple task",
-        )
+        # (A tenant-less RoutingInput is refused by design — see
+        # test_routing_input_requires_tenant_id-style checks.)
+        with pytest.raises(TypeError):
+            RoutingInput(task_id="task_001", task_content="simple task")
 
         decisions = {}
         for tenant in ["tenant_a", "tenant_b", "tenant_c"]:

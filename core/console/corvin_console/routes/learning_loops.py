@@ -3,15 +3,29 @@
 Exposes `/v1/console/capabilities/manifest` with learning_loops array.
 Integrates with plugin registry to discover loops at plugin load time (k=2).
 Populates health scores from audit chain (k=2 fixture-based, k=3 real audit).
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). This is
+a FLASK blueprint; the console is FastAPI and never mounts it, and nothing
+calls ``integrate_learning_loops_into_capabilities_manifest``. The mounted
+learning-loops surface is ``routes/learning_analytics.py``
+(``/v1/console/learning-loops/*``), which the SPA calls. Left unmounted on
+purpose rather than ported: porting would add a second loops API beside the
+one the product uses.
+
+Defused 2026-09-27: when the audit chain could not measure a loop, this module
+substituted FABRICATED health (42 events, score 0.85, status "active"); it also
+passed the status as a plain string, so ``to_manifest_dict`` crashed on any
+measured loop. An unmeasured loop is now reported ``status: "not_measured"``
+with null health, never as healthy.
 """
 
 from flask import Blueprint, jsonify, current_app
 from typing import List, Dict, Any, Optional
 import json
-from datetime import datetime, timedelta
+import logging
 from pathlib import Path
 
-from core.learning.learning_loop_manifest import LearningLoop, ManifestParser
+from core.learning.learning_loop_manifest import LearningLoop, LoopStatus, ManifestParser
 from core.learning.learning_loop_audit_integration import AuditQueryHelper
 
 learning_loops_bp = Blueprint("learning_loops", __name__, url_prefix="/v1/console/learning")
@@ -19,6 +33,18 @@ learning_loops_bp = Blueprint("learning_loops", __name__, url_prefix="/v1/consol
 # k=2: Global registry (seeded at boot)
 _registered_loops: List[LearningLoop] = []
 _loops_registry_initialized = False
+#: loop_ids whose health the audit chain could not compute.
+_unmeasured: set = set()
+
+logger = logging.getLogger(__name__)
+
+
+def loop_manifest(loop: LearningLoop) -> Dict[str, Any]:
+    """``to_manifest_dict`` with an honest status for unmeasured loops."""
+    out = loop.to_manifest_dict()
+    if loop.loop_id in _unmeasured:
+        out.update(status="not_measured", health_score=None, last_event_ts=None)
+    return out
 
 
 @learning_loops_bp.route("/loops", methods=["GET"])
@@ -34,7 +60,7 @@ def get_learning_loops():
 
         return jsonify({
             "status": "success",
-            "learning_loops": [loop.to_manifest_dict() for loop in loops],
+            "learning_loops": [loop_manifest(loop) for loop in loops],
             "count": len(loops),
         }), 200
 
@@ -63,7 +89,7 @@ def get_learning_loop_detail(loop_id: str):
 
         return jsonify({
             "status": "success",
-            "loop": loop.to_manifest_dict(),
+            "loop": loop_manifest(loop),
         }), 200
 
     except Exception as e:
@@ -129,7 +155,7 @@ def _bootstrap_learning_loops_from_plugins() -> List[LearningLoop]:
 
             except (json.JSONDecodeError, ValueError, Exception) as e:
                 # Graceful degradation per ADR-0906 § 2
-                print(f"Warning: failed to parse learning_loops from {manifest_path}: {e}")
+                logger.warning("failed to parse learning_loops from %s: %s", manifest_path, e)
                 continue
 
     return loops
@@ -149,14 +175,16 @@ def _enrich_loop_with_health_data(loop: LearningLoop) -> LearningLoop:
         event_source=loop.event_source
     )
 
-    # Fallback to synthetic if audit chain unavailable
-    if health_data["status"] == "unknown":
-        health_data = {
-            "last_event_ts": (datetime.utcnow() - timedelta(hours=2)).isoformat() + "Z",
-            "event_count_7d": 42,  # Synthetic fallback
-            "health_score": 0.85,  # Synthetic fallback
-            "status": "active"     # Synthetic fallback
-        }
+    # Audit chain could not measure this loop → report it as NOT MEASURED.
+    # (A synthetic "active / 0.85 / 42 events" used to be substituted here.)
+    try:
+        status = LoopStatus(health_data.get("status"))
+    except ValueError:
+        _unmeasured.add(loop.loop_id)
+        status = loop.status  # placeholder; loop_manifest() reports "not_measured"
+        health_data = {"last_event_ts": None, "event_count_7d": 0, "health_score": None}
+    else:
+        _unmeasured.discard(loop.loop_id)
 
     # Return enriched copy (dataclass is frozen, so we rebuild)
     return LearningLoop(
@@ -173,7 +201,7 @@ def _enrich_loop_with_health_data(loop: LearningLoop) -> LearningLoop:
         last_event_ts=health_data["last_event_ts"],
         event_count_7d=health_data["event_count_7d"],
         health_score=health_data["health_score"],
-        status=health_data["status"],
+        status=status,
     )
 
 
@@ -186,9 +214,9 @@ def integrate_learning_loops_into_capabilities_manifest(manifest_dict: Dict[str,
     """
     try:
         loops = _get_registered_loops()
-        manifest_dict["learning_loops"] = [loop.to_manifest_dict() for loop in loops]
+        manifest_dict["learning_loops"] = [loop_manifest(loop) for loop in loops]
     except Exception as e:
-        print(f"Warning: failed to add learning_loops to manifest: {e}")
+        logger.warning("failed to add learning_loops to manifest: %s", e)
         manifest_dict["learning_loops"] = []
 
     return manifest_dict

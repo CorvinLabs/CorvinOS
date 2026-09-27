@@ -146,236 +146,227 @@ def test_refresh_daemon_lock_windows(tmp_path):
     daemon._release_lock(fd)
 
 
-def test_refresh_daemon_no_credential(tmp_path):
-    """Test daemon doesn't start when no credential file exists."""
-    from corvin_operator.license.refresh_daemon import start_background_daemon
+@pytest.fixture
+def daemon_mod(monkeypatch):
+    """refresh_daemon with its process-global singleton reset, and thread START
+    recorded instead of spawning a real background thread (which would outlive
+    the test and keep writing into a deleted tmp dir)."""
+    from corvin_operator.license import refresh_daemon
 
+    started: list = []
+    monkeypatch.setattr(refresh_daemon, "_daemon_thread", None)
+    monkeypatch.setattr(refresh_daemon.RefreshWorkerThread, "start",
+                        lambda self: started.append(self))
+    refresh_daemon._test_started = started  # type: ignore[attr-defined]
+    return refresh_daemon
+
+
+def _with_credential(tmp_path) -> Path:
+    corvin_home = tmp_path / "corvin"
+    (corvin_home / "global" / "license").mkdir(parents=True)
+    (corvin_home / "global" / "license.key").write_text("test-jwt-credential")
+    return corvin_home
+
+
+def test_refresh_daemon_no_credential(tmp_path, daemon_mod):
+    """No licence key → no daemon (free installs never refresh)."""
     corvin_home = tmp_path / "corvin"
     corvin_home.mkdir(parents=True)
-
-    # No credential file — daemon should not start
-    start_background_daemon(str(corvin_home))
-
-    # Verify no thread is running
-    time.sleep(0.5)
-    # (We can't directly check this without accessing the module-level _daemon_thread,
-    # but the test just verifies no exception is raised)
+    daemon_mod.start_background_daemon(str(corvin_home))
+    assert daemon_mod._daemon_thread is None
+    assert daemon_mod._test_started == []
 
 
-def test_refresh_daemon_with_credential(tmp_path):
-    """Test daemon starts when credential file exists."""
-    from corvin_operator.license.refresh_daemon import start_background_daemon
-
-    corvin_home = tmp_path / "corvin"
-    license_dir = corvin_home / "global" / "license"
-    license_dir.mkdir(parents=True)
-
-    # Create credential file
-    credential_file = corvin_home / "global" / "license.key"
-    credential_file.write_text("test-jwt-credential")
-
-    # Should start without raising
-    start_background_daemon(str(corvin_home))
+def test_refresh_daemon_with_credential(tmp_path, daemon_mod):
+    corvin_home = _with_credential(tmp_path)
+    daemon_mod.start_background_daemon(str(corvin_home))
+    thread = daemon_mod._daemon_thread
+    assert isinstance(thread, daemon_mod.RefreshWorkerThread)
+    assert thread.corvin_home == corvin_home and thread.daemon is True
+    assert daemon_mod._test_started == [thread]
 
 
-def test_refresh_daemon_idempotent_startup(tmp_path):
-    """Test start_background_daemon is idempotent."""
-    from corvin_operator.license.refresh_daemon import start_background_daemon
+def test_refresh_daemon_idempotent_startup(tmp_path, daemon_mod):
+    corvin_home = _with_credential(tmp_path)
+    for _ in range(3):
+        daemon_mod.start_background_daemon(str(corvin_home))
+    assert len(daemon_mod._test_started) == 1
+    assert daemon_mod._test_started[0] is daemon_mod._daemon_thread
 
-    corvin_home = tmp_path / "corvin"
-    license_dir = corvin_home / "global" / "license"
-    license_dir.mkdir(parents=True)
 
-    # Create credential file
-    credential_file = corvin_home / "global" / "license.key"
-    credential_file.write_text("test-jwt-credential")
-
-    # Call multiple times — should only start once
-    start_background_daemon(str(corvin_home))
-    start_background_daemon(str(corvin_home))
-    start_background_daemon(str(corvin_home))
-
-    # No exception should be raised
+def test_refresh_daemon_honours_corvin_home_env(tmp_path, daemon_mod, monkeypatch):
+    corvin_home = _with_credential(tmp_path)
+    monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
+    daemon_mod.start_background_daemon()
+    assert daemon_mod._daemon_thread.corvin_home == corvin_home
 
 
 def test_refresh_daemon_lock_unavailable_deduplication(tmp_path):
-    """Test hourly de-duplication of lock unavailable emissions."""
+    """Hourly de-duplication of ``license.refresh_lock_unavailable``.
+
+    ``_emit_lock_unavailable`` does ``from audit import audit_event`` after putting
+    ``corvin_operator/bridges/shared`` on sys.path. The old patch target
+    ``"operator.bridges.shared.audit.audit_event"`` resolved to the STDLIB
+    ``operator`` module. Patch the module the daemon actually imports.
+    """
     from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
-    corvin_home = tmp_path / "corvin"
-    daemon = RefreshWorkerThread(corvin_home)
+    bridges_shared = str(Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared")
+    if bridges_shared not in sys.path:
+        sys.path.insert(0, bridges_shared)
+    import audit as bridge_audit  # the same module object the daemon will import
 
-    # Track audit events emitted
-    emitted_events: list[tuple[str, str]] = []
+    assert Path(bridge_audit.__file__).parent == Path(bridges_shared)
 
-    def mock_audit_event(event_type: str, **kwargs):
+    daemon = RefreshWorkerThread(tmp_path / "corvin")
+    emitted: list[str] = []
+
+    def record(event_type: str, **kwargs):
         if event_type == "license.refresh_lock_unavailable":
-            emitted_events.append((event_type, kwargs.get("reason", "")))
+            emitted.append(kwargs.get("reason", ""))
 
-    with mock.patch("operator.bridges.shared.audit.audit_event", side_effect=mock_audit_event):
-        # First emit
+    with mock.patch.object(bridge_audit, "audit_event", side_effect=record):
         daemon._emit_lock_unavailable("test_reason")
-        assert len(emitted_events) == 1
+        assert emitted == ["test_reason"]
 
-        # Second emit (same reason, immediate) — should be deduplicated
+        daemon._emit_lock_unavailable("test_reason")          # immediate repeat
+        assert emitted == ["test_reason"]
+
+        daemon._lock_failures["test_reason"] = int(time.time()) - 1800   # 30 min ago
         daemon._emit_lock_unavailable("test_reason")
-        assert len(emitted_events) == 1  # No new event
+        assert emitted == ["test_reason"]
 
-        # Simulate time passing < 1 hour
-        daemon._lock_failures["test_reason"] = int(time.time()) - 1800  # 30 min ago
+        daemon._lock_failures["test_reason"] = int(time.time()) - 3600   # 1 h ago
         daemon._emit_lock_unavailable("test_reason")
-        assert len(emitted_events) == 1  # Still deduplicated
+        assert emitted == ["test_reason", "test_reason"]
 
-        # Simulate time passing >= 1 hour
-        daemon._lock_failures["test_reason"] = int(time.time()) - 3600  # 1 hour ago
-        daemon._emit_lock_unavailable("test_reason")
-        assert len(emitted_events) == 2  # New event emitted
-
-        # Different reason should emit immediately
-        daemon._emit_lock_unavailable("other_reason")
-        assert len(emitted_events) == 3
+        daemon._emit_lock_unavailable("other_reason")         # different reason
+        assert emitted == ["test_reason", "test_reason", "other_reason"]
 
 
-def test_refresh_daemon_three_cycles(tmp_path):
-    """Test three independent refresh cycles (permit, CRL, ASRL)."""
-    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
+def _due(daemon, *, permit: bool, crl: bool, asrl: bool) -> int:
+    from corvin_operator.license import refresh_daemon as rd
 
-    corvin_home = tmp_path / "corvin"
-    daemon = RefreshWorkerThread(corvin_home)
-
-    # Mock the cycle functions
-    permit_called = []
-    crl_called = []
-    asrl_called = []
-
-    def mock_permit_refresh():
-        permit_called.append(time.time())
-
-    def mock_crl_merge():
-        crl_called.append(time.time())
-
-    def mock_asrl_fetch():
-        asrl_called.append(time.time())
-
-    daemon._do_permit_refresh = mock_permit_refresh
-    daemon._do_crl_merge = mock_crl_merge
-    daemon._do_asrl_fetch = mock_asrl_fetch
-
-    # Manually set timers to trigger all three cycles
-    daemon.state.last_permit_refresh = int(time.time()) - 3 * 3600 - 1
-    daemon.state.last_crl_merge = int(time.time()) - 3600 - 1
-    daemon.state.last_asrl_fetch = int(time.time()) - 24 * 3600 - 1
-
-    daemon._do_permit_refresh()
-    daemon._do_crl_merge()
-    daemon._do_asrl_fetch()
-
-    assert len(permit_called) == 1
-    assert len(crl_called) == 1
-    assert len(asrl_called) == 1
-
-
-def test_refresh_daemon_cycle_timers_independent(tmp_path):
-    """Test permit/CRL/ASRL cycles are independent and don't trigger early."""
-    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
-
-    corvin_home = tmp_path / "corvin"
-    daemon = RefreshWorkerThread(corvin_home)
-
-    permit_called = []
-    crl_called = []
-    asrl_called = []
-
-    def mock_permit_refresh():
-        permit_called.append(time.time())
-
-    def mock_crl_merge():
-        crl_called.append(time.time())
-
-    def mock_asrl_fetch():
-        asrl_called.append(time.time())
-
-    daemon._do_permit_refresh = mock_permit_refresh
-    daemon._do_crl_merge = mock_crl_merge
-    daemon._do_asrl_fetch = mock_asrl_fetch
-
-    # Set just the permit timer to trigger
     now = int(time.time())
-    daemon.state.last_permit_refresh = now - 3 * 3600 - 1
-    daemon.state.last_crl_merge = now - 1000  # Not yet
-    daemon.state.last_asrl_fetch = now - 1000  # Not yet
+    daemon.state.last_permit_refresh = now - rd.PERMIT_REFRESH_INTERVAL - 1 if permit else now - 60
+    daemon.state.last_crl_merge = now - rd.CRL_MERGE_INTERVAL - 1 if crl else now - 60
+    daemon.state.last_asrl_fetch = now - rd.ASRL_FETCH_INTERVAL - 1 if asrl else now - 60
+    return now
+
+
+def test_refresh_daemon_three_cycles(tmp_path, monkeypatch):
+    """All three cycles due → each runs and advances its own timer.
+
+    The real ``_do_*`` methods run; only the network call behind the permit
+    refresh (``session_refresh.refresh_once``) is replaced."""
+    from corvin_operator.license import session_refresh
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
+
+    permit_calls: list[int] = []
+    monkeypatch.setattr(session_refresh, "refresh_once",
+                        lambda timeout=10: permit_calls.append(timeout) or True)
+    daemon = RefreshWorkerThread(tmp_path / "corvin")
+    before = _due(daemon, permit=True, crl=True, asrl=True)
 
     daemon._do_permit_refresh()
     daemon._do_crl_merge()
     daemon._do_asrl_fetch()
 
-    assert len(permit_called) == 1
-    assert len(crl_called) == 0  # Not yet
-    assert len(asrl_called) == 0  # Not yet
+    assert permit_calls == [10]
+    assert daemon.state.last_permit_refresh >= before
+    assert daemon.state.last_crl_merge >= before
+    assert daemon.state.last_asrl_fetch >= before
+
+
+def test_refresh_daemon_cycle_timers_independent(tmp_path, monkeypatch):
+    """Only the permit cycle is due → CRL/ASRL timers stay put.
+
+    The old version replaced the ``_do_*`` methods with mocks that ignore the
+    timers and then asserted the mocks weren't called — after calling them."""
+    from corvin_operator.license import session_refresh
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
+
+    permit_calls: list[int] = []
+    monkeypatch.setattr(session_refresh, "refresh_once",
+                        lambda timeout=10: permit_calls.append(timeout) or True)
+    daemon = RefreshWorkerThread(tmp_path / "corvin")
+    now = _due(daemon, permit=True, crl=False, asrl=False)
+    crl_before, asrl_before = daemon.state.last_crl_merge, daemon.state.last_asrl_fetch
+
+    daemon._do_permit_refresh()
+    daemon._do_crl_merge()
+    daemon._do_asrl_fetch()
+
+    assert permit_calls == [10]
+    assert daemon.state.last_permit_refresh >= now
+    assert daemon.state.last_crl_merge == crl_before
+    assert daemon.state.last_asrl_fetch == asrl_before
+
+
+def test_failed_permit_refresh_keeps_the_timer_due(tmp_path, monkeypatch):
+    from corvin_operator.license import session_refresh
+    from corvin_operator.license.refresh_daemon import RefreshWorkerThread
+
+    monkeypatch.setattr(session_refresh, "refresh_once", lambda timeout=10: False)
+    daemon = RefreshWorkerThread(tmp_path / "corvin")
+    _due(daemon, permit=True, crl=False, asrl=False)
+    stale = daemon.state.last_permit_refresh
+    daemon._do_permit_refresh()
+    assert daemon.state.last_permit_refresh == stale   # retried next cycle
 
 
 def test_refresh_daemon_state_increments_cycle_count(tmp_path):
-    """Test daemon increments cycle_count and saves state."""
+    """Counter + state file round-trip as one cycle of ``run`` performs them."""
     from corvin_operator.license.refresh_daemon import RefreshWorkerThread
 
     corvin_home = tmp_path / "corvin"
     daemon = RefreshWorkerThread(corvin_home)
-
-    # Mock cycle functions (no-op)
-    daemon._do_permit_refresh = lambda: None
-    daemon._do_crl_merge = lambda: None
-    daemon._do_asrl_fetch = lambda: None
-
-    # Mock lock to make it succeed
-    def mock_acquire_lock():
-        return 999  # Fake FD
-
-    def mock_release_lock(fd):
-        pass
-
-    daemon._acquire_lock = mock_acquire_lock
-    daemon._release_lock = mock_release_lock
-
-    # Run one cycle manually
     fd = daemon._acquire_lock()
-    daemon._increment_counter()
-    daemon._do_permit_refresh()
-    daemon._do_crl_merge()
-    daemon._do_asrl_fetch()
-    daemon.state.cycle_count += 1
-    daemon._save_state()
-    daemon._release_lock(fd)
+    assert fd is not None
+    try:
+        assert daemon._increment_counter() == 1
+        daemon.state.cycle_count += 1
+        daemon._save_state()
+    finally:
+        daemon._release_lock(fd)
 
-    # Verify state file
     state_file = corvin_home / "global" / "license" / "state.json"
-    assert state_file.exists()
-    data = json.loads(state_file.read_text())
-    assert data["cycle_count"] == 1
+    assert json.loads(state_file.read_text())["cycle_count"] == 1
+    assert (state_file.stat().st_mode & 0o777) == 0o600
+    assert RefreshWorkerThread(corvin_home).state.cycle_count == 1
 
 
-# Integration test: Boot-time wiring
+# Integration: boot-time wiring
 def test_boot_refresh_calls_daemon_start(tmp_path, monkeypatch):
-    """Test boot_refresh() calls start_background_daemon()."""
-    corvin_home = tmp_path / "corvin"
+    """``session_refresh.boot_refresh()`` starts the refresh daemon.
+
+    The old patch target ``"operator.license.refresh_daemon.start_background_daemon"``
+    resolved to the stdlib ``operator`` module. ``boot_refresh`` does
+    ``from . import refresh_daemon as _rd; _rd.start_background_daemon()`` —
+    patch that module attribute. The network refresh is stubbed out."""
+    from corvin_operator.license import refresh_daemon, session_refresh
+
+    corvin_home = _with_credential(tmp_path)
     monkeypatch.setenv("CORVIN_HOME", str(corvin_home))
+    monkeypatch.setattr(session_refresh, "should_refresh", lambda: False)
+    monkeypatch.setattr(session_refresh, "refresh_once",
+                        lambda **k: pytest.fail("boot must not refresh when not due"))
 
-    # Create credential to trigger daemon startup
-    license_dir = corvin_home / "global" / "license"
-    license_dir.mkdir(parents=True)
-    (corvin_home / "global" / "license.key").write_text("test-jwt")
+    calls: list[tuple] = []
+    monkeypatch.setattr(refresh_daemon, "start_background_daemon",
+                        lambda *a, **k: calls.append((a, k)))
+    session_refresh.boot_refresh()
+    assert calls == [((), {})]
 
-    # Track daemon startups
-    daemon_started = []
 
-    def mock_daemon_start(ch=None):
-        daemon_started.append(True)
+def test_boot_refresh_survives_a_daemon_start_failure(tmp_path, monkeypatch):
+    """boot_refresh never raises — a broken daemon start must not fail boot."""
+    from corvin_operator.license import refresh_daemon, session_refresh
 
-    # Mock the daemon start
-    with mock.patch(
-        "operator.license.refresh_daemon.start_background_daemon",
-        side_effect=mock_daemon_start
-    ):
-        from corvin_operator.license import session_refresh
-        session_refresh.boot_refresh()
+    monkeypatch.setattr(session_refresh, "should_refresh", lambda: False)
 
-        assert len(daemon_started) == 1
+    def boom(*a, **k):
+        raise RuntimeError("no threads for you")
+
+    monkeypatch.setattr(refresh_daemon, "start_background_daemon", boom)
+    session_refresh.boot_refresh()

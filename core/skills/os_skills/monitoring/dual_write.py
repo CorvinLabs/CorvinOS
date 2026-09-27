@@ -14,6 +14,12 @@ infrastructure (correctness tracker + rollback detector).
 Call site: corvin_operator/bridges/shared/delegation_policy.py::resolve_worker_engine()
 Integration: Phase 2a exit from shadow mode
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+``delegation_policy`` refuses ``CORVIN_ACP_PHASE=phase2_*`` while
+``_PHASE2_ROLLBACK_GUARD_WIRED`` is false, because ``record_routing_outcome``
+(the rollback detector's only input) has no caller and needs a per-request
+counterfactual ``ground_truth`` no outcome sink observes.
+
 Architecture (ADR-0532 Phase 2):
 - Phase 1 (shadow): Skill called, advisory only, bundled stands
 - Phase 2a (dual-write): Real Skill decision used; agreement tracked for auto-rollback
@@ -425,6 +431,9 @@ _DUAL_WRITE_AUDIT_ALLOWLISTS: dict[str, frozenset] = {
     }),
     "l5_routing_rollback_active": frozenset({
         "request_id", "used_engine", "task_type", "reason_code", "tenant_id",
+    }),
+    "l5_rollback_triggered": frozenset({
+        "reason_code", "correctness", "baseline_correctness", "total_count", "tenant_id",
     }),
     "l5_routing_metrics": frozenset({
         "request_id", "agreement", "threshold_met", "skill_confidence",

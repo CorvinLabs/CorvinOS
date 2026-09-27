@@ -71,7 +71,7 @@ class VoiceSynthesizerMultiProvider:
             else:
                 print(f"⚠️  {provider} failed, trying next provider...")
 
-        # Should never reach here (mock always succeeds)
+        # Every real provider failed; the mock fallback reports failure too.
         return self._try_provider(TTSProvider.MOCK.value, job)
 
     def _try_provider(self, provider: str, job) -> VoiceResult:
@@ -241,7 +241,10 @@ class VoiceSynthesizerMultiProvider:
             loudness_lufs=-23.0,
             confidence=0.0,
             provider_used="Mock",
-            success=True,
+            # Silence is not narration: the files are real, the speech is not.
+            # Report failure so no caller ships a silent video as "voiced"
+            # (fail-closed, adversarial review 2026-09-27).
+            success=False,
         )
 
     def _get_duration(self, audio_path: str) -> float:

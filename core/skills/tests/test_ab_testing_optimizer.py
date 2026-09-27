@@ -230,15 +230,16 @@ class TestAuditTrail:
         with pytest.raises(RuntimeError, match="Audit chain write failed"):
             optimizer.propose_variant("test", "claude-opus-4")
 
-    def test_tenant_isolation(self, audit_chain, confidence_calc):
-        opt1 = ABTestingOptimizer("skill1", "tenant_1", audit_chain, confidence_calc)
-        opt2 = ABTestingOptimizer("skill2", "tenant_2", audit_chain, confidence_calc)
-        opt1.propose_variant("v1", "claude-opus-4")
-        opt2.propose_variant("v2", "claude-opus-4")
-        with open(audit_chain.log_path, 'r') as f:
-            events = [json.loads(line) for line in f.readlines()]
-        tenants = {e["tenant_id"] for e in events}
-        assert "tenant_1" in tenants and "tenant_2" in tenants
+    def test_tenant_isolation(self, confidence_calc, tmp_path, monkeypatch):
+        # One chain per tenant, each written in its own tenant context.
+        for skill, tid, v in (("skill1", "tenant_1", "v1"), ("skill2", "tenant_2", "v2")):
+            monkeypatch.setenv("CORVIN_TENANT_ID", tid)
+            opt = ABTestingOptimizer(skill, tid, AuditChainWriter(tmp_path / f"{tid}.jsonl"),
+                                     confidence_calc)
+            opt.propose_variant(v, "claude-opus-4")
+        for tid in ("tenant_1", "tenant_2"):
+            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text().splitlines()]
+            assert recs and {r["details"]["tenant_id"] for r in recs} == {tid}
 
 
 class TestMetricsTracking:

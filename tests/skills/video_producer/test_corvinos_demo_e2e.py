@@ -30,9 +30,13 @@ BLEND_FILE = FIXTURE_DIR / "corvinos_demo.blend"
 DURATION_CONFIG = FIXTURE_DIR / "narration_duration.json"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+import importlib.util as _ilu
+
 pytestmark = pytest.mark.skipif(
-    shutil.which("blender") is None,
-    reason="blender binary not on PATH",
+    shutil.which("blender") is None or _ilu.find_spec("ffmpeg") is None,
+    # the render's output validation imports the optional `ffmpeg-python`
+    # package; without it every render fails validation by design
+    reason="needs the blender binary on PATH and the ffmpeg-python package",
 )
 
 

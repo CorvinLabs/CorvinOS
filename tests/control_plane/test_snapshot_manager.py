@@ -1,9 +1,11 @@
 """E2E tests for Snapshot Manager (Phase 9b Stream 4)."""
 
+import dataclasses
+import json
 import pytest
 import tempfile
 import os
-from core.control_plane.snapshot_manager import SnapshotManager
+from core.control_plane.snapshot_manager import SnapshotManager, SnapshotRestoreNotImplemented
 
 
 class MockAuditBackend:
@@ -67,12 +69,14 @@ async def test_restore_snapshot():
             "tenant_1",
         )
 
-        # Restore
-        result = await manager.restore_snapshot(snap["snapshot_id"], "tenant_1", "admin_1")
+        # Restore: nothing can apply snapshot state, so it must FAIL — it used
+        # to answer status "restored" while restoring nothing (2026-09-27).
+        with pytest.raises(SnapshotRestoreNotImplemented):
+            await manager.restore_snapshot(snap["snapshot_id"], "tenant_1", "admin_1")
 
-        assert result["status"] == "restored"
-        assert result["restored_state"]["plugins"]["enabled"] == ["video_producer"]
-        assert audit.events[-1]["type"] == "snapshot_restored"
+        assert audit.events[-1]["type"] == "snapshot_restore_failed"
+        assert audit.events[-1]["payload"]["reason"] == "not_implemented"
+        assert not any(e["type"] == "snapshot_restored" for e in audit.events)
 
 
 @pytest.mark.asyncio
@@ -98,12 +102,13 @@ async def test_checksum_verification():
         )
 
         # Corrupt snapshot in memory
-        manager.snapshots[snap["snapshot_id"]] = manager.snapshots[snap["snapshot_id"]]._replace(
-            checksum="corrupted_hash"
+        # (Snapshot is a frozen dataclass, not a namedtuple)
+        manager.snapshots[snap["snapshot_id"]] = dataclasses.replace(
+            manager.snapshots[snap["snapshot_id"]], checksum="corrupted_hash"
         )
 
         # Restore should fail
-        with pytest.raises(ValueError, match="checksum_mismatch"):
+        with pytest.raises(ValueError, match="checksum mismatch"):
             await manager.restore_snapshot(snap["snapshot_id"], "tenant_1", "admin_1")
 
         # Verify audit event
@@ -133,7 +138,7 @@ async def test_list_snapshots():
             )
 
         # List
-        snapshots = manager.list_snapshots("tenant_1")
+        snapshots = await manager.list_snapshots("tenant_1")
 
         assert len(snapshots) == 3
         assert all("snapshot_id" in s for s in snapshots)
@@ -228,8 +233,8 @@ async def test_tenant_isolation():
         assert details["name"] == "T2 Snapshot"
 
         # List should be isolated
-        list_t1 = manager.list_snapshots("tenant_1")
-        list_t2 = manager.list_snapshots("tenant_2")
+        list_t1 = await manager.list_snapshots("tenant_1")
+        list_t2 = await manager.list_snapshots("tenant_2")
 
         assert len(list_t1) == 1
         assert len(list_t2) == 1
@@ -285,11 +290,10 @@ async def test_large_state_snapshot():
         assert "snapshot_id" in result
         assert result["size_bytes"] > 100000  # Should be > 100KB
 
-        # Restore and verify
-        restored = await manager.restore_snapshot(
-            result["snapshot_id"], "tenant_1", "admin_1"
-        )
-        assert len(restored["restored_state"]["overrides"]["overrides"]) == 5000
+        # The large state survives verbatim (a restore is not implemented —
+        # see test_restore_snapshot — so verify the stored snapshot instead)
+        details = manager.get_snapshot_details(result["snapshot_id"], "tenant_1")
+        assert len(details["override_state"]["overrides"]) == 5000
 
 
 @pytest.mark.asyncio
@@ -308,3 +312,41 @@ async def test_invalid_state_rejected():
                 "operator_1",
                 "tenant_1",
             )
+
+
+@pytest.mark.asyncio
+async def test_reload_then_create_does_not_overwrite(tmp_path):
+    """After load_snapshots_from_disk a new manager must not reuse snap_000000
+    (the counter restarted at 0 and overwrote the first snapshot on disk)."""
+    m1 = SnapshotManager(MockAuditBackend(), str(tmp_path))
+    first = await m1.create_snapshot({"intent": {"a": 1}}, "one", "", "op", "tenant_1")
+    m2 = SnapshotManager(MockAuditBackend(), str(tmp_path))
+    m2.load_snapshots_from_disk()
+    second = await m2.create_snapshot({"intent": {"b": 2}}, "two", "", "op", "tenant_1")
+    assert second["snapshot_id"] != first["snapshot_id"]
+    m3 = SnapshotManager(MockAuditBackend(), str(tmp_path))
+    m3.load_snapshots_from_disk()
+    assert m3.get_snapshot_details(first["snapshot_id"], "tenant_1")["intent_state"] == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_default_audit_goes_to_the_tenant_core_chain(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_1")
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    from core.compliance import audit_chain_provider
+    from corvin_operator.bridges.shared.paths import tenant_audit_chain
+
+    monkeypatch.setattr(audit_chain_provider, "_CHAIN_WRITERS", {})
+    manager = SnapshotManager(storage_path=str(tmp_path / "snaps"))
+    snap = await manager.create_snapshot({"intent": {}}, "secret name", "", "op", "tenant_1")
+    with pytest.raises(SnapshotRestoreNotImplemented):
+        await manager.restore_snapshot(snap["snapshot_id"], "tenant_1", "admin")
+
+    chain = tenant_audit_chain("tenant_1").read_text()
+    assert "secret name" not in chain
+    types = [json.loads(l)["event_type"] for l in chain.splitlines() if l.strip()]
+    assert "snapshot_created" in types and "snapshot_restore_failed" in types
+    log = await manager.get_audit_log("tenant_1")
+    assert {r["details"]["snapshot_id"] for r in log} == {snap["snapshot_id"]}
+    assert all(r["details"].get("checksum") for r in log)  # allowlisted, not dropped

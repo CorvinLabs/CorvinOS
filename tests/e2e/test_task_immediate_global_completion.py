@@ -32,6 +32,10 @@ def mock_components():
         "audit_chain": AsyncMock(),
         "dod_verifier": AsyncMock(),
         "websocket_broadcaster": AsyncMock(),
+        # The layers under test assume "no blocking dependency"; without an
+        # injected checker the orchestrator is fail-closed (see
+        # test_default_without_dependency_checker_blocks).
+        "dependency_checker": AsyncMock(return_value=[]),
     }
 
 
@@ -43,6 +47,14 @@ def orchestrator(mock_components):
 
 class TestTaskCompletionLayers:
     """Test each layer individually, then end-to-end."""
+
+    @pytest.mark.asyncio
+    async def test_default_without_dependency_checker_blocks(self, mock_components):
+        """No dependency source → BLOCKED, never "no dependencies" (fail-closed)."""
+        comps = dict(mock_components)
+        comps.pop("dependency_checker")
+        orch = TaskCompletionOrchestrator(**comps)
+        assert await orch._check_hard_dependencies("t1", "_default") == ["dependency_check_not_implemented"]
 
     # ===== LAYER 1: VERIFICATION =====
 
@@ -104,7 +116,7 @@ class TestTaskCompletionLayers:
         # Assert: NOT approved (fail-closed)
         assert result["verdict"] == TaskCompletionVerdict.PENDING_EVIDENCE
         assert result["score"] == 0.65
-        assert "score < 0.80" in result["reason"]
+        assert "< 0.80" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_layer1_idempotent_already_done(self, orchestrator, mock_components):
@@ -132,7 +144,7 @@ class TestTaskCompletionLayers:
         # Setup: audit chain appends, DB updates
         audit_event_mock = MagicMock()
         audit_event_mock.audit_hash = "hash_abc123"
-        audit_event_mock.prev_hash = "hash_prev"
+        audit_event_mock.prev_audit_hash = "hash_prev"
         mock_components["audit_chain"].get_latest_hash.return_value = "hash_prev"
         mock_components["audit_chain"].append.return_value = audit_event_mock
         mock_components["task_queue"].update_status = AsyncMock()
@@ -356,7 +368,7 @@ class TestTaskCompletionLayers:
 
         # Assert: Rejected at Layer 1
         assert result.verdict == TaskCompletionVerdict.PENDING_EVIDENCE
-        assert "score < 0.80" in result.reason
+        assert "< 0.80" in result.reason
 
         # Assert: No state changes (audit, DB, push all skipped)
         assert not mock_components["audit_chain"].append.called

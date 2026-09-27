@@ -1,6 +1,8 @@
 # 100% Drift Prevention Architecture — Implementation Roadmap
 
 > **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** P1 holds (12/12, `state_sync` wired). P2 is 22/25 (3 failures incl. fail-closed default), not "25+ passing"; P4 tests cannot import (`sentry_sdk` not a declared dependency). The "3/5 COMPLETE" total does not hold.
+>
+> **Status note (2026-09-27, adversarial review):** `core/remediation/auto_remediate.py` and `registry_sync.PluginRegistrySynchronizer.install_plugin` have no production caller. Their simulated successes now fail closed: auto-remediation reports `NOT_IMPLEMENTED` (verification "not measured"), `install_plugin` returns `not_implemented` and writes nothing.
 
 
 **Vision:** Prevent Config/Code/State drifts between environments (Dev, Staging, Prod)

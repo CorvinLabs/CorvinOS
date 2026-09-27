@@ -26,7 +26,7 @@ Protected paths (match if the absolute path is under one of these roots):
   <corvin_home>/**/instance_cert.jwt     ADR-0145 IBC (Instance Binding Certificate)
   <corvin_home>/**/instance_pubkey.pem   ADR-0145 Ed25519 public key (companion)
   <corvin_home>/**/packages/**       ADR-0032 installed AWPKG packages
-  <repo>/operator/skill-forge/skills/dyn/**   engine-facing slot mirror
+  <repo>/corvin_operator/skill-forge/skills/dyn/**   engine-facing slot mirror
   <repo>/operator/forge/forge/policy.json     bundled default policy
 
 Both directory shapes resolve to the same protected set.

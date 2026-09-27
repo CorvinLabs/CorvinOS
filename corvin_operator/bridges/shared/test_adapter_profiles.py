@@ -209,7 +209,11 @@ def main() -> int:
             raise AssertionError("no dump entry for trusted-user")
         args = e["args"]
         assert_args_contain(args, "--dangerously-skip-permissions")
-        assert_args_contain(args, "--model", "claude-haiku-4-5")
+        # The profile pins the family id; ADR-0952 normalise_pin() resolves it
+        # to the one registered dated snapshot before it reaches --model.
+        _mi = args.index("--model") if "--model" in args else -1
+        if _mi < 0 or not str(args[_mi + 1]).startswith("claude-haiku-4-5"):
+            raise AssertionError(f"--model is not the pinned haiku-4-5 family: {args}")
         assert_args_not_contain(args, "--permission-mode")
         print("PASS: trusted-user → bypassPermissions (legacy flag) + custom model")
     except AssertionError as e:

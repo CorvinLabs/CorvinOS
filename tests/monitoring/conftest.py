@@ -8,12 +8,16 @@ Fixtures:
 """
 
 import pytest
-from corvin_console.monitoring import MetricsCollector
+
+# ``sentry_sdk`` is optional: ``corvin_console.monitoring.sentry_config``
+# degrades to no-ops without it, so nothing here needs to skip on its absence.
 
 
 @pytest.fixture
 def metrics_collector():
     """Provide a fresh metrics collector for each test."""
+    from corvin_console.monitoring import MetricsCollector
+
     return MetricsCollector(namespace="test_metrics")
 
 

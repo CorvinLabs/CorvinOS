@@ -5,12 +5,11 @@
 
 import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, Clock, AlertTriangle } from "lucide-react";
+import { Check, X, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -19,7 +18,10 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 
-const API_BASE = "/v1/console/control-plane/approvals";
+// routes/control_plane_overrides.py. This page used to call
+// /control-plane/approvals, which exists nowhere, and read the body as an
+// array — the list endpoint answers {overrides, count}.
+const API_BASE = "/v1/console/control-plane/overrides";
 
 interface Approval {
   override_id: string;
@@ -43,9 +45,15 @@ export default function ControlPlaneOverridesPage() {
   const { data: approvals, isLoading } = useQuery<Approval[]>({
     queryKey: ["control-plane-approvals"],
     queryFn: async () => {
-      const res = await fetch(`${API_BASE}?status_filter=pending`);
+      const res = await fetch(API_BASE);
       if (!res.ok) throw new Error("Failed to load approvals");
-      return res.json();
+      const body = await res.json();
+      // The endpoint lists PENDING overrides only and carries no
+      // approval_status/reason field; default the status so the pending
+      // filter below does not drop every row.
+      return (Array.isArray(body?.overrides) ? body.overrides : []).map(
+        (o: Partial<Approval>) => ({ ...o, approval_status: o.approval_status ?? "pending" }),
+      );
     },
     refetchInterval: 5000, // Refresh every 5s
   });

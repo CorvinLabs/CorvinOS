@@ -1,12 +1,50 @@
 """
 E2E tests for Marketplace Discovery API Routes (Phase 1 Session 1).
 
-Tests search, filtering, collections, and details endpoints.
+Tests search, filtering, collections, and details endpoints through the REAL
+console router (``/v1/console/api/v1/marketplace/*``) with a real console
+session against a scratch CORVIN_HOME.
+
+Rewritten 2026-09-27 (adversarial review): the tests imported
+``set_marketplace_index_path`` from the wrong module (it lives in
+``routes/marketplace.py``), called un-prefixed paths and authenticated with a
+Bearer header the console does not accept.
 """
 
 import json
+
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+P = "/v1/console/api/v1/marketplace"
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    home = tmp_path / "corvin_home"
+    for sub in ("auth", "forge", "console/sessions"):
+        (home / "tenants" / "_default" / "global" / sub).mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+
+    from core.console.corvin_console import auth as _auth
+    from core.console.corvin_console.app import router
+    from core.console.corvin_console.routes import marketplace as mp
+
+    rec = _auth.create_session(tenant_id="_default", token_fingerprint="test-fp")
+    app = FastAPI()
+    app.include_router(router, prefix="/v1/console")
+    c = TestClient(app, raise_server_exceptions=False)
+    c.cookies.set("corvin_console_sid", rec.sid)
+    prev = (mp._index_manager._index_path, mp._index_manager._index)
+    yield c
+    mp._index_manager._index_path, mp._index_manager._index = prev
+
+
+def set_marketplace_index_path(path):
+    from core.console.corvin_console.routes.marketplace import set_marketplace_index_path as _set
+    _set(path)
 
 
 @pytest.fixture
@@ -55,15 +93,11 @@ def sample_index(tmp_path):
     return index_file
 
 
-@pytest.mark.asyncio
-async def test_search_endpoint(client, sample_index):
+def test_search_endpoint(client, sample_index):
     """Test /search endpoint."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
     set_marketplace_index_path(sample_index)
 
-    response = client.get(
-        "/api/v1/marketplace/search?q=model",
-        headers={"Authorization": "Bearer test_token"}
+    response = client.get(f"{P}/search?q=model"
     )
     assert response.status_code == 200
     data = response.json()
@@ -72,15 +106,11 @@ async def test_search_endpoint(client, sample_index):
     assert len(data["results"]) > 0
 
 
-@pytest.mark.asyncio
-async def test_search_with_filters(client, sample_index):
+def test_search_with_filters(client, sample_index):
     """Test search with category and tier filters."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
     set_marketplace_index_path(sample_index)
 
-    response = client.get(
-        "/api/v1/marketplace/search?q=&category=learning&tier=buildin",
-        headers={"Authorization": "Bearer test_token"}
+    response = client.get(f"{P}/search?q=&category=learning&tier=buildin"
     )
     assert response.status_code == 200
     data = response.json()
@@ -88,15 +118,11 @@ async def test_search_with_filters(client, sample_index):
     assert all(r["tier"] == "buildin" for r in data["results"])
 
 
-@pytest.mark.asyncio
-async def test_search_with_sorting(client, sample_index):
+def test_search_with_sorting(client, sample_index):
     """Test search with sort options."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
     set_marketplace_index_path(sample_index)
 
-    response = client.get(
-        "/api/v1/marketplace/search?q=&sort_by=rating",
-        headers={"Authorization": "Bearer test_token"}
+    response = client.get(f"{P}/search?q=&sort_by=rating"
     )
     assert response.status_code == 200
     data = response.json()
@@ -105,15 +131,11 @@ async def test_search_with_sorting(client, sample_index):
     assert ratings == sorted(ratings, reverse=True)
 
 
-@pytest.mark.asyncio
-async def test_search_with_pagination(client, sample_index):
+def test_search_with_pagination(client, sample_index):
     """Test search pagination."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
     set_marketplace_index_path(sample_index)
 
-    response = client.get(
-        "/api/v1/marketplace/search?limit=1&offset=0",
-        headers={"Authorization": "Bearer test_token"}
+    response = client.get(f"{P}/search?limit=1&offset=0"
     )
     assert response.status_code == 200
     data = response.json()
@@ -121,12 +143,10 @@ async def test_search_with_pagination(client, sample_index):
     assert data["total"] == 2
 
 
-@pytest.mark.asyncio
-async def test_collections_endpoint(client):
+def test_collections_endpoint(client, sample_index):
     """Test /collections endpoint."""
-    response = client.get(
-        "/api/v1/marketplace/collections",
-        headers={"Authorization": "Bearer test_token"}
+    set_marketplace_index_path(sample_index)
+    response = client.get(f"{P}/collections"
     )
     assert response.status_code == 200
     data = response.json()
@@ -137,15 +157,11 @@ async def test_collections_endpoint(client):
     assert all("skills" in c for c in data["collections"])
 
 
-@pytest.mark.asyncio
-async def test_categories_endpoint(client, sample_index):
+def test_categories_endpoint(client, sample_index):
     """Test /categories endpoint."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
     set_marketplace_index_path(sample_index)
 
-    response = client.get(
-        "/api/v1/marketplace/categories",
-        headers={"Authorization": "Bearer test_token"}
+    response = client.get(f"{P}/categories"
     )
     assert response.status_code == 200
     data = response.json()
@@ -153,15 +169,11 @@ async def test_categories_endpoint(client, sample_index):
     assert isinstance(data["categories"], dict)
 
 
-@pytest.mark.asyncio
-async def test_tags_endpoint(client, sample_index):
+def test_tags_endpoint(client, sample_index):
     """Test /tags endpoint."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
     set_marketplace_index_path(sample_index)
 
-    response = client.get(
-        "/api/v1/marketplace/tags",
-        headers={"Authorization": "Bearer test_token"}
+    response = client.get(f"{P}/tags"
     )
     assert response.status_code == 200
     data = response.json()
@@ -174,15 +186,11 @@ async def test_tags_endpoint(client, sample_index):
 # is covered by tests/e2e/test_marketplace_single_install_route.py.
 
 
-@pytest.mark.asyncio
-async def test_search_facets(client, sample_index):
+def test_search_facets(client, sample_index):
     """Test that search includes facets for filtering."""
-    from core.console.corvin_console.routes.marketplace_discovery import set_marketplace_index_path
     set_marketplace_index_path(sample_index)
 
-    response = client.get(
-        "/api/v1/marketplace/search?q=",
-        headers={"Authorization": "Bearer test_token"}
+    response = client.get(f"{P}/search?q="
     )
     assert response.status_code == 200
     data = response.json()
@@ -192,10 +200,10 @@ async def test_search_facets(client, sample_index):
     assert "tags" in data["facets"]
 
 
-@pytest.mark.asyncio
-async def test_search_requires_auth(client):
+def test_search_requires_auth(client):
     """Test that search requires authentication."""
-    response = client.get("/api/v1/marketplace/search?q=test")
+    client.cookies.clear()
+    response = client.get(f"{P}/search?q=test")
     assert response.status_code in [401, 403]
 
 

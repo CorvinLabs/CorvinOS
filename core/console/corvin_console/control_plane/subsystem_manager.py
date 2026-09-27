@@ -4,6 +4,11 @@ Subsystem Manager — Start/pause/resume/stop subsystems.
 Stream 2 of Control Plane (Phase 9b).
 
 ADR-2029: User-Centric CorvinOS Control Plane — Stream 2
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the
+control-plane subsystem routes answer 501 now. This manager is an in-memory
+state table: "start"/"stop" change a dict entry and control no real
+subsystem, so it must not back an operator-facing surface as-is.
 """
 
 import logging

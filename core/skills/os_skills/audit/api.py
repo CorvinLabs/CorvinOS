@@ -1,5 +1,7 @@
 """Phase 4 API Endpoints for Learning Dashboard.
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
 GET  /api/v1/learning/skills              — skill generation history
 GET  /api/v1/learning/weights              — weight updates + history
 GET  /api/v1/learning/feedback             — feedback signals + impact

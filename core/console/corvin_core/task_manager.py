@@ -50,6 +50,11 @@ class QuotaExceededError(Exception):
 # engine existed (a bridge turn, ADR-2081) records the process.
 ENGINE_START_EVENTS = ("task.started", "task.engine_started")
 
+#: Substrings of ``/proc/<pid>/cmdline`` that identify an engine CLI process —
+#: every engine that records a pid on a task start event (Claude Code, Codex
+#: CLI, OpenCode, Copilot CLI). Hermes runs no subprocess and records none.
+ENGINE_CMDLINE_MARKERS: tuple[bytes, ...] = (b"claude", b"codex", b"opencode", b"copilot")
+
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -752,8 +757,12 @@ class TaskManager:
         Returns False when no pid was recorded (pending task that never
         started, or a missing event log) so true orphans are still reaped.
         ``os.kill(pid, 0)`` is the cross-platform liveness probe; on Linux we
-        additionally confirm the pid is a ``claude`` engine to dodge pid-reuse
-        (a dead task whose pid got recycled by an unrelated process).
+        additionally confirm the pid is an engine CLI (see
+        :data:`ENGINE_CMDLINE_MARKERS`) to dodge pid-reuse (a dead task whose
+        pid got recycled by an unrelated process). The check used to accept
+        only ``claude``, so a live Codex / OpenCode / Copilot turn — whose pid
+        the bridge records on ``task.engine_started`` — was reaped as an orphan
+        by the next adapter boot.
         """
         pid = self._last_started_pid(task_id)
         if pid is None or pid <= 0:
@@ -770,7 +779,7 @@ class TaskManager:
         # fall back to trusting the os.kill liveness result above.
         try:
             cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
-            if b"claude" not in cmdline:
+            if not any(m in cmdline for m in ENGINE_CMDLINE_MARKERS):
                 return False  # pid recycled by an unrelated process → orphan
         except OSError:
             pass

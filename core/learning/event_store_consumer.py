@@ -17,6 +17,15 @@ References:
   - ADR-0644 (audit-first)
   - ADR-0314 (learning event schema)
   - ADR-0613 (loop closure)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+``run_consumer_cycle`` defaults ``write_func`` to the real core-chain writer
+(``event_persistence.core_audit_event``); the injected ``write_func`` shape it
+documented, ``write_func(event_type, payload, tenant_id=...)``, matched no
+writer in the repo. ``read_batch`` calls ``event_store.query(tenant_id=,
+after_ts=, limit=)``, which NO EventStore in the repo implements
+(``core.learning.event_store.EventStore`` has ``query_events``) — so the
+consumer cannot read a real store yet; only duck-typed test doubles work.
 """
 from __future__ import annotations
 
@@ -318,10 +327,17 @@ class AuditFirstWriter:
 # ============================================================================
 
 
+def _core_chain_write(event_type: str, payload: dict, *, tenant_id: str) -> str:
+    """Default ``write_func``: the learning subsystem's fail-closed core writer."""
+    from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
+
+    return core_audit_event(event_type, tenant_id=tenant_id, details=payload)
+
+
 def run_consumer_cycle(
     tenant_id: str,
     event_store: Any,
-    write_func: Any,
+    write_func: Any = None,
 ) -> int:
     """Run one consumer cycle (read → aggregate → audit → emit).
 
@@ -336,6 +352,8 @@ def run_consumer_cycle(
     Raises:
         RuntimeError: If audit write fails (fail-closed)
     """
+    if write_func is None:
+        write_func = _core_chain_write
     consumer = EventStoreConsumer(tenant_id)
 
     # Read batch

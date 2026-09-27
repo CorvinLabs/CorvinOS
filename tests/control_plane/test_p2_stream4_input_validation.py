@@ -31,30 +31,32 @@ class MockSessionRecord:
 class TestConsentRequiredDecorators:
     """Verify all major routes have @consent_required decorators (via source code inspection)."""
 
-    def test_plugins_install_route_has_consent(self):
-        """Verify consent_required is in control_plane_plugins.py routes."""
-        import inspect
-        from corvin_console.routes import control_plane_plugins
-        source = inspect.getsource(control_plane_plugins)
-        # Count how many times consent_required appears in the routes
-        assert source.count('consent_required("plugin_management")') >= 6, \
-            "Expected at least 6 consent gates for plugin operations"
+    # 2026-09-27: the plugins / subsystems / snapshots control-plane routers
+    # were DEFUSED (their backends were a second plugin registry, an in-memory
+    # subsystem simulation and an empty-state snapshotter that "restored"
+    # nothing). The source-count assertions that stood here "proved" consent
+    # gates which, wired as Depends(consent_required(...)), read ``rec`` from
+    # the query string and 403'd every request. They now assert behaviour.
 
-    def test_subsystems_routes_have_consent(self):
-        """Verify consent_required is in control_plane_subsystems.py routes."""
-        import inspect
-        from corvin_console.routes import control_plane_subsystems
-        source = inspect.getsource(control_plane_subsystems)
-        assert source.count('consent_required("subsystem_control")') >= 6, \
-            "Expected at least 6 consent gates for subsystem operations"
+    @pytest.mark.parametrize("modname,path", [
+        ("control_plane_plugins", "/control-plane/plugins"),
+        ("control_plane_subsystems", "/control-plane/subsystems"),
+        ("control_plane_snapshots", "/control-plane/snapshots"),
+    ])
+    def test_defused_routers_need_a_session_and_fail_closed(self, modname, path):
+        import importlib
+        from types import SimpleNamespace
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from corvin_console import deps
 
-    def test_snapshots_routes_have_consent(self):
-        """Verify consent_required is in control_plane_snapshots.py routes."""
-        import inspect
-        from corvin_console.routes import control_plane_snapshots
-        source = inspect.getsource(control_plane_snapshots)
-        assert source.count('consent_required("control_plane_snapshot_operations")') >= 6, \
-            "Expected at least 6 consent gates for snapshot operations"
+        mod = importlib.import_module(f"corvin_console.routes.{modname}")
+        app = FastAPI()
+        app.include_router(mod.router)
+        assert TestClient(app).get(path).status_code == 401  # router-level session guard
+        app.dependency_overrides[deps.require_session_csrf_on_mutation] = lambda: SimpleNamespace(tenant_id="_default")
+        r = TestClient(app).get(path)
+        assert r.status_code == 501 and r.json()["detail"]["status"] == "not_implemented"
 
     def test_overrides_routes_have_consent(self):
         """Verify consent_required is in control_plane_overrides.py routes."""
@@ -230,15 +232,18 @@ class TestSnapshotRestoreLogic:
 
     @pytest.mark.asyncio
     async def test_restore_snapshot_returns_state(self):
-        """Snapshot restore must return the restored state."""
-        from core.control_plane.snapshot_manager import SnapshotManager
+        """A valid snapshot is NOT reported restored: nothing applies snapshot
+        state, so restore fails closed (it used to answer status "restored"
+        while restoring nothing — adversarial review 2026-09-27)."""
+        from core.control_plane.snapshot_manager import (
+            SnapshotManager, SnapshotRestoreNotImplemented,
+        )
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
             audit = MockAuditBackendForTests()
             manager = SnapshotManager(audit, tmpdir)
 
-            # Create snapshot with specific state
             state = {
                 "intent": {"test": "value"},
                 "plugins": {"p1": "enabled"},
@@ -253,23 +258,18 @@ class TestSnapshotRestoreLogic:
                 creator_id="user1",
                 tenant_id="_default",
             )
-
             snapshot_id = result["snapshot_id"]
 
-            # Restore it
-            restore_result = await manager.restore_snapshot(
-                snapshot_id=snapshot_id,
-                tenant_id="_default",
-                approver_id="admin",
-            )
-
-            # Verify state was restored
-            assert restore_result["status"] == "restored"
-            restored_state = restore_result["restored_state"]
-            assert restored_state["intent"] == {"test": "value"}
-            assert restored_state["plugins"] == {"p1": "enabled"}
-            assert restored_state["subsystems"] == {"s1": "running"}
-            assert restored_state["overrides"] == {"o1": "approved"}
+            with pytest.raises(SnapshotRestoreNotImplemented):
+                await manager.restore_snapshot(
+                    snapshot_id=snapshot_id,
+                    tenant_id="_default",
+                    approver_id="admin",
+                )
+            # the stored state is intact
+            details = manager.get_snapshot_details(snapshot_id, "_default")
+            assert details["plugin_state"] == {"p1": "enabled"}
+            assert details["override_state"] == {"o1": "approved"}
 
     @pytest.mark.asyncio
     async def test_restore_verifies_checksum(self):

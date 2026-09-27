@@ -1,5 +1,10 @@
 """Phase 3 k=5: Plugin Distribution & Update — Canary Rollout + Auto-Rollback (ADR-0776).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``grep -rn PluginDistributionManager`` outside tests finds only the equally
+unwired ``plugin_learning_loop.py``. Nothing downloads, installs or routes users
+to a version; "deploy" / "rollback" change IN-MEMORY bookkeeping only.
+
 This module manages plugin updates with canary deployment and learning-based auto-rollback:
 1. Registry: fetch latest version + signature daily
 2. Rollback: keep N−1 versions, instant downgrade on failure
@@ -7,21 +12,37 @@ This module manages plugin updates with canary deployment and learning-based aut
 4. Auto-rollback: error rate >2% triggers global revert (all users)
 5. Learning loop: confidence per version, auto-disable if <0.4
 
-Fail-closed: any distribution error is logged, never propagates to deployment.
-Audit-first: every version check, deployment, rollback is logged (ADR-0232).
+Fail-closed: an unknown/unverified/disabled version is refused (ValueError).
+Audit-first: every deployment, rollback and disable is recorded on the tenant
+chain (``core/deployment/audit_sink.py``) BEFORE the bookkeeping changes;
+``AuditWriteFailed`` propagates. The in-memory ``_deployment_history`` is a
+read model, not the audit trail.
 Tenant-scoped: all deployments filtered by tenant_id (GDPR Art. 32).
 """
 
 from __future__ import annotations
 
 import logging
+import math
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, List
 from uuid import uuid4
 
+from core.deployment import audit_sink
+
 logger = logging.getLogger(__name__)
+
+audit_sink.register_events({
+    "marketplace.plugin_deployed": frozenset({"plugin_id", "version", "strategy", "user_count"}),
+    "marketplace.plugin_deploy_refused": frozenset({"plugin_id", "version", "strategy", "reason"}),
+    "marketplace.plugin_rolled_back": frozenset({"plugin_id", "version", "from_version", "strategy", "reason"}),
+    "marketplace.plugin_version_disabled": frozenset({"plugin_id", "version", "confidence", "threshold"}),
+})
+
+_LATENCY_WINDOW = 1000
 
 
 class DeploymentStrategy(Enum):
@@ -71,7 +92,7 @@ class HealthMetric:
     crash_rate: float  # 0.0-1.0 (crashes / total invocations)
     latency_p99: int  # 99th percentile latency (ms)
     user_feedback_score: float  # -1.0 to 1.0 (likes vs dislikes)
-    confidence: float  # From ConfidenceOptimizer (k=2)
+    confidence: Optional[float]  # From ConfidenceOptimizer (k=2); None = not measured
     n_invocations: int
     timestamp: datetime = field(default_factory=datetime.now)
 
@@ -133,6 +154,29 @@ class PluginDistributionManager:
         # Canary tracking: {plugin_id → (version, start_time, error_count, total_count)}
         self._active_canaries: dict[str, tuple[str, datetime, int, int]] = {}
 
+        # Last known tenant user count per plugin (for rollback events).
+        self._user_counts: dict[str, int] = {}
+        # Versions disabled by the confidence gate — never deployed again.
+        self._disabled_versions: set[tuple[str, str]] = set()
+        self._latencies: dict[tuple[str, str], deque] = {}
+
+    def _audit(self, event_type: str, details: dict, severity: str = "INFO") -> None:
+        audit_sink.emit(event_type, {**details, "lom": f"PluginDistributionManager.{event_type}"},
+                        tenant_id=self.tenant_id, severity=severity)
+
+    def _refuse(self, plugin_id: str, version: str, strategy: DeploymentStrategy,
+                reason_code: str, message: str) -> None:
+        self._audit("marketplace.plugin_deploy_refused", {
+            "plugin_id": plugin_id, "version": version,
+            "strategy": strategy.value, "reason": reason_code,
+        }, severity="WARNING")
+        self._deployment_history.append(DeploymentEvent(
+            plugin_id=plugin_id, version=version, strategy=strategy, user_count=0,
+            percent_users=0.0, status="failure", error_msg=message,
+        ))
+        logger.error(f"Deployment failed: {message}")
+        raise ValueError(message)
+
     def register_version(self, plugin_version: PluginVersion) -> None:
         """Register a new plugin version (from registry fetch).
 
@@ -184,38 +228,19 @@ class PluginDistributionManager:
         if not plugin_id or not version:
             raise ValueError("plugin_id and version required")
 
-        # Lookup version
         key = (plugin_id, version)
         if key not in self._version_registry:
-            event = DeploymentEvent(
-                plugin_id=plugin_id,
-                version=version,
-                strategy=strategy,
-                user_count=0,
-                percent_users=0.0,
-                status="failure",
-                error_msg=f"Version {version} not found in registry",
-            )
-            self._deployment_history.append(event)
-            logger.error(f"Deployment failed: version {version} not found")
-            raise ValueError(f"Version {version} not found")
-
+            self._refuse(plugin_id, version, strategy, "version_not_found",
+                         f"Version {version} not found in registry")
         plugin_version = self._version_registry[key]
 
         # Verify signature (fail-closed if not verified)
         if not plugin_version.signature_verified:
-            event = DeploymentEvent(
-                plugin_id=plugin_id,
-                version=version,
-                strategy=strategy,
-                user_count=0,
-                percent_users=0.0,
-                status="failure",
-                error_msg="Signature not verified",
-            )
-            self._deployment_history.append(event)
-            logger.error(f"Deployment failed: signature not verified for {version}")
-            raise ValueError("Signature not verified")
+            self._refuse(plugin_id, version, strategy, "signature_not_verified",
+                         "Signature not verified")
+        if key in self._disabled_versions:
+            self._refuse(plugin_id, version, strategy, "version_disabled",
+                         f"Version {version} is disabled (low confidence)")
 
         # Calculate affected users
         if strategy == DeploymentStrategy.CANARY:
@@ -225,7 +250,13 @@ class PluginDistributionManager:
             affected_users = total_user_count
             percent = 100.0
 
-        # Create deployment event
+        # Audit FIRST — the bookkeeping changes only after the record committed.
+        self._audit("marketplace.plugin_deployed", {
+            "plugin_id": plugin_id, "version": version,
+            "strategy": strategy.value, "user_count": affected_users,
+        })
+        self._user_counts[plugin_id] = total_user_count
+
         event = DeploymentEvent(
             plugin_id=plugin_id,
             version=version,
@@ -280,16 +311,20 @@ class PluginDistributionManager:
                 crash_rate=0.0,
                 latency_p99=0,
                 user_feedback_score=0.0,
-                confidence=0.5,
+                confidence=None,  # nothing measured a confidence (was a fixed 0.5)
                 n_invocations=0,
             )
 
         metric = self._health_metrics[key]
 
-        # Simulate metric update (in production: proper aggregation)
         n = metric.n_invocations + 1
         error_rate = (metric.error_rate * metric.n_invocations + (0 if success else 1)) / n
-        latency_p99 = max(metric.latency_p99, latency_ms)  # Simplified
+        # Real nearest-rank p99 over a bounded window (was ``max`` of all
+        # latencies ever seen, which is neither a p99 nor able to go down).
+        window = self._latencies.setdefault(key, deque(maxlen=_LATENCY_WINDOW))
+        window.append(int(latency_ms))
+        ordered = sorted(window)
+        latency_p99 = ordered[max(1, math.ceil(0.99 * len(ordered))) - 1]
 
         updated_metric = HealthMetric(
             plugin_id=plugin_id,
@@ -308,24 +343,26 @@ class PluginDistributionManager:
             canary_version, start_time, error_count, total_count = self._active_canaries[
                 plugin_id
             ]
-            if not success:
-                error_count += 1
-            total_count += 1
+            if version == canary_version:
+                if not success:
+                    error_count += 1
+                total_count += 1
 
             # Calculate error rate
             canary_error_rate = error_count / total_count if total_count > 0 else 0.0
 
-            # Auto-rollback if error rate exceeds threshold
-            if canary_error_rate > self.rollback_error_threshold:
+            # Auto-rollback if error rate exceeds threshold. Only a failure of
+            # the CANARY version counts, and rolling back a canary means
+            # aborting it (its users return to the current stable version).
+            # It used to call ``rollback_version``, which downgraded the STABLE
+            # version one step — and raised ValueError from inside
+            # ``record_invocation`` when no stable version existed.
+            if version == canary_version and canary_error_rate > self.rollback_error_threshold:
                 logger.warning(
                     f"Canary error rate {canary_error_rate:.1%} exceeds threshold "
-                    f"{self.rollback_error_threshold:.1%} — rolling back"
+                    f"{self.rollback_error_threshold:.1%} — aborting canary"
                 )
-                self.rollback_version(
-                    plugin_id,
-                    reason=f"Error rate {canary_error_rate:.1%}",
-                )
-                del self._active_canaries[plugin_id]
+                self.abort_canary(plugin_id, reason="canary_error_rate_exceeded")
             else:
                 # Update canary tracking
                 self._active_canaries[plugin_id] = (
@@ -352,35 +389,65 @@ class PluginDistributionManager:
         Raises:
             ValueError: If no previous version available (fail-closed)
         """
-        if plugin_id not in self._deployed_versions:
-            raise ValueError(f"Plugin {plugin_id} not deployed")
-
-        current_version, previous_version = self._deployed_versions[plugin_id]
-
-        if not previous_version:
+        current_version, previous_version = self._deployed_versions.get(plugin_id, (None, None))
+        if not current_version or not previous_version:
             raise ValueError(f"No previous version available for {plugin_id}")
 
-        # Deploy previous version
+        total = self._user_counts.get(plugin_id, 0)
+        self._audit("marketplace.plugin_rolled_back", {
+            "plugin_id": plugin_id, "version": previous_version,
+            "from_version": current_version, "strategy": DeploymentStrategy.ROLLBACK.value,
+            "reason": "manual_rollback",
+        }, severity="WARNING")
         event = DeploymentEvent(
             plugin_id=plugin_id,
             version=previous_version,
             strategy=DeploymentStrategy.ROLLBACK,
-            user_count=1000,  # All users
+            user_count=total,  # was a hard-coded 1000
             percent_users=100.0,
             status="success",
             error_msg=None,
             reason=reason,
         )
         self._deployment_history.append(event)
-
-        # Update tracked version
         self._deployed_versions[plugin_id] = (previous_version, current_version)
 
         logger.warning(
             f"Rolled back: {plugin_id} {current_version} → {previous_version} ({reason})"
         )
-
         return event
+
+    def abort_canary(self, plugin_id: str, reason: str = "canary_aborted") -> DeploymentEvent:
+        """Abort the active canary of ``plugin_id``; stable version is untouched.
+
+        Raises:
+            ValueError: If no canary is active
+        """
+        if plugin_id not in self._active_canaries:
+            raise ValueError(f"No active canary for {plugin_id}")
+        canary_version = self._active_canaries[plugin_id][0]
+        stable = self._deployed_versions.get(plugin_id, (None, None))[0]
+        self._audit("marketplace.plugin_rolled_back", {
+            "plugin_id": plugin_id, "version": stable or "",
+            "from_version": canary_version, "strategy": DeploymentStrategy.CANARY.value,
+            "reason": reason,
+        }, severity="WARNING")
+        del self._active_canaries[plugin_id]
+        event = DeploymentEvent(
+            plugin_id=plugin_id,
+            version=stable or "",
+            strategy=DeploymentStrategy.ROLLBACK,
+            user_count=max(1, int(self._user_counts.get(plugin_id, 0) * self.canary_percentage)),
+            percent_users=self.canary_percentage * 100,
+            status="rollback",
+            error_msg=None,
+            reason=reason,
+        )
+        self._deployment_history.append(event)
+        return event
+
+    def is_canary_active(self, plugin_id: str) -> bool:
+        return plugin_id in self._active_canaries
 
     def auto_disable_if_low_confidence(
         self,
@@ -401,18 +468,23 @@ class PluginDistributionManager:
         key = (plugin_id, version)
         metric = self._health_metrics.get(key)
 
-        if not metric or metric.confidence >= confidence_threshold:
+        # No measured confidence → no decision (never disable/keep on a guess).
+        if not metric or metric.confidence is None or metric.confidence >= confidence_threshold:
             return False
 
-        # Auto-disable
+        # It used to log "Auto-disabled" and return True while disabling
+        # nothing; now the version is really refused by ``deploy_version``.
+        self._audit("marketplace.plugin_version_disabled", {
+            "plugin_id": plugin_id, "version": version,
+            "confidence": metric.confidence, "threshold": confidence_threshold,
+        }, severity="WARNING")
+        self._disabled_versions.add(key)
+        if self._active_canaries.get(plugin_id, (None,))[0] == version:
+            self.abort_canary(plugin_id, reason="version_disabled")
         logger.warning(
             f"Auto-disabled {plugin_id} v{version} "
             f"(confidence {metric.confidence:.2f} < {confidence_threshold})"
         )
-
-        # Would notify user here
-        # For now, just log
-
         return True
 
     def get_health_metrics(self, plugin_id: str, version: str) -> Optional[HealthMetric]:

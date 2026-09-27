@@ -5,7 +5,7 @@
 **Status:** PHASE 1 WIRED (2026-09-26)
 - ✅ L5 (Delegation Routing): `os.delegation_router` — shadow mode active
 - ✅ L10 (Context Adaptation): `os.context_adapter` — shadow mode active, audited
-- 🟡 L22 (Workflow Optimization): not yet built
+- 🟡 L22 (Workflow Optimization): not wired — a draft `core/skills/os_skills/workflow_optimizer/skill.py` exists but has no production caller as of 2026-09-27 (adversarial review)
 - 🟡 L16 (Security Orchestration): not yet built
 - 🟡 L34 (Data Flow Guard): not yet built
 
@@ -19,7 +19,7 @@
 |---|---|---|---|
 | `os.delegation_router` | L5 | Route tasks: native, ACS, or TDE | ✅ Wired (shadow) |
 | `os.context_adapter` | L10 | Inject context per agent type | ✅ Wired (shadow) |
-| `os.workflow_optimizer` | L22 | Parallelize vs. serialize multi-worker tasks | Not built |
+| `os.workflow_optimizer` | L22 | Parallelize vs. serialize multi-worker tasks | Not wired (draft module, no production caller as of 2026-09-27) |
 | `os.security_orchestrator` | L16 | Detect threat patterns, suggest policies | Not built |
 | `os.flow_guard` | L34 | Learn safe data flow shapes | Not built |
 

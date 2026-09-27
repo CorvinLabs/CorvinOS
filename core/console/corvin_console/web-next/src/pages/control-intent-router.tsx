@@ -7,14 +7,10 @@
 import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3,
-  TrendingUp,
   AlertCircle,
   Copy,
   RefreshCw,
   CheckCircle,
-  Clock,
-  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +18,16 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
 
+// No backend serves this path on this build: the ADR-2028 intent router is
+// mounted at /v1/console/intents/{health,recent} (routes/intents.py), which has
+// no per-dispatch-path stats or reset. A 404 therefore renders "not available
+// on this build" and stops polling — it used to poll a 404 every 3 s and show
+// a red "Failed to load" card. Not linked from the sidebar (panel-nav-wiring
+// NAV_EXEMPT) until a stats route exists.
 const API_BASE = "/v1/console/control-plane/intent-router";
+
+/** Thrown by the stats query when the backend route is absent. */
+export class IntentRouterUnavailable extends Error {}
 
 interface DispatchPath {
   path_id: "skill_gen" | "autonomy" | "feedback";
@@ -58,10 +63,13 @@ export default function ControlIntentRouterPage() {
     queryKey: ["control-intent-router"],
     queryFn: async () => {
       const res = await fetch(`${API_BASE}/stats`);
+      if (res.status === 404) throw new IntentRouterUnavailable("not available");
       if (!res.ok) throw new Error("Failed to load router stats");
       return res.json();
     },
-    refetchInterval: autoRefresh ? 3000 : false,
+    retry: false,
+    refetchInterval: (q) =>
+      autoRefresh && !(q.state.error instanceof IntentRouterUnavailable) ? 3000 : false,
     staleTime: 1000,
   });
 
@@ -92,6 +100,21 @@ export default function ControlIntentRouterPage() {
     navigator.clipboard.writeText(text);
     toast({ title: "Copied to clipboard" });
   };
+
+  if (error instanceof IntentRouterUnavailable) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-6 p-6">
+        <header>
+          <h1 className="font-serif text-3xl font-light tracking-tight">Intent Router</h1>
+        </header>
+        <Card>
+          <CardContent className="pt-6 text-sm text-muted-foreground" data-testid="intent-router-unavailable">
+            Intent router statistics are not available on this build.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (error) {
     return (

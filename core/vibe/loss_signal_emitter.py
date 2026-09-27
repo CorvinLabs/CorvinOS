@@ -1,4 +1,8 @@
-"""Loss Signal Emitter — Real-time alert generation for production monitoring.
+"""
+Loss Signal Emitter — Real-time alert generation for production monitoring.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the only
+importer is core/console/routes/learning_dashboard.py, which no app mounts.
 
 Detects and emits four critical loss signals:
   1. Latency regression (p99 spike >20%) → escalate or rollback
@@ -13,11 +17,14 @@ References: ADR-0722 (loss signals), ADR-0232 (audit).
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Optional, Dict, List, Any, Protocol
+from collections import deque
+from typing import Optional, Dict, List, Any, Protocol, Deque
 from datetime import datetime, timedelta
 from enum import Enum
 import math
 import logging
+
+_MAX_SIGNALS = 10_000
 
 logger = logging.getLogger(__name__)
 
@@ -116,13 +123,11 @@ class LossSignalEmitter:
         Args:
             audit_backend: Audit chain backend. If None, uses NoOpAudit (fail-closed for tests).
         """
-        self.audit_backend = audit_backend or _NoOpAudit()
-        self.signals: List[LossSignal] = []
-        self.alerts_by_type: Dict[str, List[LossSignal]] = {
-            "latency": [],
-            "confidence": [],
-            "feedback": [],
-            "ab_test": [],
+        self.audit_backend = audit_backend or _default_audit()
+        # Bounded: an in-process view, never an unbounded store.
+        self.signals: Deque[LossSignal] = deque(maxlen=_MAX_SIGNALS)
+        self.alerts_by_type: Dict[str, Deque[LossSignal]] = {
+            k: deque(maxlen=_MAX_SIGNALS) for k in ("latency", "confidence", "feedback", "ab_test")
         }
 
     def emit_latency_signal(
@@ -372,7 +377,7 @@ class LossSignalEmitter:
 
         return signal
 
-    def get_recent_signals(self, minutes: int = 60) -> List[LossSignal]:
+    def get_recent_signals(self, minutes: int = 60, *, tenant_id: str) -> List[LossSignal]:
         """Get signals from last N minutes.
 
         Args:
@@ -385,11 +390,12 @@ class LossSignalEmitter:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
         recent = [
             s for s in self.signals
-            if datetime.fromisoformat(s.timestamp.replace("Z", "+00:00")) > cutoff
+            if s.tenant_id == tenant_id
+            and datetime.fromisoformat(s.timestamp.replace("Z", "+00:00")) > cutoff
         ]
         return sorted(recent, key=lambda s: s.timestamp, reverse=True)
 
-    def get_signals_by_type(self, signal_type: str) -> List[LossSignal]:
+    def get_signals_by_type(self, signal_type: str, *, tenant_id: str) -> List[LossSignal]:
         """Get all signals of a specific type.
 
         Args:
@@ -401,10 +407,10 @@ class LossSignalEmitter:
         if signal_type not in self.alerts_by_type:
             return []
 
-        signals = self.alerts_by_type[signal_type]
+        signals = [s for s in self.alerts_by_type[signal_type] if s.tenant_id == tenant_id]
         return sorted(signals, key=lambda s: s.timestamp, reverse=True)
 
-    def get_critical_signals(self) -> List[LossSignal]:
+    def get_critical_signals(self, *, tenant_id: str) -> List[LossSignal]:
         """Get all critical-severity signals.
 
         Returns:
@@ -412,21 +418,17 @@ class LossSignalEmitter:
         """
         critical = [
             s for s in self.signals
-            if s.severity == SignalSeverity.CRITICAL
+            if s.tenant_id == tenant_id and s.severity == SignalSeverity.CRITICAL
         ]
         return sorted(critical, key=lambda s: s.timestamp, reverse=True)
 
 
-class _NoOpAudit:
-    """No-op audit backend for testing (fail-closed: raises on write attempt)."""
+def _default_audit():
+    """THE tenant chain (forge writer). The former ``_NoOpAudit`` default
+    returned a fabricated hash and wrote nothing."""
+    from core.vibe._chain_audit import ForgeChainAudit
 
-    def write_event(self, event: Dict[str, Any]) -> Optional[str]:
-        """No-op: return a fake hash."""
-        return "test_hash_" + event.get("event_type", "unknown")[:8]
-
-    def last_hash(self) -> str:
-        """No-op: return empty hash."""
-        return ""
+    return ForgeChainAudit()
 
 
 # Singleton instance (thread-safe lazy initialization)

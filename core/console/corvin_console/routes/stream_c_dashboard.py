@@ -12,6 +12,16 @@ Phase 2: Real-time update mechanism + SLA <100ms refresh
 Phase 3: Comparative analytics + multi-skill correlation
 
 References: ADR-2089 (Stream C Design), ADR-0297 (Dashboard Observability)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — no
+route, app or subscriber constructs ``StreamCDashboard``; only
+tests/e2e/test_phase3_e2e_complete_loop.py does.
+
+Defused 2026-09-27: every config delta was reported ``applied: True`` although
+this class only records what the optimizer PROPOSED (applied-ness is not
+tracked → ``None``); the trend gauge reported "stable" with zero data
+(→ "no_data"); and ``_config_deltas`` / ``_trends`` were read and written
+outside the lock the class claims makes it thread-safe.
 """
 
 from typing import Optional, Dict, List
@@ -72,6 +82,8 @@ class StreamCDashboard:
           ]
         }
         """
+        with self._lock:
+            deltas = list(self._config_deltas.items())
         return {
             "panel": "config_delta_chart",
             "title": "Learning Rate Adjustments",
@@ -79,9 +91,9 @@ class StreamCDashboard:
                 {
                     "skill_id": skill_id,
                     "config_delta": delta,
-                    "applied": True,  # Phase 2: track applied status
+                    "applied": None,  # not tracked: this is the PROPOSED delta
                 }
-                for skill_id, delta in self._config_deltas.items()
+                for skill_id, delta in deltas
             ],
             "sla_ms": 100,
         }
@@ -102,13 +114,18 @@ class StreamCDashboard:
           }
         }
         """
-        improving = sum(1 for t in self._trends.values() if t == "improving")
-        stable = sum(1 for t in self._trends.values() if t == "stable")
-        degrading = sum(1 for t in self._trends.values() if t == "degrading")
+        with self._lock:
+            trends = list(self._trends.values())
+        improving = sum(1 for t in trends if t == "improving")
+        stable = sum(1 for t in trends if t == "stable")
+        degrading = sum(1 for t in trends if t == "degrading")
 
-        overall = "improving" if improving > degrading else (
-            "degrading" if degrading > improving else "stable"
-        )
+        if not trends:
+            overall = "no_data"  # nothing ingested — not "stable"
+        else:
+            overall = "improving" if improving > degrading else (
+                "degrading" if degrading > improving else "stable"
+            )
 
         return {
             "panel": "trend_gauge",
@@ -133,16 +150,14 @@ class StreamCDashboard:
             return False
 
         try:
-            # Record confidence score
-            self._confidence_series.append({
-                "timestamp": event.timestamp.isoformat(),
-                "skill_id": event.skill_id,
-                "confidence_delta": event.confidence_delta,
-                "trend": event.trend,
-            })
-
-            # Update trend cache
-            self._trends[event.skill_id] = event.trend
+            with self._lock:
+                self._confidence_series.append({
+                    "timestamp": event.timestamp.isoformat(),
+                    "skill_id": event.skill_id,
+                    "confidence_delta": event.confidence_delta,
+                    "trend": event.trend,
+                })
+                self._trends[event.skill_id] = event.trend
 
             # Phase 2: Emit to subscribers
             logger.debug(f"Stream C ingested event: {event.skill_id} trend={event.trend}")
@@ -163,8 +178,8 @@ class StreamCDashboard:
             return False
 
         try:
-            # Record config delta
-            self._config_deltas[config.skill_id] = config.config_delta
+            with self._lock:
+                self._config_deltas[config.skill_id] = config.config_delta
 
             logger.debug(
                 f"Stream C ingested config: {config.skill_id} "

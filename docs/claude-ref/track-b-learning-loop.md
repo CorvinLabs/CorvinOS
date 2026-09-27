@@ -5,6 +5,15 @@
 Track B implements the complete Learning Loop infrastructure for CorvinOS Skills, enabling continuous improvement through user feedback, automated config optimization, and convergence detection.
 
 **Status:** Phase 3 (Gates 1-5 Complete) — Ready for E2E Proof  
+**Status note (2026-09-27, adversarial review):** the Learning Dashboard API
+(`core/console/routes/learning_dashboard.py`, `/api/v1/console/learning/*`) has
+no production caller — it lives outside the `corvin_console` package and no app
+mounts its router. Its handlers used to fabricate results ("accepted",
+"queued", `all_hashes_valid: True`); every route now answers 501
+`not_implemented`. The live learning surface is
+`core/console/corvin_console/routes/method_discovery_api.py`
+(`/v1/console/learning/*`, session-bound; `POST /feedback` requires the
+`learning_feedback` consent scope).  
 **ADR:** ADR-0676 (Phase 3 Background Learning Daemon)  
 **Related:** ADR-0314 (Learning Infrastructure), ADR-0532 (OS-Skills Architecture)
 
@@ -38,7 +47,7 @@ Next Skill Execution (with updated config)
 | **FeedbackBatcher** | `core/learning/feedback_batcher.py` | Buffer feedback, trigger optimization on threshold |
 | **ConfigApplier** | `core/learning/config_applier.py` | Apply config deltas, persist to JSONL, enable rollback |
 | **ConvergenceDetector** | `core/learning/skill_optimizer.py` (existing) | Track metrics, detect convergence (confidence + latency + error) |
-| **Learning Dashboard API** | `core/console/routes/learning_dashboard.py` | REST endpoints for feedback submission and optimization triggering |
+| **Learning Dashboard API** | `core/console/routes/learning_dashboard.py` | REST endpoints for feedback submission and optimization triggering — **NOT WIRED** (no app mounts it; routes answer 501) |
 
 ---
 
@@ -54,14 +63,20 @@ Design decisions documented:
 - Update triggering: Threshold-batched (10 feedback OR 1h timeout)
 - Loop architecture: Event-driven with idempotency
 
-### Gate 2: E2E Wiring Proof ✅
-**Files:** `core/console/routes/learning_dashboard.py`, `tests/test_track_b_gate2_e2e_wiring.py`  
+### Gate 2: E2E Wiring Proof ❌ (not met)
+**Files:** `core/console/routes/learning_dashboard.py` (never mounted)  
 **Commit:** cc975b5e
 
-Real entry points created:
+Entry points defined (never mounted — see the status note above; both now
+answer 501 `not_implemented`):
 - `POST /api/v1/console/learning/feedback` — Submit user feedback
 - `POST /api/v1/console/learning/optimize` — Trigger skill config optimization
-- 16 E2E tests proving wiring
+
+The 16 tests that called this router directly (`tests/test_track_b_gate2_e2e_wiring.py`)
+were deleted in the 2026-09-27 adversarial review: they bypassed the transport
+boundary and proved no production wiring. The live feedback surface is
+`POST /v1/console/learning/feedback` in `core/console/corvin_console/routes/method_discovery_api.py`
+(session + CSRF + the `learning_feedback` consent scope).
 
 ### Gate 3: Red→Green ✅
 **Files:** `core/learning/feedback_collector.py`, `core/learning/feedback_batcher.py`, `core/learning/config_applier.py`, `tests/test_track_b_gate3_red_green.py`  

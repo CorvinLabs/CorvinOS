@@ -1,4 +1,24 @@
-"""Snapshot Manager — Save/restore Control Plane state (ADR-2029 Stream 4)."""
+"""Snapshot Manager — Save/restore Control Plane state (ADR-2029 Stream 4).
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The
+console's snapshot routes answer 501 and use a different module
+(``corvin_console/control_plane``); nothing constructs this class outside tests.
+
+Defused 2026-09-27 (adversarial review):
+
+* ``restore_snapshot`` returned ``status: "restored"`` while applying NOTHING —
+  no component takes a snapshot's state and puts it back. It now verifies the
+  snapshot (tenant, checksum), records ``snapshot_restore_failed`` with
+  ``reason=not_implemented`` and raises :class:`SnapshotRestoreNotImplemented`.
+* audit went to whatever object was injected (tests passed an in-memory list);
+  by default it now commits to the tenant's core chain through
+  ``audit_chain_provider.get_audit_chain_writer`` (the forge writer) and a
+  record that does not commit raises. Free-text snapshot names are not audited.
+* the id counter restarted at 0 per instance, so after
+  ``load_snapshots_from_disk`` the next snapshot overwrote ``snap_000000`` on
+  disk; ids now skip every id already in memory or on disk.
+* ``get_audit_log`` always answered ``[]``; it now reads the tenant's chain.
+"""
 
 from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional, Any
@@ -10,6 +30,19 @@ import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+#: Content-free field sets (ids, hashes, sizes, codes). EVENT_SEVERITY entries
+#: for ``security_events.py`` (owner please add): snapshot_created INFO,
+#: snapshot_deleted INFO, snapshot_restore_failed WARNING.
+SNAPSHOT_EVENT_ALLOWLISTS: Dict[str, frozenset] = {
+    name: frozenset({"snapshot_id", "checksum", "size_bytes", "tenant_id",
+                     "reason", "event_id", "expected", "calculated"})
+    for name in ("snapshot_created", "snapshot_deleted", "snapshot_restore_failed")
+}
+
+
+class SnapshotRestoreNotImplemented(NotImplementedError):
+    """No component applies snapshot state; a restore is never reported done."""
 
 
 @dataclass(frozen=True)
@@ -42,13 +75,17 @@ class SnapshotManager:
     - Enforce tenant isolation
     """
 
-    def __init__(self, audit_backend, storage_path: str):
+    def __init__(self, audit_backend=None, storage_path: str = ""):
         """Initialize snapshot manager.
 
         Args:
-            audit_backend: Backend for audit event logging
+            audit_backend: ``None`` → the tenant's core audit chain (default).
+                An injected backend (tests) must expose ``write_event_dict``
+                (the ``AuditChainWriter`` API) or an async ``log_event``.
             storage_path: Directory for snapshot storage
         """
+        if not storage_path:
+            raise ValueError("storage_path is required")
         self.audit = audit_backend
         self.storage_path = storage_path
         self.snapshots: Dict[str, Snapshot] = {}
@@ -83,8 +120,7 @@ class SnapshotManager:
         if not isinstance(control_plane_state, dict):
             raise ValueError("control_plane_state must be a dict")
 
-        snapshot_id = f"snap_{self._snapshot_counter:06d}"
-        self._snapshot_counter += 1
+        snapshot_id = self._next_snapshot_id()
 
         # Extract state components (fail-closed if missing)
         intent_state = control_plane_state.get("intent", {})
@@ -125,17 +161,13 @@ class SnapshotManager:
         # Persist to disk (compressed)
         self._save_snapshot_to_disk(snapshot)
 
-        # Log audit event
-        await self.audit.log_event(
-            "snapshot_created",
-            {
+        # Log audit event (the free-text name/description is never audited)
+        await self._audit_event(
+            "snapshot_created", tenant_id, user_id=creator_id,
+            details={
                 "snapshot_id": snapshot_id,
-                "name": name,
                 "checksum": checksum,
                 "size_bytes": snapshot.size_bytes,
-                "tenant_id": tenant_id,
-                "created_by": creator_id,
-                "timestamp": timestamp,
             },
         )
 
@@ -161,11 +193,11 @@ class SnapshotManager:
             tenant_id: Tenant scope
             approver_id: User ID approving restoration
 
-        Returns:
-            Status dict with restored state
-
         Raises:
             ValueError: If snapshot not found, corrupted, or checksum mismatch
+            SnapshotRestoreNotImplemented: ALWAYS for a valid snapshot — no
+                component applies snapshot state, so nothing is restored and
+                success is never reported.
         """
         if snapshot_id not in self.snapshots:
             raise ValueError(f"Snapshot {snapshot_id} not found")
@@ -189,46 +221,31 @@ class SnapshotManager:
         calculated_checksum = hashlib.sha256(state_json.encode()).hexdigest()
 
         if calculated_checksum != snapshot.checksum:
-            await self.audit.log_event(
-                "snapshot_restore_failed",
-                {
+            await self._audit_event(
+                "snapshot_restore_failed", tenant_id, user_id=approver_id,
+                details={
                     "snapshot_id": snapshot_id,
                     "reason": "checksum_mismatch",
                     "expected": snapshot.checksum,
                     "calculated": calculated_checksum,
-                    "tenant_id": tenant_id,
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
                 },
             )
             raise ValueError("Snapshot checksum mismatch (data corrupted)")
 
-        # Log restore event
-        await self.audit.log_event(
-            "snapshot_restored",
-            {
+        # The snapshot is intact — but nothing can apply it. Record the refusal
+        # and fail; never report a restore that did not happen.
+        await self._audit_event(
+            "snapshot_restore_failed", tenant_id, user_id=approver_id,
+            details={
                 "snapshot_id": snapshot_id,
-                "snapshot_name": snapshot.name,
-                "approver_id": approver_id,
-                "tenant_id": tenant_id,
-                "original_creator": snapshot.created_by,
+                "reason": "not_implemented",
                 "checksum": snapshot.checksum,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
             },
         )
-
-        logger.info(f"Snapshot {snapshot_id} restored by {approver_id}")
-
-        return {
-            "snapshot_id": snapshot_id,
-            "status": "restored",
-            "restored_at": datetime.utcnow().isoformat() + "Z",
-            "restored_state": {
-                "intent": snapshot.intent_state,
-                "plugins": snapshot.plugin_state,
-                "subsystems": snapshot.subsystem_state,
-                "overrides": snapshot.override_state,
-            },
-        }
+        raise SnapshotRestoreNotImplemented(
+            f"restore of {snapshot_id} is not implemented: no component applies "
+            "snapshot state (nothing was restored)"
+        )
 
     async def list_snapshots(self, tenant_id: str) -> List[Dict]:
         """List all snapshots for a tenant.
@@ -309,16 +326,9 @@ class SnapshotManager:
         del self.snapshots[snapshot_id]
 
         # Log audit event
-        await self.audit.log_event(
-            "snapshot_deleted",
-            {
-                "snapshot_id": snapshot_id,
-                "snapshot_name": snapshot.name,
-                "deleted_by": approver_id,
-                "tenant_id": tenant_id,
-                "checksum": snapshot.checksum,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-            },
+        await self._audit_event(
+            "snapshot_deleted", tenant_id, user_id=approver_id,
+            details={"snapshot_id": snapshot_id, "checksum": snapshot.checksum},
         )
 
         logger.info(f"Snapshot {snapshot_id} deleted by {approver_id}")
@@ -406,17 +416,64 @@ class SnapshotManager:
         return asdict(snapshot)
 
     async def get_audit_log(self, tenant_id: str) -> List[Dict]:
-        """Get audit log for snapshots (returns empty list - audit events are logged separately).
+        """Snapshot records of ``tenant_id`` from its core audit chain.
 
-        Args:
-            tenant_id: Tenant scope
-
-        Returns:
-            List of audit events (currently empty - real implementation would query audit backend)
+        Raises:
+            NotImplementedError: an injected (non-chain) audit backend is in use
+                — there is no chain to read, and an empty list would claim
+                "no events".
         """
-        # In a real implementation, this would query the audit backend
-        # For now, return empty list (audit events are logged to audit_backend directly)
-        return []
+        if self.audit is not None:
+            raise NotImplementedError("audit log is only readable from the core chain")
+        from corvin_operator.bridges.shared.paths import tenant_audit_chain
+
+        chain = tenant_audit_chain(tenant_id)
+        if not chain.exists():
+            return []
+        out: List[Dict] = []
+        with open(chain, "r") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                details = rec.get("details") or {}
+                if (str(rec.get("event_type", "")).startswith("snapshot_")
+                        and details.get("tenant_id") == tenant_id):
+                    out.append(rec)
+        return out
+
+    # ── internals ────────────────────────────────────────────────────────
+
+    def _next_snapshot_id(self) -> str:
+        """Next free ``snap_NNNNNN`` — never one in memory or on disk."""
+        while True:
+            candidate = f"snap_{self._snapshot_counter:06d}"
+            self._snapshot_counter += 1
+            on_disk = os.path.exists(
+                os.path.join(self.storage_path, f"snapshot_{candidate}.json.gz"))
+            if candidate not in self.snapshots and not on_disk:
+                return candidate
+
+    async def _audit_event(self, event_type: str, tenant_id: str, *,
+                           user_id: Optional[str], details: Dict[str, Any]) -> None:
+        """Commit one record; raise if it does not (fail-closed)."""
+        backend = self.audit
+        if backend is None:
+            from core.compliance.audit_chain_provider import get_audit_chain_writer
+            from core.compliance.audit_chain_writer import _forge
+
+            se, _ = _forge()
+            for name, fields in SNAPSHOT_EVENT_ALLOWLISTS.items():
+                se.register_event_allowlist(name, fields)
+            backend = get_audit_chain_writer(tenant_id)
+        if hasattr(backend, "write_event_dict"):
+            backend.write_event_dict(event_type=event_type, tenant_id=tenant_id,
+                                     user_id=user_id, details=dict(details))
+        else:  # legacy injected test backend
+            payload = dict(details)
+            payload["tenant_id"] = tenant_id
+            await backend.log_event(event_type, payload)
 
     def load_snapshots_from_disk(self):
         """Load all snapshots from disk into memory (on startup).

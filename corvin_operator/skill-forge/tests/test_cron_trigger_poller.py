@@ -17,6 +17,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+import _skill_forge_ns  # noqa: F401 — registers corvin_operator.skill_forge
+
 from corvin_operator.skill_forge.autonomous import (
     LossTrigger,
     SkillLossTriggerDetector,
@@ -104,10 +106,16 @@ class TestRunOnce:
 
         assert triggers == []
 
-    def test_invalid_tenant_id_raises(self, poller):
-        """Test that invalid tenant ID raises ValueError."""
-        with pytest.raises(ValueError):
-            poller.run_once("invalid/../tenant")
+    def test_invalid_tenant_id_polls_nothing(self, poller):
+        """An invalid tenant id is refused: nothing is polled or triggered.
+
+        run_once's documented contract is "exceptions logged, don't crash,
+        retry next hour" — it returns [] rather than raising — and the
+        detector is never reached with the bad id.
+        """
+        poller.detector = Mock()
+        assert poller.run_once("invalid/../tenant") == []
+        poller.detector.detect_loss_signals.assert_not_called()
 
     def test_detector_exception_handled(self, poller):
         """Test that detector exceptions are caught and logged."""
@@ -183,14 +191,34 @@ class TestWriteAuditEvent:
         audit_file = audit_dir / "audit.jsonl"
         assert audit_file.exists()
 
-        with open(audit_file, "r") as f:
-            line = f.readline()
-            event = json.loads(line)
+        lines = audit_file.read_text().splitlines()
+        event = json.loads(lines[-1])
 
+        # A CHAINED record written by the core writer — never a raw line.
         assert event["event_type"] == "skill_forge_triggered_by_cron"
-        assert event["tenant_id"] == "_default"
-        assert event["skill_id"] == "os.delegation_router"
-        assert event["confidence"] == 0.65
+        assert event["hash"] and "prev_hash" in event
+        # the tenant is the chain file itself (tenant_audit_chain("_default"))
+        assert event["details"]["skill_id"] == "os.delegation_router"
+        assert event["details"]["confidence"] == 0.65
+        assert "_dropped_fields" not in event["details"]
+
+        from forge.security_events import verify_chain
+        ok = verify_chain(audit_file)
+        assert (ok[0] if isinstance(ok, tuple) else ok), ok
+
+    def test_audit_failure_blocks_forge_trigger(
+        self, poller, sample_loss_trigger, temp_corvin_home, monkeypatch
+    ):
+        """Audit-first: if the record cannot be written, no trigger file."""
+        import corvin_operator.skill_forge.automation.cron_trigger_poller as ctp
+
+        def boom(*_a, **_k):
+            raise RuntimeError("chain down")
+
+        monkeypatch.setattr(ctp, "_audit", boom)
+        poller._trigger_forge("_default", sample_loss_trigger)
+        trig = temp_corvin_home / "tenants" / "_default" / "global" / "skill-forge" / "triggers"
+        assert not (trig / f"{sample_loss_trigger.skill_id}.json").exists()
 
     def test_write_audit_event_creates_parent_dirs(
         self, poller, sample_loss_trigger, temp_corvin_home
@@ -359,3 +387,23 @@ class TestPollAllTenants:
         assert poller._last_poll_time is not None
         assert before_time <= poller._last_poll_time <= after_time
         assert poller._last_poll_count == 1
+
+
+def test_audit_for_non_process_tenant_is_written(temp_corvin_home, monkeypatch):
+    """The poller iterates every tenant in ONE process: a record for a tenant
+    other than CORVIN_TENANT_ID must still land in THAT tenant's chain (a
+    details.tenant_id would be refused by the core writer)."""
+    import corvin_operator.skill_forge.automation.cron_trigger_poller as ctp
+
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    trig = LossTrigger(skill_id="os.x", version="1", confidence=0.1,
+                       trigger_time=datetime.utcnow(), event_count=3, lookback_hours=24)
+    ctp._audit("tenant-b", "skill_forge_triggered_by_cron", {
+        "skill_id": trig.skill_id, "skill_version": trig.version,
+        "confidence": trig.confidence, "event_count": 3, "lookback_hours": 24,
+        "trigger_time": trig.trigger_time.isoformat(),
+    })
+    chain = temp_corvin_home / "tenants" / "tenant-b" / "global" / "forge" / "audit.jsonl"
+    rec = json.loads(chain.read_text().splitlines()[-1])
+    assert rec["event_type"] == "skill_forge_triggered_by_cron"
+

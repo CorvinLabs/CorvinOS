@@ -248,7 +248,7 @@ def case_lazy_prune_expired() -> None:
 
         # Hand-craft a store with an expired time_bounded entry by writing
         # the JSON directly — clamps in grant() would block sub-MIN_TTL.
-        path = consent._store_path("telegram", "999")
+        path = consent._store_path("telegram", "999", tenant_id="_default")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "stale": {
@@ -641,7 +641,7 @@ def test_store_corrupted_denies_all() -> None:
         import consent  # type: ignore
 
         # Write a corrupt JSON file to the store path
-        path = consent._store_path("telegram", "999")
+        path = consent._store_path("telegram", "999", tenant_id="_default")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{not valid json,,}")
 
@@ -678,7 +678,7 @@ def test_prune_retry_on_write_failure() -> None:
         import consent  # type: ignore
 
         # Hand-craft a store with an expired time_bounded entry
-        path = consent._store_path("telegram", "777")
+        path = consent._store_path("telegram", "777", tenant_id="_default")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "stale": {

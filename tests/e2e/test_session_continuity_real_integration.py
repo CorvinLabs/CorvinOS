@@ -21,6 +21,20 @@ from core.infinite_session.session_recovery import (
     ContextLossError,
 )
 from core.infinite_session.session_bridge_producer import SessionBridgeProducer
+from core.infinite_session.session_recovery import sign_snapshot
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    """Scratch CORVIN_HOME + a configured snapshot key (fail-closed without one)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("CORVIN_SNAPSHOT_KEY", "test-snapshot-key-not-default")
+
+
+def _write_signed(snapshot_file: Path, snapshot: Dict[str, Any]) -> None:
+    """Persist a snapshot the way SessionBridgeProducer does: HMAC-signed."""
+    snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_file.write_text(json.dumps({"snapshot": snapshot, "signature": sign_snapshot(snapshot)}))
 
 
 @pytest.mark.asyncio
@@ -55,23 +69,13 @@ async def test_session_n_to_n_plus_1_flow(tmp_path):
         "content_hash": "sha256_xyz123",
     }
 
-    # Step 1: Finalize turn with context (Session N)
-    producer = SessionBridgeProducer()
-
     # Create snapshot directory structure
     snapshot_dir = tmp_path / "snapshots"
     snapshot_file = snapshot_dir / tenant_id / task_id / "latest.json"
     snapshot_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Persist snapshot
-    signature = "test_signature_xyz"  # In real use, HMAC signature
-    snapshot_data = {
-        "snapshot": test_snapshot,
-        "signature": signature,
-    }
-
-    with open(snapshot_file, "w") as f:
-        json.dump(snapshot_data, f)
+    # Persist snapshot (HMAC-signed, as the producer does)
+    _write_signed(snapshot_file, test_snapshot)
 
     # Verify snapshot file created
     assert snapshot_file.exists()
@@ -122,11 +126,7 @@ async def test_snapshot_timestamp_validation(tmp_path):
     snapshot_file = snapshot_dir / tenant_id / task_id / "latest.json"
     snapshot_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(snapshot_file, "w") as f:
-        json.dump(
-            {"snapshot": stale_snapshot, "signature": "fake"},
-            f
-        )
+    _write_signed(snapshot_file, stale_snapshot)
 
     # Attempt recovery
     recovery_manager = SessionRecoveryManager(snapshot_dir=snapshot_dir)
@@ -160,11 +160,7 @@ async def test_snapshot_destination_validation(tmp_path):
     snapshot_file = snapshot_dir / tenant_id / task_id / "latest.json"
     snapshot_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(snapshot_file, "w") as f:
-        json.dump(
-            {"snapshot": wrong_snapshot, "signature": "fake"},
-            f
-        )
+    _write_signed(snapshot_file, wrong_snapshot)
 
     recovery_manager = SessionRecoveryManager(snapshot_dir=snapshot_dir)
 
@@ -215,20 +211,51 @@ async def test_cross_tenant_snapshot_rejected(tmp_path):
     }
 
     snapshot_dir = tmp_path / "snapshots"
-    snapshot_file = snapshot_dir / tenant_a / task_id / "latest.json"
-    snapshot_file.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(snapshot_file, "w") as f:
-        json.dump(
-            {"snapshot": snapshot_a, "signature": "fake"},
-            f
-        )
-
-    # Try to restore in tenant B
     recovery_manager = SessionRecoveryManager(snapshot_dir=snapshot_dir)
 
+    # (1) Path scoping: tenant A's snapshot is invisible to tenant B.
+    _write_signed(snapshot_dir / tenant_a / task_id / "latest.json", snapshot_a)
+    assert await recovery_manager.auto_restore_session_context(
+        tenant_id=tenant_b, task_id=task_id,
+    ) is None
+
+    # (2) A validly signed tenant-A snapshot planted under tenant B's path is
+    # rejected by the tenant check, not restored into tenant B.
+    _write_signed(snapshot_dir / tenant_b / task_id / "latest.json", snapshot_a)
     with pytest.raises(ContextLossError, match="Cross-tenant"):
         await recovery_manager.auto_restore_session_context(
             tenant_id=tenant_b,  # Different tenant
             task_id=task_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_forged_signature_rejected(tmp_path):
+    """A snapshot whose signature was not produced with the key is rejected."""
+    tenant_id, task_id = "_default", "forged"
+    snap = {
+        "tenant_id": tenant_id, "task_id": task_id,
+        "timestamp": datetime.utcnow().isoformat(), "content_hash": "x",
+    }
+    snapshot_dir = tmp_path / "snapshots"
+    f = snapshot_dir / tenant_id / task_id / "latest.json"
+    f.parent.mkdir(parents=True)
+    f.write_text(json.dumps({"snapshot": snap, "signature": "fake"}))
+    with pytest.raises(SnapshotVerificationError):
+        await SessionRecoveryManager(snapshot_dir=snapshot_dir).auto_restore_session_context(
+            tenant_id=tenant_id, task_id=task_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_restore_fails_closed_without_key(tmp_path, monkeypatch):
+    """No snapshot key configured → restore refuses (never verifies with a default)."""
+    tenant_id, task_id = "_default", "nokey"
+    snap = {"tenant_id": tenant_id, "task_id": task_id, "timestamp": datetime.utcnow().isoformat()}
+    snapshot_dir = tmp_path / "snapshots"
+    _write_signed(snapshot_dir / tenant_id / task_id / "latest.json", snap)
+    monkeypatch.delenv("CORVIN_SNAPSHOT_KEY")
+    with pytest.raises(ValueError, match="CORVIN_SNAPSHOT_KEY"):
+        await SessionRecoveryManager(snapshot_dir=snapshot_dir).auto_restore_session_context(
+            tenant_id=tenant_id, task_id=task_id,
         )

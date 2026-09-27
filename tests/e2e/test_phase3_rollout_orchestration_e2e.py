@@ -16,10 +16,20 @@ Test structure:
 - Learning loop integration (confidence updates, parameter optimization)
 - Audit trail verification (immutable, hash-chained, LoM-bound)
 - Operator gates (manual approvals at phase boundaries)
+
+Adversarial review 2026-09-27: the orchestrator no longer invents a 100 ms
+baseline, a 0.80 prior confidence, "0 audit violations", "latency stable" or an
+intact audit chain. These tests pin the fail-closed contract: unmeasured checks
+block Phase 2b activation, a live phase without a measured baseline rolls back,
+and every decision commits to the real tenant audit chain first (CORVIN_HOME is
+a per-test temp dir via tests/conftest.py).
 """
+
+import json
 
 import pytest
 from datetime import datetime, timezone, timedelta
+from core.deployment import audit_sink
 from core.deployment.phase3_rollout_orchestrator import (
     RolloutOrchestrator,
     SkillMetrics,
@@ -345,9 +355,31 @@ class TestPhase2bSkillActivation:
             metrics,
             days_at_100_pct=7,
             days_since_last_rollback=60,
+            audit_violations_in_window=0,
+            latency_sigma_ms=2.0,
         )
 
         assert can_activate is True
+
+    def test_phase_2b_unmeasured_checks_block_activation(self):
+        """Audit violations / latency stability that were NOT measured block
+        activation — they used to be hard-coded 0 / 0.0 and always passed."""
+        metrics = SkillMetrics(
+            skill_id="os.delegation_router",
+            phase=Phase.PHASE_2B_SKILL_PRIMARY,
+            agreement_rate=0.99,
+            confidence=0.99,
+            confidence_sigma=0.01,
+            feedback_count=5000,
+        )
+
+        can_activate, reasons = Phase2bActivationGate.evaluate_skill_activation(
+            "os.delegation_router", metrics, days_at_100_pct=30, days_since_last_rollback=60,
+        )
+
+        assert can_activate is False
+        assert any("Audit violations: not_measured" in r for r in reasons)
+        assert any("Latency stability: not_measured" in r for r in reasons)
 
     def test_phase_2b_skill_activation_threshold_security(self):
         """Test L44 security skill activation (confidence ≥0.95, highest threshold)"""
@@ -365,6 +397,8 @@ class TestPhase2bSkillActivation:
             metrics,
             days_at_100_pct=7,
             days_since_last_rollback=60,
+            audit_violations_in_window=0,
+            latency_sigma_ms=1.0,
         )
 
         assert can_activate is True
@@ -403,6 +437,7 @@ class TestRollbackTriggers:
         """Test rollback triggers on correctness drop >2%"""
         orch = get_orchestrator()
         orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 100.0  # as measured in Phase 1
 
         metrics_bad = {
             "os.delegation_router": SkillMetrics(
@@ -426,6 +461,7 @@ class TestRollbackTriggers:
         """Test rollback triggers on latency spike >20%"""
         orch = get_orchestrator()
         orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 100.0  # as measured in Phase 1
 
         metrics_latency_spike = {
             "os.delegation_router": SkillMetrics(
@@ -442,11 +478,26 @@ class TestRollbackTriggers:
         state = orch.get_state()
 
         assert state.phase == Phase.ROLLED_BACK
+        assert orch.rollback_history[-1][1] == RollbackReason.LATENCY_SPIKE
 
     def test_rollback_confidence_regression(self):
-        """Test rollback triggers on confidence regression >10%"""
+        """Test rollback triggers on confidence regression >10% vs the previous
+        day's OBSERVED confidence (not an invented 0.80 prior)."""
         orch = get_orchestrator()
         orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 100.0  # as measured in Phase 1
+
+        orch.advance_day({
+            "os.delegation_router": SkillMetrics(
+                skill_id="os.delegation_router",
+                phase=Phase.PHASE_2A_CANARY,
+                agreement_rate=0.99,
+                confidence=0.80,
+                latency_p99_ms=100.0,
+                error_rate=0.001,
+            ),
+        })
+        assert orch.get_state().phase == Phase.PHASE_2A_CANARY
 
         metrics_regression = {
             "os.delegation_router": SkillMetrics(
@@ -463,11 +514,91 @@ class TestRollbackTriggers:
         state = orch.get_state()
 
         assert state.phase == Phase.ROLLED_BACK
+        assert orch.rollback_history[-1][1] == RollbackReason.CONFIDENCE_REGRESSION
+
+    def test_first_sample_has_no_confidence_prior(self):
+        """With no previous sample there is no regression to detect: the check
+        is reported unmeasured, not passed against a fabricated prior."""
+        orch = get_orchestrator()
+        orch.advance_day(TestPhase1ShadowMode._create_good_metrics(confidence=0.5))
+        assert orch.get_state().phase == Phase.PHASE_1_SHADOW
+        assert "confidence_prior" in orch.get_state().unmeasured_checks
+        assert "tenant_isolation" in orch.get_state().unmeasured_checks
+
+    def test_live_phase_without_measured_baseline_rolls_back(self):
+        """A canary with no Phase 1 latency baseline cannot detect a latency
+        spike, so it rolls back instead of comparing against an invented 100 ms."""
+        orch = get_orchestrator()
+        orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.advance_day(TestPhase1ShadowMode._create_good_metrics())
+
+        assert orch.get_state().phase == Phase.ROLLED_BACK
+        assert orch.rollback_history[-1][1] == RollbackReason.BASELINE_NOT_MEASURED
+
+    def test_reported_tenant_isolation_violation_rolls_back(self):
+        orch = get_orchestrator()
+        orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 100.0
+        orch.advance_day(TestPhase1ShadowMode._create_good_metrics(), tenant_isolation_violations=1)
+        assert orch.rollback_history[-1][1] == RollbackReason.TENANT_ISOLATION_VIOLATION_REPORTED
+
+    def test_broken_real_audit_chain_rolls_back(self):
+        """The audit-chain trigger verifies the REAL tenant chain; a tampered
+        record rolls the canary back (it used to be ``audit_chain_intact = True``)."""
+        from forge import paths as fp
+
+        orch = get_orchestrator()
+        orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 100.0
+        orch.advance_day(TestPhase1ShadowMode._create_good_metrics())
+        assert orch.get_state().phase == Phase.PHASE_2A_CANARY
+
+        chain = fp.tenant_audit_chain("_default")
+        lines = chain.read_text().splitlines()
+        rec = json.loads(lines[0])
+        rec["details"]["day"] = 999  # tamper with a committed record
+        lines[0] = json.dumps(rec)
+        chain.write_text("\n".join(lines) + "\n")
+
+        try:
+            orch.advance_day(TestPhase1ShadowMode._create_good_metrics())
+        except audit_sink.AuditWriteFailed:
+            pass  # the writer may refuse to append to a broken chain; the rollback still applies
+        assert orch.get_state().phase == Phase.ROLLED_BACK
+        assert orch.rollback_history[-1][1] == RollbackReason.AUDIT_CHAIN_BREAK
+
+    def test_failed_audit_write_blocks_the_decision(self, monkeypatch):
+        """Audit-first: if the chain write does not commit, the day is not
+        advanced and no decision is applied."""
+        orch = get_orchestrator()
+
+        def _refuse(*a, **k):
+            raise audit_sink.AuditWriteFailed("simulated non-commit")
+
+        monkeypatch.setattr(audit_sink, "emit", _refuse)
+        with pytest.raises(audit_sink.AuditWriteFailed):
+            orch.advance_day(TestPhase1ShadowMode._create_good_metrics())
+        assert orch.get_state().day_number == 1
+        assert orch.get_audit_trail() == []
+
+    def test_decisions_land_on_the_tenant_chain(self):
+        from forge import paths as fp
+        from forge import security_events as se
+
+        orch = get_orchestrator()
+        orch.advance_day(TestPhase1ShadowMode._create_good_metrics())
+        chain = fp.tenant_audit_chain("_default")
+        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        assert any(r["event_type"] == "deployment.rollout.day_advanced" and r["details"]["day"] == 2
+                   for r in recs)
+        ok, problems = se.verify_chain(chain)
+        assert ok, problems
 
     def test_rollback_immediate_execution(self):
         """Test rollback executes immediately (no delay)"""
         orch = get_orchestrator()
         orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 100.0  # as measured in Phase 1
 
         prior_timestamp = datetime.fromisoformat(orch.state.last_decision_time)
 
@@ -491,6 +622,7 @@ class TestRollbackTriggers:
         """Test rollback is audit-logged with LoM binding"""
         orch = get_orchestrator()
         orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 100.0  # as measured in Phase 1
 
         metrics_bad = {
             "os.delegation_router": SkillMetrics(
@@ -581,6 +713,7 @@ class TestLearningLoopIntegration:
     def test_confidence_updates_via_feedback(self):
         """Test confidence increases with positive feedback"""
         orch = get_orchestrator()
+        orch.state.baseline_latency_p99_ms = 82.5  # measured Phase 1 mean of these metrics
 
         # Simulate Phase 2a with positive feedback (agreement high)
         metrics_improving = TestPhase1ShadowMode._create_good_metrics(
@@ -608,6 +741,7 @@ class TestLearningLoopIntegration:
         )
 
         orch.state.phase = Phase.PHASE_2A_CANARY
+        orch.state.baseline_latency_p99_ms = 82.5
         orch.state.week_number = 3
         orch.advance_day(metrics_poor)
 
@@ -648,20 +782,26 @@ class TestOperatorGates:
     def test_phase_2a_to_2b_requires_operator_approval(self):
         """Test Phase 2a→2b transition requires operator approval"""
         orch = get_orchestrator()
-        orch.state.phase = Phase.PHASE_2A_CANARY
-        orch.state.current_traffic_percentage = 100
-        orch.state.day_number = 63
+        metrics = TestPhase1ShadowMode._create_good_metrics()
 
-        metrics = TestPhase1ShadowMode._create_good_metrics(
-            agreement_rate=0.98,
-            confidence=0.85,
-        )
-
-        orch.advance_day(metrics)
+        # Real path: Phase 1 records the latency baseline, operator approves 2a,
+        # weekly gates escalate 1% -> 10% -> 50% -> 100% (week 6 gate, day 42).
+        for _ in range(1, 15):
+            orch.advance_day(metrics)
+        assert orch.operator_approve("PHASE_2A_START", approved_by="op") is True
+        while orch.get_state().day_number < 42:
+            orch.advance_day(metrics)
 
         state = orch.get_state()
+        assert state.current_traffic_percentage == 100
         assert state.pending_operator_approval is True
         assert state.approval_required_for == "PHASE_2B_START"
+        assert state.phase == Phase.PHASE_2A_CANARY
+
+        # A different transition name does not approve it.
+        assert orch.operator_approve("PHASE_2A_START") is False
+        assert orch.operator_approve("PHASE_2B_START", approved_by="op") is True
+        assert orch.get_state().phase == Phase.PHASE_2B_SKILL_PRIMARY
 
 
 class TestComplete12WeekRollout:
@@ -715,16 +855,25 @@ class TestComplete12WeekRollout:
         state = orch.get_state()
         # Should be at 100% traffic by end of Phase 2a
         assert state.current_traffic_percentage == 100
+        assert state.approval_required_for == "PHASE_2B_START"
+        assert orch.operator_approve("PHASE_2B_START", approved_by="op") is True
 
-        # Phase 2b: skill activation
-        for day in range(64, 85):  # Days 64–84
-            metrics_good.copy()  # Continue good metrics
+        # Phase 2b WITHOUT a measured audit-violation count: nothing activates
+        # (this used to pass on a hard-coded "0 violations").
+        for day in range(64, 71):
             for skill_id, m in metrics_good.items():
-                m.confidence = min(0.95, m.confidence + 0.01)  # Confidence increases
+                m.confidence = min(0.95, m.confidence + 0.01)
             orch.advance_day(metrics_good)
+        assert not any(mode == SkillMode.PRIMARY for mode in orch.get_state().skill_states.values())
+
+        # Phase 2b with a MEASURED count of zero: skills activate as confidence
+        # reaches their thresholds (7-day latency sigma is computed from input).
+        for day in range(71, 85):
+            for skill_id, m in metrics_good.items():
+                m.confidence = min(0.95, m.confidence + 0.01)
+            orch.advance_day(metrics_good, audit_violations_in_window=0)
 
         state = orch.get_state()
-        # Skills should activate as confidence reaches thresholds
         assert any(mode == SkillMode.PRIMARY for mode in state.skill_states.values())
 
     def test_rollout_audit_trail_complete(self):

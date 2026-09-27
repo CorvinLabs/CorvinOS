@@ -342,22 +342,21 @@ class TestConfigApplier:
         assert history[1]["version"] == 2
 
     def test_clamping_to_bounds(self, applier):
-        """Test: Config values clamped to [0, 1]."""
-        applier.apply_config_delta(
-            skill_id="skill_a",
-            parameter_deltas={"threshold": 1.5},  # Will be clamped to 1.0
+        """Test: Config values clamped to [0, 1].
+
+        A single delta beyond ±1.0 is REJECTED (test_apply_invalid_delta_too_large),
+        so the upper bound is reached by accumulating in-range deltas.
+        """
+        applier.apply_config_delta(skill_id="skill_a", parameter_deltas={"threshold": 0.8})
+        ok, _msg, _ev = applier.apply_config_delta(
+            skill_id="skill_a", parameter_deltas={"threshold": 0.5},  # 1.3 → 1.0
         )
+        assert ok is True
+        assert applier.get_config("skill_a")["threshold"] == 1.0
 
-        config = applier.get_config("skill_a")
-        assert config["threshold"] <= 1.0
-
-        applier.apply_config_delta(
-            skill_id="skill_a",
-            parameter_deltas={"threshold": -0.5},  # Will be clamped to 0.0
-        )
-
-        config = applier.get_config("skill_a")
-        assert config["threshold"] >= 0.0
+        # A NEW parameter is clamped too (it used to be stored raw: -0.5).
+        applier.apply_config_delta(skill_id="skill_a", parameter_deltas={"floor": -0.5})
+        assert applier.get_config("skill_a")["floor"] == 0.0
 
     def test_rollback_config(self, applier):
         """Test: Rollback to previous version."""

@@ -5,7 +5,9 @@ import tempfile
 import os
 import hashlib
 from datetime import datetime
-from core.control_plane.snapshot_manager import SnapshotManager, Snapshot
+from core.control_plane.snapshot_manager import (
+    Snapshot, SnapshotManager, SnapshotRestoreNotImplemented,
+)
 from core.control_plane.state_capture import StateCapture
 
 
@@ -203,18 +205,16 @@ class TestSnapshotRestoration:
             state, "Backup", "Test", "operator_1", "tenant_1"
         )
 
-        result = await snapshot_manager.restore_snapshot(
-            created["snapshot_id"], "tenant_1", "admin_1"
-        )
+        # Nothing applies snapshot state, so a restore fails closed and is
+        # audited as such — never reported "restored" (2026-09-27).
+        with pytest.raises(SnapshotRestoreNotImplemented):
+            await snapshot_manager.restore_snapshot(
+                created["snapshot_id"], "tenant_1", "admin_1"
+            )
 
-        assert result["status"] == "restored"
-        assert result["restored_state"]["plugins"]["enabled"] == ["video_producer"]
-
-        # Verify audit event
-        restore_events = [
-            e for e in audit_backend.events if e["type"] == "snapshot_restored"
-        ]
-        assert len(restore_events) > 0
+        failed = [e for e in audit_backend.events if e["type"] == "snapshot_restore_failed"]
+        assert failed and failed[-1]["payload"]["reason"] == "not_implemented"
+        assert not [e for e in audit_backend.events if e["type"] == "snapshot_restored"]
 
     @pytest.mark.asyncio
     async def test_restore_snapshot_checksum_validation(self, snapshot_manager, audit_backend):

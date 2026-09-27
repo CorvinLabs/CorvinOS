@@ -27,151 +27,133 @@ import tempfile
 import json
 
 
+REPO = Path(__file__).resolve().parents[2]
+
+
+def _production_importers(needle: str) -> list[str]:
+    """Non-test .py files outside ``own_dir`` that mention ``needle``."""
+    hits = []
+    for root in ("core", "corvin_operator"):
+        for f in (REPO / root).rglob("*.py"):
+            rel = f.relative_to(REPO).as_posix()
+            if "/tests/" in rel or f.name.startswith("test_") or "node_modules" in rel:
+                continue
+            try:
+                if needle in f.read_text(errors="ignore"):
+                    hits.append(rel)
+            except OSError:
+                continue
+    return hits
+
+
 class TestIssue2_MockAuditBackendFixed:
-    """Issue #2: MockAuditBackend in Production → should use real audit chain."""
+    """Issue #2: the Context Reference Graph "audit" backend.
 
-    def test_audit_backend_uses_real_chain(self):
-        """Verify audit.py initializes real AuditChain, not MockAuditBackend."""
+    The P0 fix (d43fb8dbf) wired it to the real chain; e2e7045d8 reverted it
+    to an in-memory ``_MockAuditBackend``. It is therefore NOT an audit trail.
+    What keeps that from being a live compliance gap is that nothing outside
+    the package imports it — this test pins that, so wiring the package
+    without first moving its events onto the core chain fails here.
+    (Adversarial review 2026-09-27; reported cross-area.)
+    """
+
+    def test_reference_graph_has_no_production_importer(self):
+        hits = [h for h in _production_importers("reference_graph")
+                if not h.startswith("core/context/reference_graph/")]
+        assert hits == [], hits
+
+    def test_reference_graph_audit_is_not_the_core_chain(self):
         from core.context.reference_graph import audit
 
-        # Get the backend
-        backend = audit._get_audit_backend()
-
-        # Should NOT be a MockAuditBackend (which it was before)
-        # Should be an AuditChain instance or a no-op backend that logs
-        assert backend is not None
-        assert hasattr(backend, 'write_event'), "Backend must have write_event method"
-
-    def test_audit_emits_to_real_chain(self, tmp_path):
-        """Verify audit events are emitted through real backend."""
-        from core.context.reference_graph import audit
-
-        # Temporarily set CORVIN_HOME to temp dir
-        with patch.dict(os.environ, {'CORVIN_HOME': str(tmp_path)}):
-            # Clear cached backend so it reinitializes
-            audit._audit_backend = None
-
-            # Emit an event
-            audit.emit_event(
-                'test_event',
-                tenant_id='test_tenant',
-                lom='test:lom:path',
-                test_field='test_value'
-            )
-
-            # If audit chain was initialized, the path should exist
-            expected_audit_path = tmp_path / 'tenants' / 'test_tenant' / 'global' / 'audit.jsonl'
-            # Note: may not exist if using no-op backend, but at least doesn't crash
+        assert type(audit._audit_backend).__name__ == "_MockAuditBackend"
 
 
 class TestIssue5_TenantIsolationFixed:
-    """Issue #5: Tenant Isolation Broken via query params → should use session."""
-
-    @pytest.mark.asyncio
-    async def test_stats_api_requires_session(self):
-        """Verify /v1/stats/ requires authentication (no query param override)."""
-        from corvin_console.routes import stats_api
-
-        # The endpoint should have require_session dependency
-        # We can check the route's dependencies
-        route = None
-        for r in stats_api.router.routes:
-            if r.path == "/stats/":
-                route = r
-                break
-
-        assert route is not None, "Route /stats/ not found"
-        # Verify it has authentication dependency (should have Depends(require_session))
-        # This is checked by the presence of 'session' parameter in the function signature
-        import inspect
-        sig = inspect.signature(stats_api.get_stats)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "Route must have 'session' parameter for authentication"
+    """Issue #5 (stats tenant via query param) — see TestUnmountedLegacyRouters."""
 
 
 class TestIssue8_HardcodedUserIdsFixed:
     """Issue #8: Hardcoded User IDs → should use request.user.id from session."""
 
-    @pytest.mark.asyncio
-    async def test_billing_savings_requires_session(self):
-        """Verify billing endpoints use authenticated user_id."""
-        from corvin_console.routes import billing_savings
-        import inspect
+    def test_video_producer_feedback_uses_session_tenant(self):
+        """Video feedback takes the tenant from the authenticated session.
 
-        # Check get_savings
-        sig = inspect.signature(billing_savings.get_savings)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "get_savings must have 'session' parameter"
-
-        # Check get_all_time_savings
-        sig = inspect.signature(billing_savings.get_all_time_savings)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "get_all_time_savings must have 'session' parameter"
-
-    @pytest.mark.asyncio
-    async def test_video_producer_feedback_uses_session_tenant(self):
-        """Verify video feedback endpoint uses session.tenant_id (not hardcoded)."""
+        The guard is the router-level ``require_session_csrf_on_mutation``
+        dependency; the handler receives the SessionRecord as ``rec`` and
+        audits ``rec.tenant_id`` (never a hard-coded ``_default``).
+        """
         from corvin_console.routes import video_producer_api
         import inspect
 
         sig = inspect.signature(video_producer_api.submit_scene_feedback)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "submit_scene_feedback must have 'session' parameter for tenant_id"
+        assert "rec" in sig.parameters
+        src = inspect.getsource(video_producer_api.submit_scene_feedback)
+        assert "tenant_id=rec.tenant_id" in src
+        assert 'tenant_id="_default"' not in src
+
+
+def _video_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from corvin_console.routes import video_producer_api
+
+    app = FastAPI()
+    app.include_router(video_producer_api.router)
+    return TestClient(app)
 
 
 class TestIssue9_MissingCSRFFixed:
-    """Issue #9: Missing CSRF on Mutations → should have @require_csrf."""
+    """Issue #9: mutations must refuse a caller without session + CSRF.
 
-    @pytest.mark.asyncio
-    async def test_video_create_job_has_csrf(self):
-        """Verify POST /video/jobs has CSRF protection."""
-        from corvin_console.routes import video_producer_api
-        import inspect
+    Proven over HTTP through the real router (the protection is a router-level
+    dependency, so a signature check on the handler proves nothing either way).
+    """
 
-        sig = inspect.signature(video_producer_api.create_video_job)
-        params = list(sig.parameters.keys())
-        # Must have 'session' parameter from require_csrf dependency
-        assert 'session' in params, "create_video_job must have require_csrf protection"
+    @pytest.mark.parametrize("method,path", [
+        ("post", "/video/jobs"),
+        ("put", "/video/settings"),
+        ("post", "/video/jobs/j1/youtube"),
+        ("post", "/video/jobs/j1/scenes/s1/feedback"),
+    ])
+    def test_video_mutations_refuse_without_session(self, method, path):
+        resp = getattr(_video_client(), method)(path, json={})
+        assert resp.status_code in (401, 403), (path, resp.status_code, resp.text)
 
-    @pytest.mark.asyncio
-    async def test_video_update_settings_has_csrf(self):
-        """Verify PUT /video/settings has CSRF protection."""
-        from corvin_console.routes import video_producer_api
-        import inspect
 
-        sig = inspect.signature(video_producer_api.update_settings)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "update_settings must have require_csrf protection"
 
-    @pytest.mark.asyncio
-    async def test_video_upload_youtube_has_csrf(self):
-        """Verify POST /video/jobs/{job_id}/youtube has CSRF protection."""
-        from corvin_console.routes import video_producer_api
-        import inspect
+class TestUnmountedLegacyRouters:
+    """Issues #5, #8, #9 (stats / billing / quality export).
 
-        sig = inspect.signature(video_producer_api.upload_to_youtube)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "upload_to_youtube must have require_csrf protection"
+    The P0 fixes to ``stats_api`` (tenant from session), ``billing_savings``
+    (user from session) and ``quality_metrics`` (CSRF on export) were
+    reverted by e2e7045d8: ``?tenant_id=`` is honoured again, the user is the
+    hard-coded ``"demo_user"``, and export has no session. None of the three
+    routers is mounted by any host, so none of that is reachable. The old
+    signature checks here asserted fixes that no longer exist; this pins the
+    fact that keeps it safe. (Adversarial review 2026-09-27; cross-area.)
+    """
 
-    @pytest.mark.asyncio
-    async def test_video_feedback_has_csrf(self):
-        """Verify POST /video/jobs/{job_id}/scenes/{scene_id}/feedback has CSRF protection."""
-        from corvin_console.routes import video_producer_api
-        import inspect
+    @pytest.mark.parametrize("module", ["stats_api", "billing_savings", "quality_metrics"])
+    def test_router_is_not_mounted_anywhere(self, module):
+        hits = [h for h in _production_importers(module)
+                if not h.endswith(f"routes/{module}.py")
+                and ("include_router" in (REPO / h).read_text(errors="ignore")
+                     or f"import {module}" in (REPO / h).read_text(errors="ignore")
+                     or f"{module} as" in (REPO / h).read_text(errors="ignore"))]
+        assert hits == [], hits
 
-        sig = inspect.signature(video_producer_api.submit_scene_feedback)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "submit_scene_feedback must have require_csrf protection"
-
-    @pytest.mark.asyncio
-    async def test_quality_export_has_csrf(self):
-        """Verify POST /v1/console/quality/metrics/export has CSRF protection."""
-        from corvin_console.routes import quality_metrics
-        import inspect
-
-        sig = inspect.signature(quality_metrics.export_metrics)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "export_metrics must have require_csrf protection"
+    def test_console_serves_none_of_their_paths(self):
+        # Probe over HTTP (the router tree is nested _IncludedRouter objects,
+        # so a flat ``router.routes`` walk would see almost nothing).
+        with _unauth_client() as (client, csrf, _home, _):
+            # positive control: the probe does reach mounted console routes
+            assert client.get("/v1/console/control-plane/snapshots").status_code == 501
+            for method, path in (("get", "/v1/console/billing/savings"),
+                                 ("get", "/v1/console/billing/savings/all-time"),
+                                 ("post", "/v1/console/quality/metrics/export?task_id=t"),
+                                 ("get", "/v1/console/v1/stats/")):
+                r = getattr(client, method)(path, headers={"X-CSRF-Token": csrf})
+                assert r.status_code == 404, (path, r.status_code)
 
 
 class TestIssue1_PrivilegeEscalationFixed:
@@ -214,53 +196,40 @@ class TestIssue3_SnapshotsAuditBackendFixed:
                 pytest.skip("AuditChain not available")
 
 
-class TestIssue4_SnapshotsAuthFixed:
-    """Issue #4: Zero Auth on Snapshots Endpoints → should have require_session."""
+def _unauth_client():
+    import sys as _sys
+    _sys.path.insert(0, str(REPO / "core" / "console" / "tests"))
+    from test_admin_route import _sandbox
 
-    def test_snapshots_endpoints_require_auth(self):
-        """Verify snapshot endpoints have proper auth decorators."""
-        from corvin_console.routes import control_plane_snapshots
-        import inspect
-
-        # Check POST (create_snapshot)
-        sig = inspect.signature(control_plane_snapshots.create_snapshot)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "create_snapshot must require authentication"
-
-        # Check GET (list_snapshots)
-        sig = inspect.signature(control_plane_snapshots.list_snapshots)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "list_snapshots must require authentication"
+    return _sandbox(Path(tempfile.mkdtemp()))
 
 
-class TestIssue6_PluginsAuthFixed:
-    """Issue #6: Zero Auth on Plugins Endpoints → should have require_session."""
+class TestIssues4_6_7_ControlPlaneAuth:
+    """Issues #4, #6, #7: snapshot / plugin / subsystem routes require a
+    session. The guard is the router-level
+    ``require_session_csrf_on_mutation`` dependency, so it is proven over
+    HTTP (a handler-signature check proves nothing either way). All three
+    routers are defused to 501 ``not_implemented`` behind that guard."""
 
-    def test_plugin_endpoints_require_auth(self):
-        """Verify plugin endpoints require authentication."""
-        from corvin_console.routes import control_plane_plugins
-        import inspect
+    ROUTES = [
+        ("post", "/v1/console/control-plane/snapshots"),
+        ("get", "/v1/console/control-plane/snapshots"),
+        ("get", "/v1/console/control-plane/plugins"),
+        ("patch", "/v1/console/control-plane/plugins/p1/enable"),
+        ("delete", "/v1/console/control-plane/plugins/p1"),
+        ("get", "/v1/console/control-plane/subsystems"),
+        ("patch", "/v1/console/control-plane/subsystems/s1/start"),
+    ]
 
-        # install_plugin was removed 2026-09-26 (ADR-0892: one install route, the
-        # marketplace's) — check the remaining mutation instead.
-        assert not hasattr(control_plane_plugins, "install_plugin")
-        sig = inspect.signature(control_plane_plugins.enable_plugin)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "enable_plugin must require authentication"
-
-
-class TestIssue7_SubsystemsAuthFixed:
-    """Issue #7: Zero Auth on Subsystems Endpoints → should have require_session."""
-
-    def test_subsystem_endpoints_require_auth(self):
-        """Verify subsystem endpoints require CSRF/session."""
-        from corvin_console.routes import control_plane_subsystems
-        import inspect
-
-        # Check start_subsystem
-        sig = inspect.signature(control_plane_subsystems.start_subsystem)
-        params = list(sig.parameters.keys())
-        assert 'session' in params, "start_subsystem must require authentication"
+    def test_refused_without_session_501_with_one(self):
+        with _unauth_client() as (client, csrf, _home, _):
+            for method, path in self.ROUTES:
+                r = getattr(client, method)(path, headers={"X-CSRF-Token": csrf})
+                assert r.status_code == 501, (method, path, r.status_code, r.text)
+            client.cookies.clear()
+            for method, path in self.ROUTES:
+                r = getattr(client, method)(path)
+                assert r.status_code == 401, (method, path, r.status_code)
 
 
 if __name__ == "__main__":

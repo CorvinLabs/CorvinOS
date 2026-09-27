@@ -1,5 +1,10 @@
 """Ecosystem Monitoring & Health Tracking (ADR-0511 Phase 3).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``grep -rn ecosystem_monitoring`` outside tests finds no route, daemon or
+plugin that constructs an ``EcosystemMonitor`` or feeds it executions. Metrics
+are IN-MEMORY; a skill nobody reported on is ``NOT_MEASURED``, never healthy.
+
 Monitors skill ecosystem health:
   - Track skill installation + update metrics
   - Monitor community contributions + ratings
@@ -9,15 +14,20 @@ Monitors skill ecosystem health:
 
 Compliance:
   - Tenant-scoped metrics (ADR-0007)
-  - Audit-first: every health event logged (ADR-0232/0233)
-  - No PII: all metrics are aggregates or pseudonymous
+  - Every raised alert is recorded on the tenant chain
+    (``marketplace.ecosystem_alert_raised`` via ``core/deployment/audit_sink.py``)
+    BEFORE it is added to the alert list; ``AuditWriteFailed`` propagates.
+    Raw executions/ratings/feedback are metrics, not audit records.
+  - No PII: all metrics are aggregates or pseudonymous; error texts are not stored
 """
 
 from __future__ import annotations
 
-import hashlib
+import dataclasses
 import json
 import logging
+import math
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -25,9 +35,18 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
+from core.deployment import audit_sink
+from core.paths.tenant import tenant_home
 from core.tenants.validation import validate_tenant_id
 
 logger = logging.getLogger(__name__)
+
+audit_sink.register_events({
+    "marketplace.ecosystem_alert_raised": frozenset({"skill_id", "category", "severity", "alert_id"}),
+})
+
+# Bounded latency window per (tenant, skill) for real percentiles.
+_LATENCY_WINDOW = 1000
 
 __all__ = [
     "EcosystemMonitor",
@@ -38,9 +57,18 @@ __all__ = [
 ]
 
 
+def _nearest_rank(ordered: list[float], pct: int) -> float:
+    """Nearest-rank percentile of an ascending list (0.0 for an empty list)."""
+    if not ordered:
+        return 0.0
+    k = max(1, math.ceil(pct / 100.0 * len(ordered)))
+    return ordered[k - 1]
+
+
 class HealthStatus(Enum):
     """Skill health status."""
 
+    NOT_MEASURED = "not_measured"  # no execution observed yet
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -80,8 +108,9 @@ class SkillHealthMetrics:
     average_rating: float = 0.0  # 1.0-5.0
     rating_count: int = 0
 
-    # Learning metrics (ADR-0314)
-    confidence_score: float = 1.0  # Learning optimizer score
+    # Learning metrics (ADR-0314). Nothing feeds an optimizer confidence into
+    # this monitor, so it is None (not measured) — it used to default to 1.0.
+    confidence_score: Optional[float] = None
     feedback_count: int = 0
     improvement_trend: float = 0.0  # -1.0 to 1.0
 
@@ -91,8 +120,8 @@ class SkillHealthMetrics:
     days_since_update: int = 0
     days_since_execution: int = 0
 
-    # Status
-    status: HealthStatus = HealthStatus.HEALTHY
+    # Status — NOT_MEASURED until an execution was recorded (was HEALTHY).
+    status: HealthStatus = HealthStatus.NOT_MEASURED
     is_abandoned: bool = False  # No activity for 30+ days
 
     snapshot_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -109,6 +138,8 @@ class SkillHealthMetrics:
             "average_latency_ms": self.average_latency_ms,
             "p95_latency_ms": self.p95_latency_ms,
             "p99_latency_ms": self.p99_latency_ms,
+            "max_latency_ms": self.max_latency_ms,
+            "last_execution": self.last_execution.isoformat() if self.last_execution else None,
             "install_count": self.install_count,
             "uninstall_count": self.uninstall_count,
             "average_rating": self.average_rating,
@@ -187,8 +218,10 @@ class EcosystemMonitor:
             error_rate_threshold: Error rate above this triggers alert
             latency_threshold_ms: P99 latency above this triggers alert
         """
-        self.data_dir = data_dir or Path.home() / ".corvin" / "ecosystem-metrics"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        # None → per-tenant ``<tenant_home>/global/ecosystem-metrics`` at save
+        # time (honours CORVIN_HOME). It used to be ``~/.corvin/...``, created
+        # eagerly in the constructor, shared by every tenant.
+        self.data_dir = data_dir
 
         self.abandoned_days_threshold = abandoned_days_threshold
         self.error_rate_threshold = error_rate_threshold
@@ -197,6 +230,7 @@ class EcosystemMonitor:
         # In-memory metrics (per tenant, per skill)
         self.metrics: dict[str, dict[str, SkillHealthMetrics]] = {}  # tenant_id -> skill_id -> metrics
         self.alerts: dict[str, list[EcosystemHealthAlert]] = {}  # tenant_id -> alerts
+        self._latencies: dict[tuple[str, str], deque] = {}
 
         logger.info(f"EcosystemMonitor initialized (data_dir={self.data_dir})")
 
@@ -231,28 +265,37 @@ class EcosystemMonitor:
 
         metrics = self.metrics[tenant_id][skill_id]
 
-        # Update metrics (rebuild immutable)
         total = metrics.total_executions + 1
         successful = metrics.successful_executions + (1 if success else 0)
         failed = metrics.failed_executions + (0 if success else 1)
-        error_rate = failed / total if total > 0 else 0.0
+        error_rate = failed / total
 
-        # Update latency stats (simplified rolling average)
         new_avg_latency = (metrics.average_latency_ms * (total - 1) + latency_ms) / total
 
-        # Rebuild immutable metrics
-        self.metrics[tenant_id][skill_id] = SkillHealthMetrics(
-            skill_id=skill_id,
-            tenant_id=tenant_id,
+        # Real percentiles over a bounded window. p99 used to be
+        # ``max(prev_p99, latency * 0.95)`` — a number that is neither a
+        # percentile nor ever able to go down.
+        window = self._latencies.setdefault((tenant_id, skill_id), deque(maxlen=_LATENCY_WINDOW))
+        window.append(float(latency_ms))
+        ordered = sorted(window)
+
+        # ``dataclasses.replace`` keeps every other field. The rebuild used to
+        # construct a fresh record from execution fields only, silently
+        # resetting ratings, feedback, installs and confidence on EVERY
+        # execution.
+        self.metrics[tenant_id][skill_id] = dataclasses.replace(
+            metrics,
             total_executions=total,
             successful_executions=successful,
             failed_executions=failed,
             error_rate=error_rate,
             average_latency_ms=new_avg_latency,
-            p99_latency_ms=max(metrics.p99_latency_ms, latency_ms * 0.95),
+            p95_latency_ms=_nearest_rank(ordered, 95),
+            p99_latency_ms=_nearest_rank(ordered, 99),
             max_latency_ms=max(metrics.max_latency_ms, latency_ms),
             last_execution=datetime.now(timezone.utc),
             status=self._compute_health_status(error_rate, new_avg_latency),
+            snapshot_at=datetime.now(timezone.utc),
         )
 
         # Check for alerts
@@ -287,8 +330,8 @@ class EcosystemMonitor:
         old_avg = metrics.average_rating
         new_avg = (old_avg * (n - 1) + rating) / n
 
-        self.metrics[tenant_id][skill_id] = SkillHealthMetrics(
-            **{**metrics.__dict__, "average_rating": new_avg, "rating_count": n}
+        self.metrics[tenant_id][skill_id] = dataclasses.replace(
+            metrics, average_rating=new_avg, rating_count=n
         )
 
     def record_feedback(
@@ -326,12 +369,8 @@ class EcosystemMonitor:
         old_trend = metrics.improvement_trend
         new_trend = (old_trend * (new_feedback_count - 1) + signal) / new_feedback_count
 
-        self.metrics[tenant_id][skill_id] = SkillHealthMetrics(
-            **{
-                **metrics.__dict__,
-                "feedback_count": new_feedback_count,
-                "improvement_trend": new_trend,
-            }
+        self.metrics[tenant_id][skill_id] = dataclasses.replace(
+            metrics, feedback_count=new_feedback_count, improvement_trend=new_trend
         )
 
     def _compute_health_status(self, error_rate: float, latency_ms: float) -> HealthStatus:
@@ -374,7 +413,7 @@ class EcosystemMonitor:
                 },
                 action_recommended="Review skill logs and consider rollback",
             )
-            self.alerts[tenant_id].append(alert)
+            self._raise_alert(alert)
 
         # High latency alert
         if metrics.p99_latency_ms > self.latency_threshold_ms:
@@ -391,7 +430,34 @@ class EcosystemMonitor:
                 },
                 action_recommended="Profile skill and optimize performance",
             )
-            self.alerts[tenant_id].append(alert)
+            self._raise_alert(alert)
+
+    def _raise_alert(self, alert: EcosystemHealthAlert) -> bool:
+        """Record + keep an alert, at most one OPEN alert per (skill, category).
+
+        It used to append a new alert on every execution while the condition
+        held (100 failing runs → 100 identical alerts). Audit-first: the alert
+        is kept only after ``marketplace.ecosystem_alert_raised`` committed.
+        Returns True when a new alert was raised.
+        """
+        open_alerts = self.alerts.setdefault(alert.tenant_id, [])
+        if any(a.skill_id == alert.skill_id and a.category == alert.category
+               and not a.is_acknowledged for a in open_alerts):
+            return False
+        audit_sink.emit(
+            "marketplace.ecosystem_alert_raised",
+            {
+                "skill_id": alert.skill_id,
+                "category": alert.category,
+                "severity": alert.severity.value,
+                "alert_id": alert.alert_id,
+                "lom": "EcosystemMonitor._raise_alert",
+            },
+            tenant_id=alert.tenant_id,
+            severity="WARNING" if alert.severity != AlertSeverity.INFO else "INFO",
+        )
+        open_alerts.append(alert)
+        return True
 
     def check_abandoned_skills(self, tenant_id: str) -> list[EcosystemHealthAlert]:
         """Detect abandoned skills (no activity for N days).
@@ -427,11 +493,8 @@ class EcosystemMonitor:
                     },
                     action_recommended="Consider uninstalling if no longer needed",
                 )
-                alerts.append(alert)
-
-        if tenant_id not in self.alerts:
-            self.alerts[tenant_id] = []
-        self.alerts[tenant_id].extend(alerts)
+                if self._raise_alert(alert):
+                    alerts.append(alert)
 
         return alerts
 
@@ -566,8 +629,9 @@ class EcosystemMonitor:
             },
         }
 
-        # Write to file
-        snapshot_file = self.data_dir / f"{tenant_id}-{uuid4()}.json"
+        data_dir = self.data_dir or tenant_home(tenant_id) / "global" / "ecosystem-metrics"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_file = data_dir / f"{tenant_id}-{uuid4()}.json"
         with open(snapshot_file, "w") as f:
             json.dump(snapshot_data, f, indent=2)
 
@@ -575,9 +639,10 @@ class EcosystemMonitor:
         return snapshot_file
 
     def load_metrics_snapshot(self, snapshot_path: Path) -> bool:
-        """Load metrics from snapshot file.
+        """Restore metrics from a snapshot written by :meth:`save_metrics_snapshot`.
 
-        Returns True on success.
+        Returns True only when every metric record was restored. It used to
+        return True after restoring nothing ("simplified").
         """
         try:
             with open(snapshot_path, "r") as f:
@@ -586,13 +651,38 @@ class EcosystemMonitor:
             tenant_id = data["tenant_id"]
             validate_tenant_id(tenant_id)
 
-            if tenant_id not in self.metrics:
-                self.metrics[tenant_id] = {}
-
-            # Restore metrics (simplified)
-            logger.info(f"Loaded metrics snapshot from {snapshot_path}")
-            return True
-
-        except Exception as e:
+            restored: dict[str, SkillHealthMetrics] = {}
+            for skill_id, m in data["metrics"].items():
+                if m.get("tenant_id") != tenant_id or m.get("skill_id") != skill_id:
+                    raise ValueError("snapshot record does not match its tenant/skill key")
+                restored[skill_id] = SkillHealthMetrics(
+                    skill_id=skill_id,
+                    tenant_id=tenant_id,
+                    total_executions=int(m["total_executions"]),
+                    successful_executions=int(m["successful_executions"]),
+                    failed_executions=int(m["failed_executions"]),
+                    error_rate=float(m["error_rate"]),
+                    average_latency_ms=float(m["average_latency_ms"]),
+                    p95_latency_ms=float(m["p95_latency_ms"]),
+                    p99_latency_ms=float(m["p99_latency_ms"]),
+                    max_latency_ms=float(m.get("max_latency_ms", 0.0)),
+                    last_execution=(datetime.fromisoformat(m["last_execution"])
+                                    if m.get("last_execution") else None),
+                    install_count=int(m["install_count"]),
+                    uninstall_count=int(m["uninstall_count"]),
+                    average_rating=float(m["average_rating"]),
+                    rating_count=int(m["rating_count"]),
+                    confidence_score=m.get("confidence_score"),
+                    feedback_count=int(m["feedback_count"]),
+                    improvement_trend=float(m["improvement_trend"]),
+                    status=HealthStatus(m["status"]),
+                    is_abandoned=bool(m["is_abandoned"]),
+                    snapshot_at=datetime.fromisoformat(m["snapshot_at"]),
+                )
+        except Exception as e:  # noqa: BLE001 — any malformed snapshot is a failed load
             logger.error(f"Failed to load metrics snapshot {snapshot_path}: {e}")
             return False
+
+        self.metrics.setdefault(tenant_id, {}).update(restored)
+        logger.info(f"Loaded metrics snapshot from {snapshot_path}")
+        return True

@@ -5,6 +5,14 @@
 **ADR:** ADR-0681  
 **Commit:** 5f0fbf8f
 
+> **Status note (2026-09-27, adversarial review):** `skill_manager_routes.py` and the
+> `/v1/console/skills/...` endpoints listed below no longer exist (deleted under ADR-0892:
+> every handler was a stub). The working surface is `core/console/corvin_console/routes/skill_manager.py`,
+> mounted at `/v1/console/skills-manager` (`GET /skills/installed`, `POST /skills/install`,
+> `DELETE /skills/uninstall/{skill_id}/{version}`, `GET /skills/health`). Every route needs a
+> live console session; install/uninstall additionally need the CSRF token and the owner tier.
+> Tenant comes from the session, never an `X-Tenant-ID` header.
+
 ## Phase 5 Deliverables
 
 ### 1. Backend API (FastAPI Routes)

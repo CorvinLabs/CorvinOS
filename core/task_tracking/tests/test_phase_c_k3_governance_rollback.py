@@ -131,8 +131,8 @@ class TestApprovalStatesMachine:
         assert task["approval_state"] == "none"
 
         # Request approval: none → pending
-        patch = service.ItemPatch(approval_state="pending")
-        updated = service.update(tenant_id, task_id, patch, actor="test_user", version=task["version"])
+        patch = service.ItemPatch(approval_state="pending", version=task["version"])
+        updated = service.update(tenant_id, task_id, patch, actor="test_user")
         assert updated["approval_state"] == "pending"
 
         # Approve: pending → approved
@@ -189,34 +189,66 @@ class TestSnapshotAndRollback:
         assert ts is not None
 
     async def test_rollback_to_version(self):
-        """Test rolling back task to previous version."""
+        """Rollback restores the old field values as a NEW version (forward-only)."""
         tenant_id = "_default"
-
-        # Create task
-        create_body = service.ItemCreate(
-            title="Original Title",
-            kind="task",
-        )
-        task = service.create(tenant_id, create_body, actor="test_user")
+        task = service.create(tenant_id, service.ItemCreate(title="Original Title", kind="task"),
+                              actor="test_user")
         task_id = task["id"]
         v1 = task["version"]
 
-        # Update task (increment version)
-        patch = service.ItemPatch(title="Updated Title")
-        updated = service.update(tenant_id, task_id, patch, actor="test_user", version=v1)
+        updated = service.update(tenant_id, task_id,
+                                 service.ItemPatch(title="Updated Title", version=v1), actor="test_user")
         v2 = updated["version"]
         assert updated["title"] == "Updated Title"
 
-        # Rollback to v1
         result = await snapshots.rollback_to_version(tenant_id, task_id, v1, actor="admin")
 
-        # Verify rollback
-        if result.success:
-            # Fetch task to verify state
-            rolled_back = service.detail(tenant_id, task_id)
-            assert rolled_back["version"] == v1
-            # Note: Title reconstruction may not work perfectly in this test
-            # because we're not implementing full delta reconstruction
+        assert result.success, result.reason
+        rolled_back = service.detail(tenant_id, task_id)["item"]
+        assert rolled_back["title"] == "Original Title"
+        # Never re-issues an old version number: v1 -> v2 -> v3 (content of v1).
+        assert rolled_back["version"] == v2 + 1
+        # A stale client holding v2 now gets a conflict instead of a silent overwrite.
+        with pytest.raises(service.Conflict):
+            service.update(tenant_id, task_id, service.ItemPatch(title="Stale", version=v2),
+                           actor="test_user")
+
+    async def test_rollback_is_audited_before_the_row_changes(self, monkeypatch):
+        """If the chain record cannot be written, the row is untouched."""
+        tenant_id = "_default"
+        task = service.create(tenant_id, service.ItemCreate(title="Keep Me", kind="task"), actor="u")
+        upd = service.update(tenant_id, task["id"],
+                             service.ItemPatch(title="Changed", version=task["version"]), actor="u")
+
+        def broken(tid, et, details):
+            if et == snapshots.ROLLBACK_EVENT_TYPE:
+                raise OSError("disk full")
+            return "h"
+
+        monkeypatch.setattr(service, "chain_writer", broken)
+        with pytest.raises(service.AuditUnavailable):
+            await snapshots.rollback_to_version(tenant_id, task["id"], task["version"], actor="admin")
+        after = service.detail(tenant_id, task["id"])["item"]
+        assert after["title"] == "Changed"
+        assert after["version"] == upd["version"]
+
+    async def test_rollback_refuses_across_an_approval_decision(self):
+        """A rollback may not undo a decision — that would be an approval with no reviewer."""
+        tenant_id = "_default"
+        task = service.create(tenant_id, service.ItemCreate(title="Gate", kind="task"), actor="u")
+        t = service.update(tenant_id, task["id"],
+                           service.ItemPatch(approval_state="pending", version=task["version"]), actor="u")
+        t = service.decide(tenant_id, task["id"], "rejected", version=t["version"], actor="reviewer")
+        result = await snapshots.rollback_to_version(tenant_id, task["id"], task["version"], actor="admin")
+        assert not result.success
+        assert service.detail(tenant_id, task["id"])["item"]["approval_state"] == "rejected"
+
+    async def test_rollback_rejects_non_past_versions(self):
+        tenant_id = "_default"
+        task = service.create(tenant_id, service.ItemCreate(title="T", kind="task"), actor="u")
+        for bad in (task["version"], task["version"] + 5, 0, -1):
+            result = await snapshots.rollback_to_version(tenant_id, task["id"], bad, actor="admin")
+            assert not result.success
 
 
 class TestFullApprovalWorkflow:
@@ -253,8 +285,8 @@ class TestFullApprovalWorkflow:
         assert task["approval_state"] == "none"
 
         # Step 2: Request approval
-        patch = service.ItemPatch(approval_state="pending")
-        task = service.update(tenant_id, task_id, patch, actor="engineer", version=v1)
+        patch = service.ItemPatch(approval_state="pending", version=v1)
+        task = service.update(tenant_id, task_id, patch, actor="engineer")
         v2 = task["version"]
         assert task["approval_state"] == "pending"
 
@@ -268,7 +300,7 @@ class TestFullApprovalWorkflow:
         assert task["approval_state"] == "approved"
 
         # Step 5: Verify chain events were recorded
-        detail = service.detail(tenant_id, task_id)
+        detail = service.detail(tenant_id, task_id)["item"]
         assert detail["approval_state"] == "approved"
 
         # Step 6: Take snapshot

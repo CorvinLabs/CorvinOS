@@ -50,7 +50,7 @@ class TestLearningLoopClosureE2E:
     @pytest.mark.asyncio
     async def test_window_to_confidence_flow(self):
         """Test: AggregatedAuditWindow → ConfidenceScore → ConfidenceTrend."""
-        scoreboard = ConfidenceScoreboard(window_size=5)
+        scoreboard = ConfidenceScoreboard(window_size=10)
 
         # Simulate writing multiple confidence scores (one per window)
         score_ids = []
@@ -73,6 +73,7 @@ class TestLearningLoopClosureE2E:
             task_id="task-123",
             model_id="claude-opus-5",
             pattern_key="task_completion_rate",
+            tenant_id="_default",
         )
 
         assert trend is not None
@@ -113,8 +114,10 @@ class TestLearningLoopClosureE2E:
         assert update_id is not None
 
         # Verify update was recorded
-        update = optimizer._parameter_updates[update_id]
-        assert update.parameter_name in ["learning_rate", "temperature"]
+        group = optimizer._parameter_updates[update_id]
+        assert {u.parameter_name for u in group} == set(delta)  # every parameter kept
+        update = group[0]
+        assert update.audit_ref  # committed to the core chain first
         assert update.audit_chain_hash == "abc123def456"
 
     @pytest.mark.asyncio
@@ -125,7 +128,7 @@ class TestLearningLoopClosureE2E:
         """
         # Initialize components
         consumer = AuditEventConsumer(batch_size=10)
-        scoreboard = ConfidenceScoreboard(window_size=5, trend_threshold=0.75)
+        scoreboard = ConfidenceScoreboard(window_size=10, trend_threshold=0.75)
         optimizer = OptimizerLoop(min_confidence_threshold=0.75)
         loop = ModelOptimizationLoop(scoreboard=scoreboard, optimizer=optimizer)
 
@@ -149,8 +152,8 @@ class TestLearningLoopClosureE2E:
         assert window is not None
         assert window.latest_chain_hash.startswith("hash_")
 
-        # Step 3: Write confidence scores (one per window)
-        for j in range(5):
+        # Step 3: Write confidence scores (one per window; 10 = significance floor)
+        for j in range(10):
             await scoreboard.write_score(
                 window_id=f"win_{j:03d}",
                 tenant_id="_default",
@@ -162,7 +165,7 @@ class TestLearningLoopClosureE2E:
             )
 
         # Step 4: Verify trend is triggerable
-        triggerable = await scoreboard.list_triggerable_trends()
+        triggerable = await scoreboard.list_triggerable_trends(tenant_id="_default")
         assert len(triggerable) > 0
 
         # Step 5: Run optimization step
@@ -170,13 +173,13 @@ class TestLearningLoopClosureE2E:
         assert len(applied) > 0
 
         # Step 6: Verify parameter state was updated
-        latest_params = await optimizer.get_latest_parameter_state("claude-opus-5")
+        latest_params = await optimizer.get_latest_parameter_state("claude-opus-5", tenant_id="_default")
         assert "learning_rate" in latest_params or "temperature" in latest_params
 
         # VERIFICATION: Chain_hash → Param_Delta
         # Get the applied update
         update_id = applied[0]
-        update = optimizer._parameter_updates[update_id]
+        update = optimizer._parameter_updates[update_id][0]
 
         # Assert update carries chain linkage (would be filled from real audit chain)
         assert update.trend_id is not None
@@ -216,23 +219,25 @@ class TestLearningLoopClosureE2E:
         window_chain_hash = window.latest_chain_hash
         assert window_chain_hash.startswith(AUDIT_CHAIN_HASH)
 
-        # Step 2: Write confidence score with window linkage
-        score_id = await scoreboard.write_score(
-            window_id=window.window_id,
-            tenant_id="_default",
-            task_id="task-final",
-            model_id="claude-opus-5",
-            pattern_key="completion_rate",
-            confidence=0.88,
-            sample_count=15,
-            metadata={"chain_hash": window_chain_hash},  # Explicit linkage
-        )
+        # Step 2: Write confidence scores with window linkage (10 = significance floor)
+        for i in range(10):
+            score_id = await scoreboard.write_score(
+                window_id=window.window_id,
+                tenant_id="_default",
+                task_id="task-final",
+                model_id="claude-opus-5",
+                pattern_key="completion_rate",
+                confidence=0.80 + i * 0.015,  # improving (a stable trend proposes nothing)
+                sample_count=15,
+                metadata={"chain_hash": window_chain_hash},  # Explicit linkage
+            )
 
         # Step 3: Get trend, apply update with chain linkage
         trend = await scoreboard.get_trend(
             task_id="task-final",
             model_id="claude-opus-5",
             pattern_key="completion_rate",
+            tenant_id="_default",
         )
 
         delta = await optimizer.compute_parameter_delta(trend)
@@ -248,7 +253,7 @@ class TestLearningLoopClosureE2E:
         )
 
         # VERIFICATION: Full chain linkage is preserved
-        update = optimizer._parameter_updates[update_id]
+        update = optimizer._parameter_updates[update_id][0]
         assert update.audit_chain_hash == window_chain_hash
         assert update.audit_chain_hash.startswith(AUDIT_CHAIN_HASH)
 

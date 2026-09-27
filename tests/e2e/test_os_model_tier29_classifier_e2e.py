@@ -177,6 +177,14 @@ def client(fake_cli: dict[str, Path]):
     os.environ["CORVIN_CLAUDE_BIN"] = str(fake_cli["bin"])
     os.environ["CORVIN_FAKE_CLI_ARGV"] = str(fake_cli["argv_log"])
     os.environ.pop("CORVIN_OS_MODEL_ALLOW_HAIKU", None)
+    # chat_runtime._resolve_os_engine reroutes an UNAUTHENTICATED claude_code
+    # install to Hermes (~/.claude/.credentials.json or ANTHROPIC_API_KEY).
+    # Under a scratch HOME the turn therefore never reached the fake CLI: it
+    # went to Hermes, waited ~100 s on an Ollama connect timeout per turn (the
+    # "hang"), and the classifier abstained for engine "hermes". A dummy key
+    # satisfies the probe; the fake binary never reads it.
+    _prev_key = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-e2e-dummy-never-sent"
 
     from fastapi import FastAPI  # noqa: PLC0415
     from fastapi.testclient import TestClient  # noqa: PLC0415
@@ -189,6 +197,10 @@ def client(fake_cli: dict[str, Path]):
         r = c.get("/v1/console/auth/local-login", follow_redirects=False)
         assert r.status_code in (200, 302, 307), r.text
         yield c
+    if _prev_key is None:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+    else:
+        os.environ["ANTHROPIC_API_KEY"] = _prev_key
 
 
 @pytest.fixture(scope="module")

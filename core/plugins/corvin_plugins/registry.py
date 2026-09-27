@@ -214,8 +214,16 @@ def _emit_plugin_executed(
     Emits both audit event and learning event for plugin execution tracking.
     Used to feed the plugin confidence calculator and execution history.
     Guarded: audit/learning failures must not affect plugin execution.
+
+    NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+    nothing in the registry or a host invokes this; only tests do.
     """
     if ctx is None:
+        return
+    tenant_id = getattr(ctx, "tenant_id", None)
+    if not isinstance(tenant_id, str) or not tenant_id:
+        # Never attribute a plugin run to a guessed (``_default``) tenant.
+        log.error("plugin.executed not recorded for %r: context carries no tenant_id", plugin_id)
         return
     try:
         ctx.audit_emit("plugin.executed", {
@@ -223,7 +231,7 @@ def _emit_plugin_executed(
             "latency_ms": int(latency_ms),
             "success": bool(success),
             "error_type": str(error_type)[:64] if error_type else None,
-            "tenant_id": getattr(ctx, "tenant_id", ""),
+            "tenant_id": tenant_id,
         })
     except Exception:  # noqa: BLE001 - audit must not affect execution
         log.error("plugin.executed audit could not be written for %r", plugin_id)
@@ -231,9 +239,14 @@ def _emit_plugin_executed(
     # Emit learning event (fire-and-forget, async)
     try:
         from core.learning import learning_events
-        from core.learning.event_persistence import EventStore
+        # The store that takes a ``learning_events.LearningEvent`` (sync, chain
+        # first) — the same one core/skills/boot.py uses. The old code handed
+        # this event to ``event_persistence.EventStore``, whose async
+        # ``write_event(event, tenant_id)`` expects the event_schema type: the
+        # call raised TypeError every time and nothing was ever persisted.
+        from core.learning.event_store import EventStore
+        from forge import paths as forge_paths  # type: ignore[import-not-found]
 
-        tenant_id = getattr(ctx, "tenant_id", "_default")
         event = learning_events.LearningEvent.create(
             event_type=learning_events.EventType.PLUGIN_EXECUTED,
             skill_id=f"plugin.{plugin_id}",
@@ -246,8 +259,7 @@ def _emit_plugin_executed(
             },
             lom="plugins.registry._emit_plugin_executed",
         )
-        store = EventStore(tenant_id=tenant_id)
-        store.write_event(event)
+        EventStore(forge_paths.tenant_home(tenant_id), tenant_id=tenant_id).write_event(event)
     except Exception:  # noqa: BLE001 - learning must not affect execution
         log.error("plugin.executed learning event could not be written for %r", plugin_id)
 

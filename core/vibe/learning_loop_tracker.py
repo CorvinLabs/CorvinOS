@@ -1,4 +1,8 @@
-"""Learning Loop Tracker — Track convergence and feedback loop velocity.
+"""
+Learning Loop Tracker — Track convergence and feedback loop velocity.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the only
+importer is core/console/routes/learning_dashboard.py, which no app mounts.
 
 Monitors:
   1. Confidence convergence (target: >0.90 within 4 weeks)
@@ -80,7 +84,7 @@ class LearningLoopTracker:
         Args:
             audit_backend: Audit chain backend. If None, uses NoOpAudit.
         """
-        self.audit_backend = audit_backend or _NoOpAudit()
+        self.audit_backend = audit_backend or _default_audit()
         self.convergence_history: Dict[str, List[ConvergencePoint]] = {}
         self.loop_metrics: Dict[str, LearningLoopMetrics] = {}
         self.convergence_statuses: Dict[str, ConvergenceStatus] = {}
@@ -438,16 +442,12 @@ class LearningLoopTracker:
             # Don't raise; loop metrics are secondary to core operations
 
 
-class _NoOpAudit:
-    """No-op audit backend for testing."""
+def _default_audit():
+    """THE tenant chain (forge writer). The former ``_NoOpAudit`` default
+    returned a fabricated hash and wrote nothing."""
+    from core.vibe._chain_audit import ForgeChainAudit
 
-    def write_event(self, event: Dict[str, Any]) -> Optional[str]:
-        """No-op: return a fake hash."""
-        return "test_hash_" + event.get("event_type", "unknown")[:8]
-
-    def last_hash(self) -> str:
-        """No-op: return empty hash."""
-        return ""
+    return ForgeChainAudit()
 
 
 # Singleton instance

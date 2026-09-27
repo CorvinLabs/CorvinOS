@@ -64,6 +64,26 @@ const NAV_EXEMPT = new Set<string>([
   // hard-coded ~/.corvin, and Forge's Skills tab plus the Marketplace Skills
   // tab are already the skills surfaces. Link it once that backend is guarded.
   "skill-manager",
+  // ADR-2029 control-plane panels (ff1a0e6e2), mounted in PANELS but never in
+  // NAV_GROUPS. Deliberately kept out of the sidebar (2026-09-27 review) —
+  // none of them controls anything real yet:
+  // - control-intent-router: its backend path /control-plane/intent-router/*
+  //   is served by no router; the page renders "not available on this build".
+  // - control-plane-plugins: PluginManager keeps a SEPARATE registry in a
+  //   hard-coded ~/.corvin/plugins.json that nothing installs into, not the
+  //   ADR-0243 plugin registry the Marketplace tab manages.
+  // - control-plane-subsystems: SubsystemManager is an in-memory dict; "start"
+  //   of any id flips a flag and starts nothing; logs are mock.
+  // - control-plane-overrides: OverrideAuthority has no consumer outside its
+  //   own route — an approved override changes no behaviour.
+  // - control-plane-snapshots: create_snapshot captures a hard-coded empty
+  //   state, so a "restore" reports success while restoring nothing.
+  // Link each once its backend acts on the real subsystem.
+  "control-intent-router",
+  "control-plane-plugins",
+  "control-plane-subsystems",
+  "control-plane-overrides",
+  "control-plane-snapshots",
 ]);
 
 describe("panel wiring: registry route <-> sidebar nav", () => {

@@ -19,6 +19,15 @@ ADR COMPLIANCE:
 - ADR-0563 (Data isolation) - Tenant_id on all audit events
 - ADR-0205 (Learning integration) - Feedback loop closure
 - ADR-0314 (Learning infrastructure) - Event persistence + async emission
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
+The validators below are STRUCTURAL checks over an event list the caller
+supplies (field presence, ``prev_hash`` field equality). They never recompute
+a hash and are not a chain verification — that is
+``forge.security_events.verify_chain``. An empty event list is reported as
+``not_measured`` (non-compliant), never as a pass. ``ComplianceReportGenerator``
+read a second, unchained ``~/.corvin/orchestrator_audit.jsonl`` and is disabled.
 """
 
 from dataclasses import dataclass, field
@@ -306,6 +315,12 @@ class ComplianceChecklistFactory:
         """Run all validators for a tenant"""
         results = {}
         validators = ComplianceChecklistFactory.get_validators()
+        if not any(e.tenant_id == tenant_id for e in audit_events):
+            # Nothing to judge is not compliance: every validator fails closed.
+            return {
+                name: (False, [f"not_measured: no audit events supplied for tenant {tenant_id}"])
+                for name in validators
+            }
 
         for name, validator in validators.items():
             is_compliant, violations = validator.validate(tenant_id, audit_events)
@@ -318,8 +333,11 @@ class ComplianceReportGenerator:
     """Generate GDPR/EU AI Act compliance reports (weekly audit)"""
 
     def __init__(self, corvin_home: Optional[Path] = None):
-        self.corvin_home = corvin_home or Path.home() / ".corvin"
-        self.audit_path = self.corvin_home / "orchestrator_audit.jsonl"
+        raise NotImplementedError(
+            "ComplianceReportGenerator read a non-canonical, unchained audit file and is "
+            "disabled; reports come from corvin_compliance_reports over "
+            "forge.paths.tenant_audit_chain(tenant)"
+        )
 
     def generate_weekly_report(self, tenant_id: str) -> Dict[str, Any]:
         """Generate weekly compliance report (ADR-0232 requirement)"""

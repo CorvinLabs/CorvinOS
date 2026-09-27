@@ -30,7 +30,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
-from forge.security_events import filter_audit_details  # noqa: E402
+from forge.security_events import _EVENT_ALLOWLIST, filter_audit_details  # noqa: E402
 
 _EMIT_FUNCS = {"write_event", "audit_event", "_emit", "_emit_audit", "_audit_emit"}
 _SCAN_ROOTS = ("core", "corvin_operator")
@@ -97,6 +97,21 @@ def test_scan_found_emit_sites():
     assert len(SITES) > 100, f"AST scan found only {len(SITES)} emit sites — scanner broken"
 
 
+def _resolve_event_type(et: str) -> str:
+    """The event type the WRITER sees for a literal at an emit site.
+
+    A module-local sink may namespace its literals (``self._emit("x")`` →
+    ``audit_sink.emit(f"deployment.{x}")``). When the bare literal has no
+    allowlist but exactly ONE registered event is ``<prefix>.<literal>``, that
+    is the type actually written; judge the site against it. Ambiguous or
+    absent → the literal itself (so an unregistered emitter still fails).
+    """
+    if et in _EVENT_ALLOWLIST:
+        return et
+    matches = [k for k in _EVENT_ALLOWLIST if k.endswith("." + et)]
+    return matches[0] if len(matches) == 1 else et
+
+
 def test_no_emitter_lands_empty():
     """No shipped emitter may write a details body that is entirely dropped.
 
@@ -106,7 +121,8 @@ def test_no_emitter_lands_empty():
     """
     empty: list[str] = []
     for rel, line, et, keys in SITES:
-        cleaned, _ = filter_audit_details({k: "x" for k in keys}, event_type=et)
+        cleaned, _ = filter_audit_details({k: "x" for k in keys},
+                                          event_type=_resolve_event_type(et))
         kept = [k for k in cleaned if not k.startswith("_")]
         if not kept:
             empty.append(f"{rel}:{line} {et} loses ALL of {sorted(keys)}")

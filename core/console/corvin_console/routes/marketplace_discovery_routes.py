@@ -113,7 +113,9 @@ async def search(
         event="marketplace.search",
         details={
             "tenant_id": rec.tenant_id,
-            "query": q,
+            # Metadata only: the operator's free-text search never enters the chain.
+            "has_query": bool(q),
+            "query_len": len(q),
             "filters": {
                 "category": category,
                 "tier": tier,

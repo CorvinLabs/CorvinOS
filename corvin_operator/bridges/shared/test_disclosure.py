@@ -267,12 +267,18 @@ class AuditChainIntegrityTests(_DisclosureTestBase):
         audit_path = disclosure._audit_path()
         if not audit_path.exists():
             self.skipTest("forge package not available — _audit no-op")
-        repo = HERE
-        for parent in HERE.parents:
-            if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
-                repo = parent; break
-        forge_pkg = repo / "corvin_operator" / "forge"
+        # HERE is corvin_operator/bridges/shared; the forge package lives in
+        # corvin_operator/forge. (The old repo-root probe stopped at the first
+        # parent holding a plugins/ dir and composed a non-existent path.)
+        forge_pkg = HERE.parents[1] / "forge"
         sys.path.insert(0, str(forge_pkg))
+        _fm = sys.modules.get("forge")
+        if _fm is not None and not hasattr(_fm, "security_events") and \
+                str(forge_pkg / "forge") not in list(getattr(_fm, "__path__", [])):
+            # A ``corvin_operator`` entry on PYTHONPATH binds ``forge`` to the
+            # outer corvin_operator/forge directory, which has no
+            # security_events; rebind to the real package.
+            del sys.modules["forge"]
         from forge.security_events import verify_chain  # type: ignore
         ok, problems = verify_chain(audit_path)
         self.assertTrue(ok, f"chain broken: {problems[:5]}")

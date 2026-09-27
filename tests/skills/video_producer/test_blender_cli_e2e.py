@@ -18,13 +18,22 @@ import pytest
 FIXTURE_BLEND = Path(__file__).resolve().parents[2] / "fixtures" / "video_producer" / "simple_scene.blend"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+import importlib.util as _ilu
+
 pytestmark = pytest.mark.skipif(
     shutil.which("blender") is None,
     reason="blender binary not on PATH",
 )
 
+# the render's output validation imports the optional `ffmpeg-python` package;
+# without it every render fails validation by design
+_needs_ffmpeg_py = pytest.mark.skipif(
+    _ilu.find_spec("ffmpeg") is None, reason="needs the ffmpeg-python package",
+)
+
 
 @pytest.mark.timeout(120)
+@_needs_ffmpeg_py
 def test_cli_renders_a_real_video_as_a_subprocess(tmp_path, monkeypatch):
     assert FIXTURE_BLEND.exists(), f"fixture missing: {FIXTURE_BLEND}"
 

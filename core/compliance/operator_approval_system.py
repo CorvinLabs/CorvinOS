@@ -1,11 +1,22 @@
 """Operator Approval System (GDPR Art. 6, 7)
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
 Implements explicit consent model:
 - Operator must approve before phase transitions
 - 7-day timeout (auto-escalation, not auto-approve)
 - Operator can reject with reason
-- All approvals written to audit chain
-- Metrics snapshot captured with each approval
+- Every request/decision is written to THE tenant audit chain
+  (``forge.paths.tenant_audit_chain``) through ``forge.security_events.
+  write_event`` — content-free: ids, phase, decision; the operator id is
+  pseudonymised by the writer when PII-shaped, and the free-text reason and
+  metrics stay in the tenant's own request/decision store, never in the chain.
+- A request is decided at most once: approving or rejecting a request that is
+  not ``pending`` is refused.
+
+Until 2026-09-27 this "audit trail" was an unchained ``orchestrator_audit.jsonl``
+under ``Path.home()/.corvin`` shared by all tenants — a second, forgeable trail
+holding the raw operator id and reason text.
 """
 
 from dataclasses import dataclass, field
@@ -85,10 +96,25 @@ class OperatorApprovalGate:
     """
 
     def __init__(self, corvin_home: Optional[Path] = None):
-        self.corvin_home = corvin_home or Path.home() / ".corvin"
-        self.audit_path = self.corvin_home / "orchestrator_audit.jsonl"
-        self.requests_file = self.corvin_home / "approval_requests.jsonl"
-        self.decisions_file = self.corvin_home / "approval_decisions.jsonl"
+        from forge import paths as forge_paths  # type: ignore[import-not-found]
+
+        # Request/decision STORE root (resolved now; CORVIN_HOME honoured). The
+        # audit chain is never parametrisable — it is always the canonical one.
+        self.corvin_home = Path(corvin_home) if corvin_home else forge_paths.corvin_home()
+
+    def _store_dir(self, tenant_id: str) -> Path:
+        from forge import paths as forge_paths  # type: ignore[import-not-found]
+
+        tid = forge_paths.tenant_home(tenant_id).name  # validates the id
+        d = self.corvin_home / "tenants" / tid / "global" / "operator_approvals"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _requests_file(self, tenant_id: str) -> Path:
+        return self._store_dir(tenant_id) / "requests.jsonl"
+
+    def _decisions_file(self, tenant_id: str) -> Path:
+        return self._store_dir(tenant_id) / "decisions.jsonl"
 
     def request_approval(
         self,
@@ -118,12 +144,15 @@ class OperatorApprovalGate:
         )
 
         # Write to audit trail (fail-closed if write fails)
-        if not self._write_audit_event(request.to_audit_event()):
+        if not self._write_audit_event("operator_approval.requested", tenant_id, {
+            "request_id": request_id, "phase_name": phase_name,
+            "expires_at": request.expires_at,
+        }):
             raise RuntimeError(f"Failed to write approval request to audit trail (tenant {tenant_id})")
 
-        # Store request file
+        # Store request file (fail-closed: an unstored request cannot be decided)
         try:
-            with open(self.requests_file, 'a') as f:
+            with open(self._requests_file(tenant_id), 'a') as f:
                 f.write(json.dumps({
                     "request_id": request_id,
                     "tenant_id": tenant_id,
@@ -135,7 +164,8 @@ class OperatorApprovalGate:
                     "status": "pending",
                 }) + "\n")
         except Exception as e:
-            logger.error(f"Failed to store approval request: {e}")
+            logger.error("Failed to store approval request: %s", type(e).__name__)
+            raise RuntimeError(f"Failed to store approval request (tenant {tenant_id})") from e
 
         logger.info(f"Approval requested for phase {phase_name} in tenant {tenant_id}: {request_id}")
         return request
@@ -153,13 +183,16 @@ class OperatorApprovalGate:
         GDPR Art. 7: Can be withdrawn via rejection
         ADR-0563: Tenant isolation enforced
         """
-        # Verify request exists and is not expired
-        request = self._get_request(request_id)
+        # Verify request exists, is pending and is not expired
+        request = self._get_request(request_id, tenant_id)
         if not request:
             return False, f"Request {request_id} not found"
 
         if request.get("tenant_id") != tenant_id:
-            return False, f"Tenant mismatch: {request.get('tenant_id')} != {tenant_id} (ADR-0563)"
+            return False, "Tenant mismatch (ADR-0563)"
+
+        if request.get("status", "pending") != "pending":
+            return False, f"Request {request_id} already {request.get('status')}"
 
         expires_at = datetime.fromisoformat(request.get("expires_at", ""))
         if datetime.now(timezone.utc) > expires_at:
@@ -177,21 +210,21 @@ class OperatorApprovalGate:
         )
 
         # Write to audit trail (fail-closed)
-        if not self._write_audit_event(decision.to_audit_event()):
+        if not self._write_decision_audit(decision, request):
             return False, "Failed to write approval to audit trail (GDPR Art. 30)"
 
         # Update request status
-        self._update_request_status(request_id, "approved")
+        self._update_request_status(request_id, tenant_id, "approved")
 
         # Store decision
         try:
-            with open(self.decisions_file, 'a') as f:
+            with open(self._decisions_file(tenant_id), 'a') as f:
                 f.write(json.dumps(decision.__dict__) + "\n")
         except Exception as e:
-            logger.error(f"Failed to store approval decision: {e}")
-            return False, f"Failed to store decision: {e}"
+            logger.error("Failed to store approval decision: %s", type(e).__name__)
+            return False, "Failed to store decision"
 
-        logger.info(f"Phase transition approved by {operator_id} for tenant {tenant_id}: {request_id}")
+        logger.info("Phase transition approved for tenant %s: %s", tenant_id, request_id)
         return True, f"Phase transition approved (tenant {tenant_id})"
 
     def reject_transition(
@@ -207,13 +240,16 @@ class OperatorApprovalGate:
         GDPR Art. 7: Explicit withdrawal
         ADR-0563: Tenant isolation enforced
         """
-        # Verify request exists
-        request = self._get_request(request_id)
+        # Verify request exists and is still pending
+        request = self._get_request(request_id, tenant_id)
         if not request:
             return False, f"Request {request_id} not found"
 
         if request.get("tenant_id") != tenant_id:
-            return False, f"Tenant mismatch (ADR-0563)"
+            return False, "Tenant mismatch (ADR-0563)"
+
+        if request.get("status", "pending") != "pending":
+            return False, f"Request {request_id} already {request.get('status')}"
 
         # Record rejection decision
         decision = OperatorApprovalDecision(
@@ -228,22 +264,22 @@ class OperatorApprovalGate:
         )
 
         # Write to audit trail (fail-closed)
-        if not self._write_audit_event(decision.to_audit_event()):
+        if not self._write_decision_audit(decision, request):
             return False, "Failed to write rejection to audit trail (GDPR Art. 30)"
 
         # Update request status
-        self._update_request_status(request_id, "rejected")
+        self._update_request_status(request_id, tenant_id, "rejected")
 
         # Store decision
         try:
-            with open(self.decisions_file, 'a') as f:
+            with open(self._decisions_file(tenant_id), 'a') as f:
                 f.write(json.dumps(decision.__dict__) + "\n")
         except Exception as e:
-            logger.error(f"Failed to store rejection decision: {e}")
-            return False, f"Failed to store decision: {e}"
+            logger.error("Failed to store rejection decision: %s", type(e).__name__)
+            return False, "Failed to store decision"
 
-        logger.warning(f"Phase transition rejected by {operator_id} for tenant {tenant_id}: {reason}")
-        return True, f"Phase transition rejected (reason: {reason})"
+        logger.warning("Phase transition rejected for tenant %s: %s", tenant_id, request_id)
+        return True, "Phase transition rejected"
 
     def check_approval_status(
         self,
@@ -255,7 +291,7 @@ class OperatorApprovalGate:
 
         Returns: (status, decision_id or None)
         """
-        request = self._get_request(request_id)
+        request = self._get_request(request_id, tenant_id)
         if not request:
             return "not_found", None
 
@@ -269,95 +305,90 @@ class OperatorApprovalGate:
             expires_at = datetime.fromisoformat(request.get("expires_at", ""))
             if datetime.now(timezone.utc) > expires_at:
                 # Auto-escalate (not auto-approve) - requires manual intervention
-                self._update_request_status(request_id, "expired")
+                self._write_audit_event("operator_approval.expired", tenant_id, {
+                    "request_id": request_id, "phase_name": request.get("phase_name"),
+                })
+                self._update_request_status(request_id, tenant_id, "expired")
                 logger.warning(f"Approval request {request_id} expired (tenant {tenant_id})")
                 return "expired", None
 
         # Find decision if approved/rejected
         decision_id = None
         if current_status in ("approved", "rejected"):
-            decision_id = self._get_decision_for_request(request_id)
+            decision_id = self._get_decision_for_request(request_id, tenant_id)
 
         return current_status, decision_id
 
-    def _write_audit_event(self, event: Dict) -> bool:
-        """Write event to audit trail (fail-closed if audit write fails)"""
+    def _write_audit_event(self, event_type: str, tenant_id: str, details: Dict) -> bool:
+        """Write one content-free record to THE tenant chain. False on failure
+        (callers fail closed)."""
         try:
-            # Add audit metadata
-            event_record = {
-                "event_id": f"evt-{uuid.uuid4().hex[:12]}",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "tenant_id": event.get("tenant_id"),  # MANDATORY
-                **event,
-            }
+            from forge import paths as forge_paths  # type: ignore[import-not-found]
+            from forge import security_events  # type: ignore[import-not-found]
 
-            # Write to audit trail
-            with open(self.audit_path, 'a') as f:
-                f.write(json.dumps(event_record) + "\n")
-
+            security_events.write_event(
+                forge_paths.tenant_audit_chain(tenant_id),
+                event_type,
+                details={**details, "tenant_id": tenant_id,
+                         "lom": "core.compliance.operator_approval_system"},
+            )
             return True
-        except Exception as e:
-            logger.error(f"Failed to write audit event: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to write audit event %s: %s", event_type, type(e).__name__)
             return False  # Fail-closed
 
-    def _get_request(self, request_id: str) -> Optional[Dict]:
-        """Get approval request by ID"""
-        if not self.requests_file.exists():
-            return None
+    def _write_decision_audit(self, decision: "OperatorApprovalDecision", request: Dict) -> bool:
+        return self._write_audit_event("operator_approval.decided", decision.tenant_id, {
+            "request_id": decision.request_id,
+            "decision_id": decision.decision_id,
+            "decision": decision.decision,
+            "phase_name": request.get("phase_name"),
+            "consent_basis": decision.consent_basis,
+            # reserved spine key: the writer pseudonymises a PII-shaped id
+            "user": decision.operator_id,
+        })
 
+    @staticmethod
+    def _read_jsonl(path: Path) -> List[Dict]:
+        if not path.exists():
+            return []
+        out = []
+        with open(path, 'r') as f:
+            for line in f:
+                if line.strip():
+                    out.append(json.loads(line))
+        return out
+
+    def _get_request(self, request_id: str, tenant_id: str) -> Optional[Dict]:
+        """Get approval request by ID from the tenant's own store."""
         try:
-            with open(self.requests_file, 'r') as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    if data.get("request_id") == request_id:
-                        return data
-        except Exception as e:
-            logger.error(f"Failed to read request: {e}")
-
+            for data in self._read_jsonl(self._requests_file(tenant_id)):
+                if data.get("request_id") == request_id:
+                    return data
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to read request: %s", type(e).__name__)
         return None
 
-    def _get_decision_for_request(self, request_id: str) -> Optional[str]:
+    def _get_decision_for_request(self, request_id: str, tenant_id: str) -> Optional[str]:
         """Get decision ID for a request"""
-        if not self.decisions_file.exists():
-            return None
-
         try:
-            with open(self.decisions_file, 'r') as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    if data.get("request_id") == request_id:
-                        return data.get("decision_id")
-        except Exception as e:
-            logger.error(f"Failed to read decision: {e}")
-
+            for data in self._read_jsonl(self._decisions_file(tenant_id)):
+                if data.get("request_id") == request_id:
+                    return data.get("decision_id")
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to read decision: %s", type(e).__name__)
         return None
 
-    def _update_request_status(self, request_id: str, status: str) -> None:
-        """Update request status"""
-        if not self.requests_file.exists():
-            return
-
-        try:
-            # Read all requests
-            requests = []
-            with open(self.requests_file, 'r') as f:
-                for line in f:
-                    if line.strip():
-                        requests.append(json.loads(line))
-
-            # Update the matching request
+    def _update_request_status(self, request_id: str, tenant_id: str, status: str) -> None:
+        """Update request status (atomic replace of the tenant's store)."""
+        path = self._requests_file(tenant_id)
+        requests = self._read_jsonl(path)
+        for req in requests:
+            if req.get("request_id") == request_id:
+                req["status"] = status
+                req["updated_at"] = datetime.now(timezone.utc).isoformat()
+        tmp = path.with_suffix(".jsonl.tmp")
+        with open(tmp, 'w') as f:
             for req in requests:
-                if req.get("request_id") == request_id:
-                    req["status"] = status
-                    req["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-            # Write back
-            with open(self.requests_file, 'w') as f:
-                for req in requests:
-                    f.write(json.dumps(req) + "\n")
-        except Exception as e:
-            logger.error(f"Failed to update request status: {e}")
+                f.write(json.dumps(req) + "\n")
+        tmp.replace(path)

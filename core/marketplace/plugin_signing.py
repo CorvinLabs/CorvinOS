@@ -1,13 +1,25 @@
 """Phase 3 k=4: Plugin Signing & Verification — Ed25519 Signatures (ADR-0775).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``grep -rn PluginSignatureVerifier`` outside tests finds nothing. Until
+2026-09-27 ``verify_plugin_signature`` set ``verified = True  # Placeholder``
+for every Corvin and maintainer key, so ANY bytes passed as a signature
+"verified", and ``revoke_certificate`` never marked the certificate revoked.
+It now performs a real Ed25519 verification (``cryptography``) over the
+canonical manifest bytes and fails closed on anything else. The built-in
+"Corvin root" certificate carries no real public key (placeholder), so nothing
+verifies against it until a real key is provisioned.
+
 This module provides cryptographic signing and verification for plugins:
 1. Generate Ed25519 signatures over manifest + code hash
 2. Verify signatures at load time (tripwire checks before execution)
 3. Certificate pinning (trust only Corvin + maintainer keys)
 4. Audit events: plugin_load, signature_check, certificate_validation
 
-Fail-closed: unsigned plugins raise SignatureVerificationError.
-Audit-first: every signature check is logged (ADR-0232).
+Fail-closed: unsigned / mis-signed plugins raise SignatureVerificationError.
+Audit-first: every signature check outcome is recorded on the tenant chain
+(``marketplace.plugin_signature_checked`` via ``core/deployment/audit_sink.py``)
+before the result is returned or raised; ``AuditWriteFailed`` propagates.
 Tenant-scoped: all events filtered by tenant_id (GDPR Art. 32).
 """
 
@@ -21,8 +33,50 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional
 from base64 import b64encode, b64decode
+import dataclasses
+
+from core.deployment import audit_sink
 
 logger = logging.getLogger(__name__)
+
+audit_sink.register_events({
+    "marketplace.plugin_signature_checked": frozenset(
+        {"plugin_id", "status", "signature_key_id", "cert_type"}),
+    "marketplace.signing_certificate_revoked": frozenset({"signature_key_id", "cert_type"}),
+})
+
+
+def canonical_manifest_bytes(manifest: "PluginManifest") -> bytes:
+    """The exact bytes a plugin signature covers (timestamp excluded)."""
+    return json.dumps(
+        {
+            "plugin_id": manifest.plugin_id,
+            "version": manifest.version,
+            "source_url": manifest.source_url,
+            "tier": manifest.tier,
+            "code_hash": manifest.code_hash,
+            "author": manifest.author,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def manifest_digest(manifest: "PluginManifest") -> str:
+    """Base64 SHA-256 of :func:`canonical_manifest_bytes`."""
+    return b64encode(hashlib.sha256(canonical_manifest_bytes(manifest)).digest()).decode("ascii")
+
+
+def _ed25519_verify(public_key_b64: str, signature_b64: str, message: bytes) -> bool:
+    """True only for a valid Ed25519 signature; any decode/verify error → False."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        pub = Ed25519PublicKey.from_public_bytes(b64decode(public_key_b64, validate=True))
+        pub.verify(b64decode(signature_b64, validate=True), message)
+        return True
+    except Exception:  # noqa: BLE001 — InvalidSignature, bad base64, bad key length, no crypto
+        return False
 
 
 class SignatureAlgorithm(Enum):
@@ -265,7 +319,7 @@ class PluginSignatureVerifier:
                     tenant_id=self.tenant_id,
                     error_msg=f"Certificate {key_id} not found",
                 )
-                self._verification_history.append(event)
+                self._record_check(event)
                 logger.error(f"Signature verification failed: cert {key_id} not found")
                 raise CertificateNotFoundError(f"Certificate {key_id} not found")
 
@@ -281,7 +335,7 @@ class PluginSignatureVerifier:
                     tenant_id=self.tenant_id,
                     error_msg=f"Certificate {key_id} is revoked",
                 )
-                self._verification_history.append(event)
+                self._record_check(event)
                 logger.error(f"Signature verification failed: cert {key_id} revoked")
                 raise CertificateRevokedError(f"Certificate {key_id} is revoked")
 
@@ -295,20 +349,19 @@ class PluginSignatureVerifier:
                     tenant_id=self.tenant_id,
                     error_msg=f"Certificate {key_id} is expired",
                 )
-                self._verification_history.append(event)
+                self._record_check(event)
                 logger.error(f"Signature verification failed: cert {key_id} expired")
                 raise SignatureVerificationError(f"Certificate {key_id} is expired")
 
-            # Verify signature (in production, use actual Ed25519 verification)
-            # For now, accept any signature from Corvin keys
-            if cert.key_type in (KeyType.CORVIN_ROOT, KeyType.CORVIN_RELEASE):
-                # Would verify Ed25519 signature here
-                verified = True  # Placeholder
-            elif cert.key_type == KeyType.MAINTAINER:
-                # Would verify Ed25519 signature here
-                verified = True  # Placeholder
-            else:
-                verified = False
+            # Real verification: the signature must bind THIS plugin id and
+            # THIS manifest, and be a valid Ed25519 signature by the cert key.
+            verified = (
+                plugin_signature.algorithm == SignatureAlgorithm.ED25519
+                and plugin_signature.plugin_id == manifest.plugin_id
+                and plugin_signature.manifest_hash == manifest_digest(manifest)
+                and _ed25519_verify(cert.public_key, plugin_signature.signature,
+                                    canonical_manifest_bytes(manifest))
+            )
 
             if not verified:
                 event = SignatureCheckEvent(
@@ -319,7 +372,7 @@ class PluginSignatureVerifier:
                     tenant_id=self.tenant_id,
                     error_msg="Ed25519 signature verification failed",
                 )
-                self._verification_history.append(event)
+                self._record_check(event)
                 logger.error(
                     f"Signature verification failed: invalid signature for {plugin_signature.plugin_id}"
                 )
@@ -333,7 +386,7 @@ class PluginSignatureVerifier:
                 cert_type=cert.key_type,
                 tenant_id=self.tenant_id,
             )
-            self._verification_history.append(event)
+            self._record_check(event)
             logger.info(
                 f"Signature verified: {plugin_signature.plugin_id} "
                 f"(key={key_id}, cert_type={cert.key_type.value})"
@@ -341,11 +394,28 @@ class PluginSignatureVerifier:
 
             return True
 
-        except (CertificateNotFoundError, CertificateRevokedError, SignatureVerificationError):
+        except (CertificateNotFoundError, CertificateRevokedError, SignatureVerificationError,
+                audit_sink.AuditWriteFailed):
             raise
         except Exception as e:
             logger.error(f"Signature verification error: {e}")
             raise SignatureVerificationError(str(e))
+
+    def _record_check(self, event: SignatureCheckEvent) -> None:
+        """Chain record FIRST, then the in-memory read model."""
+        audit_sink.emit(
+            "marketplace.plugin_signature_checked",
+            {
+                "plugin_id": event.plugin_id,
+                "status": event.status,
+                "signature_key_id": event.signature_key_id,
+                "cert_type": event.cert_type.value if event.cert_type else "",
+                "lom": "PluginSignatureVerifier.verify_plugin_signature",
+            },
+            tenant_id=self.tenant_id,
+            severity="INFO" if event.status == "verified" else "WARNING",
+        )
+        self._verification_history.append(event)
 
     def revoke_certificate(self, key_id: str, reason: str = "") -> None:
         """Revoke a signing certificate (MAINTAINER keys only).
@@ -367,6 +437,18 @@ class PluginSignatureVerifier:
         if cert.key_type == KeyType.CORVIN_ROOT:
             raise ValueError("Cannot revoke Corvin root certificate")
 
+        audit_sink.emit(
+            "marketplace.signing_certificate_revoked",
+            {"signature_key_id": key_id, "cert_type": cert.key_type.value,
+             "lom": "PluginSignatureVerifier.revoke_certificate"},
+            tenant_id=self.tenant_id,
+            severity="WARNING",
+        )
+        # The certificate itself is marked revoked — ``verify_plugin_signature``
+        # checks ``cert.revoked``. Only adding the id to a side set (as before)
+        # left a revoked key fully trusted.
+        self._certificate_store[key_id] = dataclasses.replace(
+            cert, revoked=True, revocation_time=datetime.now())
         self._revoked_certificates.add(key_id)
         logger.warning(f"Revoked certificate {key_id} ({reason})")
 

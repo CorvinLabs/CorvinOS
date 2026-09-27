@@ -1,8 +1,10 @@
 /**
- * Skill Upload Tab — Local ZIP Upload (Phase 5 K=3)
+ * Skill Upload Tab — local ZIP install.
  *
- * Drag-and-drop or file picker for .zip files.
- * Validates file type and initiates installation via upload endpoint.
+ * POSTs multipart {file, skill_id, version} to
+ * /v1/console/skills-manager/skills/install (routes/skill_manager.py), which
+ * requires all three fields. It used to POST only the file to /v1/skills/upload
+ * (served by no router) and then read a `skill_id` the response never had.
  */
 
 import { useCallback, useState } from 'react';
@@ -10,7 +12,9 @@ import { Upload, FileCheck } from 'lucide-react';
 import { useSkillManager } from '../SkillManagerContext';
 
 export function SkillUploadTab() {
-  const { startInstall } = useSkillManager();
+  const { installZip } = useSkillManager();
+  const [skillId, setSkillId] = useState('');
+  const [version, setVersion] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,40 +73,30 @@ export function SkillUploadTab() {
       setError('No file selected');
       return;
     }
+    if (!skillId.trim() || !version.trim()) {
+      setError('Enter the skill id and version');
+      return;
+    }
 
     setUploading(true);
     setError(null);
-
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-
-      const response = await fetch('/v1/skills/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || `${response.status} ${response.statusText}`);
+      if (await installZip(selectedFile, skillId.trim(), version.trim())) {
+        setSelectedFile(null);
+        setSkillId('');
+        setVersion('');
       }
-
-      const data = await response.json();
-      await startInstall(data.skill_id, data.name || selectedFile.name, 'upload');
-      setSelectedFile(null);
-    } catch (err) {
-      setError(String(err));
     } finally {
       setUploading(false);
     }
-  }, [selectedFile, startInstall]);
+  }, [selectedFile, skillId, version, installZip]);
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
         <h2 className="text-lg font-semibold mb-4">Upload Custom Skill</h2>
         <p className="text-sm text-muted-foreground mb-6">
-          Upload a .zip file containing your skill package. The skill will be validated and installed.
+          Upload a .zip file containing your skill package, with its skill id and version. The package is validated and installed.
         </p>
       </div>
 
@@ -153,6 +147,28 @@ export function SkillUploadTab() {
         </div>
       )}
 
+      {/* Skill identity — required by the install route */}
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-sm space-y-1">
+          <span className="font-medium">Skill id</span>
+          <input
+            value={skillId}
+            onChange={(e) => setSkillId(e.target.value)}
+            className="w-full border rounded px-2 py-1 bg-background"
+            placeholder="my-skill"
+          />
+        </label>
+        <label className="text-sm space-y-1">
+          <span className="font-medium">Version</span>
+          <input
+            value={version}
+            onChange={(e) => setVersion(e.target.value)}
+            className="w-full border rounded px-2 py-1 bg-background"
+            placeholder="1.0.0"
+          />
+        </label>
+      </div>
+
       {/* Error message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive rounded p-4 text-destructive">
@@ -163,7 +179,7 @@ export function SkillUploadTab() {
       {/* Upload button */}
       <button
         onClick={handleUpload}
-        disabled={!selectedFile || uploading}
+        disabled={!selectedFile || !skillId.trim() || !version.trim() || uploading}
         className="w-full px-4 py-2 bg-primary text-primary-foreground rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
       >
         {uploading ? 'Uploading…' : 'Upload & Install'}

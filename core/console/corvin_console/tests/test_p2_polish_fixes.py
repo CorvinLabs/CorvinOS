@@ -6,12 +6,22 @@ Tests for:
 3. Restore snapshot implementation
 """
 
-import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, patch, MagicMock
+import sys
+import tempfile
+from pathlib import Path
 
-from corvin_console.app import app
+import pytest
+
 from corvin_console.error_handling import safe_error_response, safe_snapshot_error
+
+# The console router is mounted under /v1/console by its hosts; the old tests
+# posted to /v1/console/... on the bare ``corvin_console.app.app`` (which
+# serves at root) and so only ever saw 404. Use the shared sandbox: real
+# router at the real prefix, a real session, a scratch CORVIN_HOME.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+from test_admin_route import _sandbox  # noqa: E402
+
+SNAP = "/v1/console/control-plane/snapshots"
 
 
 # ============================================================================
@@ -53,169 +63,55 @@ class TestErrorSanitization:
         assert "def456" not in safe_msg
         assert "checksum mismatch" not in safe_msg.lower() or "integrity" in safe_msg.lower()
 
-    def test_snapshot_create_error_response_sanitized(self):
-        """POST /snapshots error response should be sanitized."""
-        client = TestClient(app)
-
-        # Mock manager to raise exception
-        with patch("corvin_console.routes.control_plane_snapshots.get_snapshot_manager") as mock_mgr:
-            mock_manager = AsyncMock()
-            mock_manager.create_snapshot.side_effect = RuntimeError("Database connection pool exhausted")
-            mock_mgr.return_value = mock_manager
-
-            response = client.post(
-                "/v1/console/control-plane/snapshots",
-                json={
-                    "name": "test-snapshot",
-                    "description": "Test snapshot"
-                }
-            )
-
-        # Should return 400 with safe message
-        assert response.status_code == 400
-        detail = response.json()["detail"]
-
-        # Should NOT contain internal details
-        assert "Database connection" not in detail
-        assert "exhausted" not in detail
-        assert "RuntimeError" not in detail
-        # Should contain safe message
-        assert "Failed to create snapshot" in detail or "error" in detail.lower()
-
-    def test_snapshot_get_error_response_sanitized(self):
-        """GET /snapshots/{id} error response should be sanitized."""
-        client = TestClient(app)
-
-        with patch("corvin_console.routes.control_plane_snapshots.get_snapshot_manager") as mock_mgr:
-            mock_manager = AsyncMock()
-            mock_manager.get_snapshot.side_effect = ValueError("Access denied: user lacks admin role")
-            mock_mgr.return_value = mock_manager
-
-            response = client.get("/v1/console/control-plane/snapshots/snap_000001")
-
-        # Should return 403 with safe message
-        assert response.status_code == 403
-        detail = response.json()["detail"]
-
-        # Should NOT expose privilege/role details
-        assert "admin" not in detail.lower()
-        assert "user lacks" not in detail
-        assert "denied" not in detail.lower() or "access" in detail.lower()
+    # (The snapshot create/get sanitization tests patched a
+    # ``get_snapshot_manager`` the defused router no longer has: every
+    # snapshot route answers 501 before any manager could raise — see
+    # TestSnapshotRoutesDefused.)
 
 
 # ============================================================================
-# Snapshot Bounds Tests
+# Snapshot routes: defused, fail closed (adversarial review 2026-09-27)
 # ============================================================================
 
-class TestSnapshotBounds:
-    """Test snapshot name/description length bounds (DoS prevention)."""
+class TestSnapshotRoutesDefused:
+    """Snapshot capture recorded a hard-coded EMPTY state and restore reported
+    success while restoring nothing, so every route now answers 501
+    ``not_implemented`` behind a session. The name/description bounds tests
+    that used to live here have no subject any more: the request model was
+    removed with the handlers, and no input reaches validation."""
 
-    def test_snapshot_name_max_length(self):
-        """Snapshot name must be <= 500 chars."""
-        client = TestClient(app)
+    ROUTES = [
+        ("post", SNAP, {"name": "x" * 501, "description": "y"}),
+        ("get", SNAP, None),
+        ("get", SNAP + "/audit-log", None),
+        ("get", SNAP + "/snap_000001", None),
+        ("post", SNAP + "/snap_000001/restore", {}),
+        ("post", SNAP + "/snap_000001/diff", {}),
+        ("delete", SNAP + "/snap_000001", None),
+    ]
 
-        # Name exactly at limit (500 chars) should pass validation
-        long_name = "x" * 500
-        response = client.post(
-            "/v1/console/control-plane/snapshots",
-            json={
-                "name": long_name,
-                "description": "Valid description"
-            }
-        )
-        # Should not fail validation (may fail for other reasons, but not validation)
-        # Status != 422 (validation error)
-        assert response.status_code != 422
+    def test_every_route_is_501_not_implemented_with_a_session(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, _home, _):
+            for method, path, body in self.ROUTES:
+                kw = {"headers": {"X-CSRF-Token": csrf}}
+                if body is not None:
+                    kw["json"] = body
+                r = getattr(client, method)(path, **kw)
+                assert r.status_code == 501, (method, path, r.status_code, r.text)
+                assert r.json()["detail"]["status"] == "not_implemented"
 
-    def test_snapshot_name_exceeds_limit(self):
-        """Snapshot name > 500 chars should be rejected."""
-        client = TestClient(app)
+    def test_every_route_requires_a_session(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, _csrf, _home, _):
+            client.cookies.clear()
+            for method, path, body in self.ROUTES:
+                kw = {"json": body} if body is not None else {}
+                r = getattr(client, method)(path, **kw)
+                assert r.status_code == 401, (method, path, r.status_code)
 
-        # Name exceeding limit
-        long_name = "x" * 501
-        response = client.post(
-            "/v1/console/control-plane/snapshots",
-            json={
-                "name": long_name,
-                "description": "Valid description"
-            }
-        )
-
-        # Should reject with 422 (validation error)
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        # Should mention name bounds
-        assert any("name" in str(d).lower() for d in detail)
-        assert any("500" in str(d) for d in detail)
-
-    def test_snapshot_description_max_length(self):
-        """Snapshot description must be <= 500 chars."""
-        client = TestClient(app)
-
-        # Description exactly at limit
-        long_desc = "y" * 500
-        response = client.post(
-            "/v1/console/control-plane/snapshots",
-            json={
-                "name": "Valid name",
-                "description": long_desc
-            }
-        )
-        # Should not fail validation
-        assert response.status_code != 422
-
-    def test_snapshot_description_exceeds_limit(self):
-        """Snapshot description > 500 chars should be rejected."""
-        client = TestClient(app)
-
-        # Description exceeding limit
-        long_desc = "y" * 501
-        response = client.post(
-            "/v1/console/control-plane/snapshots",
-            json={
-                "name": "Valid name",
-                "description": long_desc
-            }
-        )
-
-        # Should reject with 422 (validation error)
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        # Should mention description bounds
-        assert any("description" in str(d).lower() for d in detail)
-        assert any("500" in str(d) for d in detail)
-
-    def test_snapshot_name_empty_rejected(self):
-        """Snapshot name cannot be empty."""
-        client = TestClient(app)
-
-        response = client.post(
-            "/v1/console/control-plane/snapshots",
-            json={
-                "name": "",
-                "description": "Valid description"
-            }
-        )
-
-        # Should reject empty name
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert any("name" in str(d).lower() for d in detail)
-
-    def test_snapshot_name_whitespace_only_rejected(self):
-        """Snapshot name cannot be whitespace only."""
-        client = TestClient(app)
-
-        response = client.post(
-            "/v1/console/control-plane/snapshots",
-            json={
-                "name": "   ",
-                "description": "Valid description"
-            }
-        )
-
-        # Should reject whitespace-only name
-        assert response.status_code == 422
+    def test_mutations_require_csrf(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, _csrf, _home, _):
+            r = client.post(SNAP, json={"name": "n", "description": "d"})
+            assert r.status_code == 403, r.text
 
 
 # ============================================================================
@@ -235,7 +131,8 @@ class TestSnapshotRestoreImplementation:
             async def log_event(self, event_type, payload):
                 pass
 
-        manager = SnapshotManager(MockAudit(), "/tmp/test_snapshots")
+        import tempfile
+        manager = SnapshotManager(MockAudit(), tempfile.mkdtemp())
 
         # Create a snapshot
         original_state = {
@@ -261,17 +158,15 @@ class TestSnapshotRestoreImplementation:
         assert snapshot["name"] == "test-restore"
         assert snapshot["intent_state"]["task1"] == "enabled"
 
-        # Now restore the snapshot
-        restore_result = await manager.restore_snapshot(
-            snapshot_id=snapshot_id,
-            tenant_id="test-tenant",
-            approver_id="approver-user"
-        )
-
-        # Verify restore returned state
-        assert restore_result["status"] == "restored"
-        assert restore_result["restored_state"]["intent"]["task1"] == "enabled"
-        assert restore_result["restored_state"]["plugins"]["plugin1"] == "active"
+        # A restore must never be reported done: nothing applies snapshot
+        # state, so it fails closed (adversarial review 2026-09-27).
+        from core.control_plane.snapshot_manager import SnapshotRestoreNotImplemented
+        with pytest.raises(SnapshotRestoreNotImplemented):
+            await manager.restore_snapshot(
+                snapshot_id=snapshot_id,
+                tenant_id="test-tenant",
+                approver_id="approver-user"
+            )
 
     @pytest.mark.asyncio
     async def test_restore_snapshot_invalid_checksum_rejected(self):
@@ -282,7 +177,8 @@ class TestSnapshotRestoreImplementation:
             async def log_event(self, event_type, payload):
                 pass
 
-        manager = SnapshotManager(MockAudit(), "/tmp/test_snapshots")
+        import tempfile
+        manager = SnapshotManager(MockAudit(), tempfile.mkdtemp())
 
         # Create snapshot
         original_state = {
@@ -305,8 +201,9 @@ class TestSnapshotRestoreImplementation:
         # Corrupt the snapshot in-memory
         snapshot = manager.snapshots[snapshot_id]
         # Modify a field to invalidate checksum
-        manager.snapshots[snapshot_id] = snapshot._replace(
-            intent_state={"task1": "disabled"}  # Changed state
+        import dataclasses
+        manager.snapshots[snapshot_id] = dataclasses.replace(
+            snapshot, intent_state={"task1": "disabled"}  # Changed state
         )
 
         # Attempt to restore should raise ValueError (checksum mismatch)
@@ -326,53 +223,39 @@ class TestEndpointErrorResponses:
     """Test that endpoints return sanitized error responses."""
 
     def test_override_create_error_sanitized(self):
-        """POST /overrides error should be sanitized."""
-        client = TestClient(app)
+        """POST /overrides with an unknown type → 400/422, no internals."""
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _):
+            from core.compliance import consent_store
+            from corvin_console import auth as _auth
+            from corvin_console.routes import control_plane_overrides as ov
 
-        # Send invalid override request
-        response = client.post(
-            "/v1/console/control-plane/overrides",
-            json={
-                "override_type": "invalid_type",
-                "target_id": "target1",
-                "reason": "Testing"
-            }
-        )
+            consent_store._stores.clear()
+            ov._authority = None
+            sid = client.cookies.get("corvin_console_sid")
+            consent_store.get_consent_store("_default", corvin_home=home).grant_consent(
+                user_id=_auth.load_session(sid).sid_fingerprint,
+                scope="control_plane_override_operations")
+            response = client.post(
+                "/v1/console/control-plane/overrides",
+                headers={"X-CSRF-Token": csrf},
+                json={"override_type": "invalid_type", "target_id": "target1",
+                      "reason": "Testing"},
+            )
+            ov._authority = None
 
-        # Should fail but with safe message
-        assert response.status_code in [400, 422]
+        assert response.status_code in (400, 422), response.text
+        body = response.text
+        assert "Traceback" not in body and "File \"" not in body
         if response.status_code == 400:
             detail = response.json()["detail"]
-            # Should mention invalid type, but safely
             assert "invalid" in detail.lower() or "override" in detail.lower()
 
-    def test_snapshot_list_returns_safe_metadata(self):
-        """Snapshot list should not expose sensitive metadata."""
-        client = TestClient(app)
-
-        with patch("corvin_console.routes.control_plane_snapshots.get_snapshot_manager") as mock_mgr:
-            mock_manager = AsyncMock()
-            mock_manager.list_snapshots.return_value = [
-                {
-                    "snapshot_id": "snap_000001",
-                    "name": "backup-2026-09-22",
-                    "description": "System state backup",
-                    "created_at": "2026-09-22T12:00:00Z",
-                    "created_by": "admin",
-                    "checksum": "abc123",
-                    "size_bytes": 1024
-                }
-            ]
-            mock_mgr.return_value = mock_manager
-
-            response = client.get("/v1/console/control-plane/snapshots")
-
-        assert response.status_code == 200
-        snapshots = response.json()
-        assert len(snapshots) == 1
-        # Metadata should be readable
-        assert snapshots[0]["name"] == "backup-2026-09-22"
-        assert snapshots[0]["size_bytes"] == 1024
+    def test_snapshot_list_is_not_implemented_never_sample_data(self):
+        """The list route must not serve fabricated snapshot metadata."""
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, _csrf, _home, _):
+            response = client.get(SNAP)
+        assert response.status_code == 501
+        assert "snapshots" not in response.json()
 
 
 if __name__ == "__main__":

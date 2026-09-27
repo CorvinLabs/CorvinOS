@@ -13,6 +13,17 @@ Architecture:
 
 Based on ADR-2077 (Message Completeness Protocol; filed as ADR-0542 until 2026-09-27, renumbered — 0542 is the phase-gate validator).
 Depends on: ADR-0541 (Session Bridging), ADR-0314 (Learning Events)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``chat_runtime.stream_turn`` does not call ``finalize_turn_with_context`` (the
+"integration guide" below is prose, not code).
+
+Defused 2026-09-27: the envelope claimed ``context_verified: True`` even when
+the bridge event (its audit proof) had failed to emit, carried an invented
+``expected_duration_minutes: 90``, and ``TurnContextExtractor`` returned
+placeholder state ("Phase X: Unknown", empty plan) as if extracted. The
+envelope now reports ``context_verified`` = whether the bridge event was
+actually written, and the extractor raises ``NotImplementedError``.
 """
 
 from __future__ import annotations
@@ -147,6 +158,7 @@ class MessageCompletenessGate:
 
         # 2. EMIT BRIDGE EVENT (hash-chained, audit trail)
         prev_hash = prior_snapshot.content_hash if prior_snapshot else ""
+        bridge_event = None
         try:
             bridge_event = self.producer.emit_bridge_event(
                 snapshot=snapshot,
@@ -160,15 +172,15 @@ class MessageCompletenessGate:
             )
         except Exception as e:
             logger.error(f"Bridge event emission failed: {e}", exc_info=True)
-            # Don't propagate — message should still be sent, but audit failed
-            # (fail-closed principle: if audit fails, we log but don't stop the turn)
+            # The message is still sent, but it must not CLAIM a verified
+            # context: ``context_verified`` below is False in that case.
 
         # 3. CONSTRUCT SESSION MESSAGE (with full state)
         next_action = {
             "type": "continue_phase",
             "instructions": f"Continue with {phase_name}",
             "blocking_gate": None,
-            "expected_duration_minutes": 90,
+            "expected_duration_minutes": None,  # not estimated
         }
 
         recovery_instructions = (
@@ -206,9 +218,9 @@ class MessageCompletenessGate:
 
                 # Audit proof
                 "audit_trail": {
-                    "bridge_event_id": bridge_event.hash if 'bridge_event' in locals() else "",
+                    "bridge_event_id": getattr(bridge_event, "hash", "") if bridge_event is not None else "",
                     "snapshot_hash": snapshot.content_hash,
-                    "context_verified": True,
+                    "context_verified": bridge_event is not None,
                 },
             },
             recovery_instructions=recovery_instructions,
@@ -275,31 +287,27 @@ def integrate_message_completeness_into_stream_turn():
 
 
 class TurnContextExtractor:
-    """Helper to extract session context from WebChatSession + ExecutionContext."""
+    """Helper to extract session context — NOT IMPLEMENTED.
+
+    Each method used to return placeholder state ("Phase X: Unknown", an empty
+    plan) that a caller could not tell from real extracted state.
+    """
 
     @staticmethod
     def extract_phase_name(sess) -> str:
-        """Extract current phase from session or environment."""
-        # Placeholder: real implementation reads from plan, vibe context, or env
-        return "Phase X: Unknown"
+        raise NotImplementedError("phase extraction is not implemented")
 
     @staticmethod
     def extract_active_subtasks(sess) -> List[str]:
-        """Extract active subtasks from session plan or task manager."""
-        # Placeholder
-        return []
+        raise NotImplementedError("subtask extraction is not implemented")
 
     @staticmethod
     def extract_plan_state(sess) -> tuple[str, int, int]:
-        """Extract plan_id, current_step, total_steps."""
-        # Placeholder
-        return ("", 0, 0)
+        raise NotImplementedError("plan-state extraction is not implemented")
 
     @staticmethod
     def extract_artifacts(sess) -> tuple[Optional[str], Dict[str, str]]:
-        """Extract last_artifact_id and open_tool_calls."""
-        # Placeholder
-        return (None, {})
+        raise NotImplementedError("artifact extraction is not implemented")
 
 
 __all__ = [

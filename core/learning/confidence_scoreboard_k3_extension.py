@@ -1,4 +1,12 @@
-"""ConfidenceScoreboard K=3 Extension — Track escalation + feedback loop (ADR-0314, ADR-2084)."""
+"""ConfidenceScoreboard K=3 Extension — Track escalation + feedback loop (ADR-0314, ADR-2084).
+
+In-process only (no persistence, no audit): a restart resets every score.
+The module-level helpers keep ONE scoreboard PER TENANT — until 2026-09-27 a
+single process-global scoreboard mixed every tenant's outcomes into one
+confidence delta.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+"""
 
 from datetime import datetime
 from typing import Dict, Optional, List
@@ -105,32 +113,38 @@ class ConfidenceScoreboardK3:
             return "stable"
 
 
-# Global singleton
-_SCOREBOARD: Optional[ConfidenceScoreboardK3] = None
+# One scoreboard per tenant (never a process-global one).
+_SCOREBOARDS: Dict[str, ConfidenceScoreboardK3] = {}
 
 
-def initialize_scoreboard():
-    """Initialize global scoreboard."""
-    global _SCOREBOARD
-    _SCOREBOARD = ConfidenceScoreboardK3()
+def _board(tenant_id: str, *, create: bool) -> Optional[ConfidenceScoreboardK3]:
+    from core.tenants import validate_tenant_id  # noqa: PLC0415
+
+    validate_tenant_id(tenant_id)
+    if create and tenant_id not in _SCOREBOARDS:
+        _SCOREBOARDS[tenant_id] = ConfidenceScoreboardK3()
+    return _SCOREBOARDS.get(tenant_id)
 
 
-def update_scoreboard(model: str, outcome: str, escalated: bool = False, latency_ms: Optional[float] = None) -> float:
-    """Update scoreboard and return confidence delta."""
-    if _SCOREBOARD:
-        return _SCOREBOARD.update(model, outcome, escalated, latency_ms)
-    return 0.0
+def initialize_scoreboard(*, tenant_id: str) -> None:
+    """(Re)initialize the tenant's scoreboard."""
+    _board(tenant_id, create=False)
+    _SCOREBOARDS[tenant_id] = ConfidenceScoreboardK3()
 
 
-def get_confidence_delta(model: str) -> float:
-    """Get confidence delta for next task."""
-    if _SCOREBOARD:
-        return _SCOREBOARD.get_confidence_delta(model)
-    return 0.0
+def update_scoreboard(model: str, outcome: str, escalated: bool = False,
+                      latency_ms: Optional[float] = None, *, tenant_id: str) -> float:
+    """Update the tenant's scoreboard and return its confidence delta."""
+    return _board(tenant_id, create=True).update(model, outcome, escalated, latency_ms)
 
 
-def get_scoreboard_state() -> Dict:
-    """Get current scoreboard state (for monitoring)."""
-    if _SCOREBOARD:
-        return _SCOREBOARD.get_all_scores()
-    return {}
+def get_confidence_delta(model: str, *, tenant_id: str) -> float:
+    """Get the tenant's confidence delta for next task."""
+    b = _board(tenant_id, create=False)
+    return b.get_confidence_delta(model) if b else 0.0
+
+
+def get_scoreboard_state(*, tenant_id: str) -> Dict:
+    """Get the tenant's scoreboard state (for monitoring)."""
+    b = _board(tenant_id, create=False)
+    return b.get_all_scores() if b else {}

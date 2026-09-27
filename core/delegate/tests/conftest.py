@@ -28,3 +28,39 @@ def _delegate_license_test_bypass():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+@pytest.fixture(autouse=True)
+def _forge_root_sandbox(monkeypatch, tmp_path):
+    """Keep spawned forge MCP servers out of the checkout's project-scope forge.
+
+    ``forge.py`` resolves its registry root (and with it the audit chain its
+    security events go to) from ``FORGE_ROOT``, else ``scope_root(detect_scope())``
+    — for a cwd inside a git checkout that is ``<checkout>/.corvin/forge``,
+    regardless of ``CORVIN_HOME``. ``test_live_e2e.py::ForgeMcpLiveTests`` spawns
+    the real server from the repo cwd, so every run appended a
+    ``compute.worker_unreachable`` record to ``<checkout>/.corvin/forge/audit.jsonl``
+    — in the live checkout, the live install's file (caught by the root conftest's
+    chain tripwire, 2026-09-27). A test that needs its own root still wins.
+    """
+    monkeypatch.setenv("FORGE_ROOT", str(tmp_path / "forge-root"))
+
+
+@pytest.fixture(autouse=True)
+def _restore_corvin_home():
+    """Undo the suite's unconditional ``os.environ.pop("CORVIN_HOME")`` teardowns.
+
+    Several unittest classes here (test_mcp_server, test_output_judge,
+    test_delegation AuditChainTests, ...) set ``CORVIN_HOME`` in ``setUp`` and
+    ``pop`` it in ``tearDown`` — leaving it UNSET, not restored. Unset means the
+    repo-marker home, i.e. the live install when the suite runs in the live
+    checkout (incident 2026-09-27). Restore the value the test started with.
+    """
+    saved = os.environ.get("CORVIN_HOME")
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = saved

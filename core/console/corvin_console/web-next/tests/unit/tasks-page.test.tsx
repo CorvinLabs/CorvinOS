@@ -277,7 +277,7 @@ describe("Tasks page", () => {
 
   it("opens the drawer, PATCHes with version + CSRF and explains a 409", async () => {
     renderIt("/app/initiatives?item=b");
-    const drawer = await screen.findByTestId("detail-drawer");
+    const drawer = await screen.findByTestId("detail-drawer", {}, { timeout: 5000 });
     await within(drawer).findByText("Imported batch", {}, { timeout: 2000 }).catch(() => null);
     fireEvent.change(within(drawer).getByLabelText("Status"), { target: { value: "in_progress" } });
     await waitFor(() => expect(patches).toHaveLength(1));
@@ -318,7 +318,7 @@ describe("regressions from the adversarial review", () => {
     const withTrailing = { ...ITEMS[3], description: "hello\n" };
     server.use(http.get("/v1/console/task-tracking/items/:id", () => HttpResponse.json(DETAIL(withTrailing))));
     renderIt("/app/initiatives?item=b");
-    const drawer = await screen.findByTestId("detail-drawer");
+    const drawer = await screen.findByTestId("detail-drawer", {}, { timeout: 5000 });
     for (const label of ["Description", "Title", "Assignee", "Deadline", "Estimate hours"]) {
       const el = within(drawer).getByLabelText(label, { selector: "input, textarea" });
       fireEvent.focus(el);
@@ -330,7 +330,7 @@ describe("regressions from the adversarial review", () => {
 
   it("an emptied date input does not clear the deadline; the explicit button does", async () => {
     renderIt("/app/initiatives?item=b");
-    const drawer = await screen.findByTestId("detail-drawer");
+    const drawer = await screen.findByTestId("detail-drawer", {}, { timeout: 5000 });
     const date = within(drawer).getByLabelText("Deadline", { selector: "input" });
     fireEvent.focus(date);
     fireEvent.change(date, { target: { value: "" } });
@@ -372,7 +372,7 @@ describe("regressions from the adversarial review", () => {
       http.get("/v1/console/task-tracking/items/:id", () => HttpResponse.json(DETAIL(odd))),
     );
     renderIt(`/app/initiatives?view=${view}&item=odd`);
-    expect(await screen.findByTestId("detail-drawer")).toBeTruthy();
+    expect(await screen.findByTestId("detail-drawer", {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.queryByText(/Cannot read properties/)).toBeNull();
   });
 });

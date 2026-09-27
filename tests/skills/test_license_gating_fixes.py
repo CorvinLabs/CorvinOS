@@ -324,41 +324,23 @@ class TestBootSkillsValidation:
         # Verify _validate_builtin_skills was called
         mock_validate.assert_called_once()
 
-    @patch('core.skills.boot.OperatorKeyManager')
-    @patch('core.skills.boot.ForgeSkillValidator')
-    def test_validate_builtin_skills_uses_operator_key(self, mock_validator_class, mock_key_mgr_class):
-        """_validate_builtin_skills should use OperatorKeyManager."""
-        # Setup mocks
-        mock_key_mgr = Mock()
-        mock_key_mgr.current_public_key = Mock(return_value=Mock(spec=rsa.RSAPublicKey))
-        mock_key_mgr_class.return_value = mock_key_mgr
+    def test_validate_builtin_skills_reports_not_performed(self):
+        """Builtin Skills are in-wheel code and are NOT signature-validated.
 
-        mock_validator = Mock()
-        mock_validator_class.return_value = mock_validator
-
-        # Call validation
-        _validate_builtin_skills(tenant_id="_default")
-
-        # Verify OperatorKeyManager was called
-        mock_key_mgr_class.assert_called_once()
-        mock_key_mgr.current_public_key.assert_called_once()
-
-    def test_validate_builtin_skills_audits_validation_events(self):
-        """_validate_builtin_skills should emit audit events."""
+        Round-2 adversarial review: the old test asserted that a (mocked)
+        validator produced "validation" audit events — the function emitted
+        ``skill_validation_passed`` without running any check. It must now
+        say it validated nothing, and never claim a pass.
+        """
         audit_events = []
 
         def mock_audit_emit(event_type, details):
             audit_events.append((event_type, details))
 
-        with patch('core.skills.boot.OperatorKeyManager'):
-            with patch('core.skills.boot.ForgeSkillValidator'):
-                _validate_builtin_skills(tenant_id="_default", audit_emit=mock_audit_emit)
-
-        # Verify audit events were emitted
-        assert len(audit_events) > 0
-        event_types = [e[0] for e in audit_events]
-        # Should have validation events
-        assert any("validation" in et.lower() for et in event_types)
+        assert _validate_builtin_skills(tenant_id="_default", audit_emit=mock_audit_emit) is False
+        assert [e[0] for e in audit_events] == ["skill_validation_not_performed"]
+        assert audit_events[0][1]["reason_code"] == "builtin_in_wheel_code"
+        assert not any("passed" in e[0] for e in audit_events)
 
 
 class TestThreeLayerValidationIntegration:

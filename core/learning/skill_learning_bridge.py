@@ -404,7 +404,17 @@ def get_skill_learning_bridge(
 
     Convenience function for skill integration.
     """
-    default_store_path = Path.home() / ".corvin" / "tenants" / tenant_id / "global" / f"{skill_id}_config.json"
+    import re  # noqa: PLC0415
+
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+    # skill_id becomes a path component: refuse anything that is not a plain
+    # dotted identifier (``os.delegation_router``) so ``../x`` cannot escape
+    # the tenant's global dir. tenant_home() validates tenant_id.
+    if not isinstance(skill_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", skill_id) \
+            or ".." in skill_id:
+        raise ValueError(f"invalid skill_id for config path: {skill_id!r}")
+    default_store_path = tenant_home(tenant_id) / "global" / f"{skill_id}_config.json"
     return _BRIDGE_REGISTRY.get_or_create(
         skill_id,
         tenant_id,

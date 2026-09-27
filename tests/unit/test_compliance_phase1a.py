@@ -1,221 +1,102 @@
-"""Phase 1A: Smoke tests for ADR-0232 Audit Trail + Boot Tripwire."""
+"""ADR-0232 "Phase 1A" skeleton — defused (adversarial review 2026-09-27).
 
-import tempfile
-import pytest
+The skeleton shipped a second audit chain (``AuditTrail``) and a second boot
+tripwire checking that second chain. Both are now refused / delegated: there is
+ONE chain per tenant (``forge.paths.tenant_audit_chain``) and ONE tripwire
+(``corvin_compliance_reports.tripwire``). These tests pin that.
+"""
+
 from pathlib import Path
+from unittest import mock
 
-from core.compliance import (
-    AuditTrail,
-    AuditRecord,
-    BootTripwire,
-    ComplianceError,
-)
-from core.compliance.audit_trail import new_audit_record
-from core.compliance.exceptions import AuditChainError, TripwireError
+import pytest
+
+from core.compliance import AuditRecord, AuditTrail, BootTripwire, ComplianceError
+from core.compliance.audit_trail import new_audit_record, pseudonymise_actor
+from core.compliance.boot_tripwire import assert_boot_compliance
+from core.compliance.exceptions import TripwireError
+from corvin_compliance_reports import tripwire as canonical_tripwire
+from forge import paths as forge_paths
 
 
 class TestAuditRecord:
-    """Immutable audit records."""
-    
+    """AuditRecord stays an inert, immutable value type."""
+
+    def _record(self, **kw):
+        base = dict(
+            timestamp="2026-09-26T20:32:00Z", event_type="consent_granted",
+            tenant_id="default", actor="operator", action="approve",
+            resource="skill:foo", result="allowed", details={"version": "1.0"},
+        )
+        base.update(kw)
+        return AuditRecord(**base)
+
     def test_audit_record_frozen(self):
-        """AuditRecord is immutable."""
-        record = AuditRecord(
-            timestamp="2026-09-26T20:32:00Z",
-            event_type="consent_granted",
-            tenant_id="default",
-            actor="operator",
-            action="approve",
-            resource="skill:foo",
-            result="allowed",
-            details={"version": "1.0"},
-        )
-        
         with pytest.raises(AttributeError):
-            record.timestamp = "2026-09-26T21:00:00Z"
-    
+            self._record().timestamp = "2026-09-26T21:00:00Z"
+
     def test_audit_record_hash_deterministic(self):
-        """Same record always produces same hash."""
-        record = AuditRecord(
-            timestamp="2026-09-26T20:32:00Z",
-            event_type="consent_granted",
-            tenant_id="default",
-            actor="operator",
-            action="approve",
-            resource="skill:foo",
-            result="allowed",
-            details={},
-        )
-        
-        hash1 = record.hash()
-        hash2 = record.hash()
-        assert hash1 == hash2
+        r = self._record()
+        assert r.hash() == r.hash()
+
+    def test_new_audit_record_never_carries_a_raw_user_id(self):
+        rec = new_audit_record("consent_granted", "default", "alice@example.com",
+                               "grant", "analytics", "allowed")
+        assert rec.actor != "alice@example.com"
+        assert rec.actor == pseudonymise_actor("alice@example.com")
+        assert len(rec.actor) == 8
+
+    def test_system_actor_is_kept(self):
+        rec = new_audit_record("x", "default", "system", "a", "r", "allowed")
+        assert rec.actor == "system"
 
 
-class TestAuditTrail:
-    """Hash-chained audit trail."""
-    
-    def test_empty_trail(self):
-        """New trail is valid."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            trail = AuditTrail(Path(tmpdir) / "audit.jsonl")
-            assert trail.verify_chain() is True
-    
-    def test_append_record(self):
-        """Append creates hash-chained entry."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            trail = AuditTrail(Path(tmpdir) / "audit.jsonl")
-            
-            record = AuditRecord(
-                timestamp="2026-09-26T20:32:00Z",
-                event_type="test_event",
-                tenant_id="default",
-                actor="test",
-                action="test_action",
-                resource="test",
-                result="allowed",
-                details={},
-            )
-            
-            hash_result = trail.append(record)
-            assert hash_result == record.hash()
-            assert trail.verify_chain() is True
-    
-    def test_chain_integrity(self):
-        """Hash chain is verifiable."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            trail = AuditTrail(Path(tmpdir) / "audit.jsonl")
-            
-            # Append 3 records
-            for i in range(3):
-                record = AuditRecord(
-                    timestamp=f"2026-09-26T20:{i:02d}:00Z",
-                    event_type="test",
-                    tenant_id="default",
-                    actor="test",
-                    action=f"action_{i}",
-                    resource="test",
-                    result="allowed",
-                    details={"index": i},
-                )
-                trail.append(record)
-            
-            # Verify all
-            assert trail.verify_chain() is True
-    
-    def test_records_iteration(self):
-        """Iterate all records in trail."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            trail = AuditTrail(Path(tmpdir) / "audit.jsonl")
-            
-            for i in range(3):
-                record = AuditRecord(
-                    timestamp=f"2026-09-26T20:{i:02d}:00Z",
-                    event_type="test",
-                    tenant_id="default",
-                    actor="test",
-                    action=f"action_{i}",
-                    resource="test",
-                    result="allowed",
-                    details={"index": i},
-                )
-                trail.append(record)
-            
-            # Iterate and count
-            records = list(trail.records())
-            assert len(records) == 3
-            assert records[0].action == "action_0"
-            assert records[2].action == "action_2"
+class TestNoSecondChain:
+    """AuditTrail must not be able to create a second chain."""
+
+    def test_audit_trail_refuses(self, tmp_path):
+        with pytest.raises(NotImplementedError, match="tenant_audit_chain"):
+            AuditTrail(tmp_path / "audit.jsonl")
+        assert not (tmp_path / "audit.jsonl").exists()
 
 
-class TestBootTripwire:
-    """Boot compliance check."""
-    
-    def test_tripwire_pass(self):
-        """Tripwire passes when audit trail exists and is initialized."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            corvin_home = Path(tmpdir)
-            
-            # Create and initialize audit trail
-            trail = AuditTrail(corvin_home / "audit.jsonl")
-            record = new_audit_record(
-                event_type="boot_started",
-                tenant_id="default",
-                actor="system",
-                action="boot",
-                resource="platform",
-                result="allowed",
-                details={"phase": "1a"},
-            )
-            trail.append(record)
-            
-            # Tripwire should pass
-            tripwire = BootTripwire(corvin_home)
-            assert tripwire.run() is True
-            
-            status = tripwire.status()
-            assert status["all_pass"] is True
-    
-    def test_tripwire_fail_missing(self):
-        """Tripwire fails if audit trail missing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            corvin_home = Path(tmpdir)
-            # Don't create audit trail
-            
-            tripwire = BootTripwire(corvin_home)
-            assert tripwire.run() is False
-            
-            status = tripwire.status()
-            assert status["all_pass"] is False
-    
-    def test_tripwire_fail_empty(self):
-        """Tripwire fails if audit trail empty (not initialized)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            corvin_home = Path(tmpdir)
-            
-            # Create empty trail (not initialized)
-            trail = AuditTrail(corvin_home / "audit.jsonl")
-            
-            tripwire = BootTripwire(corvin_home)
-            assert tripwire.run() is False
-    
-    def test_tripwire_assert_raises(self):
-        """assert_all() raises TripwireError if fail."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            corvin_home = Path(tmpdir)
-            
-            tripwire = BootTripwire(corvin_home)
-            with pytest.raises(TripwireError):
-                tripwire.assert_all()
+class TestBootTripwireDelegates:
+    """BootTripwire is a facade over the canonical tripwire."""
 
+    def test_refuses_to_vouch_for_another_root(self, tmp_path):
+        other = tmp_path / "not-the-active-home"
+        tw = BootTripwire(other)
+        assert tw.run() is False
+        assert tw.status()["all_pass"] is False
+        with pytest.raises(TripwireError):
+            tw.assert_all()
+        # it created nothing there (the old skeleton wrote/checked <home>/audit.jsonl)
+        assert not other.exists()
 
-class TestCompliancePhase1AIntegration:
-    """E2E Phase 1A: Audit Trail + Tripwire."""
-    
-    def test_full_boot_sequence(self):
-        """Full boot: create trail → append record → verify → tripwire."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            corvin_home = Path(tmpdir)
-            
-            # Step 1: Create and populate trail
-            trail = AuditTrail(corvin_home / "audit.jsonl")
-            record = new_audit_record(
-                event_type="boot_started",
-                tenant_id="default",
-                actor="system",
-                action="boot",
-                resource="platform",
-                result="allowed",
-                details={"phase": "1a"},
-            )
-            trail.append(record)
-            
-            # Step 2: Verify trail
-            assert trail.verify_chain() is True
-            
-            # Step 3: Tripwire check
-            tripwire = BootTripwire(corvin_home)
-            tripwire.assert_all()  # Should not raise
-            
-            # Step 4: Verify tripwire status
-            status = tripwire.status()
-            assert status["all_pass"] is True
+    def test_run_reports_canonical_results(self):
+        home = forge_paths.corvin_home()
+        fake = [canonical_tripwire.TripwireResult("audit_chain_intact", True, "ok"),
+                canonical_tripwire.TripwireResult("consent_gate_denies_by_default", False, "x")]
+        with mock.patch.object(canonical_tripwire, "check_all", return_value=fake):
+            tw = BootTripwire(home)
+            assert tw.run() is False
+        assert [c["component"] for c in tw.status()["checks"]] == [
+            "audit_chain_intact", "consent_gate_denies_by_default"]
+
+    def test_run_passes_only_when_every_canonical_check_passes(self):
+        fake = [canonical_tripwire.TripwireResult("audit_chain_intact", True, "ok")]
+        with mock.patch.object(canonical_tripwire, "check_all", return_value=fake):
+            assert BootTripwire(forge_paths.corvin_home()).run() is True
+
+    def test_assert_all_wraps_canonical_failure(self):
+        with mock.patch.object(canonical_tripwire, "assert_all",
+                               side_effect=canonical_tripwire.TripwireError("chain broken")):
+            with pytest.raises(TripwireError, match="chain broken"):
+                assert_boot_compliance(forge_paths.corvin_home())
+
+    def test_unrunnable_tripwire_fails_closed(self):
+        with mock.patch.object(canonical_tripwire, "check_all", side_effect=RuntimeError("boom")):
+            assert BootTripwire(forge_paths.corvin_home()).run() is False
+
+    def test_tripwire_error_is_a_compliance_error(self):
+        assert issubclass(TripwireError, ComplianceError)

@@ -20,8 +20,33 @@ CONSENT_SCOPES = {
     "control_plane_snapshot_operations": "System state snapshots and restore",
     "plugin_management": "Plugin installation, enable, disable, uninstall",
     "subsystem_control": "Subsystem start, pause, resume, stop",
+    # Read by the console's learning feedback route AND by
+    # core.skills.os_skills.feedback_loop.FeedbackInterpreter.check_consent.
+    "learning_feedback": "Processing operator feedback to tune learning skills",
+    "intent_classification": "Classifying requests to route them to a skill",
     "default": "General system operations",
 }
+
+#: Scopes an operator may grant/revoke for themselves from the console
+#: (``routes/consent.py``). ``default`` is a fallback label, not a grant.
+GRANTABLE_CONSENT_SCOPES = frozenset(k for k in CONSENT_SCOPES if k != "default")
+
+
+def consent_subject(rec: Any) -> str:
+    """The consent store's subject id for a console session record.
+
+    It is the session's ``sid_fingerprint`` (sha256 prefix) — the identity the
+    rest of the console attributes actions to. NEVER ``rec.sid``: that is the
+    ``corvin_console_sid`` cookie, a bearer credential; persisting it in the
+    consent database (and logging it) put a live session token at rest.
+
+    Raises:
+        ConsentError: the record carries no fingerprint (fail-closed).
+    """
+    fp = getattr(rec, "sid_fingerprint", None)
+    if not isinstance(fp, str) or not fp:
+        raise ConsentError("session record has no sid_fingerprint")
+    return fp
 
 
 class ConsentError(Exception):
@@ -83,11 +108,27 @@ def consent_required(consent_scope: str = "default") -> Callable:
         # Default: assume NO consent unless explicitly granted in store
         try:
             from core.compliance.consent_store import get_consent_store, TenantIsolationError
-
-            # Fail-closed: require valid tenant_id + user_id
-            if not rec.tenant_id or not rec.sid:
+        except ImportError as e:
+            # Consent store not available — fail-closed. (Imported outside the
+            # main try: the ``except TenantIsolationError`` clause below would
+            # otherwise raise NameError on exactly this path.)
+            logger.error(
+                f"CRITICAL: Consent store unavailable for scope={consent_scope}: {e}. "
+                f"This is a security failure — cannot proceed without consent verification."
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Consent verification system unavailable. Please try again."
+            )
+        try:
+            # Fail-closed: require valid tenant_id + subject
+            try:
+                subject = consent_subject(rec)
+            except ConsentError:
+                subject = ""
+            if not getattr(rec, "tenant_id", None) or not subject:
                 logger.warning(
-                    f"Consent check failed: missing tenant_id or user_id (fail-closed)"
+                    "Consent check failed: missing tenant_id or subject (fail-closed)"
                 )
                 raise HTTPException(
                     status_code=http_status.HTTP_403_FORBIDDEN,
@@ -100,20 +141,22 @@ def consent_required(consent_scope: str = "default") -> Callable:
             # Check if user has active consent for this scope
             # Fail-closed: any exception or missing consent = deny
             has_consent = consent_store.get_consent(
-                user_id=rec.sid,
+                user_id=subject,
                 scope=consent_scope
             )
 
             if not has_consent:
                 logger.warning(
-                    f"Consent denied: user={rec.sid} tenant={rec.tenant_id} scope={consent_scope}"
+                    f"Consent denied: subject={subject} tenant={rec.tenant_id} scope={consent_scope}"
                 )
                 raise HTTPException(
                     status_code=http_status.HTTP_403_FORBIDDEN,
                     detail=f"Consent required for: {CONSENT_SCOPES.get(consent_scope, consent_scope)}. "
-                           f"Please grant consent at /consent-manager"
+                           f"Grant it with POST /v1/console/consent/{consent_scope}"
                 )
 
+        except HTTPException:
+            raise
         except TenantIsolationError as e:
             # Tenant isolation violation — fail-closed
             logger.error(
@@ -123,11 +166,9 @@ def consent_required(consent_scope: str = "default") -> Callable:
                 status_code=http_status.HTTP_403_FORBIDDEN,
                 detail="Consent verification failed due to security constraint"
             )
-        except ImportError as e:
-            # Consent store not available — fail-closed
+        except Exception as e:  # noqa: BLE001 — any unverifiable state denies
             logger.error(
-                f"CRITICAL: Consent store unavailable for scope={consent_scope}: {e}. "
-                f"This is a security failure — cannot proceed without consent verification."
+                f"Consent check error for scope={consent_scope}: {type(e).__name__} (fail-closed)"
             )
             raise HTTPException(
                 status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -135,11 +176,14 @@ def consent_required(consent_scope: str = "default") -> Callable:
             )
 
         logger.info(
-            f"Consent verified: user={getattr(rec, 'sid', 'unknown')} tenant={rec.tenant_id} scope={consent_scope}"
+            f"Consent verified: subject={subject} tenant={rec.tenant_id} scope={consent_scope}"
         )
 
     return verify_consent
 
 
 # Export for convenience
-__all__ = ["consent_required", "ConsentError", "CONSENT_SCOPES"]
+__all__ = [
+    "consent_required", "consent_subject", "ConsentError",
+    "CONSENT_SCOPES", "GRANTABLE_CONSENT_SCOPES",
+]

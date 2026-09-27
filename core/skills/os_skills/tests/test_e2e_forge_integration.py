@@ -100,22 +100,19 @@ class TestForgeE2E:
 
     @pytest.mark.asyncio
     async def test_dashboard_compliance_export(self):
-        """E2E: Dashboard exports GDPR-compliant report."""
-        from console.routes.learning_dashboard import LearningDashboardAPI
+        """The dashboard's compliance export is NOT implemented and says so.
+
+        It used to return invented figures ("42 skills generated",
+        ``convergence_achieved: True``) — this test asserted them. A GDPR
+        export must never be answered from placeholder data (2026-09-27).
+        """
+        from core.console.routes.learning_dashboard import LearningDashboardAPI
 
         dashboard = LearningDashboardAPI()
-
-        # Export compliance report
-        report = await dashboard.export_compliance_report(
-            start_date="2026-01-01",
-            end_date="2026-12-31",
-        )
-
-        assert report is not None
-        assert "period" in report
-        assert "skills_generated" in report
-        assert "bias_detected" in report
-        assert report["convergence_achieved"] is True
+        with pytest.raises(NotImplementedError):
+            await dashboard.export_compliance_report(start_date="2026-01-01", end_date="2026-12-31")
+        with pytest.raises(NotImplementedError):
+            await dashboard.verify_audit_chain()
 
 
 class TestForgeQuality:

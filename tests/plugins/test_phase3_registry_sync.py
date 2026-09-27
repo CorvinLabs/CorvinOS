@@ -452,15 +452,14 @@ class TestPluginRegistrySynchronizer:
             installer=installer,
         )
 
-        # Remediate (not dry run)
+        # Remediate (not dry run). Installation is not implemented (there is
+        # no artifact source): nothing may be reported as remediated and no
+        # stub tree may be written (adversarial review 2026-09-27).
         remediation_count, messages = sync.remediate(dry_run=False)
 
-        assert remediation_count == 1
-        assert len(messages) > 0
-
-        # Verify plugin was installed
-        plugin_path = os.path.join(self.plugins_dir, "plugin1")
-        assert os.path.exists(plugin_path)
+        assert remediation_count == 0
+        assert any("not_implemented" in m for m in messages)
+        assert not os.path.exists(os.path.join(self.plugins_dir, "plugin1"))
 
     def test_get_local_and_canonical_plugins(self):
         """Test retrieval of local and canonical plugins"""
@@ -486,14 +485,12 @@ class TestPluginRegistrySynchronizer:
         local = sync.get_local_plugins()
         assert len(local) == 0
 
-        # Install a plugin
-        plugin = manager.get_plugin("plugin1")
-        installer.install_plugin(plugin)
-
-        # Get local plugins (should have plugin1)
+        # A plugin tree present on disk is reported with its version
+        plugin_dir = Path(self.plugins_dir) / "plugin1"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.json").write_text(json.dumps({"id": "plugin1", "version": "1.0.0"}))
         local = sync.get_local_plugins()
-        assert "plugin1" in local
-        assert local["plugin1"] == "1.0.0"
+        assert local.get("plugin1") == "1.0.0"
 
 
 class TestPluginInstallerAndUpdater:
@@ -521,34 +518,36 @@ class TestPluginInstallerAndUpdater:
         )
 
         success, message = installer.install_plugin(plugin)
-        assert success
-        assert os.path.exists(os.path.join(self.plugins_dir, "test_plugin"))
+        assert success is False and "not_implemented" in message
+        assert not os.path.exists(os.path.join(self.plugins_dir, "test_plugin"))
+
+    @pytest.mark.parametrize("bad", ["../escape", "a/b", "..", ".", "a\\b", ""])
+    def test_plugin_id_traversal_refused(self, bad):
+        installer = PluginInstaller(plugins_dir=self.plugins_dir)
+        ok, msg = installer.install_plugin(PluginEntry(plugin_id=bad, version="1", checksum="x"))
+        assert ok is False and msg == "invalid plugin id"
+        ok, msg = installer.update_plugin(PluginEntry(plugin_id=bad, version="1", checksum="x"))
+        assert ok is False
 
     def test_plugin_update_with_backup(self):
         """Test plugin update with rollback on failure"""
         installer = PluginInstaller(plugins_dir=self.plugins_dir)
 
-        # Install v1
-        plugin_v1 = PluginEntry(
-            plugin_id="test_plugin",
-            version="1.0.0",
-            checksum="abc123",
-        )
-        success, _ = installer.install_plugin(plugin_v1)
-        assert success
+        # An installed v1 tree
+        plugin_dir = Path(self.plugins_dir) / "test_plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.json").write_text(json.dumps({"id": "test_plugin", "version": "1.0.0"}))
 
-        # Update to v2
+        # Update to v2 cannot install (not implemented) → fails and leaves v1 intact
         plugin_v2 = PluginEntry(
             plugin_id="test_plugin",
             version="2.0.0",
             checksum="def456",
         )
-        success, _ = installer.update_plugin(plugin_v2)
-        assert success
-
-        # Verify version was updated
-        version = self._read_plugin_version(os.path.join(self.plugins_dir, "test_plugin"))
-        assert version == "2.0.0"
+        success, msg = installer.update_plugin(plugin_v2)
+        assert success is False and "not_implemented" in msg
+        version = self._read_plugin_version(str(plugin_dir))
+        assert version == "1.0.0"
 
     def _read_plugin_version(self, plugin_path: str) -> str:
         """Helper to read plugin version"""
@@ -610,7 +609,8 @@ class TestPhase3Integration:
         # Remediate all instances
         for sync in instances:
             count, msgs = sync.remediate(dry_run=False)
-            assert count == 3  # All 3 plugins should be installed
+            assert count == 0  # install is not implemented: nothing is claimed
+            assert len(sync.detect_plugin_drift()) == 3
 
     def test_audit_logging_integration(self):
         """Test that audit logging is integrated (mock)"""
@@ -636,11 +636,15 @@ class TestPhase3Integration:
             installer=installer,
         )
 
-        # Remediate (should attempt audit logging)
         count, msgs = sync.remediate(dry_run=False)
-        assert count == 1
+        assert count == 0
 
-        # Verify audit was attempted (may fail if security_events not available, which is OK for this test)
+        # The attempt is audited as a FAILED remediation — never a success.
+        from forge import paths as forge_paths
+        chain = forge_paths.tenant_audit_chain("_default")
+        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        rem = [r for r in recs if r["event_type"] == "plugin.remediation_attempted"]
+        assert rem and all(r["details"]["success"] is False for r in rem)
 
 
 class TestPhase3RegressionsAdversarialReview:

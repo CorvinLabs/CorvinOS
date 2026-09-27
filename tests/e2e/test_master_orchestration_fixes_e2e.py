@@ -1,508 +1,325 @@
 """
-Comprehensive E2E Tests for Master Orchestration Fixes (31 Adversarial Review Findings)
+Master orchestration (core/deployment/master_orchestration_blueprint.py) — honest suite.
 
-Tests all critical, high-priority, and medium-priority fixes:
-- F001-F011: Critical fixes (phase gates, state persistence, audit trail, LoM binding, metrics snapshot)
-- F012-F023: High priority (idempotency, thread-safety, timeout, tenant isolation)
-- F024-F031: Medium priority (edge cases, error handling, compliance)
+The module is NOT WIRED (no production caller as of 2026-09-27). These tests
+drive its public surface and read the REAL tenant audit chain back
+(forge ``write_event`` via ``core.deployment.audit_sink``); nothing here asserts
+a fabricated success.
 
-All tests verify:
-1. Functionality correctness
-2. State persistence and recovery
-3. Audit trail integrity (hash-chain)
-4. LoM cryptographic binding
-5. Tenant isolation
-6. Compliance with GDPR Art. 30/32, EU AI Act Art. 5/50
+Rewritten in the 2026-09-27 adversarial review. It replaces this file's old
+content and ``test_master_orch_findings_complete_e2e.py`` (deleted: a duplicate
+of this suite whose "ProofCollector"/aggregator printed "VERIFIED" regardless
+of outcome, and whose F015 test implemented the enforcement inside the test).
+
+Findings covered: F001 (day-14 gate), F002 (state persistence, tamper refusal),
+F009 (records on the one tenant chain), F010 (LoM hash), F011 (metrics
+snapshot), F012 (idempotency), F014 (concurrent audit writes), F015 (premature
+canary reverted), F019 (timeout escalation, once), F023 (tenant isolation),
+F024 (fail-closed without a measured baseline / on audit failure).
 """
 
-import pytest
 import json
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import tempfile
-import hashlib
+from unittest.mock import patch
 
+import pytest
+
+from core.deployment import audit_sink
 from core.deployment.master_orchestration_blueprint import (
     MasterRolloutOrchestrator,
     OperatorApprovalGate,
-    Phase,
-    SkillMode,
-    SkillMetrics,
-    PhaseGateResult,
-    WeeklyGateEvaluation,
     OperatorApprovalRecord,
+    Phase,
+    PhaseGateResult,
+    SkillMetrics,
+    SkillMode,
 )
-from core.deployment.adr_validation_framework import (
-    ADRComplianceValidator,
-    ComplianceStatus,
-)
 
 
-class TestF001_Phase1Approval:
-    """F001: Phase 1→2a Approval Gate at day 14"""
-
-    def test_phase_1_approval_gate_at_day_14(self):
-        """Verify Phase 1→2a approval gate fires at day 14"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orch = MasterRolloutOrchestrator()
-            orch.STATE_FILE = Path(tmpdir) / "state.json"
-            orch.AUDIT_TRAIL_FILE = Path(tmpdir) / "audit.jsonl"
-
-            # Simulate 14 days of progress
-            for day in range(1, 15):
-                orch.state.base_state.day_number = day
-                metrics = {
-                    "skill_1": SkillMetrics(
-                        agreement_rate=0.99,
-                        confidence=0.95,
-                        latency_p99_ms=100.0,
-                        feedback_count=1000,
-                    )
-                }
-                orch.advance_day(metrics)
-
-            # Verify approval gate was requested on day 14
-            assert OperatorApprovalGate.PHASE_1_TO_2A.value in orch.state.operator_approvals
-            record = orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value]
-            assert record.requested_at is not None
+@pytest.fixture(autouse=True)
+def _isolated_runtime(tmp_path, monkeypatch):
+    """Each test has its own CORVIN_HOME/HOME — the audit chain is real."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    yield
 
 
-class TestF002_StatePersistence:
-    """F002: State Persistence rewrite with complete state restoration"""
-
-    def test_state_persistence_and_recovery(self):
-        """Verify complete state persistence and recovery"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            state_file = Path(tmpdir) / "state.json"
-
-            # Create orchestrator and add state
-            orch1 = MasterRolloutOrchestrator()
-            orch1.STATE_FILE = state_file
-            orch1.state.base_state.day_number = 10
-            orch1.state.base_state.week_number = 2
-
-            # Add approval request
-            record = OperatorApprovalRecord(
-                gate=OperatorApprovalGate.PHASE_1_TO_2A,
-                requested_at=datetime.now(timezone.utc).isoformat(),
-                agreement_rate_at_approval=0.99,
-                confidence_at_approval=0.95,
-                latency_p99_at_approval=100.0,
-                feedback_count_at_approval=1000,
-            )
-            orch1.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value] = record
-
-            # Save state
-            orch1._save_state()
-            assert state_file.exists()
-
-            # Create new orchestrator and load state
-            orch2 = MasterRolloutOrchestrator()
-            orch2.STATE_FILE = state_file
-            orch2._load_persisted_state()
-
-            # Verify complete state restored
-            assert orch2.state.base_state.day_number == 10
-            assert orch2.state.base_state.week_number == 2
-            assert OperatorApprovalGate.PHASE_1_TO_2A.value in orch2.state.operator_approvals
-            restored_record = orch2.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value]
-            assert restored_record.agreement_rate_at_approval == 0.99
-            assert restored_record.confidence_at_approval == 0.95
+def _chain(tenant="_default"):
+    se, fp = audit_sink._forge()
+    path = fp.tenant_audit_chain(tenant)
+    if not path.exists():
+        return [], (True, []), path
+    recs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return recs, se.verify_chain(path), path
 
 
-class TestF009_AuditTrailPersistent:
-    """F009: Audit Trail persistent to disk (append-only, hash-chained)"""
-
-    def test_audit_trail_persistence(self):
-        """Verify audit trail is persisted to disk"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-
-            orch = MasterRolloutOrchestrator()
-            orch.AUDIT_TRAIL_FILE = audit_file
-
-            # Emit audit events
-            orch._audit_log({"event": "test_event_1", "data": "value1"})
-            orch._audit_log({"event": "test_event_2", "data": "value2"})
-
-            # Persist audit trail
-            orch._persist_audit_trail()
-            assert audit_file.exists()
-
-            # Verify audit events persisted
-            with open(audit_file, "r") as f:
-                lines = f.readlines()
-                assert len(lines) == 2
-                event1 = json.loads(lines[0])
-                event2 = json.loads(lines[1])
-                assert event1["event"] == "test_event_1"
-                assert event2["event"] == "test_event_2"
-                # Verify hash chain
-                assert event2["prior_hash"] == event1["hash"]
-
-    def test_audit_trail_hash_chain_integrity(self):
-        """Verify audit trail hash chain integrity"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-
-            orch = MasterRolloutOrchestrator()
-            orch.AUDIT_TRAIL_FILE = audit_file
-
-            # Emit multiple events
-            for i in range(5):
-                orch._audit_log({"event": f"event_{i}"})
-
-            # Verify hash chain
-            is_valid, issues = orch.verify_audit_chain()
-            assert is_valid
-            assert len(issues) == 0
-
-            # Persist and reload
-            orch._persist_audit_trail()
-            orch2 = MasterRolloutOrchestrator()
-            orch2.AUDIT_TRAIL_FILE = audit_file
-            orch2._load_persisted_audit_trail()
-
-            # Verify hash chain still valid
-            is_valid, issues = orch2.verify_audit_chain()
-            assert is_valid
-            assert len(issues) == 0
+def _events(name, tenant="_default"):
+    recs, _, _ = _chain(tenant)
+    return [r for r in recs if r["event_type"] == f"deployment.master.{name}"]
 
 
-class TestF010_LoMCryptographicBinding:
-    """F010: LoM Cryptographic Binding (sha256 of inspect.getsource)"""
-
-    def test_lom_binding_on_approval(self):
-        """Verify LoM cryptographic binding on operator approval"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orch = MasterRolloutOrchestrator()
-            orch.STATE_FILE = Path(tmpdir) / "state.json"
-
-            # Create approval request
-            record = OperatorApprovalRecord(
-                gate=OperatorApprovalGate.PHASE_1_TO_2A,
-                requested_at=datetime.now(timezone.utc).isoformat(),
-            )
-            orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value] = record
-
-            # Approve
-            result = orch.operator_approve(
-                OperatorApprovalGate.PHASE_1_TO_2A,
-                approved_by="test_operator",
-                reason="Test approval"
-            )
-
-            assert result is True
-            # Verify LoM hash was set
-            assert record.lom_hash != ""
-            assert len(record.lom_hash) == 64  # SHA256 hex is 64 chars
+def _metrics(phase=Phase.PHASE_1_SHADOW, **kw):
+    base = dict(
+        agreement_rate=0.99, confidence=0.90, confidence_sigma=0.02,
+        latency_p99_ms=100.0, feedback_count=2000,
+    )
+    base.update(kw)
+    return {"os.delegation_router": SkillMetrics(skill_id="os.delegation_router", phase=phase, **base)}
 
 
-class TestF011_OperatorApprovalMetrics:
-    """F011: Operator Approval Metrics Snapshot"""
-
-    def test_metrics_snapshot_at_approval_request(self):
-        """Verify metrics snapshot is captured at approval request time"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orch = MasterRolloutOrchestrator()
-            orch.STATE_FILE = Path(tmpdir) / "state.json"
-
-            # Create metrics
-            metrics = {
-                "skill_1": SkillMetrics(
-                    agreement_rate=0.98,
-                    confidence=0.94,
-                    latency_p99_ms=110.0,
-                    feedback_count=950,
-                )
-            }
-
-            # Request approval with metrics
-            orch._request_operator_approval(OperatorApprovalGate.PHASE_1_TO_2A, metrics)
-
-            # Verify metrics snapshot
-            record = orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value]
-            assert record.agreement_rate_at_approval == 0.98
-            assert record.confidence_at_approval == 0.94
-            assert record.latency_p99_at_approval == 110.0
-            assert record.feedback_count_at_approval == 950
+def _run_to_day_14(orch):
+    while orch.state.base_state.day_number < 14:
+        orch.advance_day(_metrics())
 
 
-class TestF012_DoubleApprovalIdempotency:
-    """F012: Double-Approval Idempotency (UUID approval_id, no duplicates)"""
-
-    def test_idempotent_approval_duplicate(self):
-        """Verify idempotent duplicate approvals are rejected"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orch = MasterRolloutOrchestrator()
-            orch.STATE_FILE = Path(tmpdir) / "state.json"
-
-            # Create approval request
-            record = OperatorApprovalRecord(
-                gate=OperatorApprovalGate.PHASE_1_TO_2A,
-                requested_at=datetime.now(timezone.utc).isoformat(),
-            )
-            approval_id = record.approval_id
-            orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value] = record
-
-            # First approval
-            result1 = orch.operator_approve(
-                OperatorApprovalGate.PHASE_1_TO_2A,
-                approved_by="operator1"
-            )
-            assert result1 is True
-
-            # Attempt duplicate approval with same approval_id
-            # Modify the decision to pending
-            record.decision = None
-            result2 = orch.operator_approve(
-                OperatorApprovalGate.PHASE_1_TO_2A,
-                approved_by="operator1"
-            )
-            # Should return True (idempotent)
-            assert result2 is True
-
-
-class TestF014_AuditTrailThreadSafe:
-    """F014: Audit Trail Thread-Safe (RLock on self.audit_trail Append)"""
-
-    def test_audit_trail_thread_safety(self):
-        """Verify audit trail is thread-safe"""
+class TestF001Phase1Gate:
+    def test_gate_fires_at_day_14_and_is_on_the_chain(self):
         orch = MasterRolloutOrchestrator()
-        events_emitted = []
+        _run_to_day_14(orch)
 
-        def emit_events(thread_id, count):
-            for i in range(count):
-                orch._audit_log({
-                    "event": f"thread_{thread_id}_event_{i}",
-                    "thread_id": thread_id
-                })
-                events_emitted.append((thread_id, i))
+        key = OperatorApprovalGate.PHASE_1_TO_2A.value
+        assert key in orch.state.operator_approvals
+        assert orch.state.base_state.pending_operator_approval
+        assert orch.state.base_state.approval_required_for == key
+        assert orch.state.base_state.phase == Phase.PHASE_1_SHADOW  # not auto-advanced
 
-        # Start multiple threads
-        threads = []
-        for thread_id in range(5):
-            t = threading.Thread(target=emit_events, args=(thread_id, 10))
-            threads.append(t)
+        req = _events("operator_approval_requested")
+        assert len(req) == 1 and req[0]["details"]["gate"] == key
+        # F011: snapshot is on the chain too
+        assert req[0]["details"]["agreement_rate"] == pytest.approx(0.99)
+        _, (ok, problems), _ = _chain()
+        assert ok, problems
+
+    def test_approval_transitions_and_records_pseudonymous_operator(self):
+        orch = MasterRolloutOrchestrator()
+        _run_to_day_14(orch)
+        assert orch.operator_approve(OperatorApprovalGate.PHASE_1_TO_2A, approved_by="alice@example.com")
+
+        st = orch.state.base_state
+        assert st.phase == Phase.PHASE_2A_CANARY
+        assert st.current_traffic_percentage == 1
+        assert all(m == SkillMode.DUAL_WRITE for m in st.skill_states.values())
+
+        granted = _events("operator_approval_granted")
+        assert len(granted) == 1
+        assert "alice@example.com" not in json.dumps(granted[0])  # operator_ref hash only
+        assert len(granted[0]["details"]["operator_ref"]) == 12
+
+    def test_approval_not_applied_when_audit_write_fails(self):
+        orch = MasterRolloutOrchestrator()
+        _run_to_day_14(orch)
+        with patch.object(audit_sink, "emit", side_effect=audit_sink.AuditWriteFailed("down")):
+            with pytest.raises(audit_sink.AuditWriteFailed):
+                orch.operator_approve(OperatorApprovalGate.PHASE_1_TO_2A, approved_by="op")
+        assert orch.state.base_state.phase == Phase.PHASE_1_SHADOW
+        rec = orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value]
+        assert rec.decision is None
+
+    def test_rejected_request_cannot_be_approved_later(self):
+        orch = MasterRolloutOrchestrator()
+        _run_to_day_14(orch)
+        assert orch.operator_reject(OperatorApprovalGate.PHASE_1_TO_2A, rejected_by="op", reason="no")
+        assert orch.operator_approve(OperatorApprovalGate.PHASE_1_TO_2A, approved_by="op") is False
+        assert orch.state.base_state.phase == Phase.PHASE_1_SHADOW
+
+    def test_approve_without_request_is_refused(self):
+        orch = MasterRolloutOrchestrator()
+        assert orch.operator_approve(OperatorApprovalGate.PHASE_2A_TO_2B, approved_by="op") is False
+
+
+class TestF002StatePersistence:
+    def test_state_round_trips_per_tenant_under_corvin_home(self, tmp_path):
+        orch = MasterRolloutOrchestrator()
+        # Lives under CORVIN_HOME, per tenant — not ~/.corvin
+        assert str(orch.STATE_FILE).startswith(str(tmp_path / "corvin" / "tenants" / "_default"))
+        _run_to_day_14(orch)
+        assert orch.STATE_FILE.exists()
+
+        orch2 = MasterRolloutOrchestrator()
+        assert orch2.state.base_state.day_number == 14
+        rec = orch2.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value]
+        assert rec.agreement_rate_at_approval == pytest.approx(0.99)
+
+    def test_tampered_state_file_is_not_loaded(self):
+        orch = MasterRolloutOrchestrator()
+        orch.state.base_state.day_number = 10
+        assert orch._save_state()
+        data = json.loads(orch.STATE_FILE.read_text())
+        data["base_state"]["phase"] = "PHASE_2B_SKILL_PRIMARY"  # forged promotion
+        orch.STATE_FILE.write_text(json.dumps(data))
+
+        orch2 = MasterRolloutOrchestrator()
+        assert orch2.state.base_state.phase == Phase.PHASE_1_SHADOW
+        assert orch2.state.base_state.day_number == 1
+
+
+class TestF009TenantChain:
+    def test_every_record_is_on_the_one_tenant_chain(self):
+        orch = MasterRolloutOrchestrator()
+        for _ in range(3):
+            orch.advance_day(_metrics())
+        days = _events("day_advanced")
+        assert [r["details"]["day"] for r in days] == [2, 3, 4]
+        assert [m["hash"] for m in orch.audit_trail] == [r["hash"] for r in _events("day_advanced")]
+        ok, issues = orch.verify_audit_chain()
+        assert ok, issues
+        # no parallel audit file any more
+        assert not list(Path(orch.STATE_FILE).parent.glob("*audit*.jsonl"))
+
+    def test_verify_detects_tampering_of_the_real_chain(self):
+        orch = MasterRolloutOrchestrator()
+        orch.advance_day(_metrics())
+        orch.advance_day(_metrics())
+        _, _, path = _chain()
+        lines = path.read_text().splitlines()
+        rec = json.loads(lines[-2])
+        rec["details"]["day"] = 99
+        lines[-2] = json.dumps(rec)
+        path.write_text("\n".join(lines) + "\n")
+        ok, issues = orch.verify_audit_chain()
+        assert not ok and issues
+
+    def test_undeclared_event_is_refused(self):
+        orch = MasterRolloutOrchestrator()
+        with pytest.raises(audit_sink.AuditWriteFailed):
+            orch._audit_log({"event": "made_up_event"})
+
+
+class TestF010F012Approval:
+    def test_lom_hash_and_idempotent_duplicate(self):
+        orch = MasterRolloutOrchestrator()
+        _run_to_day_14(orch)
+        gate = OperatorApprovalGate.PHASE_1_TO_2A
+        assert orch.operator_approve(gate, approved_by="op1")
+        rec = orch.state.operator_approvals[gate.value]
+        assert len(rec.lom_hash) == 64
+        # same approval again: idempotent, no second chain record
+        assert orch.operator_approve(gate, approved_by="op1") is True
+        assert len(_events("operator_approval_granted")) == 1
+
+
+class TestF011Snapshot:
+    def test_metrics_snapshot_at_request(self):
+        orch = MasterRolloutOrchestrator()
+        orch._request_operator_approval(
+            OperatorApprovalGate.PHASE_1_TO_2A,
+            _metrics(agreement_rate=0.98, confidence=0.94, latency_p99_ms=110.0, feedback_count=950),
+        )
+        rec = orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value]
+        assert rec.agreement_rate_at_approval == pytest.approx(0.98)
+        assert rec.confidence_at_approval == pytest.approx(0.94)
+        assert rec.latency_p99_at_approval == pytest.approx(110.0)
+        assert rec.feedback_count_at_approval == 950
+
+    def test_request_without_metrics_records_not_measured(self):
+        orch = MasterRolloutOrchestrator()
+        orch._request_operator_approval(OperatorApprovalGate.PHASE_2A_TO_2B)
+        rec = orch.state.operator_approvals[OperatorApprovalGate.PHASE_2A_TO_2B.value]
+        assert rec.agreement_rate_at_approval is None
+
+
+class TestF014Concurrency:
+    def test_concurrent_audit_writes_keep_the_chain_valid(self):
+        orch = MasterRolloutOrchestrator()
+
+        def emit(n):
+            for i in range(10):
+                orch._audit_log({"event": "automatic_transition", "transition": f"t{n}_{i}"})
+
+        threads = [threading.Thread(target=emit, args=(n,)) for n in range(5)]
+        for t in threads:
             t.start()
-
-        # Wait for all threads
         for t in threads:
             t.join()
-
-        # Verify all events were recorded
         assert len(orch.audit_trail) == 50
-
-        # Verify hash chain is intact
-        is_valid, issues = orch.verify_audit_chain()
-        assert is_valid
-        assert len(issues) == 0
+        assert len(_events("automatic_transition")) == 50
+        ok, issues = orch.verify_audit_chain()
+        assert ok, issues
 
 
-class TestF015_Phase1MinimumEnforcement:
-    """F015: Phase 1 14-Day Minimum Enforcement"""
-
-    def test_phase_2a_before_day_14_rejected(self):
-        """Verify Phase 2a before day 14 is rejected"""
+class TestF015PrematureCanary:
+    def test_canary_before_day_14_is_reverted(self):
         orch = MasterRolloutOrchestrator()
+        st = orch.state.base_state
+        st.phase = Phase.PHASE_2A_CANARY
+        st.current_traffic_percentage = 1
+        st.day_number = 10
+        orch.advance_day(_metrics(phase=Phase.PHASE_2A_CANARY))
+        assert st.phase == Phase.PHASE_1_SHADOW
+        assert st.current_traffic_percentage == 0
+        assert all(m == SkillMode.ADVISORY for m in st.skill_states.values())
+        assert len(_events("premature_phase_2a_reverted")) == 1
 
-        # Attempt to move to Phase 2a on day 10
-        orch.state.base_state.phase = Phase.PHASE_2A_CANARY
-        orch.state.base_state.day_number = 10
 
-        metrics = {"skill_1": SkillMetrics()}
-        orch.advance_day(metrics)
-
-        # Verify we reject it
-        # (The advance_day should log warning and return early)
-
-
-class TestF019_ApprovalTimeout:
-    """F019: Operator Approval Timeout (Day 21 → auto-escalation)"""
-
-    def test_approval_timeout_escalation(self):
-        """Verify approval timeout triggers escalation"""
+class TestF019Timeout:
+    def test_timeout_escalates_once(self):
         orch = MasterRolloutOrchestrator()
-
-        # Create approval request with old timestamp (8 days ago)
-        old_time = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        record = OperatorApprovalRecord(
+        orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value] = OperatorApprovalRecord(
             gate=OperatorApprovalGate.PHASE_1_TO_2A,
-            requested_at=old_time,
+            requested_at=(datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
         )
-        orch.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value] = record
-
-        # Check for timeouts
         orch._check_approval_timeouts()
-
-        # Verify escalation was recorded in audit trail
-        escalation_events = [e for e in orch.audit_trail if e.get("event") == "approval_escalated_to_admin"]
-        assert len(escalation_events) > 0
-
-
-class TestF023_TenantIsolation:
-    """F023: Tenant Isolation in all State"""
-
-    def test_tenant_isolation_in_approvals(self):
-        """Verify tenant isolation in operator approvals"""
-        orch1 = MasterRolloutOrchestrator(tenant_id="tenant_1")
-        orch2 = MasterRolloutOrchestrator(tenant_id="tenant_2")
-
-        # Create approval in tenant 1
-        record1 = OperatorApprovalRecord(
-            gate=OperatorApprovalGate.PHASE_1_TO_2A,
-            requested_at=datetime.now(timezone.utc).isoformat(),
-            tenant_id="tenant_1",
-        )
-        orch1.state.operator_approvals[OperatorApprovalGate.PHASE_1_TO_2A.value] = record1
-
-        # Verify tenant 2 doesn't see it
-        assert OperatorApprovalGate.PHASE_1_TO_2A.value not in orch2.state.operator_approvals
-
-        # Create approval in tenant 2
-        record2 = OperatorApprovalRecord(
-            gate=OperatorApprovalGate.PHASE_2A_TO_2B,
-            requested_at=datetime.now(timezone.utc).isoformat(),
-            tenant_id="tenant_2",
-        )
-        orch2.state.operator_approvals[OperatorApprovalGate.PHASE_2A_TO_2B.value] = record2
-
-        # Verify tenant 1 only sees its own
-        assert len(orch1.state.operator_approvals) == 1
-        assert len(orch2.state.operator_approvals) == 1
-
-    def test_tenant_isolation_in_audit_events(self):
-        """Verify tenant isolation in audit events"""
-        orch = MasterRolloutOrchestrator(tenant_id="tenant_test")
-
-        orch._audit_log({"event": "test_event"})
-
-        # Verify tenant_id is recorded
-        assert orch.audit_trail[-1]["tenant_id"] == "tenant_test"
+        orch._check_approval_timeouts()
+        esc = _events("approval_escalated_to_admin")
+        assert len(esc) == 1
+        assert esc[0]["details"]["gate"] == OperatorApprovalGate.PHASE_1_TO_2A.value
 
 
-class TestF024_EdgeCaseHandling:
-    """F024-F031: Edge Cases and Error Handling"""
+class TestF023TenantIsolation:
+    def test_state_is_per_tenant(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_a")
+        orch_a = MasterRolloutOrchestrator(tenant_id="tenant_a")
+        orch_a.state.base_state.day_number = 10
+        assert orch_a._save_state()
 
-    def test_empty_metrics_handling(self):
-        """Verify empty metrics are handled gracefully"""
-        validator = ADRComplianceValidator(tenant_id="test_tenant")
+        orch_b = MasterRolloutOrchestrator(tenant_id="tenant_b")
+        assert orch_b.STATE_FILE != orch_a.STATE_FILE
+        assert orch_b.state.base_state.day_number == 1
 
-        # Test with empty metrics
-        checks = validator.validate_adr_0206_canary(
-            week_number=3,
-            metrics={},
-            baseline_latency_ms=100.0
-        )
+        # Even pointed at tenant_a's file, tenant_b refuses to load it
+        orch_b.STATE_FILE = orch_a.STATE_FILE
+        orch_b._load_persisted_state()
+        assert orch_b.state.base_state.day_number == 1
+        assert orch_b.state.tenant_id == "tenant_b"
 
-        # Should return at least one check with FAIL status
-        assert len(checks) > 0
-        assert any(c.status == ComplianceStatus.FAIL for c in checks)
+    def test_audit_for_foreign_tenant_is_refused_at_the_chokepoint(self):
+        # process tenant is _default; a tenant_b record must not be written
+        orch = MasterRolloutOrchestrator(tenant_id="tenant_b")
+        with pytest.raises(audit_sink.AuditWriteFailed):
+            orch._audit_log({"event": "automatic_transition", "transition": "x"})
 
-    def test_invalid_week_number_handling(self):
-        """Verify invalid week numbers are handled"""
-        validator = ADRComplianceValidator()
-
-        # Test with invalid week number
-        checks = validator.validate_adr_0206_canary(
-            week_number=99,  # Invalid
-            metrics={"agreement_rate": 0.99},
-            baseline_latency_ms=100.0
-        )
-
-        # Should handle gracefully
-        assert len(checks) > 0
+    def test_tenant_records_land_on_their_own_chain(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_a")
+        orch = MasterRolloutOrchestrator(tenant_id="tenant_a")
+        orch.advance_day(_metrics())
+        assert len(_events("day_advanced", tenant="tenant_a")) == 1
+        assert _events("day_advanced", tenant="_default") == []
 
 
-class TestComplianceIntegration:
-    """Integration tests for compliance validation"""
-
-    def test_weekly_compliance_report_generation(self):
-        """Verify weekly compliance report generation"""
-        validator = ADRComplianceValidator(tenant_id="test_tenant")
-
-        report = validator.generate_weekly_report(
-            week_number=3,
-            phase="PHASE_2A_CANARY",
-            metrics={
-                "canary_metrics": {
-                    "agreement_rate": 0.99,
-                    "latency_p99_ms": 110.0,
-                },
-                "learning_metrics": {
-                    "skill_1": {
-                        "feedback_count": 1000,
-                        "confidence_sigma": 0.04,
-                    }
-                },
-                "heartbeat_metrics": {
-                    "last_ping_seconds_ago": 300,
-                    "geo_consent_respected": True,
-                },
-                "rollback_metrics": {
-                    "rollback_triggers_armed": 8,
-                    "audit_chain_verified": True,
-                },
-            }
-        )
-
-        assert report.week_number == 3
-        assert report.tenant_id == "test_tenant"
-        assert len(report.checks) > 0
-
-    def test_phase_transition_compliance_check(self):
-        """Verify phase transition compliance check"""
-        validator = ADRComplianceValidator(tenant_id="test_tenant")
-
-        # Generate report
-        report = validator.generate_weekly_report(
-            week_number=3,
-            phase="PHASE_2A_CANARY",
-            metrics={
-                "canary_metrics": {
-                    "agreement_rate": 0.99,
-                    "latency_p99_ms": 110.0,
-                },
-                "learning_metrics": {"skill_1": {"feedback_count": 1000, "confidence_sigma": 0.04}},
-                "heartbeat_metrics": {"last_ping_seconds_ago": 300, "geo_consent_respected": True},
-                "rollback_metrics": {"rollback_triggers_armed": 8, "audit_chain_verified": True},
-            }
-        )
-
-        # Check if transition allowed
-        can_proceed, reasons = validator.can_proceed_with_phase_transition(3)
-
-        # Should be able to proceed if all checks pass
-        assert isinstance(can_proceed, bool)
-        assert isinstance(reasons, list)
-
-
-class TestAuditChainIntegrity:
-    """Tests for audit chain integrity"""
-
-    def test_audit_chain_verification(self):
-        """Verify audit chain integrity verification"""
+class TestF024FailClosed:
+    def test_weekly_gate_without_measured_baseline_fails(self):
         orch = MasterRolloutOrchestrator()
+        orch.state.base_state.phase = Phase.PHASE_2A_CANARY
+        assert orch.state.base_state.baseline_latency_p99_ms is None
+        orch._evaluate_weekly_gate(3, _metrics(phase=Phase.PHASE_2A_CANARY))
+        ev = orch.state.weekly_evaluations[3]
+        assert ev.gate_result == PhaseGateResult.FAIL
+        assert "not_measured" in ev.reason
 
-        # Emit multiple events
-        for i in range(10):
-            orch._audit_log({"event": f"event_{i}", "index": i})
+    def test_weekly_gate_with_measured_baseline_evaluates(self):
+        orch = MasterRolloutOrchestrator()
+        _run_to_day_14(orch)  # shadow days record the baseline
+        assert orch.state.base_state.baseline_latency_p99_ms == pytest.approx(100.0)
+        orch._evaluate_weekly_gate(3, _metrics(phase=Phase.PHASE_2A_CANARY, latency_p99_ms=105.0))
+        assert orch.state.weekly_evaluations[3].gate_result == PhaseGateResult.PASS
 
-        # Verify chain
-        is_valid, issues = orch.verify_audit_chain()
-        assert is_valid
-        assert len(issues) == 0
-
-        # Attempt to tamper with audit trail
-        orch.audit_trail[5]["data"] = "tampered"
-
-        # Verify detection
-        is_valid, issues = orch.verify_audit_chain()
-        assert not is_valid
-        assert len(issues) > 0
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_advance_day_without_metrics_is_refused(self):
+        orch = MasterRolloutOrchestrator()
+        with pytest.raises(ValueError):
+            orch.advance_day({})
+        assert orch.state.base_state.day_number == 1

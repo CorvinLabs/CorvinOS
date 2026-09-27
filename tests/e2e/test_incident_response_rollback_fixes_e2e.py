@@ -15,6 +15,10 @@ Tests all critical fixes:
 - RA-005: Operator authentication for manual unlock (RBAC + 2FA)
 
 Plus 4 additional findings (RA-006-RA-007 and variants).
+
+Adversarial review 2026-09-27: both modules are NOT WIRED (no production
+caller). Audit records now go to the real tenant chain (forge write_event via
+core.deployment.audit_sink); these tests read that chain back and verify it.
 """
 
 import pytest
@@ -38,6 +42,27 @@ from core.deployment.rollback_automation import (
     RollbackTrigger,
     RollbackAction,
 )
+from core.deployment import audit_sink
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime(tmp_path, monkeypatch):
+    """Every test gets its own CORVIN_HOME/HOME — the audit chain is real."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    yield
+
+
+def _chain_records():
+    se, fp = audit_sink._forge()
+    chain = fp.tenant_audit_chain("_default")
+    if not chain.exists():
+        return [], (True, [])
+    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return recs, se.verify_chain(chain)
 
 
 class TestIR001PerChannelSuccessTracking:
@@ -100,7 +125,62 @@ class TestIR001PerChannelSuccessTracking:
 
         assert result is False
         assert notifier.channel_results["slack"] is False
-        assert notifier.channel_results["pagerduty"] is True
+        # WARNING incidents never page: PagerDuty was not attempted, so it is
+        # not reported as delivered.
+        assert notifier.channel_results["pagerduty"] is False
+        assert notifier.channel_results["email"] is True
+
+    def test_notify_without_any_channel_is_not_success(self):
+        """No channel configured → nothing delivered → False (was True)."""
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        incident = Incident(
+            incident_id="INC-test-nochan",
+            incident_type=IncidentType.LATENCY_SPIKE,
+            severity=IncidentSeverity.CRITICAL,
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            message="x", details={}, metric_name="latency_p99_ms",
+            actual_value=300.0, threshold=200.0,
+        )
+        assert notifier.notify(incident) is False
+
+    def test_incident_committed_to_tenant_chain_without_free_text(self):
+        """Audit-first: the incident is on the real chain, content-free."""
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        incident = Incident(
+            incident_id="INC-chain-001",
+            incident_type=IncidentType.AUDIT_CHAIN_BREAK,
+            severity=IncidentSeverity.CRITICAL,
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            message="operator note with an email a@b.example",
+            details={"free": "text"},
+            metric_name="audit_chain_verified",
+            actual_value=0.0, threshold=1.0,
+        )
+        with patch.object(notifier, "_send_slack_notification", return_value=True):
+            assert notifier.notify(incident, slack_webhook="http://slack.example.com") is True
+        recs, (ok, problems) = _chain_records()
+        assert ok, problems
+        mine = [r for r in recs if r["event_type"] == "deployment.incident_detected"]
+        assert mine and mine[-1]["details"]["incident_id"] == "INC-chain-001"
+        assert "a@b.example" not in json.dumps(mine[-1])
+        assert incident.audit_event_id == mine[-1]["hash"]
+
+    def test_notify_refused_when_audit_write_fails(self):
+        """Fail-closed: no chain record → nothing is sent."""
+        notifier = IncidentNotifier(start_dlq_worker=False)
+        incident = Incident(
+            incident_id="INC-noaudit",
+            incident_type=IncidentType.LATENCY_SPIKE,
+            severity=IncidentSeverity.WARNING,
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            message="x", details={}, metric_name="latency_p99_ms",
+            actual_value=300.0, threshold=200.0,
+        )
+        slack = Mock(return_value=True)
+        with patch.object(audit_sink, "emit", side_effect=audit_sink.AuditWriteFailed("boom")):
+            with patch.object(notifier, "_send_slack_notification", slack):
+                assert notifier.notify(incident, slack_webhook="http://slack.example.com") is False
+        slack.assert_not_called()
 
     def test_notify_returns_false_when_email_fails(self):
         """Email fails → returns False"""
@@ -381,14 +461,19 @@ class TestRA001AuditBefore:
 
         result = controller.execute_rollback(event)
 
-        # Check audit trail
-        assert len(controller.audit_trail) > 0
-        audit_event = controller.audit_trail[0]
-        assert audit_event["event"] == "rollback_executed"
-        assert audit_event["rollback_event_id"] == event.event_id
+        # The record is on the real tenant chain
+        recs, (ok, problems) = _chain_records()
+        assert ok, problems
+        rb = [r for r in recs if r["event_type"] == "deployment.rollback_executed"]
+        assert rb and rb[-1]["details"]["rollback_event_id"] == event.event_id
+        # free-text reason never reaches the chain
+        assert "Latency exceeded threshold" not in json.dumps(rb[-1])
+        assert controller.audit_trail[-1]["hash"] == rb[-1]["hash"]
 
-        # Check that phase is locked (action was executed)
+        # Phase is locked (a lock without expiry stays locked until unlocked —
+        # it used to read as "unlocked")
         assert controller.is_phase_locked("PHASE_2B_SKILL_PRIMARY")
+        assert "phase:PHASE_2B_SKILL_PRIMARY" in controller.get_open_lockdowns()
         assert result is True
 
     def test_rollback_rejected_if_audit_fails(self):
@@ -624,10 +709,24 @@ class TestRA005OperatorAuth:
         result = controller.unlock_phase("PHASE_CRITICAL", operator_context=context)
         assert result is False
 
-        # With valid 2FA → allowed
+        # A token but NO verifier configured → refused (any 6 chars used to pass)
         context = {"user_id": "op1", "role": "admin", "authenticated": True, "twofa_token": "123456"}
         result = controller.unlock_phase("PHASE_CRITICAL", operator_context=context)
+        assert result is False
+
+        # With a verifier that accepts the token → allowed
+        controller.twofa_verifier = lambda user, token: (user, token) == ("op1", "123456")
+        result = controller.unlock_phase("PHASE_CRITICAL", operator_context=context)
         assert result is True
+
+    def test_critical_unlock_rejected_by_verifier(self):
+        controller = RollbackController(twofa_verifier=lambda u, t: False)
+        controller.locked_phases["PHASE_CRITICAL"] = (
+            datetime.now(timezone.utc) + timedelta(hours=25)
+        ).isoformat()
+        context = {"user_id": "op1", "role": "admin", "authenticated": True, "twofa_token": "999999"}
+        assert controller.unlock_phase("PHASE_CRITICAL", operator_context=context) is False
+        assert controller.is_phase_locked("PHASE_CRITICAL")
 
     def test_impersonation_attack_prevented(self):
         """Operator impersonation attack is rejected (no string operator_id alone)"""
@@ -642,42 +741,47 @@ class TestRA005OperatorAuth:
 
 
 class TestAuditChainIntegrity:
-    """Verify audit trail is immutable and hash-chained"""
+    """Rollback records land on the ONE tenant chain, which verifies."""
 
     def test_audit_trail_hash_chained(self):
-        """Audit trail events are hash-chained"""
         controller = RollbackController()
+        for i, phase in enumerate(("PHASE_1", "PHASE_2")):
+            event = RollbackEvent(
+                event_id=f"RB-hash-00{i}",
+                trigger=RollbackTrigger.CORRECTNESS_DROP,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                phase=phase,
+                actions_taken=[RollbackAction.LOCK_PHASE],
+                reason=f"Test {i}",
+                lom="test:129",
+            )
+            # reset cooldown so both rollbacks run
+            controller.last_rollback_time = 0.0
+            assert controller.execute_rollback(event) is True
 
-        event1 = RollbackEvent(
-            event_id="RB-hash-001",
+        recs, (ok, problems) = _chain_records()
+        assert ok, problems
+        rb = [r for r in recs if r["event_type"] == "deployment.rollback_executed"]
+        assert [r["details"]["rollback_event_id"] for r in rb] == ["RB-hash-000", "RB-hash-001"]
+        # consecutive chain records link by prev_hash
+        for prev, cur in zip(recs, recs[1:]):
+            assert cur["prev_hash"] == prev["hash"]
+
+    def test_rollback_refused_when_chain_write_fails(self):
+        controller = RollbackController()
+        event = RollbackEvent(
+            event_id="RB-nochain",
             trigger=RollbackTrigger.CORRECTNESS_DROP,
             timestamp=datetime.now(timezone.utc).isoformat(),
             phase="PHASE_1",
             actions_taken=[RollbackAction.LOCK_PHASE],
-            reason="Test 1",
-            lom="test:129",
+            reason="x",
+            lom="test:1",
         )
-
-        event2 = RollbackEvent(
-            event_id="RB-hash-002",
-            trigger=RollbackTrigger.LATENCY_SPIKE,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            phase="PHASE_2",
-            actions_taken=[RollbackAction.LOCK_PHASE],
-            reason="Test 2",
-            lom="test:130",
-        )
-
-        with patch.object(controller, "_audit_log", return_value=True):
-            controller.execute_rollback(event1)
-            controller.execute_rollback(event2)
-
-        # Verify chain
-        assert len(controller.audit_trail) >= 2
-        for i in range(1, len(controller.audit_trail)):
-            prev_event = controller.audit_trail[i - 1]
-            curr_event = controller.audit_trail[i]
-            assert curr_event["prior_hash"] == prev_event["hash"]
+        with patch.object(audit_sink, "emit", side_effect=audit_sink.AuditWriteFailed("x")):
+            assert controller.execute_rollback(event) is False
+        assert not controller.is_phase_locked("PHASE_1")
+        assert controller.rollback_events == []
 
 
 class TestIncidentDetection:
@@ -701,9 +805,14 @@ class TestIncidentDetection:
             {"audit_chain_verified": False},
         )
 
-        assert len(incidents) > 0
-        assert incidents[0].incident_type == IncidentType.AUDIT_CHAIN_BREAK
+        # Only the measured signal raises an incident: an absent confidence
+        # metric used to fabricate a CRITICAL "confidence below minimum".
+        assert [i.incident_type for i in incidents] == [IncidentType.AUDIT_CHAIN_BREAK]
         assert incidents[0].severity == IncidentSeverity.CRITICAL
+
+    def test_unmeasured_metrics_raise_no_incident(self):
+        detector = IncidentDetector()
+        assert detector.detect_incidents({}) == []
 
 
 if __name__ == "__main__":

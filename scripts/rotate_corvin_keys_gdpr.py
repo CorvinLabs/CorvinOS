@@ -8,6 +8,24 @@ Implements 4-phase rotation with hash-chained audit trail:
 4. Cleanup old key files
 
 Fail-closed: any error → abort rotation + alert.
+
+DEFUSED (adversarial review 2026-09-27) — ``rotate_secrets()`` raises
+``NotImplementedError`` and the CLI exits 2. NOT WIRED: the only caller is
+``core/compliance/bootstrap_rotation.py::trigger_rotation``, which itself has no
+production caller as of 2026-09-27.
+
+Why: nothing here rotated anything. Phase 1 generated keys and discarded them,
+phases 2-4 were "(simulated)" (no dual-write, no revocation, invented file
+paths), and the result reported ``"status": "success"``. Worse, every phase
+appended a record in a PRIVATE hash scheme (sha256 over a dataclass, no MAC)
+straight onto the hand-composed canonical tenant chain path
+``<CORVIN_HOME>/tenants/<tid>/global/forge/audit.jsonl``. One run made
+``forge.security_events.verify_chain`` report the chain as tampered — which is
+what the ADR-0232 boot tripwire refuses to boot on. Reproduced 2026-09-27.
+
+To make this real: rotate real key material through the store that consumes it,
+and write ``secret_rotated`` records with ``forge.security_events.write_event``
+on ``forge.paths.tenant_audit_chain(tenant)`` — never a hand-built record.
 """
 import hashlib
 import json
@@ -55,7 +73,21 @@ def get_audit_path(tenant_id: str) -> Path:
     return Path(corvin_home) / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
 
 
+DEFUSED_REASON = (
+    "rotate_corvin_keys_gdpr.py is defused: its rotation was simulated (new keys "
+    "discarded, revocation/cleanup not performed) and it wrote private-format "
+    "records onto the canonical tenant audit chain, breaking verify_chain. "
+    "Nothing was rotated."
+)
+
+
 def emit_audit_event(event: RotationEvent) -> None:
+    """REFUSED — used to hand-write a private-format record onto the canonical
+    tenant chain path (breaks ``verify_chain``)."""
+    raise NotImplementedError(DEFUSED_REASON)
+
+
+def _legacy_emit_audit_event(event: RotationEvent) -> None:  # pragma: no cover - unreachable, kept for reference
     """Emit audit event (hash-chained, fail-closed)."""
     audit_path = get_audit_path(event.tenant_id)
     audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,7 +241,8 @@ def phase_4_cleanup(tenant_id: str, secret_id: str, old_key_files: list) -> dict
 
 
 def rotate_secrets(policy_path: str, tenant_id: str = "_default") -> dict:
-    """Execute full 4-phase GDPR-compliant rotation."""
+    """Execute full 4-phase GDPR-compliant rotation — REFUSED (see module docstring)."""
+    raise NotImplementedError(DEFUSED_REASON)
     _log.info(f"Starting secret rotation for tenant={tenant_id}")
 
     try:
@@ -263,6 +296,9 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
+
+    print(f"ERROR: {DEFUSED_REASON}", file=sys.stderr)
+    sys.exit(2)
 
     if len(sys.argv) < 2:
         _log.error("Usage: python3 rotate_corvin_keys_gdpr.py <policy_yaml> [tenant_id]")

@@ -33,10 +33,23 @@ class TestCheckpointManagerStress:
     @pytest.fixture
     def manager(self, temp_checkpoint_dir):
         """CheckpointManager instance."""
+        # These tests measure the manager's own lock contention. ``None`` now
+        # means "the tenant's real chain writer" (serialised fsync'd writes,
+        # which would dominate the timing), so pass an explicit in-test sink;
+        # checkpoint auditing itself is covered by
+        # test_security_fix_2_checkpoint_integrity.py.
+        class _CountingWriter:
+            def __init__(self):
+                self.events = []
+
+            def write_event(self, event):
+                self.events.append(event.event_type)
+                return "h"
+
         return CheckpointManager(
             checkpoint_dir=temp_checkpoint_dir,
             tenant_id="_default",
-            audit_writer=None  # Disable audit for stress test performance
+            audit_writer=_CountingWriter(),
         )
 
     def create_test_checkpoint(self, task_id: str, checkpoint_id: str, iter_num: int) -> CheckpointState:

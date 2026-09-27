@@ -1395,12 +1395,14 @@ class MCPServer:
             return
 
         try:
-            from .paths import corvin_home as _forge_corvin_home
             from .tenants import current_tenant as _current_tenant
             from .security_events import write_event as _write_event
 
             tenant_id = _current_tenant(args.get("tenant_id"))
-            audit_path = _forge_corvin_home() / "tenants" / tenant_id / "audit.jsonl"
+            # THE tenant chain — was hand-composed as
+            # ``<corvin_home>/tenants/<tid>/audit.jsonl``, a file no verifier,
+            # tripwire or compliance report reads.
+            audit_path = _server_audit_chain(tenant_id)
 
             def _audit_writer(event_type: str, severity: str, details: dict) -> None:
                 _write_event(audit_path, event_type, severity=severity, details=details)
@@ -2223,16 +2225,19 @@ class MCPServer:
         run_id: str = "",
         details: dict | None = None,
     ) -> None:
-        """Append a structured security event with hash-chain integrity."""
-        path = self.registry.root / self.registry.AUDIT_NAME
+        """Append a structured security event to THE tenant audit chain."""
+        path = _server_audit_chain()
         if getattr(self, "forge_persona", ""):
             details = dict(details or {})
             details.setdefault("persona", self.forge_persona)
         try:
+            # Always chained: ``write_event`` refuses an unchained record, so
+            # honouring a workspace policy's ``audit.hash_chain: false`` here
+            # raised ValueError out of every security-event call site.
             _write_security_event(
                 path, event_type,
                 tool=tool, run_id=run_id, details=details,
-                hash_chain=self.policy.audit_hash_chain,
+                hash_chain=True,
             )
         except OSError:
             pass
@@ -2519,11 +2524,10 @@ class MCPServer:
         if severity not in ("INFO", "WARNING"):
             severity = "INFO"
         try:
-            _audit_path = self.registry.root / self.registry.AUDIT_NAME
             _write_security_event(
-                _audit_path, event_type,
+                _server_audit_chain(), event_type,
                 severity=severity, details=details,
-                hash_chain=self.policy.audit_hash_chain,
+                hash_chain=True,
             )
         except Exception as exc:  # noqa: BLE001
             self._error(msgid, -32603, f"audit write failed: {exc}")
@@ -2536,6 +2540,33 @@ class MCPServer:
             "content": [{"type": "text",
                          "text": json.dumps({"written": event_type})}],
         })
+
+
+def _server_audit_chain(tenant_id: str | None = None) -> Path:
+    """THE hash chain this server's security events append to.
+
+    Same precedence as the bridge audit writer (``bridges/shared/audit.py::
+    audit_path``): ``VOICE_AUDIT_PATH`` (explicit file redirect) >
+    ``$FORGE_ROOT/audit.jsonl`` (explicit dir redirect; tests + ops tooling) >
+    ``paths.tenant_audit_chain(current_tenant())`` — one chain per tenant,
+    governed by ``CORVIN_HOME``.
+
+    It used to be ``registry.root / "audit.jsonl"``: the WORKSPACE root, which
+    for a server started without ``FORGE_ROOT`` inside a git checkout is
+    ``<checkout>/.corvin/forge`` (project scope) whatever ``CORVIN_HOME`` says —
+    a per-workspace chain nothing verifies, and in the live checkout the live
+    install's file (a sandboxed test run appended records there, 2026-09-27).
+    Workspaces bound TOOLS; they are not a boundary for the audit trail.
+    """
+    redirect = os.environ.get("VOICE_AUDIT_PATH", "").strip()
+    if redirect:
+        return Path(redirect).expanduser()
+    forge_root = os.environ.get("FORGE_ROOT", "").strip()
+    if forge_root:
+        return Path(forge_root).expanduser() / Registry.AUDIT_NAME
+    from .paths import tenant_audit_chain  # noqa: PLC0415
+    from .tenants import current_tenant  # noqa: PLC0415
+    return tenant_audit_chain(current_tenant(tenant_id))
 
 
 _FEATURES_SERVER_PROD = "https://corvin-features-production.up.railway.app"

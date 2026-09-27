@@ -1,20 +1,27 @@
 """Plugin event queue tripwire — ADR-0682 (Learning k=6).
 
-Drain tripwire: Before turn N+1, drain event queue completely.
-Fail-closed: if queue not drained within timeout, deny turn (TripwireError).
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — no
+host, turn loop or route calls :func:`drain_event_queue_before_turn`.
 
-Load-bearing: ensures no plugin events are lost between turns.
-GDPR Art. 30, 32: Audit trail is immutable and complete.
+Drain tripwire: before turn N+1, write every pending plugin event of the
+tenant to the tenant audit chain. Fail-closed: when the queue cannot be fully
+drained within ``timeout_sec`` — a chain write fails, the deadline passes, or
+events are still pending — :class:`TripwireError` is raised and the turn must
+be denied. "Drained" means "in the audit chain", never merely "read".
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
+from core.audit.event_queue import DrainingError, EventQueue
+
 logger = logging.getLogger(__name__)
+
+_DRAIN_BATCH = 1000
 
 
 @dataclass(frozen=True)
@@ -26,124 +33,65 @@ class TripwireResult:
     error: Optional[str] = None
 
     def __bool__(self) -> bool:
-        """True if tripwire passed (success=True)."""
         return self.success
 
 
 class TripwireError(Exception):
     """Queue drain failed or timed out — turn denied (fail-closed)."""
-    pass
 
 
 def drain_event_queue_before_turn(
     tenant_id: str = "_default",
     timeout_sec: float = 5.0,
 ) -> TripwireResult:
-    """Drain event queue before turn execution (fail-closed tripwire).
-
-    MUST complete successfully before turn N+1 can proceed.
-    If queue cannot be drained within timeout_sec, raises TripwireError
-    and turn is DENIED.
-
-    Args:
-        tenant_id: Tenant scope (default '_default')
-        timeout_sec: Hard timeout (default 5.0 seconds)
-
-    Returns:
-        TripwireResult (immutable)
+    """Drain the tenant's plugin event queue into its audit chain.
 
     Raises:
-        TripwireError: If drain fails or times out (turn DENIED)
+        TripwireError: the queue could not be emptied into the chain in time
+            (turn DENIED).
     """
-    start_time = datetime.utcnow()
-
+    start = time.monotonic()
+    deadline = start + float(timeout_sec)
+    drained = 0
     try:
-        from core.audit.event_queue import EventQueue, DrainingError
+        queue = EventQueue(tenant_id=tenant_id)
+        while True:
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0:
+                raise TripwireError("queue drain timed out before the queue was empty")
+            batch = queue.drain(batch_size=_DRAIN_BATCH, timeout_sec=remaining_s)
+            drained += len(batch)
+            pending = queue.stats().pending_count
+            if pending == 0:
+                break
+            if not batch:
+                # Pending rows exist but a drain wrote none — it cannot progress.
+                raise TripwireError(f"{pending} plugin event(s) pending and not drainable")
+    except TripwireError as exc:
+        logger.error("plugin event tripwire FAILED (tenant=%s): %s", tenant_id, exc)
+        raise
+    except DrainingError as exc:
+        logger.error("plugin event tripwire FAILED (tenant=%s): %s", tenant_id, exc)
+        raise TripwireError(f"queue drain failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - every failure denies the turn
+        logger.error("plugin event tripwire FAILED (tenant=%s): %s", tenant_id,
+                     type(exc).__name__)
+        raise TripwireError(f"unexpected tripwire error: {type(exc).__name__}") from exc
 
-        queue = EventQueue()
-
-        # Drain pending events
-        try:
-            drained_events = queue.drain(batch_size=1000, timeout_sec=timeout_sec)
-        except DrainingError as e:
-            # Timeout or other drain error
-            elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-            error_msg = f"Queue drain failed: {e}"
-            logger.error(f"Tripwire FAILED: {error_msg}")
-
-            result = TripwireResult(
-                success=False,
-                events_drained=0,
-                elapsed_ms=elapsed_ms,
-                error=error_msg,
-            )
-
-            # Fail-closed: raise TripwireError to deny turn
-            raise TripwireError(error_msg) from e
-
-        elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-
-        # Check if any events remain (should be empty after drain)
-        remaining = queue.stats()
-        if remaining.pending_count > 0:
-            warning_msg = (
-                f"Queue still has {remaining.pending_count} pending events after drain; "
-                f"turn will proceed but audit trail is incomplete"
-            )
-            logger.warning(f"Tripwire WARNING: {warning_msg}")
-
-        result = TripwireResult(
-            success=True,
-            events_drained=len(drained_events),
-            elapsed_ms=elapsed_ms,
-        )
-
-        logger.info(
-            f"✅ Tripwire passed: drained {len(drained_events)} events in {elapsed_ms:.1f}ms "
-            f"(tenant={tenant_id})"
-        )
-
-        return result
-
-    except TripwireError:
-        raise  # Re-raise tripwire errors
-    except Exception as e:
-        elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-        error_msg = f"Unexpected tripwire error: {e}"
-        logger.error(f"Tripwire FAILED: {error_msg}")
-
-        # Fail-closed: treat unexpected errors as drain failures
-        raise TripwireError(error_msg) from e
+    elapsed_ms = (time.monotonic() - start) * 1000
+    return TripwireResult(success=True, events_drained=drained, elapsed_ms=elapsed_ms)
 
 
 def verify_queue_drained(tenant_id: str = "_default") -> bool:
-    """Verify queue is empty (audit check, non-blocking).
-
-    Called for monitoring/auditing; does not block turn.
-    Used to detect incomplete drains (alert operator).
-
-    Args:
-        tenant_id: Tenant scope (default '_default')
-
-    Returns:
-        True if queue is empty, False otherwise
-    """
+    """True iff the tenant's queue has no pending event. Fail-closed: an
+    unreadable queue reads as NOT drained."""
     try:
-        from core.audit.event_queue import EventQueue
-
-        queue = EventQueue()
-        stats = queue.stats()
-
-        is_empty = stats.pending_count == 0
-
-        if not is_empty:
-            logger.warning(
-                f"Queue not fully drained: {stats.pending_count} pending events "
-                f"({stats.high_priority_count} HIGH, {stats.low_priority_count} LOW)"
-            )
-
-        return is_empty
-
-    except Exception as e:
-        logger.warning(f"Failed to verify queue drain: {e}")
+        stats = EventQueue(tenant_id=tenant_id).stats()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("plugin event queue unreadable (tenant=%s): %s", tenant_id,
+                       type(exc).__name__)
         return False
+    if stats.pending_count:
+        logger.warning("plugin event queue not drained: %d pending (tenant=%s)",
+                       stats.pending_count, tenant_id)
+    return stats.pending_count == 0

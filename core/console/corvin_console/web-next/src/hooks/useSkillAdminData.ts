@@ -23,6 +23,15 @@ interface UseAdminDataState<T> {
   lastUpdate: string | null;
 }
 
+
+/**
+ * Error text for a 404: none of the learning admin/dashboard routes these
+ * hooks call (/v1/console/learning/{workflow-optimizer,security-orchestrator,
+ * flow-guard}/admin, /v1/console/learning/dashboard) is served on this build.
+ * Callers render it as a neutral "not available" state, not a failure.
+ */
+export const ADMIN_DATA_UNAVAILABLE = "Not available on this build.";
+
 /**
  * Hook: Fetch Stream 1 (Workflow Optimizer) admin data
  */
@@ -42,7 +51,9 @@ export function useWorkflowOptimizerAdmin() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+        throw new Error(
+          response.status === 404 ? ADMIN_DATA_UNAVAILABLE : `Failed to fetch: HTTP ${response.status}`,
+        );
       }
 
       const result = (await response.json()) as AdminPanelResponse<WorkflowOptimizerAdminData>;
@@ -84,7 +95,9 @@ export function useSecurityOrchestratorAdmin() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+        throw new Error(
+          response.status === 404 ? ADMIN_DATA_UNAVAILABLE : `Failed to fetch: HTTP ${response.status}`,
+        );
       }
 
       const result = (await response.json()) as AdminPanelResponse<SecurityOrchestratorAdminData>;
@@ -126,7 +139,9 @@ export function useFlowGuardAdmin() {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+        throw new Error(
+          response.status === 404 ? ADMIN_DATA_UNAVAILABLE : `Failed to fetch: HTTP ${response.status}`,
+        );
       }
 
       const result = (await response.json()) as AdminPanelResponse<FlowGuardAdminData>;
@@ -175,7 +190,9 @@ export function useUnifiedLearningDashboard(dateRange?: { start: string; end: st
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+        throw new Error(
+          response.status === 404 ? ADMIN_DATA_UNAVAILABLE : `Failed to fetch: HTTP ${response.status}`,
+        );
       }
 
       const result = (await response.json()) as AdminPanelResponse<UnifiedDashboardData>;

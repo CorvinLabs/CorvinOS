@@ -40,8 +40,14 @@ def sandbox(tenants=("_default",)):
         # The root conftest points VOICE_AUDIT_PATH at ITS sandbox home; moving
         # CORVIN_HOME here without moving the redirect leaves the chain outside
         # the root, which the hardened tripwire refuses (ADR-0641 round-2).
+        # It must name EXACTLY the resolver's own chain — the TENANT chain
+        # ``tenants/<tid>/global/forge/audit.jsonl`` (R4) — or the tripwire reads
+        # it as a redirect (``audit_path_not_redirected``); the pre-R4
+        # ``global/forge`` path it used to name is exactly that.
         _prev_audit = os.environ.get("VOICE_AUDIT_PATH")
-        os.environ["VOICE_AUDIT_PATH"] = str(home / "global" / "forge" / "audit.jsonl")
+        os.environ["VOICE_AUDIT_PATH"] = str(
+            home / "tenants" / tenants[0] / "global" / "forge" / "audit.jsonl"
+        )
         os.environ["ADAPTER_FAKE_CLAUDE"] = "1"
         os.environ["ADAPTER_FAKE_DELAY"] = "0.01"
         os.environ["CORVIN_METRICS_COLLECTOR_INTERVAL"] = "1"  # 1s for tests

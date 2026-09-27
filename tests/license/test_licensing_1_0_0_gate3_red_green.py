@@ -1,357 +1,190 @@
-"""GATE 3: RED→GREEN Iteration for Licensing 1.0.0
+"""Licensing 1.0.0 — capability matrix, tier vocabulary and the daily quota counter.
 
-This file implements the complete test suite that drives RED→GREEN development:
-1. RED: All tests fail (enforcer not wired, quota counter not implemented)
-2. GREEN: Implement enforcement at chokepoints, pass all tests
-3. REFACTOR: Consolidate via require_capability() API
+These used to be ``requests`` calls to a live ``localhost:8765``. The HTTP
+endpoint they targeted (``/v1/licensing/verify``) is not served at that path and
+answers ``enforcement_unavailable`` for everything where it IS mounted — see
+test_licensing_1_0_0_e2e.py. The semantics those tests meant to check live in
+``capability_api.require_capability`` (ADR-0703 §2 — the single gate every
+chokepoint calls) and ``quota_counter`` (ADR-0703 class-L per-day counter), and
+are tested there directly. Free tier = scratch CORVIN_HOME with no licence key.
 
-ADR-0700/0701/0702/0703/0704 enforcement:
-- Class L quotas (compute.run, etc.)
-- Class N credentials (A2A network, marketplace)
-- Audit trail (every decision logged)
-- Fail-closed contract (enforcement error → free allowance)
-
-License: Apache-2.0
+Dropped empty stubs (no subject in the product): Member-Credential TTL issuance
+(``active_credential`` is a stub that returns None), CRL-unavailable denial for
+new A2A peers, "chokepoints wired" grep guard, and quota persistence "across a
+console restart" as a separate case (the counter is a file; covered by
+``test_counter_is_file_backed``).
 """
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from unittest import mock
 
 import pytest
-import requests
-import json
-import time
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
-from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _license_console_sandbox import member_tier  # noqa: E402
+
+import corvin_operator.license.capability_api as ca  # noqa: E402
+from corvin_operator.license import limits, quota_counter, validator  # noqa: E402
+
+BASELINE = ["chat.turns", "voice.summaries", "bridges.all", "engines.all",
+            "skills.run_vetted", "skills.run_local", "telemetry.opt_out"]
+MEMBER_ONLY = ["forge.create", "a2a.network", "marketplace.publish"]
 
 
-class TestTierEnforcement:
-    """Test 1–3: Tier vocabulary and capability assignment."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_01_free_tier_exists(self):
-        """Test 1: Free tier is properly defined."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "chat.turns", "tier": "free", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["tier"] == "free"
-        assert data["allowed"] == True  # chat is baseline
-    
-    def test_02_member_tier_exists(self):
-        """Test 2: Member tier is properly defined."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "forge.create", "tier": "member", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["tier"] == "member"
-        assert data["allowed"] == True
-    
-    def test_03_only_two_tiers(self):
-        """Test 3: Only 'free' and 'member' tiers exist."""
-        # Verify that legacy tier strings are rejected
-        for legacy_tier in ["universal", "starter", "pro", "enterprise"]:
-            # These should resolve to free (per ADR-0700 §1 wire rule)
-            # TODO: implement wire rule
-            pass
+def _decide(capability: str, requested: int = 1):
+    return ca.require_capability(capability, requested, tenant_id="_default",
+                                 entry_point="tests/license/gate3")
 
 
-class TestComputeQuotaEnforcement:
-    """Test 4–6: Compute run quota enforcement (class L)."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_04_free_tier_compute_quota_10_per_day(self):
-        """Test 4: Free tier has 10 compute runs/day quota."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "compute.run", "tier": "free", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False or data["quota_remaining"] == 10
-    
-    def test_05_member_tier_compute_unlimited(self):
-        """Test 5: Member tier has unlimited compute runs."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "compute.run", "tier": "member", "requested": 100},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == True
-        assert data["quota_remaining"] is None or data["quota_remaining"] >= 100
-    
-    def test_06_quota_resets_at_utc_midnight(self):
-        """Test 6: Quota counter resets at UTC midnight."""
-        # TODO: Requires time mocking or real UTC observation
-        # Verify quota_enforcer.py line 127 uses UTC, not local time
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def _denied(capability: str, requested: int = 1) -> ca.LicenseDenied:
+    with pytest.raises(ca.LicenseDenied) as exc:
+        _decide(capability, requested)
+    return exc.value
 
 
-class TestForgeCapabilityEnforcement:
-    """Test 7–9: Forge creation gates (class L, ADR-0701)."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_07_forge_create_free_tier_denied(self):
-        """Test 7: Free tier cannot create Forges."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "forge.create", "tier": "free", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-        assert "forge" in data["reason"].lower() or data["reason"] == "not_available_in_tier"
-    
-    def test_08_forge_create_member_tier_allowed(self):
-        """Test 8: Member tier can create Forges."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "forge.create", "tier": "member", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == True
-    
-    def test_09_forge_chokepoints_wired(self):
-        """Test 9: All Forge chokepoints (G1–G5) are wired."""
-        # Verify that G1–G5 call require_capability("forge.create")
-        # TODO: Parse AST or grep for chokepoint calls
-        # grep -n "require_capability.*forge.create" operator/forge/forge/registry.py
-        # Should find: registry.py:123, skill_forge/registry.py:456, etc.
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+# ── Tier vocabulary (ADR-0700 §1) ───────────────────────────────────────────
+
+def test_scratch_home_is_free_tier():
+    assert validator.active_tier() == "free"
+    assert _decide("chat.turns").tier is ca.Tier.FREE
 
 
-class TestA2ANetworkGating:
-    """Test 10–12: A2A network access (class N, ADR-0702)."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_10_a2a_network_free_tier_denied(self):
-        """Test 10: Free tier cannot join A2A network."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "a2a.network", "tier": "free", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-    
-    def test_11_a2a_network_member_tier_allowed(self):
-        """Test 11: Member tier can join A2A network."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "a2a.network", "tier": "member", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == True
-    
-    def test_12_a2a_credential_lifecycle(self):
-        """Test 12: A2A Member Credential (MC) has 7-day TTL."""
-        # TODO: Issue MC, verify exp timestamp
-        # exp should be issued_time + 7 days
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_only_two_canonical_tiers():
+    assert {t.value for t in ca.Tier} == {"free", "member"}
+    for legacy in ("universal", "starter", "personal", "professional", "pro",
+                   "business", "enterprise"):
+        assert validator.canonical_tier(legacy) == "member"
+    for garbage in ("super_member", "platinum", "", "MEMBER", "admin"):
+        assert validator.canonical_tier(garbage) == "free"
 
 
-class TestAuditTrailIntegrity:
-    """Test 13–15: Audit trail (ADR-0232/0233)."""
-    
-    def test_13_capability_decision_logged(self):
-        """Test 13: Every require_capability() call emits audit event."""
-        # Trigger a capability check
-        requests.post(
-            "http://localhost:8765/v1/licensing/verify",
-            json={"capability": "compute.run", "tier": "free", "requested": 1},
-            timeout=5
-        )
-        # TODO: Read audit chain and verify license.capability_decision event exists
-        # audit_file = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "audit.jsonl"
-        # lines = audit_file.read_text().strip().split("\n")
-        # assert any("license.capability_decision" in line for line in lines[-10:])
-        pass
-    
-    def test_14_audit_chain_hash_integrity(self):
-        """Test 14: Audit chain is properly hash-linked."""
-        # TODO: Run verify_audit_chain.py and assert exit code 0
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_15_audit_fail_closed_no_silent_failures(self):
-        """Test 15: Audit failure causes capability denial (fail-closed)."""
-        # TODO: Mock audit backend to fail, verify require_capability returns free allowance
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_unrecognised_resolver_output_is_treated_as_free():
+    with mock.patch.object(ca, "active_tier", lambda: "platinum"):
+        assert _denied("forge.create").tier is ca.Tier.FREE
 
 
-class TestFailClosedContract:
-    """Test 16–18: Fail-closed enforcement error handling."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_16_enforcement_error_resolves_to_free_allowance(self):
-        """Test 16: Enforcement error falls back to free allowance."""
-        # TODO: Mock capability lookup to fail, verify require_capability returns free tier
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_17_missing_capability_file_denies_class_l(self):
-        """Test 17: Missing licence.key denies class L capabilities."""
-        # TODO: Remove ~/.corvin/global/license.key, try compute.run
-        # expect: denied or falls back to free allowance
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_18_crl_unavailable_denies_class_n(self):
-        """Test 18: Unavailable CRL denies class N (new A2A peers)."""
-        # TODO: Mock CRL fetch to fail, verify A2A deny for new peers (but existing pairs work)
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+def test_resolver_exception_falls_back_to_the_free_allowance():
+    def boom():
+        raise RuntimeError("licence store unreadable")
+
+    with mock.patch.object(ca, "active_tier", boom):
+        assert _decide("chat.turns").decision is ca.Decision.ALLOW
+        assert _denied("forge.create").reason == "not_available_in_tier"
 
 
-class TestCapabilityMatrix:
-    """Test 19–21: Full capability matrix (ADR-0700 §2.1)."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_19_baseline_capabilities_both_tiers(self):
-        """Test 19: Baseline capabilities available on free and member."""
-        baseline = [
-            "chat.turns", "voice.summaries", "bridges.all", "engines.all",
-            "skills.run_vetted", "skills.run_local", "telemetry.opt_out"
-        ]
-        for cap in baseline:
-            for tier in ["free", "member"]:
-                response = requests.post(
-                    f"{self.BASE_URL}/v1/licensing/verify",
-                    json={"capability": cap, "tier": tier, "requested": 1},
-                    timeout=5
-                )
-                assert response.status_code == 200
-                assert response.json()["allowed"] == True
-    
-    def test_20_member_only_capabilities(self):
-        """Test 20: Member-only capabilities denied for free tier."""
-        member_only = ["forge.create", "a2a.network", "marketplace.publish"]
-        for cap in member_only:
-            response = requests.post(
-                f"{self.BASE_URL}/v1/licensing/verify",
-                json={"capability": cap, "tier": "free", "requested": 1},
-                timeout=5
-            )
-            assert response.status_code == 200
-            assert response.json()["allowed"] == False
-    
-    def test_21_capabilities_match_limits_py(self):
-        """Test 21: Capability matrix matches operator/license/limits.py."""
-        # TODO: Load CAPABILITIES from limits.py, compare to response
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+# ── Capability matrix (ADR-0700 §2.1) ───────────────────────────────────────
+
+@pytest.mark.parametrize("capability", BASELINE)
+def test_baseline_is_unlimited_on_both_tiers(capability):
+    free = _decide(capability)
+    assert free.decision is ca.Decision.ALLOW and free.allowed is None
+    with member_tier():
+        member = _decide(capability)
+    assert member.decision is ca.Decision.ALLOW and member.tier is ca.Tier.MEMBER
 
 
-class TestQuotaCounting:
-    """Test 22–25: Quota counter implementation (ADR-0703 §2)."""
-    
-    def test_22_quota_counter_per_installation_per_day(self):
-        """Test 22: Quota is counted per installation, per UTC day."""
-        # TODO: Get instance_id from ~/.corvin/global/instance_id
-        # Call compute.run 5 times, verify counter persisted
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_23_quota_counter_persisted_across_restarts(self):
-        """Test 23: Quota counter survives process restart."""
-        # TODO: Call compute.run, get counter value
-        # Restart console, verify counter is preserved
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_24_quota_boundary_exactly_10_for_free(self):
-        """Test 24: Free tier quota boundary is exactly 10."""
-        # TODO: Call compute.run 10 times (should succeed), 11th should fail
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
-    
-    def test_25_quota_reset_at_midnight_utc(self):
-        """Test 25: Quota resets at UTC midnight, not local midnight."""
-        # TODO: Mock system time, verify reset happens at correct moment
-        pytest.skip("not implemented — the body of this test is empty. It counted as a PASS in every run until the 2026-09-20 review; marking it skipped makes the gap visible instead of inflating the green count.")
+@pytest.mark.parametrize("capability", MEMBER_ONLY)
+def test_member_only_capabilities(capability):
+    denied = _denied(capability)
+    assert (denied.capability, denied.tier, denied.reason) == (
+        capability, ca.Tier.FREE, "not_available_in_tier")
+    with member_tier():
+        ok = _decide(capability)
+    assert ok.decision is ca.Decision.ALLOW and ok.allowed is None and ok.reason is None
 
 
-class TestEdgeCases:
-    """Test 26–28: Edge cases and error handling."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_26_unknown_capability_denied(self):
-        """Test 26: Unknown capabilities are safely denied."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "fake.capability.xyz", "tier": "member", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-        assert "unknown" in data["reason"].lower()
-    
-    def test_27_invalid_tier_defaults_to_free(self):
-        """Test 27: Invalid tier values default to free."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "forge.create", "tier": "invalid", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        # Should treat as free, so denied
-        assert data["allowed"] == False
-    
-    def test_28_negative_requested_quantity_denied(self):
-        """Test 28: Negative or zero requested quantity is denied."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "compute.run", "tier": "member", "requested": -1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False or data["requested"] == -1  # edge case
+def test_compute_run_free_allowance_is_ten():
+    assert _decide("compute.run", 10).allowed == 10
+    assert _denied("compute.run", 11).reason == "quota_exceeded"
+    with member_tier():
+        big = _decide("compute.run", 999_999)
+    assert big.decision is ca.Decision.ALLOW and big.allowed is None
 
 
-class TestUpgradeURLs:
-    """Test 29–30: Upgrade URLs for denied capabilities."""
-    
-    BASE_URL = "http://localhost:8765"
-    
-    def test_29_denied_capability_includes_upgrade_url(self):
-        """Test 29: Denied capabilities include an upgrade URL."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "forge.create", "tier": "free", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == False
-        # Optional: assert data["upgrade_url"] is not None
-    
-    def test_30_allowed_capability_no_upgrade_url(self):
-        """Test 30: Allowed capabilities don't include upgrade URL."""
-        response = requests.post(
-            f"{self.BASE_URL}/v1/licensing/verify",
-            json={"capability": "chat.turns", "tier": "free", "requested": 1},
-            timeout=5
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["allowed"] == True
-        # Optional: assert data["upgrade_url"] is None
+def test_unknown_capability_is_denied_even_for_a_member():
+    with member_tier():
+        assert _denied("fake.capability.xyz").reason == "unknown_capability"
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+def test_matrix_shape_matches_limits_py():
+    assert ca.CAPABILITIES is limits.CAPABILITIES
+    for name, spec in limits.CAPABILITIES.items():
+        assert spec["class"] in ("B", "L", "N"), name
+        assert set(spec) == {"class", "free", "member"}, name
+        assert spec["member"]["limit"] is None, name   # member is unlimited everywhere
+    assert {n for n, s in limits.CAPABILITIES.items() if s["free"]["limit"] == 0} == set(MEMBER_ONLY)
+    assert all(limits.CAPABILITIES[c]["class"] == "B" for c in BASELINE)
+
+
+def test_non_positive_requested_is_not_validated_KNOWN_GAP():
+    """KNOWN GAP: ``requested`` is not range-checked; a negative or zero quantity is
+    ALLOWED on a finite free allowance. Harmless today (require_capability consumes
+    nothing), but a future caller that debits ``requested`` would be crediting."""
+    assert _decide("compute.run", -1).decision is ca.Decision.ALLOW
+    assert _decide("compute.run", 0).decision is ca.Decision.ALLOW
+
+
+def test_invalid_tenant_returns_enforcement_unavailable_instead_of_raising():
+    """The contract callers must handle: a non-ALLOW decision can come back as a
+    RETURN value. G2 and the console G3 dependency treat it as a deny; G1 and G5
+    do not (see test_adr0701_gates_g1_g4_g5.py)."""
+    decision = ca.require_capability("forge.create", tenant_id="../x", entry_point="t")
+    assert decision.decision is ca.Decision.ENFORCEMENT_UNAVAILABLE
+    assert decision.reason == "invalid_tenant" and decision.allowed == 0
+
+
+# ── Daily quota counter (class L, per tenant, per UTC day) ──────────────────
+
+@pytest.fixture
+def qhome(tmp_path):
+    return tmp_path / "corvin_home"
+
+
+def test_free_boundary_is_exact(qhome):
+    with mock.patch.object(quota_counter, "get_limit", lambda f: 10):
+        counts = [quota_counter.increment_and_check(qhome, "compute_units_per_day", "_default")
+                  for _ in range(10)]
+        assert counts == list(range(1, 11))
+        with pytest.raises(limits.LicenseLimitError):
+            quota_counter.increment_and_check(qhome, "compute_units_per_day", "_default")
+    assert quota_counter.get_today_count(qhome, "compute_units_per_day", "_default") == 10
+
+
+def test_unlimited_limit_writes_no_counter(qhome):
+    with mock.patch.object(quota_counter, "get_limit", lambda f: None):
+        assert quota_counter.increment_and_check(qhome, "compute_units_per_day", "_default") == 0
+    assert quota_counter.get_today_count(qhome, "compute_units_per_day", "_default") == 0
+
+
+def test_counter_rolls_over_on_the_utc_date(qhome):
+    with mock.patch.object(quota_counter, "get_limit", lambda f: 1):
+        with mock.patch.object(quota_counter, "_today_utc", lambda: "2026-09-26"):
+            quota_counter.increment_and_check(qhome, "f", "_default")
+            with pytest.raises(limits.LicenseLimitError):
+                quota_counter.increment_and_check(qhome, "f", "_default")
+        with mock.patch.object(quota_counter, "_today_utc", lambda: "2026-09-27"):
+            assert quota_counter.increment_and_check(qhome, "f", "_default") == 1
+
+
+def test_today_is_the_utc_date():
+    from datetime import datetime, timezone
+
+    assert quota_counter._today_utc() == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def test_counter_is_per_tenant(qhome):
+    with mock.patch.object(quota_counter, "get_limit", lambda f: 1):
+        quota_counter.increment_and_check(qhome, "f", "tenant_a")
+        assert quota_counter.increment_and_check(qhome, "f", "tenant_b") == 1
+
+
+def test_counter_is_file_backed(qhome):
+    with mock.patch.object(quota_counter, "get_limit", lambda f: 5):
+        for _ in range(3):
+            quota_counter.increment_and_check(qhome, "f", "_default")
+    files = list((qhome / "quotas").glob("_default_f_*.json"))
+    assert len(files) == 1
+    assert (files[0].stat().st_mode & 0o777) == 0o600
+    assert quota_counter._load(files[0]) == {"count": 3}

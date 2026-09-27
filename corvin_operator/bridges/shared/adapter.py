@@ -1912,10 +1912,10 @@ def _routing_config(shared_settings: dict, profile: dict) -> dict:
 
 def _apply_auto_routing(prompt: str, channel: str, chat_key: str,
                         profile: dict, shared_settings: dict) -> dict:
-    """Wenn der Chat keine Persona gepinnt hat und Router-Mode=auto ist:
-    Haiku entscheiden lassen. Bei niedriger confidence / Router offline:
-    Fallback-Persona (assistant). Liefert das ggf. um Persona-Felder
-    angereicherte Profile back (mit `_auto_routed`-Marker für die UI).
+    """When the chat has no pinned persona and router mode is ``auto``, let
+    Haiku decide. On low confidence / router offline: fallback persona
+    (assistant). Returns the profile, enriched with persona fields where
+    applicable (with an `_auto_routed` marker for the UI).
 
     A turn without a pinned persona ALWAYS leaves here with a persona identity —
     the fallback when nothing better is available, even when no persona config
@@ -7551,9 +7551,9 @@ def _call_claude_streaming_impl(
         try:
             import yaml as _yaml  # type: ignore
             _tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
-            _home = _corvin_home() if callable(getattr(
-                __import__("builtins"), "_corvin_home", None)
-            ) else Path(
+            # (A ``_corvin_home()`` branch guarded by a builtins lookup that
+            # is never true referenced an undefined name; removed.)
+            _home = Path(
                 os.environ.get("CORVIN_HOME") or
                 (Path.home() / ".corvin")
             )
@@ -13076,6 +13076,7 @@ def main() -> int:
         time.sleep(3.0)
         _write_shutdown_anchor()
         try:
+            import logging  # noqa: PLC0415 — not imported at module level
             logging.shutdown()
         except Exception:  # noqa: BLE001
             pass

@@ -21,6 +21,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+if __name__ == "__main__":
+    # Plain-script run (run-all-tests.sh): no conftest — sandbox every runtime
+    # root BEFORE the product imports below resolve a home or a chain.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _script_sandbox
+
+    _script_sandbox.enter()
+
 _PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PLUGIN_DIR))
 _AGENTS_PARENT = _PLUGIN_DIR.parents[1] / "corvin_operator" / "bridges" / "shared"
@@ -137,13 +145,19 @@ class ToolsCallTests(unittest.TestCase):
         _delegation._default_engine_factory = lambda _eid: self._fake  # type: ignore[assignment]
         # Avoid writing into the real audit chain.
         self._tmp = __import__("tempfile").mkdtemp(prefix="delegate-mcp-test-")
+        self._saved_corvin_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = self._tmp
 
     def tearDown(self):
         _delegation._default_engine_factory = self._saved_default  # type: ignore[assignment]
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        # Restore, never pop: an unset CORVIN_HOME resolves the repo-marker
+        # home — the live install when run from the main checkout.
+        if self._saved_corvin_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._saved_corvin_home
 
     def test_happy_path_via_mcp(self):
         server = DelegateServer(stderr=io.StringIO())
@@ -267,13 +281,19 @@ class FramingBlockTests(unittest.TestCase):
     def setUp(self):
         self._saved_default = _delegation._default_engine_factory
         self._tmp = __import__("tempfile").mkdtemp(prefix="delegate-frame-test-")
+        self._saved_corvin_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = self._tmp
 
     def tearDown(self):
         _delegation._default_engine_factory = self._saved_default  # type: ignore[assignment]
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        # Restore, never pop: an unset CORVIN_HOME resolves the repo-marker
+        # home — the live install when run from the main checkout.
+        if self._saved_corvin_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._saved_corvin_home
 
     def test_injection_text_gets_framed(self):
         _delegation._default_engine_factory = lambda _eid: _InjectionEngine()  # type: ignore[assignment]
@@ -357,13 +377,19 @@ class AllowWriteToolParamTests(unittest.TestCase):
 
         _delegation._default_engine_factory = lambda _eid: _RecordingEngine()  # type: ignore[assignment]
         self._tmp = __import__("tempfile").mkdtemp(prefix="delegate-aw-test-")
+        self._saved_corvin_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = self._tmp
 
     def tearDown(self):
         _delegation._default_engine_factory = self._saved_default  # type: ignore[assignment]
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        # Restore, never pop: an unset CORVIN_HOME resolves the repo-marker
+        # home — the live install when run from the main checkout.
+        if self._saved_corvin_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._saved_corvin_home
 
     def test_default_safe_mode_for_claude_code(self):
         server = DelegateServer(stderr=io.StringIO())
@@ -431,6 +457,7 @@ class HermeticAndEnvToolParamTests(unittest.TestCase):
 
         _delegation._default_engine_factory = lambda _eid: _RecordingEngine()  # type: ignore[assignment]
         self._tmp = __import__("tempfile").mkdtemp(prefix="delegate-l292-test-")
+        self._saved_corvin_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = self._tmp
         # Plant a "secret" the scrub should hide.
         os.environ["MCP_TEST_LEAK"] = "x"
@@ -438,7 +465,12 @@ class HermeticAndEnvToolParamTests(unittest.TestCase):
     def tearDown(self):
         _delegation._default_engine_factory = self._saved_default  # type: ignore[assignment]
         os.environ.pop("MCP_TEST_LEAK", None)
-        os.environ.pop("CORVIN_HOME", None)
+        # Restore, never pop: an unset CORVIN_HOME resolves the repo-marker
+        # home — the live install when run from the main checkout.
+        if self._saved_corvin_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._saved_corvin_home
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
 

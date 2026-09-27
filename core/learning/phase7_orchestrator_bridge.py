@@ -7,12 +7,22 @@ L3: Learning → Routing (config_store versioning + routing decision)
 
 Based on ADR-0537, 0696, 0690, 0688, 0689 (Skills 2.0 + Learning Loop)
 Also integrates with existing: learning_events.py, active_loop.py, skill_optimizer.py
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+``SkillOrchestrator.execute_with_learning`` SIMULATES the skill (its output is
+marked ``simulated: True``). ``AuditSink`` is NOT an audit trail: it is an
+in-process query cache. Every event it accepts is first committed,
+content-free, to the tenant's core audit chain
+(``event_persistence.core_audit_event``); if that commit fails the event is
+refused. (Until 2026-09-27 the in-memory list with its own sha256 "chain" was
+the only record — a second chain format that vanished with the process.)
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
@@ -73,10 +83,38 @@ class ConfigUpdateEvent(AuditEvent):
     reason: str = ""
 
 
+#: Chain event names for the three event classes (content-free; allowlisted in
+#: ``event_persistence._LEARNING_EVENT_ALLOWLISTS``).
+_CHAIN_EVENT_NAMES = {
+    "SkillExecutedEvent": "learning.phase7_skill_executed",
+    "FeedbackEvent": "learning.phase7_feedback",
+    "ConfigUpdateEvent": "learning.phase7_config_updated",
+}
+#: In-process cache cap (oldest dropped; the chain keeps everything).
+MAX_CACHED_EVENTS = 10_000
+
+
+def _chain_details(event: "AuditEvent") -> Dict[str, Any]:
+    """Content-free projection: ids, versions, numbers — never input/output data."""
+    d: Dict[str, Any] = {"event_id": event.event_id, "tenant_id": event.tenant_id}
+    for key in ("skill_id", "version", "latency_ms", "lom", "event_id_ref", "signal", "param"):
+        if hasattr(event, key):
+            val = getattr(event, key)
+            d["skill_version" if key == "version" else key] = val
+    return d
+
+
 class AuditSink:
-    """In-memory audit trail (hash-chained, fail-closed)."""
+    """In-process query cache over events committed to the core audit chain.
+
+    ``emit`` commits a content-free record to ``tenant_audit_chain`` FIRST and
+    only then caches the event; no commit -> ``False`` and nothing cached.
+    """
 
     def __init__(self, tenant_id: str = "_default"):
+        from core.tenants import validate_tenant_id  # noqa: PLC0415
+
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.events: List[AuditEvent] = []
         self.last_hash = "sha256(genesis)"
@@ -88,6 +126,18 @@ class AuditSink:
         Fail-closed: if hash computation fails or chain breaks,
         return False and DO NOT add event to trail.
         """
+        from .event_persistence import core_audit_event  # noqa: PLC0415
+
+        if event.tenant_id != self.tenant_id:
+            print(f"❌ AuditSink.emit() refused: tenant mismatch (event NOT added)")
+            return False
+        try:
+            chain_name = _CHAIN_EVENT_NAMES[type(event).__name__]
+            core_audit_event(chain_name, tenant_id=self.tenant_id, details=_chain_details(event))
+        except Exception as e:  # noqa: BLE001 — no chain commit, no event
+            print(f"❌ AuditSink.emit() FAILED: core audit did not commit ({type(e).__name__}) "
+                  f"(event NOT added)")
+            return False
         try:
             # Build event with chain link
             event_dict = asdict(event)
@@ -105,9 +155,11 @@ class AuditSink:
             event_type = type(event)
             updated_event = event_type(**event_dict)
 
-            # Add to chain
+            # Add to the cache
             self.events.append(updated_event)
             self.last_hash = updated_event.hash
+            if len(self.events) > MAX_CACHED_EVENTS:
+                del self.events[: len(self.events) - MAX_CACHED_EVENTS]
 
             return True
         except Exception as e:
@@ -133,7 +185,7 @@ class AuditSink:
         if not self.events:
             return True
 
-        current_hash = "sha256(genesis)"
+        current_hash = self.events[0].prev_hash  # the cache may have dropped its head
         for event in self.events:
             if event.prev_hash != current_hash:
                 return False
@@ -346,13 +398,16 @@ class SkillOrchestrator:
             routing = "skill_path"  # Execute directly
             decision_model = "opus"  # Better model for confident cases
 
-        # 3. Simulate Skill execution (would call real Skill here)
+        # 3. SIMULATED Skill execution (no real Skill is called here)
+        _t0 = time.monotonic()
         output_data = {
             "decision": decision_model,
             "routing": routing,
             "confidence": input_confidence,
             "model_used": decision_model,
+            "simulated": True,
         }
+        latency_ms = int((time.monotonic() - _t0) * 1000)  # measured, not a constant
 
         # 4. Emit SkillExecutedEvent to audit trail (L1)
         skill_event = SkillExecutedEvent(
@@ -360,7 +415,7 @@ class SkillOrchestrator:
             version=config.version,
             input_data=input_data,
             output_data=output_data,
-            latency_ms=42,
+            latency_ms=latency_ms,
             lom=f"{__file__}:execute_with_learning:L{self.execute_with_learning.__code__.co_firstlineno}",
             tenant_id=self.tenant_id,
         )

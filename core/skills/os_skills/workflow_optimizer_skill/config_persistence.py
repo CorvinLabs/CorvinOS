@@ -316,7 +316,11 @@ class ConfigPersistence:
             Dict with version_count, total_feedback, etc.
         """
         versions = self.list_versions()
-        total_feedback = sum(v.get("feedback_count", 0) for v in versions)
+        # feedback_count is CUMULATIVE per version (ConfidenceCalculator
+        # re-reads all feedback), and list_versions() lists the current file
+        # AND its archived copy — summing counted every event 2×(versions).
+        # The current version's count is the total incorporated.
+        total_feedback = versions[0].get("feedback_count", 0) if versions else 0
 
         return {
             "total_versions": len(versions),

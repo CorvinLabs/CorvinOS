@@ -15,8 +15,9 @@ from core.plugins.corvin_plugins.bootstrap import bootstrap_tenant
 
 
 @pytest.fixture
-def tenant_config_path(tmp_path):
-    """Create a temporary tenant config path."""
+def tenant_config_path(tmp_path, monkeypatch):
+    """Create a temporary tenant config path under an isolated CORVIN_HOME."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     tenant_dir = tmp_path / "tenants" / "_default" / "global"
     tenant_dir.mkdir(parents=True)
     config_file = tenant_dir / "tenant.corvin.yaml"
@@ -47,19 +48,18 @@ class TestPluginLifecycle:
         assert config["plugins"]["ai.vibe_engineering"]["enabled"] == False
         assert config["plugins"]["reasoning.tree_of_thoughts"]["enabled"] == True
 
-    def test_all_four_plugins_registered(self):
-        """All 4 plugins are registered in the plugin system."""
-        expected_plugins = [
-            "ai.vibe_engineering",
-            "reasoning.tree_of_thoughts",
-            "observability.token_metrics",
-            "learning.feedback_loop"
-        ]
+    def test_loader_refuses_instead_of_pretending(self, tenant_config_path):
+        """lifecycle_loader is NOT WIRED and its registry API does not exist:
+        it must say so, never report plugins as loaded (adversarial review
+        2026-09-27; the real loader is bootstrap.bootstrap_tenant)."""
+        with pytest.raises(NotImplementedError):
+            lifecycle_loader.load_plugins_for_tenant("_default")
+        with pytest.raises(NotImplementedError):
+            lifecycle_loader.register_lifecycle_hooks("_default")
 
-        registered = registry.list_plugin_ids()
-        for plugin_id in expected_plugins:
-            # At least one should match (may have other plugins too)
-            assert any(plugin_id in pid for pid in registered)
+    def test_read_tenant_config_rejects_traversal(self):
+        with pytest.raises(Exception):
+            lifecycle_loader.read_tenant_config("../../etc")
 
     def test_vibe_engineering_plugin_has_active_mode_config(self):
         """Vibe Engineering plugin has active_mode configuration."""
@@ -106,21 +106,23 @@ class TestPluginLifecycle:
 
 
 class TestPluginAuditTrail:
-    """Test that plugin state changes are audited."""
+    """Loader events go to the tenant's plugin event queue (not yet the chain)."""
 
-    def test_plugin_loaded_event_emitted(self):
-        """When plugin loads, audit event recorded."""
-        # Placeholder: real implementation would check audit chain
-        # For now, verify the method exists
-        assert hasattr(lifecycle_loader, "_emit_audit_event")
+    def test_plugin_loaded_event_queued_for_its_tenant(self, tenant_config_path):
+        from core.audit.event_queue import EventQueue
 
-    def test_plugin_disabled_event_emitted(self):
-        """When plugin disabled, audit event recorded."""
-        # Placeholder: real implementation would check audit chain
-        # Verify the disabled event is emitted in load_plugins_for_tenant
-        import inspect
-        source = inspect.getsource(lifecycle_loader.load_plugins_for_tenant)
-        assert "plugin_disabled" in source
+        lifecycle_loader._emit_audit_event(
+            "plugin_loaded", plugin_id="ai.x", tenant_id="_default", version="1.0")
+        rows = EventQueue(tenant_id="_default").batch_read()
+        assert [(r["event_type"], r["plugin_id"]) for r in rows] == [("plugin_loaded", "ai.x")]
+
+    def test_plugin_disabled_event_queued(self, tenant_config_path):
+        from core.audit.event_queue import EventQueue
+
+        lifecycle_loader._emit_audit_event(
+            "plugin_disabled", plugin_id="ai.y", tenant_id="_default", reason="config")
+        rows = EventQueue(tenant_id="_default").batch_read()
+        assert [(r["event_type"], r["reason"]) for r in rows] == [("plugin_disabled", "config")]
 
 
 class TestMigrationCompatibility:

@@ -132,7 +132,7 @@ class ConfidenceCalculator:
            - Count successes (feedback_type=correct)
            - Count total feedback
            - Compute new P(correct) = successes / total
-        3. Apply smoothing (Laplace smoothing to avoid 0/1 extremes)
+        3. Beta-Binomial update centred on the default prior (n0=2)
         4. Persist to YAML (versioned, immutable history)
         5. Emit CONFIG_UPDATED event to audit trail
 
@@ -175,16 +175,25 @@ class ConfidenceCalculator:
             if feedback_type == "correct":
                 success_counts[key] = success_counts.get(key, 0) + 1
 
-        # Bayesian update with Laplace smoothing (α=1.0)
-        # P_new = (successes + α) / (total + 2α)
-        # α=1 smoothing prevents 0/1 extremes on small sample sizes
-        alpha = 1.0
+        # Bayesian (Beta-Binomial) update centred on the DEFAULT prior:
+        #   P_new = (p0 * n0 + successes) / (n0 + total)
+        # with prior mean p0 = the default weight of that cell and prior
+        # strength n0 = 2 pseudo-observations (as strong as Laplace's α=1).
+        # Two defects fixed here (adversarial review 2026-09-27):
+        #  * plain Laplace (s+1)/(n+2) discarded the prior entirely — one
+        #    "incorrect" on a cell dropped it from its prior to 0.33, below
+        #    every untouched cell, and flipped routing on a single sample;
+        #  * the prior must be the defaults, not ``current_weights``: every
+        #    call re-reads ALL feedback, so updating an already-updated
+        #    weight would count each event once per call.
+        prior = RoutingWeights().weights
+        n0 = 2.0
         updated_weights = dict(current_weights.weights)
 
         for key, total in total_counts.items():
             successes = success_counts.get(key, 0)
-            # Laplace-smoothed estimate
-            p_new = (successes + alpha) / (total + 2 * alpha)
+            p0 = prior.get(key, 0.5)
+            p_new = (p0 * n0 + successes) / (n0 + total)
             updated_weights[key] = p_new
             logger.info(
                 f"Updated weight {key}: {successes}/{total} successes → P={p_new:.3f}"
@@ -197,13 +206,37 @@ class ConfidenceCalculator:
             version=self._next_version(current_weights.version),
         )
 
-        # Persist to YAML (versioned)
+        # Audit FIRST, then persist: no weight change may become live without
+        # its CONFIG_UPDATED record (the emit used to run after the save and
+        # swallow a write failure, leaving an unaudited config change).
+        self._emit_config_updated_event(current_weights, new_weights)
         self._save_weights_versioned(new_weights)
 
-        # Emit CONFIG_UPDATED event to audit trail
-        self._emit_config_updated_event(current_weights, new_weights)
-
         return new_weights, len(feedback_events)
+
+    def save_weights(self, weights: RoutingWeights) -> RoutingWeights:
+        """Persist ``weights`` as the next version — audited first.
+
+        The version is always bumped from the current on-disk version, so each
+        save gets its own immutable history file (a caller-supplied version
+        would silently overwrite an archived one).
+
+        Returns:
+            The RoutingWeights actually persisted (with its assigned version).
+
+        Raises:
+            RuntimeError: the CONFIG_UPDATED audit record could not be written
+                (nothing is persisted then).
+        """
+        current = self.load_weights()
+        new_weights = RoutingWeights(
+            weights=dict(weights.weights),
+            feedback_count=weights.feedback_count,
+            version=self._next_version(current.version),
+        )
+        self._emit_config_updated_event(current, new_weights)
+        self._save_weights_versioned(new_weights)
+        return new_weights
 
     def load_weights(self) -> RoutingWeights:
         """Load latest routing weights from disk.
@@ -315,8 +348,10 @@ class ConfidenceCalculator:
                 f"CONFIG_UPDATED event emitted: {len(config_delta)} weight changes, "
                 f"v{old_weights.version} → v{new_weights.version}"
             )
-        except RuntimeError as e:
+        except (RuntimeError, IOError) as e:
+            # Fail closed: the caller must not persist an unaudited change.
             logger.error(f"Failed to emit CONFIG_UPDATED event: {e}")
+            raise RuntimeError(f"CONFIG_UPDATED audit write failed: {e}") from e
 
     def _next_version(self, current_version: str) -> str:
         """Generate next version identifier (semantic versioning).

@@ -4,6 +4,9 @@
 **Date:** 2026-09-18  
 **Related:** ADR-0675 (Skill Forge v2.0), ADR-0676 (Learning Daemon)  
 **Implementation:** Complete feedback→config→execution loop wired  
+**Status note (2026-09-27, adversarial review):** the HTTP entry point this doc
+names (`core/console/routes/learning_dashboard.py`) is not mounted by any app;
+its routes now answer 501 `not_implemented` (see § Integration Points).  
 **Tests:** 50+ integration tests, 18 adversarial tests
 
 ---
@@ -246,6 +249,14 @@ def collect_feedback(
 ## Integration Points
 
 ### 1. API Endpoints (routes/learning_dashboard.py)
+
+> **NOT WIRED (2026-09-27, adversarial review):** `core/console/routes/learning_dashboard.py`
+> has no production caller — no app mounts its `/api/v1/console/learning` router,
+> and every route now answers 501 `not_implemented` instead of a fabricated
+> "accepted"/"queued" result. The request/response shapes below are the kept
+> contract only. The live endpoint is `POST /v1/console/learning/feedback`
+> (`corvin_console/routes/method_discovery_api.py`), which needs a console
+> session and the `learning_feedback` consent scope.
 
 **Submit Feedback:**
 ```

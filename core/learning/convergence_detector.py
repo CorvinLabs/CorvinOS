@@ -7,9 +7,15 @@ This module implements advanced convergence detection for Phase 2b:
 4. Schedule optimizations: set next_optimization_date based on phase and velocity
 5. Monitor convergence quality: track convergence stability over time
 
-Fail-closed: any detection error is logged, never propagates to caller.
-Tenant-scoped: all operations filtered by tenant_id (GDPR Art. 32).
-Audit-first: all events logged to EventStore (ADR-0314).
+Errors: any detection error is logged, never propagates to caller.
+Tenant-scoped: one detector per tenant (GDPR Art. 32).
+Audit: NONE. This module keeps its state in memory only and writes nothing —
+neither an audit record nor the ``convergence/`` directory it creates. (Its
+docstring claimed "all events logged to EventStore"; no such call existed.)
+Audited logging of these observations is ``phase2b_integration``'s job.
+History lists are capped per skill (MAX_HISTORY_PER_SKILL).
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 
 Phase Machine:
     exploration (n < 10) → plateau (stable 3-5d) → exploitation (n ≥ 30) → divergence (if ↓)
@@ -119,6 +125,7 @@ class ConvergenceDetector:
 
     # False convergence detection
     FALSE_POSITIVE_RESUME_THRESHOLD = 0.02  # If resumes climbing > 2%, it was false positive
+    MAX_HISTORY_PER_SKILL = 1000  # cap on transitions / alerts kept per skill
 
     def __init__(
         self,
@@ -136,6 +143,9 @@ class ConvergenceDetector:
         """
         if not tenant_id:
             raise ValueError("tenant_id required (GDPR Art. 32, fail-closed)")
+        from core.tenants import validate_tenant_id  # noqa: PLC0415
+
+        validate_tenant_id(tenant_id)
 
         self.tenant_id = tenant_id
         self.tenant_home = Path(tenant_home)
@@ -288,6 +298,7 @@ class ConvergenceDetector:
                     self._divergence_alerts[skill_id] = []
 
                 self._divergence_alerts[skill_id].append(alert)
+                del self._divergence_alerts[skill_id][:-self.MAX_HISTORY_PER_SKILL]
 
                 logger.warning(
                     f"divergence_detected: {skill_id}: {severity}: "
@@ -529,6 +540,7 @@ class ConvergenceDetector:
             self._transitions[skill_id] = []
 
         self._transitions[skill_id].append(transition)
+        del self._transitions[skill_id][:-self.MAX_HISTORY_PER_SKILL]
 
     def _transition_reason(
         self,

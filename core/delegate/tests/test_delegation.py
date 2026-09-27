@@ -38,6 +38,14 @@ from typing import Any
 os.environ.setdefault("CORVIN_AGENTS_SKIP_LIVE", "1")
 os.environ.setdefault("CORVIN_INTEGRATION_TEST", "1")
 
+if __name__ == "__main__":
+    # Plain-script run (run-all-tests.sh): no conftest — sandbox every runtime
+    # root BEFORE the product imports below resolve a home or a chain.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _script_sandbox
+
+    _script_sandbox.enter()
+
 # Make plugin source importable without bootstrapping a venv.
 _PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PLUGIN_DIR))
@@ -429,6 +437,7 @@ class AuditChainTests(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.tmpdir = tempfile.mkdtemp(prefix="corvin-delegate-test-")
+        self._saved_corvin_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = self.tmpdir
         # The audit writer creates parent dirs lazily; pre-create global/forge/
         Path(self.tmpdir, "global", "forge").mkdir(parents=True, exist_ok=True)
@@ -441,7 +450,12 @@ class AuditChainTests(unittest.TestCase):
     def tearDown(self):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
-        os.environ.pop("CORVIN_HOME", None)
+        # Restore, never pop: an unset CORVIN_HOME resolves the repo-marker
+        # home — the live install when run from the main checkout.
+        if self._saved_corvin_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._saved_corvin_home
 
     def _chain_lines(self) -> list[str]:
         ap = Path(self.tmpdir) / "global" / "forge" / "audit.jsonl"

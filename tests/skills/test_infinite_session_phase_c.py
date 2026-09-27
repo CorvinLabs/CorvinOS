@@ -148,6 +148,24 @@ class TestRollbackManager:
         assert restarted.verify_chain_integrity(TENANT) == (True, None)
         assert restarted.recover_pending(max_age_s=0.0) == []
 
+    def test_recovery_never_deletes_a_torn_in_flight_wal(self, home, rm):
+        # Regression (flaky test_concurrent_commits_keep_chain): a manager built
+        # while another thread was mid-``begin_transaction`` read the half-written
+        # WAL, hit a JSON error and DELETED it; that commit then failed with
+        # "WAL entry not found". A young unreadable WAL must be left alone.
+        torn = rm.wal_dir / "00000000-0000-4000-8000-000000000000.json"
+        torn.write_text('{"transaction_id": "0000')
+        RollbackManager(TENANT)  # construction runs recover_pending()
+        assert torn.exists()
+        # ...but a stale unreadable one is still garbage-collected.
+        assert rm.recover_pending(max_age_s=0.0) == []
+        assert not torn.exists()
+
+    def test_begin_publishes_wal_atomically(self, rm):
+        tx, err = rm.begin_transaction(TENANT, "cfg.a", {"v": 1}, {"v": 2})
+        assert err is None
+        assert [p.name for p in rm.wal_dir.iterdir()] == [f"{tx}.json"]
+
     def test_concurrent_commits_keep_chain(self, home):
         import threading
         errors: list = []

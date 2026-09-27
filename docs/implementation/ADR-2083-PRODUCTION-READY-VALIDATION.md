@@ -1,5 +1,11 @@
 # ADR-2083 Production-Ready Validation
 
+> **Implementation status (2026-09-27, adversarial review) — the runtime pieces this document relies on are NOT implemented and fail closed:**
+> - **Background workflow runner** (`corvin_operator/workflows/workflow_background_runner.py`): there is no background executor. `WorkflowBackgroundRunner.start()` returns `status="blocked"` with `reason_code="not_implemented"` for every workflow ("no background workflow executor is wired on this install") and records the attempt on the tenant audit chain as `workflow.background_start` (content-free: `run_id`, `status`, `bridge_type`, `reason_code`). It never answers `queued`, and no workflow runs.
+> - **Interactive loop** (`corvin_operator/autonomy/loop_executor_bridge_aware.py`, CLI/Web path): nothing schedules the loop — `LoopExecutor.run()` returns `reason_complete="not_implemented"`. The non-interactive (Discord/Slack) path runs the iterations in the CALLING thread, blocking the caller; it is not a background job. `get_audit_trail()` is an in-memory trace, not the audit chain.
+> - **No bridge calls any of it**: `autonomy_detector`, `loop_executor_bridge_aware` and `workflow_background_runner` are imported only by `scripts/adr2083_staging_validation.py` (an in-process simulation that exits 3, "simulated only — no staging evidence", when all its checks pass) and its tests; the runner and the loop executor carry the "NOT WIRED: no production caller" marker. `/loop` on Discord and Slack workflow starts behave exactly as before ADR-2083.
+> - Checklists, rollout gates, monitoring signals and log lines below describe the DESIGN, not observed behaviour.
+
 > **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** Not ready for merge as claimed: `autonomy_detector` has no bridge caller (only `loop_executor_bridge_aware` / `workflow_background_runner`, themselves called only by `scripts/adr2083_staging_validation.py`), and `tests/e2e/test_bridge_autonomy_e2e.py` is 19/22 (`assert 'non_interactive' == 'background'`).
 
 

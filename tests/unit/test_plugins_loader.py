@@ -103,69 +103,33 @@ class TestPluginLoaderCaching:
             assert "workflows_router" in loader._plugin_cache
 
 
-class TestPluginLoaderAdapterInjection:
-    """Test adapter injection into plugin."""
+class TestPluginLoaderMarketplaceRefusal:
+    """The marketplace workflows plugin is refused, not attempted (2026-09-27).
 
-    def test_adapter_injection_marketplace_plugin(self):
-        """Adapters are passed to marketplace plugin when loading."""
-        from corvin_console.routes.plugins_loader import PluginLoader
+    Its routes take ``tenant_id`` from the query string and never consult the
+    session backend, so mounting it would let any caller read/write any
+    tenant's workflows. The console routes are the mounted implementation.
+    """
 
-        loader = PluginLoader()
+    def test_marketplace_plugin_not_attempted_console_routes_mounted(self):
+        from corvin_console.routes import plugins_loader
+        from corvin_console.routes import workflows as workflows_console
 
-        # Mock session auth module
-        mock_session_auth = Mock()
-        mock_audit_backend = Mock()
-        mock_storage_backend = Mock()
+        assert plugins_loader._MARKETPLACE_WORKFLOWS_MOUNTABLE is False
+        loader = plugins_loader.PluginLoader()
+        with patch.object(loader, "_try_load_marketplace_plugin") as mock_mp:
+            router = loader.load_workflows_plugin(session_auth_module=Mock(), audit_backend=Mock())
+        mock_mp.assert_not_called()
+        assert router is workflows_console.router
 
-        # Patch marketplace plugin loading to verify adapter injection
-        with patch("corvin_console.routes.plugins_loader.PluginLoader._try_load_marketplace_plugin") as mock_mp:
-            mock_router = Mock(spec=APIRouter)
-            mock_mp.return_value = mock_router
+    def test_mounted_router_serves_the_paths_the_spa_calls(self):
+        from corvin_console.routes import plugins_loader
 
-            router = loader.load_workflows_plugin(
-                session_auth_module=mock_session_auth,
-                audit_backend=mock_audit_backend,
-                storage_backend=mock_storage_backend,
-            )
-
-            # Verify _try_load_marketplace_plugin was called with adapters
-            mock_mp.assert_called_once()
-            call_kwargs = mock_mp.call_args[1]
-            assert call_kwargs["session_auth_module"] == mock_session_auth
-            assert call_kwargs["audit_backend"] == mock_audit_backend
-            assert call_kwargs["storage_backend"] == mock_storage_backend
-
-
-class TestPluginLoaderConsoleSessionAdapter:
-    """Test console session adapter integration."""
-
-    def test_console_session_adapter_wraps_auth(self):
-        """ConsoleSessionBackend wraps console auth module."""
-        from corvin_console.routes.plugins_loader import PluginLoader
-
-        loader = PluginLoader()
-
-        mock_session_auth = Mock()
-        mock_session_auth.get_session = Mock(return_value=Mock(
-            tenant_id="test_tenant",
-            user_id="test_user",
-            session_id="test_session",
-            csrf_token="test_token",
-        ))
-
-        with patch("corvin_console.routes.plugins_loader.PluginLoader._try_load_marketplace_plugin") as mock_mp:
-            mock_router = Mock(spec=APIRouter)
-            mock_mp.return_value = mock_router
-
-            # Call with session auth
-            router = loader.load_workflows_plugin(session_auth_module=mock_session_auth)
-
-            # Verify adapters were built correctly
-            call_kwargs = mock_mp.call_args[1]
-            session_backend = call_kwargs["session_backend"]
-
-            # ConsoleSessionBackend should have been created
-            assert session_backend is not None
+        router = plugins_loader.PluginLoader().load_workflows_plugin()
+        paths = {getattr(r, "path", "") for r in router.routes}
+        assert "/workflows" in paths
+        assert "/workflows/{wid}" in paths
+        assert not any(p.startswith("/workflows/workflows") for p in paths)
 
 
 class TestPluginLoaderGlobalSingleton:

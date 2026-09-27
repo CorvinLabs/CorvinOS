@@ -9,6 +9,22 @@ Implements:
 5. Drift detection across instances
 
 ADR-0408: Configuration Management Phase 2 Design
+
+What this module actually is (adversarial review 2026-09-27): a FILE-based
+per-tenant config store at ``<corvin_home>/config/<tenant>.json`` — there is no
+etcd/Consul client and ``CENTRAL_STORE_PATH`` is not read by anything. "Drift
+detection" compares ONE caller-supplied instance config against this process's
+canonical file; nothing collects configs from other instances, so it cannot
+detect drift ACROSS a multi-instance deployment on its own — the caller must
+bring the remote instance's config. The gateway builds this manager at boot
+(``corvin_gateway.config_audit.build_config_manager``) and parks it on
+``app.state``; no route reads it there.
+
+Audit: ``create_with_audit()`` binds :class:`TenantChainConfigAudit`, which
+writes through the ONE forge writer onto ``tenant_audit_chain(tenant)``. It
+used to bind ``AuditChainWriter`` to a caller-supplied path — a second,
+incompatible hash scheme which, pointed at the canonical chain, made
+``verify_chain`` (and the ADR-0232 boot tripwire) read the chain as tampered.
 """
 
 from dataclasses import dataclass, asdict, field
@@ -102,6 +118,32 @@ def _config_file(tenant_id: str) -> Path:
     return corvin_home() / "config" / f"{tenant_id}.json"
 
 
+class TenantChainConfigAudit:
+    """``audit_chain`` for :class:`CentralizedConfigManager` that writes through
+    the forge writer onto the event's own tenant chain.
+
+    Same ``write_event_dict`` surface as ``AuditChainWriter`` (which the manager
+    calls). Mirrors ``corvin_gateway.config_audit.ForgeConfigAudit``; kept here
+    so ``core.config`` does not import the gateway. Raises on failure.
+    """
+
+    def write_event_dict(self, event_type: str, tenant_id: str,
+                         user_id: Optional[str] = None, details: Optional[dict] = None,
+                         severity: Optional[str] = None) -> str:
+        from core.deployment.audit_sink import _forge  # noqa: PLC0415
+
+        se, fp = _forge()
+        chain = fp.tenant_audit_chain(tenant_id)
+        chain.parent.mkdir(parents=True, exist_ok=True)
+        rec = se.write_event(
+            chain, str(event_type),
+            severity=str(severity).upper() if severity else None,
+            details={**(details or {}), "tenant_id": tenant_id},
+            hash_chain=True,
+        )
+        return str(rec.get("hash", ""))
+
+
 class CentralizedConfigManager:
     """
     Phase 2: Centralized configuration management
@@ -141,18 +183,19 @@ class CentralizedConfigManager:
     @classmethod
     def create_with_audit(
         cls,
-        audit_log_path: str | Path,
+        audit_log_path: "str | Path | None" = None,
     ) -> "CentralizedConfigManager":
         """Factory method to create manager with audit integration.
 
-        Args:
-            audit_log_path: Path to audit.jsonl
+        Config events go to ``tenant_audit_chain(<event tenant>)`` through the
+        forge writer. ``audit_log_path`` is accepted for backward compatibility
+        and IGNORED: binding a writer to a caller-chosen path is how a second
+        hash scheme once landed on the canonical chain.
 
         Returns:
             CentralizedConfigManager with audit chain
         """
-        audit_chain = AuditChainWriter(audit_log_path)
-        return cls(audit_chain=audit_chain)
+        return cls(audit_chain=TenantChainConfigAudit())
 
     def _load_schema(self) -> Dict[str, Any]:
         """Load JSON schema from file.
@@ -547,9 +590,15 @@ class CentralizedConfigManager:
                 details=details,
                 severity=severity,
             )
-        except Exception:
-            # Fail-open for audit (don't crash config operations)
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Config audit is best-effort by design (a config read must not
+            # crash on an audit hiccup) — but never SILENT: say it was lost.
+            import logging  # noqa: PLC0415
+
+            logging.getLogger(__name__).error(
+                "config audit event %s NOT recorded for tenant %s: %s",
+                event_type, tenant_id, type(exc).__name__,
+            )
 
 
 # Module-level singleton (optional)

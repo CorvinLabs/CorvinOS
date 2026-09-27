@@ -11,6 +11,11 @@ Integration:
 - Called by delegation_policy.resolve_worker_engine() after dual-write
 - If triggered, sets a flag that causes future routing to use bundled rule only
 - Console dashboard shows rollback status + reason
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Its
+tracker has no production feed (``dual_write.record_routing_outcome`` has zero
+callers), so it can never fire; Phase 2 routing is therefore refused in
+``delegation_policy`` (``_PHASE2_ROLLBACK_GUARD_WIRED``).
 """
 from __future__ import annotations
 
@@ -50,6 +55,7 @@ class RollbackDetector:
         self,
         correctness_tracker: CorrectnessTracker,
         storage_path: Path | None = None,
+        tenant_id: str = "_default",
     ):
         """Initialize rollback detector.
 
@@ -59,6 +65,7 @@ class RollbackDetector:
         """
         self.tracker = correctness_tracker
         self.storage_path = storage_path
+        self.tenant_id = tenant_id
         self._state = RollbackState.RUNNING
         self._rollback_events: list[RollbackEvent] = []
         self._last_check_at: float = time.time()
@@ -82,11 +89,14 @@ class RollbackDetector:
     def _trigger_rollback(self) -> None:
         """Trigger rollback to bundled routing."""
         metrics = self.tracker.current_metrics()
-        drop = metrics.shadow_correctness - metrics.correctness
+        recent = self.tracker.recent_correctness()
+        if recent is None:
+            recent = metrics.correctness
+        drop = metrics.shadow_correctness - recent
 
         reason = (
             f"correctness dropped from {metrics.shadow_correctness:.2%} to "
-            f"{metrics.correctness:.2%} ({drop*100:.1f}% > threshold 2.0%)"
+            f"{recent:.2%} ({drop*100:.1f}% > threshold 2.0%)"
         )
 
         event = RollbackEvent(
@@ -96,7 +106,7 @@ class RollbackDetector:
                 "window_size": metrics.window_size,
                 "correct_count": metrics.correct_count,
                 "total_count": metrics.total_count,
-                "correctness": metrics.correctness,
+                "correctness": recent,
                 "shadow_correctness": metrics.shadow_correctness,
                 "skill_confidence_mean": metrics.skill_confidence_mean,
             },
@@ -117,20 +127,28 @@ class RollbackDetector:
             self._persist_event(event)
 
     def _emit_audit_event(self, event: RollbackEvent) -> None:
-        """Emit rollback event to audit trail (ADR-0299)."""
-        try:
-            from core.security.audit_logger import audit_event  # noqa: PLC0415
+        """Chain the rollback on the tenant audit log (ADR-0299).
 
-            audit_event(
-                "l5_rollback_triggered",
-                {
-                    "reason": event.reason,
-                    "metrics": event.metrics_at_trigger,
-                    "timestamp": event.timestamp,
-                },
-            )
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("Failed to emit audit event: %s", exc)
+        Used to import ``core.security.audit_logger`` — a module that does not
+        exist — and swallow the ImportError, so a rollback was never audited.
+        Same writer as the dual-write routing events (``dual_write._audit`` →
+        ``audit.audit_event`` → ``tenant_audit_chain()``); only content-free
+        numbers are recorded, the free-text ``reason`` stays in the log.
+        """
+        from core.skills.os_skills.monitoring.dual_write import _audit  # noqa: PLC0415
+
+        m = event.metrics_at_trigger
+        _audit(
+            "l5_rollback_triggered",
+            {
+                "reason_code": "correctness_drop",
+                "correctness": m.get("correctness"),
+                "baseline_correctness": m.get("shadow_correctness"),
+                "total_count": m.get("total_count"),
+                "tenant_id": self.tenant_id,
+            },
+            self.tenant_id,
+        )
 
     def _persist_event(self, event: RollbackEvent) -> None:
         """Persist rollback event to disk."""

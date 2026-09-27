@@ -2,8 +2,17 @@
 Phase 5: Operator Approval Workflow
 
 Handles approval requests for high-risk drifts.
-Integrates with OperatorApprovalGate from Phase 4.
 24-hour timeout with PagerDuty escalation.
+
+NOT WIRED (request side): no production caller creates approval requests as of
+2026-09-27 (adversarial review) — ``RemediationOrchestrator`` has no caller.
+The console routes (``routes/remediation_routes.py``) do read and decide
+requests on the process-global gate.
+
+Every request, decision, expiry and escalation is written to the TENANT's core
+hash chain (``_audit.remediation_audit``) BEFORE the state changes; a record
+that does not commit refuses the transition. Requests are tenant-bound: a
+tenant can neither see nor decide another tenant's request.
 """
 
 import json
@@ -16,6 +25,7 @@ from typing import Optional, Dict, Any
 import time
 
 from .drift_categories import DriftCategory, RiskAssessment
+from ._audit import remediation_audit
 
 
 logger = logging.getLogger(__name__)
@@ -48,9 +58,11 @@ class ApprovalRequest:
     expires_at: Optional[str] = None
     escalated_at: Optional[str] = None
     escalation_incident_id: Optional[str] = None
+    tenant_id: str = "_default"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "tenant_id": self.tenant_id,
             "request_id": self.request_id,
             "drift_id": self.drift_id,
             "drift_type": self.drift_type,
@@ -97,8 +109,17 @@ class ApprovalGate:
         self.slack_alerter = slack_alerter
         self.pending_requests = {}  # In-memory cache: request_id -> ApprovalRequest
 
+    #: States an operator may still decide. An escalated request is still open —
+    #: escalation pages someone, it does not close the request.
+    _DECIDABLE = (ApprovalState.PENDING, ApprovalState.ESCALATED)
+
     def request_approval(
-        self, assessment: RiskAssessment, instance_id: str, requested_by: str = "system"
+        self,
+        assessment: RiskAssessment,
+        instance_id: str,
+        requested_by: str = "system",
+        *,
+        tenant_id: str = "_default",
     ) -> ApprovalRequest:
         """
         Create approval request for high-risk drift.
@@ -137,7 +158,11 @@ class ApprovalGate:
             requested_at=now.isoformat(),
             requested_by=requested_by,
             expires_at=expires_at,
+            tenant_id=tenant_id,
         )
+
+        # Audit FIRST: no chain record → no request.
+        self._audit_event("approval_requested", approval_request)
 
         # Store in memory cache
         self.pending_requests[request_id] = approval_request
@@ -152,9 +177,6 @@ class ApprovalGate:
         # Send Slack notification
         self._notify_slack_request(approval_request)
 
-        # Audit log
-        self._audit_event("approval_requested", approval_request)
-
         logger.info(f"✉️ Approval requested: {request_id} for {assessment.drift_id}")
 
         return approval_request
@@ -164,6 +186,10 @@ class ApprovalGate:
     ) -> Optional[ApprovalRequest]:
         """
         Poll for operator decision on approval request.
+
+        BLOCKS the calling thread (``time.sleep``) for up to
+        ``timeout_seconds``. Never call it on a request path or an event loop;
+        ``RemediationOrchestrator`` no longer does.
 
         Args:
             request_id: ID of approval request
@@ -187,6 +213,9 @@ class ApprovalGate:
                 logger.info(f"✓ Approval decision received: {request_id} → {request.state.value}")
                 return request
 
+            if self._expire_if_due(request):
+                return request
+
             # Check if should escalate
             if request.state == ApprovalState.PENDING:
                 time_pending = (datetime.utcnow() - datetime.fromisoformat(request.requested_at)).total_seconds() / 60
@@ -198,18 +227,50 @@ class ApprovalGate:
             # Wait and poll again
             time.sleep(poll_interval_seconds)
 
-        # Timeout: mark as expired
-        logger.warning(f"Approval timeout: {request_id}")
+        # Poll window over: the request stays open until its own expiry — the
+        # caller simply stopped waiting.
+        logger.warning(f"Stopped waiting for approval: {request_id}")
         request = self._get_request(request_id)
-        if request and request.state == ApprovalState.PENDING:
-            request.state = ApprovalState.EXPIRED
-            request.expires_at = datetime.utcnow().isoformat()
-            self._audit_event("approval_expired", request)
-
+        if request is not None:
+            self._expire_if_due(request)
         return request
 
+    def _expire_if_due(self, request: ApprovalRequest) -> bool:
+        """Mark an open request EXPIRED once ``expires_at`` has passed (audited)."""
+        if request.state not in self._DECIDABLE or not request.expires_at:
+            return request.state == ApprovalState.EXPIRED
+        try:
+            expired = datetime.utcnow() >= datetime.fromisoformat(request.expires_at)
+        except ValueError:
+            expired = True  # unparseable deadline: fail-closed
+        if not expired:
+            return False
+        prior = request.state
+        request.state = ApprovalState.EXPIRED
+        try:
+            self._audit_event("approval_expired", request)
+        except Exception:
+            request.state = prior
+            raise
+        return True
+
+    def get_request_for_tenant(self, request_id: str, tenant_id: str) -> Optional[ApprovalRequest]:
+        """The request if it exists AND belongs to ``tenant_id``; else ``None``."""
+        request = self._get_request(request_id)
+        if request is None or request.tenant_id != tenant_id:
+            return None
+        return request
+
+    def requests_for_tenant(self, tenant_id: str) -> list:
+        return [r for r in self.pending_requests.values() if r.tenant_id == tenant_id]
+
     def approve_request(
-        self, request_id: str, approved_by: str, reason: Optional[str] = None
+        self,
+        request_id: str,
+        approved_by: str,
+        reason: Optional[str] = None,
+        *,
+        tenant_id: Optional[str] = None,
     ) -> ApprovalRequest:
         """
         Operator approves remediation.
@@ -222,19 +283,8 @@ class ApprovalGate:
         Returns:
             Updated ApprovalRequest
         """
-        request = self._get_request(request_id)
-        if request is None:
-            raise ValueError(f"Approval request not found: {request_id}")
-
-        if request.state != ApprovalState.PENDING:
-            raise ValueError(
-                f"Cannot approve request in state {request.state.value} (must be pending)"
-            )
-
-        request.state = ApprovalState.APPROVED
-        request.approved_by = approved_by
-        request.decision_at = datetime.utcnow().isoformat()
-        request.decision_reason = reason
+        request = self._open_request(request_id, tenant_id, "approve")
+        self._decide(request, ApprovalState.APPROVED, approved_by, reason)
 
         # Update backend
         if self.approval_backend:
@@ -246,15 +296,17 @@ class ApprovalGate:
         # Send Slack notification
         self._notify_slack_decision(request, "approved")
 
-        # Audit log
-        self._audit_event("approval_approved", request)
-
         logger.info(f"✅ Approval approved: {request_id} by {approved_by}")
 
         return request
 
     def reject_request(
-        self, request_id: str, rejected_by: str, reason: Optional[str] = None
+        self,
+        request_id: str,
+        rejected_by: str,
+        reason: Optional[str] = None,
+        *,
+        tenant_id: Optional[str] = None,
     ) -> ApprovalRequest:
         """
         Operator rejects remediation.
@@ -267,19 +319,8 @@ class ApprovalGate:
         Returns:
             Updated ApprovalRequest
         """
-        request = self._get_request(request_id)
-        if request is None:
-            raise ValueError(f"Approval request not found: {request_id}")
-
-        if request.state != ApprovalState.PENDING:
-            raise ValueError(
-                f"Cannot reject request in state {request.state.value} (must be pending)"
-            )
-
-        request.state = ApprovalState.REJECTED
-        request.rejected_by = rejected_by
-        request.decision_at = datetime.utcnow().isoformat()
-        request.decision_reason = reason
+        request = self._open_request(request_id, tenant_id, "reject")
+        self._decide(request, ApprovalState.REJECTED, rejected_by, reason)
 
         # Update backend
         if self.approval_backend:
@@ -291,12 +332,47 @@ class ApprovalGate:
         # Send Slack notification
         self._notify_slack_decision(request, "rejected")
 
-        # Audit log
-        self._audit_event("approval_rejected", request)
-
         logger.info(f"❌ Approval rejected: {request_id} by {rejected_by}")
 
         return request
+
+    def _open_request(
+        self, request_id: str, tenant_id: Optional[str], verb: str
+    ) -> ApprovalRequest:
+        """The still-decidable request, or ``ValueError`` (unknown / other
+        tenant / expired / already decided)."""
+        request = self._get_request(request_id)
+        if request is None or (tenant_id is not None and request.tenant_id != tenant_id):
+            raise ValueError(f"Approval request not found: {request_id}")
+        if self._expire_if_due(request):
+            raise ValueError(f"Cannot {verb} request {request_id}: it has expired")
+        if request.state not in self._DECIDABLE:
+            raise ValueError(
+                f"Cannot {verb} request in state {request.state.value} (must be pending)"
+            )
+        return request
+
+    def _decide(
+        self, request: ApprovalRequest, state: ApprovalState, decider: str, reason: Optional[str]
+    ) -> None:
+        """Audit-FIRST state transition: the decision is written to the tenant
+        chain before it takes effect; if the record does not commit, the
+        request is left exactly as it was and the error propagates."""
+        snapshot = (request.state, request.approved_by, request.rejected_by,
+                    request.decision_at, request.decision_reason)
+        request.state = state
+        if state == ApprovalState.APPROVED:
+            request.approved_by = decider
+        else:
+            request.rejected_by = decider
+        request.decision_at = datetime.utcnow().isoformat()
+        request.decision_reason = reason
+        try:
+            self._audit_event("approval_decided", request)
+        except Exception:
+            (request.state, request.approved_by, request.rejected_by,
+             request.decision_at, request.decision_reason) = snapshot
+            raise
 
     def cancel_remediation(self, request_id: str) -> ApprovalRequest:
         """
@@ -396,19 +472,40 @@ Reason: {request.decision_reason or "None"}
                 instance_id=request.instance_id,
                 drift_type=request.drift_type,
             )
+            prior = (request.state, request.escalated_at)
             request.escalated_at = datetime.utcnow().isoformat()
             request.state = ApprovalState.ESCALATED
-            self._audit_event("approval_escalated", request)
+            try:
+                self._audit_event("approval_escalated", request)
+            except Exception:
+                request.state, request.escalated_at = prior
+                raise
         except Exception as e:
             logger.error(f"Failed to escalate to PagerDuty: {e}")
 
     def _audit_event(self, event_type: str, request: ApprovalRequest):
-        """Log approval event to audit trail"""
+        """Write the event to the request's tenant chain (raises if it does not
+        commit), then hand an additive copy to an injected ``audit_backend``."""
+        decision = None
+        decided_by = request.approved_by or request.rejected_by
+        if event_type == "approval_decided":
+            decision = request.state.value
+        remediation_audit(
+            f"remediation.{event_type}",
+            tenant_id=request.tenant_id,
+            request_id=request.request_id,
+            drift_id=request.drift_id,
+            drift_type=request.drift_type,
+            instance_id=request.instance_id,
+            state=request.state.value,
+            decision=decision,
+            decided_by=decided_by,
+            has_reason=bool(request.decision_reason) if decision else None,
+        )
         if not self.audit_backend:
             return
-
         try:
-            event = {
+            self.audit_backend.write_event({
                 "event_type": event_type,
                 "request_id": request.request_id,
                 "drift_id": request.drift_id,
@@ -417,10 +514,9 @@ Reason: {request.decision_reason or "None"}
                 "approved_by": request.approved_by,
                 "rejected_by": request.rejected_by,
                 "timestamp": datetime.utcnow().isoformat(),
-            }
-            self.audit_backend.write_event(event)
+            })
         except Exception as e:
-            logger.error(f"Failed to log audit event: {e}")
+            logger.error(f"audit_backend copy failed (core chain record committed): {e}")
 
 
 # Global approval gate instance

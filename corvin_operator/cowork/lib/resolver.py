@@ -597,7 +597,7 @@ def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
             # import forge (the venv/wheel Python running the bridge), not an
             # arbitrary bare-PATH one. Mirror of mcp_config_builder.py.
             "command": sys.executable,
-            "args": ["{{REPO_ROOT}}/operator/forge/forge.py",
+            "args": ["{{REPO_ROOT}}/corvin_operator/forge/forge.py",
                      "mcp", "--permission-mode", "yes"],
             "env": env,
         }
@@ -653,8 +653,8 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str) -> dict:
             # we inject the two plugin roots onto PYTHONPATH explicitly —
             # joined with os.pathsep (';' on Windows, ':' on POSIX).
             "PYTHONPATH": os.pathsep.join((
-                "{{REPO_ROOT}}/operator/skill-forge",
-                "{{REPO_ROOT}}/operator/forge",
+                "{{REPO_ROOT}}/corvin_operator/skill-forge",
+                "{{REPO_ROOT}}/corvin_operator/forge",
             )),
         }
         mcp["skill_forge"] = {
@@ -768,8 +768,8 @@ def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
                 "PYTHONPATH": os.pathsep.join((
                     "{{CORE_ROOT}}/core/orchestration",
                     "{{CORE_ROOT}}/core/workflows",
-                    "{{REPO_ROOT}}/operator/bridges/shared",
-                    "{{REPO_ROOT}}/operator/forge",
+                    "{{REPO_ROOT}}/corvin_operator/bridges/shared",
+                    "{{REPO_ROOT}}/corvin_operator/forge",
                 )),
                 "CORVIN_CALLER_PERSONA": persona_name,
             },
@@ -814,8 +814,8 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
             # {{CORE_ROOT}} + os.pathsep — see _inject_orchestration_capability.
             "PYTHONPATH": os.pathsep.join((
                 "{{CORE_ROOT}}/core/delegate",
-                "{{REPO_ROOT}}/operator/forge",
-                "{{REPO_ROOT}}/operator/bridges/shared",
+                "{{REPO_ROOT}}/corvin_operator/forge",
+                "{{REPO_ROOT}}/corvin_operator/bridges/shared",
             )),
             "CORVIN_CALLER_PERSONA": persona_name,
         }

@@ -11,6 +11,8 @@ ADR-0511: Marketplace Plugin-First Architecture
 ADR-0533: OS-Skill Manifest Schema & Versioning (canary deployment)
 ADR-0314: Learning Infrastructure (event emission & metrics collection)
 ADR-0722: DoD Loss Signal Learning Integration
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import statistics
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
@@ -36,6 +39,94 @@ except ImportError:
     np = None
 
 logger = logging.getLogger(__name__)
+
+#: Recommendation / winner reason when a group has fewer than two samples.
+INSUFFICIENT_STATS = "insufficient_stats"
+
+#: Positive field allowlists for this module's chain events (the core writer
+#: is default-deny on keys).
+_AB_AUDIT_FIELDS: Dict[str, frozenset] = {
+    "ab_experiment_created": frozenset({"experiment_id", "skill_id", "baseline_version",
+                                        "variant_version", "sample_size", "significance_threshold"}),
+    "ab_analysis_started": frozenset({"experiment_id", "skill_id", "sample_size_control",
+                                      "sample_size_variant"}),
+    "ab_analysis_completed": frozenset({"experiment_id", "skill_id", "winner", "confidence",
+                                        "pvalue", "effect_size"}),
+    "ab_auto_rollout_promoted": frozenset({"experiment_id", "skill_id", "variant_version",
+                                           "confidence"}),
+    "ab_auto_rollout_reverted": frozenset({"experiment_id", "skill_id", "variant_version",
+                                           "regression", "threshold"}),
+}
+
+
+def _betacf(a: float, b: float, x: float) -> float:
+    """Continued fraction for the regularized incomplete beta (Lentz)."""
+    tiny = 1e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c, d = 1.0, 1.0 - qab * x / qap
+    d = 1.0 / (d if abs(d) > tiny else tiny)
+    h = d
+    for m in range(1, 500):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 1e-14:
+            break
+    return h
+
+
+def _betainc_reg(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta I_x(a, b), stdlib only."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    bt = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+                  + a * math.log(x) + b * math.log1p(-x))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return bt * _betacf(a, b, x) / a
+    return 1.0 - bt * _betacf(b, a, 1.0 - x) / b
+
+
+def welch_t_test(control: List[float], variant: List[float]) -> Tuple[Optional[float], float]:
+    """Two-sided Welch t-test with a real t-distribution p-value (stdlib math).
+
+    Returns ``(pvalue, cohens_d)``. ``pvalue`` is ``None`` when either group
+    has fewer than two samples — "not enough data" must never read as
+    "no difference" (p = 1.0), which is what the scipy-less fallback used
+    to report. Zero variance in both groups is exact: p = 0.0 when the means
+    differ, 1.0 when they are equal.
+    """
+    n1, n2 = len(control), len(variant)
+    if n1 < 2 or n2 < 2:
+        return (None, 0.0)
+    m1, m2 = statistics.fmean(control), statistics.fmean(variant)
+    v1, v2 = statistics.variance(control), statistics.variance(variant)
+    pooled = math.sqrt((v1 + v2) / 2.0)
+    d = (m2 - m1) / pooled if pooled > 0 else 0.0
+    se2 = v1 / n1 + v2 / n2
+    if se2 == 0.0:
+        return (0.0 if m1 != m2 else 1.0, d)
+    t = (m2 - m1) / math.sqrt(se2)
+    denom = 0.0
+    if v1 > 0:
+        denom += (v1 / n1) ** 2 / (n1 - 1)
+    if v2 > 0:
+        denom += (v2 / n2) ** 2 / (n2 - 1)
+    df = se2 ** 2 / denom
+    p = _betainc_reg(df / 2.0, 0.5, df / (df + t * t))
+    return (min(max(p, 0.0), 1.0), d)
 
 
 class ExperimentStatus(str, Enum):
@@ -201,7 +292,7 @@ class StatisticalTest:
     def chi_square_test(
         observations_control: List[float],
         observations_variant: List[float],
-    ) -> Tuple[float, float]:
+    ) -> Tuple[Optional[float], float]:
         """
         Perform chi-square test for statistical significance.
 
@@ -213,7 +304,9 @@ class StatisticalTest:
             (pvalue, effect_size)
         """
         if len(observations_control) < 2 or len(observations_variant) < 2:
-            return (1.0, 0.0)  # Insufficient data
+            return (None, 0.0)  # insufficient_stats — never "p = 1.0"
+        if not HAS_SCIPY:
+            return (None, 0.0)  # not measurable without scipy — never "p = 1.0"
 
         # Bin observations into categories (e.g., latency ranges)
         all_obs = observations_control + observations_variant
@@ -236,47 +329,20 @@ class StatisticalTest:
             return (pvalue, cramers_v)
         except Exception as e:
             logger.error(f"Chi-square test failed: {e}")
-            return (1.0, 0.0)
+            return (None, 0.0)  # failed ≠ "no difference"
 
     @staticmethod
     def t_test(
         observations_control: List[float],
         observations_variant: List[float],
-    ) -> Tuple[float, float]:
+    ) -> Tuple[Optional[float], float]:
+        """Welch t-test (see :func:`welch_t_test`); ``pvalue`` None = insufficient_stats.
+
+        This used to call scipy's (Student) ``ttest_ind`` and, when scipy was
+        absent or anything raised, return ``(1.0, 0.0)`` — an unmeasured test
+        reported as a measured "no difference".
         """
-        Perform t-test for statistical significance.
-
-        Args:
-            observations_control: Control group observations
-            observations_variant: Variant group observations
-
-        Returns:
-            (pvalue, effect_size_cohens_d)
-        """
-        if len(observations_control) < 2 or len(observations_variant) < 2:
-            return (1.0, 0.0)
-
-        try:
-            from scipy.stats import ttest_ind
-
-            t_stat, pvalue = ttest_ind(observations_control, observations_variant)
-
-            # Cohen's d effect size
-            mean_control = statistics.mean(observations_control)
-            mean_variant = statistics.mean(observations_variant)
-            std_control = statistics.stdev(observations_control) if len(observations_control) > 1 else 0
-            std_variant = statistics.stdev(observations_variant) if len(observations_variant) > 1 else 0
-
-            if std_control == 0 and std_variant == 0:
-                cohens_d = 0.0
-            else:
-                pooled_std = np.sqrt((std_control**2 + std_variant**2) / 2)
-                cohens_d = (mean_variant - mean_control) / pooled_std if pooled_std > 0 else 0.0
-
-            return (pvalue, cohens_d)
-        except Exception as e:
-            logger.error(f"T-test failed: {e}")
-            return (1.0, 0.0)
+        return welch_t_test(list(observations_control), list(observations_variant))
 
 
 class ABTestingFramework:
@@ -294,7 +360,12 @@ class ABTestingFramework:
             test_dir: Directory for test data (default: ~/.corvin/ab_tests/)
             audit_emit: Audit event emitter (reaches compliance chain, GDPR Art. 30/32)
         """
-        self.test_dir = test_dir or Path.home() / ".corvin" / "ab_tests"
+        if test_dir is None:
+            # Honour CORVIN_HOME (CLAUDE.md: never hard-wire ~/.corvin in skills).
+            from core.paths.tenant import corvin_home  # noqa: PLC0415
+
+            test_dir = corvin_home() / "ab_tests"
+        self.test_dir = Path(test_dir)
         self.audit_emit = audit_emit or self._default_audit_emit
         self.test_dir.mkdir(parents=True, exist_ok=True)
 
@@ -303,8 +374,15 @@ class ABTestingFramework:
         self.metrics: Dict[str, ExperimentMetrics] = self._load_metrics()
 
     def _default_audit_emit(self, event_type: str, payload: Dict[str, Any]) -> None:
-        """Default audit emitter (logs to console; real implementation uses audit chain)."""
-        logger.info(f"[AUDIT] {event_type}: {json.dumps(payload, default=str)}")
+        """Append to the tenant's hash-chained audit log (audit-FIRST).
+
+        This used to only ``logger.info`` the event while the docstring claimed
+        a compliance chain. A failed chain write now raises, so the audited
+        operation (experiment creation, analysis, rollout) does not proceed.
+        """
+        from ._chain_audit import chain_write  # noqa: PLC0415
+
+        chain_write(event_type, payload, fields=_AB_AUDIT_FIELDS.get(event_type, frozenset()))
 
     def _load_experiments(self) -> Dict[str, ExperimentConfig]:
         """Load existing experiment configurations."""
@@ -329,6 +407,8 @@ class ABTestingFramework:
                     significance_threshold=exp_data.get("significance_threshold", 0.05),
                     success_criteria=exp_data.get("success_criteria", {}),
                     rollout_percentage=exp_data.get("rollout_percentage", 10),
+                    rollback_on_regression=exp_data.get("rollback_on_regression", True),
+                    max_regression_pct=exp_data.get("max_regression_pct", 0.15),
                     created_at=exp_data.get("created_at", ""),
                 )
             return experiments
@@ -481,7 +561,7 @@ class ABTestingFramework:
 
         metrics.pvalue = pvalue
         metrics.effect_size = effect_size
-        metrics.is_significant = pvalue < config.significance_threshold
+        metrics.is_significant = pvalue is not None and pvalue < config.significance_threshold
 
         # Determine winner based on success criteria
         winner = "inconclusive"
@@ -514,8 +594,12 @@ class ABTestingFramework:
                 recommendation = f"Promote variant (p={pvalue:.4f}, effect_size={effect_size:.2f})"
             else:
                 winner = "control"
-                confidence = pvalue
+                confidence = 1.0 - pvalue
                 recommendation = "Variant did not meet success criteria"
+        elif pvalue is None:
+            winner = "inconclusive"
+            confidence = 0.0
+            recommendation = f"{INSUFFICIENT_STATS}: each cohort needs at least 2 samples"
         else:
             winner = "inconclusive"
             confidence = 0.0

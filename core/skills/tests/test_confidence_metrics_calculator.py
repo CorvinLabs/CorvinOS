@@ -229,20 +229,16 @@ class TestAuditIntegration:
             curr = json.loads(lines[1])
             assert curr["prev_hash"] == prev["hash"]
 
-    def test_tenant_isolation(self, temp_audit_path):
-        audit_chain = AuditChainWriter(temp_audit_path)
-
-        calc1 = ConfidenceMetricsCalculator("tenant_1", audit_chain, LearningEventStore("tenant_1"))
-        calc2 = ConfidenceMetricsCalculator("tenant_2", audit_chain, LearningEventStore("tenant_2"))
-
-        calc1.get_confidence_history("skill1")
-        calc2.get_confidence_history("skill2")
-
-        with open(temp_audit_path, 'r') as f:
-            events = [json.loads(line) for line in f.readlines()]
-
-        tenants = {e["tenant_id"] for e in events}
-        assert "tenant_1" in tenants and "tenant_2" in tenants
+    def test_tenant_isolation(self, tmp_path, monkeypatch):
+        # One chain per tenant, each written in its own tenant context.
+        for tid, skill in (("tenant_1", "skill1"), ("tenant_2", "skill2")):
+            monkeypatch.setenv("CORVIN_TENANT_ID", tid)
+            calc = ConfidenceMetricsCalculator(
+                tid, AuditChainWriter(tmp_path / f"{tid}.jsonl"), LearningEventStore(tid))
+            calc.get_confidence_history(skill)
+        for tid in ("tenant_1", "tenant_2"):
+            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text().splitlines()]
+            assert recs and {r["details"]["tenant_id"] for r in recs} == {tid}
 
 
 class TestPerformanceSLA:

@@ -15,6 +15,7 @@ Tests:
 ADR-0511, ADR-0533, ADR-0314, ADR-0722
 """
 
+import dataclasses
 import json
 import tempfile
 import shutil
@@ -33,6 +34,42 @@ from core.skills.ab_testing import (
     CohortAssignment,
     ExperimentStatus,
 )
+
+
+def adr_manifest(name: str = "os.test_router", version: str = "1.0.0") -> dict:
+    """An ADR-0533 conformant manifest (the installer now runs the validator)."""
+    return {
+        "name": name,
+        "version": version,
+        "goal": "Test routing decision for the installer E2E",
+        "description": "Minimal ADR-0533 manifest used by the marketplace installer tests",
+        "triggers": [{
+            "name": "before_delegation", "event_type": "decision_point",
+            "phase": "pre_routing", "condition": "every_turn",
+            "async_allowed": False, "timeout_ms": 5000,
+        }],
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "output_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "learning_signal": {
+            "metrics": ["latency_actual_vs_predicted"],
+            "scoring_rule": "mde < 5%",
+            "feedback_sources": [{"event_type": "turn_completed", "extract": ["latency"]}],
+            "sanitization": {"disallow_fields": ["prompt"], "pii_patterns": ["email"],
+                             "fail_closed": True},
+        },
+        "boot_layer": "installed",
+        "origin": "community",
+        "scope": "local_development",
+    }
+
+
+def packaged(installer, skill, source_dir: Path):
+    """Point ``skill`` at ``source_dir`` with its REAL checksum."""
+    return dataclasses.replace(
+        skill,
+        source_url=f"local://{source_dir}",
+        checksum_sha256=installer._compute_checksum(source_dir),
+    )
 
 
 class TestMarketplaceSkillInstaller:
@@ -58,15 +95,7 @@ class TestMarketplaceSkillInstaller:
             version="1.0.0",
             source_url="local:///tmp/test_skill",
             checksum_sha256="abc123def456",
-            manifest={
-                "name": "Test Router",
-                "version": "1.0.0",
-                "goal": "Test routing decision",
-                "triggers": [{"name": "before_delegation", "timeout_ms": 5000}],
-                "input_schema": {"type": "object"},
-                "output_schema": {"type": "object"},
-                "learning_signal": {"metrics": ["latency"]},
-            },
+            manifest=adr_manifest(),
         )
 
     def test_discover_skills(self, installer, tmp_path):
@@ -111,8 +140,8 @@ learning_signal:
         (source_dir / "plugin.json").write_text("{}")
         (source_dir / "manifest.yaml").write_text("name: test")
 
-        # Update source URL
-        sample_skill.source_url = f"local://{source_dir}"
+        # Point at the real source + its real checksum (SkillPackage is frozen)
+        sample_skill = packaged(installer, sample_skill, source_dir)
 
         # Install skill
         record = installer.install_skill(sample_skill)
@@ -121,6 +150,7 @@ learning_signal:
         assert record.version == "1.0.0"
         assert record.status == "installed"
         assert record.local_path.exists()
+        assert (record.local_path / "manifest.yaml").read_text() == "name: test"
 
     def test_skill_verification(self, installer, sample_skill):
         """Test skill manifest verification."""
@@ -133,7 +163,7 @@ learning_signal:
             version="1.0.0",
             source_url="local:///tmp",
             checksum_sha256="xyz",
-            manifest={"name": "Invalid"},  # Missing required fields
+            manifest={"name": "invalid"},  # Missing required fields
         )
 
         with pytest.raises(Exception):
@@ -144,7 +174,7 @@ learning_signal:
         source_dir = tmp_path / "test_skill"
         source_dir.mkdir()
         (source_dir / "plugin.json").write_text("{}")
-        sample_skill.source_url = f"local://{source_dir}"
+        sample_skill = packaged(installer, sample_skill, source_dir)
 
         # Install with initial canary stage
         record = installer.install_skill(
@@ -173,7 +203,7 @@ learning_signal:
         source_dir = tmp_path / "test_skill"
         source_dir.mkdir()
         (source_dir / "plugin.json").write_text("{}")
-        sample_skill.source_url = f"local://{source_dir}"
+        sample_skill = packaged(installer, sample_skill, source_dir)
 
         record = installer.install_skill(sample_skill)
 
@@ -187,7 +217,7 @@ learning_signal:
         source_dir = tmp_path / "test_skill"
         source_dir.mkdir()
         (source_dir / "plugin.json").write_text("{}")
-        sample_skill.source_url = f"local://{source_dir}"
+        sample_skill = packaged(installer, sample_skill, source_dir)
 
         # Install skill
         record = installer.install_skill(sample_skill)
@@ -243,8 +273,8 @@ class TestABTestingFramework:
         ab_framework.create_experiment(test_config)
 
         # Same tenant should always get same cohort
-        cohort1 = ab_framework.assign_cohort("tenant_1", "tenant_1")
-        cohort2 = ab_framework.assign_cohort("tenant_1", "tenant_1")
+        cohort1 = ab_framework.assign_cohort("exp_001", "tenant_1")
+        cohort2 = ab_framework.assign_cohort("exp_001", "tenant_1")
 
         assert cohort1 == cohort2
 
@@ -256,7 +286,7 @@ class TestABTestingFramework:
         total = 100
 
         for i in range(total):
-            cohort = ab_framework.assign_cohort("tenant", f"tenant_{i}")
+            cohort = ab_framework.assign_cohort("exp_001", f"tenant_{i}")
             if cohort == CohortAssignment.VARIANT:
                 variant_count += 1
 
@@ -284,34 +314,36 @@ class TestABTestingFramework:
         assert metrics.sample_size_control + metrics.sample_size_variant == 10
 
     def test_statistical_significance(self, ab_framework, test_config):
-        """Test chi-square significance testing."""
-        ab_framework.create_experiment(test_config)
+        """Welch t-test on latency: a real 5% improvement with noise is significant.
 
-        # Record control metrics (baseline)
-        for i in range(50):
-            ab_framework.record_metric(
-                "exp_001",
-                f"control_{i}",
-                latency_ms=100.0,  # Baseline: 100ms
-                cost_per_token=0.001,
-                quality_score=0.9,
-            )
+        Cohorts come from the stable hash, not from the tenant's name — so the
+        test routes each tenant by its ACTUAL cohort (the old test named
+        tenants "variant_i" and expected them to land in the variant).
+        """
+        ab_framework.create_experiment(dataclasses.replace(test_config, rollout_percentage=50))
+        n_c = n_v = 0
+        i = 0
+        while n_c < 40 or n_v < 40:
+            tenant = f"t_{i}"
+            jitter = (i % 7) - 3  # deterministic noise, +-3 ms
+            if ab_framework.assign_cohort("exp_001", tenant) == CohortAssignment.CONTROL:
+                if n_c < 40:
+                    ab_framework.record_metric("exp_001", tenant, latency_ms=100.0 + jitter,
+                                               cost_per_token=0.001, quality_score=0.9)
+                    n_c += 1
+            elif n_v < 40:
+                ab_framework.record_metric("exp_001", tenant, latency_ms=95.0 + jitter,
+                                           cost_per_token=0.001, quality_score=0.92)
+                n_v += 1
+            i += 1
 
-        # Record variant metrics (improved)
-        for i in range(50):
-            ab_framework.record_metric(
-                "exp_001",
-                f"variant_{i}",
-                latency_ms=95.0,   # 5% improvement
-                cost_per_token=0.001,
-                quality_score=0.92,
-            )
-
-        # Analyze
         result = ab_framework.analyze_experiment("exp_001")
 
-        # With significant improvement, should be significant (p < 0.05)
-        assert result.metrics.is_significant or result.winner != "inconclusive"
+        assert result.metrics.sample_size_control == 40
+        assert result.metrics.sample_size_variant == 40
+        assert result.metrics.pvalue is not None and result.metrics.pvalue < 1e-6
+        assert result.metrics.is_significant
+        assert result.winner == "variant"
 
     def test_experiment_analysis(self, ab_framework, test_config):
         """Test experiment analysis and winner determination."""
@@ -425,15 +457,14 @@ class TestAuditIntegration:
                 },
             )
 
-            # Install should emit audit events
-            try:
+            # The manifest is not ADR-0533 valid: install must fail, audited
+            with pytest.raises(Exception):
                 installer.install_skill(skill)
-            except:
-                pass  # May fail but should emit events
 
-            # Verify audit events were emitted
             event_types = [e["type"] for e in audit_events]
-            assert "skill_install_initiated" in event_types or len(event_types) > 0
+            assert event_types[0] == "skill_install_initiated"
+            assert "skill_verification_failed" in event_types
+            assert "skill_installed" not in event_types
 
     def test_ab_framework_audit_events(self):
         """Test that A/B framework emits audit events."""

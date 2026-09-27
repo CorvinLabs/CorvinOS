@@ -38,17 +38,17 @@ class TestFeedbackCollector:
         """Test: Trigger retraining when threshold reached"""
         collector = FeedbackCollector(retraining_threshold=3)
 
-        # Add feedback below threshold
-        collector.add_feedback("s1", "syntax_aware", "code1", None, 4.0)
-        collector.add_feedback("s2", "syntax_aware", "code2", None, 4.5)
+        # Below threshold → no trigger
+        assert collector.add_feedback("s1", "syntax_aware", "code1", None, 4.0) is None
+        assert collector.add_feedback("s2", "syntax_aware", "code2", None, 4.5) is None
 
-        # Should return None (threshold not reached)
-        result = collector.add_feedback("s3", "syntax_aware", "code3", None, 4.2)
-        assert result is None
+        # The 3rd sample reaches threshold=3 → the batch of 3 is handed off
+        batch = collector.add_feedback("s3", "syntax_aware", "code3", None, 4.2)
+        assert [r["session_id"] for r in batch] == ["s1", "s2", "s3"]
 
-        # Add one more to trigger
-        result = collector.add_feedback("s4", "syntax_aware", "code4", None, 4.1)
-        assert result is not None  # Retraining triggered
+        # ...and the buffer restarts: the next sample does NOT re-trigger
+        assert collector.add_feedback("s4", "syntax_aware", "code4", None, 4.1) is None
+        assert collector.get_feedback_stats("syntax_aware")["count"] == 1
 
 
 class TestModelRegistry:
@@ -89,6 +89,20 @@ class TestModelRegistry:
 
         syntax_versions = registry.get_model_versions("syntax_aware")
         assert len(syntax_versions) == 2
+        # visual_aware's v1.0 did not overwrite syntax_aware's v1.0
+        assert len(registry.get_model_versions("visual_aware")) == 1
+
+    def test_same_version_id_promotes_per_strategy(self):
+        registry = ModelRegistry()
+        registry.register_model(ModelVersion("v1.0", "syntax_aware"))
+        registry.register_model(ModelVersion("v1.0", "visual_aware"))
+
+        import pytest
+        with pytest.raises(ValueError, match="ambiguous"):
+            registry.promote_model("v1.0")
+        registry.promote_model("v1.0", strategy="visual_aware")
+        assert registry.get_production_model("visual_aware").strategy == "visual_aware"
+        assert registry.get_production_model("syntax_aware") is None
 
 
 class TestABTestFramework:

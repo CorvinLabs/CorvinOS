@@ -1,5 +1,7 @@
 # Phase 9 Production Deployment Report
 
+> **Status note (2026-09-27, adversarial review):** the backing modules `corvin_console/control_plane/plugin_manager.py` and `subsystem_manager.py` have no production caller. The Control Plane Plugins, Subsystems and Snapshots routers (served under `/v1/console/control-plane/...`) simulated success (a second plugin registry, in-memory subsystem state, empty snapshots); they now require a console session (CSRF on mutations) and answer 501 `not_implemented`. The real plugin surface is `/v1/console/plugins`.
+
 **Deployment Date:** 2026-09-22T14:09:46Z
 **Git Commit:** 06a6b68c
 **Git Branch:** main

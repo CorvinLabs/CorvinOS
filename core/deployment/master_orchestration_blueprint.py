@@ -19,6 +19,20 @@ Load-bearing invariants:
 8. Double-approval idempotency — UUID approval_id, no duplicate events
 9. Audit trail persistent to disk — append-only, hash-chained (ADR-0232)
 10. LoM cryptographic binding — sha256 of inspect.getsource for each operator_approve call
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). No
+service, route, timer or CLI constructs a MasterRolloutOrchestrator; its phase
+and "traffic percentage" route nothing. Honesty contract:
+- audit records go to ``tenant_audit_chain(tenant_id)`` through
+  ``core.deployment.audit_sink`` BEFORE the decision they record is applied; a
+  failed write raises ``AuditWriteFailed`` and the decision is not taken.
+  ``audit_trail`` is only a local mirror of committed records (there is no
+  second audit file any more — the old ``master_orchestrator_audit.jsonl`` was
+  an unverified parallel chain).
+- state lives under ``<corvin_home>/tenants/<tid>/global/orchestration/``
+  (honours ``CORVIN_HOME``; one file per tenant), never a hard-wired ``~/.corvin``.
+- a weekly gate without a MEASURED Phase 1 latency baseline FAILS (no 100 ms default).
+- a persisted state whose hash does not verify is NOT loaded.
 """
 
 from dataclasses import dataclass, field, asdict
@@ -34,6 +48,7 @@ import time
 import uuid
 import inspect
 
+from . import audit_sink
 from .phase3_rollout_orchestrator import (
     RolloutOrchestrator,
     RolloutState,
@@ -45,6 +60,26 @@ from .phase3_rollout_orchestrator import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MASTER_FIELDS = frozenset({
+    "gate", "approval_id", "day", "week", "phase", "traffic_pct", "operator_ref",
+    "lom_hash", "decision", "transition", "agreement_rate", "confidence",
+    "latency_p99_ms", "feedback_count", "sequence_number",
+})
+_MASTER_EVENTS = {
+    f"deployment.master.{name}": _MASTER_FIELDS
+    for name in (
+        "day_advanced", "operator_approval_requested", "operator_approval_granted",
+        "operator_approval_rejected", "automatic_transition", "approval_escalated_to_admin",
+        "premature_phase_2a_reverted",
+    )
+}
+audit_sink.register_events(_MASTER_EVENTS)
+
+
+def _operator_ref(operator_id: Optional[str]) -> str:
+    """Pseudonymous operator reference for the chain (never the raw id)."""
+    return hashlib.sha256(str(operator_id).encode()).hexdigest()[:12] if operator_id else ""
 
 
 class OperatorApprovalGate(Enum):
@@ -168,10 +203,6 @@ class MasterRolloutOrchestrator:
     - Tenant isolation (F023)
     """
 
-    STATE_FILE = Path.home() / ".corvin" / "master_orchestrator_state.json"
-    AUDIT_TRAIL_FILE = Path.home() / ".corvin" / "master_orchestrator_audit.jsonl"  # F009
-    CHECKPOINT_DIR = Path.home() / ".corvin" / "orchestrator_checkpoints"
-
     # F001: Phase gates at day 14 (Phase 1→2a) and day 42 (Phase 2a→2b)
     PHASE_1_APPROVAL_DAY = 14
     PHASE_2A_APPROVAL_DAY = 42
@@ -179,10 +210,23 @@ class MasterRolloutOrchestrator:
     # F019: Operator approval timeout at day 21
     APPROVAL_TIMEOUT_DAYS = 7
 
-    def __init__(self, base_orchestrator: Optional[RolloutOrchestrator] = None, tenant_id: str = "_default"):
-        self.base_orch = base_orchestrator or RolloutOrchestrator()
+    def __init__(
+        self,
+        base_orchestrator: Optional[RolloutOrchestrator] = None,
+        tenant_id: str = "_default",
+        state_dir: Optional[Path] = None,
+    ):
         self.tenant_id = tenant_id  # F023
+        self.base_orch = base_orchestrator or RolloutOrchestrator(tenant_id=tenant_id)
+        # Per-tenant state location under CORVIN_HOME (was a class-level
+        # ``Path.home()/.corvin`` shared by every tenant and every test).
+        if state_dir is None:
+            from core.paths.tenant import tenant_home  # noqa: PLC0415
+            state_dir = tenant_home(tenant_id) / "global" / "orchestration"
+        self.STATE_FILE = Path(state_dir) / "master_orchestrator_state.json"
+        self.CHECKPOINT_DIR = Path(state_dir) / "orchestrator_checkpoints"
         self.state = self._initialize_master_state()
+        # Local mirror of records committed to the tenant chain.
         self.audit_trail: List[Dict] = []
         self.lock = threading.RLock()  # F014: Thread-safe audit trail
         self.audit_trail_lock = threading.RLock()  # F014: Separate lock for audit trail
@@ -190,13 +234,10 @@ class MasterRolloutOrchestrator:
         # F012: Track processed approval IDs to prevent duplicates
         self.processed_approval_ids: Set[str] = set()
 
-        # Ensure directories exist
         self.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-        self.AUDIT_TRAIL_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        # F002, F009: Load persisted state and audit trail
+        # F002: Load persisted state
         self._load_persisted_state()
-        self._load_persisted_audit_trail()
 
         logger.info(f"MasterRolloutOrchestrator initialized, phase: {self.state.base_state.phase.value}, tenant: {self.tenant_id}")
 
@@ -225,6 +266,24 @@ class MasterRolloutOrchestrator:
                 logger.error(f"Tenant isolation validation failed for tenant {self.tenant_id}")
                 return
 
+            # F015: Phase 1 14-Day Minimum Enforcement. The old code only
+            # returned early and left the rollout IN canary; now it is reverted.
+            day_num = self.state.base_state.day_number
+            if self.state.base_state.phase == Phase.PHASE_2A_CANARY and day_num < self.PHASE_1_APPROVAL_DAY:
+                logger.warning("Phase 2a before day 14 — reverting to Phase 1 shadow")
+                self._audit_log({
+                    "event": "premature_phase_2a_reverted",
+                    "day": day_num,
+                    "phase": Phase.PHASE_1_SHADOW.value,
+                    "lom": "core/deployment/master_orchestration_blueprint.py:advance_day",
+                })
+                self.state.base_state.phase = Phase.PHASE_1_SHADOW
+                self.state.base_state.current_traffic_percentage = 0
+                for skill_id in self.state.base_state.skill_states:
+                    self.state.base_state.skill_states[skill_id] = SkillMode.ADVISORY
+                self._save_state()
+                return
+
             # Delegate base metrics to Phase3Orchestrator
             self.base_orch.advance_day(current_metrics)
 
@@ -239,11 +298,6 @@ class MasterRolloutOrchestrator:
             # F001: Phase 1→2a approval gate at day 14
             if phase == Phase.PHASE_1_SHADOW and day_num == self.PHASE_1_APPROVAL_DAY:
                 self._request_operator_approval(OperatorApprovalGate.PHASE_1_TO_2A, current_metrics)
-
-            # F015: Phase 1 14-Day Minimum Enforcement
-            if phase == Phase.PHASE_2A_CANARY and day_num < 14:
-                logger.warning(f"Phase 2a requested before day 14, rejecting")
-                return
 
             # Phase 2a→2b approval gate at day 42
             if phase == Phase.PHASE_2A_CANARY and day_num == self.PHASE_2A_APPROVAL_DAY:
@@ -260,19 +314,15 @@ class MasterRolloutOrchestrator:
             # Check automatic transitions
             self._check_automatic_transitions()
 
-            # Persist state and audit trail
-            self._save_state()
-            self._persist_audit_trail()  # F009
-
-            # Emit audit event (F009: persisted)
+            # Emit audit event, then persist state
             self._audit_log({
                 "event": "day_advanced",
                 "day": day_num,
                 "week": week_num,
                 "phase": phase.value,
                 "traffic_pct": self.state.base_state.current_traffic_percentage,
-                "tenant_id": self.tenant_id,  # F023
             })
+            self._save_state()
 
     def _evaluate_weekly_gate(self, week_num: int, metrics: Dict[str, SkillMetrics]) -> None:
         """
@@ -282,13 +332,17 @@ class MasterRolloutOrchestrator:
         """
         from .phase3_rollout_orchestrator import Phase2aGateEvaluator
 
-        baseline_latency_ms = 100.0  # Phase 1 baseline
-
-        passed, reasons = Phase2aGateEvaluator.evaluate_week_gate(
-            week_num,
-            metrics,
-            baseline_latency_ms,
-        )
+        # Phase 1 baseline as MEASURED by the base orchestrator in shadow mode.
+        # Not measured → the gate FAILS (was an invented 100 ms).
+        baseline_latency_ms = self.state.base_state.baseline_latency_p99_ms
+        if baseline_latency_ms is None:
+            passed, reasons = False, ["✗ Latency baseline: not_measured (no Phase 1 baseline recorded)"]
+        else:
+            passed, reasons = Phase2aGateEvaluator.evaluate_week_gate(
+                week_num,
+                metrics,
+                baseline_latency_ms,
+            )
 
         # Record evaluation
         gate_result = PhaseGateResult.PASS if passed else PhaseGateResult.FAIL
@@ -326,7 +380,7 @@ class MasterRolloutOrchestrator:
 
             # Check if ready for Phase 2b approval
             if next_traffic == 100 and week_num >= 6:
-                self._request_operator_approval(OperatorApprovalGate.PHASE_2A_TO_2B)
+                self._request_operator_approval(OperatorApprovalGate.PHASE_2A_TO_2B, metrics)
 
     def _check_automatic_transitions(self) -> None:
         """Check and execute pending automatic transitions"""
@@ -349,7 +403,11 @@ class MasterRolloutOrchestrator:
                             f"Automatic escalation in week {week}",
                         )
 
-    def _request_operator_approval(self, gate: OperatorApprovalGate, current_metrics: Dict[str, SkillMetrics]) -> None:
+    def _request_operator_approval(
+        self,
+        gate: OperatorApprovalGate,
+        current_metrics: Optional[Dict[str, SkillMetrics]] = None,
+    ) -> None:
         """
         Request operator approval for phase transition (F001, F011).
 
@@ -369,24 +427,21 @@ class MasterRolloutOrchestrator:
             record.latency_p99_at_approval = sum(m.latency_p99_ms for m in current_metrics.values()) / len(current_metrics) if current_metrics else None
             record.feedback_count_at_approval = sum(int(m.feedback_count) for m in current_metrics.values()) if current_metrics else None
 
-        self.state.operator_approvals[gate.value] = record
-        self.state.base_state.pending_operator_approval = True
-        self.state.base_state.approval_required_for = gate.value
-
+        # Audit-first: the request is recorded before it becomes pending.
         self._audit_log({
             "event": "operator_approval_requested",
             "gate": gate.value,
             "approval_id": record.approval_id,  # F012
-            "requested_at": record.requested_at,
-            "tenant_id": self.tenant_id,  # F023
-            "metrics_snapshot": {  # F011
-                "agreement_rate": record.agreement_rate_at_approval,
-                "confidence": record.confidence_at_approval,
-                "latency_p99_ms": record.latency_p99_at_approval,
-                "feedback_count": record.feedback_count_at_approval,
-            },
-            "lom": "master_orchestration_blueprint.py::_request_operator_approval:299",
+            # F011 metrics snapshot (None = not measured at request time)
+            "agreement_rate": record.agreement_rate_at_approval,
+            "confidence": record.confidence_at_approval,
+            "latency_p99_ms": record.latency_p99_at_approval,
+            "feedback_count": record.feedback_count_at_approval,
+            "lom": "core/deployment/master_orchestration_blueprint.py:_request_operator_approval",
         })
+        self.state.operator_approvals[gate.value] = record
+        self.state.base_state.pending_operator_approval = True
+        self.state.base_state.approval_required_for = gate.value
 
         logger.warning(f"OPERATOR APPROVAL REQUESTED: {gate.value} (approval_id: {record.approval_id})")
 
@@ -415,34 +470,41 @@ class MasterRolloutOrchestrator:
                 logger.error(f"Tenant mismatch in operator_approve: {record.tenant_id} vs {self.tenant_id}")
                 return False
 
+            # A rejected (or otherwise decided) request is closed; approving it
+            # would resurrect a transition the operator already turned down.
+            if record.decision is not None:
+                logger.error(f"Approval {record.approval_id} already decided ({record.decision})")
+                return False
+
+            if not approved_by:
+                logger.error("operator_approve requires approved_by")
+                return False
+
+            # F010: LoM cryptographic binding
+            lom_hash = hashlib.sha256(inspect.getsource(self.operator_approve).encode()).hexdigest()
+
+            # Audit-FIRST (F014: under the audit lock): no committed record → no transition.
+            with self.audit_trail_lock:
+                self._audit_log({
+                    "event": "operator_approval_granted",
+                    "gate": gate.value,
+                    "approval_id": record.approval_id,  # F012
+                    "operator_ref": _operator_ref(approved_by),
+                    "lom_hash": lom_hash,  # F010
+                    "lom": "core/deployment/master_orchestration_blueprint.py:operator_approve",
+                })
+
             record.approved_at = datetime.now(timezone.utc).isoformat()
             record.approved_by = approved_by
             record.decision = "approved"
             record.reason = reason
-
-            # F010: LoM cryptographic binding
-            lom_source = inspect.getsource(self.operator_approve)
-            record.lom_hash = hashlib.sha256(lom_source.encode()).hexdigest()
+            record.lom_hash = lom_hash
 
             # Execute phase transition
             if gate == OperatorApprovalGate.PHASE_1_TO_2A:
                 self._transition_phase_1_to_2a()
             elif gate == OperatorApprovalGate.PHASE_2A_TO_2B:
                 self._transition_phase_2a_to_2b()
-
-            # F014: Thread-safe audit log with lock
-            with self.audit_trail_lock:
-                self._audit_log({
-                    "event": "operator_approval_granted",
-                    "gate": gate.value,
-                    "approval_id": record.approval_id,  # F012
-                    "approved_by": approved_by,
-                    "approved_at": record.approved_at,
-                    "reason": reason,
-                    "lom_hash": record.lom_hash,  # F010
-                    "tenant_id": self.tenant_id,  # F023
-                    "lom": "master_orchestration_blueprint.py::operator_approve:345",
-                })
 
             # F012: Mark this approval ID as processed
             self.processed_approval_ids.add(record.approval_id)
@@ -463,6 +525,17 @@ class MasterRolloutOrchestrator:
                 return False
 
             record = self.state.operator_approvals[gate.value]
+            if record.decision is not None:
+                logger.error(f"Approval {record.approval_id} already decided ({record.decision})")
+                return False
+
+            self._audit_log({
+                "event": "operator_approval_rejected",
+                "gate": gate.value,
+                "approval_id": record.approval_id,
+                "operator_ref": _operator_ref(rejected_by),
+                "lom": "core/deployment/master_orchestration_blueprint.py:operator_reject",
+            })
             record.approved_at = datetime.now(timezone.utc).isoformat()
             record.approved_by = rejected_by
             record.decision = "rejected"
@@ -470,14 +543,6 @@ class MasterRolloutOrchestrator:
 
             self.state.base_state.pending_operator_approval = False
             self.state.base_state.approval_required_for = None
-
-            self._audit_log({
-                "event": "operator_approval_rejected",
-                "gate": gate.value,
-                "rejected_by": rejected_by,
-                "reason": reason,
-                "lom": "master_orchestration.py::operator_reject:245",
-            })
 
             logger.warning(f"OPERATOR REJECTED: {gate.value} ({reason})")
             return True
@@ -513,15 +578,12 @@ class MasterRolloutOrchestrator:
     def _record_automatic_transition(self, transition: str, reason: str) -> None:
         """Record automatic transition in audit trail"""
         timestamp = datetime.now(timezone.utc).isoformat()
-        self.state.automatic_transitions.append((timestamp, transition, reason))
-
         self._audit_log({
             "event": "automatic_transition",
             "transition": transition,
-            "reason": reason,
-            "timestamp": timestamp,
-            "lom": "master_orchestration.py::_record_automatic_transition:290",
+            "lom": "core/deployment/master_orchestration_blueprint.py:_record_automatic_transition",
         })
+        self.state.automatic_transitions.append((timestamp, transition, reason))
 
         logger.info(f"Automatic transition: {transition} ({reason})")
 
@@ -537,7 +599,7 @@ class MasterRolloutOrchestrator:
         else:
             return 100
 
-    def _save_state(self) -> None:
+    def _save_state(self) -> bool:
         """
         Persist master orchestrator state to disk (fail-closed, F002, F023).
 
@@ -580,9 +642,11 @@ class MasterRolloutOrchestrator:
 
             self.state.last_saved_time = state_dict["last_saved_time"]
             self.state.last_saved_hash = state_hash
+            return True
 
         except Exception as e:
-            logger.error(f"Failed to save state: {e}")
+            logger.error(f"Failed to save state: {type(e).__name__}")
+            return False
 
     def _load_persisted_state(self) -> None:
         """
@@ -604,8 +668,11 @@ class MasterRolloutOrchestrator:
             state_json = json.dumps(state_dict, sort_keys=True, default=str)
             calculated_hash = hashlib.sha256(state_json.encode()).hexdigest()
 
-            if stored_hash and stored_hash != calculated_hash:
-                logger.warning(f"State hash mismatch, loading anyway (integrity may be compromised)")
+            if not stored_hash or stored_hash != calculated_hash:
+                # Fail-closed: a state file that does not verify could claim any
+                # phase (e.g. skill-primary). Do not load it.
+                logger.error("Persisted state hash missing/mismatch — NOT loaded (integrity)")
+                return
 
             # F023: Verify tenant isolation
             persisted_tenant = state_dict.get("tenant_id", "_default")
@@ -719,57 +786,6 @@ class MasterRolloutOrchestrator:
         except Exception as e:
             logger.error(f"Failed to load persisted state: {e}")
 
-    def _load_persisted_audit_trail(self) -> None:
-        """
-        Load persisted audit trail from disk (F009).
-
-        Reads append-only audit trail and verifies hash chain integrity.
-        """
-        if not self.AUDIT_TRAIL_FILE.exists():
-            logger.info("No persisted audit trail found, starting fresh")
-            return
-
-        try:
-            with open(self.AUDIT_TRAIL_FILE, "r") as f:
-                for line in f:
-                    event = json.loads(line)
-                    # F023: Only load events for this tenant
-                    if event.get("tenant_id") == self.tenant_id:
-                        self.audit_trail.append(event)
-
-            logger.info(f"Loaded {len(self.audit_trail)} audit events (tenant: {self.tenant_id})")
-
-            # F009: Verify audit chain integrity
-            is_valid, issues = self.verify_audit_chain()
-            if not is_valid:
-                logger.warning(f"Audit chain integrity issues: {issues}")
-
-        except Exception as e:
-            logger.error(f"Failed to load persisted audit trail: {e}")
-
-    def _persist_audit_trail(self) -> None:
-        """
-        Persist audit trail to disk (F009).
-
-        Appends new audit events to disk in append-only format.
-        """
-        if not self.audit_trail:
-            return
-
-        try:
-            # Only persist events not yet saved
-            events_to_persist = self.audit_trail[self.state.audit_events_persisted:]
-
-            with open(self.AUDIT_TRAIL_FILE, "a") as f:
-                for event in events_to_persist:
-                    f.write(json.dumps(event, default=str) + "\n")
-
-            self.state.audit_events_persisted = len(self.audit_trail)
-            self.state.last_audit_persist_time = datetime.now(timezone.utc).isoformat()
-
-        except Exception as e:
-            logger.error(f"Failed to persist audit trail: {e}")
-
     def _validate_tenant_isolation(self) -> bool:
         """
         Validate tenant isolation for all state queries (F023, F035).
@@ -782,7 +798,10 @@ class MasterRolloutOrchestrator:
             logger.warning(f"Tenant change detected: {self.state.tenant_id} → {self.tenant_id}")
             # F035: RESET base_state completely on tenant switch
             self.state.tenant_id = self.tenant_id
-            self.state.base_state = self._initialize_master_state().base_state
+            # A fresh base orchestrator: the old code re-used ``self.base_orch.state``
+            # (the very object it meant to reset), so nothing was reset.
+            self.base_orch = RolloutOrchestrator(tenant_id=self.tenant_id)
+            self.state.base_state = self.base_orch.state
             # Clear approvals and evaluations for old tenant
             self.state.operator_approvals.clear()
             self.state.weekly_evaluations.clear()
@@ -821,7 +840,7 @@ class MasterRolloutOrchestrator:
             requested_time = datetime.fromisoformat(record.requested_at.replace("Z", "+00:00"))
             elapsed = (current_time - requested_time).days
 
-            if elapsed >= self.APPROVAL_TIMEOUT_DAYS:
+            if elapsed >= self.APPROVAL_TIMEOUT_DAYS and not record.reason.startswith("Auto-escalation"):
                 logger.warning(f"Approval timeout for {gate_key} (elapsed: {elapsed} days), escalating to admin")
                 self._escalate_approval_to_admin(record, gate_key)
 
@@ -829,43 +848,36 @@ class MasterRolloutOrchestrator:
         """
         Escalate approval to admin if timeout exceeded (F019).
         """
-        record.reason = f"Auto-escalation after {self.APPROVAL_TIMEOUT_DAYS} day timeout"
-
         self._audit_log({
             "event": "approval_escalated_to_admin",
             "gate": gate_key,
             "approval_id": record.approval_id,
-            "requested_at": record.requested_at,
-            "escalated_at": datetime.now(timezone.utc).isoformat(),
-            "reason": record.reason,
-            "tenant_id": self.tenant_id,
-            "lom": "master_orchestration_blueprint.py::_escalate_approval_to_admin:598",
+            "lom": "core/deployment/master_orchestration_blueprint.py:_escalate_approval_to_admin",
         })
+        record.reason = f"Auto-escalation after {self.APPROVAL_TIMEOUT_DAYS} day timeout"
 
         logger.warning(f"APPROVAL ESCALATED TO ADMIN: {gate_key}")
 
-    def _audit_log(self, event: Dict) -> None:
-        """
-        Log audit event (immutable, hash-chained).
+    def _audit_log(self, event: Dict) -> Dict:
+        """Commit one record to the tenant audit chain; mirror it locally.
 
-        Every orchestration decision logged for compliance (ADR-0537, ADR-0232, F009).
-        Thread-safe append with RLock (F014).
+        Raises ``audit_sink.AuditWriteFailed`` when the record does not commit
+        (fail-closed): callers write BEFORE applying the decision, so a failed
+        write leaves the decision untaken. Only ``_MASTER_FIELDS`` reach the
+        chain (content-free); free text never does.
         """
-        # F014: Thread-safe audit log
         with self.audit_trail_lock:
-            event["sequence_number"] = len(self.audit_trail)
-            event["timestamp"] = event.get("timestamp", datetime.now(timezone.utc).isoformat())
-            event["tenant_id"] = event.get("tenant_id", self.tenant_id)  # F023
-
-            if self.audit_trail:
-                event["prior_hash"] = self.audit_trail[-1].get("hash", "")
-            else:
-                event["prior_hash"] = "GENESIS"
-
-            event_json = json.dumps(event, sort_keys=True, default=str)
-            event["hash"] = hashlib.sha256(event_json.encode()).hexdigest()
-
-            self.audit_trail.append(event)
+            name = str(event["event"])
+            details = {k: v for k, v in event.items() if k in _MASTER_FIELDS}
+            details["sequence_number"] = len(self.audit_trail)
+            details["lom"] = event.get("lom", "core/deployment/master_orchestration_blueprint.py:_audit_log")
+            record = audit_sink.emit(
+                f"deployment.master.{name}", details, tenant_id=self.tenant_id,
+            )
+            mirror = {"event": name, **details, "tenant_id": self.tenant_id,
+                      "hash": record.get("hash", ""), "prev_hash": record.get("prev_hash", "")}
+            self.audit_trail.append(mirror)
+            return mirror
 
     def get_status(self) -> Dict:
         """Get current rollout status"""
@@ -881,21 +893,16 @@ class MasterRolloutOrchestrator:
         }
 
     def verify_audit_chain(self) -> Tuple[bool, List[str]]:
-        """Verify audit chain integrity"""
-        issues = []
+        """Verify the REAL tenant audit chain (forge ``verify_chain``).
 
-        if not self.audit_trail:
-            return True, []
-
-        for i, event in enumerate(self.audit_trail):
-            event_copy = {k: v for k, v in event.items() if k != "hash"}
-            event_json = json.dumps(event_copy, sort_keys=True, default=str)
-            expected_hash = hashlib.sha256(event_json.encode()).hexdigest()
-
-            if event["hash"] != expected_hash:
-                issues.append(f"Event {i}: hash mismatch")
-
-            if i > 0 and event["prior_hash"] != self.audit_trail[i-1]["hash"]:
-                issues.append(f"Event {i}: prior_hash breaks chain")
-
-        return len(issues) == 0, issues
+        Unverifiable (writer/verifier unavailable) counts as broken.
+        """
+        try:
+            se, fp = audit_sink._forge()
+            chain = fp.tenant_audit_chain(self.tenant_id)
+            if not chain.exists():
+                return (not self.audit_trail), ([] if not self.audit_trail else ["chain missing"])
+            ok, problems = se.verify_chain(chain)
+            return bool(ok), [str(p) for p in (problems or [])]
+        except Exception as exc:  # noqa: BLE001 — fail-closed
+            return False, [f"verifier unavailable ({type(exc).__name__})"]

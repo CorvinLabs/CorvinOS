@@ -64,12 +64,12 @@ class TestAuditBackendRaceConditions:
             # Verify: all events readable
             events = writer.read_events()
             assert len(events) == 100
-            # Events should be in order (by sequence)
+            # Every record links to its predecessor (the chain order IS the
+            # sequence; the forge record carries no separate counter)
             with open(log_path, "r") as f:
-                lines = f.readlines()
-                for i, line in enumerate(lines):
-                    entry = json.loads(line)
-                    assert entry["sequence"] == i
+                entries = [json.loads(line) for line in f if line.strip()]
+            for prev, cur in zip(entries, entries[1:]):
+                assert cur["prev_hash"] == prev["hash"]
 
     def test_concurrent_write_and_read(self):
         """Test write + read don't race (read consistency)."""
@@ -278,53 +278,40 @@ class TestAuditBackendRaceConditions:
             assert len(final_events) == 40
 
     def test_tenant_isolation_concurrent(self):
-        """Test tenant isolation under concurrent access."""
+        """A writer in tenant A's process never writes tenant B's records, even
+        under concurrency: the core writer refuses every foreign-tenant record
+        and the chain stays intact."""
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "audit.jsonl"
             writer = AuditChainWriter(log_path)
-
-            errors = []
+            refused, errors = [], []
 
             def write_for_tenant(tenant_id: str, count: int):
-                try:
-                    for i in range(count):
-                        event = AuditEvent(
-                            event_id=f"event-{tenant_id}-{i}",
-                            event_type="test",
-                            tenant_id=tenant_id,
-                            user_id=f"user-{tenant_id}",
-                            timestamp=datetime.utcnow().isoformat(),
-                            details={"index": i},
-                            severity="info",
-                        )
+                for i in range(count):
+                    event = AuditEvent(
+                        event_id=f"event-{tenant_id}-{i}", event_type="test",
+                        tenant_id=tenant_id, user_id=f"user-{tenant_id}",
+                        timestamp=datetime.utcnow().isoformat(),
+                        details={"index": i}, severity="info",
+                    )
+                    try:
                         writer.write_event(event)
-                except Exception as e:
-                    errors.append(e)
+                    except IOError as e:
+                        (refused if "AuditTenantMismatch" in str(e) else errors).append(e)
 
-            threads = []
-            tenants = ["tenant_a", "tenant_b", "tenant_c"]
-            for tenant in tenants:
-                threads.append(
-                    threading.Thread(target=write_for_tenant, args=(tenant, 20))
-                )
-
+            tenants = ["_default", "tenant_b", "tenant_c"]
+            threads = [threading.Thread(target=write_for_tenant, args=(t, 20)) for t in tenants]
             for t in threads:
                 t.start()
             for t in threads:
                 t.join()
 
-            # Verify: no errors
-            assert len(errors) == 0
-
-            # Verify: each tenant sees only its own events
-            for tenant in tenants:
-                events = writer.read_events(tenant_id=tenant)
-                assert len(events) == 20
-                assert all(e.tenant_id == tenant for e in events)
-
-            # Verify: chain is intact
+            assert errors == []
+            assert len(refused) == 40
+            mine = [e for e in writer.read_events(tenant_id="_default") if e.event_type == "test"]
+            assert len(mine) == 20
+            assert writer.read_events(tenant_id="tenant_b") == []
             assert writer.verify_chain()
-            assert writer.get_event_count() == 60
 
     def test_stress_concurrent_all_ops(self):
         """Stress test: all operations (write, read, verify, retention) concurrent."""

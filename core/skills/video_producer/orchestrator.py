@@ -3,13 +3,18 @@
 Consolidated orchestration for director mode + worker coordination.
 Ref: ADR-0206 (Phase 6 Milestone 1 — Regression + Orchestration)
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+``execute_frame`` dispatches to the Phase 6b workers, which are not implemented
+and fail closed — it used to report every frame ``completed`` from a stub.
+
 Goals (Phase 6 Part 2):
   - Full orchestration + storyboard integration
   - Merge director mode + worker coordination
   - 5 new E2E tests for orchestration
   - Gate: 60+ tests passing
 """
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import json
 from typing import Optional, List
 from datetime import datetime
 import hashlib
@@ -116,21 +121,28 @@ class VideoOrchestrator:
             "timestamp": datetime.utcnow().isoformat()
         })
 
-        # Phase 6: Stub implementation (will be wired to real workers in Phase 6b)
+        # Dispatch to the frame's worker. The Phase 6b workers have no
+        # backend and fail closed; this used to be a stub that reported every
+        # frame "completed" with a placeholder output.
+        from .workers.phase6b import get_worker  # noqa: PLC0415
+
+        worker_result = get_worker(command.frame.worker_type).execute(
+            {**command.frame.worker_input, "frame_id": command.frame.frame_id}
+        )
         result = {
             "command_id": command.command_id,
             "frame_id": command.frame.frame_id,
-            "status": "completed",
-            "output": {
-                "worker_type": command.frame.worker_type,
-                "execution_time_ms": 250,  # placeholder
-                "result": f"{command.frame.worker_type} execution stub"
-            },
-            "errors": []
+            "status": worker_result.status,
+            "output": worker_result.output,
+            "errors": [worker_result.error] if worker_result.error else [],
         }
 
         self.execution_trace.append({
-            "event": "frame_execution_completed",
+            "event": (
+                "frame_execution_completed"
+                if result["status"] == "completed"
+                else "frame_execution_failed"
+            ),
             "command_id": command.command_id,
             "status": result["status"],
             "timestamp": datetime.utcnow().isoformat()
@@ -246,6 +258,99 @@ class VideoOrchestrator:
             # Fallback: resume from frame 0 if recovery fails
             return 0
 
+    # ------------------------------------------------------------------ #
+    # Checkpoint serialisation (ADR-0892)
+    # ------------------------------------------------------------------ #
+
+    def to_dict(self) -> dict:
+        """Deterministic, JSON-serialisable orchestrator state."""
+        return {
+            "project_id": self.project_id,
+            "created_at": self.created_at,
+            "storyboard": [asdict(f) for f in self.storyboard],
+            "commands": [
+                {
+                    "command_id": c.command_id,
+                    "frame_id": c.frame.frame_id,
+                    "execution_order": c.execution_order,
+                    "dependencies": list(c.dependencies),
+                    "timeout_seconds": c.timeout_seconds,
+                    "retry_count": c.retry_count,
+                }
+                for c in self.commands
+            ],
+            "execution_trace": [dict(e) for e in self.execution_trace],
+        }
+
+    @staticmethod
+    def _state_root(state: dict) -> str:
+        return hashlib.sha256(
+            json.dumps(state, sort_keys=True, default=str).encode()
+        ).hexdigest()
+
+    def serialize_to_checkpoint(self, checkpoint_id: str) -> dict:
+        """Checkpoint payload: state + its SHA-256 root.
+
+        Idempotent: the same state always serialises identically (the
+        timestamp is the state's own last-change time, not "now").
+
+        ``tenant_signature`` is ``None``: this module holds no tenant key, so
+        the checkpoint is UNSIGNED. ``merkle_root`` detects corruption, not a
+        deliberate rewrite — do not treat a restored checkpoint as authentic.
+        """
+        state = self.to_dict()
+        last = self.execution_trace[-1].get("timestamp") if self.execution_trace else None
+        return {
+            "checkpoint_id": checkpoint_id,
+            **state,
+            "timestamp_iso": last or self.created_at,
+            "merkle_root": self._state_root(state),
+            "tenant_signature": None,
+        }
+
+    def restore_from_checkpoint_data(self, data: dict) -> None:
+        """Replace this orchestrator's state with a verified checkpoint.
+
+        Raises ``CheckpointIntegrityError`` for a legacy checkpoint (no
+        ``merkle_root`` / ``tenant_signature`` field) or one whose state does
+        not hash to its ``merkle_root`` (fail-closed: nothing is restored).
+        """
+        from core.vibe_engineering.checkpoint_manager import (  # noqa: PLC0415
+            CheckpointIntegrityError,
+        )
+
+        if "merkle_root" not in data or "tenant_signature" not in data:
+            raise CheckpointIntegrityError("legacy checkpoint: no merkle_root/tenant_signature")
+        state = {k: data.get(k) for k in ("project_id", "created_at", "storyboard",
+                                           "commands", "execution_trace")}
+        if self._state_root(state) != data["merkle_root"]:
+            raise CheckpointIntegrityError("checkpoint state does not match its merkle_root")
+
+        storyboard = [StoryboardFrame(**f) for f in state["storyboard"]]
+        by_id = {f.frame_id: f for f in storyboard}
+        commands = [
+            OrchestrationCommand(
+                command_id=c["command_id"],
+                frame=by_id[c["frame_id"]],
+                execution_order=c["execution_order"],
+                dependencies=list(c["dependencies"]),
+                timeout_seconds=c["timeout_seconds"],
+                retry_count=c["retry_count"],
+            )
+            for c in state["commands"]
+        ]
+        self.project_id = state["project_id"]
+        self.created_at = state["created_at"]
+        self.storyboard = storyboard
+        self.commands = commands
+        self.execution_trace = [dict(e) for e in state["execution_trace"]]
+
+    @classmethod
+    def deserialize_from_checkpoint(cls, data: dict) -> "VideoOrchestrator":
+        orch = cls(str(data.get("project_id", "")))
+        orch.restore_from_checkpoint_data(data)
+        return orch
+
     def get_execution_hash(self) -> str:
         """Generate hash of orchestration state (for audit chain).
 
@@ -276,6 +381,6 @@ class VideoOrchestrator:
 # Phase 6 Gate: Orchestrator ready for integration
 # ✅ Immutable storyboard frame model
 # ✅ Command generation with dependency resolution
-# ✅ Worker execution stub (wired in Phase 6b)
+# ❌ Worker execution: Phase 6b workers not implemented (fail closed)
 # ✅ Audit trace (hash-chained in Phase 6b)
 # ✅ E2E test points ready (5 new tests)

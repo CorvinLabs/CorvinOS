@@ -127,14 +127,17 @@ describe('VoiceStatusPanel (ADR-0185 M4)', () => {
     });
   });
 
-  it('shows a model-download hint when the local model file is missing', async () => {
+  it('reports a missing local model without a manual CLI hint', async () => {
+    // c4b8486e0 (2026-09-24) moved model provisioning to the server: the
+    // STT model is fetched on first use, so the old "run corvin-install"
+    // hint would send the operator to a step that is no longer needed.
     mockVoiceStatus(MODEL_MISSING);
     renderWithProviders(<VoiceStatusPanel />);
 
     await waitFor(() => {
       expect(screen.getByText(/not downloaded yet/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/run corvin-install/i)).toBeInTheDocument();
+    expect(screen.queryByText(/run corvin-install/i)).not.toBeInTheDocument();
   });
 
   it('degrades gracefully when the status endpoint errors', async () => {

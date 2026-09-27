@@ -291,10 +291,11 @@ class TestHandshakeAndActiveState:
         record.next_retry_at = time.time() - 1
         coord.pairings[record.kid] = record
 
-        # Attempt handshake (simulated)
-        record.retry_count = 1  # Move past initial simulated failure
+        # Injected transport that reports a verified peer answer (the module
+        # itself has none — see test_default_handshake_fails_closed).
         record.next_retry_at = time.time() - 1
-        result = coord.attempt_handshake(record.kid)
+        with mock.patch.object(coord, "_perform_handshake", return_value=True):
+            result = coord.attempt_handshake(record.kid)
 
         # Verify state transition
         assert result is True
@@ -326,62 +327,53 @@ class TestHandshakeAndActiveState:
 class TestE2ECompleteFlow:
     """Test complete end-to-end pairing flow with audit trail."""
 
-    def test_complete_pairing_flow_with_audit_trail(self):
-        """Complete flow: create token → import → handshake → audit trail."""
-        chain = MockAuditChain()
+    def test_complete_pairing_flow_with_audit_trail(self, tmp_path, monkeypatch):
+        """Complete flow on the REAL tenant chain: create token → import →
+        handshake. The handshake transport is not implemented, so the flow
+        must end FAILED (fail-closed) and the chain must say so — never
+        ``discovery.peer_paired``."""
+        from core.discovery.discovery_coordinator import HANDSHAKE_NOT_IMPLEMENTED
+        from forge import paths as fp
+        from forge import security_events as se
 
-        # 1. Issuer creates token
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+        monkeypatch.setenv("CORVIN_TENANT_ID", "test-tenant")
+        monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+        monkeypatch.delenv("FORGE_ROOT", raising=False)
+
         with mock.patch("core.discovery.discovery_coordinator.get_my_url", return_value="http://issuer.local:8775"):
             with mock.patch("core.discovery.discovery_coordinator.get_my_relay_url", return_value="wss://relay.example.com"):
-                issuer_inst = InstanceIdentity("test-org", "issuer", "a" * 64)
-                issuer_coord = DiscoveryCoordinator(issuer_inst, tenant_id="test-tenant")
+                issuer_coord = DiscoveryCoordinator(
+                    InstanceIdentity("test-org", "issuer", "a" * 64), tenant_id="test-tenant")
+                token, token_str = issuer_coord.create_pairing_token(label="issuer-token")
 
-                # Mock audit emit to capture events
-                def mock_emit(event_type, payload, lom):
-                    audit_event = {
-                        "event_type": event_type,
-                        "payload": payload,
-                        "lom": lom,
-                        "timestamp": time.time(),
-                        "tenant_id": issuer_coord.tenant_id,
-                    }
-                    chain.append_event(audit_event)
-
-                with mock.patch.object(issuer_coord, "_emit_audit_event", side_effect=mock_emit):
-                    token, token_str = issuer_coord.create_pairing_token(label="issuer-token")
-
-        assert token is not None
-
-        # 2. Redeemer imports token
-        redeemer_inst = InstanceIdentity("test-org", "redeemer", "b" * 64)
-        redeemer_coord = DiscoveryCoordinator(redeemer_inst, tenant_id="test-tenant")
-
-        with mock.patch.object(redeemer_coord, "_emit_audit_event", side_effect=mock_emit):
-            redeemer_record = redeemer_coord.import_pairing_token(token_str)
-
+        redeemer_coord = DiscoveryCoordinator(
+            InstanceIdentity("test-org", "redeemer", "b" * 64), tenant_id="test-tenant")
+        redeemer_record = redeemer_coord.import_pairing_token(token_str)
         assert redeemer_record.state == PairingState.PENDING
 
-        # 3. Handshake occurs
-        redeemer_record.retry_count = 1  # Simulate past initial failure
         redeemer_record.next_retry_at = time.time() - 1
+        assert redeemer_coord.attempt_handshake(redeemer_record.kid) is False
+        assert redeemer_record.state == PairingState.FAILED
+        assert redeemer_record.last_error == HANDSHAKE_NOT_IMPLEMENTED
 
-        with mock.patch.object(redeemer_coord, "_emit_audit_event", side_effect=mock_emit):
-            handshake_result = redeemer_coord.attempt_handshake(redeemer_record.kid)
-
-        if handshake_result:
-            assert redeemer_record.state == PairingState.ACTIVE
-
-        # 4. Verify audit trail
-        assert chain.verify_chain_integrity() is True
-        tenant_events = [e for e in chain.events if e["tenant_id"] == "test-tenant"]
-        assert len(tenant_events) > 0
-
-        # All events have required fields
-        for event in tenant_events:
-            assert "event_type" in event
-            assert "timestamp" in event
-            assert "lom" in event
-            assert "tenant_id" in event
+        chain = fp.tenant_audit_chain("test-tenant")
+        ok, issues = se.verify_chain(chain)
+        assert ok, issues
+        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        types = [r["event_type"] for r in recs if r["event_type"].startswith("discovery.")]
+        assert types == [
+            "discovery.pairing_token_created",
+            "discovery.peer_pairing_initiated",
+            "discovery.peer_pairing_failed",
+        ]
+        for r in recs:
+            if r["event_type"].startswith("discovery."):
+                assert r["details"]["tenant_id"] == "test-tenant"
+                assert r["details"]["lom"]
+                assert token.kid not in json.dumps(r)
 
 
 class TestRelayIntegration:

@@ -191,12 +191,15 @@ class TestE2EProofRealImprovement:
         if negative_feedback_count >= 3:
             print(f"  {negative_feedback_count} negative feedback → reducing params")
 
-            # Apply config deltas (reduce timeout and retry count)
+            # Apply config deltas (reduce timeout and retry count). Learned
+            # params are normalised to [0, 1] and a single delta is bounded
+            # to ±1.0 (ConfigApplier contract), so the reductions are
+            # expressed as fractions of the baseline.
             success, msg, event = config_applier.apply_config_delta(
                 skill_id=skill_id,
                 parameter_deltas={
-                    "timeout_ms": -25,  # Reduce timeout
-                    "retry_count": -1,  # Reduce retries
+                    "timeout_reduction": 0.25,  # -25% of 100ms
+                    "retry_reduction": 0.5,     # -50% of 2 retries
                 },
                 reason="feedback_driven",
                 feedback_id=feedback[0]["feedback_id"],  # Link to first feedback
@@ -216,8 +219,9 @@ class TestE2EProofRealImprovement:
         print("\n[PHASE 4] IMPROVED EXECUTION (5 runs with updated params)")
 
         # Use updated parameters from optimization
-        updated_timeout = 100 + config_applier.get_config(skill_id).get("timeout_ms", 0)
-        updated_retry = 2 + config_applier.get_config(skill_id).get("retry_count", 0)
+        learned = config_applier.get_config(skill_id)
+        updated_timeout = round(100 * (1 - learned.get("timeout_reduction", 0.0)))
+        updated_retry = round(2 * (1 - learned.get("retry_reduction", 0.0)))
 
         print(f"  Using optimized params: timeout={updated_timeout}ms, retry={updated_retry}")
 

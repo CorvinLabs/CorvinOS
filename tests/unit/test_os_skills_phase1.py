@@ -195,13 +195,20 @@ class TestSkillValidator:
 
     def test_valid_manifest_passes(self, temp_manifest):
         """Test valid manifest passes all checks."""
+        # ADR-0533 manifest (the pre-ADR shape — no description / boot_layer /
+        # origin / scope, free-form trigger + metric names — is now invalid).
         manifest_yaml = """
 name: test.skill
 version: "1.0.0"
-goal: "Test skill"
+goal: "Exercise the manifest validator"
+description: "A minimal ADR-0533 conformant test manifest"
 triggers:
   - name: test_trigger
-    event_type: test
+    event_type: decision_point
+    phase: pre_routing
+    condition: every_turn
+    async_allowed: false
+    timeout_ms: 1000
 input_schema:
   type: object
   required: [test_field]
@@ -215,11 +222,18 @@ output_schema:
     result:
       type: string
 learning_signal:
-  metrics: [test_metric]
+  metrics: [quality_score_outcome]
+  scoring_rule: "mde < 5%"
   feedback_sources:
-    - event_type: test_event
+    - event_type: turn_completed
+      extract: [quality_outcome]
   sanitization:
     disallow_fields: [prompt, response]
+    pii_patterns: [email, phone, credit_card, social_security, api_key, password]
+    fail_closed: true
+boot_layer: bundled
+origin: builtin
+scope: local_development
 """
         temp_manifest.write_text(manifest_yaml)
 

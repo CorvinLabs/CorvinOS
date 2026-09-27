@@ -11,6 +11,11 @@ Features:
 
 Based on ADR-0541 (Session Bridging - EventStore Protocol) Amendment.
 Depends on: ADR-0314 (Learning Events), ADR-0232 (Audit Chain)
+
+NOT WIRED (persistence/bridge event): as of 2026-09-27 (adversarial review)
+``emit_bridge_event`` has no production caller — chat_runtime.py only calls
+``create_snapshot``; the one other caller, message_completeness_protocol.py,
+is itself unreachable.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict, replace
 from datetime import datetime
 from pathlib import Path
@@ -310,13 +316,31 @@ class SessionBridgeProducer:
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
         snapshot_file = snapshot_dir / "latest.json"
+        snapshot_dict = snapshot.to_dict()
+        # Signed with the same function the recovery side verifies with. The
+        # snapshot used to be persisted with NO signature, so
+        # ``SessionRecoveryManager`` rejected every snapshot this producer wrote.
+        # No snapshot key configured → raises → emit_bridge_event fails closed.
+        from core.infinite_session.session_recovery import sign_snapshot  # noqa: PLC0415
+
         snapshot_data = {
-            "snapshot": snapshot.to_dict(),
+            "snapshot": snapshot_dict,
+            "signature": sign_snapshot(snapshot_dict),
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-        with open(snapshot_file, "w") as f:
-            json.dump(snapshot_data, f, indent=2)
+        # Atomic + owner-only (task/worktree metadata): write a 0o600 temp file
+        # in the same directory, then rename over latest.json.
+        tmp = snapshot_file.with_name(f".latest.json.{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(snapshot_data, f, indent=2)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, snapshot_file)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
         logger.info(f"Snapshot persisted: {snapshot_file}")
 

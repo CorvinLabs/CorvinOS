@@ -3,6 +3,8 @@ Skill Compiler (ADR-0533)
 
 Compiles skill manifests to runtime instances.
 Validates module encapsulation and enforces audit-trail invariants.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 import ast
@@ -13,7 +15,10 @@ from typing import Dict, List, Optional, Set, Tuple, Any
 import yaml
 import json
 
-from skill_validator import validate_skill_manifest_dict, SkillValidationReport
+try:  # package import (core.skills.compiler)
+    from .skill_validator import validate_skill_manifest_dict, SkillValidationReport
+except ImportError:  # flat import with core/skills on sys.path
+    from skill_validator import validate_skill_manifest_dict, SkillValidationReport
 
 
 @dataclass
@@ -71,8 +76,12 @@ class SkillCallExtractor(ast.NodeVisitor):
     - os.brain_loader.infer(...)  (if via import)
     """
     
+    #: Root name of a skill namespace called directly (``os.brain_loader.infer``).
+    SKILL_ROOTS = frozenset({"os"})
+
     def __init__(self, source_lines: List[str]):
         self.skill_calls: List[SkillCall] = []
+        self.bound_names: Set[str] = set()
         self.imports: List[ImportStatement] = []
         self.source_lines = source_lines
     
@@ -80,6 +89,7 @@ class SkillCallExtractor(ast.NodeVisitor):
         """Visit 'from X import Y' statements."""
         if node.module:
             for alias in node.names:
+                self.bound_names.add(alias.asname or alias.name)
                 self.imports.append(ImportStatement(
                     module_name=node.module,
                     alias=alias.asname or alias.name,
@@ -92,6 +102,7 @@ class SkillCallExtractor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import):
         """Visit 'import X' statements."""
         for alias in node.names:
+            self.bound_names.add(alias.asname or alias.name.split(".")[0])
             self.imports.append(ImportStatement(
                 module_name=alias.name,
                 alias=alias.asname or alias.name,
@@ -172,11 +183,14 @@ class SkillCallExtractor(ast.NodeVisitor):
         if not isinstance(func_value, ast.Attribute):
             return False
         
-        # Check if root is a name (imported module)
+        # Root must be a skill namespace (``os``) that the module has NOT bound
+        # by an import — ``import os; os.path.join(...)`` is the stdlib, not
+        # a skill. Matching every ``a.b.c()`` call failed ordinary code with
+        # "Undeclared skill call: os.path.join".
         if not isinstance(func_value.value, ast.Name):
             return False
-        
-        return True
+        root = func_value.value.id
+        return root in self.SKILL_ROOTS and root not in self.bound_names
     
     def _extract_direct_skill_call(self, node: ast.Call) -> Optional[SkillCall]:
         """Extract a direct skill call like os.brain_loader.infer(...)."""
@@ -339,11 +353,15 @@ class SkillCompiler:
         extractor = SkillCallExtractor(source_lines)
         extractor.visit(tree)
         
-        # Check for forbidden direct imports
+        # Check for forbidden direct imports. ``from corvin.skills import
+        # brain_loader`` and ``import corvin.skills.brain_loader`` reach the
+        # sealed module just as well as ``from corvin.skills.brain_loader
+        # import infer``; the old ``startswith("corvin.skills.")`` test let the
+        # first form through. Only ``from corvin.skills import SkillRuntime``.
         for imp in extractor.imports:
-            if imp.module_name.startswith("corvin.skills."):
-                # Only SkillRuntime is allowed
-                if imp.module_name != "corvin.skills" or imp.imported_name != "SkillRuntime":
+            if imp.module_name == "corvin.skills" or imp.module_name.startswith("corvin.skills."):
+                if not (imp.is_from_import and imp.module_name == "corvin.skills"
+                        and imp.imported_name == "SkillRuntime"):
                     errors.append(
                         f"Line {imp.line_number}: Direct import forbidden: "
                         f"from {imp.module_name} import {imp.imported_name or '*'}\n"

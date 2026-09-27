@@ -1,5 +1,7 @@
 # Phase 3: Plugin Registry Consistency — Integration Guide
 
+> **Status note (2026-09-27, adversarial review):** `PluginRegistrySynchronizer.remediate()` / `install_plugin()` have no production caller, and `install_plugin` is not implemented — it returns `not_implemented` (no plugin artifact source) and writes nothing. The "auto-install missing" remediation in § 4 installs nothing. Drift *detection* is imported by `core/monitoring/drift_detector.py`.
+
 **Date:** 2026-09-26  
 **Status:** COMPLETE  
 **ADR:** [ADR-2067](../Corvin-ADR/decisions/ADR-2067-plugin-registry-consistency-phase3.md)

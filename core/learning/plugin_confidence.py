@@ -3,25 +3,45 @@
 Calculates plugin execution confidence based on historical success/failure rates.
 Integrates with event store to query PLUGIN_EXECUTED events over a lookback window.
 Includes decay function for stale/unused plugins.
+
+Reads the SAME store the plugin registry writes ``plugin_executed`` events to:
+``core.learning.event_store.EventStore(tenant_home(tid), tenant_id=tid)``
+(``corvin_plugins.registry._emit_plugin_executed``). Until 2026-09-27 it built
+``event_persistence.EventStore``, which has no ``query_events`` — every call
+raised, was caught, and returned a fabricated neutral 0.5. An unreadable store
+now yields ``None`` ("not measured"), never a number.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from . import learning_events
-from .event_persistence import EventStore
+from .event_store import EventStore
 
 log = logging.getLogger(__name__)
+
+
+def _store(tenant_id: str) -> EventStore:
+    from core.paths import tenant_home  # noqa: PLC0415 — validates tenant_id
+
+    return EventStore(tenant_home(tenant_id), tenant_id=tenant_id)
+
+
+def _parse_ts(ts: str) -> datetime:
+    d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return d.replace(tzinfo=None) if d.tzinfo is None else d.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def calculate_plugin_confidence(
     plugin_id: str,
     tenant_id: str,
     lookback_days: int = 7,
-) -> float:
+) -> Optional[float]:
     """Calculate plugin execution confidence [0.0, 1.0].
 
     Args:
@@ -35,21 +55,22 @@ def calculate_plugin_confidence(
         - 0.0 = all executions failed
         - 0.5 = 50% success rate
         - (decayed value) = plugin unused >30 days
-
-    Audit-First: All queries logged, hash-chain integrity verified.
+        - None = the store could not be read (not measured)
     """
     try:
-        store = EventStore(tenant_id=tenant_id)
+        store = _store(tenant_id)
 
         # Query PLUGIN_EXECUTED events for this plugin within lookback window
         cutoff_time = datetime.utcnow() - timedelta(days=lookback_days)
-        cutoff_iso = cutoff_time.isoformat() + "Z"
-
-        events = store.query_events(
-            skill_id=f"plugin.{plugin_id}",
-            event_type=learning_events.EventType.PLUGIN_EXECUTED,
-            since=cutoff_iso,
-        )
+        events = [
+            e for e in store.query_events(
+                tenant_id,
+                skill_id=f"plugin.{plugin_id}",
+                event_type=learning_events.EventType.PLUGIN_EXECUTED,
+                since=cutoff_time.strftime("%Y-%m-%d"),  # the store filters by day file
+            )
+            if _parse_ts(e.timestamp) >= cutoff_time
+        ]
 
         if not events:
             # No execution history — assume neutral confidence
@@ -72,9 +93,7 @@ def calculate_plugin_confidence(
         # Apply decay if plugin has been unused recently
         last_execution = events[-1].timestamp if events else None
         if last_execution:
-            days_since_exec = (
-                datetime.utcnow() - datetime.fromisoformat(last_execution.rstrip("Z"))
-            ).days
+            days_since_exec = (datetime.utcnow() - _parse_ts(last_execution)).days
             if days_since_exec > 30:
                 # Plugin unused for >30 days — decay confidence
                 confidence *= _decay_factor_days(days_since_exec)
@@ -82,23 +101,24 @@ def calculate_plugin_confidence(
         return max(0.0, min(1.0, confidence))  # Clamp to [0.0, 1.0]
 
     except Exception as exc:  # noqa: BLE001
-        log.error("plugin_confidence.calculate_plugin_confidence failed for %r: %s", plugin_id, exc)
-        return 0.5  # Neutral default on error
+        log.error("plugin_confidence.calculate_plugin_confidence failed for %r: %s",
+                  plugin_id, type(exc).__name__)
+        return None  # not measured — never a fabricated neutral score
 
 
 def _get_last_plugin_execution(plugin_id: str, tenant_id: str) -> Optional[datetime]:
     """Get the timestamp of the plugin's most recent execution (any lookback)."""
     try:
-        store = EventStore(tenant_id=tenant_id)
-        events = store.query_events(
+        events = _store(tenant_id).query_events(
+            tenant_id,
             skill_id=f"plugin.{plugin_id}",
             event_type=learning_events.EventType.PLUGIN_EXECUTED,
-            since="2020-01-01T00:00:00Z",  # Very old date to get ALL history
+            since="2020-01-01",  # all history
             limit=1,
-            order_by="timestamp DESC",
+            newest_first=True,
         )
         if events:
-            return datetime.fromisoformat(events[0].timestamp.rstrip("Z"))
+            return _parse_ts(events[0].timestamp)
         return None
     except Exception:  # noqa: BLE001
         return None
@@ -150,7 +170,7 @@ def emit_confidence_update(
             return False
 
     try:
-        store = EventStore(tenant_id=tenant_id)
+        store = _store(tenant_id)
 
         event = learning_events.LearningEvent.create(
             event_type=learning_events.EventType.PLUGIN_CONFIDENCE_UPDATED,

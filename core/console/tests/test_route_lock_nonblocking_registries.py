@@ -99,6 +99,7 @@ def _console(tmp_path: Path):
     os.environ["REMOTE_PENDING_DIR"] = str(home / "pending_invites")
     os.environ["REMOTE_PENDING_FRIENDSHIPS_DIR"] = str(home / "pending_friendships")
     preloaded = {k: v for k, v in sys.modules.items() if k.startswith(_PURGED)}
+    _cleanups: list = []
     try:
         _reset_modules()
         from fastapi import FastAPI
@@ -110,6 +111,18 @@ def _console(tmp_path: Path):
         rec = _auth.create_session(tenant_id=TENANT, token_fingerprint="lock-test-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
 
+        # These tests are about LOCKS, not licensing: the SkillForge registry's
+        # forge.create gate (ADR-0701) denies the free tier, which a test host
+        # is, so grant the capability for the sandbox's duration.
+        from unittest.mock import patch as _patch
+        from corvin_operator.license import capability_api as _cap
+
+        _allow = _patch.object(_cap, "require_capability", lambda capability, requested=1, **_k: _cap.CapabilityDecision(
+            decision=_cap.Decision.ALLOW, tier=_cap.Tier.MEMBER, capability=capability,
+            requested=requested, allowed=requested))
+        _allow.start()
+        _cleanups.append(_allow.stop)
+
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")
         client = TestClient(app, raise_server_exceptions=False)
@@ -117,6 +130,8 @@ def _console(tmp_path: Path):
         client.headers.update({"X-CSRF-Token": csrf})
         yield client, home
     finally:
+        for fn in _cleanups:
+            fn()
         for k, v in prev.items():
             if v is None:
                 os.environ.pop(k, None)

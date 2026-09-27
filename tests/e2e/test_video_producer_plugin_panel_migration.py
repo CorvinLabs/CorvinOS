@@ -12,12 +12,18 @@ import pytest
 import json
 from pathlib import Path
 
+# tests/e2e/<this file> → repo root. The marketplace is the SIBLING checkout.
+# (These paths used to be built as ``<repo>/CorvinOS/...`` and
+# ``<repo>/Corvin-Marketplace/...`` — neither exists from any checkout, so the
+# registry test crashed and the marketplace tests skipped.)
+REPO = Path(__file__).resolve().parents[2]
+MARKETPLACE = REPO.parent / "Corvin-Marketplace"
+
 
 @pytest.fixture
 def plugin_manifest():
     """Load Video Producer plugin manifest."""
-    manifest_path = Path(__file__).parent.parent.parent / \
-        "Corvin-Marketplace/plugins/contributor/media/video_producer/plugin.json"
+    manifest_path = MARKETPLACE / "plugins/contributor/media/video_producer/plugin.json"
     if not manifest_path.exists():
         pytest.skip("Plugin manifest not found")
     with open(manifest_path) as f:
@@ -47,8 +53,9 @@ def test_plugin_panel_components_exist():
         "src/web/components/LearningTab.tsx",
     ]
 
-    plugin_dir = Path(__file__).parent.parent.parent / \
-        "Corvin-Marketplace/plugins/contributor/media/video_producer"
+    plugin_dir = MARKETPLACE / "plugins/contributor/media/video_producer"
+    if not plugin_dir.is_dir():
+        pytest.skip("Corvin-Marketplace sibling checkout not present")
 
     for comp in components:
         comp_path = plugin_dir / comp
@@ -56,20 +63,17 @@ def test_plugin_panel_components_exist():
         assert comp_path.stat().st_size > 100, f"Component is empty: {comp}"
 
 
-def test_videoproducerpage_removed_from_console():
-    """✅ Console native VideoProducerPage is removed."""
-    registry_path = Path(__file__).parent.parent.parent / \
-        "CorvinOS/core/console/corvin_console/web-next/src/panels/registry.tsx"
+def test_video_producer_panel_stays_registered_in_console():
+    """The console-native Video Producer panel stays registered.
 
-    content = registry_path.read_text()
-
-    # Import should be removed
-    assert "VideoProducerPage" not in content
-    assert "VideoQualityMetricsPage" not in content
-
-    # PANELS entries should be gone
-    assert 'rc("video-producer"' not in content
-    assert 'rc("video-quality-metrics"' not in content
+    Inverted 2026-09-27: this asserted the panel had been REMOVED in favour of
+    the plugin's ``console_panels`` entry — but nothing in the console loads a
+    plugin's ``console_panels``, so removing it left ``/app/video-producer``
+    rendering nothing. The frontend restored it; this pins that.
+    """
+    content = (REPO / "core/console/corvin_console/web-next/src/panels/registry.tsx").read_text()
+    assert "VideoProducerPage" in content
+    assert 'rc("video-producer"' in content
 
 
 def test_migration_preserves_api_routes():
@@ -79,14 +83,9 @@ def test_migration_preserves_api_routes():
         "routes/quality_api.py",
     ]
 
-    console_dir = Path(__file__).parent.parent.parent / \
-        "CorvinOS/core/console"
-
     for route in api_routes:
-        route_path = console_dir / "corvin_console" / route
-        # Routes should still exist (API stays in Console, UI in Plugin)
-        assert route_path.exists() or not route_path.name.startswith("video"), \
-            f"API route missing (should remain in Console): {route}"
+        route_path = REPO / "core/console/corvin_console" / route
+        assert route_path.is_file(), f"API route missing (should remain in Console): {route}"
 
 
 if __name__ == "__main__":

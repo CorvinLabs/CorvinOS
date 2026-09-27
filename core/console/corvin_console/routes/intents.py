@@ -170,7 +170,7 @@ async def get_recent_intents(
         # For now, return empty list (E2E tests will mock this)
 
         logger = __import__('logging').getLogger(__name__)
-        logger.info(f"Recent intents query: user={rec.sid} tenant={tenant_id} limit={limit}")
+        logger.info(f"Recent intents query: sid_fp={rec.sid_fingerprint} tenant={tenant_id} limit={limit}")
 
         return events[:limit]
 

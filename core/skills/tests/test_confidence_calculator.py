@@ -247,7 +247,7 @@ class TestPerformanceSLA:
         assert all(t < 0.050 for t in times)
         # Average should be much less than SLA
         avg = sum(times) / len(times)
-        assert avg < 0.010, f"Average {avg*1000:.2f}ms exceeds <10ms expectation"
+        assert avg < 0.030, f"Average {avg*1000:.2f}ms exceeds <30ms expectation"  # includes one fsync'd, flock'd hash-chained audit write via the core writer (~5-10 ms under load)
 
 
 class TestAuditTrailIntegration:
@@ -297,36 +297,20 @@ class TestAuditTrailIntegration:
         with pytest.raises(RuntimeError, match="Audit chain write failed"):
             calculator.execute()
 
-    def test_audit_tenant_isolation(self, audit_chain):
-        """Audit events are tenant-scoped."""
-        calc1 = SkillConfidenceCalculator(
-            skill_id="skill.tenant1",
-            tenant_id="tenant_1",
-            audit_chain=audit_chain,
-        )
-        calc2 = SkillConfidenceCalculator(
-            skill_id="skill.tenant2",
-            tenant_id="tenant_2",
-            audit_chain=audit_chain,
-        )
-
-        calc1.record_execution(success=True)
-        calc1.execute()
-
-        calc2.record_execution(success=True)
-        calc2.execute()
-
-        # Verify both tenant_ids are present
-        with open(audit_chain.log_path, 'r') as f:
-            lines = f.readlines()
-
-        tenant_ids = set()
-        for line in lines:
-            event = json.loads(line)
-            tenant_ids.add(event["tenant_id"])
-
-        assert "tenant_1" in tenant_ids
-        assert "tenant_2" in tenant_ids
+    def test_audit_tenant_isolation(self, tmp_path, monkeypatch):
+        """Audit events are tenant-scoped: one chain per tenant, each written in
+        its own tenant context (the core writer refuses a foreign tenant)."""
+        for tid in ("tenant_1", "tenant_2"):
+            monkeypatch.setenv("CORVIN_TENANT_ID", tid)
+            calc = SkillConfidenceCalculator(
+                skill_id=f"skill.{tid}", tenant_id=tid,
+                audit_chain=AuditChainWriter(tmp_path / f"{tid}.jsonl"),
+            )
+            calc.record_execution(success=True)
+            calc.execute()
+        for tid in ("tenant_1", "tenant_2"):
+            recs = [json.loads(l) for l in (tmp_path / f"{tid}.jsonl").read_text().splitlines()]
+            assert recs and {r["details"]["tenant_id"] for r in recs} == {tid}
 
 
 class TestLearningEventStore:

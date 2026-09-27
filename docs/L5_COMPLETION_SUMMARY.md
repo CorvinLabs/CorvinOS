@@ -1,5 +1,7 @@
 # L5 COMPLETE — 100% Production-Ready
 
+> **Status note (2026-09-27, adversarial review):** `core/learning/feedback_ingestion.py` has no production caller; "production-ready" below does not make it part of the running system.
+
 **Status:** ALL 10 GAPS CLOSED ✅  
 **Date:** 2026-09-04  
 **Release Ready:** YES

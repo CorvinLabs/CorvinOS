@@ -394,18 +394,17 @@ class TestIntegration4LayerValidation:
 
         print("✅ Integration: All 4 layers present in ForgeSkillValidator")
 
-    def test_boot_skills_calls_forge_validator(self):
-        """Fix #2: boot_skills() calls ForgeSkillValidator before registration."""
-        # Check that boot.py line 164 calls _validate_builtin_skills()
+    def test_boot_skills_does_not_claim_a_validation_it_never_ran(self):
+        """Round-2 review: this test grepped boot_skills' SOURCE for the word
+        "validator" while the called function validated nothing and would have
+        chained ``skill_validation_passed``. Assert behaviour instead: a boot
+        records ``skill_validation_not_performed`` and never a pass."""
         from core.skills.boot import boot_skills
 
-        # boot_skills signature includes _validate_builtin_skills call
-        import inspect
-        source = inspect.getsource(boot_skills)
-
-        assert "_validate_builtin_skills" in source
-        assert "ForgeSkillValidator" in source or "validator" in source.lower()
-        print("✅ Fix #2: boot_skills() calls _validate_builtin_skills()")
+        seen = []
+        boot_skills("_default", audit_emit=lambda et, d: seen.append(et), wire_learning=False)
+        assert "skill_validation_not_performed" in seen
+        assert not any(et == "skill_validation_passed" for et in seen)
 
 
 class TestAuditLogging:

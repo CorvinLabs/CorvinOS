@@ -17,44 +17,26 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Add parent directories to path to import modules with dashes
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
+import pytest
 
-# Import via importlib to handle the dash in the module name
-import importlib.util
-skill_forge_path = REPO / "corvin_operator" / "skill-forge" / "autonomous"
-spec = importlib.util.spec_from_file_location(
-    "trigger_detector",
-    skill_forge_path / "trigger_detector.py"
-)
-trigger_detector_module = importlib.util.module_from_spec(spec)
-
-# Mock the core modules before importing
-sys.modules["core"] = MagicMock()
-sys.modules["core.paths"] = MagicMock()
-sys.modules["core.tenants"] = MagicMock()
-
-spec.loader.exec_module(trigger_detector_module)
+# Load the REAL package through the corvin_operator.skill_forge alias.
+# This file used to exec trigger_detector.py standalone (its relative imports
+# then failed collection) after replacing sys.modules["core"],
+# ["core.paths"] and ["core.tenants"] with MagicMocks — for the rest of the
+# pytest session, so every later test importing ``core`` got a mock.
+import _skill_forge_ns  # noqa: E402,F401
+import corvin_operator.skill_forge.autonomous.trigger_detector as trigger_detector_module  # noqa: E402
 
 SkillLossTriggerDetector = trigger_detector_module.SkillLossTriggerDetector
 LossTrigger = trigger_detector_module.LossTrigger
 
 
 # Test helper functions
-PASS = 0
-FAIL = 0
-
-
-def test(label, ok, *, detail=""):
-    """Record a test result."""
-    global PASS, FAIL
-    status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"{status}  {label}{(' — ' + detail) if detail else ''}")
-    if ok:
-        PASS += 1
-    else:
-        FAIL += 1
+def check(label, ok, *, detail=""):
+    """Assert a result. (This used to be ``test()``, which only COUNTED
+    failures — no pytest test in this file could fail — and, being named
+    ``test``, was itself collected as a broken test.)"""
+    assert ok, f"{label}{(' — ' + detail) if detail else ''}"
 
 
 def create_mock_audit_file(
@@ -63,10 +45,20 @@ def create_mock_audit_file(
     events: list[dict],
 ) -> None:
     """Write mock audit events to a JSON-lines file."""
+    # Chain the fixture in the detector's own format (the detector refuses an
+    # unchained file, fail-closed). NOTE: that format is NOT the core chain's
+    # — see test_real_core_chain_is_refused below.
+    from corvin_operator.skill_forge.autonomous.audit_chain_validator import (
+        AuditChainValidator,
+    )
     audit_path.parent.mkdir(parents=True, exist_ok=True)
+    prev = ""
     with open(audit_path, "w") as f:
         for event in events:
-            f.write(json.dumps(event) + "\n")
+            body = {k: v for k, v in event.items() if k not in ("hash", "prev_hash")}
+            h = AuditChainValidator._compute_event_hash(body, prev)
+            f.write(json.dumps({**body, "prev_hash": prev, "hash": h}) + "\n")
+            prev = h
 
 
 def create_skill_event(
@@ -136,7 +128,7 @@ def test_detect_loss_when_confidence_below_threshold():
             triggers[0].event_count == 10 and
             triggers[0].lookback_hours == 24
         )
-        test("detect_loss_when_confidence_below_threshold", ok)
+        check("detect_loss_when_confidence_below_threshold", ok)
 
 
 def test_no_trigger_when_confident():
@@ -173,7 +165,7 @@ def test_no_trigger_when_confident():
 
         # Expect no triggers (confidence 0.80 >= 0.70)
         ok = len(triggers) == 0
-        test("no_trigger_when_confident", ok)
+        check("no_trigger_when_confident", ok)
 
 
 def test_no_trigger_at_exact_threshold():
@@ -210,7 +202,7 @@ def test_no_trigger_at_exact_threshold():
 
         # Expect no triggers (confidence == 0.70, which is NOT < 0.70)
         ok = len(triggers) == 0
-        test("no_trigger_at_exact_threshold", ok)
+        check("no_trigger_at_exact_threshold", ok)
 
 
 def test_tenant_isolation():
@@ -266,7 +258,7 @@ def test_tenant_isolation():
             abs(triggers[0].confidence - 0.20) < 0.01 and
             triggers[0].event_count == 5  # Only _default's 5 events
         )
-        test("tenant_isolation", ok)
+        check("tenant_isolation", ok)
 
 
 def test_lookback_window_parameter():
@@ -322,7 +314,7 @@ def test_lookback_window_parameter():
             len(triggers) == 1 and
             abs(triggers[0].confidence - 0.375) < 0.01
         )
-        test("lookback_window_parameter", ok_1 and ok_2)
+        check("lookback_window_parameter", ok_1 and ok_2)
 
 
 def test_missing_audit_file():
@@ -344,7 +336,7 @@ def test_missing_audit_file():
 
         # Verify empty list
         ok = triggers == []
-        test("missing_audit_file", ok)
+        check("missing_audit_file", ok)
 
 
 def test_invalid_json_in_audit_file():
@@ -366,13 +358,15 @@ def test_invalid_json_in_audit_file():
             with patch.object(trigger_detector_module, "validate_tenant_id") as mock_validate:
                 mock_validate.return_value = None
 
+                # Fail closed: the chain check refuses the file (unchained /
+                # unparseable) before any event is read.
                 try:
                     detector.detect_loss_signals(tenant_id, lookback_hours=24)
                     ok = False  # Should have raised
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, RuntimeError):
                     ok = True  # Expected
 
-        test("invalid_json_in_audit_file", ok)
+        check("invalid_json_in_audit_file", ok)
 
 
 def test_events_without_outcome_feedback():
@@ -416,7 +410,7 @@ def test_events_without_outcome_feedback():
             abs(triggers[0].confidence - (2/3)) < 0.01 and
             triggers[0].event_count == 5  # Total events in group
         )
-        test("events_without_outcome_feedback", ok)
+        check("events_without_outcome_feedback", ok)
 
 
 def test_multiple_skills_with_mixed_confidence():
@@ -481,7 +475,7 @@ def test_multiple_skills_with_mixed_confidence():
             triggers[1].skill_id == "skill1" and
             abs(triggers[1].confidence - 0.20) < 0.01
         )
-        test("multiple_skills_with_mixed_confidence", ok)
+        check("multiple_skills_with_mixed_confidence", ok)
 
 
 def test_loss_trigger_immutability():
@@ -502,7 +496,7 @@ def test_loss_trigger_immutability():
     except (AttributeError, TypeError):
         ok = True  # Expected
 
-    test("loss_trigger_immutability", ok)
+    check("loss_trigger_immutability", ok)
 
 
 def test_empty_audit_file():
@@ -525,25 +519,31 @@ def test_empty_audit_file():
                 triggers = detector.detect_loss_signals(tenant_id, lookback_hours=24)
 
         ok = triggers == []
-        test("empty_audit_file", ok)
+        check("empty_audit_file", ok)
 
 
-if __name__ == "__main__":
-    print("Running SkillLossTriggerDetector tests...\n")
+def test_real_core_chain_is_refused(tmp_path, monkeypatch):
+    """KNOWN DEFECT (cross-area, adversarial review 2026-09-27): the detector
+    validates with its own AuditChainValidator hash, which does not match
+    ``forge.security_events.write_event`` — so it refuses every REAL tenant
+    audit chain (fail-closed RuntimeError) and the cron loss loop can never
+    fire on a real install. It also reads ``skill_id``/``tenant_id``/
+    ``outcome_feedback`` at the top level of a record, where the core writer
+    puts none of them (they live under ``details``). This test pins the
+    current, fail-closed behaviour; it must be rewritten in the commit that
+    fixes the detector."""
+    import sys as _sys
+    forge_dir = _skill_forge_ns.SKILL_FORGE_DIR.parent / "forge"
+    if str(forge_dir) not in _sys.path:
+        _sys.path.insert(0, str(forge_dir))
+    from forge import security_events as se
 
-    test_detect_loss_when_confidence_below_threshold()
-    test_no_trigger_when_confident()
-    test_no_trigger_at_exact_threshold()
-    test_tenant_isolation()
-    test_lookback_window_parameter()
-    test_missing_audit_file()
-    test_invalid_json_in_audit_file()
-    test_events_without_outcome_feedback()
-    test_multiple_skills_with_mixed_confidence()
-    test_loss_trigger_immutability()
-    test_empty_audit_file()
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from core.paths import tenant_audit_chain
+    chain = tenant_audit_chain("_default")
+    se.write_event(chain, "skill.executed", severity="INFO",
+                   details={"skill_id": "s", "tenant_id": "_default", "status": "error"})
+    assert se.verify_chain(chain)[0]
+    with pytest.raises(RuntimeError, match="integrity check failed"):
+        SkillLossTriggerDetector().detect_loss_signals("_default")
 
-    print(f"\n{'='*60}")
-    print(f"Results: {PASS} passed, {FAIL} failed")
-    print(f"{'='*60}")
-    sys.exit(0 if FAIL == 0 else 1)

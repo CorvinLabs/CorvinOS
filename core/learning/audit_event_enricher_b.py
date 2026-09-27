@@ -9,6 +9,13 @@ Phase 2: Deduplication + backpressure handling
 Phase 3: Cross-stream correlation
 
 References: ADR-2088 (Stream B Design), ADR-0665 (Audit-First Learning)
+
+The enriched event is committed to the tenant's core audit chain
+(``learning.enriched_outcome_event``) before it is returned; a failed commit
+raises. (Until 2026-09-27 the "audit_ref" was a stub uuid written nowhere.)
+A score of another tenant is refused.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from dataclasses import dataclass
@@ -58,6 +65,9 @@ class AuditEventEnricher:
 
     def __init__(self, tenant_id: str):
         """Initialize enricher for tenant."""
+        from core.tenants import validate_tenant_id  # noqa: PLC0415
+
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self._enriched_count = 0
         self._lock = threading.Lock()  # Thread safety
@@ -90,8 +100,14 @@ class AuditEventEnricher:
                 )
                 return None
 
+            if getattr(confidence_score, "tenant_id", self.tenant_id) != self.tenant_id:
+                logger.error("AuditEventEnricher: score of another tenant refused")
+                return None
+
             # Emit audit event
             audit_ref = self._emit_enriched_outcome_event(
+                a2_audit_ref=str(getattr(outcome_record, "audit_ref", "") or ""),
+                a3_audit_ref=str(getattr(confidence_score, "audit_ref", "") or ""),
                 skill_id=outcome_record.skill_id,
                 outcome_count=outcome_record.outcome_count,
                 confidence_delta=confidence_score.confidence_delta,
@@ -135,22 +151,25 @@ class AuditEventEnricher:
         outcome_count: int,
         confidence_delta: float,
         trend: str,
+        a2_audit_ref: str = "",
+        a3_audit_ref: str = "",
     ) -> str:
-        """
-        Emit learning.enriched_outcome_event to audit chain + dashboard sink.
+        """Commit ``learning.enriched_outcome_event`` to the core chain (fail-closed)."""
+        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
 
-        Phase 1: Stub with UUID
-        Phase 2: Real audit chain write + dashboard subscription
-        """
-        import uuid
-
-        audit_ref = uuid.uuid4().hex[:16]
-        logger.debug(
-            f"[AUDIT STUB] learning.enriched_outcome_event: "
-            f"{skill_id} outcomes={outcome_count} "
-            f"delta={confidence_delta:.4f} trend={trend} ref={audit_ref}"
+        return core_audit_event(
+            "learning.enriched_outcome_event",
+            tenant_id=self.tenant_id,
+            details={
+                "skill_id": str(skill_id)[:128],
+                "outcome_count": int(outcome_count),
+                "confidence_delta": round(float(confidence_delta), 6),
+                "trend": str(trend)[:16],
+                "a2_audit_ref": a2_audit_ref[:64],
+                "a3_audit_ref": a3_audit_ref[:64],
+                "tenant_id": self.tenant_id,
+            },
         )
-        return audit_ref
 
     def get_enriched_count(self) -> int:
         """Return count of enriched events."""

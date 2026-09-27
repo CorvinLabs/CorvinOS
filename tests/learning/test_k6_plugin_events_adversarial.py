@@ -20,39 +20,42 @@ class TestCrossTenantIsolation:
         return EventQueue(db_path)
 
     def test_no_cross_tenant_leakage(self, temp_queue):
-        """Events from different tenants are isolated."""
-        # Enqueue for tenant1
+        """A tenant's queue refuses another tenant's event (one queue per tenant)."""
+        from core.audit.event_queue import EventQueueTenantMismatch
+
         temp_queue.enqueue({
             'event_type': 'plugin_executed',
             'plugin_id': 'test',
-            'tenant_id': 'tenant1',
+            'tenant_id': '_default',
             'timestamp': '2026-09-27T00:00:00Z',
-            'input_hash': 'tenant1_data_hash',
+            'input_hash': 'a' * 64,
             'priority': 'HIGH',
         })
+        with pytest.raises(EventQueueTenantMismatch):
+            temp_queue.enqueue({
+                'event_type': 'plugin_executed',
+                'plugin_id': 'test',
+                'tenant_id': 'tenant2',
+                'timestamp': '2026-09-27T00:00:01Z',
+                'input_hash': 'b' * 64,
+                'priority': 'HIGH',
+            })
 
-        # Enqueue for tenant2
-        temp_queue.enqueue({
-            'event_type': 'plugin_executed',
-            'plugin_id': 'test',
-            'tenant_id': 'tenant2',
-            'timestamp': '2026-09-27T00:00:01Z',
-            'input_hash': 'tenant2_data_hash',
-            'priority': 'HIGH',
-        })
-
-        # Both should be in queue
-        stats = temp_queue.stats()
-        assert stats.total_events == 2
-
-        # Drain and verify isolation
         drained = temp_queue.drain(batch_size=50, timeout_sec=2.0)
-        tenant1_events = [e for e in drained if e['tenant_id'] == 'tenant1']
-        tenant2_events = [e for e in drained if e['tenant_id'] == 'tenant2']
+        assert [e['tenant_id'] for e in drained] == ['_default']
 
-        # Both tenants should have their events
-        assert len(tenant1_events) > 0
-        assert len(tenant2_events) > 0
+    def test_drain_refuses_to_write_into_another_process_tenant(self, tmp_path, monkeypatch):
+        """A queue of tenant B drained in a process of tenant A never writes B's
+        events under A — the chain writer refuses, the rows stay pending."""
+        from core.audit.event_queue import DrainingError
+
+        q = EventQueue(tmp_path / "b.db", tenant_id="tenant-b")
+        q.enqueue({'event_type': 'plugin_error', 'plugin_id': 'p', 'tenant_id': 'tenant-b',
+                   'timestamp': '2026-09-27T00:00:00Z', 'priority': 'HIGH'})
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant-a")
+        with pytest.raises(DrainingError):
+            q.drain(batch_size=10, timeout_sec=2.0)
+        assert q.stats().pending_count == 1
 
 
 class TestPIIRedactionEnforcement:
@@ -112,7 +115,7 @@ class TestEventImmutabilityEnforced:
         drained = temp_queue.drain(batch_size=50, timeout_sec=2.0)
         assert len(drained) > 0
 
-        # Drained event should be identical to input
+        # A single load is written as-is (a summary only folds 2+ loads)
         drained_event = drained[0]
         assert drained_event['event_type'] == 'plugin_loaded'
         assert drained_event['plugin_id'] == 'test'
@@ -144,9 +147,8 @@ class TestFeedbackPoisoningDetection:
 
         drained = temp_queue.drain(batch_size=50, timeout_sec=2.0)
 
-        # Should have errors visible in queue
         errors = [e for e in drained if e['event_type'] == 'plugin_error']
-        assert len(errors) >= 5  # Most errors should be there
+        assert len(errors) == 10  # plugin_error is never folded or shed
 
 
 class TestGDPRCompliance:

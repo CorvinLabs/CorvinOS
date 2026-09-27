@@ -5,6 +5,14 @@ Audit Trail Integration (ADR-0232/0233):
   the immutable core audit chain via AuditChainWriter
 - Audit events are hash-chained and tamper-resistant
 - Fail-closed: write errors to audit chain raise exceptions
+
+Tenant routing (fixed 2026-09-27, adversarial review): the console keeps ONE
+authority (constructed for ``_default``) and passes ``rec.tenant_id`` per call.
+The writer used to be bound once, at construction, so every other tenant's
+override records landed in ``_default``'s chain; approve/reject did not check
+the override's tenant at all, so a session of tenant B could decide tenant A's
+request. The chain writer is now resolved per call for the tenant the record is
+ABOUT, and every decision path refuses a cross-tenant override id.
 """
 
 from dataclasses import dataclass, field
@@ -83,16 +91,35 @@ class OverrideAuthority:
             tenant_id: Tenant scope for audit isolation
             audit_backend: Optional backend (for testing); defaults to core chain writer
         """
+        if not isinstance(tenant_id, str) or not tenant_id:
+            raise ValueError(f"tenant_id must be a non-empty str, got {type(tenant_id).__name__}")
         self.tenant_id = tenant_id
-        # Use provided backend (tests) or get real core audit chain writer
-        if audit_backend is not None:
-            self.audit_chain = audit_backend
-        else:
-            self.audit_chain = get_audit_chain_writer(tenant_id)
+        # Injected backend (tests) is used for every tenant; otherwise the
+        # core chain writer is resolved PER CALL for the record's tenant.
+        self._injected_backend = audit_backend
 
         self.overrides: Dict[str, OverrideRequest] = {}
         self.approvers: Set[str] = set()
         self._request_counter = 0
+
+    @property
+    def audit_chain(self):
+        """Writer of the authority's own tenant (backward-compatible accessor)."""
+        return self._writer(self.tenant_id)
+
+    def _writer(self, tenant_id: str):
+        if self._injected_backend is not None:
+            return self._injected_backend
+        return get_audit_chain_writer(tenant_id)
+
+    def _own(self, override_id: str, tenant_id: str) -> OverrideRequest:
+        """The override, if it exists AND belongs to ``tenant_id``."""
+        override = self.overrides.get(override_id)
+        if override is None:
+            raise ValueError(f"Override {override_id} not found")
+        if override.tenant_id != tenant_id:
+            raise ValueError(f"Access denied to override {override_id}")
+        return override
 
     async def request_override(
         self,
@@ -141,7 +168,7 @@ class OverrideAuthority:
         self.overrides[override_id] = request
 
         # Log immutable audit event to core chain (fail-closed)
-        self.audit_chain.write_event_dict(
+        self._writer(tenant_id).write_event_dict(
             event_type="override_requested",
             tenant_id=tenant_id,
             user_id=requestor_id,
@@ -182,7 +209,7 @@ class OverrideAuthority:
         """
         if approver_id not in self.approvers:
             # Log denial to audit chain (fail-closed)
-            self.audit_chain.write_event_dict(
+            self._writer(tenant_id).write_event_dict(
                 event_type="override_approve_denied",
                 tenant_id=tenant_id,
                 user_id=approver_id,
@@ -194,10 +221,7 @@ class OverrideAuthority:
             )
             raise PermissionError(f"{approver_id} is not an authorized approver")
 
-        if override_id not in self.overrides:
-            raise ValueError(f"Override {override_id} not found")
-
-        override = self.overrides[override_id]
+        override = self._own(override_id, tenant_id)
 
         # Check if already processed
         if override.approval_status != ApprovalStatus.PENDING.value:
@@ -222,7 +246,7 @@ class OverrideAuthority:
         self.overrides[override_id] = approved_request
 
         # Log immutable audit event to core chain (fail-closed)
-        self.audit_chain.write_event_dict(
+        self._writer(tenant_id).write_event_dict(
             event_type="override_approved",
             tenant_id=tenant_id,
             user_id=approver_id,
@@ -262,10 +286,7 @@ class OverrideAuthority:
         if approver_id not in self.approvers:
             raise PermissionError(f"{approver_id} is not an authorized approver")
 
-        if override_id not in self.overrides:
-            raise ValueError(f"Override {override_id} not found")
-
-        override = self.overrides[override_id]
+        override = self._own(override_id, tenant_id)
 
         # Check if already processed
         if override.approval_status != ApprovalStatus.PENDING.value:
@@ -290,13 +311,13 @@ class OverrideAuthority:
         self.overrides[override_id] = rejected_request
 
         # Log immutable audit event to core chain (fail-closed)
-        self.audit_chain.write_event_dict(
+        self._writer(tenant_id).write_event_dict(
             event_type="override_rejected",
             tenant_id=tenant_id,
             user_id=approver_id,
             details={
                 "override_id": override_id,
-                "rejection_reason": rejection_reason,
+                # the free-text rejection reason is never written to the chain
                 "override_type": override.override_type.value,
                 "target_id": override.target_id,
             },
@@ -480,7 +501,7 @@ class OverrideAuthority:
         self.overrides[override_id] = interrupted_request
 
         # Log immutable audit event to core chain (fail-closed)
-        self.audit_chain.write_event_dict(
+        self._writer(tenant_id).write_event_dict(
             event_type="override_interrupted",
             tenant_id=tenant_id,
             details={
@@ -527,7 +548,9 @@ class OverrideAuthority:
                         continue
                     event = json.loads(line)
                     # Filter to override-related events for this tenant
-                    if (event.get("tenant_id") == tenant_id and
+                    details = event.get("details") or {}
+                    ev_tenant = details.get("tenant_id", event.get("tenant_id"))
+                    if (ev_tenant == tenant_id and
                         event.get("event_type", "").startswith("override_")):
                         events.append(event)
         except (json.JSONDecodeError, IOError):

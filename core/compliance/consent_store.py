@@ -10,8 +10,16 @@ Implements persistent storage of user consent with:
 All consent grants/revokes are audited via audit_backend.
 Queries filtered by tenant_id (cross-tenant access returns 403).
 
-Database: SQLite (~/.corvin/tenants/<tenant>/consent_store.db)
+Database: SQLite (<corvin_home>/tenants/<tenant>/consent_store.db)
 Schema: [user_id, scope, tenant_id, granted_at, expires_at, revoked_at]
+
+``user_id`` is a pseudonymous subject id — for the console, the session's
+``sid_fingerprint`` (see ``core.compliance.consent.consent_subject``). It must
+NEVER be a raw session id: the ``corvin_console_sid`` cookie is a bearer
+credential and this file is not a secret store.
+
+Every grant is TTL-capped at :data:`MAX_TTL_DAYS`; deny-by-default is kept on
+every read path (missing, revoked, expired, unreadable → no consent).
 """
 
 import sqlite3
@@ -25,6 +33,10 @@ from enum import Enum
 import hashlib
 
 logger = logging.getLogger(__name__)
+
+#: Hard upper bound on any consent grant. A caller asking for more is clamped
+#: here — a grant can never outlive this, whatever the surface requests.
+MAX_TTL_DAYS = 90
 
 
 class ConsentScope(str, Enum):
@@ -52,9 +64,13 @@ class ConsentRecord:
 
     def is_active(self) -> bool:
         """Check if consent is currently valid"""
-        now = datetime.utcnow()
-        expires = datetime.fromisoformat(self.expires_at)
-        return revoked_at is None and now < expires
+        if self.revoked_at is not None:
+            return False
+        try:
+            expires = datetime.fromisoformat(self.expires_at)
+        except (TypeError, ValueError):
+            return False  # unreadable expiry → no consent (fail-closed)
+        return datetime.utcnow() < expires
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for audit event payload"""
@@ -90,17 +106,9 @@ class ConsentStore:
         Raises:
             TenantIsolationError: If tenant_id is None/empty
         """
-        if not tenant_id or not isinstance(tenant_id, str):
-            raise TenantIsolationError("tenant_id must be non-empty string (fail-closed)")
+        self.tenant_id = _validated_tenant(tenant_id)
 
-        self.tenant_id = tenant_id
-
-        # Resolve CORVIN_HOME
-        if corvin_home is None:
-            import os
-            corvin_home = Path(os.getenv("CORVIN_HOME", Path.home() / ".corvin"))
-        else:
-            corvin_home = Path(corvin_home)
+        corvin_home = _resolve_home(corvin_home)
 
         # Build tenant-scoped DB path
         self.db_path = corvin_home / "tenants" / tenant_id / "consent_store.db"
@@ -170,24 +178,32 @@ class ConsentStore:
         """
         if not user_id or not scope:
             raise ConsentStoreError("user_id and scope must be non-empty")
+        try:
+            ttl = float(ttl_days)
+        except (TypeError, ValueError):
+            raise ConsentStoreError(f"ttl_days must be a number, got {ttl_days!r}") from None
+        if not ttl > 0:  # also rejects NaN
+            raise ConsentStoreError("ttl_days must be > 0")
+        ttl = min(ttl, float(MAX_TTL_DAYS))
 
         now = datetime.utcnow()
-        expires = now + timedelta(days=ttl_days)
+        expires = now + timedelta(days=ttl)
 
         conn = self._get_connection()
         try:
-            # Upsert: if exists, revoke old + create new
-            # (ensures audit trail shows explicit new grant)
-            conn.execute("""
-                UPDATE consent_records
-                SET revoked_at = ?
-                WHERE user_id = ? AND scope = ? AND tenant_id = ? AND revoked_at IS NULL
-            """, (now.isoformat(), user_id, scope, self.tenant_id))
-
-            # Insert new consent record
+            # One row per (user_id, scope, tenant_id) — the table's UNIQUE
+            # constraint. A (re-)grant REPLACES the row's window and clears any
+            # revocation. The previous "revoke old row, then INSERT a new one"
+            # violated that constraint on every re-grant (IntegrityError), so
+            # consent, once revoked, could never be given again. The history
+            # of grants/revokes lives in the audit chain, not in this table.
             conn.execute("""
                 INSERT INTO consent_records (user_id, scope, tenant_id, granted_at, expires_at)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, scope, tenant_id) DO UPDATE SET
+                    granted_at = excluded.granted_at,
+                    expires_at = excluded.expires_at,
+                    revoked_at = NULL
             """, (user_id, scope, self.tenant_id, now.isoformat(), expires.isoformat()))
 
             conn.commit()
@@ -380,8 +396,37 @@ class ConsentStore:
             conn.close()
 
 
-# Module-level singleton (per tenant)
-_stores: Dict[str, ConsentStore] = {}
+def _validated_tenant(tenant_id: Any) -> str:
+    """Canonical tenant validation (``forge.tenants.validate_tenant_id``);
+    anything it refuses — empty, traversal, wrong shape — is a
+    :class:`TenantIsolationError` (fail-closed)."""
+    if not tenant_id or not isinstance(tenant_id, str):
+        raise TenantIsolationError("tenant_id must be non-empty string (fail-closed)")
+    try:
+        from corvin_operator.forge.forge.tenants import validate_tenant_id
+        validate_tenant_id(tenant_id)
+    except ImportError as exc:
+        raise TenantIsolationError("tenant validator unavailable (fail-closed)") from exc
+    except Exception as exc:  # InvalidTenantID / ValueError
+        raise TenantIsolationError(f"invalid tenant_id (fail-closed): {exc}") from exc
+    return tenant_id
+
+
+def _resolve_home(corvin_home: Optional[Path]) -> Path:
+    """Explicit root, else the canonical runtime root — which honours
+    ``CORVIN_HOME`` at CALL time (``core.paths.tenant.corvin_home``)."""
+    if corvin_home is not None:
+        return Path(corvin_home)
+    from core.paths.tenant import corvin_home as _canonical_home
+    return _canonical_home()
+
+
+# Module-level cache, keyed by the RESOLVED database file — never by tenant
+# alone. Keyed by tenant, the first store created in a process was returned
+# forever: a later ``CORVIN_HOME`` (tests, a second runtime root) or an
+# explicit ``corvin_home=`` argument was silently ignored and grants/reads went
+# to the first root's database.
+_stores: Dict[Path, ConsentStore] = {}
 
 
 def get_consent_store(tenant_id: str, corvin_home: Optional[Path] = None) -> ConsentStore:
@@ -398,10 +443,11 @@ def get_consent_store(tenant_id: str, corvin_home: Optional[Path] = None) -> Con
     Raises:
         TenantIsolationError: If tenant_id is invalid
     """
-    if not tenant_id:
-        raise TenantIsolationError("tenant_id required (fail-closed)")
-
-    if tenant_id not in _stores:
-        _stores[tenant_id] = ConsentStore(tenant_id, corvin_home)
-
-    return _stores[tenant_id]
+    tenant_id = _validated_tenant(tenant_id)
+    home = _resolve_home(corvin_home)
+    key = (home / "tenants" / tenant_id / "consent_store.db").resolve()
+    store = _stores.get(key)
+    if store is None:
+        store = ConsentStore(tenant_id, home)
+        _stores[key] = store
+    return store

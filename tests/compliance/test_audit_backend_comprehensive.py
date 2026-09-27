@@ -95,346 +95,140 @@ class TestAuditEventCreation:
             event.event_type = "modified"  # type: ignore
 
 
+def _recs(path):
+    return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+
+
+def _ev(i=0, tenant="_default", user="user1", **kw):
+    return AuditEvent(event_id=f"evt-{i}", event_type=kw.pop("event_type", "test"),
+                      tenant_id=tenant, user_id=user, timestamp="2026-09-22T12:00:00Z",
+                      details=kw.pop("details", {"index": i}), **kw)
+
+
 class TestAuditChainWriter:
-    """Test AuditChainWriter hash-chain integrity."""
+    """AuditChainWriter is a facade over forge.security_events.write_event
+    (adversarial review 2026-09-27: it used to write its own record format into
+    the canonical chain, which the forge verifier — and so the boot tripwire —
+    then read as tampered)."""
 
     @pytest.fixture
-    def audit_log(self):
-        """Create temporary audit log."""
-        fd, path = tempfile.mkstemp(suffix=".jsonl")
-        os.close(fd)
-        yield Path(path)
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    def audit_log(self, tmp_path):
+        return tmp_path / "audit.jsonl"
 
-    def test_writer_initialization(self, audit_log):
-        """Test AuditChainWriter initialization."""
-        writer = AuditChainWriter(audit_log)
-        assert writer.log_path == audit_log
-        assert writer.GENESIS_HASH == writer._last_hash
-        assert writer.get_event_count() == 0
+    def test_write_single_event_uses_the_forge_record_shape(self, audit_log):
+        h = AuditChainWriter(audit_log).write_event(_ev(1, details={"scope": "x"}))
+        (rec,) = _recs(audit_log)
+        assert rec["hash"] == h
+        assert rec["event_type"] == "test"
+        assert rec["details"]["tenant_id"] == "_default"
+        assert rec["details"]["event_id"] == "evt-1"
+        assert rec["details"]["user"] == "user1"
 
-    def test_write_single_event(self, audit_log):
-        """Test writing a single event."""
-        writer = AuditChainWriter(audit_log)
-
-        event = AuditEvent(
-            event_id="evt-001",
-            event_type="plugin_loaded",
-            tenant_id="_default",
-            user_id=None,
-            timestamp="2026-09-22T12:00:00Z",
-        )
-
-        hash1 = writer.write_event(event)
-
-        # Verify event was written
-        with open(audit_log, "r") as f:
-            lines = f.readlines()
-        assert len(lines) == 1
-
-        # Verify event structure
-        entry = json.loads(lines[0])
-        assert entry["event_id"] == "evt-001"
-        assert entry["hash"] == hash1
-        assert entry["prev_hash"] == writer.GENESIS_HASH
-
-    def test_write_chain_of_events(self, audit_log):
-        """Test writing and chaining multiple events."""
-        writer = AuditChainWriter(audit_log)
-        hashes = []
-
+    def test_chain_verifies_with_the_forge_verifier(self, audit_log):
+        from forge import security_events as se
+        w = AuditChainWriter(audit_log)
         for i in range(5):
-            event = AuditEvent(
-                event_id=f"evt-{i:03d}",
-                event_type="test_event",
-                tenant_id="_default",
-                user_id=None,
-                timestamp=f"2026-09-22T12:{i:02d}:00Z",
-            )
-            event_hash = writer.write_event(event)
-            hashes.append(event_hash)
+            w.write_event(_ev(i))
+        se.write_event(audit_log, "plugin.executed", details={"plugin_id": "p", "tenant_id": "_default"})
+        w.write_event(_ev(9))
+        assert se.verify_chain(audit_log)[0]
+        assert w.verify_chain() is True
 
-        # Verify chain integrity
-        with open(audit_log, "r") as f:
-            lines = f.readlines()
-
-        assert len(lines) == 5
-
-        for i, line in enumerate(lines):
-            entry = json.loads(line)
-            if i == 0:
-                assert entry["prev_hash"] == writer.GENESIS_HASH
-            else:
-                assert entry["prev_hash"] == hashes[i - 1]
-            assert entry["hash"] == hashes[i]
-
-    def test_verify_chain_valid(self, audit_log):
-        """Test verifying an intact chain."""
-        writer = AuditChainWriter(audit_log)
-
+    def test_verify_chain_detects_tampering(self, audit_log):
+        w = AuditChainWriter(audit_log)
         for i in range(3):
-            event = AuditEvent(
-                event_id=f"evt-{i:03d}",
-                event_type="test",
-                tenant_id="_default",
-                user_id=None,
-                timestamp=f"2026-09-22T12:{i:02d}:00Z",
-            )
-            writer.write_event(event)
+            w.write_event(_ev(i))
+        lines = audit_log.read_text().splitlines()
+        rec = json.loads(lines[1])
+        rec["details"]["index"] = 999
+        lines[1] = json.dumps(rec)
+        audit_log.write_text("\n".join(lines) + "\n")
+        assert w.verify_chain() is False
 
-        # Verify chain
-        assert writer.verify_chain() is True
+    def test_last_hash_is_the_chain_tail(self, audit_log):
+        w = AuditChainWriter(audit_log)
+        assert w.get_last_hash() == ""
+        h = w.write_event(_ev(1))
+        assert AuditChainWriter(audit_log).get_last_hash() == h  # persists across instances
 
-    def test_verify_chain_corrupted_hash(self, audit_log):
-        """Test verifying a chain with corrupted hash."""
-        writer = AuditChainWriter(audit_log)
+    def test_prev_hash_links_records(self, audit_log):
+        w = AuditChainWriter(audit_log)
+        h1 = w.write_event(_ev(1))
+        w.write_event(_ev(2))
+        assert _recs(audit_log)[1]["prev_hash"] == h1
 
-        # Write valid event
-        event = AuditEvent(
-            event_id="evt-001",
-            event_type="test",
-            tenant_id="_default",
-            user_id=None,
-            timestamp="2026-09-22T12:00:00Z",
-        )
-        writer.write_event(event)
-
-        # Corrupt the hash
-        with open(audit_log, "r") as f:
-            content = f.read()
-
-        corrupted = content.replace('"hash":"', '"hash":"CORRUPTED_')
-
-        with open(audit_log, "w") as f:
-            f.write(corrupted)
-
-        # Re-initialize writer to reload corrupted chain
-        writer2 = AuditChainWriter(audit_log)
-
-        # Verification should fail (or return false gracefully)
-        # Since we corrupted after write, the in-memory state might still be OK
-        # So we'll just verify the corrupted file can be detected on read
-        with open(audit_log, "r") as f:
-            entry = json.loads(f.read())
-
-        assert entry["hash"].startswith("CORRUPTED_")
-
-    def test_chain_persistence_across_instances(self, audit_log):
-        """Test that chain state persists across writer instances."""
-        # Write events with first writer
-        writer1 = AuditChainWriter(audit_log)
+    def test_read_events_and_count(self, audit_log):
+        w = AuditChainWriter(audit_log)
         for i in range(3):
-            event = AuditEvent(
-                event_id=f"evt-{i:03d}",
-                event_type="test",
-                tenant_id="_default",
-                user_id=None,
-                timestamp=f"2026-09-22T12:{i:02d}:00Z",
-            )
-            writer1.write_event(event)
+            w.write_event(_ev(i, details={"skill_id": f"s{i}"}))
+        events = w.read_events()
+        assert [e.event_id for e in events] == ["evt-0", "evt-1", "evt-2"]
+        assert events[0].details["skill_id"] == "s0"
+        assert events[0].timestamp  # from the record ts
+        assert w.get_event_count() == 3
+        assert w.get_stats()["chain_verified"] is True
 
-        final_hash_1 = writer1.get_last_hash()
-        count_1 = writer1.get_event_count()
-
-        # Create new writer instance
-        writer2 = AuditChainWriter(audit_log)
-
-        # Verify state loaded from disk
-        assert writer2.get_last_hash() == final_hash_1
-        assert writer2.get_event_count() == count_1
-
-    def test_read_events_unfiltered(self, audit_log):
-        """Test reading all events without filter."""
-        writer = AuditChainWriter(audit_log)
-
-        for tenant in ["tenant-a", "tenant-b"]:
-            for i in range(2):
-                event = AuditEvent(
-                    event_id=f"evt-{tenant}-{i}",
-                    event_type="test",
-                    tenant_id=tenant,
-                    user_id=None,
-                    timestamp="2026-09-22T12:00:00Z",
-                )
-                writer.write_event(event)
-
-        events = writer.read_events()
-        assert len(events) == 4
-
-    def test_read_events_filtered_by_tenant(self, audit_log):
-        """Test reading events filtered by tenant."""
-        writer = AuditChainWriter(audit_log)
-
-        # Write events for different tenants
-        for tenant in ["tenant-a", "tenant-b"]:
-            for i in range(2):
-                event = AuditEvent(
-                    event_id=f"evt-{tenant}-{i}",
-                    event_type="test",
-                    tenant_id=tenant,
-                    user_id=None,
-                    timestamp="2026-09-22T12:00:00Z",
-                )
-                writer.write_event(event)
-
-        # Read only tenant-a
-        events = writer.read_events(tenant_id="tenant-a")
-        assert len(events) == 2
-        assert all(e.tenant_id == "tenant-a" for e in events)
-
-    def test_event_count_tracking(self, audit_log):
-        """Test event sequence numbering."""
-        writer = AuditChainWriter(audit_log)
-
-        for i in range(10):
-            event = AuditEvent(
-                event_id=f"evt-{i:03d}",
-                event_type="test",
-                tenant_id="_default",
-                user_id=None,
-                timestamp=f"2026-09-22T12:{i:02d}:00Z",
-            )
-            writer.write_event(event)
-
-        assert writer.get_event_count() == 10
-
-        # Verify sequence numbers in file
-        with open(audit_log, "r") as f:
-            for line in f:
-                entry = json.loads(line)
-                assert "sequence" in entry
+    def test_write_failure_raises(self, tmp_path):
+        blocker = tmp_path / "file"
+        blocker.write_text("x")
+        w = AuditChainWriter.__new__(AuditChainWriter)
+        import threading as _t
+        w.log_path, w._lock = blocker / "audit.jsonl", _t.RLock()
+        with pytest.raises(IOError):
+            w.write_event(_ev(1))
 
 
 class TestAuditTenantIsolation:
-    """Test tenant isolation in audit trail."""
-
     @pytest.fixture
-    def audit_log(self):
-        """Create temporary audit log."""
-        fd, path = tempfile.mkstemp(suffix=".jsonl")
-        os.close(fd)
-        yield Path(path)
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    def audit_log(self, tmp_path):
+        return tmp_path / "audit.jsonl"
 
-    def test_tenant_id_recorded_in_events(self, audit_log):
-        """Test that tenant_id is properly recorded in each event."""
-        writer = AuditChainWriter(audit_log)
+    def test_foreign_tenant_record_is_refused(self, audit_log):
+        """The core writer refuses a record tagged with a tenant other than the
+        process tenant — one process never writes another tenant's records."""
+        w = AuditChainWriter(audit_log)
+        with pytest.raises(IOError, match="AuditTenantMismatch"):
+            w.write_event(_ev(1, tenant="tenant-b"))
+        assert all(r["event_type"] == "audit.tenant_mismatch" for r in _recs(audit_log))
 
-        for tenant_id in ["tenant-a", "tenant-b", "tenant-c"]:
-            event = AuditEvent(
-                event_id=f"evt-{tenant_id}",
-                event_type="test",
-                tenant_id=tenant_id,
-                user_id=None,
-                timestamp="2026-09-22T12:00:00Z",
-            )
-            writer.write_event(event)
-
-        # Verify each event has correct tenant_id
-        with open(audit_log, "r") as f:
-            for i, line in enumerate(f):
-                entry = json.loads(line)
-                expected_tenant = ["tenant-a", "tenant-b", "tenant-c"][i]
-                assert entry["tenant_id"] == expected_tenant
-
-    def test_tenant_filtered_read(self, audit_log):
-        """Test filtering events by tenant on read."""
-        writer = AuditChainWriter(audit_log)
-
-        # Write mixed tenant events
-        for tenant_id in ["tenant-a", "tenant-b"]:
-            for j in range(3):
-                event = AuditEvent(
-                    event_id=f"evt-{tenant_id}-{j}",
-                    event_type="test",
-                    tenant_id=tenant_id,
-                    user_id=None,
-                    timestamp="2026-09-22T12:00:00Z",
-                )
-                writer.write_event(event)
-
-        # Read only tenant-a
-        tenant_a_events = writer.read_events(tenant_id="tenant-a")
-        assert len(tenant_a_events) == 3
-        assert all(e.tenant_id == "tenant-a" for e in tenant_a_events)
-
-        # Read only tenant-b
-        tenant_b_events = writer.read_events(tenant_id="tenant-b")
-        assert len(tenant_b_events) == 3
-        assert all(e.tenant_id == "tenant-b" for e in tenant_b_events)
+    def test_tenant_recorded_and_filtered(self, tmp_path, monkeypatch):
+        for tid in ("tenant-a", "tenant-b"):
+            monkeypatch.setenv("CORVIN_TENANT_ID", tid)
+            AuditChainWriter(tmp_path / f"{tid}.jsonl").write_event(_ev(1, tenant=tid))
+        w = AuditChainWriter(tmp_path / "tenant-a.jsonl")
+        assert [e.tenant_id for e in w.read_events(tenant_id="tenant-a")] == ["tenant-a"]
+        assert w.read_events(tenant_id="tenant-b") == []
 
 
 class TestAuditConcurrency:
-    """Test concurrent audit access (thread-safety)."""
+    def test_concurrent_writes(self, tmp_path):
+        log = tmp_path / "audit.jsonl"
+        w = AuditChainWriter(log)
+        errors = []
 
-    @pytest.fixture
-    def audit_log(self):
-        """Create temporary audit log."""
-        fd, path = tempfile.mkstemp(suffix=".jsonl")
-        os.close(fd)
-        yield Path(path)
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        def worker(t):
+            try:
+                for i in range(10):
+                    w.write_event(_ev(t * 100 + i))
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
 
-    def test_concurrent_writes(self, audit_log):
-        """Test multiple threads writing concurrently (no corruption)."""
-        writer = AuditChainWriter(audit_log)
-        num_threads = 5
-        events_per_thread = 10
-
-        def write_events(thread_id):
-            for i in range(events_per_thread):
-                event = AuditEvent(
-                    event_id=f"evt-t{thread_id}-{i}",
-                    event_type="test",
-                    tenant_id=f"tenant-{thread_id}",
-                    user_id=None,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                )
-                writer.write_event(event)
-
-        threads = [
-            threading.Thread(target=write_events, args=(i,)) for i in range(num_threads)
-        ]
-
-        for t in threads:
-            t.start()
-
-        for t in threads:
-            t.join()
-
-        # Verify all events written without corruption
-        with open(audit_log, "r") as f:
-            lines = [l for l in f.readlines() if l.strip()]
-
-        assert len(lines) == num_threads * events_per_thread
-
-        # Verify all are valid JSON
-        for line in lines:
-            json.loads(line)
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(5)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert errors == []
+        assert len(_recs(log)) == 50
+        assert w.verify_chain() is True
 
 
 class TestAuditEventTypes:
     """Test different audit event types."""
 
     @pytest.fixture
-    def audit_log(self):
-        """Create temporary audit log."""
-        fd, path = tempfile.mkstemp(suffix=".jsonl")
-        os.close(fd)
-        yield Path(path)
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    def audit_log(self, tmp_path):
+        return tmp_path / "audit.jsonl"
 
     @pytest.mark.parametrize(
         "event_type,severity",
@@ -476,86 +270,30 @@ class TestAuditEventTypes:
 
 
 class TestAuditCompliance:
-    """Test GDPR/compliance requirements."""
+    """GDPR requirements on the records AuditChainWriter produces."""
 
-    @pytest.fixture
-    def audit_log(self):
-        """Create temporary audit log."""
-        fd, path = tempfile.mkstemp(suffix=".jsonl")
-        os.close(fd)
-        yield Path(path)
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    def test_audit_immutability_append_only(self, tmp_path):
+        log = tmp_path / "audit.jsonl"
+        w = AuditChainWriter(log)
+        w.write_event(_ev(1))
+        first = log.read_text()
+        w.write_event(_ev(2))
+        assert log.read_text().startswith(first)
 
-    def test_audit_immutability_append_only(self, audit_log):
-        """Test that audit log is append-only (never modified/deleted)."""
-        writer = AuditChainWriter(audit_log)
+    def test_audit_timestamp_capture(self, tmp_path):
+        log = tmp_path / "audit.jsonl"
+        AuditChainWriter(log).write_event_dict("test", "_default", details={})
+        (rec,) = _recs(log)
+        assert isinstance(rec["ts"], float)
 
-        # Write event
-        event1 = AuditEvent(
-            event_id="evt-001",
-            event_type="test",
-            tenant_id="_default",
-            user_id=None,
-            timestamp="2026-09-22T12:00:00Z",
-        )
-        hash1 = writer.write_event(event1)
+    def test_pii_shaped_user_id_is_pseudonymised(self, tmp_path):
+        log = tmp_path / "audit.jsonl"
+        AuditChainWriter(log).write_event(_ev(1, user="alice@example.com"))
+        assert "alice@example.com" not in log.read_text()
+        (rec,) = _recs(log)
+        assert len(rec["details"]["user"]) == 8
 
-        # Write another event
-        event2 = AuditEvent(
-            event_id="evt-002",
-            event_type="test",
-            tenant_id="_default",
-            user_id=None,
-            timestamp="2026-09-22T12:01:00Z",
-        )
-        hash2 = writer.write_event(event2)
-
-        # Verify both events exist and chain is intact
-        events = writer.read_events()
-        assert len(events) == 2
-
-    def test_audit_timestamp_capture(self, audit_log):
-        """Test that audit timestamps are captured (GDPR Art. 30 requirement)."""
-        writer = AuditChainWriter(audit_log)
-
-        timestamp_str = "2026-09-22T12:34:56Z"
-        event = AuditEvent(
-            event_id="evt-001",
-            event_type="test",
-            tenant_id="_default",
-            user_id="user1",
-            timestamp=timestamp_str,
-        )
-
-        writer.write_event(event)
-
-        with open(audit_log, "r") as f:
-            entry = json.loads(f.read())
-
-        assert entry["timestamp"] == timestamp_str
-
-    def test_audit_user_tracking(self, audit_log):
-        """Test that user_id is tracked (GDPR Art. 30 requirement)."""
-        writer = AuditChainWriter(audit_log)
-
-        event = AuditEvent(
-            event_id="evt-001",
-            event_type="test",
-            tenant_id="_default",
-            user_id="operator123",
-            timestamp="2026-09-22T12:00:00Z",
-        )
-
-        writer.write_event(event)
-
-        with open(audit_log, "r") as f:
-            entry = json.loads(f.read())
-
-        assert entry["user_id"] == "operator123"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_opaque_user_id_is_kept_for_attribution(self, tmp_path):
+        log = tmp_path / "audit.jsonl"
+        AuditChainWriter(log).write_event(_ev(1, user="user123"))
+        assert _recs(log)[0]["details"]["user"] == "user123"

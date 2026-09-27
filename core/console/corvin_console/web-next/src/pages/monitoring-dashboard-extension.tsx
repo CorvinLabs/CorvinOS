@@ -13,10 +13,16 @@
  *
  * Data refresh: 5-second cadence during active phases
  * Auto-collapse on production stable (day >84)
+ *
+ * NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+ * nothing imports this page. Its data source /v1/console/orchestration/status
+ * is not mounted (routes/orchestration.py is included by no router), so a 404
+ * renders "not available on this build" and polling stops. The 8 rollback
+ * triggers used to be drawn as "armed" with green checks from a hard-coded
+ * list; nothing reports their state, so they are listed as "not reported".
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { LineChart, BarChart, PieChart, ResponsiveContainer, Line, Bar, Cell, Legend, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
@@ -63,15 +69,26 @@ interface Incident {
 
 const RolloutMonitoringDashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<RolloutMetrics | null>(null);
-  const [complianceReports, setComplianceReports] = useState<Record<number, ComplianceReport>>({});
-  const [incidents, setIncidents] = useState<Incident[]>([]);
+  // Nothing fills these yet: no endpoint serves compliance reports or
+  // incidents to this page, so both panels render their empty state.
+  const [complianceReports] = useState<Record<number, ComplianceReport>>({});
+  const [incidents] = useState<Incident[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [unavailable, setUnavailable] = useState(false);
 
   // Fetch rollout status every 5 seconds
   useEffect(() => {
+    const timer: { id?: ReturnType<typeof setInterval> } = {};
     const fetchMetrics = async () => {
       try {
         const response = await fetch('/v1/console/orchestration/status');
+        if (response.status === 404) {
+          // Route absent on this build: say so once, stop polling.
+          setUnavailable(true);
+          setIsLoading(false);
+          if (timer.id) clearInterval(timer.id);
+          return;
+        }
         if (!response.ok) {
           // FINDING 8: API error state
           const errorData: RolloutMetrics = {
@@ -125,9 +142,17 @@ const RolloutMonitoringDashboard: React.FC = () => {
     };
 
     fetchMetrics();
-    const interval = setInterval(fetchMetrics, 5000);
-    return () => clearInterval(interval);
+    timer.id = setInterval(fetchMetrics, 5000);
+    return () => clearInterval(timer.id);
   }, []);
+
+  if (unavailable) {
+    return (
+      <div className="flex items-center justify-center p-8 text-sm text-muted-foreground" data-testid="rollout-unavailable">
+        Rollout monitoring is not available on this build.
+      </div>
+    );
+  }
 
   if (isLoading) {
     return <div className="flex items-center justify-center p-8">Loading rollout status...</div>;
@@ -160,7 +185,6 @@ const RolloutMonitoringDashboard: React.FC = () => {
     PRODUCTION: 'Production (Stable)',
   }[metrics.phase] || metrics.phase;
 
-  const daysRemaining = Math.max(0, 84 - metrics.day);
   const progressPercent = Math.min(100, (metrics.day / 84) * 100);
 
   return (
@@ -477,8 +501,6 @@ const CompliancePanel: React.FC<{
     return null;
   }
 
-  const totalChecks = latestReport.passed_checks + latestReport.failed_checks + latestReport.warning_checks;
-
   return (
     <Card
       className={
@@ -588,39 +610,19 @@ const ApprovalAlert: React.FC<{ requiredFor: string; blockingReason?: string }> 
 }) => {
   const handleApprove = async () => {
     try {
-      const response = await fetch('/v1/console/orchestration/approval', {
+      // routes/orchestration.py documents POST /orchestration/approve
+      // {phase, reason}; "/orchestration/approval" exists nowhere.
+      const response = await fetch('/v1/console/orchestration/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          gate: requiredFor,
-          action: 'approve',
+          phase: requiredFor,
           reason: 'Approved via dashboard',
         }),
       });
       if (response.ok) {
         alert('Approval submitted successfully');
         // Refresh metrics
-        window.location.reload();
-      }
-    } catch (error) {
-      alert(`Error: ${error}`);
-    }
-  };
-
-  const handleReject = async () => {
-    const reason = prompt('Rejection reason (optional):');
-    try {
-      const response = await fetch('/v1/console/orchestration/approval', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          gate: requiredFor,
-          action: 'reject',
-          reason: reason || 'Rejected via dashboard',
-        }),
-      });
-      if (response.ok) {
-        alert('Rejection submitted successfully');
         window.location.reload();
       }
     } catch (error) {
@@ -648,13 +650,7 @@ const ApprovalAlert: React.FC<{ requiredFor: string; blockingReason?: string }> 
             onClick={handleApprove}
             className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium"
           >
-            ✓ Approve
-          </button>
-          <button
-            onClick={handleReject}
-            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm font-medium"
-          >
-            ✗ Reject
+            Approve
           </button>
         </div>
       </AlertDescription>
@@ -685,14 +681,14 @@ const RollbackTriggersPanel: React.FC<{ metrics: RolloutMetrics }> = ({ metrics 
   };
 
   const triggers = [
-    { name: `Correctness Drop (${phaseThresholds.correctness})`, status: 'armed' },
-    { name: `Latency Spike (${phaseThresholds.latency})`, status: 'armed' },
-    { name: `Confidence Regression (${phaseThresholds.confidence})`, status: 'armed' },
-    { name: 'Audit Chain Break', status: 'armed' },
-    { name: 'Tenant Isolation Violation', status: 'armed' },
-    { name: 'Security Check Failure', status: 'armed' },
-    { name: 'Loss Signal Critical', status: 'armed' },
-    { name: 'Manual Operator Rollback', status: 'armed' },
+    { name: `Correctness Drop (${phaseThresholds.correctness})`, status: 'not reported' },
+    { name: `Latency Spike (${phaseThresholds.latency})`, status: 'not reported' },
+    { name: `Confidence Regression (${phaseThresholds.confidence})`, status: 'not reported' },
+    { name: 'Audit Chain Break', status: 'not reported' },
+    { name: 'Tenant Isolation Violation', status: 'not reported' },
+    { name: 'Security Check Failure', status: 'not reported' },
+    { name: 'Loss Signal Critical', status: 'not reported' },
+    { name: 'Manual Operator Rollback', status: 'not reported' },
   ];
 
   return (
@@ -700,15 +696,16 @@ const RollbackTriggersPanel: React.FC<{ metrics: RolloutMetrics }> = ({ metrics 
       <CardHeader>
         <CardTitle>Auto-Rollback Triggers</CardTitle>
         <CardDescription>
-          All 8 fail-closed triggers armed and monitoring (thresholds for {metrics.phase})
+          Thresholds for {metrics.phase}. The backend does not report whether these triggers are armed.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {triggers.map((trigger) => (
             <div key={trigger.name} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
-              <CheckCircle className="h-4 w-4 text-green-600" />
+              <Clock className="h-4 w-4 text-gray-400" />
               <span className="text-sm">{trigger.name}</span>
+              <span className="ml-auto text-xs text-gray-500">{trigger.status}</span>
             </div>
           ))}
         </div>

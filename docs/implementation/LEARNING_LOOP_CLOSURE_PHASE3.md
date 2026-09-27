@@ -1,5 +1,7 @@
 # Learning Loop Closure — Phase 3 OS-Skills (ADR-0314 + ADR-0722)
 
+> **Status note (2026-09-27, adversarial review):** `core/learning/skill_optimizer_loop.py` (`SkillOptimizerLoop`) and `core/learning/optimizer_loop.py` (`OptimizerLoop`) have no production caller; `skill_optimizer_loop.py` did not even import before 2026-09-27. The loop that is closed in production is the ADR-0613 path (see `docs/claude-ref/learning-loop.md`).
+
 **Status:** Implementation Complete ✅  
 **Last Updated:** 2026-09-27  
 **Maintainer:** Claude Code (Agent)

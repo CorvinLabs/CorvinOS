@@ -1,6 +1,8 @@
 # Phase 5: Automated Remediation & Operator Approval Workflow
 
 > **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** The 5 `/v1/console/remediation/*` routes are mounted, but `tests/remediation/test_phase5_remediation.py` is not green: >=5 failures in the first 23 tests, then hangs past 300 s.
+>
+> **Status note (2026-09-27, adversarial review):** the mounted `/v1/console/remediation/*` routes use only `approval_workflow`. `core/remediation/auto_remediate.py` (`SafeAutoRemediator`) and `core/remediation/orchestrator.py` have no production caller; no fix executor exists, so auto-remediation reports `NOT_IMPLEMENTED` (verification "not measured") and nothing reaches REMEDIATED — it used to simulate success.
 
 
 **Status:** 🟢 **COMPLETE & PRODUCTION-READY**  

@@ -12,6 +12,17 @@ Graceful fallback if DB unavailable.
 
 @date 2026-09-25
 @phase Phase 3a: Persistent Storage Layer
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+nothing imports this module.
+
+Defused 2026-09-27: ``SQLiteStore`` was a stub that silently served every call
+from an in-memory dict, so a caller that asked for PERSISTENT storage
+("sqlite") lost all data on restart without being told. It now raises
+``NotImplementedError``; ``store_type="sqlite"`` fails; ``"auto"`` falls back
+to the in-memory store explicitly (logged). ``InMemoryStore.list_sessions``
+applied ``limit`` BEFORE filtering by tenant, dropping a tenant's sessions
+whenever other tenants' sessions came first.
 """
 
 from abc import ABC, abstractmethod
@@ -101,9 +112,9 @@ class InMemoryStore(VoiceSessionStore):
     def list_sessions(self, tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """List sessions for tenant"""
         return [
-            s for s in list(self._sessions.values())[:limit]
+            s for s in self._sessions.values()
             if s.get("tenant_id") == tenant_id
-        ]
+        ][:limit]
 
     def is_available(self) -> bool:
         """Always available (in-memory)"""
@@ -111,92 +122,32 @@ class InMemoryStore(VoiceSessionStore):
 
 
 class SQLiteStore(VoiceSessionStore):
-    """
-    Phase 3: Persistent SQLite storage.
-    Fallback to InMemory if DB unavailable.
+    """Phase 3: Persistent SQLite storage — NOT IMPLEMENTED.
 
-    TODO: Implement SQLAlchemy integration
-    Phase 3b: Cloud SQL variant (same interface)
+    Constructing it raises: a "persistent" store that quietly kept everything
+    in memory is worse than no store.
     """
 
-    def __init__(self, db_path: str = "~/.corvin/voice_sessions.db"):
-        self._db_path = db_path
-        self._fallback_store = InMemoryStore()
-        self._available = False
+    def __init__(self, db_path: str = ""):
+        raise NotImplementedError("persistent voice-session storage is not implemented")
 
-        # Try to initialize DB
-        self._init_db()
+    def create_session(self, session_id: str, tenant_id: str) -> Dict[str, Any]:  # pragma: no cover
+        raise NotImplementedError
 
-    def _init_db(self):
-        """Initialize SQLite database (Phase 3b: implement)"""
-        # TODO: Phase 3b - Implement SQLAlchemy engine + session factory
-        # from sqlalchemy import create_engine
-        # from sqlalchemy.orm import sessionmaker
-        #
-        # engine = create_engine(f"sqlite:///{self._db_path}")
-        # Session = sessionmaker(bind=engine)
-        # self._session = Session()
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:  # pragma: no cover
+        raise NotImplementedError
 
-        logger.info(f"SQLiteStore: TODO implement DB initialization at {self._db_path}")
-        # For Phase 3a MVP: use fallback
-        self._available = False
+    def update_session(self, session_id: str, data: Dict[str, Any]) -> bool:  # pragma: no cover
+        raise NotImplementedError
 
-    def create_session(self, session_id: str, tenant_id: str) -> Dict[str, Any]:
-        """Create session (with fallback)"""
-        if not self._available:
-            return self._fallback_store.create_session(session_id, tenant_id)
+    def delete_session(self, session_id: str) -> bool:  # pragma: no cover
+        raise NotImplementedError
 
-        # TODO: Phase 3b - Implement DB write
-        # db_session.add(VoiceSessionRecord(...))
-        # db_session.commit()
-        return {}
+    def list_sessions(self, tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:  # pragma: no cover
+        raise NotImplementedError
 
-    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get session (with fallback)"""
-        if not self._available:
-            return self._fallback_store.get_session(session_id)
-
-        # TODO: Phase 3b - Query DB
-        # return db_session.query(VoiceSessionRecord).filter_by(session_id=session_id).first()
-        return None
-
-    def update_session(self, session_id: str, data: Dict[str, Any]) -> bool:
-        """Update session (with fallback)"""
-        if not self._available:
-            return self._fallback_store.update_session(session_id, data)
-
-        # TODO: Phase 3b - Update DB
-        # session = db_session.query(VoiceSessionRecord).filter_by(session_id=session_id).first()
-        # if session:
-        #     for key, value in data.items():
-        #         setattr(session, key, value)
-        #     db_session.commit()
+    def is_available(self) -> bool:  # pragma: no cover
         return False
-
-    def delete_session(self, session_id: str) -> bool:
-        """Delete session (with fallback)"""
-        if not self._available:
-            return self._fallback_store.delete_session(session_id)
-
-        # TODO: Phase 3b - Delete from DB
-        return False
-
-    def list_sessions(self, tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """List sessions (with fallback)"""
-        if not self._available:
-            return self._fallback_store.list_sessions(tenant_id, limit)
-
-        # TODO: Phase 3b - Query DB
-        return []
-
-    def is_available(self) -> bool:
-        """Check DB availability"""
-        return self._available
-
-    def fallback_to_memory(self):
-        """Explicitly fallback to in-memory store"""
-        logger.warning("SQLiteStore falling back to InMemory due to DB unavailability")
-        self._available = False
 
 
 # Singleton store (Phase 3: pluggable)
@@ -223,14 +174,10 @@ def get_voice_session_store(
     if store_type == "memory":
         _store = InMemoryStore()
     elif store_type == "sqlite":
-        _store = SQLiteStore(db_path or "~/.corvin/voice_sessions.db")
+        raise NotImplementedError("store_type='sqlite' is not implemented (no persistent store)")
     elif store_type == "auto":
-        sqlite_store = SQLiteStore(db_path or "~/.corvin/voice_sessions.db")
-        if sqlite_store.is_available():
-            _store = sqlite_store
-        else:
-            logger.info("Auto-mode: SQLite unavailable, using InMemory fallback")
-            _store = sqlite_store._fallback_store
+        logger.warning("voice session store: no persistent backend; using NON-persistent in-memory store")
+        _store = InMemoryStore()
     else:
         raise ValueError(f"Unknown store type: {store_type}")
 

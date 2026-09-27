@@ -40,6 +40,32 @@ from core.learning.confidence_optimizer import (
 # ============================================================================
 
 
+@pytest.fixture(autouse=True)
+def _isolated_audit(tmp_path, monkeypatch):
+    """Deploy/rollback records go to the REAL tenant chain — in a scratch
+    CORVIN_HOME, as the tenant the manager serves (the writer refuses any
+    other tenant's record)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "test_tenant_default")
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    yield
+
+
+def chain_events(event_type: str, tenant: str = "test_tenant_default") -> list[dict]:
+    import json
+
+    from forge import paths as fp
+
+    chain = fp.tenant_audit_chain(tenant)
+    if not chain.exists():
+        return []
+    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return [r["details"] for r in recs if r["event_type"] == event_type]
+
+
 @pytest.fixture
 def tenant_id():
     """Test tenant ID."""
@@ -315,7 +341,8 @@ class TestHealthMetricsAndAutoRollback:
             )
 
         metric = distribution_manager.get_health_metrics("test_plugin", "1.0.0")
-        assert metric.error_rate > 0.0
+        assert metric.error_rate == 1.0
+        assert metric.n_invocations == 3
 
     def test_auto_rollback_on_error_rate(
         self, distribution_manager, sample_plugin_version
@@ -355,12 +382,67 @@ class TestHealthMetricsAndAutoRollback:
                 plugin_id="test_plugin",
                 version="1.0.1",
                 success=False,
+                latency_ms=42,
             )
 
-        # Should have triggered auto-rollback
-        current_version = distribution_manager.get_current_version("test_plugin")
-        # Note: auto-rollback is tracked internally; current implementation
-        # would need to check _active_canaries status
+        # The canary was aborted; the stable version is untouched (it used to
+        # be downgraded one step by a canary failure).
+        assert not distribution_manager.is_canary_active("test_plugin")
+        assert distribution_manager.get_current_version("test_plugin") == "1.0.0"
+        rolled = chain_events("marketplace.plugin_rolled_back")
+        assert len(rolled) == 1
+        assert rolled[0]["from_version"] == "1.0.1"
+        assert rolled[0]["version"] == "1.0.0"
+        assert rolled[0]["reason"] == "canary_error_rate_exceeded"
+
+    def test_canary_failure_without_stable_does_not_crash(
+        self, distribution_manager, sample_plugin_version
+    ):
+        """A failing canary with no stable version used to raise ValueError
+        from inside ``record_invocation``."""
+        distribution_manager.register_version(sample_plugin_version)
+        distribution_manager.deploy_version("test_plugin", "1.0.0", DeploymentStrategy.CANARY)
+        distribution_manager.record_invocation("test_plugin", "1.0.0", success=False, latency_ms=5)
+        assert not distribution_manager.is_canary_active("test_plugin")
+        assert distribution_manager.get_current_version("test_plugin") is None
+
+    def test_p99_is_a_real_percentile(self, distribution_manager):
+        for ms in [10] * 99 + [1000]:
+            distribution_manager.record_invocation("p", "1", success=True, latency_ms=ms)
+        assert distribution_manager.get_health_metrics("p", "1").latency_p99 == 10
+
+    def test_deploy_is_audited_before_bookkeeping(
+        self, distribution_manager, sample_plugin_version, monkeypatch
+    ):
+        from core.deployment.audit_sink import AuditWriteFailed
+
+        distribution_manager.register_version(sample_plugin_version)
+
+        def boom(*a, **k):
+            raise AuditWriteFailed("disk full")
+
+        monkeypatch.setattr("core.marketplace.plugin_distribution.audit_sink.emit", boom)
+        with pytest.raises(AuditWriteFailed):
+            distribution_manager.deploy_version("test_plugin", "1.0.0", DeploymentStrategy.STABLE)
+        assert distribution_manager.get_current_version("test_plugin") is None
+
+    def test_unmeasured_confidence_never_disables(self, distribution_manager):
+        distribution_manager.record_invocation("p", "1", success=True, latency_ms=1)
+        assert distribution_manager.get_health_metrics("p", "1").confidence is None
+        assert distribution_manager.auto_disable_if_low_confidence("p", "1") is False
+
+    def test_disabled_version_is_refused(self, distribution_manager, sample_plugin_version):
+        import dataclasses
+
+        distribution_manager.register_version(sample_plugin_version)
+        distribution_manager.record_invocation("test_plugin", "1.0.0", success=True, latency_ms=1)
+        key = ("test_plugin", "1.0.0")
+        distribution_manager._health_metrics[key] = dataclasses.replace(
+            distribution_manager._health_metrics[key], confidence=0.1)
+        assert distribution_manager.auto_disable_if_low_confidence("test_plugin", "1.0.0") is True
+        with pytest.raises(ValueError, match="disabled"):
+            distribution_manager.deploy_version("test_plugin", "1.0.0", DeploymentStrategy.STABLE)
+        assert chain_events("marketplace.plugin_version_disabled")[0]["confidence"] == 0.1
 
 
 # ============================================================================

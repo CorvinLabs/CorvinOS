@@ -256,6 +256,14 @@ curl -X GET http://localhost:8765/v1/skills/assistant.quick_fix \
 
 Send feedback about a skill execution.
 
+> **Correction (2026-09-27, adversarial review):** no route `/v1/learning/feedback` is
+> served on :8765. The live endpoint is `POST /v1/console/learning/feedback`
+> (`core/console/corvin_console/routes/method_discovery_api.py`): it needs a console
+> session cookie + CSRF token (not a bearer API key), takes
+> `{task_id, outcome_quality, would_repeat, reason}`, and requires the per-user GDPR
+> consent scope `learning_feedback` (deny-by-default) — without it the answer is 403,
+> audited as `console.action_denied` (action `learning.feedback`, reason `consent_required`).
+
 **Request:**
 ```bash
 curl -X POST http://localhost:8765/v1/learning/feedback \

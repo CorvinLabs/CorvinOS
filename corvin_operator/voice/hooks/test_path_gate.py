@@ -140,7 +140,12 @@ def main() -> int:
     expect(
         "Truncate corvin-voice/session.key via Bash",
         {"tool_name": "Bash",
-         "tool_input": {"command": ": > ~/.config/corvin-voice/session.key"}},
+         # The gate protects the EFFECTIVE voice config dir; with
+         # XDG_CONFIG_HOME set (run-all-tests.sh sandboxes it) that is not
+         # ~/.config, so target the resolved directory.
+         "tool_input": {"command": ": > " + str(Path(
+             os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+             / "corvin-voice" / "session.key")}},
         blocked=True,
     )
 
@@ -486,7 +491,7 @@ def main() -> int:
             "cp into slot-mirror",
             {"tool_name": "Bash",
              "tool_input": {"command":
-                f"cp /tmp/foo {REPO}/operator/skill-forge/skills/dyn/y/SKILL.md"}},
+                f"cp /tmp/foo {REPO}/corvin_operator/skill-forge/skills/dyn/y/SKILL.md"}},
             blocked=True,
         )
 

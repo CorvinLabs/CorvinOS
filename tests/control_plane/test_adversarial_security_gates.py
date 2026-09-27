@@ -235,26 +235,30 @@ class TestAdversarialSecurityGates:
 
 
     # ==================== G11: SESSION EXPIRATION ====================
-    async def test_g11_expired_session_requests_denied(self):
-        """Gate 11: Requests with expired session are denied (401).
+    async def test_g11_expired_session_requests_denied(self, tmp_path, monkeypatch):
+        """Gate 11: a request with an expired console session is denied (401).
 
-        Expected: ❌ 401 Unauthorized
+        Rewritten 2026-09-27: the previous body raised ``PermissionError``
+        itself inside ``pytest.raises`` (and crashed comparing a naive with an
+        aware datetime) — it exercised no product code.
         """
-        session = {
-            "session_id": "sess-001",
-            "user_id": "admin",
-            "expires_at": "2026-09-21T00:00:00Z"  # Already expired
-        }
+        import time as _time
+        from fastapi import HTTPException
 
-        from datetime import datetime
-        now = datetime.fromisoformat("2026-09-22T10:00:00")
-        expires = datetime.fromisoformat(session["expires_at"])
+        home = tmp_path / "corvin_home"
+        (home / "tenants" / "_default" / "global" / "console" / "sessions").mkdir(parents=True)
+        (home / "tenants" / "_default" / "global" / "auth").mkdir(parents=True)
+        monkeypatch.setenv("CORVIN_HOME", str(home))
+        from corvin_console import auth as _auth
+        from corvin_console import deps
 
-        is_expired = now > expires
-
-        if is_expired:
-            with pytest.raises(PermissionError):
-                raise PermissionError("Session has expired")
+        rec = _auth.create_session(tenant_id="_default", token_fingerprint="fp")
+        assert deps.require_session(corvin_console_sid=rec.sid).sid == rec.sid  # positive control
+        future = rec.expires_at + 1
+        monkeypatch.setattr(_time, "time", lambda: future)
+        with pytest.raises(HTTPException) as exc:
+            deps.require_session(corvin_console_sid=rec.sid)
+        assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio

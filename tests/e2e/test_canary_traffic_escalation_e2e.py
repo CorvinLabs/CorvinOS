@@ -11,6 +11,12 @@ Scenarios:
 
 Related: ADR-0206, ADR-0532, ADR-0867
 Compliance: GDPR Art. 30/32 (audit trail), EU AI Act Art. 50 (transparency + LoM)
+
+Adversarial review 2026-09-27: the controller is NOT WIRED (no router reads its
+traffic percentage). These tests pin its honest behaviour: escalate() evaluates
+the gates itself, health is UNKNOWN until measured, a missing metric fails its
+gate, and every decision commits to the real tenant audit chain first
+(CORVIN_HOME is a per-test temp dir via tests/conftest.py).
 """
 
 import pytest
@@ -36,22 +42,25 @@ from core.deployment.canary_validation import (
     GateStatus,
     AuditEventType,
     LocalFileAuditBackend,
+    TenantChainAuditBackend,
     create_validation_engine,
 )
+from core.deployment import audit_sink
+
+
+def _chain_records():
+    from forge import paths as fp
+
+    chain = fp.tenant_audit_chain("_default")
+    if not chain.exists():
+        return []
+    return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
 
 
 @pytest.fixture
-def temp_state_file():
+def temp_state_file(tmp_path):
     """Temporary canary state file for testing"""
-    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
-        return f.name
-
-
-@pytest.fixture
-def temp_audit_file():
-    """Temporary audit file for testing"""
-    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".jsonl") as f:
-        return f.name
+    return str(tmp_path / "canary_state.json")
 
 
 @pytest.fixture
@@ -61,10 +70,9 @@ def controller(temp_state_file):
 
 
 @pytest.fixture
-def validation_engine(temp_audit_file):
-    """Create a fresh validation engine with local audit backend"""
-    backend = LocalFileAuditBackend(audit_file=temp_audit_file)
-    return CanaryValidationEngine(audit_backend=backend)
+def validation_engine():
+    """Validation engine writing to the (per-test) tenant audit chain"""
+    return CanaryValidationEngine(audit_backend=TenantChainAuditBackend())
 
 
 @pytest.fixture
@@ -121,7 +129,7 @@ class TestCanaryTrafficControllerBasics:
         state = controller.start_canary(initial_traffic=1)
 
         assert state.current_traffic_percent == 1
-        assert state.status == CanaryHealth.HEALTHY
+        assert state.status == CanaryHealth.UNKNOWN  # nothing measured yet
         assert state.started_at is not None
         assert len(state.decision_history) == 1
         assert state.decision_history[0]["decision"] == "escalate"
@@ -135,7 +143,20 @@ class TestCanaryTrafficControllerBasics:
         with open(temp_state_file, "r") as f:
             data = json.load(f)
         assert data["current_traffic_percent"] == 1
-        assert data["status"] == "healthy"
+        assert data["status"] == "unknown"
+
+    def test_default_state_file_is_tenant_scoped(self, monkeypatch, tmp_path):
+        """No hard-coded ~/.corvin: the default follows CORVIN_HOME."""
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "ch"))
+        c = CanaryTrafficController()
+        assert str(c.state_file).startswith(str(tmp_path / "ch"))
+        assert c.state_file.name == "canary_state.json"
+
+    def test_start_decision_committed_to_tenant_chain(self, controller):
+        controller.start_canary(initial_traffic=1)
+        recs = [r for r in _chain_records() if r["event_type"] == "deployment.canary.decision"]
+        assert recs and recs[-1]["details"]["decision"] == "escalate"
+        assert recs[-1]["details"]["traffic_percent"] == 1
 
     def test_cannot_start_canary_twice(self, controller):
         """Starting canary twice should warn, not reset"""
@@ -317,7 +338,47 @@ class TestCanaryEscalation:
         assert success
         assert new_traffic == 100
         assert controller.state.phase_2b_activated
-        assert "Phase 2b" in reason
+        assert "Phase 2b" in reason and "no router reads it" in reason
+
+    def test_escalate_refused_without_metrics(self, controller):
+        """escalate() used to move traffic unconditionally; now it evaluates the
+        gates itself and refuses without passing metrics."""
+        controller.start_canary(initial_traffic=1)
+        success, reason, traffic = controller.escalate()
+        assert success is False
+        assert traffic == 1
+        assert controller.state.current_traffic_percent == 1
+        assert "refused" in reason
+
+    def test_escalate_refused_on_failing_gates(self, controller, degraded_metrics):
+        controller.start_canary(initial_traffic=1)
+        controller.record_metrics(TrafficMetrics(
+            timestamp=datetime.utcnow().isoformat() + "Z", traffic_percent=1,
+            total_requests=100, error_count=0, agreement_count=88, **degraded_metrics,
+        ))
+        success, _, traffic = controller.escalate()
+        assert success is False and traffic == 1
+
+    def test_escalate_at_100_is_not_a_success(self, controller):
+        controller.start_canary(initial_traffic=1)
+        controller.state.current_traffic_percent = 100
+        success, _, traffic = controller.escalate()
+        assert success is False and traffic == 100
+
+    def test_failed_audit_write_blocks_escalation(self, controller, healthy_metrics_1pct, monkeypatch):
+        controller.start_canary(initial_traffic=1)
+        controller.record_metrics(TrafficMetrics(
+            timestamp=datetime.utcnow().isoformat() + "Z", traffic_percent=1,
+            total_requests=100, error_count=0, agreement_count=98, **healthy_metrics_1pct,
+        ))
+
+        def _refuse(*a, **k):
+            raise audit_sink.AuditWriteFailed("simulated non-commit")
+
+        monkeypatch.setattr(audit_sink, "emit", _refuse)
+        with pytest.raises(audit_sink.AuditWriteFailed):
+            controller.escalate()
+        assert controller.state.current_traffic_percent == 1
 
 
 class TestCanaryHoldScenario:
@@ -367,25 +428,39 @@ class TestCanaryRollbackScenario:
         assert controller.state.rollback_reason == "Error rate spike detected"
 
     def test_rollback_fail_closed(self, controller, tmp_path):
-        """Rollback fails gracefully if disk unavailable"""
-        # Create a read-only file (simulate disk full)
-        readonly_file = tmp_path / "readonly.json"
-        readonly_file.write_text("{}")
-        readonly_file.chmod(0o444)
-
-        controller_ro = CanaryTrafficController(state_file=str(readonly_file))
+        """Rollback that cannot be persisted reports failure AND leaves the
+        in-memory state equal to what is on disk (it used to return "unchanged"
+        while memory already said 1%)."""
+        state_file = tmp_path / "state.json"
+        controller_ro = CanaryTrafficController(state_file=str(state_file))
         controller_ro.start_canary(initial_traffic=1)
         controller_ro.state.current_traffic_percent = 10
+        state_file.chmod(0o444)  # simulate a disk that refuses the write
 
-        # Attempt rollback (should fail gracefully)
-        success, reason, rolled_back_to = controller_ro.rollback(
-            reason="Test failure",
-            target_traffic=1
-        )
+        try:
+            success, reason, rolled_back_to = controller_ro.rollback(
+                reason="Test failure",
+                target_traffic=1
+            )
+        finally:
+            state_file.chmod(0o644)
 
-        # Fail-closed: returns false but doesn't crash
         assert not success
         assert rolled_back_to == 10  # Unchanged
+        assert controller_ro.state.current_traffic_percent == 10
+        assert controller_ro.state.rollback_reason is None
+
+    def test_start_canary_fail_closed_on_unwritable_state(self, tmp_path):
+        state_file = tmp_path / "ro.json"
+        state_file.write_text("{}")
+        state_file.chmod(0o444)
+        try:
+            c = CanaryTrafficController(state_file=str(state_file))
+            with pytest.raises(RuntimeError, match="fail-closed"):
+                c.start_canary(initial_traffic=1)
+            assert c.state.current_traffic_percent == 0
+        finally:
+            state_file.chmod(0o644)
 
 
 class TestCanaryValidationEngine:
@@ -423,13 +498,56 @@ class TestCanaryValidationEngine:
             metrics=healthy_metrics_1pct,
         )
 
-        # Should have audit event hash
-        assert result.audit_event_hash is not None
-        assert len(result.audit_event_hash) == 64  # SHA256 hex string
+        # The hash is the committed tenant-chain record's hash
+        assert result.audit_event_hash
+        recs = [r for r in _chain_records() if r["event_type"] == "deployment.canary.canary_validation_run"]
+        assert recs and recs[-1]["hash"] == result.audit_event_hash
+        assert recs[-1]["details"]["gates_passed"] == 1
+
+    def test_missing_metric_fails_its_gate(self, validation_engine):
+        """A metric that was not measured used to read as 0.0 and PASS every
+        "less than" gate. It now FAILS as not_measured."""
+        result = validation_engine.run_validation(
+            traffic_percent=1,
+            gates=[{"gate_name": "latency_ok", "metric_type": "p99_latency_ms",
+                    "threshold_pass": 500.0, "threshold_warn": 1000.0, "operator": "lt"}],
+            metrics={},
+        )
+        assert result.all_gates_pass is False
+        assert result.gates_evaluated[0].status == GateStatus.FAIL
+        assert "not_measured" in result.gates_evaluated[0].details
+        assert result.decision_recommendation == "HOLD"
+
+    def test_no_gates_is_not_a_pass(self, validation_engine):
+        result = validation_engine.run_validation(traffic_percent=1, gates=[], metrics={"error_rate_pct": 0.0})
+        assert result.all_gates_pass is False
+        assert result.overall_status == GateStatus.FAIL
+
+    def test_unaudited_validation_cannot_escalate(self, validation_engine, healthy_metrics_1pct, monkeypatch):
+        def _refuse(*a, **k):
+            raise audit_sink.AuditWriteFailed("simulated non-commit")
+
+        monkeypatch.setattr(audit_sink, "emit", _refuse)
+        result = validation_engine.run_validation(
+            traffic_percent=1,
+            gates=[{"gate_name": "latency_ok", "metric_type": "p99_latency_ms",
+                    "threshold_pass": 500.0, "threshold_warn": 1000.0, "operator": "lt"}],
+            metrics=healthy_metrics_1pct,
+        )
+        assert result.audit_event_hash is None
+        assert result.decision_recommendation == "HOLD"
+        decision, _, _ = validation_engine.make_decision(result, current_traffic_percent=1)
+        assert decision == "HOLD"
+
+    def test_local_file_audit_backend_refused(self, tmp_path):
+        """The hand-built second chain (~/.corvin/audit_canary.jsonl) is refused."""
+        with pytest.raises(NotImplementedError):
+            LocalFileAuditBackend(audit_file=str(tmp_path / "x.jsonl"))
 
     def test_decision_making_escalate(self, validation_engine):
         """Decision engine should recommend escalation"""
         result = ValidationRunResult(
+            audit_event_hash="committed",
             timestamp=datetime.utcnow().isoformat() + "Z",
             traffic_percent=1,
             gates_evaluated=[
@@ -502,7 +620,10 @@ class TestCanaryValidationEngine:
         )
 
         assert success
-        assert len(hash_val) == 64  # SHA256
+        recs = [r for r in _chain_records() if r["event_type"] == "deployment.canary.skill_feedback"]
+        assert recs and recs[-1]["hash"] == hash_val
+        # free-text notes never reach the chain
+        assert "feedback_notes" not in json.dumps(recs[-1]["details"])
 
 
 class TestCanaryFullJourney:
@@ -627,6 +748,8 @@ class TestCanaryMetricsAndReporting:
             )
             controller.record_metrics(metrics)
 
+        assert controller.get_metrics_summary()["status"] == "unknown"  # not evaluated yet
+        controller.evaluate_escalation()
         summary = controller.get_metrics_summary()
 
         assert summary["current_traffic_percent"] == 1

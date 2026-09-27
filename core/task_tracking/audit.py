@@ -14,6 +14,7 @@ Compliance:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
@@ -60,6 +61,12 @@ class AuditEvent:
     timestamp: str
     prior_hash: str = "genesis"
     chain_hash: str = ""  # Computed and set by emit_task_audit_event
+
+    def __post_init__(self) -> None:
+        # frozen=True only blocks rebinding the attribute; the dict the caller
+        # passed would otherwise stay shared, so mutating it after construction
+        # silently changed the event's content (and its compute_hash()).
+        object.__setattr__(self, "delta", copy.deepcopy(dict(self.delta or {})))
 
     def compute_hash(self) -> str:
         """Compute SHA256 hash of event content (excluding chain_hash).

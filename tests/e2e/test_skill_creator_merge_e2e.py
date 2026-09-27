@@ -204,15 +204,26 @@ def test_skill_forge_is_the_first_tab_and_the_default(
     the two facts live in different constants — the ordered id list and the
     default — so nothing but a check keeps them together.
     """
-    hits = [
-        body
+    # Match the FORGE_TABS array itself, whatever sits between its entries:
+    # the literal triple "skill-forge","tools","skills" went stale when
+    # 312e22648 inserted "autonomous-forge" as the second tab (2026-09-21),
+    # although skill-forge stayed first. What must hold is that the array
+    # STARTS with skill-forge and still carries tools and skills after it.
+    import re
+
+    tab_arrays = [
+        m.group(0)
         for body in served_chunks.values()
-        if '"skill-forge","tools","skills"' in body.replace(" ", "")
-        or "'skill-forge','tools','skills'" in body.replace(" ", "")
+        for m in re.finditer(r"""\[(["'])skill-forge\1[^\]]{0,300}\]""", body)
+    ]
+    hits = [
+        arr for arr in tab_arrays
+        if re.search(r"""(["'])tools\1.*(["'])skills\2""", arr)
     ]
     assert hits, (
-        "the served bundle does not order Forge's tabs skill-forge → tools → "
-        "skills; either the order changed or the crawl missed the page chunk"
+        "the served bundle has no tab list that starts with skill-forge and "
+        "then carries tools and skills; either the order changed or the crawl "
+        f"missed the page chunk (arrays starting with skill-forge: {tab_arrays})"
     )
 
 

@@ -26,18 +26,23 @@ class TestFeatureExtractor:
         assert features.reasoning_depth == 1
 
     def test_medium_task_extraction(self):
-        """Test extraction for a medium task."""
+        """No simple/complex keyword → medium (the documented rule).
+
+        The old fixture ("implements binary search ... sorted list") scores one
+        complex against two simple keywords and is "simple" under the rule the
+        module documents; it asserted "medium" and a >50-token estimate for a
+        ~45-token prompt, i.e. it never matched the implementation.
+        """
         task = """
-        Write a Python function that implements binary search.
-        The function should take a sorted list and a target value.
-        Return the index of the target, or -1 if not found.
+        Write a Python function that returns the n-th Fibonacci number.
+        If n is negative, return -1.
         """
         features = self.extractor.extract(task)
 
         assert features.keyword_complexity == "medium"
-        assert features.token_estimate > 50
+        assert features.token_estimate == len(task) // 4
         assert features.has_pseudocode is True
-        assert features.reasoning_depth >= 2
+        assert features.reasoning_depth == 1
 
     def test_complex_task_extraction(self):
         """Test extraction for a complex task."""
@@ -49,8 +54,19 @@ class TestFeatureExtractor:
         features = self.extractor.extract(task)
 
         assert features.keyword_complexity == "complex"
-        assert features.token_estimate > 100
-        assert features.reasoning_depth >= 3
+        assert features.token_estimate == len(task) // 4  # 1 token ~ 4 chars
+        assert features.reasoning_depth == 2 - (features.token_estimate < 100)
+
+        long_task = task * 10  # ~580 tokens → depth 5 // 100 + 1, capped at 5
+        assert self.extractor.extract(long_task).reasoning_depth >= 3
+
+    def test_keywords_match_word_starts_not_substrings(self):
+        """2026-09-27: "information" counted as the simple keyword "format",
+        "ecosystem" as the complex keyword "system"."""
+        assert self.extractor.extract(
+            "Tell me information about the specialist account").keyword_complexity == "medium"
+        assert self.extractor.extract("Describe the ecosystem").keyword_complexity == "medium"
+        assert self.extractor.extract("Implements a sorted list").keyword_complexity == "simple"
 
     def test_code_block_detection(self):
         """Test code block detection."""

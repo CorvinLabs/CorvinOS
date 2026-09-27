@@ -72,6 +72,21 @@ def _clean_subprocess_env() -> dict[str, str]:
     return env
 
 
+def _workspace_env(root: Path) -> dict[str, str]:
+    """Subprocess env whose audit chain is ``<root>/audit.jsonl``.
+
+    The server writes its security events to THE tenant chain unless a
+    ``VOICE_AUDIT_PATH`` / ``FORGE_ROOT`` redirect is set (mcp_server.
+    ``_server_audit_chain``). These tests read the events back beside the
+    workspace they pass as ``--root``, so they redirect the chain there
+    explicitly — never inheriting a suite-wide FORGE_ROOT or the real home.
+    """
+    env = _clean_subprocess_env()
+    env.pop("VOICE_AUDIT_PATH", None)
+    env["FORGE_ROOT"] = str(root)
+    return env
+
+
 class MCPClient:
     """Drives a forge.py mcp subprocess over stdio JSON-RPC."""
 
@@ -93,7 +108,7 @@ class MCPClient:
             text=True,
             bufsize=1,
             cwd=str(ROOT),
-            env=_clean_subprocess_env(),
+            env=_workspace_env(root),
         )
         self._next_id = 0
         self._buffered: list[dict[str, Any]] = []

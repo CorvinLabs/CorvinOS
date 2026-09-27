@@ -79,7 +79,12 @@ class TestF1RaceConditionFix:
         # Verify: no race condition errors and all updates recorded
         assert len(errors) == 0, f"Concurrent updates raised errors: {errors}"
         assert len(results) == 20, f"Expected 20 updates, got {len(results)}"
-        assert audit_backend.write_event.call_count == 20, "Each update should audit-log"
+        # 20 rapid updates also trip the frequency-oscillation clamp, which
+        # writes its own ``weight_oscillation_detected`` record — count only
+        # the per-update records.
+        updated = [c for c in audit_backend.write_event.call_args_list
+                   if c.args[0].get("event_type") == "weight_updated"]
+        assert len(updated) == 20, "Each update should audit-log"
         print("✅ F1: Concurrent weight updates thread-safe (20 concurrent ops, 0 races)")
 
     def test_concurrent_status_queries_during_updates(self):
@@ -213,9 +218,12 @@ class TestF2PIILeakageFix:
 
     def test_api_key_scrubbed(self):
         """E2E: API keys/tokens scrubbed."""
-        text = "API key [TESTKEY_abc123def456ghi789] is secret"
+        # Built at runtime so no key-shaped literal sits in the repo (secret
+        # scanners); the shape is what the scrubber must recognise.
+        key = "sk_" + "live_" + "abc123def456ghi789jkl012"
+        text = f"API key {key} is secret"
         scrubbed = _scrub_pii(text)
-        assert "[TESTKEY_" not in scrubbed, "API key should be scrubbed"
+        assert key not in scrubbed, "API key should be scrubbed"
         assert "[API_KEY]" in scrubbed, "Should be replaced with [API_KEY]"
         print("✅ F2: API key scrubbing works")
 
@@ -243,45 +251,35 @@ class TestF2PIILeakageFix:
     def test_event_store_scrubs_on_write(self):
         """E2E: EventStore scrubs PII before writing to disk."""
         import tempfile
+        from core.learning.learning_events import EventType, LearningEvent as StoreEvent
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             store = EventStore(tmpdir_path, tenant_id="test_tenant")
-
-            # Mock audit backend
-            audit_backend = Mock()
-            audit_backend.write_event = Mock(return_value="audit_ref_123")
-
-            # Create event with PII in payload
-            event = LearningEvent(
-                event_type=LearningEventType.USER_FEEDBACK,
+            ts = datetime.utcnow().isoformat() + "Z"
+            event = StoreEvent(
+                event_id="evt-1",
+                event_type=EventType.FEEDBACK,
+                skill_id="test_skill",
                 tenant_id="test_tenant",
-                instance_id="instance_1",
-                skill_name="test_skill",
-                session_id="sess_1",
-                timestamp_utc=datetime.utcnow(),
-                payload={
+                timestamp=ts,
+                signal={
                     "feedback": "User email is user@example.com",
-                    "phone": "Call 555-123-4567"
-                }
+                    "phone": "Call 555-123-4567",
+                },
             )
 
-            # Patch the audit chain function
-            with patch("core.learning.event_store.EventStore._audit_chain_first", return_value="audit_ref_123"):
+            with patch("core.learning.event_store.EventStore._audit_chain_first",
+                       return_value="audit_ref_123"):
                 store.write_event(event)
 
-            # Read back the event and verify PII is scrubbed
-            events_file = tmpdir_path / "learning" / "events" / datetime.utcnow().strftime("%Y-%m-%d") + ".jsonl"
-            if events_file.exists():
-                with open(events_file) as f:
-                    line = f.readline()
-                    written_event = json.loads(line)
-
-                    # Verify PII scrubbed
-                    feedback = json.dumps(written_event.get("payload", {}))
-                    assert "@" not in feedback, "Email should be scrubbed on disk"
-                    assert "555-123" not in feedback, "Phone should be scrubbed on disk"
-                    print("✅ F2: EventStore scrubs PII before disk write")
+            events_file = tmpdir_path / "learning" / "events" / (ts.split("T")[0] + ".jsonl")
+            assert events_file.exists(), "event must be written to disk"
+            written_event = json.loads(events_file.read_text().splitlines()[0])
+            on_disk = json.dumps(written_event)
+            assert "user@example.com" not in on_disk, "Email should be scrubbed on disk"
+            assert "555-123" not in on_disk, "Phone should be scrubbed on disk"
+            assert written_event["audit_ref"] == "audit_ref_123"
 
 
 # ============================================================================
@@ -328,13 +326,26 @@ class TestF3SignatureValidationFix:
             feedback_type=feedback.feedback_type,
             reason=feedback.reason,
             signature=sig,
-            tenant_id=feedback.tenant_id
+            tenant_id=feedback.tenant_id,
+            timestamp=feedback.timestamp,  # the signature covers the timestamp
         )
 
         validator = FeedbackIngestionValidator(feedback_secret=secret)
         is_valid, error = validator.validate(feedback_signed)
         assert is_valid, f"Valid signature should pass: {error}"
         print("✅ F3: Valid signature accepted")
+
+    def test_signature_is_bound_to_tenant(self):
+        """A feedback signed for tenant A must not validate when replayed as tenant B."""
+        import dataclasses
+        secret = "tenant_bound_secret"
+        fb = SkillFeedback(skill_id="os.delegation_router", task_id="t1",
+                           feedback_type=FeedbackType.GOOD, tenant_id="tenant_a")
+        signed = dataclasses.replace(fb, signature=fb.compute_signature(secret=secret))
+        replayed = dataclasses.replace(signed, tenant_id="tenant_b")
+        v = FeedbackIngestionValidator(feedback_secret=secret)
+        assert v.validate(signed)[0]
+        assert not v.validate(replayed)[0]
 
     def test_feedback_signature_validation_fails_invalid(self):
         """E2E: Validator rejects feedback with invalid signature."""
@@ -516,14 +527,14 @@ class TestAdversarialReviewIntegration:
                     )
 
                     # Create event with PII (should be scrubbed)
-                    event = LearningEvent(
-                        event_type=LearningEventType.USER_FEEDBACK,
+                    from core.learning.learning_events import EventType, LearningEvent as StoreEvent
+                    event = StoreEvent(
+                        event_id=f"evt-{delta}",
+                        event_type=EventType.FEEDBACK,
+                        skill_id="skill_1",
                         tenant_id="test_tenant",
-                        instance_id="instance_1",
-                        skill_name="skill_1",
-                        session_id="sess_1",
-                        timestamp_utc=datetime.utcnow(),
-                        payload={"feedback": "Contact user@example.com"}
+                        timestamp=datetime.utcnow().isoformat() + "Z",
+                        signal={"feedback": "Contact user@example.com"},
                     )
                     store.write_event(event)
 
@@ -535,7 +546,10 @@ class TestAdversarialReviewIntegration:
                     for f in as_completed(futures):
                         f.result()
 
-        print("✅ Integration: Concurrent updates + PII scrubbing work together")
+            lines = [ln for fp in (tmpdir_path / "learning" / "events").glob("*.jsonl")
+                     for ln in fp.read_text().splitlines()]
+            assert len(lines) == 10
+            assert all("user@example.com" not in ln for ln in lines)
 
     def test_feedback_with_signature_and_validation(self):
         """E2E: Complete feedback flow with signature validation."""
@@ -555,7 +569,8 @@ class TestAdversarialReviewIntegration:
             task_id=feedback.task_id,
             feedback_type=feedback.feedback_type,
             reason=feedback.reason,
-            signature=sig
+            signature=sig,
+            timestamp=feedback.timestamp,  # the signature covers the timestamp
         )
 
         # Validate through ingestion backend

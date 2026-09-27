@@ -183,7 +183,7 @@ class TestConfidenceScoreboard:
     def test_scoreboard_window_size_clamped(self):
         """Window size is clamped to [3, 100]."""
         sb_small = ConfidenceScoreboard(window_size=1)
-        assert sb_small.window_size == 3
+        assert sb_small.window_size == 10  # never below the significance floor
 
         sb_large = ConfidenceScoreboard(window_size=500)
         assert sb_large.window_size == 100
@@ -262,10 +262,10 @@ class TestConfidenceScoreboard:
             sample_count=100,
         )
 
-        scores = await scoreboard.get_scores_for_task("task-123")
+        scores = await scoreboard.get_scores_for_task("task-123", tenant_id="_default")
         assert len(scores) == 3
 
-        scores_other = await scoreboard.get_scores_for_task("task-999")
+        scores_other = await scoreboard.get_scores_for_task("task-999", tenant_id="_default")
         assert len(scores_other) == 1
 
     @pytest.mark.asyncio
@@ -297,7 +297,7 @@ class TestConfidenceScoreboard:
                 sample_count=50,
             )
 
-        triggerable = await scoreboard.list_triggerable_trends()
+        triggerable = await scoreboard.list_triggerable_trends(tenant_id="_default")
 
         # Should include task-good trend (mean >= 0.75), not task-bad
         triggerable_keys = {(t.task_id, t.model_id, t.pattern_key) for t in triggerable}

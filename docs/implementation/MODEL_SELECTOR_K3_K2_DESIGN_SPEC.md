@@ -1,5 +1,7 @@
 # Model-Selector K=3: K=2 Detailed Design Specification
 
+> **Status note (2026-09-27, adversarial review):** the components specified here that now exist — `core/skills/os_skills/health_check_monitor.py`, `core/learning/confidence_scoreboard.py`, `core/skills/os_skills/model_selector_k3_integration.py` — have no production caller; OS-model routing is `resolve_os_model` Tier 2.9 (ADR-0952). `p99_projection` is a heuristic (elapsed × 1.5), not a measured p99.
+
 **ADR:** ADR-2084 (Conceptual Level)  
 **Phase:** K=2 (Design → Specifications)  
 **Date:** 2026-09-27  

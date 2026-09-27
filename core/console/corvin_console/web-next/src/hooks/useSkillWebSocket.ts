@@ -28,7 +28,6 @@ import type {
   PingMessage,
   SkillStreamState,
   OnUpdateCallback,
-  OnErrorCallback,
   OnConnectCallback,
   OnDisconnectCallback,
 } from "@/types/websocket-events";
@@ -62,169 +61,118 @@ export function useSkillWebSocket(options: UseSkillWebSocketOptions = {}) {
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout>();
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval>>();
   const subscriptionsRef = useRef<Map<SkillStreamId, ChannelSubscription>>(new Map());
-  const connectionPromiseRef = useRef<Promise<void> | null>(null);
-  const connectionResolveRef = useRef<(() => void) | null>(null);
+  // Lifecycle guards. Without them the socket closed by the unmount cleanup
+  // fired onclose, which scheduled a reconnect — the hook kept reconnecting
+  // forever after its component was gone (and kept the test runner alive).
+  const mountedRef = useRef(false);
+  const attemptsRef = useRef(0);
+  // Callbacks in refs so `connect` is stable: inline callbacks used to give
+  // `connect` a new identity every render, and the mount effect (deps
+  // [connect]) tore the socket down and reopened it on every render.
+  const optsRef = useRef({ onConnect, onDisconnect, autoReconnect });
+  optsRef.current = { onConnect, onDisconnect, autoReconnect };
+
+  const clearTimers = () => {
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+    if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+    reconnectTimeoutRef.current = undefined;
+    connectTimeoutRef.current = undefined;
+    heartbeatIntervalRef.current = undefined;
+  };
 
   // Connect to WebSocket
-  const connect = useCallback(async () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      return;
+  const connect = useCallback(() => {
+    if (!mountedRef.current) return;
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) {
+      return; // already connecting or open
     }
 
+    const scheduleReconnect = () => {
+      if (!mountedRef.current || !optsRef.current.autoReconnect) return;
+      const delay = RECONNECT_INTERVALS[Math.min(attemptsRef.current, RECONNECT_INTERVALS.length - 1)];
+      attemptsRef.current += 1;
+      const attempts = attemptsRef.current;
+      setState((prev) => ({ ...prev, isReconnecting: true, connectionAttempts: attempts }));
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = setTimeout(connect, delay);
+    };
+
+    let ws: WebSocket;
     try {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${protocol}//${window.location.host}/v1/console/learning/stream`;
-
-      const ws = new WebSocket(url);
-
-      // Set connection timeout
-      const connectionTimeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("Connection timeout")), CONNECT_TIMEOUT);
-      });
-
-      ws.onopen = () => {
-        console.log("[Skill WebSocket] Connected");
-        setState((prev) => ({
-          ...prev,
-          isConnected: true,
-          isReconnecting: false,
-          error: null,
-          connectionAttempts: 0,
-        }));
-
-        // Start heartbeat
-        if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
-        heartbeatIntervalRef.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            const msg: PingMessage = { action: "ping" };
-            ws.send(JSON.stringify(msg));
-          }
-        }, HEARTBEAT_INTERVAL);
-
-        // Re-subscribe to all channels
-        subscriptionsRef.current.forEach((_, channel) => {
-          const msg: SubscribeMessage = { action: "subscribe", channel };
-          ws.send(JSON.stringify(msg));
-        });
-
-        // Resolve connection promise
-        if (connectionResolveRef.current) {
-          connectionResolveRef.current();
-          connectionResolveRef.current = null;
-        }
-
-        onConnect?.();
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg: WebSocketEvent = JSON.parse(event.data);
-
-          setState((prev) => ({
-            ...prev,
-            lastUpdate: msg,
-          }));
-
-          // Dispatch to all callbacks subscribed to this channel
-          if ("stream_id" in msg) {
-            const channel = msg.stream_id;
-            const subscription = subscriptionsRef.current.get(channel);
-            if (subscription) {
-              subscription.callbacks.forEach((cb) => cb(msg));
-            }
-          }
-        } catch (err) {
-          console.error("[Skill WebSocket] Parse error:", err);
-          setState((prev) => ({
-            ...prev,
-            error: `Failed to parse message: ${String(err)}`,
-          }));
-        }
-      };
-
-      ws.onerror = (event) => {
-        console.error("[Skill WebSocket] Error:", event);
-        setState((prev) => ({
-          ...prev,
-          error: "WebSocket connection error",
-        }));
-      };
-
-      ws.onclose = () => {
-        console.log("[Skill WebSocket] Disconnected");
-
-        // Clear heartbeat
-        if (heartbeatIntervalRef.current) {
-          clearInterval(heartbeatIntervalRef.current);
-        }
-
-        setState((prev) => ({
-          ...prev,
-          isConnected: false,
-        }));
-
-        onDisconnect?.();
-
-        // Auto-reconnect
-        if (autoReconnect) {
-          setState((prev) => {
-            const nextAttempt = Math.min(
-              prev.connectionAttempts,
-              RECONNECT_INTERVALS.length - 1
-            );
-            const delay = RECONNECT_INTERVALS[nextAttempt];
-
-            console.log(`[Skill WebSocket] Reconnecting in ${delay}ms...`);
-
-            reconnectTimeoutRef.current = setTimeout(connect, delay);
-
-            return {
-              ...prev,
-              isReconnecting: true,
-              connectionAttempts: prev.connectionAttempts + 1,
-            };
-          });
-        }
-      };
-
-      wsRef.current = ws;
-
-      // Wait for connection (or timeout)
-      await Promise.race([
-        new Promise<void>((resolve) => {
-          connectionResolveRef.current = resolve;
-        }),
-        connectionTimeout,
-      ]);
+      ws = new WebSocket(`${protocol}//${window.location.host}/v1/console/learning/stream`);
     } catch (err) {
-      console.error("[Skill WebSocket] Connection failed:", err);
+      setState((prev) => ({ ...prev, error: `Failed to connect: ${String(err)}` }));
+      scheduleReconnect();
+      return;
+    }
+    wsRef.current = ws;
+
+    // A socket that never opens is closed, which routes it through onclose.
+    connectTimeoutRef.current = setTimeout(() => {
+      if (ws.readyState !== WebSocket.OPEN) ws.close();
+    }, CONNECT_TIMEOUT);
+
+    ws.onopen = () => {
+      if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+      attemptsRef.current = 0;
       setState((prev) => ({
         ...prev,
-        error: `Failed to connect: ${String(err)}`,
-        isReconnecting: autoReconnect,
+        isConnected: true,
+        isReconnecting: false,
+        error: null,
+        connectionAttempts: 0,
       }));
 
-      if (autoReconnect) {
-        setState((prev) => {
-          const nextAttempt = Math.min(
-            prev.connectionAttempts,
-            RECONNECT_INTERVALS.length - 1
-          );
-          const delay = RECONNECT_INTERVALS[nextAttempt];
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          const msg: PingMessage = { action: "ping" };
+          ws.send(JSON.stringify(msg));
+        }
+      }, HEARTBEAT_INTERVAL);
 
-          reconnectTimeoutRef.current = setTimeout(connect, delay);
+      // Re-subscribe to all channels
+      subscriptionsRef.current.forEach((_, channel) => {
+        const msg: SubscribeMessage = { action: "subscribe", channel };
+        ws.send(JSON.stringify(msg));
+      });
 
-          return {
-            ...prev,
-            connectionAttempts: prev.connectionAttempts + 1,
-          };
-        });
+      optsRef.current.onConnect?.();
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg: WebSocketEvent = JSON.parse(event.data);
+        setState((prev) => ({ ...prev, lastUpdate: msg }));
+        if ("stream_id" in msg) {
+          subscriptionsRef.current.get(msg.stream_id)?.callbacks.forEach((cb) => cb(msg));
+        }
+      } catch (err) {
+        setState((prev) => ({ ...prev, error: `Failed to parse message: ${String(err)}` }));
       }
-    }
-  }, [autoReconnect, onConnect, onDisconnect]);
+    };
+
+    ws.onerror = () => {
+      setState((prev) => ({ ...prev, error: "WebSocket connection error" }));
+    };
+
+    ws.onclose = () => {
+      if (wsRef.current !== ws) return; // a superseded socket
+      wsRef.current = null;
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+      if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+      if (!mountedRef.current) return;
+      setState((prev) => ({ ...prev, isConnected: false }));
+      optsRef.current.onDisconnect?.();
+      scheduleReconnect();
+    };
+  }, []);
 
   // Subscribe to channel
   const subscribe = useCallback(
@@ -283,16 +231,21 @@ export function useSkillWebSocket(options: UseSkillWebSocketOptions = {}) {
 
   // Connect on mount
   useEffect(() => {
+    mountedRef.current = true;
     connect();
 
     return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
+      mountedRef.current = false;
+      clearTimers();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        ws.close();
       }
-      if (heartbeatIntervalRef.current) {
-        clearInterval(heartbeatIntervalRef.current);
-      }
-      wsRef.current?.close();
     };
   }, [connect]);
 
@@ -312,7 +265,7 @@ export function useSkillStream(
   onUpdate?: OnUpdateCallback,
   autoConnect = true
 ) {
-  const { subscribe, unsubscribe, ...state } = useSkillWebSocket({
+  const { subscribe, unsubscribe: _unsubscribe, ...state } = useSkillWebSocket({
     autoReconnect: autoConnect,
   });
 

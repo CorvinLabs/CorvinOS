@@ -1,6 +1,8 @@
 # Phase 3: Plugin Registry Consistency — Completion Report
 
 > **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** `tests/plugins/test_phase3_registry_sync.py` is 4/18 (14x `'NoneType' object has no attribute 'plugins'`), not 18/18; `registry_sync` has one production importer (`core/monitoring/drift_detector.py`). Not production-ready.
+>
+> **Status note (2026-09-27, adversarial review):** `PluginRegistrySynchronizer.install_plugin` has no production caller (only the uncalled `remediate()` reaches it). It used to write a stub `plugin.json` and report success; it now returns `not_implemented` and touches no disk, so `remediate()` can no longer record a fabricated install.
 
 
 **Date:** 2026-09-26  

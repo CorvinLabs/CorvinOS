@@ -17,6 +17,15 @@ Load-bearing constraints:
   - Exactly-once: Idempotent via task_id key (no double-complete)
 
 Wave 1-4 compatible: Uses existing public APIs (TaskQueue, TaskPubSub, AuditChain).
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+nothing imports this module.
+
+Defused 2026-09-27: the hard-dependency check was a placeholder returning
+"no blocked dependencies" for every task, i.e. fail-OPEN on the gate this
+module exists for. Without an injected ``dependency_checker`` it now reports
+the check itself as unsatisfied, so every task is BLOCKED until a real
+dependency query exists.
 """
 
 import asyncio
@@ -76,6 +85,7 @@ class TaskCompletionOrchestrator:
         audit_chain,             # AuditChain instance (hash-chained, immutable)
         dod_verifier,            # DoD_VerifierSkill instance
         websocket_broadcaster,   # WebSocketBroadcaster instance
+        dependency_checker=None,  # async (task_id, tenant_id) -> list[str] of blockers
     ):
         self.task_queue = task_queue
         self.pubsub = pubsub
@@ -83,6 +93,7 @@ class TaskCompletionOrchestrator:
         self.audit_chain = audit_chain
         self.dod_verifier = dod_verifier
         self.websocket_broadcaster = websocket_broadcaster
+        self.dependency_checker = dependency_checker
 
         # Track completed tasks for idempotency + consistency checks
         self._recently_completed: Dict[str, float] = {}  # task_id -> completion_time
@@ -173,6 +184,11 @@ class TaskCompletionOrchestrator:
                     verified_by=operator_id or "dod_verifier",
                     tenant_id=tenant_id,
                 )
+                # Recorded INSIDE the lock: it used to be set only after
+                # layers 3-4, outside the lock, so a concurrent second call
+                # re-checked before it was set and appended a SECOND
+                # completion event to the audit chain.
+                self._recently_completed[task_id] = time.monotonic()
         except Exception as e:
             logger.exception(f"Atomic transition failed for {task_id}: {e}")
             return CompletionTransactionResult(
@@ -204,9 +220,6 @@ class TaskCompletionOrchestrator:
                 # This is CRITICAL but doesn't roll back (audit-first immutability)
         except Exception as e:
             logger.warning(f"Consistency check failed for {task_id}: {e}")
-
-        # Mark in local tracker (for idempotency window)
-        self._recently_completed[task_id] = time.monotonic()
 
         return CompletionTransactionResult(
             verdict=TaskCompletionVerdict.APPROVED,
@@ -296,9 +309,12 @@ class TaskCompletionOrchestrator:
 
     async def _check_hard_dependencies(self, task_id: str, tenant_id: str) -> list:
         """Check if all hard dependencies are done. Fail-closed: blocked if ANY not done."""
-        # TODO: Query KG for hard dependencies (ADR-0890 dependency model)
-        # For now: simplified placeholder
-        return []
+        if self.dependency_checker is not None:
+            return list(await self.dependency_checker(task_id, tenant_id))
+        # No dependency source injected and the KG query (ADR-0890) is not
+        # implemented. "Unknown" is not "satisfied": report the missing check
+        # as a blocker (fail-closed).
+        return ["dependency_check_not_implemented"]
 
     # ===== LAYER 2: ATOMIC TRANSITION =====
 

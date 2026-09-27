@@ -344,35 +344,33 @@ class TestPhase1TenantIsolation:
     """Verify Phase 1 events respect tenant isolation (GDPR Art. 6)."""
 
     @pytest.fixture
-    def multi_tenant_chain(self) -> Path:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
-            temp_path = Path(f.name)
-
-        # Emit events for multiple tenants
-        write_event(
-            temp_path,
-            "erasure.tenant_boundary_checked",
-            details={
-                "erasure_id": "erase_1",
-                "tenant_id": "tenant_a",
-                "isolation_valid": True,
-            },
-        )
-        write_event(
-            temp_path,
-            "erasure.tenant_boundary_checked",
-            details={
-                "erasure_id": "erase_2",
-                "tenant_id": "tenant_b",
-                "isolation_valid": True,
-            },
-        )
-
+    def multi_tenant_chain(self, tmp_path, monkeypatch) -> Path:
+        # write_event refuses a record tagged with a tenant other than the
+        # PROCESS tenant (F-A6), so each record is written in its own tenant's
+        # context — exactly how a real multi-tenant host writes them.
+        temp_path = tmp_path / "audit.jsonl"
+        for tenant, erasure_id in (("tenant_a", "erase_1"), ("tenant_b", "erase_2")):
+            monkeypatch.setenv("CORVIN_TENANT_ID", tenant)
+            write_event(
+                temp_path,
+                "erasure.tenant_boundary_checked",
+                details={
+                    "erasure_id": erasure_id,
+                    "tenant_id": tenant,
+                    "isolation_valid": True,
+                },
+            )
         yield temp_path
-        try:
-            temp_path.unlink()
-        except OSError:
-            pass
+
+    def test_foreign_tenant_record_is_refused(self, tmp_path, monkeypatch):
+        """A record tagged with another tenant never reaches the chain."""
+        from forge.security_events import AuditTenantMismatch
+
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_a")
+        with pytest.raises(AuditTenantMismatch):
+            write_event(tmp_path / "audit.jsonl", "erasure.tenant_boundary_checked",
+                        details={"erasure_id": "x", "tenant_id": "tenant_b",
+                                 "isolation_valid": True})
 
     def test_erasure_events_carry_tenant_id(self, multi_tenant_chain):
         """Each erasure event must carry its tenant_id."""

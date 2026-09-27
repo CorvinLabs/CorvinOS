@@ -1,9 +1,18 @@
 """
-Autonome Loop Executor — Bridge-aware execution for /loop command.
+Autonomous Loop Executor — Bridge-aware execution for /loop command.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Only
+``scripts/adr2083_staging_validation.py`` and its E2E test import it.
 
 Adapts loop behavior to the current bridge:
-- Interactive (CLI/Web): use ScheduleWakeup for periodic reschedule
-- Non-Interactive (Discord/Slack): run as background task (no reschedule)
+- Interactive (CLI/Web): NOT IMPLEMENTED — nothing schedules the loop, so
+  :meth:`LoopExecutor.run` reports ``reason_complete="not_implemented"``
+  instead of claiming a schedule exists.
+- Non-Interactive (Discord/Slack): runs the iterations in the CALLING thread
+  until the iteration budget or timeout (it blocks the caller).
+
+``get_audit_trail()`` returns a per-instance execution trace. It is NOT the
+hash-chained audit log and must not be cited as audit evidence.
 
 Part of ADR-2083: Non-Interactive Bridge Autonomy Design.
 """
@@ -86,27 +95,28 @@ class LoopExecutor:
 
     def _run_scheduled(self) -> dict:
         """
-        Interactive mode: schedule the loop for periodic execution.
-        Returns immediately with scheduling confirmation.
+        Interactive mode: periodic scheduling is NOT implemented.
+
+        This used to answer "Loop scheduled for periodic execution
+        (ScheduleWakeup active)" while scheduling nothing — a fabricated
+        success. It now fails closed: nothing ran, nothing is scheduled.
         """
-        # In interactive mode, the ScheduleWakeup tool will handle reschedule
-        # This agent just logs the scheduling intent
-        logger.info(f"Scheduling loop: prompt={self.config.prompt[:50]}..., interval={self.config.interval_seconds}s")
+        logger.warning("Loop NOT scheduled: no scheduler is wired for interactive bridges")
 
         self.audit_trail.append({
-            "event": "loop_scheduled",
+            "event": "loop_not_scheduled",
             "bridge": get_bridge_type().value,
             "autonomy_mode": "scheduled",
-            "interval_seconds": self.config.interval_seconds,
+            "reason": "not_implemented",
         })
 
         return {
             "execution_mode": "scheduled",
             "bridge_type": get_bridge_type().value,
             "iterations": 0,
-            "reason_complete": "scheduled",
+            "reason_complete": "not_implemented",
             "duration_seconds": 0,
-            "message": "Loop scheduled for periodic execution (ScheduleWakeup active)",
+            "message": "Loop NOT scheduled: no scheduler is wired for interactive bridges",
         }
 
     def _run_background(self) -> dict:

@@ -133,7 +133,10 @@ class TestLoopExecutionModes:
                     result = executor.run()
 
                     assert result["execution_mode"] == "scheduled"
-                    assert result["reason_complete"] == "scheduled"
+                    # No scheduler is wired: the executor must say so instead of
+                    # claiming "ScheduleWakeup active" (2026-09-27 review).
+                    assert result["reason_complete"] == "not_implemented"
+                    assert result["iterations"] == 0
 
     def test_loop_non_interactive_background(self):
         """Loop on Discord bridge: uses BACKGROUND mode (run-to-completion)."""
@@ -221,8 +224,9 @@ class TestWorkflowBackgroundExecution:
 
                     assert isinstance(ack, WorkflowStartAck)
                     assert ack.run_id.startswith("wf_")
-                    assert ack.status in ["queued", "running"]
-                    assert ack.autonomy_mode == "background"
+                    # No background executor is wired: fail closed, never "queued".
+                    assert ack.status == "blocked"
+                    assert ack.autonomy_mode == "interactive"
                     assert ack.bridge_type == "cli"
 
     def test_workflow_starts_non_blocking_discord(self):
@@ -235,8 +239,9 @@ class TestWorkflowBackgroundExecution:
             )
 
             assert ack.bridge_type == "discord"
-            assert ack.autonomy_mode == "background"
-            assert "Hintergrund" in ack.message  # German message for Discord
+            assert ack.autonomy_mode == "non_interactive"
+            assert ack.status == "blocked"
+            assert "could not be started" in ack.message
 
     def test_workflow_ack_to_dict(self):
         """WorkflowStartAck serializes to dict."""
@@ -314,8 +319,9 @@ class TestBridgeAwarenessIntegration:
             workflow_runner = WorkflowBackgroundRunner()
             wf_ack = workflow_runner.start(script="orchestration_script")
 
-            # Verify non-blocking
-            assert wf_ack.autonomy_mode == "background"
+            # The workflow is refused (no executor), never reported as queued
+            assert wf_ack.autonomy_mode == "non_interactive"
+            assert wf_ack.status == "blocked"
 
             # Start loop (would also be non-blocking)
             def dummy_executor(prompt):
@@ -333,7 +339,7 @@ class TestBridgeAwarenessIntegration:
 
             # Verify both are non-blocking
             assert loop_result["execution_mode"] == "background"
-            assert wf_ack.autonomy_mode == "background"
+            assert wf_ack.status == "blocked"
 
 
 # Integration with production systems
@@ -375,6 +381,26 @@ class TestProductionReadyCompliance:
             # For now, verify structure allows it
             ack_dict = ack.to_dict()
             assert isinstance(ack_dict, dict)
+
+
+def test_workflow_start_attempt_reaches_the_tenant_audit_chain(tmp_path, monkeypatch):
+    """The start attempt is a hash-chained record (no "AUDIT:" log line), and
+    the free-text description never enters it."""
+    import json
+    chain = tmp_path / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+    chain.parent.mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
+    monkeypatch.setenv("CORVIN_BRIDGE_TYPE", "discord")
+    ack = WorkflowBackgroundRunner().start(script="s", description="secret-description")
+    recs = [json.loads(l) for l in chain.read_text().splitlines()]
+    mine = [r for r in recs if r.get("event_type") == "workflow.background_start"]
+    assert mine, recs
+    d = mine[-1].get("details") or mine[-1]
+    assert d["run_id"] == ack.run_id
+    assert d["status"] == "blocked"
+    assert d["reason_code"] == "not_implemented"
+    assert "secret-description" not in chain.read_text()
 
 
 if __name__ == "__main__":

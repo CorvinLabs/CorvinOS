@@ -1455,9 +1455,9 @@ function ChatPane({
           // 403 = stale CSRF token (e.g. console restart) — refresh session silently
           if (e instanceof ApiError && e.status === 403) {
             refreshAuth();
-            setError("Session abgelaufen — bitte nochmal sprechen.");
+            setError("Session expired — please record again.");
           } else {
-            setError(e instanceof Error ? e.message : "Transkription fehlgeschlagen");
+            setError(e instanceof Error ? e.message : "Transcription failed");
           }
         }
       };

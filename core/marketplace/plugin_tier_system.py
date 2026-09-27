@@ -1,5 +1,13 @@
 """Phase 3 k=4: Plugin Tier System — Access Control & Capability Gating (ADR-0775).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``grep -rn PluginTierGate`` outside tests finds nothing; the live plugin
+boundary is ``core/plugins/corvin_plugins`` (ADR-0243). Until 2026-09-27 a
+VETTED/COMMUNITY plugin registered with an UNVERIFIED signature received its
+tier's full capability set; it is now denied every capability (fail-closed).
+Denials are recorded on the tenant chain (``marketplace.plugin_capability_denied``
+via ``core/deployment/audit_sink.py``) before ``CapabilityDeniedError`` is raised.
+
 This module implements three-tier plugin classification with capability-based access control:
 1. BUILDIN: Hard-wired, audit-first, full access (never removable)
 2. VETTED: Reviewed + signed, full access, versioned
@@ -19,7 +27,13 @@ from enum import Enum
 from typing import Optional, Set
 from uuid import uuid4
 
+from core.deployment import audit_sink
+
 logger = logging.getLogger(__name__)
+
+audit_sink.register_events({
+    "marketplace.plugin_capability_denied": frozenset({"plugin_id", "capability", "tier", "reason"}),
+})
 
 
 class PluginTier(Enum):
@@ -230,12 +244,20 @@ class PluginTierGate:
 
         metadata = self._plugin_registry[plugin_id]
         allowed_capabilities = TIER_CAPABILITY_MATRIX.get(metadata.tier, set())
-        allowed = capability in allowed_capabilities
+        # A signed tier whose signature was never verified gets NOTHING.
+        unverified = metadata.tier != PluginTier.BUILDIN and not metadata.signature_verified
+        allowed = capability in allowed_capabilities and not unverified
 
         # Create audit event
         reason = None
+        reason_code = ""
         if not allowed:
-            reason = f"Capability {capability.value} not in {metadata.tier.value} tier"
+            if unverified:
+                reason_code = "signature_not_verified"
+                reason = f"Capability {capability.name} denied: signature not verified"
+            else:
+                reason_code = "not_in_tier"
+                reason = f"Capability {capability.name} not in {metadata.tier.value} tier"
             if plugin_id not in self._blocked_capabilities:
                 self._blocked_capabilities[plugin_id] = 0
             self._blocked_capabilities[plugin_id] += 1
@@ -259,11 +281,19 @@ class PluginTierGate:
                 f"({metadata.tier.value} tier)"
             )
 
-        # Fail-closed: raise if denied
+        # Fail-closed: raise if denied (after the denial is on the chain)
         if not allowed:
+            audit_sink.emit(
+                "marketplace.plugin_capability_denied",
+                {"plugin_id": plugin_id, "capability": capability.value,
+                 "tier": metadata.tier.value, "reason": reason_code,
+                 "lom": lom or "PluginTierGate.check_capability"},
+                tenant_id=self.tenant_id,
+                severity="WARNING",
+            )
             raise CapabilityDeniedError(
                 f"Plugin {plugin_id} (tier={metadata.tier.value}) cannot access "
-                f"{capability.value}"
+                f"{capability.name}: {reason_code}"
             )
 
         return True

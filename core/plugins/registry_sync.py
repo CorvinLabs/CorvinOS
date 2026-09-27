@@ -53,44 +53,28 @@ class PluginInstaller:
         corvin_home = os.getenv("CORVIN_HOME", os.path.expanduser("~/.corvin"))
         return os.path.join(corvin_home, "plugins", "installed")
 
+    @staticmethod
+    def _safe_plugin_id(plugin_id: str) -> bool:
+        """A plugin id is one path component: no separator, NUL, '.' or '..'."""
+        pid = str(plugin_id or "")
+        return bool(pid) and pid not in (".", "..") and not any(c in pid for c in ("/", "\\", "\x00"))
+
     def install_plugin(self, plugin_entry: PluginEntry) -> Tuple[bool, str]:
-        """
-        Install a plugin from canonical manifest.
+        """Install a plugin from the canonical manifest — NOT IMPLEMENTED.
 
-        This is a mock implementation. Real implementation would:
-        1. Download plugin from S3/artifact repository
-        2. Verify checksum
-        3. Extract to plugins_dir
-        4. Verify extraction succeeded
+        NOT WIRED: no production caller as of 2026-09-27 (adversarial review);
+        only ``remediate()`` reaches this, and nothing calls ``remediate()``.
 
-        Args:
-            plugin_entry: Plugin to install
+        This used to be a mock that wrote a stub ``plugin.json`` and returned
+        success, which ``remediate()`` then recorded in the audit chain as a
+        successful remediation. There is no artifact source to download from,
+        so it now reports ``not_implemented`` (a failure) and touches no disk.
 
         Returns: (success, message)
         """
-        try:
-            plugin_path = os.path.join(self.plugins_dir, plugin_entry.plugin_id)
-
-            # Mock: Create plugin directory structure
-            Path(plugin_path).mkdir(parents=True, exist_ok=True)
-
-            # Mock: Create plugin.json
-            plugin_json = {
-                "id": plugin_entry.plugin_id,
-                "version": plugin_entry.version,
-                "dependencies": plugin_entry.dependencies,
-                "boot_layer": plugin_entry.boot_layer,
-            }
-
-            with open(os.path.join(plugin_path, "plugin.json"), "w") as f:
-                json.dump(plugin_json, f, indent=2)
-
-            logger.info(f"✅ Installed plugin: {plugin_entry.plugin_id}@{plugin_entry.version}")
-            return True, f"Installed {plugin_entry.plugin_id}@{plugin_entry.version}"
-
-        except Exception as e:
-            logger.error(f"❌ Failed to install {plugin_entry.plugin_id}: {e}")
-            return False, str(e)
+        if not self._safe_plugin_id(plugin_entry.plugin_id):
+            return False, "invalid plugin id"
+        return False, "not_implemented: no plugin artifact source"
 
     def update_plugin(self, plugin_entry: PluginEntry) -> Tuple[bool, str]:
         """
@@ -103,22 +87,23 @@ class PluginInstaller:
 
         Returns: (success, message)
         """
+        if not self._safe_plugin_id(plugin_entry.plugin_id):
+            return False, "invalid plugin id"
         try:
             plugin_path = os.path.join(self.plugins_dir, plugin_entry.plugin_id)
             backup_path = f"{plugin_path}.backup"
+
+            # Install first; the current tree is only replaced once a new one
+            # exists (install is not implemented, so the old tree stays intact).
+            success, message = self.install_plugin(plugin_entry)
+            if not success:
+                return False, f"Update failed: {message}"
 
             # Backup current version
             if os.path.exists(plugin_path):
                 if os.path.exists(backup_path):
                     shutil.rmtree(backup_path)
                 shutil.copytree(plugin_path, backup_path)
-
-            # Remove current version
-            if os.path.exists(plugin_path):
-                shutil.rmtree(plugin_path)
-
-            # Install new version
-            success, message = self.install_plugin(plugin_entry)
 
             if success:
                 # Remove backup on successful update

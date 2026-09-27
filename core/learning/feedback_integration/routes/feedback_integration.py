@@ -7,12 +7,18 @@ Four POST endpoints for operator feedback:
   POST /v1/console/learning/metrics/observe → metric_observed
 
 All endpoints:
-  - Require CSRF token (@require_csrf)
+  - Require CSRF token + session (Depends(require_csrf))
   - Require authenticated session (@require_session)
   - Scope feedback to tenant_id from SessionRecord
   - Write to ADR-0314 EventStore (audit-first)
   - Never persist free-text reason field (presence + length only)
   - Return 400 on invalid input (with reason), never 500
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — this
+router is mounted nowhere. Until 2026-09-27 it did not even import
+(``core.security.csrf`` does not exist); CSRF + session now come from the
+console's own ``require_csrf`` dependency, and writes go through
+``EventStoreWriter`` onto the tenant-bound learning EventStore.
 """
 
 from __future__ import annotations
@@ -23,9 +29,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from core.security.csrf import require_csrf
-from core.console.corvin_console.deps import require_session
-from core.console.corvin_console.models import SessionRecord
+from core.console.corvin_console.deps import require_csrf
+from core.console.corvin_console.auth import SessionRecord
 from ..models.feedback_event import (
     FeedbackEvent,
     FeedbackType,
@@ -62,7 +67,14 @@ def _require_learning() -> None:
 def _get_event_store(session: SessionRecord) -> EventStore:
     """Get EventStore bound to session's tenant."""
     _require_learning()
-    return EventStore(tenant_id=session.tenant_id)
+    return EventStore(tenant_home(session.tenant_id), tenant_id=session.tenant_id)
+
+
+async def _write(store: EventStore, event: FeedbackEvent, session: SessionRecord) -> str:
+    """Audit-first write through the one writer (returns the chain audit_ref)."""
+    from ..event_store_writer import EventStoreWriter  # noqa: PLC0415
+
+    return await EventStoreWriter(store, tenant_id=session.tenant_id).write_feedback(event)
 
 
 @router.post(
@@ -70,10 +82,9 @@ def _get_event_store(session: SessionRecord) -> EventStore:
     response_model=FeedbackResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-@require_csrf
 async def feedback_workflow_optimizer(
     request: OutcomeFeedbackRequest,
-    session: SessionRecord = Depends(require_session),
+    session: SessionRecord = Depends(require_csrf),
 ) -> FeedbackResponse:
     """Workflow Optimizer feedback: was routing decision correct?
 
@@ -101,7 +112,7 @@ async def feedback_workflow_optimizer(
         )
 
         # Write to EventStore (audit-first)
-        await store.write_event(event, session.tenant_id)
+        await _write(store, event, session)
 
         logger.info(
             f"Feedback recorded: {event.feedback_id} (skill={request.skill_id}, outcome={request.outcome})"
@@ -125,10 +136,9 @@ async def feedback_workflow_optimizer(
     response_model=FeedbackResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-@require_csrf
 async def feedback_security_orchestrator(
     request: OutcomeFeedbackRequest,
-    session: SessionRecord = Depends(require_session),
+    session: SessionRecord = Depends(require_csrf),
 ) -> FeedbackResponse:
     """Security Orchestrator feedback: was threat detection correct?
 
@@ -154,7 +164,7 @@ async def feedback_security_orchestrator(
             lom="feedback_integration.feedback_security_orchestrator",
         )
 
-        await store.write_event(event, session.tenant_id)
+        await _write(store, event, session)
 
         logger.info(
             f"Security feedback recorded: {event.feedback_id} (outcome={request.outcome})"
@@ -178,10 +188,9 @@ async def feedback_security_orchestrator(
     response_model=FeedbackResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-@require_csrf
 async def feedback_flow_guard(
     request: PreferenceFeedbackRequest,
-    session: SessionRecord = Depends(require_session),
+    session: SessionRecord = Depends(require_csrf),
 ) -> FeedbackResponse:
     """Flow Guard feedback: deterministic or LLM-based policy?
 
@@ -206,7 +215,7 @@ async def feedback_flow_guard(
             lom="feedback_integration.feedback_flow_guard",
         )
 
-        await store.write_event(event, session.tenant_id)
+        await _write(store, event, session)
 
         logger.info(
             f"Flow Guard feedback recorded: {event.feedback_id} (preference={request.preference})"
@@ -230,10 +239,9 @@ async def feedback_flow_guard(
     response_model=FeedbackResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-@require_csrf
 async def feedback_metrics(
     request: MetricFeedbackRequest,
-    session: SessionRecord = Depends(require_session),
+    session: SessionRecord = Depends(require_csrf),
 ) -> FeedbackResponse:
     """Metrics feedback: observe latency, cost, accuracy.
 
@@ -258,7 +266,7 @@ async def feedback_metrics(
             lom="feedback_integration.feedback_metrics",
         )
 
-        await store.write_event(event, session.tenant_id)
+        await _write(store, event, session)
 
         logger.info(
             f"Metric recorded: {event.feedback_id} ({request.metric_name}={request.metric_value})"

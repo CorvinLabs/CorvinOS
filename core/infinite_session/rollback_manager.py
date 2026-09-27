@@ -262,10 +262,19 @@ class RollbackManager:
             for wal_file in sorted(self.wal_dir.glob("*.json")):
                 try:
                     age = now - wal_file.stat().st_mtime
+                except OSError:
+                    continue  # vanished (committed/recovered by another manager)
+                try:
                     with open(wal_file, "r", encoding="utf-8") as fh:
                         wal = json.load(fh)
                 except (OSError, ValueError):
-                    wal_file.unlink(missing_ok=True)
+                    # An unreadable WAL inside the grace window may be one a
+                    # concurrent ``begin_transaction`` is still writing (before
+                    # the atomic publish below existed, a torn read here
+                    # deleted an in-flight WAL and its commit then failed with
+                    # "WAL entry not found"). Only a stale one is garbage.
+                    if age >= max_age_s:
+                        wal_file.unlink(missing_ok=True)
                     continue
                 tx_id = wal.get("transaction_id", wal_file.stem)
                 if tx_id not in known and age < max_age_s:
@@ -318,10 +327,15 @@ class RollbackManager:
         }
         try:
             target = self._wal_file(transaction_id)
-            with open(target, "w", encoding="utf-8") as fh:
+            # Publish atomically: write a temp name the ``*.json`` recovery glob
+            # never matches, fsync, then rename. A concurrent ``recover_pending``
+            # therefore sees either no WAL or a complete one — never a torn file.
+            tmp = target.with_name(f".{target.name}.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(wal_entry, fh)
                 fh.flush()
                 os.fsync(fh.fileno())
+            os.replace(tmp, target)
         except (OSError, ValueError) as exc:
             return "", f"begin_transaction failed: {exc}"
         return transaction_id, None

@@ -1,5 +1,10 @@
 """Plugin lifecycle event emitters — ADR-0682 (Learning k=6).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The
+registry's real load/unload/disable path audits through ``PluginContext.
+audit_emit`` (``plugin.loaded`` / ``plugin.disabled`` …); these emitters are
+reached only from ``lifecycle_loader`` (itself uncalled) and tests.
+
 Emits immutable, non-blocking audit events for plugin lifecycle:
 - plugin_loaded: Plugin init started and completed
 - plugin_executed: Plugin method executed (success or error)
@@ -11,7 +16,10 @@ All events are:
 - Tenant-scoped (tenant_id on every event)
 - Non-blocking (failures logged, never raised)
 - PII fail-closed (detect PII in payloads, redact or drop)
-- Audit-first (write to chain before returning)
+- Queued, NOT yet audited: an event lands in the tenant's durable queue
+  (``core.audit.event_queue``) and reaches the audit chain only when that
+  queue is drained. A failed enqueue is logged and the event is lost, which is
+  why nothing here may be described as an audit record.
 """
 
 from __future__ import annotations
@@ -22,6 +30,8 @@ import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Any, Optional
+
+from core.audit.event_queue import EventQueue
 
 logger = logging.getLogger(__name__)
 
@@ -241,9 +251,9 @@ def _enqueue_event(event: PluginLifecycleEvent) -> None:
         event: PluginLifecycleEvent to enqueue
     """
     try:
-        from core.audit.event_queue import EventQueue
-        queue = EventQueue()
-        queue.enqueue(event)
+        # The event's OWN tenant queue — never a shared/_default one (ADR-0007).
+        EventQueue(tenant_id=event.tenant_id).enqueue(event)
     except Exception as e:
-        logger.warning(f"Failed to enqueue plugin lifecycle event: {e}")
+        logger.warning("Failed to enqueue plugin lifecycle event %s: %s",
+                       event.event_type, type(e).__name__)
         # Non-blocking: continue regardless

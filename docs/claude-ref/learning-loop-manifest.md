@@ -9,6 +9,9 @@
 > `learning-loops-dashboard.tsx` page fetches a 404. When the audit query returns
 > `unknown`, `_enrich_loop_with_health_data` substitutes hard-coded values
 > (`event_count_7d: 42`, `health_score: 0.85`, `status: active`) — fabricated data.
+> Defused later on 2026-09-27 (adversarial review): an unmeasured loop is now reported
+> `status: "not_measured"` with null health. The mounted loops surface is
+> `routes/learning_analytics.py` (`/v1/console/learning-loops/*`).
 > `tests/integration/test_learning_loop_manifest_e2e.py`: 4 failed / 12 passed
 > (`NameError: datetime`, `'str' object has no attribute 'value'`, missing `last_event_ts`).
 > The table below records what the iterations *set out* to ship, not what is live.

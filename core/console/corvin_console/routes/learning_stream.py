@@ -19,10 +19,17 @@ Wire format (JSON):
     "timestamp": "2026-09-25T...",
   }
 
-Security:
-  - Requires authenticated session (CSRF validation at connection)
-  - Tenant isolation: events filtered by session.tenant_id
-  - Audit: connection + disconnection events logged
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the
+console app does not mount this router and nothing calls the ``broadcast_*``
+helpers. (Its decorator path already carries ``/v1/console``; mounted under the
+console router it would have become ``/v1/console/v1/console/...``.)
+
+Defused 2026-09-27. The "Security" claims this docstring made were false: the
+socket accepted ANY connection (no session, no CSRF, ``tenant_id`` from the
+query string, never used) and ``broadcast`` sent every channel's events to
+every tenant's subscribers. The endpoint now authenticates the session cookie
+(close 4401 without one) and then closes with 4501 ``not_implemented`` —
+there is no tenant-scoped event source to stream from.
 """
 from __future__ import annotations
 
@@ -129,9 +136,18 @@ async def websocket_learning_stream(
     Updates:
       Server sends: {"type": "confidence_updated", "stream_id": "...", "data": {...}}
     """
+    sid = ws.cookies.get("corvin_console_sid")
+    rec = session_auth.load_session(sid) if sid else None
     await ws.accept()
+    if rec is None:
+        await ws.close(code=4401, reason="no session")
+        return
+    # No tenant-scoped event source exists: refuse honestly instead of
+    # subscribing the client to cross-tenant broadcast channels.
+    await ws.close(code=4501, reason="not_implemented")
+    return
 
-    # Generate client ID
+    # Generate client ID  (unreachable until a tenant-scoped source exists)
     client_id = await _manager.get_client_id()
     subscribed_channels: set[str] = set()
 

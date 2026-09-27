@@ -233,8 +233,11 @@ class TestAuditWriteEventTool(unittest.TestCase):
             "details": {"turn_id": "ot_abc123", "delegation_id": "dlg_xyz"},
         })
         self.assertTrue(any(r[0] == "ok" for r in stub._responses))
-        # Implementation writes directly to the audit file in the registry root
-        audit_file = stub.registry.root / stub.registry.AUDIT_NAME
+        # Written to THE tenant chain (VOICE_AUDIT_PATH / FORGE_ROOT redirect,
+        # else tenant_audit_chain) — never beside the workspace root.
+        from forge.mcp_server import _server_audit_chain
+        audit_file = _server_audit_chain()
+        self.assertFalse((stub.registry.root / stub.registry.AUDIT_NAME).exists())
         self.assertTrue(audit_file.exists(), "audit file must be created")
         events = [json.loads(line) for line in audit_file.read_text().splitlines() if line]
         written_types = [e.get("event_type") for e in events]

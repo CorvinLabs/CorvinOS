@@ -1,6 +1,19 @@
-import React, { useState, useEffect } from "react";
+/**
+ * Skill Learning Dashboard — per-skill learning metrics, feedback, proposals.
+ *
+ * NOT WIRED: no production caller as of 2026-09-27 (adversarial review). No
+ * panel, route or component imports this page.
+ *
+ * Backend: routes/skill_learning_routes.py. No per-skill learning store is
+ * wired behind it yet, so today it answers 404 for the metrics and
+ * `{available: false}` with empty lists for feedback and proposals. This page
+ * must render that honestly — it used to dereference `metrics.accuracy` on the
+ * 404 body and crash, and it drew a placeholder "chart" and an Approve button
+ * that called nothing.
+ */
+import React, { useEffect, useState } from "react";
 
-interface LearningMetrics {
+export interface LearningMetrics {
   skill_id: string;
   version: string;
   total_executions: number;
@@ -13,7 +26,7 @@ interface LearningMetrics {
   last_updated: string;
 }
 
-interface FeedbackItem {
+export interface FeedbackItem {
   execution_id: string;
   outcome_correct: boolean;
   rating: number;
@@ -22,7 +35,7 @@ interface FeedbackItem {
   latency_ms: number;
 }
 
-interface OptimizationProposal {
+export interface OptimizationProposal {
   proposal_id: string;
   skill_id: string;
   parameter_name: string;
@@ -35,292 +48,169 @@ interface OptimizationProposal {
   status: "pending" | "approved" | "rejected" | "applied";
 }
 
-export const SkillLearningDashboard: React.FC<{ skillId: string }> = ({
-  skillId,
-}) => {
-  const [metrics, setMetrics] = useState<LearningMetrics | null>(null);
-  const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
-  const [proposals, setProposals] = useState<OptimizationProposal[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const metricsRes = await fetch(
-          `/v1/console/skills/${skillId}/learning`
-        );
-        const metricsData = await metricsRes.json();
-        setMetrics(metricsData);
-
-        const feedbackRes = await fetch(
-          `/v1/console/skills/${skillId}/feedback/history?limit=20`
-        );
-        const feedbackData = await feedbackRes.json();
-        setFeedback(feedbackData.recent);
-
-        const proposalsRes = await fetch(
-          `/v1/console/skills/${skillId}/optimization/proposals`
-        );
-        const proposalsData = await proposalsRes.json();
-        setProposals(proposalsData.proposals);
-      } finally {
-        setLoading(false);
-      }
+export type SkillLearningState =
+  | { kind: "unavailable"; reason: string }
+  | { kind: "error"; message: string }
+  | {
+      kind: "ok";
+      metrics: LearningMetrics;
+      feedback: FeedbackItem[] | null; // null = source not available
+      proposals: OptimizationProposal[] | null;
     };
 
-    fetchData();
+const UNAVAILABLE = "Skill learning metrics are not available on this build.";
+
+function isMetrics(v: unknown): v is LearningMetrics {
+  const m = v as Partial<LearningMetrics> | null;
+  return (
+    !!m &&
+    typeof m.skill_id === "string" &&
+    typeof m.accuracy === "number" &&
+    typeof m.total_executions === "number" &&
+    typeof m.confidence_score === "number" &&
+    typeof m.avg_latency_ms === "number" &&
+    typeof m.error_rate === "number"
+  );
+}
+
+/** Fetch and classify the three endpoints. Exported for tests. */
+export async function loadSkillLearning(
+  skillId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SkillLearningState> {
+  const base = `/v1/console/skills/${encodeURIComponent(skillId)}`;
+  try {
+    const metricsRes = await fetchImpl(`${base}/learning`);
+    if (metricsRes.status === 404) return { kind: "unavailable", reason: UNAVAILABLE };
+    if (!metricsRes.ok) return { kind: "error", message: `HTTP ${metricsRes.status}` };
+    const metrics = await metricsRes.json();
+    if (!isMetrics(metrics) || (metrics as { available?: boolean }).available === false) {
+      return { kind: "unavailable", reason: UNAVAILABLE };
+    }
+
+    const listOrNull = async <T,>(url: string, key: string): Promise<T[] | null> => {
+      const res = await fetchImpl(url);
+      if (!res.ok) return null;
+      const body = await res.json();
+      if (!body || body.available === false || !Array.isArray(body[key])) return null;
+      return body[key] as T[];
+    };
+    const feedback = await listOrNull<FeedbackItem>(`${base}/feedback/history?limit=20`, "recent");
+    const proposals = await listOrNull<OptimizationProposal>(`${base}/optimization/proposals`, "proposals");
+    return { kind: "ok", metrics, feedback, proposals };
+  } catch (err) {
+    return { kind: "error", message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function Notice({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-dashed p-6 text-center" data-testid="skill-learning-notice">
+      <p className="font-medium">{title}</p>
+      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+    </div>
+  );
+}
+
+export const SkillLearningDashboard: React.FC<{ skillId: string }> = ({ skillId }) => {
+  const [state, setState] = useState<SkillLearningState | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState(null);
+    loadSkillLearning(skillId).then((s) => {
+      if (!cancelled) setState(s);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [skillId]);
 
-  if (loading) return <div>Loading...</div>;
-  if (!metrics) return <div>No data</div>;
+  if (state === null) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
+  if (state.kind === "unavailable") {
+    return (
+      <div className="mx-auto max-w-5xl p-6">
+        <Notice title={`${skillId} — learning`} body={state.reason} />
+      </div>
+    );
+  }
+  if (state.kind === "error") {
+    return (
+      <div className="mx-auto max-w-5xl p-6">
+        <Notice title="Could not load skill learning data" body={state.message} />
+      </div>
+    );
+  }
+
+  const { metrics, feedback, proposals } = state;
+  const cards = [
+    {
+      label: "Accuracy",
+      value: `${(metrics.accuracy * 100).toFixed(1)}%`,
+      detail: `${metrics.correct_outcomes} / ${metrics.total_executions} correct`,
+    },
+    { label: "Confidence score", value: `${(metrics.confidence_score * 100).toFixed(0)}%`, detail: "Skill reliability" },
+    { label: "Avg latency", value: `${metrics.avg_latency_ms.toFixed(1)} ms`, detail: "Per execution" },
+    { label: "Error rate", value: `${(metrics.error_rate * 100).toFixed(1)}%`, detail: "Failed executions" },
+  ];
 
   return (
-    <div className="learning-dashboard">
-      <h2>{metrics.skill_id} — Learning Dashboard</h2>
-
-      {/* Metrics Cards */}
-      <div className="metrics-grid">
-        <div className="metric-card">
-          <div className="metric-label">Accuracy</div>
-          <div className="metric-value">{(metrics.accuracy * 100).toFixed(1)}%</div>
-          <div className="metric-detail">
-            {metrics.correct_outcomes} / {metrics.total_executions} correct
+    <div className="mx-auto max-w-5xl space-y-6 p-6">
+      <h2 className="text-2xl font-semibold">{metrics.skill_id} — learning</h2>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map((c) => (
+          <div key={c.label} className="rounded-lg border p-4">
+            <div className="text-xs uppercase text-muted-foreground">{c.label}</div>
+            <div className="text-2xl font-bold">{c.value}</div>
+            <div className="text-xs text-muted-foreground">{c.detail}</div>
           </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-label">Confidence Score</div>
-          <div className="metric-value">{(metrics.confidence_score * 100).toFixed(0)}%</div>
-          <div className="metric-detail">Skill reliability</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-label">Avg Latency</div>
-          <div className="metric-value">{metrics.avg_latency_ms.toFixed(1)}ms</div>
-          <div className="metric-detail">Per execution</div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-label">Error Rate</div>
-          <div className="metric-value">{(metrics.error_rate * 100).toFixed(1)}%</div>
-          <div className="metric-detail">Failed executions</div>
-        </div>
+        ))}
       </div>
 
-      {/* Confidence Chart (Placeholder) */}
-      <div className="chart-section">
-        <h3>Confidence Trend</h3>
-        <div className="chart-placeholder">
-          [Chart: Confidence score over time — {metrics.confidence_score.toFixed(2)}]
-        </div>
-      </div>
+      <section className="rounded-lg border p-4">
+        <h3 className="mb-3 font-semibold">Recent feedback</h3>
+        {feedback === null ? (
+          <p className="text-sm text-muted-foreground">Feedback history is not available on this build.</p>
+        ) : feedback.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No feedback recorded yet.</p>
+        ) : (
+          <ul className="space-y-2 text-sm">
+            {feedback.map((item) => (
+              <li key={item.execution_id} className="flex gap-3">
+                <span>{item.outcome_correct ? "correct" : "incorrect"}</span>
+                <span className="flex-1">
+                  {item.notes} — {item.rating}/5 ({item.latency_ms.toFixed(1)} ms)
+                </span>
+                <span className="text-xs text-muted-foreground">{item.timestamp}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-      {/* Feedback Panel */}
-      <div className="feedback-section">
-        <h3>Recent Feedback ({feedback.length} items)</h3>
-        <div className="feedback-list">
-          {feedback.map((item) => (
-            <div key={item.execution_id} className="feedback-item">
-              <span className="icon">
-                {item.outcome_correct ? "✅" : "❌"}
-              </span>
-              <span className="details">
-                <strong>{item.notes}</strong> — {item.rating}★ (
-                {item.latency_ms.toFixed(1)}ms)
-              </span>
-              <span className="time">{item.timestamp}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Optimization Proposals */}
-      <div className="proposals-section">
-        <h3>Optimization Proposals ({proposals.length})</h3>
-        <div className="proposals-list">
-          {proposals.map((p) => (
-            <div key={p.proposal_id} className="proposal-card">
-              <div className="proposal-header">
-                <span className="param">{p.parameter_name}</span>
-                <span className="confidence">{(p.confidence * 100).toFixed(0)}% confidence</span>
-              </div>
-              <div className="proposal-body">
-                <p className="rationale">{p.rationale}</p>
-                <div className="change">
-                  {p.old_value} → {p.new_value} (expected +{p.expected_improvement_pct.toFixed(1)}%)
+      <section className="rounded-lg border p-4">
+        <h3 className="mb-3 font-semibold">Optimization proposals</h3>
+        {proposals === null ? (
+          <p className="text-sm text-muted-foreground">Optimization proposals are not available on this build.</p>
+        ) : proposals.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No pending proposals.</p>
+        ) : (
+          <ul className="space-y-3 text-sm">
+            {proposals.map((p) => (
+              <li key={p.proposal_id} className="rounded border p-3">
+                <div className="flex justify-between">
+                  <span className="font-medium">{p.parameter_name}</span>
+                  <span className="text-xs text-muted-foreground">{(p.confidence * 100).toFixed(0)}% confidence</span>
                 </div>
-              </div>
-              <button className="approve-btn">Approve</button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <style>{`
-        .learning-dashboard {
-          padding: 20px;
-          max-width: 1200px;
-          margin: 0 auto;
-        }
-
-        .learning-dashboard h2 {
-          font-size: 24px;
-          font-weight: 600;
-          margin-bottom: 20px;
-        }
-
-        .metrics-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 16px;
-          margin-bottom: 30px;
-        }
-
-        .metric-card {
-          border: 1px solid #e0e0e0;
-          border-radius: 8px;
-          padding: 16px;
-          background: #f9f9f9;
-        }
-
-        .metric-label {
-          font-size: 12px;
-          color: #666;
-          text-transform: uppercase;
-          margin-bottom: 8px;
-        }
-
-        .metric-value {
-          font-size: 32px;
-          font-weight: 700;
-          color: #007bff;
-          margin-bottom: 4px;
-        }
-
-        .metric-detail {
-          font-size: 12px;
-          color: #999;
-        }
-
-        .chart-section {
-          border: 1px solid #e0e0e0;
-          border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 30px;
-        }
-
-        .chart-placeholder {
-          background: #f5f5f5;
-          padding: 40px;
-          text-align: center;
-          border-radius: 6px;
-          color: #999;
-          font-size: 14px;
-        }
-
-        .feedback-section,
-        .proposals-section {
-          border: 1px solid #e0e0e0;
-          border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 20px;
-        }
-
-        .feedback-section h3,
-        .proposals-section h3 {
-          margin: 0 0 16px 0;
-          font-size: 16px;
-          font-weight: 600;
-        }
-
-        .feedback-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-
-        .feedback-item {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 12px;
-          background: #f9f9f9;
-          border-radius: 6px;
-          font-size: 13px;
-        }
-
-        .feedback-item .icon {
-          font-size: 16px;
-          width: 24px;
-          text-align: center;
-        }
-
-        .feedback-item .details {
-          flex: 1;
-        }
-
-        .feedback-item .time {
-          color: #999;
-          font-size: 11px;
-        }
-
-        .proposals-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-
-        .proposal-card {
-          border: 1px solid #ddd;
-          border-radius: 6px;
-          padding: 14px;
-          background: #ffffff;
-        }
-
-        .proposal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 8px;
-        }
-
-        .param {
-          font-weight: 600;
-          color: #333;
-        }
-
-        .confidence {
-          font-size: 12px;
-          color: #666;
-        }
-
-        .rationale {
-          margin: 8px 0;
-          font-size: 13px;
-          color: #555;
-        }
-
-        .change {
-          font-size: 12px;
-          color: #0056b3;
-          font-family: monospace;
-          margin-bottom: 10px;
-        }
-
-        .approve-btn {
-          padding: 6px 12px;
-          background: #28a745;
-          color: white;
-          border: none;
-          border-radius: 4px;
-          font-size: 12px;
-          cursor: pointer;
-        }
-
-        .approve-btn:hover {
-          background: #218838;
-        }
-      `}</style>
+                <p className="my-1 text-muted-foreground">{p.rationale}</p>
+                <code className="text-xs">
+                  {p.old_value} → {p.new_value} (expected +{p.expected_improvement_pct.toFixed(1)}%)
+                </code>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 };

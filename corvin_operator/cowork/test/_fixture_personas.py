@@ -126,7 +126,7 @@ FORGE = {
     "skill_forge_enabled": True,
     "mcp_servers": {"forge": {
         "command": "{{PYTHON}}",
-        "args": ["{{REPO_ROOT}}/operator/forge/forge.py", "mcp"],
+        "args": ["{{REPO_ROOT}}/corvin_operator/forge/forge.py", "mcp"],
         "env": {"FORGE_PERSONA": "forge"},
     }},
     "append_system": "Forge persona: generate tools.",

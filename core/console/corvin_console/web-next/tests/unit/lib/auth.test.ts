@@ -34,15 +34,25 @@ describe('AuthProvider 401 wiring (WA-17)', () => {
       ),
     );
 
-    // AuthProvider's own initial whoami query already exercises the 401
-    // path once; simulate a SECOND, unrelated page's request 401-ing to
-    // prove the handler reacts to failures outside its own query too.
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalled());
-    invalidateSpy.mockClear();
+    // AuthProvider's own whoami 401s first. That must NOT re-trigger whoami:
+    // it did, and the two chased each other — 2.72 M whoami 401s in under
+    // two hours from one tab on 2026-09-23.
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 200));
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['auth'] });
+    const whoamiCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/auth/whoami')).length;
+    expect(whoamiCalls, 'no whoami loop').toBeLessThanOrEqual(2);
 
+    // An unrelated page's request 401-ing still re-checks the session at once.
     const { api } = await import('@/lib/api');
     await expect(api('/license/info')).rejects.toThrow();
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['auth'] });
+
+    // …but a burst of 401s from many panels re-checks only once.
+    invalidateSpy.mockClear();
+    await Promise.allSettled([api('/a'), api('/b'), api('/c')]);
+    expect(invalidateSpy.mock.calls.filter((c) => JSON.stringify(c[0]) === '{"queryKey":["auth"]}').length).toBeLessThanOrEqual(1);
   });
 });
 

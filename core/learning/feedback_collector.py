@@ -1,7 +1,10 @@
 """Feedback Collection Module — Gate 3 Implementation (ADR-0676).
 
-Collects user feedback on skill executions, validates, scrubs PII, and emits
-immutable FeedbackReceivedEvent to event stream.
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The
+only importers are tests/test_track_b_*; nothing persists or audits what is
+collected here (in-memory buffer only).
+
+Collects user feedback on skill executions, validates and scrubs PII.
 
 Components:
 - FeedbackCollector: Main API for feedback submission
@@ -177,8 +180,21 @@ class FeedbackCollector:
                 reason=error_msg,
             )
 
-        # Scrub PII from reason
+        # Scrub PII from reason. ``scrub`` returns None when the text carries
+        # so much PII that it is discarded; a reason that was given but could
+        # not be made safe rejects the whole submission (fail closed) instead
+        # of silently recording it as "no reason".
         scrubbed_reason = PIIScrubber.scrub(reason) if reason else None
+        if reason and scrubbed_reason is None:
+            return FeedbackCollectorResult(
+                feedback_id=feedback_id,
+                skill_id=skill_id,
+                task_id=task_id,
+                tenant_id=self.tenant_id,
+                timestamp=timestamp,
+                accepted=False,
+                reason="reason contains too much PII",
+            )
 
         # Store feedback (in-memory for Gate 3, persisted in Gate 3+)
         feedback_event = {
@@ -195,9 +211,16 @@ class FeedbackCollector:
         }
 
         self.feedback_store.append(feedback_event)
+        # quality_rating is an int: stringify, and test for None rather than
+        # truthiness (joining the raw values raised TypeError on every rated
+        # submission, adversarial review 2026-09-27).
+        kinds = ", ".join(
+            str(v) for v in (outcome_feedback, quality_rating, preference_feedback)
+            if v is not None
+        )
         logger.info(
             f"Feedback collected: feedback_id={feedback_id}, skill={skill_id}, "
-            f"task={task_id}, types=[{', '.join(filter(None, [outcome_feedback, quality_rating, preference_feedback]))}]"
+            f"task={task_id}, types=[{kinds}]"
         )
 
         return FeedbackCollectorResult(
@@ -229,13 +252,21 @@ class FeedbackCollector:
             return count
 
 
-# Global singleton
-_feedback_collector = None
+# One collector PER TENANT. A single module-level instance created for the
+# first caller's tenant used to be returned to every later tenant, so tenant B's
+# feedback was recorded (and read back) under tenant A (adversarial review
+# 2026-09-27).
+_feedback_collectors: Dict[str, FeedbackCollector] = {}
 
 
 def get_feedback_collector(tenant_id: str = "_default") -> FeedbackCollector:
-    """Get or create feedback collector singleton."""
-    global _feedback_collector
-    if _feedback_collector is None:
-        _feedback_collector = FeedbackCollector(tenant_id=tenant_id)
-    return _feedback_collector
+    """Get or create the feedback collector for ``tenant_id``."""
+    from core.tenants import validate_tenant_id
+
+    validate_tenant_id(tenant_id)
+    collector = _feedback_collectors.get(tenant_id)
+    if collector is None:
+        collector = _feedback_collectors.setdefault(
+            tenant_id, FeedbackCollector(tenant_id=tenant_id)
+        )
+    return collector

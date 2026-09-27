@@ -107,8 +107,8 @@ class _AllowlistMCPClient(MCPClient):
     def __init__(self, root: Path, *, allowed: str):
         # We can't go through the parent constructor cleanly because it
         # spawns inherited-env. Re-implement minimally.
-        from test_mcp import ROOT as TEST_ROOT
-        env = dict(os.environ)
+        from test_mcp import ROOT as TEST_ROOT, _workspace_env
+        env = _workspace_env(root)
         env["FORGE_ALLOWED_TOOLS"] = allowed
         self.root = root
         self.proc = subprocess.Popen(

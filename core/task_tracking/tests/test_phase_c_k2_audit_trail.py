@@ -370,11 +370,21 @@ class TestTenantIsolation:
         async def test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 with mock.patch("core.paths.tenant_home", return_value=tmpdir):
+                    # Omitted entirely: keyword-only, no default -> TypeError.
+                    with pytest.raises(TypeError, match="tenant_id"):
+                        await emit_task_audit_event(
+                            event_type="task_created",
+                            task_id="task-123",
+                            actor="user-1",
+                            action="create",
+                            delta={"title": "New Task"},
+                        )
+                    # Passed but empty: refused before anything is written.
                     with pytest.raises(ValueError, match="tenant_id is required"):
                         await emit_task_audit_event(
                             event_type="task_created",
                             task_id="task-123",
-                            # Missing tenant_id
+                            tenant_id="",
                             actor="user-1",
                             action="create",
                             delta={"title": "New Task"},

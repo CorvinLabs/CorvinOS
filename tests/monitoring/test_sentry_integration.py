@@ -9,6 +9,7 @@ Test suite for Sentry integration (Component 1)
 """
 
 import pytest
+
 import os
 from unittest.mock import patch, MagicMock
 from corvin_console.monitoring import (

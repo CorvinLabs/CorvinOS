@@ -1,309 +1,169 @@
 """
-Security Remediation Test Suite — Phase 9 Critical Fixes.
+Security Remediation Test Suite — Phase 9 fixes (ADR-2029 control plane).
 
-Tests all 21 security issues fixed:
-- P0 (7): Audit system, privilege escalation, auth bypass, CSRF, consent gates
-- P1 (4): Input validation, tenant isolation
-- P2 (10): Error messages, payload bounds, snapshot restore, import errors
+Rewritten 2026-09-27 (adversarial review). The previous version:
 
-ADR-2029: User-Centric CorvinOS Control Plane
+* built ``OverrideAuthority(mock)`` positionally — the mock landed in the
+  ``tenant_id`` slot and every such test raised before testing anything;
+* "ran" coroutines by wrapping them in ``pytest.mark.asyncio(...)`` (a marker,
+  not a runner) — the coroutine was never awaited, so the assertions checked a
+  ``MarkDecorator``;
+* imported ``core.audit.get_audit_backend``, which does not exist;
+* carried eight ``pass`` bodies (auth bypass, CSRF, consent, snapshot bounds,
+  snapshot restore, tenant extraction, dependency checking) that counted as
+  passes while asserting nothing. They are removed: auth/CSRF on console routes
+  is enforced and tested by ``core/console/tests/test_route_auth_guard.py``;
+  the consent gate + its grant route by
+  ``core/console/tests/test_consent_routes_e2e.py``; snapshot restore now fails
+  closed (``tests/control_plane/test_snapshot_manager.py``); the control-plane
+  plugin/snapshot routes answer 501 (their managers are NOT WIRED).
+
+``PluginManager`` / ``SubsystemManager`` (``corvin_console/control_plane``) are
+NOT WIRED and keep their events in an in-memory list — the tests below check
+tenant scoping of that list, NOT that anything reaches the audit chain.
 """
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from datetime import datetime
-import json
 
 from corvin_console.control_plane.plugin_manager import PluginManager, BootLayer
 from corvin_console.control_plane.subsystem_manager import SubsystemManager
-from corvin_console.control_plane.override_authority import (
+from core.control_plane.override_authority import (
     OverrideAuthority,
     OverrideType,
     PermissionError,
 )
 
 
-class TestAuditSystemFixes:
-    """P0 Issue #1-4: Verify audit backend is wired (not MockAuditBackend)."""
+class _RecordingChain:
+    """Stands in for the core ``AuditChainWriter`` (same method)."""
 
-    def test_plugin_manager_uses_real_audit_backend(self):
-        """Verify plugin manager emits audit events (not no-op)."""
-        # Create a mock audit backend that tracks calls
-        mock_audit = AsyncMock()
+    def __init__(self):
+        self.events = []
 
-        # Manually instantiate PluginManager with mock (production uses real)
-        mgr = PluginManager()
+    def write_event_dict(self, event_type, tenant_id, user_id=None, details=None, severity=None):
+        self.events.append({"type": event_type, "tenant_id": tenant_id,
+                            "user_id": user_id, "details": dict(details or {})})
+        return f"h{len(self.events)}"
 
-        # Emit an audit event
-        mgr._emit_audit_event("test_event", "test_plugin", "_default", {"status": "success"})
 
-        # Verify event was added to audit_events list (persisted)
-        assert len(mgr.audit_events) > 0
-        assert mgr.audit_events[0]["event_type"] == "test_event"
-        assert mgr.audit_events[0]["tenant_id"] == "_default"
+@pytest.fixture
+def plugin_mgr(tmp_path):
+    return PluginManager(registry_path=tmp_path / "plugins.json")
 
-    def test_subsystem_manager_audit_persistence(self):
-        """Verify subsystem manager persists audit events."""
+
+class TestManagerEventScoping:
+    """In-memory manager events are tenant-scoped (module NOT WIRED)."""
+
+    def test_plugin_manager_records_event(self, plugin_mgr):
+        plugin_mgr._emit_audit_event("test_event", "test_plugin", "_default", {"status": "success"})
+        assert plugin_mgr.audit_events[0]["event_type"] == "test_event"
+        assert plugin_mgr.audit_events[0]["tenant_id"] == "_default"
+
+    def test_subsystem_manager_records_event(self):
         mgr = SubsystemManager()
-
         mgr._emit_audit_event("subsystem_started", "subsys1", "_default", "operator1")
-
-        # Verify event persisted
-        assert len(mgr.audit_events) > 0
         assert mgr.audit_events[0]["event_type"] == "subsystem_started"
         assert mgr.audit_events[0]["tenant_id"] == "_default"
 
+    def test_audit_log_tenant_scoped(self, plugin_mgr):
+        plugin_mgr._emit_audit_event("event1", "plugin1", "_tenant_a", {"status": "success"})
+        plugin_mgr._emit_audit_event("event2", "plugin2", "_tenant_b", {"status": "success"})
+        assert [e["tenant_id"] for e in plugin_mgr.get_audit_log("_tenant_a")] == ["_tenant_a"]
+        assert [e["tenant_id"] for e in plugin_mgr.get_audit_log("_tenant_b")] == ["_tenant_b"]
+
 
 class TestPrivilegeEscalationFix:
-    """P0 Issue #5: Privilege escalation in override_authority routes."""
-
-    def test_cannot_become_approver_without_auth(self):
-        """Verify unconditional add_approver is removed."""
-        mock_audit = AsyncMock()
-        authority = OverrideAuthority(mock_audit)
-
-        # User starts as non-approver
-        assert not authority.is_approver("user1")
-
-        # They cannot just call add_approver directly from route
-        # (routes now check is_approver BEFORE approval, so this is never reached)
-        # The route-level fix prevents this:
-        # if not authority.is_approver(rec.sid):
-        #     raise PermissionError("Only admins can approve")
-
-
-class TestAuthBypassFix:
-    """P0 Issue #6: Auth bypass on snapshots endpoints."""
+    """P0 #5: nobody is an approver by default, and a non-approver is refused
+    (and the refusal is audited)."""
 
     @pytest.mark.asyncio
-    async def test_restore_snapshot_requires_auth(self):
-        """Verify restore_snapshot requires authentication."""
-        # In routes, this is now protected by:
-        # @Depends(require_csrf) which requires a valid session
-        # The test framework verifies decorators are applied
-        pass
+    async def test_cannot_approve_without_being_an_approver(self):
+        chain = _RecordingChain()
+        authority = OverrideAuthority(tenant_id="_default", audit_backend=chain)
+        assert not authority.is_approver("user1")
+        ov = await authority.request_override(
+            OverrideType.FORCE_ENABLE, "plugin-x", "maintenance", "user1", "_default")
+        with pytest.raises(PermissionError):
+            await authority.approve_override(ov["override_id"], "user1", "_default")
+        assert chain.events[-1]["type"] == "override_approve_denied"
+        assert authority.get_override_status(ov["override_id"], "_default")["approval_status"] == "pending"
 
 
 class TestCrossTenantIsolationFix:
-    """P0 Issue #7-8: Cross-tenant isolation."""
+    """P0 #7-8."""
 
-    def test_plugin_manager_tenant_isolation(self):
-        """Verify plugins are isolated per tenant."""
-        mgr = PluginManager()
+    @pytest.mark.asyncio
+    async def test_plugin_manager_tenant_isolation(self, plugin_mgr):
+        r = await plugin_mgr.install_plugin("plugin1", "Plugin 1", "1.0", "bundled", "_tenant_a")
+        assert r["status"] == "success"
+        assert await plugin_mgr.list_plugins("_tenant_b") == []
+        assert await plugin_mgr.get_plugin("plugin1", "_tenant_b") is None
+        assert [p.plugin_id for p in await plugin_mgr.list_plugins("_tenant_a")] == ["plugin1"]
 
-        # Install plugin in tenant_a
-        result_a = pytest.mark.asyncio(mgr.install_plugin)(
-            "plugin1", "Plugin 1", "1.0", "bundled", "_tenant_a"
-        )
-
-        # Tenant B cannot see it
-        plugins_b = pytest.mark.asyncio(mgr.list_plugins)("_tenant_b")
-        assert len(plugins_b) == 0
-
-    def test_audit_log_tenant_scoped(self):
-        """Verify audit logs are tenant-scoped (no cross-tenant leakage)."""
-        mgr = PluginManager()
-
-        # Emit events for two tenants
-        mgr._emit_audit_event("event1", "plugin1", "_tenant_a", {"status": "success"})
-        mgr._emit_audit_event("event2", "plugin2", "_tenant_b", {"status": "success"})
-
-        # Tenant A can only see their events
-        log_a = mgr.get_audit_log("_tenant_a")
-        assert len(log_a) == 1
-        assert log_a[0]["tenant_id"] == "_tenant_a"
-
-        # Tenant B can only see their events
-        log_b = mgr.get_audit_log("_tenant_b")
-        assert len(log_b) == 1
-        assert log_b[0]["tenant_id"] == "_tenant_b"
-
-
-class TestCSRFProtection:
-    """P0 Issue #9-11: CSRF protection on mutations."""
-
-    def test_plugin_enable_has_csrf_protection(self):
-        """Verify plugin enable endpoint has @require_csrf decorator."""
-        # Routes now have @require_csrf on enable, disable, uninstall
-        # This is verified in route definitions
-        pass
-
-
-class TestConsentGates:
-    """P0 Issue #12-13: Consent gates on state-change operations."""
-
-    def test_snapshot_restore_needs_consent(self):
-        """Verify restore_snapshot requires consent."""
-        # Routes now have @require_consent or equivalent gates
-        pass
+    @pytest.mark.asyncio
+    async def test_override_cross_tenant_decision_refused(self):
+        authority = OverrideAuthority(tenant_id="_default", audit_backend=_RecordingChain())
+        authority.add_approver("admin")
+        ov = await authority.request_override(
+            OverrideType.FORCE_DISABLE, "t", "r", "op", "tenant_a")
+        with pytest.raises(ValueError, match="Access denied"):
+            await authority.approve_override(ov["override_id"], "admin", "tenant_b")
 
 
 class TestInputValidation:
-    """P1 Issues: Input validation (boot_layer, timeout_s, tenant_id, override_type)."""
+    """P1: boot_layer, tenant_id, timeout_s, override_type."""
 
-    def test_boot_layer_validation(self):
-        """Verify invalid boot_layer is rejected."""
+    def test_boot_layer_validation(self, plugin_mgr):
         with pytest.raises(ValueError, match="Invalid boot_layer"):
+            plugin_mgr._validate_boot_layer("invalid_layer")
+        with pytest.raises(ValueError):
             BootLayer("invalid_layer")
 
-    def test_tenant_id_validation(self):
-        """Verify empty tenant_id is rejected."""
-        mgr = PluginManager()
-
-        with pytest.raises(ValueError, match="tenant_id must be a non-empty string"):
-            pytest.mark.asyncio(mgr.list_plugins)("")
-
-        with pytest.raises(ValueError, match="tenant_id must be a non-empty string"):
-            pytest.mark.asyncio(mgr.list_plugins)(None)
+    @pytest.mark.asyncio
+    async def test_tenant_id_validation(self, plugin_mgr):
+        for bad in ("", None):
+            with pytest.raises(ValueError, match="tenant_id must be a non-empty string"):
+                await plugin_mgr.list_plugins(bad)
 
     def test_timeout_s_validation(self):
-        """Verify timeout_s is bounded."""
         mgr = SubsystemManager()
+        for bad in (-1, 0, 3601):
+            with pytest.raises(ValueError, match="timeout_s must be between"):
+                mgr._validate_timeout_s(bad)
+        mgr._validate_timeout_s(1)
+        mgr._validate_timeout_s(3600)
 
-        # Test negative timeout
-        with pytest.raises(ValueError, match="timeout_s must be between"):
-            mgr._validate_timeout_s(-1)
-
-        # Test zero timeout
-        with pytest.raises(ValueError, match="timeout_s must be between"):
-            mgr._validate_timeout_s(0)
-
-        # Test too-large timeout (>3600s)
-        with pytest.raises(ValueError, match="timeout_s must be between"):
-            mgr._validate_timeout_s(3601)
-
-        # Test valid timeout
-        mgr._validate_timeout_s(1)  # min
-        mgr._validate_timeout_s(3600)  # max
-
-    def test_override_type_validation(self):
-        """Verify override_type is enum-validated."""
-        mock_audit = AsyncMock()
-        authority = OverrideAuthority(mock_audit)
-
-        # Invalid type should raise
+    @pytest.mark.asyncio
+    async def test_override_type_validation(self):
+        authority = OverrideAuthority(tenant_id="_default", audit_backend=_RecordingChain())
         with pytest.raises(ValueError, match="Invalid override type"):
-            pytest.mark.asyncio(authority.request_override)(
-                "invalid_type",  # Not an OverrideType enum
-                "target1",
-                "reason",
-                "user1",
-                "_default"
-            )
+            await authority.request_override("invalid_type", "target1", "reason", "user1", "_default")
+
+    @pytest.mark.asyncio
+    async def test_override_requires_reason(self):
+        authority = OverrideAuthority(tenant_id="_default", audit_backend=_RecordingChain())
+        with pytest.raises(ValueError, match="reason is required"):
+            await authority.request_override(OverrideType.FORCE_ENABLE, "t", "   ", "u", "_default")
 
 
 class TestErrorMessageSanitization:
-    """P2 Issue #19: Error messages should not leak internal details."""
-
-    def test_plugin_error_messages_safe(self):
-        """Verify error messages don't expose internals."""
-        mgr = PluginManager()
-
-        # Try to enable a non-existent plugin
-        result = pytest.mark.asyncio(mgr.enable_plugin)(
-            "nonexistent", "_default", "operator1"
-        )
-
-        # Error message should be user-friendly
-        assert result["status"] == "error"
-        assert "Plugin" in result["message"]
-
-
-class TestSnapshotBounds:
-    """P2 Issue #21: Bound snapshot name/description."""
-
-    def test_snapshot_name_max_length(self):
-        """Verify snapshot name is bounded."""
-        # SnapshotCreateRequest validator in routes enforces max 500 chars
-        # This is tested in request validation
-        pass
-
-
-class TestSnapshotRestore:
-    """P2 Issue #22: Implement actual snapshot restore."""
+    """P2 #19: a missing plugin yields a plain error, not a traceback."""
 
     @pytest.mark.asyncio
-    async def test_snapshot_restore_actually_restores(self):
-        """Verify restore_snapshot actually modifies system state."""
-        # This needs to be tested with the real SnapshotManager
-        # For now, verify the method exists and is awaitable
-        pass
+    async def test_plugin_error_messages_safe(self, plugin_mgr):
+        result = await plugin_mgr.enable_plugin("nonexistent", "_default", "operator1")
+        assert result["status"] == "error"
+        assert "Plugin" in result["message"]
+        assert "Traceback" not in result["message"]
 
 
 class TestImportErrors:
-    """P2 Issue #14: Fix import error (audit_backend not exported)."""
+    """P2 #14: the core audit backend accessor is importable."""
 
     def test_audit_backend_is_importable(self):
-        """Verify audit_backend can be imported from control_plane."""
-        from core.audit import get_audit_backend
-        # If this import succeeds, the fix is in place
-        assert get_audit_backend is not None
+        from core.compliance.audit_chain_provider import get_audit_backend, get_audit_chain_writer
 
-
-class TestTenantIdExtraction:
-    """P1 Issue #18: Verify tenant_id is from session, not hardcoded."""
-
-    def test_plugin_routes_use_session_tenant(self):
-        """Verify routes extract tenant_id from session, not hardcoded."""
-        # Routes now have:
-        # session: Annotated[session_auth.SessionRecord, Depends(require_session)]
-        # tenant_id=session.tenant_id  # (not hardcoded="default")
-        pass
-
-
-class TestDependencyCheckingFix:
-    """P1 Issue #19: Dependency checking works (not dead code)."""
-
-    def test_plugin_disable_checks_dependents(self):
-        """Verify dependent plugins block disable."""
-        # This is tested in the plugin_manager implementation
-        pass
-
-
-@pytest.mark.asyncio
-async def test_complete_security_audit():
-    """Integration test: All 21 fixes are in place."""
-
-    # P0 Fixes
-    # 1. Audit backend wired (not mock)
-    mock_audit = AsyncMock()
-
-    # 2-4. Audit events persisted
-    mgr = PluginManager()
-    assert hasattr(mgr, "audit_events")
-
-    # 5. Privilege escalation blocked
-    authority = OverrideAuthority(mock_audit)
-    assert authority.is_approver("admin") is False
-    assert not authority.is_approver("user1")  # Cannot self-elevate
-
-    # 6. Auth gates on mutations (verified in routes)
-    # 7-8. Tenant isolation
-    mgr._emit_audit_event("test", "plugin1", "tenant1", {"status": "success"})
-    log = mgr.get_audit_log("tenant1")
-    assert len(log) == 1
-
-    log_other = mgr.get_audit_log("tenant2")
-    assert len(log_other) == 0  # No cross-tenant leakage
-
-    # 9-11. CSRF+Consent (verified in routes)
-
-    # P1 Fixes
-    # 12. Boot layer validation
-    with pytest.raises(ValueError):
-        BootLayer("invalid")
-
-    # 13. Tenant ID validation
-    with pytest.raises(ValueError):
-        mgr._validate_tenant_id("")
-
-    # 14. Timeout bounds
-    sub = SubsystemManager()
-    with pytest.raises(ValueError):
-        sub._validate_timeout_s(5000)  # Too large
-
-    # P2 Fixes
-    # (Error messages and bounds verified above)
+        assert get_audit_backend is get_audit_chain_writer
 
 
 if __name__ == "__main__":

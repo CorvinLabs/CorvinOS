@@ -266,8 +266,8 @@ class TestOptimizerLoop:
             parameter_delta={"learning_rate": 0.001},
         )
 
-        opus_updates = await optimizer.get_updates_for_model("claude-opus-5")
-        sonnet_updates = await optimizer.get_updates_for_model("claude-sonnet-5")
+        opus_updates = await optimizer.get_updates_for_model("claude-opus-5", tenant_id="_default")
+        sonnet_updates = await optimizer.get_updates_for_model("claude-sonnet-5", tenant_id="_default")
 
         assert len(opus_updates) >= 1
         assert len(sonnet_updates) >= 1
@@ -295,7 +295,7 @@ class TestOptimizerLoop:
             parameter_delta={"learning_rate": 0.001, "temperature": 0.85},
         )
 
-        params = await optimizer.get_latest_parameter_state("claude-opus-5")
+        params = await optimizer.get_latest_parameter_state("claude-opus-5", tenant_id="_default")
 
         assert "learning_rate" in params
         assert "temperature" in params
@@ -320,3 +320,86 @@ async def test_model_optimization_loop_structure():
 
     assert loop.scoreboard is scoreboard
     assert loop.optimizer is optimizer
+
+
+# ── Adversarial review 2026-09-27: tenant isolation + audit-first ──────────
+
+@pytest.mark.asyncio
+async def test_scoreboard_trends_do_not_mix_tenants():
+    from core.learning.confidence_scoreboard import ConfidenceScoreboard
+
+    sb = ConfidenceScoreboard()
+    for i in range(10):
+        await sb.write_score(window_id=f"w{i}", tenant_id="tenant_a", task_id="t", model_id="m",
+                             pattern_key="p", confidence=0.9, sample_count=10)
+        await sb.write_score(window_id=f"w{i}", tenant_id="tenant_b", task_id="t", model_id="m",
+                             pattern_key="p", confidence=0.1, sample_count=10)
+    a = await sb.get_trend("t", "m", "p", tenant_id="tenant_a")
+    b = await sb.get_trend("t", "m", "p", tenant_id="tenant_b")
+    assert a.mean_confidence == pytest.approx(0.9)
+    assert b.mean_confidence == pytest.approx(0.1)
+    assert [t.tenant_id for t in await sb.list_triggerable_trends(tenant_id="tenant_b")] == []
+
+
+@pytest.mark.asyncio
+async def test_scoreboard_memory_is_bounded_per_key():
+    from core.learning.confidence_scoreboard import ConfidenceScoreboard
+
+    sb = ConfidenceScoreboard(window_size=10)
+    for i in range(50):
+        await sb.write_score(window_id=f"w{i}", tenant_id="_default", task_id="t", model_id="m",
+                             pattern_key="p", confidence=0.5, sample_count=1)
+    assert len(sb._scores) == 10
+
+
+@pytest.mark.asyncio
+async def test_optimization_step_uses_only_the_callers_tenant():
+    from core.learning.confidence_scoreboard import ConfidenceScoreboard
+    from core.learning.optimizer_loop import ModelOptimizationLoop
+
+    sb = ConfidenceScoreboard()
+    for i in range(10):
+        await sb.write_score(window_id=f"w{i}", tenant_id="tenant_a", task_id="t", model_id="m",
+                             pattern_key="p", confidence=0.76 + i * 0.02, sample_count=10)
+    loop = ModelOptimizationLoop(scoreboard=sb, optimizer=OptimizerLoop())
+    assert await loop.run_optimization_step("tenant_b") == []
+
+
+@pytest.mark.asyncio
+async def test_parameter_update_refused_when_audit_does_not_commit(monkeypatch):
+    import core.learning.event_persistence as ep
+
+    def boom(*a, **k):
+        raise RuntimeError("core audit write did not commit")
+
+    monkeypatch.setattr(ep, "core_audit_event", boom)
+    optimizer = OptimizerLoop()
+    trend = ConfidenceTrend(task_id="t", model_id="m", pattern_key="p", n_samples=10,
+                            mean_confidence=0.9, std_dev=0.0, trend_direction="improving",
+                            last_updated="2026-09-27T12:00:00Z")
+    with pytest.raises(RuntimeError):
+        await optimizer.apply_parameter_update(trend_id="x", tenant_id="_default", trend=trend,
+                                               parameter_delta={"learning_rate": 0.001})
+    assert optimizer._parameter_updates == {}
+
+
+@pytest.mark.asyncio
+async def test_parameter_update_lands_on_the_chain_with_its_fields():
+    import json
+    import os
+    from pathlib import Path
+
+    optimizer = OptimizerLoop()
+    trend = ConfidenceTrend(task_id="t", model_id="m", pattern_key="p", n_samples=10,
+                            mean_confidence=0.9, std_dev=0.0, trend_direction="improving",
+                            last_updated="2026-09-27T12:00:00Z")
+    uid = await optimizer.apply_parameter_update(
+        trend_id="x", tenant_id="_default", trend=trend,
+        parameter_delta={"learning_rate": 0.001, "temperature": 0.9})
+    ref = optimizer._parameter_updates[uid][0].audit_ref
+    chain = Path(os.environ["VOICE_AUDIT_PATH"])
+    recs = [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]
+    rec = [r for r in recs if r.get("details", {}).get("audit_ref") == ref][-1]
+    assert rec["event_type"] == "learning.parameter_update_recorded"
+    assert rec["details"]["parameter_names"] == "learning_rate,temperature"
+    assert rec["details"]["update_count"] == 2

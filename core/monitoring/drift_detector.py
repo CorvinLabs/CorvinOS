@@ -1,9 +1,17 @@
 """
 Phase 4: Real-Time Drift Detection & Alerting
 
-Background monitoring service that polls instances every 30s.
-Detects drifts from Phase 1 (deployment state), Phase 2 (config), Phase 3 (plugins).
-Routes alerts via Slack (all severities) and PagerDuty (CRITICAL only).
+Background monitoring service that polls registered instances every 30s.
+
+What it can and cannot see (adversarial review 2026-09-27): it iterates the
+instances registered in THIS process's ``DeploymentStateManager`` — the gateway
+/ console boot registers exactly one, the local instance — and compares their
+recorded state against that same manager (Phase 1) plus the plugin registry
+(Phase 3). Nothing fetches state from OTHER hosts, so it does not detect drift
+across a multi-instance deployment. Config drift (Phase 2) is NOT checked here:
+``CentralizedConfigManager.detect_config_drift`` needs a caller-supplied remote
+config and nothing supplies one. Alerts go to Slack / PagerDuty only when their
+webhook / key is configured.
 """
 
 import os
@@ -360,22 +368,32 @@ class DriftDetectionService:
                 logger.error(f"❌ Custom alert handler failed: {e}")
 
     def _audit_alert(self, severity, message: str, instance_id: str, drift_type: str):
-        """Log alert to audit trail"""
-        try:
-            from core.compliance.security_events import write_event
+        """Record the alert in THE audit chain of the process tenant.
 
-            write_event(
-                "drift_alert_sent",
-                {
-                    "severity": severity.value,
-                    "instance_id": instance_id,
-                    "drift_type": drift_type,
-                    "message": message,
-                    "timestamp": datetime.utcnow().isoformat(),
+        Goes through ``forge.security_events.write_event`` on
+        ``forge.paths.tenant_audit_chain()`` (the one chain, ADR-0650). Content-
+        free: the free-text ``message`` never enters the chain — the instance id,
+        drift type and severity carry the fact. This used to import
+        ``core.compliance.security_events``, which does not exist, so every drift
+        alert went unaudited behind a logged ImportError.
+        """
+        try:
+            from forge import paths as forge_paths  # type: ignore[import-not-found]
+            from forge import security_events  # type: ignore[import-not-found]
+
+            tenant_id = forge_paths.tenant_home().name
+            security_events.write_event(
+                forge_paths.tenant_audit_chain(tenant_id),
+                "deployment.drift_alert",
+                details={
+                    "instance_id": str(instance_id)[:128],
+                    "drift_type": str(drift_type)[:64],
+                    "severity": str(getattr(severity, "name", severity))[:16],
+                    "tenant_id": tenant_id,
                 },
             )
-        except Exception as e:
-            logger.error(f"❌ Audit logging failed: {e}")
+        except Exception as e:  # noqa: BLE001 - alert routing must still run
+            logger.error("drift alert audit could not be written: %s", type(e).__name__)
 
     def register_alert_handler(self, handler: Callable[[AlertSeverity, str], None]):
         """Register custom alert handler (for testing)"""

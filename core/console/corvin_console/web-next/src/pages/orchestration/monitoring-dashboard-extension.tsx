@@ -10,6 +10,13 @@
  * - Metrics validation display (outcome_count, avg_confidence bounds)
  * - Audit trail verification (hash-chain status)
  * - Error recovery & degradation (lock timeout → retry button)
+ *
+ * NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+ * nothing imports this component, and routes/orchestration.py is mounted by no
+ * router, so /v1/console/orchestration/status answers 404: that renders "not
+ * available on this build" and stops polling. On any other error the page no
+ * longer renders its placeholder initial state (PHASE_1, "Audit Chain: ✓
+ * Valid") as if it had been measured.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -65,6 +72,9 @@ export const MonitoringDashboardExtension: React.FC = () => {
     error: null,
     request_in_flight: false,
   });
+  // True only once a status response has actually been received.
+  const [loaded, setLoaded] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
 
   /**
    * Fetch orchestration status from API
@@ -77,11 +87,17 @@ export const MonitoringDashboardExtension: React.FC = () => {
         },
       });
 
+      if (response.status === 404) {
+        setUnavailable(true);
+        setDashboard((prev) => ({ ...prev, loading: false }));
+        return;
+      }
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json();
+      setLoaded(true);
       setDashboard((prev) => ({
         ...prev,
         status: data,
@@ -101,10 +117,11 @@ export const MonitoringDashboardExtension: React.FC = () => {
    * Poll status every 2 seconds
    */
   useEffect(() => {
+    if (unavailable) return;
     fetchStatus();
     const interval = setInterval(fetchStatus, 2000);
     return () => clearInterval(interval);
-  }, [fetchStatus]);
+  }, [fetchStatus, unavailable]);
 
   /**
    * Handle approval button click
@@ -113,11 +130,13 @@ export const MonitoringDashboardExtension: React.FC = () => {
     async (phase: string) => {
       setDashboard((prev) => ({ ...prev, request_in_flight: true }));
       try {
-        const response = await fetch('/v1/orchestration/approve', {
+        // The documented route is under /v1/console (routes/orchestration.py);
+        // X-CSRF-Token comes from lib/csrf-fetch.ts — `window.csrfToken`
+        // was never set by anything.
+        const response = await fetch('/v1/console/orchestration/approve', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-Token': (window as any).csrfToken || '',
           },
           body: JSON.stringify({
             phase,
@@ -158,8 +177,28 @@ export const MonitoringDashboardExtension: React.FC = () => {
     return errors;
   };
 
+  if (unavailable) {
+    return (
+      <div className="dashboard" data-testid="orchestration-unavailable">
+        Orchestration status is not available on this build.
+      </div>
+    );
+  }
+
   if (dashboard.loading) {
     return <div className="dashboard loading">Loading orchestration status...</div>;
+  }
+
+  if (!loaded) {
+    // Never render the placeholder initial state as if it were measured.
+    return (
+      <div className="dashboard error-banner" role="alert">
+        <span className="error-message">{dashboard.error || 'Orchestration status could not be loaded.'}</span>
+        <button className="retry-button" onClick={fetchStatus}>
+          Retry
+        </button>
+      </div>
+    );
   }
 
   const { status } = dashboard;

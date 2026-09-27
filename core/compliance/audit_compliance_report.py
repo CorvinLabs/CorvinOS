@@ -8,6 +8,17 @@ Verifies:
 5. Operator approval recorded
 6. Rollback reason documented
 7. Boot tripwire validates chain
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
+DEFUSED: this checker read ``~/.corvin/orchestrator_audit.jsonl`` — a second,
+unchained file no canonical writer produces — and its "hash chain" check only
+compared ``prev_hash`` fields, never recomputing a hash, so a rewritten record
+passed. A compliance verdict built on that is fabricated. The checker now
+refuses to run and names the real sources: the tenant chain is verified by
+``forge.security_events.verify_chain(forge.paths.tenant_audit_chain(tid))`` and
+reports come from ``corvin_compliance_reports`` (gdpr_ropa / ai_act_evidence /
+audit_attestation).
 """
 
 from dataclasses import dataclass
@@ -38,9 +49,11 @@ class AuditComplianceChecker:
     """Comprehensive audit trail compliance verification"""
 
     def __init__(self, audit_path: Optional[Path] = None):
-        self.audit_path = audit_path or Path.home() / ".corvin" / "orchestrator_audit.jsonl"
-        self.check_results: List[AuditComplianceRecord] = []
-        self.event_cache: Dict[str, dict] = {}
+        raise NotImplementedError(
+            "AuditComplianceChecker verified a non-canonical, unchained file and is "
+            "disabled; verify forge.paths.tenant_audit_chain(tenant) with "
+            "forge.security_events.verify_chain and report via corvin_compliance_reports"
+        )
 
     def verify_all_compliance(self, tenant_id: str) -> Tuple[bool, List[AuditComplianceRecord]]:
         """

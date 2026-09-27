@@ -1,5 +1,7 @@
 # Wave 1b Definition-of-Done Verifier Report
 
+> **Status note (2026-09-27, adversarial review):** Event 4 below is wrong: `core/plugins/corvin_plugins/lifecycle.py` has no `PluginExecutor` and no production caller. `plugin.execution_timeout` is emitted by `core/plugins/corvin_plugins/registry.py` (`_emit_execution_timeout`, on `on_load` / `health_check` deadline overruns). "File exists" is not a reachability proof.
+
 **Task ID:** Wave_1b_DESIGN  
 **Task Type:** Design Phase (Multi-Stream Architecture)  
 **Verifier Skill:** `assistant.definition_of_done_verifier` (ADR-0721)  

@@ -11,6 +11,9 @@ ADR-0511: Marketplace Plugin-First Architecture
 ADR-0533: OS-Skill Manifest Schema & Versioning
 ADR-0314: Learning Infrastructure (event emission)
 ADR-0232: Boot Tripwire & Audit Chain (compliance)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+Only ``local://`` sources are implemented; any other scheme is refused.
 """
 
 from __future__ import annotations
@@ -26,12 +29,50 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from uuid import uuid4
+import re
 import threading
 
-import requests
 import yaml
 
 logger = logging.getLogger(__name__)
+
+#: A skill id / version is used as a path component of the install dir, so it
+#: must be a single safe segment: ``plugin.json``'s ``id`` is marketplace
+#: content, and ``../../x`` used to write the copy outside the install root.
+_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+#: Canary progression; promotion may only move forward along this list.
+_CANARY_ORDER = ("canary_10", "canary_50", "promoted")
+
+#: Positive field allowlists for this module's chain events. Free text
+#: (exception messages, rollback reasons) and filesystem paths stay OUT of
+#: the chain; an error is recorded by its type name.
+_ID = {"install_id", "skill_id"}
+_INSTALLER_AUDIT_FIELDS: Dict[str, frozenset] = {
+    "skill_registry_save": frozenset({"skill_count"}),
+    "skill_registry_saved": frozenset({"skill_count"}),
+    "skill_registry_save_failed": frozenset({"error_type"}),
+    "skill_discovery_error": frozenset({"skill_dir_name", "error_type"}),
+    "marketplace_discovery_failed": frozenset({"error_type", "tier"}),
+    "skill_install_initiated": frozenset(_ID | {"version", "source_scheme", "checksum_sha256",
+                                                "deployment_stage", "tenant_scopes"}),
+    "skill_installed": frozenset(_ID | {"version", "deployment_stage", "checksum_sha256"}),
+    "skill_verification_failed": frozenset(_ID | {"error_type"}),
+    "skill_install_failed": frozenset(_ID | {"error_type"}),
+    "skill_canary_promotion_initiated": frozenset(_ID | {"from_stage", "to_stage"}),
+    "skill_canary_promoted": frozenset(_ID | {"from_stage", "to_stage"}),
+    "skill_canary_promotion_failed": frozenset(_ID | {"error_type"}),
+    "skill_rollback_initiated": frozenset(_ID | {"version"}),
+    "skill_rolled_back": frozenset(_ID | {"version"}),
+    "skill_rollback_failed": frozenset(_ID | {"error_type"}),
+    "skill_registration_failed": frozenset({"skill_id", "version", "error_type"}),
+}
+
+
+def _safe_segment(value: str, what: str) -> str:
+    if not isinstance(value, str) or not _SAFE_SEGMENT.match(value) or ".." in value:
+        raise SkillVerificationError(f"unsafe {what}: {value!r}")
+    return value
 
 
 class DeploymentStage(str, Enum):
@@ -116,8 +157,13 @@ class MarketplaceSkillInstaller:
             skills_install_dir: Where to install skills (default: ~/.corvin/skills_installed/)
             audit_emit: Audit event emitter (reaches compliance chain, GDPR Art. 30/32)
         """
-        self.marketplace_root = marketplace_root or Path.home().parent / "projects" / "Corvin-Marketplace" / "plugins"
-        self.skills_install_dir = skills_install_dir or Path.home() / ".corvin" / "skills_installed"
+        self.marketplace_root = marketplace_root or Path.home() / "projects" / "Corvin-Marketplace" / "plugins"
+        if skills_install_dir is None:
+            # Honour CORVIN_HOME (CLAUDE.md: never hard-wire ~/.corvin in skills).
+            from core.paths.tenant import corvin_home  # noqa: PLC0415
+
+            skills_install_dir = corvin_home() / "skills_installed"
+        self.skills_install_dir = Path(skills_install_dir)
         self.audit_emit = audit_emit or self._default_audit_emit
 
         self.skills_install_dir.mkdir(parents=True, exist_ok=True)
@@ -128,8 +174,16 @@ class MarketplaceSkillInstaller:
         self.installations: Dict[str, InstallationRecord] = self._load_registry()
 
     def _default_audit_emit(self, event_type: str, payload: Dict[str, Any]) -> None:
-        """Default audit emitter (logs to console; real implementation uses audit chain)."""
-        logger.info(f"[AUDIT] {event_type}: {json.dumps(payload, default=str)}")
+        """Append to the tenant's hash-chained audit log (audit-FIRST).
+
+        This used to only ``logger.info`` the event while the module claimed
+        "all installations logged to compliance chain". A failed chain write
+        now raises, so the audited action does not proceed unrecorded.
+        """
+        from ._chain_audit import chain_write  # noqa: PLC0415
+
+        chain_write(event_type, payload,
+                    fields=_INSTALLER_AUDIT_FIELDS.get(event_type, frozenset()))
 
     def _load_registry(self) -> Dict[str, InstallationRecord]:
         """Load existing skill installations from registry."""
@@ -165,9 +219,7 @@ class MarketplaceSkillInstaller:
         with self.registry_lock:
             # Emit audit event FIRST (ADR-0232: audit-first design)
             self.audit_emit("skill_registry_save", {
-                "timestamp": datetime.utcnow().isoformat(),
                 "skill_count": len(self.installations),
-                "registry_path": str(self.registry_path),
             })
 
             try:
@@ -189,14 +241,12 @@ class MarketplaceSkillInstaller:
 
                 # Emit success event
                 self.audit_emit("skill_registry_saved", {
-                    "timestamp": datetime.utcnow().isoformat(),
                     "skill_count": len(self.installations),
                 })
             except Exception as e:
                 logger.error(f"Failed to save registry: {e}")
                 self.audit_emit("skill_registry_save_failed", {
-                    "error": str(e),
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "error_type": type(e).__name__,
                 })
                 raise SkillInstallError(f"Registry save failed: {e}")
 
@@ -240,8 +290,10 @@ class MarketplaceSkillInstaller:
                         with open(manifest_yaml) as f:
                             manifest = yaml.safe_load(f)
 
+                        skill_id = _safe_segment(plugin_meta.get("id", skill_dir.name), "skill_id")
+                        _safe_segment(plugin_meta.get("version", "0.0.0"), "version")
                         skill = SkillPackage(
-                            skill_id=plugin_meta.get("id", skill_dir.name),
+                            skill_id=skill_id,
                             version=plugin_meta.get("version", "0.0.0"),
                             source_url=f"local://{skill_dir}",
                             checksum_sha256=self._compute_checksum(skill_dir),
@@ -254,14 +306,14 @@ class MarketplaceSkillInstaller:
                     except Exception as e:
                         logger.error(f"Failed to parse skill {skill_dir.name}: {e}")
                         self.audit_emit("skill_discovery_error", {
-                            "skill_dir": str(skill_dir),
-                            "error": str(e),
+                            "skill_dir_name": skill_dir.name,
+                            "error_type": type(e).__name__,
                         })
 
         except Exception as e:
             logger.error(f"Marketplace discovery failed: {e}")
             self.audit_emit("marketplace_discovery_failed", {
-                "error": str(e),
+                "error_type": type(e).__name__,
                 "tier": tier,
             })
 
@@ -272,6 +324,7 @@ class MarketplaceSkillInstaller:
         hash_obj = hashlib.sha256()
         for file_path in sorted(path.rglob("*")):
             if file_path.is_file():
+                hash_obj.update(file_path.relative_to(path).as_posix().encode() + b"\0")
                 with open(file_path, "rb") as f:
                     hash_obj.update(f.read())
         return hash_obj.hexdigest()
@@ -300,33 +353,37 @@ class MarketplaceSkillInstaller:
         tenant_scopes = tenant_scopes or ["_default"]
         install_id = str(uuid4())
 
-        # Audit-FIRST: log attempt
+        # Audit-FIRST: log attempt. If this record cannot be chained the
+        # default emitter raises and nothing is installed.
         self.audit_emit("skill_install_initiated", {
             "install_id": install_id,
             "skill_id": skill.skill_id,
             "version": skill.version,
-            "source_url": skill.source_url,
+            "source_scheme": skill.source_url.split("://", 1)[0] if "://" in skill.source_url else "",
+            "checksum_sha256": skill.checksum_sha256,
             "deployment_stage": deployment_stage.value,
             "tenant_scopes": tenant_scopes,
         })
 
         try:
-            # Verify skill before installation
+            # Verify skill before installation (ids, manifest, source, checksum)
             self._verify_skill(skill)
+            source_path = self._verified_source(skill)
 
-            # Create installation directory
-            install_path = self.skills_install_dir / f"{skill.skill_id}_{skill.version}"
+            # Create installation directory — must stay inside the install root
+            root = self.skills_install_dir.resolve()
+            install_path = (self.skills_install_dir / f"{skill.skill_id}_{skill.version}")
+            if install_path.resolve().parent != root:
+                raise SkillVerificationError("install path escapes the install root")
             install_path.mkdir(parents=True, exist_ok=True)
 
             # Copy skill to installation directory
-            source_path = Path(skill.source_url.replace("local://", ""))
-            if source_path.exists():
-                for file_path in source_path.rglob("*"):
-                    if file_path.is_file():
-                        rel_path = file_path.relative_to(source_path)
-                        target_path = install_path / rel_path
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(file_path, target_path)
+            for file_path in source_path.rglob("*"):
+                if file_path.is_file():
+                    rel_path = file_path.relative_to(source_path)
+                    target_path = install_path / rel_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(file_path, target_path)
 
             # Create installation record
             record = InstallationRecord(
@@ -353,7 +410,7 @@ class MarketplaceSkillInstaller:
                 "skill_id": skill.skill_id,
                 "version": skill.version,
                 "deployment_stage": deployment_stage.value,
-                "local_path": str(install_path),
+                "checksum_sha256": skill.checksum_sha256,
             })
 
             logger.info(f"✅ Skill installed: {skill.skill_id}@{skill.version} → {install_path}")
@@ -364,7 +421,7 @@ class MarketplaceSkillInstaller:
             self.audit_emit("skill_verification_failed", {
                 "install_id": install_id,
                 "skill_id": skill.skill_id,
-                "error": str(e),
+                "error_type": type(e).__name__,
             })
             raise
 
@@ -373,7 +430,7 @@ class MarketplaceSkillInstaller:
             self.audit_emit("skill_install_failed", {
                 "install_id": install_id,
                 "skill_id": skill.skill_id,
-                "error": str(e),
+                "error_type": type(e).__name__,
             })
             raise SkillInstallError(f"Installation failed: {e}")
 
@@ -384,17 +441,26 @@ class MarketplaceSkillInstaller:
         Checks:
         1. Manifest schema compliance (ADR-0533)
         2. Required fields present
-        3. Dependencies resolvable
-        4. Checksum integrity
+        3. Dependency entries well-formed (NOT resolved against a registry)
+        4. Checksum integrity — in :meth:`_verified_source`, at install time
 
         Raises:
             SkillVerificationError: If any check fails
         """
-        # Check manifest has required fields
-        required_fields = ["name", "version", "goal", "triggers", "input_schema", "output_schema"]
-        for field in required_fields:
-            if field not in skill.manifest:
-                raise SkillVerificationError(f"Missing required field in manifest: {field}")
+        _safe_segment(skill.skill_id, "skill_id")
+        _safe_segment(skill.version, "version")
+
+        # ADR-0533: the full manifest validator runs before installation. This
+        # used to check six keys and log "verification passed".
+        if not isinstance(skill.manifest, dict):
+            raise SkillVerificationError("manifest must be an object")
+        from .skill_validator import validate_skill_manifest_dict  # noqa: PLC0415
+
+        report = validate_skill_manifest_dict(skill.manifest)
+        if not report.is_valid:
+            raise SkillVerificationError(
+                "manifest failed ADR-0533 validation: " + "; ".join(report.blockers[:5])
+            )
 
         # Check version matches
         if skill.manifest["version"] != skill.version:
@@ -407,7 +473,26 @@ class MarketplaceSkillInstaller:
             if not isinstance(dep, (str, dict)):
                 raise SkillVerificationError(f"Invalid dependency format: {dep}")
 
-        logger.info(f"✅ Skill verification passed: {skill.skill_id}@{skill.version}")
+        logger.info(f"Skill manifest verified: {skill.skill_id}@{skill.version}")
+
+    def _verified_source(self, skill: SkillPackage) -> Path:
+        """Resolve the package source and verify its checksum (fail-closed).
+
+        Only ``local://`` is implemented. A missing source used to be skipped
+        silently and the install reported ``installed`` with an empty
+        directory; the declared checksum was never compared at all.
+        """
+        if not skill.source_url.startswith("local://"):
+            raise SkillVerificationError(
+                f"not_implemented: source scheme of {skill.source_url.split('://', 1)[0]!r}"
+            )
+        source_path = Path(skill.source_url[len("local://"):])
+        if not source_path.is_dir():
+            raise SkillVerificationError("package source directory does not exist")
+        actual = self._compute_checksum(source_path)
+        if actual != skill.checksum_sha256:
+            raise SkillVerificationError("package checksum mismatch")
+        return source_path
 
     def promote_canary(
         self,
@@ -434,6 +519,14 @@ class MarketplaceSkillInstaller:
 
         record = self.installations[install_id]
         old_stage = record.deployment_stage
+
+        # Only forward along canary_10 → canary_50 → promoted. A rolled-back
+        # or failed installation used to be promotable straight to 100%.
+        if (old_stage.value not in _CANARY_ORDER or next_stage.value not in _CANARY_ORDER
+                or _CANARY_ORDER.index(next_stage.value) <= _CANARY_ORDER.index(old_stage.value)):
+            raise SkillInstallError(
+                f"Invalid promotion: {old_stage.value} -> {next_stage.value}"
+            )
 
         # Audit-FIRST: log promotion attempt
         self.audit_emit("skill_canary_promotion_initiated", {
@@ -465,7 +558,7 @@ class MarketplaceSkillInstaller:
             self.audit_emit("skill_canary_promotion_failed", {
                 "install_id": install_id,
                 "skill_id": record.skill_id,
-                "error": str(e),
+                "error_type": type(e).__name__,
             })
             raise SkillInstallError(f"Promotion failed: {e}")
 
@@ -493,11 +586,12 @@ class MarketplaceSkillInstaller:
         record = self.installations[install_id]
 
         # Audit-FIRST: log rollback attempt
+        # ``reason`` is operator free text: logged locally, never chained.
+        logger.info("rollback %s requested: %s", install_id, reason)
         self.audit_emit("skill_rollback_initiated", {
             "install_id": install_id,
             "skill_id": record.skill_id,
             "version": record.version,
-            "reason": reason,
         })
 
         try:
@@ -512,7 +606,6 @@ class MarketplaceSkillInstaller:
                 "install_id": install_id,
                 "skill_id": record.skill_id,
                 "version": record.version,
-                "reason": reason,
             })
 
             logger.info(f"✅ Skill rolled back: {record.skill_id}@{record.version}")
@@ -523,7 +616,7 @@ class MarketplaceSkillInstaller:
             self.audit_emit("skill_rollback_failed", {
                 "install_id": install_id,
                 "skill_id": record.skill_id,
-                "error": str(e),
+                "error_type": type(e).__name__,
             })
             raise SkillInstallError(f"Rollback failed: {e}")
 

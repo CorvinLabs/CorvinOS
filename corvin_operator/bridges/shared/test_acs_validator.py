@@ -364,3 +364,23 @@ def test_validation_result_str():
     assert "R1" in str(issue)
     assert "ERROR" in str(issue)
     assert "bad version" in str(issue)
+
+
+def test_codemode_tool_creation_checks_workflow_dynamic_tools():
+    """Round-2 review: R25/R26 read the workflow document through an undefined
+    name, so a codemode agent with ``tool_creation`` made the validator raise
+    NameError instead of returning a result."""
+    import acs_validator as _v
+
+    agent = {"identity": {"id": "a"},
+             "capabilities": {"tools": {"enabled": True},
+                              "sandbox": {"type": "process"},
+                              "codemode": {"enabled": True, "tool_creation": True}}}
+    bad = _v.validate_workflow_dict({"workflow": {"name": "w"}}, agents_data=[agent])
+    rules = {i.rule_id for i in bad.errors}
+    assert {"R25", "R26"} <= rules
+    good = _v.validate_workflow_dict(
+        {"workflow": {"name": "w"},
+         "dynamic_tools": {"enabled": True, "allowed_namespaces": ["dynamic"]}},
+        agents_data=[agent])
+    assert not ({"R25", "R26"} & {i.rule_id for i in good.errors})

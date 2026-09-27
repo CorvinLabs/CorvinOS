@@ -109,8 +109,10 @@ class EventStore:
         date_str = timestamp.split("T")[0]
         return self.events_dir / f"{date_str}.jsonl"
 
-    def write_event(self, event: LearningEvent) -> None:
+    def write_event(self, event: LearningEvent) -> str:
         """Write event: core audit chain FIRST (fail-closed), then disk.
+
+        Returns the ``audit_ref`` of the committed chain record.
 
         F2: PII Scrubbing — all payloads scrubbed before disk write (GDPR Art. 32).
 
@@ -155,6 +157,7 @@ class EventStore:
 
             except IOError as e:
                 raise IOError(f"Failed to write learning event: {e}")
+            return audit_ref
 
     @staticmethod
     def _audit_chain_first(event: LearningEvent) -> str:

@@ -251,6 +251,23 @@ async def _jwt_guard(request: HTTPConnection) -> None:
 # ── Lifespan + app instance ──────────────────────────────────────────
 
 
+def _deployment_identity() -> tuple[str, str]:
+    """``(instance_id, tenant_id)`` this gateway registers for drift detection.
+
+    CORVIN_* only (project identity hard cut): a bare ``INSTANCE_ID`` /
+    ``TENANT_ID`` is not a Corvin variable, and reading it registered every
+    gateway under ``_default`` regardless of ``CORVIN_TENANT_ID``. The tenant
+    goes through the canonical resolver, so an invalid value raises instead of
+    silently registering a malformed tenant id.
+    """
+    from forge.tenants import current_tenant
+
+    return (
+        os.environ.get("CORVIN_INSTANCE_ID") or "gateway-local",
+        current_tenant(),
+    )
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create the dispatcher on startup, drain in-flight on shutdown.
@@ -354,8 +371,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         import logging as _deployment_logger
 
         manager = get_deployment_manager()
-        instance_id = os.environ.get("INSTANCE_ID", "gateway-local")
-        tenant_id = os.environ.get("TENANT_ID", "_default")
+        instance_id, tenant_id = _deployment_identity()
 
         manager.register_instance(instance_id=instance_id, tenant_id=tenant_id)
         _deployment_logger.getLogger("corvin.deployment").info(

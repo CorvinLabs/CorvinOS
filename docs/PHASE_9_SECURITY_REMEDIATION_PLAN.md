@@ -1,5 +1,7 @@
 # PHASE 9 SECURITY REMEDIATION PLAN
 
+> **Status note (2026-09-27, adversarial review):** `control_plane/plugin_manager.py` and `control_plane/subsystem_manager.py` have no production caller — the control-plane plugin/subsystem routes that used them now answer 501. Neither manager controls a real plugin or subsystem.
+
 **Status:** 🔴 BLOCKING — 13 Critical + 8 High Severity Security Issues  
 **Timeline:** 2–3 day remediation sprint required before Phase 10 kickoff  
 **Go Decision:** 🔴 NO-GO FOR PRODUCTION until fixes applied  

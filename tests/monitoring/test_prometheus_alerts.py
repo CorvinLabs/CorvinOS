@@ -18,19 +18,24 @@ from pathlib import Path
 ALERTS_FILE = Path(__file__).parent.parent.parent / "core/console/corvin_console/monitoring/prometheus_alerts.yaml"
 
 
+@pytest.fixture(scope="module")
+def alert_rules():
+    """Load alert rules from YAML file.
+
+    Module-scoped (it used to be defined inside TestPrometheusAlerts, so
+    TestAlertNaming errored with "fixture 'alert_rules' not found").
+    """
+    with open(ALERTS_FILE, "r") as f:
+        content = f.read()
+        # Remove comments for YAML parsing
+        lines = [line for line in content.split("\n") if not line.strip().startswith("#")]
+        yaml_content = "\n".join(lines)
+        rules = yaml.safe_load(yaml_content)
+    return rules
+
+
 class TestPrometheusAlerts:
     """Test Prometheus alert rules."""
-
-    @pytest.fixture(scope="class")
-    def alert_rules(self):
-        """Load alert rules from YAML file."""
-        with open(ALERTS_FILE, "r") as f:
-            content = f.read()
-            # Remove comments for YAML parsing
-            lines = [line for line in content.split("\n") if not line.strip().startswith("#")]
-            yaml_content = "\n".join(lines)
-            rules = yaml.safe_load(yaml_content)
-        return rules
 
     def test_alert_yaml_valid(self):
         """Test that alert rules YAML is valid."""
@@ -154,30 +159,27 @@ class TestPrometheusAlerts:
                         f"Alert {rule.get('alert')} expression doesn't look like Prometheus: {expr[:100]}"
 
     def test_alert_thresholds_documented(self, alert_rules):
-        """Test alert thresholds are in descriptions."""
-        groups = alert_rules["groups"]
+        """Every critical alert that fires on a NON-ZERO numeric threshold names
+        that threshold in its description (counter alerts on ``> 0`` fire on any
+        occurrence and have no threshold to document). This replaces an
+        arbitrary ">= 3 descriptions contain a keyword" count, which failed on
+        a file where every thresholded alert is in fact documented."""
+        import re
 
-        threshold_count = 0
-
-        for group in groups:
+        thresholded = 0
+        for group in alert_rules["groups"]:
             for rule in group["rules"]:
-                if "alert" in rule:
-                    description = rule.get("annotations", {}).get("description", "")
-
-                    # Critical alerts should mention thresholds
-                    severity = rule.get("labels", {}).get("severity")
-                    if severity == "critical":
-                        # Should mention threshold or expected value
-                        has_threshold = any(
-                            keyword in description.lower()
-                            for keyword in ["threshold", "expected", "ms)", "%)", "exceeds"]
-                        )
-
-                        if has_threshold:
-                            threshold_count += 1
-
-        # Should have multiple alerts with documented thresholds
-        assert threshold_count >= 3
+                if "alert" not in rule or rule.get("labels", {}).get("severity") != "critical":
+                    continue
+                m = re.search(r"[<>]=?\s*([0-9]*\.?[0-9]+)\s*$", str(rule.get("expr", "")).strip())
+                if not m or float(m.group(1)) == 0.0:
+                    continue
+                thresholded += 1
+                description = rule.get("annotations", {}).get("description", "")
+                assert f"threshold: {m.group(1)}" in description, (
+                    f"{rule['alert']}: threshold {m.group(1)} not documented in description"
+                )
+        assert thresholded >= 1, "positive control: at least one thresholded critical alert"
 
 
 class TestAlertNaming:

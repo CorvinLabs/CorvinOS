@@ -4,14 +4,29 @@ import math
 import pytest
 from datetime import datetime, timezone
 
+
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
+
+
+def _trail(tmp_path):
+    """``AuditTrail`` needs a tenant; since 2026-09-27 it writes the tenant's
+    CORE chain (tenant_audit_chain under the scratch CORVIN_HOME above) and
+    refuses a private chain file. (The no-argument ``AuditTrail()`` these
+    tests once used never constructed.)"""
+    from core.skills.os_skills.audit.trail import AuditTrail
+
+    return AuditTrail("test_tenant")
+
 # Test Finding 1: German IBAN redaction
-def test_iban_redaction():
+def test_iban_redaction(tmp_path):
     """Test that German IBANs are properly redacted."""
     from core.skills.os_skills.audit.reporter import ComplianceReporter
     from core.skills.os_skills.audit.trail import AuditTrail
 
     # Create a minimal audit trail
-    trail = AuditTrail()
+    trail = _trail(tmp_path)
     reporter = ComplianceReporter(trail)
 
     # Test IBAN redaction
@@ -23,12 +38,12 @@ def test_iban_redaction():
 
 
 # Test Finding 2: International phone redaction
-def test_phone_redaction():
+def test_phone_redaction(tmp_path):
     """Test that international phone formats are redacted."""
     from core.skills.os_skills.audit.reporter import ComplianceReporter
     from core.skills.os_skills.audit.trail import AuditTrail
 
-    trail = AuditTrail()
+    trail = _trail(tmp_path)
     reporter = ComplianceReporter(trail)
 
     # Test multiple phone formats
@@ -48,12 +63,12 @@ def test_phone_redaction():
 
 
 # Test Finding 3: Prometheus metric validation
-def test_prometheus_validation():
+def test_prometheus_validation(tmp_path):
     """Test Prometheus metric value validation."""
     from core.skills.os_skills.audit.prometheus import PrometheusExporter
     from core.skills.os_skills.audit.trail import AuditTrail
 
-    trail = AuditTrail()
+    trail = _trail(tmp_path)
     exporter = PrometheusExporter(trail)
 
     # Test invalid values (should raise)
@@ -75,12 +90,12 @@ def test_prometheus_validation():
 
 
 # Test Finding 4: Random salt generation
-def test_random_salt():
+def test_random_salt(tmp_path):
     """Test that salt is randomly generated, not hardcoded."""
     from core.skills.os_skills.audit.reporter import ComplianceReporter
     from core.skills.os_skills.audit.trail import AuditTrail
 
-    trail = AuditTrail()
+    trail = _trail(tmp_path)
 
     # Create two reporters with no explicit salt
     reporter1 = ComplianceReporter(trail)
@@ -101,12 +116,12 @@ def test_random_salt():
 
 
 # Test Finding 5: Prefix validation
-def test_prometheus_prefix_validation():
+def test_prometheus_prefix_validation(tmp_path):
     """Test that Prometheus prefix is validated."""
     from core.skills.os_skills.audit.prometheus import PrometheusExporter
     from core.skills.os_skills.audit.trail import AuditTrail
 
-    trail = AuditTrail()
+    trail = _trail(tmp_path)
     exporter = PrometheusExporter(trail)
 
     # Invalid prefixes
@@ -137,36 +152,19 @@ def test_prometheus_prefix_validation():
 
 
 # Test Finding 6 & 6b: Bias threshold >= 80%
-def test_bias_threshold():
+def test_bias_threshold(tmp_path):
     """Test bias detection at exactly 80% boundary."""
     from core.skills.os_skills.audit.reporter import ComplianceReporter
     from core.skills.os_skills.audit.trail import AuditTrail, AuditEvent
 
-    trail = AuditTrail()
+    trail = _trail(tmp_path)
     reporter = ComplianceReporter(trail)
 
-    # Manually add events for testing (bypass normal flow)
-    # Create 10 feedback events, 8 positive (80%)
-    for i in range(8):
-        event = AuditEvent(
-            event_type="feedback_received",
-            tenant_id="test_tenant",
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            skill_id="test_skill_1",
-            payload={"signal": "positive"},
-        )
-        trail.events.append(event)
-
-    # Add 2 neutral (total 10, positive = 80%)
-    for i in range(2):
-        event = AuditEvent(
-            event_type="feedback_received",
-            tenant_id="test_tenant",
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            skill_id="test_skill_1",
-            payload={"signal": "neutral"},
-        )
-        trail.events.append(event)
+    # 10 feedback events for one skill, 8 positive (80%) — written through the
+    # trail (there is no ``trail.events`` list to append to)
+    for signal in ["positive"] * 8 + ["neutral"] * 2:
+        trail.write_event("feedback_received", skill_id="test_skill_1",
+                          payload={"signal": signal})
 
     alerts = reporter.detect_bias()
 

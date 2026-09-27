@@ -2,12 +2,15 @@
  * ConsolePluginUploadModal — Plugin Upload Dialog
  *
  * Drag-drop ZIP upload for plugin distribution (Layer 1-4).
- * Validates file + size, calls POST /v1/skills/upload endpoint.
+ * Validates file + size, then POSTs it to /v1/console/plugin-uploads
+ * (routes/plugin_upload.py; CSRF header via lib/csrf-fetch.ts). An invalid
+ * package is answered 400 with {detail: {message, validation_errors}}.
  *
  * Props: isOpen (bool), onClose (fn), onUploadComplete (fn)
  */
 import React, { useCallback, useRef, useState } from 'react';
 import { Upload, X, AlertCircle } from 'lucide-react';
+import { PLUGIN_UPLOADS, errorMessage } from '@/pages/skills/endpoints';
 
 export interface ConsolePluginUploadModalProps {
   isOpen: boolean;
@@ -87,18 +90,18 @@ export const ConsolePluginUploadModal: React.FC<ConsolePluginUploadModalProps> =
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const response = await fetch('/v1/skills/upload', {
+      const response = await fetch(PLUGIN_UPLOADS, {
         method: 'POST',
         body: formData,
+        credentials: 'same-origin',
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || `HTTP ${response.status}`);
+        throw new Error(await errorMessage(response));
       }
 
       const data = await response.json();
-      const uploadId = data.upload_id || data.id || '';
+      const uploadId: string = data.upload_id ?? '';
       setSelectedFile(null);
       onUploadComplete(uploadId);
       onClose();

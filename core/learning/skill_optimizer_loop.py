@@ -38,6 +38,19 @@ Algorithm:
      - Emit config_updated event
      - Write new manifest
   5. Return OptimizationDecision for audit logging
+
+Audit-first (fixed 2026-09-27): a decision that WOULD change a config is
+committed to the tenant's core audit chain (``learning.config_updated`` via
+``event_persistence.core_audit_event``) before ``should_update`` stays true;
+if that record does not commit the decision is downgraded to
+``audit_unavailable``. ``apply_config_update`` refuses any decision without a
+committed ``audit_ref``. (Previously an optimizer built without an emitter
+never audited at all, an emit failure was logged and ignored, and
+``apply_config_update`` wrote the manifest regardless.)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The
+module did not even import until 2026-09-27 (``FeedbackSignal`` was imported
+from a module that does not define it).
 """
 
 from __future__ import annotations
@@ -45,16 +58,22 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 
-from core.learning.learning_events import LearningEvent, EventType, FeedbackSignal
+from core.learning.learning_events import LearningEvent, EventType
+from core.learning.skill_feedback_ingester import FeedbackSignal
 from core.learning.skill_feedback_ingester import FeedbackSignalType
 from core.paths import tenant_home
+from core.tenants import validate_tenant_id
 
 logger = logging.getLogger(__name__)
+
+#: A skill id becomes a manifest file name: a plain dotted identifier only.
+_SKILL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*")
 
 
 @dataclass
@@ -69,6 +88,7 @@ class OptimizationDecision:
     slope: float = 0.0
     validation_passed: bool = False
     audit_event: Optional[LearningEvent] = None
+    audit_ref: str = ""  # committed core-chain record (required to apply)
 
 
 class ConvergenceDetector:
@@ -200,6 +220,9 @@ class SkillOptimizerLoop:
             skill_id: Skill being optimized (e.g., "os.delegation_router")
             emitter: EventEmitter for audit logging
         """
+        validate_tenant_id(tenant_id)
+        if not isinstance(skill_id, str) or len(skill_id) > 128 or not _SKILL_ID_RE.fullmatch(skill_id):
+            raise ValueError(f"invalid skill_id: {skill_id!r}")
         self.tenant_id = tenant_id
         self.skill_id = skill_id
         self.emitter = emitter
@@ -319,7 +342,31 @@ class SkillOptimizerLoop:
         """
         decision = self.optimize_from_signal(signal, current_config, outcomes)
 
-        # Emit audit event (audit-first, before any side effects)
+        # Audit FIRST for a decision that would change a config: a committed
+        # chain record or no update (fail-closed).
+        if decision.should_update:
+            from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
+            try:
+                decision.audit_ref = core_audit_event(
+                    "learning.config_updated",
+                    tenant_id=self.tenant_id,
+                    details={
+                        "event_id": f"opt-{self.skill_id}-{datetime.now(timezone.utc).timestamp():.6f}",
+                        "event_type": EventType.CONFIG_UPDATED.value,
+                        "skill_id": self.skill_id,
+                        "lom": "core/learning/skill_optimizer_loop.py:execute_optimization_epoch",
+                        "tenant_id": self.tenant_id,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 — any audit failure refuses the update
+                logger.error("optimizer config update for %s refused: audit did not commit (%s)",
+                             self.skill_id, type(exc).__name__)
+                decision.should_update = False
+                decision.validation_passed = False
+                decision.reason = "audit_unavailable"
+
+        # Learning signal for the optimizer's own feedback loop (best effort;
+        # the emitter is an async queue, NOT the audit record).
         if self.emitter:
             try:
                 audit_event = LearningEvent.create(
@@ -364,6 +411,9 @@ class SkillOptimizerLoop:
         """
         if not decision.should_update:
             return False
+        if not decision.audit_ref:
+            logger.error("refusing config update for %s: no committed audit record", self.skill_id)
+            return False
 
         if not manifest_path:
             # Default: skill manifest in tenant home
@@ -383,7 +433,7 @@ class SkillOptimizerLoop:
 
             # Update config
             manifest["config"] = decision.new_config
-            manifest["last_optimizer_update"] = datetime.now(timezone.utc).isoformat() + "Z"
+            manifest["last_optimizer_update"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             manifest["optimizer_epochs"] = manifest.get("optimizer_epochs", 0) + 1
 
             # Write manifest (atomic: write temp, then rename)

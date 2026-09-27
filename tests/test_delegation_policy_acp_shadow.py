@@ -77,7 +77,14 @@ class TestShadowWiring:
         outputs = [e.signal["output"] for e in events]
         assert all(o["shadow"] is True for o in outputs)
         assert sorted(o["bundled_engine"] for o in outputs) == ["acs", "native", "tde"]
-        assert all(o["engine"] in ("claude-haiku-4", "claude-sonnet-4", "claude-opus-5") for o in outputs)
+        # The Skill answers in the engine vocabulary under ``decision`` and, now
+        # that it receives force_delegate / is_big_data, agrees with the
+        # bundled rule on the /delegate turn instead of fabricating a
+        # "native" disagreement.
+        assert all(o["decision"] in ("native", "acs", "tde") for o in outputs)
+        by_bundled = {o["bundled_engine"]: o["decision"] for o in outputs}
+        assert by_bundled["native"] == "native"
+        assert by_bundled["acs"] == "acs"
         assert all(e.lom and "delegation_policy" in e.lom for e in events)
         # the core audit chain got the skill execution AND the learning record
         assert sum(1 for et, _ in audit if et == "skill.executed") == 3  # CoreAuditBackend dots the type

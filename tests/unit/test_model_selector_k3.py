@@ -69,7 +69,7 @@ async def test_escalation_triggers_at_threshold():
 
     assert task_state.escalated
     assert task_state.model == "sonnet"
-    assert len(monitor.event_queue.qsize()) > 0
+    assert monitor.event_queue.qsize() > 0
 
 
 @pytest.mark.asyncio
@@ -142,21 +142,78 @@ async def test_get_escalation_events():
 # ModelSelector K=3 Integration Tests (5 tests)
 # ============================================================================
 
-def test_resolve_os_model_default():
-    """resolve_os_model returns a model."""
-    model = resolve_os_model(None)
-    assert model in ["haiku", "sonnet", "opus"]
+def test_resolve_os_model_defers_to_the_canonical_resolver(monkeypatch):
+    """K=3 no longer decides the model: it returns what the ONE resolver
+    (bridges/shared/model_selector.resolve_os_model, ADR-0952) returns. The
+    old stub answered "sonnet" for everything."""
+    from corvin_operator.bridges.shared import model_selector as ms
+
+    seen = {}
+
+    def fake(profile, **kw):
+        seen.update(kw, profile=profile)
+        return "claude-opus-5"
+
+    monkeypatch.setattr(ms, "resolve_os_model", fake)
+    assert resolve_os_model("design a distributed system", tenant_id="t1") == "claude-opus-5"
+    assert seen["task_input"] == "design a distributed system"
+    assert seen["tenant_id"] == "t1"
 
 
-def test_health_monitor_registration():
-    """Health monitor registration in resolve_os_model."""
-    monitor = HealthCheckMonitor()
+def test_resolve_os_model_honours_operator_pin(monkeypatch):
+    """Tier 1 pin wins; the stub ignored it."""
+    monkeypatch.setenv("CORVIN_OS_MODEL_OVERRIDE", "claude-haiku-4-5-20251001")
+    assert resolve_os_model("write a compiler") == "claude-haiku-4-5-20251001"
+
+
+@pytest.mark.asyncio
+async def test_pinned_task_is_registered_pinned_and_never_escalated(monkeypatch):
+    import core.skills.os_skills.model_selector_k3_integration as k3
+
+    monkeypatch.setenv("CORVIN_OS_MODEL_OVERRIDE", "claude-haiku-4-5-20251001")
+    monitor = HealthCheckMonitor(sla_target_ms=10)
+    monkeypatch.setattr(k3, "_HEALTH_MONITOR", monitor)
 
     class TaskInput:
         task_id = "task1"
+        text = "hello"
 
-    # With monitor available
-    # (In real code, this would use global _HEALTH_MONITOR)
+    model = resolve_os_model(TaskInput())
+    state = monitor.running_tasks["task1"]
+    assert state.pinned and state.model == model
+    state.start_time -= 10  # far beyond the SLA
+    await monitor._check_all_tasks()
+    assert not state.escalated and state.model == model
+    assert monitor.event_queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_escalation_uses_the_task_sla_not_a_literal_600():
+    monitor = HealthCheckMonitor()
+    monitor.register_task("t", "haiku", sla_target_ms=100)
+    monitor.running_tasks["t"].start_time -= 0.08  # 80 ms elapsed → projection 120 > 100
+    await monitor._check_all_tasks()
+    assert monitor.running_tasks["t"].model == "sonnet"
+
+
+@pytest.mark.asyncio
+async def test_top_tier_does_not_emit_a_fake_escalation():
+    monitor = HealthCheckMonitor()
+    monitor.register_task("t", "opus")
+    await monitor._trigger_escalation("t", monitor.running_tasks["t"], 9999)
+    assert monitor.event_queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_initialize_health_monitor_starts_inside_the_loop():
+    import core.skills.os_skills.model_selector_k3_integration as k3
+
+    monitor = await initialize_health_monitor()
+    try:
+        assert monitor.health_check_task is not None and not monitor.health_check_task.done()
+    finally:
+        await monitor.stop()
+        k3._HEALTH_MONITOR = None
 
 
 @pytest.mark.asyncio
@@ -181,14 +238,6 @@ def test_unregister_task_integration():
     assert "task1" not in monitor.running_tasks
 
 
-def test_model_selector_k2_unchanged():
-    """K=2 classification logic unchanged (K=3 is additive)."""
-    # K=2 would be: classify_complexity → confidence → model
-    # K=3 adds: register_health_monitor(model)
-    # This test validates K=2 still works (stubbed to return sonnet)
-    assert resolve_os_model(None) in ["haiku", "sonnet", "opus"]
-
-
 # ============================================================================
 # ConfidenceScoreboard K=3 Tests (10 tests)
 # ============================================================================
@@ -204,7 +253,7 @@ def test_scoreboard_init():
 def test_scoreboard_update_success():
     """Update scoreboard with success outcome."""
     sb = ConfidenceScoreboardK3()
-    delta = sb.update("haiku", "success", escalated=False, latency_ms=300)
+    delta = sb.update("haiku", "success", escalated=False, latency_observed_ms=300)
 
     assert sb.scores["haiku"]["success_count"] == 1
     assert sb.scores["haiku"]["total_count"] == 1
@@ -230,9 +279,9 @@ def test_confidence_delta_with_escalation():
 def test_trend_stable():
     """Trend detection: stable."""
     sb = ConfidenceScoreboardK3()
-    sb.update("haiku", "success", latency_ms=300)
-    sb.update("haiku", "success", latency_ms=310)
-    sb.update("haiku", "success", latency_ms=305)
+    sb.update("haiku", "success", latency_observed_ms=300)
+    sb.update("haiku", "success", latency_observed_ms=310)
+    sb.update("haiku", "success", latency_observed_ms=305)
     trend = sb.scores["haiku"]["trend"]
     assert trend == "stable"
 
@@ -240,9 +289,9 @@ def test_trend_stable():
 def test_trend_improving():
     """Trend detection: improving (latency decreasing)."""
     sb = ConfidenceScoreboardK3()
-    sb.update("haiku", "success", latency_ms=500)
-    sb.update("haiku", "success", latency_ms=400)
-    sb.update("haiku", "success", latency_ms=300)
+    sb.update("haiku", "success", latency_observed_ms=500)
+    sb.update("haiku", "success", latency_observed_ms=400)
+    sb.update("haiku", "success", latency_observed_ms=300)
     trend = sb.scores["haiku"]["trend"]
     assert trend == "improving"
 
@@ -250,9 +299,9 @@ def test_trend_improving():
 def test_trend_degrading():
     """Trend detection: degrading (latency increasing)."""
     sb = ConfidenceScoreboardK3()
-    sb.update("haiku", "success", latency_ms=300)
-    sb.update("haiku", "success", latency_ms=400)
-    sb.update("haiku", "success", latency_ms=500)
+    sb.update("haiku", "success", latency_observed_ms=300)
+    sb.update("haiku", "success", latency_observed_ms=400)
+    sb.update("haiku", "success", latency_observed_ms=500)
     trend = sb.scores["haiku"]["trend"]
     assert trend == "degrading"
 
@@ -271,7 +320,7 @@ def test_latency_samples_rolling_window():
     """Latency samples use rolling window (max 10)."""
     sb = ConfidenceScoreboardK3()
     for i in range(15):
-        sb.update("haiku", "success", latency_ms=100 + i)
+        sb.update("haiku", "success", latency_observed_ms=100 + i)
 
     # Should have max 10 samples
     assert len(sb.scores["haiku"]["latency_samples"]) == 10
@@ -377,7 +426,7 @@ def test_k3_full_flow():
 
     # 3. Update scoreboard
     sb = ConfidenceScoreboardK3()
-    delta = sb.update("haiku", "success", escalated=True, latency_ms=620)
+    delta = sb.update("haiku", "success", escalated=True, latency_observed_ms=620)
 
     # 4. Confidence delta for next task
     next_delta = sb.get_confidence_delta("haiku")

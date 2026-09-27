@@ -54,8 +54,12 @@ def _install(root: Path, skill_id: str, version: str, deps: list[dict] | None = 
 
 @pytest.fixture
 def registry(tmp_path, monkeypatch) -> Path:
+    # The catalogue reads ``installed_skills_root()`` = ``corvin_home()/skills_installed``
+    # (the store the Skill Manager writes); point CORVIN_HOME at the sandbox.
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     root = tmp_path / "skills_installed"
-    monkeypatch.setattr(marketplace_routes, "_REGISTRY_PATH", root / "skills_registry.json")
+    from core.console.corvin_console.routes.skill_manager import installed_skills_root
+    assert installed_skills_root().resolve() == root.resolve()  # positive control
     return root
 
 

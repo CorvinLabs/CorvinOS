@@ -93,6 +93,9 @@ _LEARNING_EVENT_ALLOWLISTS: dict[str, frozenset[str]] = {
             # core/learning/learning_events.py::EventType (ADR-0314 store)
             "confidence", "feedback", "outcome", "preference", "attention", "metric",
             "config_updated", "skill_executed", "decision",
+            "plugin_executed", "plugin_confidence_updated", "plugin_error_recovered",
+            "geo_mismatch", "scene_rendered", "quality_feedback", "upload_progress",
+            "production_complete",
             # core/learning/event_schema.py::LearningEventType (event_persistence store)
             "tool.executed", "operator.rated_tool", "operator.rated_skill", "confidence.score",
             "decision.record", "feedback.user_provided", "outcome.observed", "preference.set",
@@ -101,6 +104,55 @@ _LEARNING_EVENT_ALLOWLISTS: dict[str, frozenset[str]] = {
         )
     },
     "learning.retention": frozenset({"retention_days", "deleted_count", "partitions_rewritten", "audit_ref"}),
+    # core/learning/phase7_orchestrator_bridge.py (NOT WIRED as of 2026-09-27)
+    **{
+        name: frozenset({
+            "event_id", "skill_id", "skill_version", "latency_ms", "lom", "event_id_ref",
+            "signal", "param", "audit_ref", "tenant_id",
+        })
+        for name in ("learning.phase7_skill_executed", "learning.phase7_feedback",
+                     "learning.phase7_config_updated")
+    },
+    # core/learning/phase2b_integration.py (NOT WIRED as of 2026-09-27)
+    **{
+        f"learning.phase2b.{name}": frozenset({
+            "skill_id", "confidence", "confidence_at_transition", "confidence_boost",
+            "current_confidence", "decline_percent", "delta", "feedback_signal_strength",
+            "from_phase", "to_phase", "new_threshold", "old_threshold", "new_value",
+            "old_value", "param_name", "n_samples", "n_samples_at_transition",
+            "phase_2b_eligible", "plateau_confidence", "plateau_days", "reason",
+            "recommended_action", "resumed_confidence", "resume_improvement_percent",
+            "rolling_avg_7day", "severity", "trend_direction", "variance_7day",
+            "audit_ref", "tenant_id",
+        })
+        for name in ("confidence_trend_recorded", "phase_transition_recorded",
+                     "optimization_triggered", "threshold_adjusted", "divergence_detected",
+                     "convergence_detected", "false_convergence_detected")
+    },
+    # core/learning/event_store_consumer.py (NOT WIRED as of 2026-09-27)
+    "learning.outcome_aggregated": frozenset({
+        "skill_id", "window_ts", "outcome_count", "avg_confidence", "feedback_count",
+        "audit_ref", "tenant_id",
+    }),
+    # Stream A/B modules (confidence_scorer_a3, meta_optimizer_a4,
+    # audit_event_enricher_b; NOT WIRED as of 2026-09-27)
+    "learning.confidence_scored": frozenset({
+        "skill_id", "outcome_count", "success_count", "escalation_count",
+        "confidence_delta", "trend", "source_audit_ref", "audit_ref", "tenant_id",
+    }),
+    "learning.optimizer_config_updated": frozenset({
+        "skill_id", "config_delta", "confidence_before", "confidence_after",
+        "source_audit_ref", "audit_ref", "tenant_id",
+    }),
+    "learning.enriched_outcome_event": frozenset({
+        "skill_id", "outcome_count", "confidence_delta", "trend", "a2_audit_ref",
+        "a3_audit_ref", "audit_ref", "tenant_id",
+    }),
+    # core/learning/optimizer_loop.py (Phase C k=3; NOT WIRED as of 2026-09-27)
+    "learning.parameter_update_recorded": frozenset({
+        "update_id", "trend_id", "model_id", "pattern_key", "parameter_names",
+        "update_count", "audit_ref", "tenant_id",
+    }),
     "learning.erasure": frozenset({"erasure_id", "erased_count", "partitions_rewritten", "audit_ref"}),
     "learning.hyperparameter_changed": frozenset({
         "loop_id", "reason", "update_count", "conservative_mode", "changes", "audit_ref",

@@ -182,26 +182,49 @@ def _hash_audit_event(event_data: str, prev_hash: Optional[str] = None) -> str:
 
 
 def _emit_audit_event(event_type: str, data: Dict[str, Any], task_id: str):
-    """Emit audit event to the chain (ADR-0232: Hash-chained audit).
+    """Record a timeline action in THE tenant audit chain (ADR-0232/0650).
 
-    Args:
-        event_type: Type of event (e.g., 'frame_status_changed', 'executor_paused')
-        data: Event payload
-        task_id: Task identifier for audit trail
+    Written through ``forge.security_events.write_event`` on
+    ``forge.paths.tenant_audit_chain()`` for the process tenant, content-free:
+    the action name plus task/frame ids, status and progress — never metadata or
+    error text. ``_AUDIT_EVENTS`` keeps a per-process index of the REAL chain
+    records (their chain ``hash`` / ``prev_hash``) for the timeline response.
+
+    Until 2026-09-27 this computed its own "hash chain" over an in-memory list
+    and wrote nothing to the audit trail at all (adversarial review).
     """
-    prev_hash = _AUDIT_EVENTS[-1]['hash'] if _AUDIT_EVENTS else None
-    event_hash = _hash_audit_event(f"{event_type}:{task_id}:{str(data)}", prev_hash)
+    try:
+        from forge import paths as forge_paths  # type: ignore[import-not-found]
+        from forge import security_events  # type: ignore[import-not-found]
 
-    audit_event = {
+        tenant_id = forge_paths.tenant_home().name
+        details: Dict[str, Any] = {
+            "action": str(event_type)[:64],
+            "task_id": str(task_id)[:128],
+            "tenant_id": tenant_id,
+        }
+        if data.get("frameId") is not None:
+            details["frame_id"] = str(data["frameId"])[:128]
+        if isinstance(data.get("status"), str):
+            details["status"] = data["status"][:32]
+        if isinstance(data.get("progress"), (int, float)) and not isinstance(data.get("progress"), bool):
+            details["progress"] = data["progress"]
+        rec = security_events.write_event(
+            forge_paths.tenant_audit_chain(tenant_id),
+            "video_producer.timeline_event",
+            details=details,
+        )
+    except Exception as exc:  # noqa: BLE001 - the timeline action already happened
+        logger.error("timeline audit %s not written: %s", event_type, type(exc).__name__)
+        return
+    _AUDIT_EVENTS.append({
         'timestamp': datetime.utcnow().isoformat(),
         'event_type': event_type,
         'task_id': task_id,
-        'data': data,
-        'hash': event_hash,
-        'prev_hash': prev_hash,
-    }
-    _AUDIT_EVENTS.append(audit_event)
-    logger.info(f"Audit event emitted: {event_type} (hash: {event_hash[:16]}...)")
+        'hash': rec.get('hash'),
+        'prev_hash': rec.get('prev_hash'),
+    })
+    del _AUDIT_EVENTS[:-10_000]  # bounded per-process index
 
 
 def _get_or_create_task(task_id: str) -> TimelineTaskState:

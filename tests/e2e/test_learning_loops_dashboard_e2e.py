@@ -100,22 +100,28 @@ class TestLearningLoopsConsoleSpeechIntegration:
         assert learning_loops_bp.name == "learning_loops"
 
     def test_dashboard_integration_e2e(self):
-        """Full E2E: API endpoint → React component."""
-        # This would be a real browser test (Playwright/Selenium)
-        # For now, verify the wiring exists
+        """The mounted SPA surface calls the mounted FastAPI loops route.
 
-        api_path = Path("core/console/corvin_console/routes/learning_loops.py")
-        component_path = Path("core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
+        Rewritten 2026-09-27: this used to assert that the string
+        '/v1/console/learning/loops' appears in both the Flask blueprint and
+        the dashboard page — true, and proof of nothing: the console never
+        mounts that Flask blueprint. The real path is
+        ``/v1/console/learning-loops/list`` (routes/learning_analytics.py).
+        """
+        hook = Path("core/console/corvin_console/web-next/src/hooks/use-learning-loops.ts").read_text()
+        assert '"/v1/console/learning-loops/list"' in hook
 
-        assert api_path.exists(), "API routes not found"
-        assert component_path.exists(), "React component not found"
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from core.console.corvin_console.app import router
 
-        api_content = api_path.read_text()
-        component_content = component_path.read_text()
-
-        # Both reference the same endpoint
-        assert "'/v1/console/learning/loops'" in api_content
-        assert "'/v1/console/learning/loops'" in component_content
+        app = FastAPI()
+        app.include_router(router, prefix="/v1/console")
+        client = TestClient(app, raise_server_exceptions=False)
+        # Mounted: without a session it is refused (401), not missing (404).
+        assert client.get("/v1/console/learning-loops/list").status_code == 401
+        # ...and the Flask blueprint's path is NOT served by the console.
+        assert client.get("/v1/console/learning/loops").status_code == 404
 
 
 # Marker: Session 2 Complete

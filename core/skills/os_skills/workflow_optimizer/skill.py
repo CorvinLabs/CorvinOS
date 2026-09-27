@@ -7,7 +7,10 @@ This Skill learns optimal task routing from operator feedback via ADR-0314
 (Learning Infrastructure). It replaces hardcoded routing logic with data-driven,
 confidence-scored decisions.
 
-**Status:** Phase 10 Stream 1 (production-ready)
+**Status:** NOT WIRED: no production caller as of 2026-09-27 (adversarial
+review). Until then the module could not even be imported (``RoutingInput``
+declared a non-default field after defaulted ones → TypeError at class
+definition), so no test of it had ever run.
 
 **Design Principles:**
 1. Feedback-first learning: only learns from explicit operator feedback
@@ -89,7 +92,10 @@ class RoutingInput:
     task_content: str  # Task description / prompt
     task_type: Optional[str] = None  # "code", "analysis", "chat", etc.
     user_id: Optional[str] = None
-    tenant_id: str  # REQUIRED: no default (fail-closed tenant isolation)
+    # REQUIRED, no default (fail-closed tenant isolation). Keyword-only: a
+    # non-default field after defaulted ones made the class definition itself
+    # raise TypeError, so this whole module failed to import.
+    tenant_id: str = field(kw_only=True)
 
     def __post_init__(self):
         """Validate routing input (fail-closed)."""
@@ -238,23 +244,18 @@ class WorkflowOptimizer:
         # Feature extraction (deterministic, no LLM call)
         features = self._extract_features(task_content)
 
-        # Score (weighted sum)
-        score = (
-            features["token_count_normalized"] * 0.25 +
-            features["code_blocks"] * 0.25 +
-            features["keyword_density"] * 0.2 +
-            features["nesting_depth_normalized"] * 0.15 +
-            features["external_refs"] * 0.1 +
-            features["multi_file"] * 0.05
-        )
-
-        # Classify based on score (0–1 range)
-        if score < 0.3:
-            return TaskComplexity.SIMPLE
-        elif score < 0.7:
-            return TaskComplexity.MEDIUM
-        else:
+        # Rule ladder over raw counts. The previous weighted sum normalised
+        # tokens against 5 000 words and code blocks against five, so any
+        # realistic prompt scored < 0.3 and COMPLEX (>= 0.7) was unreachable:
+        # a distributed-system design task routed to Haiku.
+        kw = features["keyword_hits"]
+        tokens = features["token_count"]
+        blocks = features["code_block_count"]
+        if kw >= 2 or blocks >= 3:  # length alone never makes a task complex
             return TaskComplexity.COMPLEX
+        if kw >= 1 or tokens >= 25 or blocks >= 1 or features["multi_file"]:
+            return TaskComplexity.MEDIUM
+        return TaskComplexity.SIMPLE
 
     def pick_model(
         self,
@@ -390,9 +391,9 @@ class WorkflowOptimizer:
             "concurrent", "distributed", "parallel", "performance",
             "security", "encryption", "authentication", "authorization"
         ]
-        keyword_density = sum(
-            task_content.lower().count(kw) for kw in complexity_keywords
-        ) / max(token_count, 1)
+        keyword_hits = sum(1 for kw in complexity_keywords if kw in task_content.lower())
+        keyword_density = keyword_hits / max(token_count, 1)
+        code_block_count = code_blocks // 2  # two fences per block
 
         # External references
         external_refs = (
@@ -407,6 +408,8 @@ class WorkflowOptimizer:
 
         return {
             "token_count": token_count,
+            "keyword_hits": keyword_hits,
+            "code_block_count": code_block_count,
             "token_count_normalized": min(token_count / 5000.0, 1.0),
             "code_blocks": min(code_blocks / 5.0, 1.0),
             "keyword_density": min(keyword_density / 0.1, 1.0),
@@ -464,21 +467,32 @@ class WorkflowOptimizer:
             config_data: Config delta (for config updates)
             lom: Line of Moral Responsibility (code location)
         """
-        # TODO: Integrate with ADR-0232 audit_backend
-        # For now, log to console (bootstrap phase)
-        event = {
-            "tenant_id": tenant_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event_type": event_type,
-            "skill_id": "os.workflow_optimizer",
-            "input": input_data,
-            "decision": decision,
-            "config": config_data,
-            "lom": lom,
-        }
-        logger.info(f"AUDIT: {json.dumps(event)}")
+        # Content-free projection onto the tenant's hash-chained audit log.
+        # This used to ``logger.info("AUDIT: ...")`` the full input — the
+        # task prompt included — into ordinary log lines, and chained nothing.
+        details: Dict[str, object] = {"tenant_id": tenant_id, "lom": lom or ""}
+        if decision:
+            details.update({
+                "decision_id": decision.get("decision_id"),
+                "model": getattr(decision.get("model"), "value", decision.get("model")),
+                "complexity": getattr(decision.get("complexity"), "value", decision.get("complexity")),
+                "confidence": decision.get("confidence"),
+            })
+        if config_data:
+            details["config_keys"] = sorted(str(k) for k in config_data)
+        try:
+            from audit import audit_event  # type: ignore[import-not-found]  # noqa: PLC0415
+            from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]  # noqa: PLC0415
+        except ImportError:
+            logger.error("core audit writer unavailable — %s NOT chained", event_type)
+            return
+        register_event_allowlist(event_type, _AUDIT_FIELDS)
+        audit_event(event_type, details=details, tenant_id=tenant_id)
 
-        # TODO: Write to audit_backend.write_event(event) after integration
+
+_AUDIT_FIELDS = frozenset({
+    "tenant_id", "lom", "decision_id", "model", "complexity", "confidence", "config_keys",
+})
 
 
 # ============================================================================

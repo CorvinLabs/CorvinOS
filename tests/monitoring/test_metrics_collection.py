@@ -12,6 +12,7 @@ Test suite for Prometheus metrics collection (Component 4)
 """
 
 import pytest
+
 from corvin_console.monitoring import MetricsCollector, get_metrics, initialize_metrics
 
 

@@ -51,8 +51,13 @@ def _reset_modules():
 
 
 @contextmanager
-def _sandbox(tmp_path: Path):
-    """Sandboxed console app + live session + BOOTED ACP registry with learning."""
+def _sandbox(tmp_path: Path, *, grant_feedback_consent: bool = True):
+    """Sandboxed console app + live session + BOOTED ACP registry with learning.
+
+    ``grant_feedback_consent`` records an active ``learning_feedback`` consent
+    for the sandbox session in the tenant's consent store — the feedback route
+    is deny-by-default without it (GDPR Art. 6).
+    """
     home = tmp_path / "corvin_home"
     tenant_id = "_default"
     tenant_home = home / "tenants" / tenant_id
@@ -87,6 +92,13 @@ def _sandbox(tmp_path: Path):
 
         rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+        from core.compliance import consent_store as _consent_store
+
+        _consent_store._stores.clear()  # per-tenant singleton: drop stores of other sandboxes
+        if grant_feedback_consent:
+            _consent_store.get_consent_store(tenant_id).grant_consent(
+                user_id=rec.sid_fingerprint, scope="learning_feedback"
+            )
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")
         client = TestClient(app, raise_server_exceptions=False)
@@ -200,6 +212,27 @@ class LearningLoopRoutesE2E(unittest.TestCase):
             self.assertEqual(r.status_code, 400)
             r = client.post("/v1/console/learning/feedback", json={"task_id": "", "outcome_quality": "good"})
             self.assertEqual(r.status_code, 422)
+
+    def test_feedback_without_consent_is_403_audited_and_not_recorded(self):
+        # Deny-by-default: no active ``learning_feedback`` consent → 403 (was a
+        # 500 while feedback_loop imported the nonexistent core.consent.manager),
+        # the denial is audited, and NOTHING is recorded, emitted or tuned.
+        with _sandbox(Path(self._tmp), grant_feedback_consent=False) as (
+            client, home, tenant_id, emitter, chain,
+        ):
+            r = client.post(
+                "/v1/console/learning/feedback",
+                json={"task_id": "task-nc", "outcome_quality": "excellent", "would_repeat": True},
+            )
+            self.assertEqual(r.status_code, 403, r.text)
+            emitter.stop(timeout=5.0)
+            self.assertEqual([e for e in _events_on_disk(home, tenant_id) if e["event_type"] == "feedback"], [])
+            self.assertEqual([c for c in _chain(chain) if c.get("event_type") == "learning.feedback"], [])
+            console = json.dumps(_console_chain(home, tenant_id))
+            self.assertNotIn("feedback_received", console)
+            self.assertIn("consent_required", console)
+            cfg = home / "tenants" / tenant_id / "skills" / "os_delegation_router_config.json"
+            self.assertFalse(cfg.exists())
 
     def test_accepted_hypothesis_creates_version_and_rollback_is_real(self):
         with _sandbox(Path(self._tmp)) as (client, home, tenant_id, emitter, chain):

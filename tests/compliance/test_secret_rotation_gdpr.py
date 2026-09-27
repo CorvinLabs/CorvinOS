@@ -15,12 +15,11 @@ class TestSecretRotationGDPR:
     """Test suite for GDPR Art. 32 secret rotation."""
 
     @pytest.fixture
-    def temp_corvin_home(self):
-        """Temporary CORVIN_HOME for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            corvin_home = Path(tmpdir)
-            os.environ["CORVIN_HOME"] = str(corvin_home)
-            yield corvin_home
+    def temp_corvin_home(self, tmp_path, monkeypatch):
+        """Temporary CORVIN_HOME for testing (monkeypatched, never leaked)."""
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+        return tmp_path
 
     @pytest.fixture
     def rotation_policy_path(self, temp_corvin_home):
@@ -46,89 +45,47 @@ rotation:
 
         return policy_path
 
-    def test_rotation_creates_audit_events(self, temp_corvin_home, rotation_policy_path):
-        """Test that rotation creates audit events (GDPR Art. 32)."""
+    # ── scripts/rotate_corvin_keys_gdpr.py is DEFUSED (adversarial review
+    # 2026-09-27): its "rotation" was simulated and it hand-wrote private-format
+    # records onto the canonical tenant chain, which made verify_chain report
+    # the chain as tampered. These tests pin the refusal. ──────────────────
+
+    def test_rotation_refuses_and_writes_nothing(self, temp_corvin_home, rotation_policy_path):
         tenant_id = "_default"
         audit_path = temp_corvin_home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Import rotation script
-        from scripts.rotate_corvin_keys_gdpr import rotate_secrets
-
-        result = rotate_secrets(str(rotation_policy_path), tenant_id=tenant_id)
-
-        # Verify result
-        assert result["status"] == "success"
-        assert result["secrets_rotated"] == 1
-        assert result["phases_completed"] == 4
-
-        # Verify audit events were created
-        assert audit_path.exists(), "Audit trail not created"
-
-        with open(audit_path) as f:
-            events = [json.loads(line) for line in f.readlines()]
-
-        # Should have 4 events (one per phase)
-        assert len(events) >= 4, f"Expected ≥4 audit events, got {len(events)}"
-
-        # Verify event types
-        event_types = [e["event_type"] for e in events]
-        assert "rotation_phase_1_generate" in event_types
-        assert "rotation_phase_2_dual_write" in event_types
-        assert "rotation_phase_3_revoke" in event_types
-        assert "rotation_phase_4_cleanup" in event_types
-
-    def test_hash_chain_integrity(self, temp_corvin_home, rotation_policy_path):
-        """Test that audit events form an intact hash chain."""
-        tenant_id = "_default"
-        audit_path = temp_corvin_home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
 
         from scripts.rotate_corvin_keys_gdpr import rotate_secrets
 
-        rotate_secrets(str(rotation_policy_path), tenant_id=tenant_id)
+        with pytest.raises(NotImplementedError, match="defused"):
+            rotate_secrets(str(rotation_policy_path), tenant_id=tenant_id)
+        assert not audit_path.exists(), "a refused rotation must not touch the audit chain"
 
-        with open(audit_path) as f:
-            events = [json.loads(line) for line in f.readlines()]
-
-        # Verify hash chain: each event's prev_hash should match previous event's hash
-        for i in range(1, len(events)):
-            current_event = events[i]
-            previous_event = events[i - 1]
-
-            # prev_hash should exist and match
-            assert current_event.get("prev_hash") == previous_event.get("hash"), \
-                f"Event {i}: hash chain broken (prev_hash mismatch)"
-
-    def test_audit_events_include_tenant_id(self, temp_corvin_home, rotation_policy_path):
-        """Test that audit events include tenant_id (tenant isolation)."""
-        tenant_id = "_default"
-        audit_path = temp_corvin_home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-
+    def test_rotation_leaves_existing_chain_verifiable(self, temp_corvin_home, rotation_policy_path):
+        """Regression: one run used to break verify_chain on the tenant chain."""
+        from core.deployment.audit_sink import _forge, emit, register_events
         from scripts.rotate_corvin_keys_gdpr import rotate_secrets
 
-        rotate_secrets(str(rotation_policy_path), tenant_id=tenant_id)
+        register_events({"deployment.test_rotation_guard": {"n"}})
+        emit("deployment.test_rotation_guard", {"n": 1})
+        se, fp = _forge()
+        chain = fp.tenant_audit_chain("_default")
+        assert se.verify_chain(chain)[0]
 
-        with open(audit_path) as f:
-            events = [json.loads(line) for line in f.readlines()]
+        with pytest.raises(NotImplementedError):
+            rotate_secrets(str(rotation_policy_path), tenant_id="_default")
+        ok, problems = se.verify_chain(chain)
+        assert ok, problems
 
-        # All events must include tenant_id
-        for event in events:
-            assert "tenant_id" in event, f"Event {event['event_type']} missing tenant_id"
-            assert event["tenant_id"] == tenant_id, f"Event has wrong tenant_id: {event['tenant_id']}"
+    def test_rotation_cli_exits_2(self, temp_corvin_home, rotation_policy_path):
+        import subprocess
+        import sys as _sys
 
-    def test_rotation_fails_if_audit_unavailable(self, temp_corvin_home, rotation_policy_path):
-        """Test fail-closed: rotation aborts if audit chain is unreachable."""
-        tenant_id = "_default"
-
-        # Don't create audit path (simulate unavailable audit backend)
-        from scripts.rotate_corvin_keys_gdpr import rotate_secrets
-
-        # Mock write permission denial
-        with patch("builtins.open", side_effect=PermissionError("Audit write denied")):
-            with pytest.raises(RuntimeError, match="Audit chain write failed"):
-                rotate_secrets(str(rotation_policy_path), tenant_id=tenant_id)
+        script = Path(__file__).resolve().parents[2] / "scripts" / "rotate_corvin_keys_gdpr.py"
+        proc = subprocess.run([_sys.executable, str(script), str(rotation_policy_path)],
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 2
+        assert "defused" in proc.stderr
+        assert "success" not in proc.stdout
 
     def test_bootstrap_check_detects_old_secrets(self, temp_corvin_home, rotation_policy_path):
         """Test bootstrap check: detects if secrets >90 days old."""
@@ -143,7 +100,6 @@ rotation:
         with open(state_file, "w") as f:
             json.dump(old_state, f)
 
-        os.environ["CORVIN_TENANT_ID"] = tenant_id
 
         # Mock the rotation script to avoid actual execution
         with patch("subprocess.run") as mock_run:
@@ -172,7 +128,6 @@ rotation:
         with open(state_file, "w") as f:
             json.dump(fresh_state, f)
 
-        os.environ["CORVIN_TENANT_ID"] = tenant_id
 
         # Rotation script should NOT be called
         with patch("subprocess.run") as mock_run:
@@ -182,30 +137,28 @@ rotation:
             assert not mock_run.called, "Rotation script should not be called for fresh secrets"
             assert result is True
 
-    def test_rotation_all_phases_complete(self, temp_corvin_home, rotation_policy_path):
-        """Test that all 4 rotation phases complete successfully."""
-        tenant_id = "_default"
-        audit_path = temp_corvin_home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
 
-        from scripts.rotate_corvin_keys_gdpr import rotate_secrets
+    def _old_state(self, home):
+        state_file = home / "tenants" / "_default" / "global" / ".secret_rotation_state"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps({"last_rotation": "2026-06-01T00:00:00Z"}))
 
-        result = rotate_secrets(str(rotation_policy_path), tenant_id=tenant_id)
+    def test_unparseable_rotation_output_fails_closed(self, temp_corvin_home, rotation_policy_path):
+        """Regression: unparseable script output used to be 'assumed success'."""
+        self._old_state(temp_corvin_home)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="not json", stderr="")
+            with pytest.raises(RuntimeError):
+                verify_secret_rotation_policy()
 
-        # Verify all phases
-        assert result["phases_completed"] == 4
+    def test_non_success_status_fails_closed(self, temp_corvin_home, rotation_policy_path):
+        self._old_state(temp_corvin_home)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps({"status": "partial"}), stderr="")
+            with pytest.raises(RuntimeError):
+                verify_secret_rotation_policy()
 
-        # Verify phase results are present
-        assert "api_keys_phase_1" in result["results"]
-        assert "api_keys_phase_2" in result["results"]
-        assert "api_keys_phase_3" in result["results"]
-        assert "api_keys_phase_4" in result["results"]
-
-        # Verify phase 2 dual-write window is set
-        phase_2 = result["results"]["api_keys_phase_2"]
-        assert "phase_2_start" in phase_2
-        assert "phase_2_end" in phase_2
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_real_defused_script_makes_a_due_rotation_fail_closed(self, temp_corvin_home, rotation_policy_path):
+        self._old_state(temp_corvin_home)
+        with pytest.raises(RuntimeError):
+            verify_secret_rotation_policy()

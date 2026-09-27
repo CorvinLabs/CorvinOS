@@ -1,6 +1,8 @@
 # Phase 7: Learning Loop Architecture Wiring
 
 > **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** "Architecture Wiring Complete" is false: `core/skills/skill_config_store.py` does not exist, and `test_phase7_k1_learning_loop_wiring.py` is 1/3 (threshold unchanged by feedback; genesis-hash mismatch).
+>
+> **Status note (2026-09-27, adversarial review):** the audit sink named below, `core/compliance/audit_trail.py`, and `core/skills/video_producer/orchestrator.py` (`VideoOrchestrator`) have no production caller. `audit_trail.py` no longer ships a second hash chain (the one tenant chain is `tenant_audit_chain()`); `execute_frame` dispatches to Phase 6b workers that are not implemented and fail closed instead of reporting every frame `completed`.
 
 
 **Status:** k=1 (Architecture complete, tests skeleton)  

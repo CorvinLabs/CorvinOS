@@ -12,6 +12,18 @@ Provides REST endpoints for operator override requests and approvals:
 
 Override Authority — operator-initiated overrides with admin approval gates,
 full audit trail, tenant isolation, and TTL-based expiration.
+
+Identity (fixed 2026-09-27): the raw session id ``rec.sid`` IS the session
+cookie — a bearer credential. It was stored as ``requestor_id``, returned by
+``GET /overrides`` to every session of the tenant (anyone who could list could
+hijack the requestor's session), passed as ``user_id`` into the audit chain,
+and used as the approver key. Now: ``requestor_id`` is ``rec.sid_fingerprint``
+(non-secret, what every console audit record already uses) and approvers are
+keyed on ``rec.sid_fingerprint`` too. (An interim version keyed approvers on
+``rec.token_fingerprint`` — which every session creator sets to ``""``, so
+every session of every operator mapped to the one identity ``"token:"``.)
+An empty fingerprint is refused (403), never mapped to a shared identity, and
+a session may not approve or deny its own request (four-eyes).
 """
 
 from __future__ import annotations
@@ -49,6 +61,38 @@ def get_authority() -> OverrideAuthority:
         # (tenant_id defaults to "_default", can be overridden per request)
         _authority = OverrideAuthority(tenant_id="_default")
     return _authority
+
+
+def _approver_id(rec: session_auth.SessionRecord) -> str:
+    """Non-secret identity for the approver set: ``rec.sid_fingerprint``.
+
+    Never ``rec.sid`` (the session cookie itself) and never
+    ``rec.token_fingerprint`` (empty for every session). Fails closed: a
+    session without a fingerprint gets 403 instead of an identity it would
+    share with every other such session.
+    """
+    fp = (rec.sid_fingerprint or "").strip()
+    if not fp:
+        raise HTTPException(
+            http_status.HTTP_403_FORBIDDEN,
+            detail="Session has no identity; cannot act as approver",
+        )
+    return f"sid:{fp}"
+
+
+def _refuse_self_decision(
+    authority: OverrideAuthority, override_id: str, rec: session_auth.SessionRecord
+) -> None:
+    """Four-eyes: the requesting session may not decide its own override."""
+    try:
+        detail = authority.get_override_status(override_id, rec.tenant_id)
+    except ValueError:
+        return  # unknown / foreign override: the authority call reports it
+    if detail.get("requestor_id") == rec.sid_fingerprint:
+        raise HTTPException(
+            http_status.HTTP_403_FORBIDDEN,
+            detail="A request cannot be decided by the session that made it",
+        )
 
 
 # Request/Response models
@@ -111,7 +155,7 @@ async def create_override(
             override_type=override_type,
             target_id=body.target_id,
             reason=body.reason,
-            requestor_id=rec.sid,
+            requestor_id=rec.sid_fingerprint,
             tenant_id=rec.tenant_id,
         )
     except ValueError as exc:
@@ -246,7 +290,8 @@ async def approve_override(
 
     # ✅ CRITICAL FIX: Check approver authority BEFORE attempting approval
     # Never unconditionally add_approver — that's privilege escalation!
-    if not authority.is_approver(rec.sid):
+    approver = _approver_id(rec)
+    if not authority.is_approver(approver):
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
@@ -259,8 +304,10 @@ async def approve_override(
             detail="Only admins can approve overrides"
         )
 
+    _refuse_self_decision(authority, override_id, rec)
+
     try:
-        result = await authority.approve_override(override_id, rec.sid, rec.tenant_id)
+        result = await authority.approve_override(override_id, approver, rec.tenant_id)
     except PermissionError as exc:
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
@@ -307,7 +354,8 @@ async def deny_override(
 
     # ✅ CRITICAL FIX: Check approver authority BEFORE attempting denial
     # Never unconditionally add_approver — that's privilege escalation!
-    if not authority.is_approver(rec.sid):
+    approver = _approver_id(rec)
+    if not authority.is_approver(approver):
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
@@ -320,9 +368,11 @@ async def deny_override(
             detail="Only admins can deny overrides"
         )
 
+    _refuse_self_decision(authority, override_id, rec)
+
     try:
         result = await authority.deny_override(
-            override_id, rec.sid, body.reason, rec.tenant_id
+            override_id, approver, body.reason, rec.tenant_id
         )
     except PermissionError as exc:
         console_audit.action_performed(

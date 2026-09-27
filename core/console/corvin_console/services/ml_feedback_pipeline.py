@@ -11,6 +11,9 @@ Workflow:
 
 @date 2026-09-25
 @phase Phase 3c: ML Feedback Loop (MVP)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — only
+core/console/tests/test_ml_feedback_pipeline.py imports this module.
 """
 
 from typing import Optional, Dict, List, Any
@@ -87,10 +90,14 @@ class FeedbackCollector:
 
         self._feedback_buffer[strategy].append(feedback_record)
 
-        # Check if retraining threshold reached
+        # Threshold reached → hand the batch off and start a new one. Returning a
+        # copy while keeping the buffer re-triggered retraining on EVERY later
+        # feedback, each time with a larger (unbounded) batch.
         if len(self._feedback_buffer[strategy]) >= self._retraining_threshold:
             logger.info(f"Retraining threshold reached for strategy '{strategy}'")
-            return self._feedback_buffer[strategy].copy()
+            batch = self._feedback_buffer[strategy]
+            self._feedback_buffer[strategy] = []
+            return batch
 
         return None
 
@@ -114,20 +121,38 @@ class ModelRegistry:
     """Registry of trained model versions"""
 
     def __init__(self):
-        self._models: Dict[str, ModelVersion] = {}
+        # Keyed by (strategy, version_id): version ids are per strategy ("v1.0"
+        # exists for syntax_aware AND visual_aware). Keying on version_id alone
+        # let one strategy's registration overwrite another's model.
+        self._models: Dict[tuple, ModelVersion] = {}
         self._production_models: Dict[str, str] = {}  # strategy -> version_id
 
     def register_model(self, model: ModelVersion):
         """Register a new trained model version"""
-        self._models[model.version_id] = model
+        key = (model.strategy, model.version_id)
+        if key in self._models:
+            raise ValueError(f"Model {model.version_id} already registered for {model.strategy}")
+        self._models[key] = model
         logger.info(f"Model {model.version_id} registered ({model.strategy})")
 
-    def promote_model(self, model_id: str):
-        """Promote model to production"""
-        if model_id not in self._models:
-            raise ValueError(f"Model {model_id} not found")
+    def promote_model(self, model_id: str, strategy: Optional[str] = None):
+        """Promote model to production.
 
-        model = self._models[model_id]
+        ``strategy`` is required when ``model_id`` exists for more than one
+        strategy (ambiguous → ``ValueError``, never a guess).
+        """
+        matches = [
+            m for (strat, vid), m in self._models.items()
+            if vid == model_id and (strategy is None or strat == strategy)
+        ]
+        if not matches:
+            raise ValueError(f"Model {model_id} not found")
+        if len(matches) > 1:
+            raise ValueError(f"Model {model_id} is ambiguous; pass strategy=")
+        model = matches[0]
+        previous = self.get_production_model(model.strategy)
+        if previous is not None and previous is not model:
+            previous.status = ModelStatus.DEPRECATED
         model.promote_to_production()
         self._production_models[model.strategy] = model_id
 
@@ -135,7 +160,7 @@ class ModelRegistry:
         """Get production model for strategy"""
         model_id = self._production_models.get(strategy)
         if model_id:
-            return self._models.get(model_id)
+            return self._models.get((strategy, model_id))
         return None
 
     def get_model_versions(self, strategy: str) -> List[ModelVersion]:

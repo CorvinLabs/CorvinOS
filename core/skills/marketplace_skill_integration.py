@@ -10,6 +10,8 @@ ADR-0511: Marketplace Plugin-First Architecture
 ADR-0533: OS-Skill Manifest Schema & Versioning
 ADR-0314: Learning Infrastructure (event emission)
 ADR-0722: DoD Loss Signal Learning Integration
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from core.skills.marketplace_installer import (
     DeploymentStage,
     InstallationRecord,
 )
-from core.skills.ab_testing import ABTestingFramework, ExperimentConfig
+from core.skills.ab_testing import ABTestingFramework, CohortAssigner, ExperimentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +53,15 @@ class MarketplaceSkillIntegration:
         """
         self.installer = installer
         self.ab_framework = ab_framework
-        self.registry_callback = registry_callback or self._default_registry_callback
+        # No default registry: the old default only logged "[REGISTRY]
+        # Registering skill" and registered nothing, so a skill was reported
+        # installed-and-registered while no registry knew about it.
+        self.registry_callback = registry_callback
         self.learning_emit = learning_emit or self._default_learning_emit
 
-    def _default_registry_callback(self, skill_id: str, metadata: Dict[str, Any]) -> None:
-        """Default registry callback (logs only)."""
-        logger.info(f"[REGISTRY] Registering skill: {skill_id} v{metadata.get('version')}")
-
     def _default_learning_emit(self, event_type: str, payload: Dict[str, Any]) -> None:
-        """Default learning event emitter (logs only)."""
-        logger.info(f"[LEARNING] {event_type}: skill_id={payload.get('skill_id')}")
+        """No learning sink is wired by default: say so, do not pretend."""
+        logger.debug("learning sink not wired; %s not emitted", event_type)
 
     def install_and_register(
         self,
@@ -85,6 +86,13 @@ class MarketplaceSkillIntegration:
         Returns:
             InstallationRecord
         """
+        if self.registry_callback is None:
+            # Refuse BEFORE installing: an installed-but-unregistered skill is
+            # exactly the half state this method promises not to leave.
+            raise NotImplementedError(
+                "not_implemented: no skill registry callback configured"
+            )
+
         # 1. Install skill
         record = self.installer.install_skill(
             skill,
@@ -108,7 +116,7 @@ class MarketplaceSkillIntegration:
             self.installer.audit_emit("skill_registration_failed", {
                 "skill_id": skill.skill_id,
                 "version": skill.version,
-                "error": str(e),
+                "error_type": type(e).__name__,
             })
             raise
 
@@ -181,9 +189,10 @@ class MarketplaceSkillIntegration:
         # Find matching A/B test
         exp_id = f"{record.skill_id}_{record.version}_canary"
         if exp_id not in self.ab_framework.experiments:
-            logger.warning(f"No A/B test found for {exp_id}")
-            # Still promote (may have been created manually)
-            return self._promote_stage(install_id, next_traffic_percent)
+            # No evidence → no promotion (fail-closed). This used to promote
+            # anyway, i.e. "based on A/B results" with no results at all.
+            logger.warning(f"No A/B test found for {exp_id}; not promoting")
+            return record
 
         # Analyze A/B test
         result = self.ab_framework.analyze_experiment(exp_id)
@@ -250,28 +259,25 @@ class MarketplaceSkillIntegration:
         exp_id = f"{skill_id}_{record.version}_canary"
         if exp_id in self.ab_framework.experiments:
             config = self.ab_framework.experiments[exp_id]
-            cohort = self.ab_framework.assign_cohort(exp_id, tenant_id)
 
-            if record.deployment_stage in [DeploymentStage.CANARY_10, DeploymentStage.CANARY_50]:
-                # Variant only applies to assigned cohort + traffic stage
-                if cohort.value == "variant":
-                    # Check if enough traffic has been allocated
-                    if record.deployment_stage == DeploymentStage.CANARY_10:
-                        # Only 10% get variant in CANARY_10 stage
-                        return record.version if self._should_route_to_variant(tenant_id, 10) else config.baseline_version
-                    elif record.deployment_stage == DeploymentStage.CANARY_50:
-                        # Only 50% get variant in CANARY_50 stage
-                        return record.version if self._should_route_to_variant(tenant_id, 50) else config.baseline_version
-                else:
-                    return config.baseline_version
+            stage_percent = {
+                DeploymentStage.CANARY_10: 10,
+                DeploymentStage.CANARY_50: 50,
+            }.get(record.deployment_stage)
+            if stage_percent is not None:
+                # ONE stable hash decides, at the stage's traffic share. This
+                # used to AND the experiment cohort (10%) with a second gate on
+                # Python's per-process-randomised ``hash()`` — ~1% instead of
+                # 10%, and a different answer after every restart.
+                return (record.version if self._should_route_to_variant(exp_id, tenant_id, stage_percent)
+                        else config.baseline_version)
 
         return record.version
 
-    def _should_route_to_variant(self, tenant_id: str, percent: int) -> bool:
-        """Determine if tenant should receive variant based on traffic percentage."""
-        # Simple modulo-based routing (deterministic)
-        tenant_hash = hash(tenant_id) % 100
-        return tenant_hash < percent
+    @staticmethod
+    def _should_route_to_variant(exp_id: str, tenant_id: str, percent: int) -> bool:
+        """Deterministic across processes (sha256, not ``hash()``)."""
+        return CohortAssigner(exp_id).assign(tenant_id, percent).value == "variant"
 
     def list_installed_skills(self) -> List[Dict[str, Any]]:
         """List all installed skills with their current versions."""

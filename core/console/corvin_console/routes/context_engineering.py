@@ -5,126 +5,109 @@ GET /v1/console/context-engineering/quota
 POST /v1/console/context-engineering/quota/reset
 GET /v1/console/context-engineering/metrics
 
-Operator-only (requires role check).
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — this
+router is not mounted by ``corvin_console.app``.
+
+Defused 2026-09-27. The routes had NO authentication (``require_operator``
+returned "operator" for every caller), took ``tenant_id`` from the query
+string (any caller could read/write any tenant's config, and the unvalidated
+id was a path component), and ``/quota``, ``/quota/reset`` and ``/metrics``
+returned fabricated values (0 units used, "reset" without a counter, zero
+turns) as if measured. Now: every route needs a console session, mutations a
+CSRF-signed one; the tenant is the session's; config mutations are audited on
+that tenant's chain; quota/metrics answer 501 ``not_implemented``.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Dict, Any, Optional
+from typing import Annotated, Any, Dict
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from .. import audit as console_audit
+from .. import auth as session_auth
 from ..context_engineering_config import (
     ContextEngineeringConfigManager,
     ConfigValidationError,
 )
+from ..deps import require_csrf, require_session
 
 router = APIRouter(
     prefix="/v1/console/context-engineering",
     tags=["context-engineering"],
 )
 
+Session = Annotated[session_auth.SessionRecord, Depends(require_session)]
+Mutation = Annotated[session_auth.SessionRecord, Depends(require_csrf)]
 
-# Dependency: verify operator role (TODO: implement RBAC)
-async def require_operator(request) -> str:
-    """Dependency: verify operator role."""
-    # TODO: Implement RBAC check (ADR-0035, house-rules)
-    # For now: allow all (TODO: fix in Phase 1, Week 3 with auth)
-    return "operator"
+
+def _audit(rec: session_auth.SessionRecord, action: str) -> None:
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=f"context_engineering.{action}",
+        target_kind="config",
+        target_id="context-engineering",
+    )
+
+
+def _not_implemented() -> HTTPException:
+    return HTTPException(
+        status_code=501,
+        detail={"status": "not_implemented",
+                "reason": "context-engineering quota/metrics are not measured on this build"},
+    )
 
 
 @router.get("/config")
-async def get_config(
-    tenant_id: str = Query("_default"),
-    _: str = Depends(require_operator),
-) -> Dict[str, Any]:
-    """Get current CE config."""
-    mgr = ContextEngineeringConfigManager(tenant_id)
-    return mgr.dict()
+async def get_config(rec: Session) -> Dict[str, Any]:
+    """Get the session tenant's CE config."""
+    return ContextEngineeringConfigManager(rec.tenant_id).dict()
 
 
 @router.post("/config")
-async def update_config(
-    changes: Dict[str, Any],
-    tenant_id: str = Query("_default"),
-    _: str = Depends(require_operator),
-) -> Dict[str, Any]:
+async def update_config(changes: Dict[str, Any], rec: Mutation) -> Dict[str, Any]:
     """Update CE config (atomic, merges with current)."""
-    mgr = ContextEngineeringConfigManager(tenant_id)
+    mgr = ContextEngineeringConfigManager(rec.tenant_id)
     try:
         new_config = await mgr.update(changes)
-        return {"status": "updated", "config": new_config.dict()}
     except ConfigValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _audit(rec, "config_updated")
+    return {"status": "updated", "config": new_config.dict()}
 
 
 @router.put("/config")
-async def replace_config(
-    config: Dict[str, Any],
-    tenant_id: str = Query("_default"),
-    _: str = Depends(require_operator),
-) -> Dict[str, Any]:
+async def replace_config(config: Dict[str, Any], rec: Mutation) -> Dict[str, Any]:
     """Replace entire config (validation first)."""
-    mgr = ContextEngineeringConfigManager(tenant_id)
+    mgr = ContextEngineeringConfigManager(rec.tenant_id)
     try:
         new_config = await mgr.update(config)
-        return {"status": "replaced", "config": new_config.dict()}
     except ConfigValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _audit(rec, "config_replaced")
+    return {"status": "replaced", "config": new_config.dict()}
 
 
 @router.delete("/config")
-async def reset_config(
-    tenant_id: str = Query("_default"),
-    _: str = Depends(require_operator),
-) -> Dict[str, Any]:
+async def reset_config(rec: Mutation) -> Dict[str, Any]:
     """Reset to defaults."""
-    mgr = ContextEngineeringConfigManager(tenant_id)
-    new_config = await mgr.reset_to_defaults()
+    new_config = await ContextEngineeringConfigManager(rec.tenant_id).reset_to_defaults()
+    _audit(rec, "config_reset")
     return {"status": "reset", "config": new_config.dict()}
 
 
 @router.get("/quota")
-async def get_quota(
-    tenant_id: str = Query("_default"),
-    _: str = Depends(require_operator),
-) -> Dict[str, Any]:
-    """Get quota usage (units_used / daily_units)."""
-    mgr = ContextEngineeringConfigManager(tenant_id)
-    config = mgr.get()
-    daily_units = config.quota["daily_units"]
-
-    # TODO: Fetch actual units_used from counter (Phase 1, Week 3)
-    units_used = 0
-
-    return {
-        "daily_units": daily_units,
-        "units_used": units_used,
-        "units_remaining": daily_units - units_used,
-        "percent_used": (units_used / daily_units * 100) if daily_units > 0 else 0,
-    }
+async def get_quota(rec: Session) -> Dict[str, Any]:
+    """NOT IMPLEMENTED (501): no quota counter exists."""
+    raise _not_implemented()
 
 
 @router.post("/quota/reset")
-async def reset_quota(
-    tenant_id: str = Query("_default"),
-    _: str = Depends(require_operator),
-) -> Dict[str, Any]:
-    """Reset quota counter (operator only)."""
-    # TODO: Reset quota counter (Phase 1, Week 3)
-    return {"status": "reset"}
+async def reset_quota(rec: Mutation) -> Dict[str, Any]:
+    """NOT IMPLEMENTED (501): there is no counter to reset."""
+    raise _not_implemented()
 
 
 @router.get("/metrics")
-async def get_metrics(
-    tenant_id: str = Query("_default"),
-    hours: int = Query(24, ge=1, le=720),
-    _: str = Depends(require_operator),
-) -> Dict[str, Any]:
-    """Get usage stats, degradation rate, confidence distribution."""
-    # TODO: Fetch metrics from audit trail (Phase 1, Week 3)
-    return {
-        "period_hours": hours,
-        "turns_total": 0,
-        "ce_turns_enriched": 0,
-        "degradation_count": 0,
-        "degradation_rate": 0.0,
-        "avg_confidence": 0.0,
-        "stage_breakdown": {},
-    }
+async def get_metrics(rec: Session) -> Dict[str, Any]:
+    """NOT IMPLEMENTED (501): no CE usage metrics are collected."""
+    raise _not_implemented()

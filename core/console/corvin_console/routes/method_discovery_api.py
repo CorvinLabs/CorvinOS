@@ -49,12 +49,17 @@ from pydantic import BaseModel, Field
 from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
+from core.compliance.consent import consent_required, consent_subject
 
 logger = logging.getLogger(__name__)
 
 # Import backend components (stripped install → endpoints answer 503, never mock)
 try:
-    from core.skills.os_skills.feedback_loop import FeedbackInterpreter, UserFeedback
+    from core.skills.os_skills.feedback_loop import (
+        LEARNING_FEEDBACK_CONSENT_SCOPE,
+        FeedbackInterpreter,
+        UserFeedback,
+    )
     from core.skills.os_skills.skill_adapter import SkillAdapter, SkillConfigLockBusy
     from core.skills.os_skills.workstyle_model import PreferenceInferencer
     from core.learning.outcome_sink import learning_emitter, recent_outcomes
@@ -62,6 +67,7 @@ try:
     _LEARNING_AVAILABLE = True
 except ImportError:  # pragma: no cover - stripped install without core.skills
     FeedbackInterpreter = None  # type: ignore[assignment]
+    LEARNING_FEEDBACK_CONSENT_SCOPE = "learning_feedback"
     UserFeedback = None  # type: ignore[assignment]
     SkillAdapter = None  # type: ignore[assignment]
     SkillConfigLockBusy = TimeoutError  # type: ignore[assignment,misc]
@@ -274,6 +280,22 @@ async def submit_feedback(
     if request.outcome_quality not in _QUALITIES:
         raise HTTPException(status_code=400, detail=f"outcome_quality must be one of {_QUALITIES}")
 
+    # GDPR Art. 6 consent gate — the console's one consent store, deny-by-
+    # default, BEFORE anything is audited as received or emitted as a learning
+    # event. A denial is a 403 (never a 500) and is itself audited.
+    try:
+        await consent_required(LEARNING_FEEDBACK_CONSENT_SCOPE)(rec)
+    except HTTPException as exc:
+        console_audit.action_denied(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="learning.feedback",
+            target_kind="task",
+            target_id=request.task_id,
+            reason="consent_required" if exc.status_code == 403 else "consent_unverifiable",
+        )
+        raise
+
     feedback = UserFeedback(
         task_id=request.task_id,
         tenant_id=rec.tenant_id,
@@ -302,7 +324,11 @@ async def submit_feedback(
         },
     )
 
-    hypotheses = FeedbackInterpreter().interpret(feedback)
+    try:
+        # Same store, same identity as the gate above (defence in depth).
+        hypotheses = FeedbackInterpreter().interpret(feedback, user_id=consent_subject(rec))
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="consent required for learning feedback") from None
     successes, total = recent_outcomes(rec.tenant_id, limit=10)
 
     adapters: dict[str, SkillAdapter] = {}

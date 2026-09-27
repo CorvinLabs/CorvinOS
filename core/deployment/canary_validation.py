@@ -6,6 +6,18 @@ All decisions are audit-logged (hash-chained) and attributed to OS-Skills.
 
 Related: ADR-0532 (OS-Skills), ADR-0314 (Learning Infrastructure), ADR-0722 (Observability)
 Compliance: GDPR Art. 30/32 (audit trail), EU AI Act Art. 50 (transparency + LoM binding)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The only
+importer is ``core/deployment/__init__.py``; no router acts on its decisions.
+
+Honesty contract (adversarial review 2026-09-27):
+- a gate whose metric is missing FAILS as ``not_measured`` (it used to read the
+  metric as 0.0, which passes every "less than" gate); a run with no gates fails.
+- audit goes to the ONE tenant chain via ``core.deployment.audit_sink``
+  (:class:`TenantChainAuditBackend`, the default). ``LocalFileAuditBackend`` —
+  a hand-built second chain at ``~/.corvin/audit_canary.jsonl`` — refuses to
+  construct. A validation run whose audit record did not commit cannot
+  recommend ESCALATE.
 """
 
 import json
@@ -17,7 +29,21 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from abc import ABC, abstractmethod
 
+from core.deployment import audit_sink
+
 logger = logging.getLogger(__name__)
+
+NOT_MEASURED = "not_measured"
+
+# Content-free chain fields per event (free-text description / details /
+# feedback notes stay out of the chain).
+_CHAIN_FIELDS = frozenset({
+    "gate_name", "metric_type", "actual_value", "threshold_pass", "threshold_warn",
+    "status", "passed", "traffic_percent", "overall_status", "decision",
+    "decision_recommendation", "all_gates_pass", "gate_count", "gates_passed",
+    "validation_result_hash", "skill_id", "actual_outcome", "confidence_before",
+    "confidence_after",
+})
 
 
 class GateStatus(Enum):
@@ -125,10 +151,46 @@ class AuditBackend(ABC):
         pass
 
 
+class TenantChainAuditBackend(AuditBackend):
+    """Writes canary events onto ``tenant_audit_chain(tenant)`` via the forge
+    writer (``core.deployment.audit_sink``). Returns the chain record's hash."""
+
+    def __init__(self) -> None:
+        self.last_hash: Optional[str] = None
+
+    def write_event(self, event: AuditEvent) -> Tuple[bool, str]:
+        name = f"deployment.canary.{event.event_type.value}"
+        audit_sink.register_events({name: _CHAIN_FIELDS})
+        details = {k: v for k, v in (event.payload or {}).items()
+                   if k in _CHAIN_FIELDS and isinstance(v, (str, int, float, bool))}
+        details["skill_id"] = event.skill_id
+        details["lom"] = event.lom
+        try:
+            rec = audit_sink.emit(name, details, tenant_id=event.tenant_id)
+        except audit_sink.AuditWriteFailed as exc:
+            logger.error(f"FAIL-CLOSED: canary audit event not committed: {exc}")
+            return False, ""
+        event.prev_hash = self.last_hash
+        event.hash = str(rec.get("hash", ""))
+        self.last_hash = event.hash
+        return True, event.hash
+
+    def get_last_hash(self) -> Optional[str]:
+        return self.last_hash
+
+
 class LocalFileAuditBackend(AuditBackend):
-    """Local file-based audit backend (for testing + standalone)"""
+    """REFUSED: a hand-built second hash chain outside the tenant audit chain.
+
+    Kept only so old imports resolve; constructing it raises. Use
+    :class:`TenantChainAuditBackend`.
+    """
 
     def __init__(self, audit_file: str = "~/.corvin/audit_canary.jsonl"):
+        raise NotImplementedError(
+            "LocalFileAuditBackend wrote a private hash chain outside "
+            "tenant_audit_chain(); use TenantChainAuditBackend"
+        )
         self.audit_file = Path(audit_file).expanduser()
         self.audit_file.parent.mkdir(parents=True, exist_ok=True)
         self.last_hash: Optional[str] = None
@@ -193,7 +255,7 @@ class CanaryValidationEngine:
 
     def __init__(self, audit_backend: Optional[AuditBackend] = None):
         """Initialize validation engine with optional audit backend"""
-        self.audit_backend = audit_backend or LocalFileAuditBackend()
+        self.audit_backend = audit_backend or TenantChainAuditBackend()
         self.validation_history: List[ValidationRunResult] = []
         self.decision_history: List[Dict[str, Any]] = []
 
@@ -241,8 +303,14 @@ class CanaryValidationEngine:
                 tenant_id=tenant_id,
             )
 
-        # Overall status: PASS if all gates pass, WARN if any warn, FAIL if any fail
-        if all(s == GateStatus.PASS for s in gate_statuses):
+        # Overall status: PASS if all gates pass, WARN if any warn, FAIL if any fail.
+        # No gates at all is a FAIL — all([]) must not read as "all passed".
+        if not gate_statuses:
+            result.overall_status = GateStatus.FAIL
+            result.all_gates_pass = False
+            result.decision_recommendation = "HOLD"
+            result.errors.append("no gates configured")
+        elif all(s == GateStatus.PASS for s in gate_statuses):
             result.overall_status = GateStatus.PASS
             result.all_gates_pass = True
             result.decision_recommendation = "ESCALATE"
@@ -259,11 +327,24 @@ class CanaryValidationEngine:
         success, hash_val = self._emit_audit_event(
             event_type=AuditEventType.VALIDATION_RUN,
             description=f"Validation run at {traffic_percent}% ({result.overall_status.value})",
-            payload=result.to_dict(),
+            payload={
+                "traffic_percent": traffic_percent,
+                "overall_status": result.overall_status.value,
+                "decision_recommendation": result.decision_recommendation,
+                "all_gates_pass": result.all_gates_pass,
+                "gate_count": len(result.gates_evaluated),
+                "gates_passed": sum(1 for g in result.gates_evaluated if g.passed),
+            },
             tenant_id=tenant_id,
         )
 
         result.audit_event_hash = hash_val if success else None
+        if not success:
+            # Audit-first: an unrecorded validation cannot green-light anything.
+            result.all_gates_pass = False
+            result.overall_status = GateStatus.FAIL
+            result.decision_recommendation = "HOLD"
+            result.errors.append("validation audit record did not commit")
         self.validation_history.append(result)
 
         logger.info(f"✅ Validation complete: {result.overall_status.value} "
@@ -287,15 +368,18 @@ class CanaryValidationEngine:
         decision = "HOLD"  # Default safe decision
         reason = ""
 
-        # Check for escalation conditions
-        if validation_result.all_gates_pass:
+        # Check for escalation conditions (an unaudited validation never escalates)
+        if validation_result.all_gates_pass and not validation_result.audit_event_hash:
+            decision = "HOLD"
+            reason = "Validation run has no committed audit record (fail-closed)"
+        elif validation_result.all_gates_pass:
             # All gates pass — safe to escalate
             if current_traffic_percent < 100:
                 decision = "ESCALATE"
                 reason = "All gates pass. Ready for next level."
             else:
                 decision = "ESCALATE_PHASE_2B"
-                reason = "All gates pass at 100%. Activating Phase 2b."
+                reason = "All gates pass at 100% (no router acts on Phase 2b — not wired)."
         else:
             # Gates failing or warning — hold at current level
             failed_gates = [g.gate_name for g in validation_result.gates_evaluated if g.status == GateStatus.FAIL]
@@ -307,8 +391,12 @@ class CanaryValidationEngine:
                 reason = "Gates warning. Wait for stability."
 
         # Check for rollback conditions (fail-closed)
-        error_rate = validation_result.metrics_snapshot.get("error_rate_pct", 0)
-        if error_rate > 1.0:
+        error_rate = (validation_result.metrics_snapshot or {}).get("error_rate_pct")
+        if error_rate is None:
+            if decision.startswith("ESCALATE"):
+                decision = "HOLD"
+                reason = f"Error rate {NOT_MEASURED} — cannot escalate"
+        elif error_rate > 1.0:
             decision = "ROLLBACK"
             reason = f"Error rate {error_rate}% > 1% (ROLLBACK)"
 
@@ -323,16 +411,21 @@ class CanaryValidationEngine:
             "tenant_id": tenant_id,
         }
 
-        self.decision_history.append(decision_record)
-
-        # Emit decision audit event
-        self._emit_audit_event(
+        # Emit decision audit event (audit-first: an uncommitted ESCALATE is a HOLD)
+        ok, _h = self._emit_audit_event(
             event_type=AuditEventType.DECISION_MADE,
             description=f"Decision: {decision}",
             payload=decision_record,
             skill_id=skill_id,
             tenant_id=tenant_id,
         )
+        if not ok and decision.startswith("ESCALATE"):
+            decision = "HOLD"
+            reason = "Decision audit record did not commit (fail-closed)"
+            decision_record["decision"] = decision
+            decision_record["reason"] = reason
+
+        self.decision_history.append(decision_record)
 
         logger.info(f"🎯 Decision: {decision} — {reason}")
 
@@ -408,7 +501,19 @@ class CanaryValidationEngine:
         threshold_warn = gate_def["threshold_warn"]
         operator = gate_def.get("operator", "lt")
 
-        actual_value = metrics.get(metric_type, 0.0)
+        actual_value = metrics.get(metric_type)
+        if actual_value is None:
+            # Not measured → FAIL. Reading it as 0.0 passed every "lt" gate.
+            return GateEvaluation(
+                gate_name=gate_name,
+                metric_type=metric_type,
+                actual_value=float("nan"),
+                threshold_pass=threshold_pass,
+                threshold_warn=threshold_warn,
+                status=GateStatus.FAIL,
+                passed=False,
+                details=f"{metric_type}: {NOT_MEASURED}",
+            )
 
         # Compare actual to thresholds
         if operator == "lt":
@@ -456,7 +561,7 @@ class CanaryValidationEngine:
             skill_id=skill_id,
             description=description,
             payload=payload or {},
-            lom=f"canary_validation.py::{event_type.value}",
+            lom="core/deployment/canary_validation.py:_emit_audit_event",
         )
 
         return self.audit_backend.write_event(event)

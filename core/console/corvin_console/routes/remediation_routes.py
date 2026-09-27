@@ -10,6 +10,12 @@ Every route needs a console session; approve/reject additionally need the CSRF
 token and an owner/admin tier. The deciding operator is taken from the session
 (``console:<sid_fingerprint>``), never from the request body — a body-supplied
 ``approved_by`` let any caller approve a remediation under any name.
+
+Requests are tenant-bound: every route sees only the session tenant's requests
+(another tenant's request id is a 404). A decision is written to the tenant's
+core audit chain BEFORE it takes effect (``ApprovalGate._decide``); when that
+record cannot commit the decision is refused with 503 and nothing changes.
+An expired request can no longer be decided (409).
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,10 +30,8 @@ from ..deps import require_csrf, require_session
 # Import remediation components (Phase 5)
 try:
     from core.remediation.approval_workflow import get_approval_gate
-    from core.remediation.orchestrator import RemediationOrchestrator
 except ImportError:
     get_approval_gate = None
-    RemediationOrchestrator = None
 
 
 logger = logging.getLogger(__name__)
@@ -74,8 +78,8 @@ async def list_pending_approvals(rec: Session):
     try:
         approval_gate = get_approval_gate()
         pending_requests = [
-            req for req in approval_gate.pending_requests.values()
-            if req.state.value == "pending"
+            req for req in approval_gate.requests_for_tenant(rec.tenant_id)
+            if req.state.value in ("pending", "escalated")
         ]
 
         return {
@@ -97,7 +101,7 @@ async def list_pending_approvals(rec: Session):
 
     except Exception as e:
         logger.exception(f"Error listing pending approvals: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="listing pending approvals failed")
 
 
 @remediation_router.post('/approve/{request_id}')
@@ -111,15 +115,19 @@ async def approve_remediation(request_id: str, data: ApprovalDecisionRequest, re
         )
 
     approval_gate = get_approval_gate()
-    if request_id not in approval_gate.pending_requests:
+    if approval_gate.get_request_for_tenant(request_id, rec.tenant_id) is None:
         raise HTTPException(
             status_code=404,
             detail=f"Approval request {request_id} not found"
         )
     try:
-        req = approval_gate.approve_request(request_id, decider, data.reason)
+        req = approval_gate.approve_request(request_id, decider, data.reason, tenant_id=rec.tenant_id)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        # The core audit record did not commit — the decision was NOT applied.
+        logger.error(f"remediation approve refused, audit unavailable: {e}")
+        raise HTTPException(status_code=503, detail="audit unavailable; decision not applied")
     except Exception as e:
         logger.exception(f"Error on remediation approve: {e}")
         raise HTTPException(status_code=500, detail="remediation decision failed")
@@ -144,15 +152,19 @@ async def reject_remediation(request_id: str, data: ApprovalDecisionRequest, rec
         )
 
     approval_gate = get_approval_gate()
-    if request_id not in approval_gate.pending_requests:
+    if approval_gate.get_request_for_tenant(request_id, rec.tenant_id) is None:
         raise HTTPException(
             status_code=404,
             detail=f"Approval request {request_id} not found"
         )
     try:
-        req = approval_gate.reject_request(request_id, decider, data.reason)
+        req = approval_gate.reject_request(request_id, decider, data.reason, tenant_id=rec.tenant_id)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        # The core audit record did not commit — the decision was NOT applied.
+        logger.error(f"remediation reject refused, audit unavailable: {e}")
+        raise HTTPException(status_code=503, detail="audit unavailable; decision not applied")
     except Exception as e:
         logger.exception(f"Error on remediation reject: {e}")
         raise HTTPException(status_code=500, detail="remediation decision failed")
@@ -177,7 +189,7 @@ async def get_remediation_history(rec: Session, limit: int = 100, offset: int = 
 
     try:
         approval_gate = get_approval_gate()
-        all_requests = list(approval_gate.pending_requests.values())
+        all_requests = approval_gate.requests_for_tenant(rec.tenant_id)
 
         # Pagination
         total = len(all_requests)
@@ -203,7 +215,7 @@ async def get_remediation_history(rec: Session, limit: int = 100, offset: int = 
 
     except Exception as e:
         logger.exception(f"Error fetching remediation history: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="fetching remediation history failed")
 
 
 @remediation_router.get('/status/{request_id}')
@@ -217,13 +229,12 @@ async def get_remediation_status(request_id: str, rec: Session):
 
     try:
         approval_gate = get_approval_gate()
-        if request_id not in approval_gate.pending_requests:
+        req = approval_gate.get_request_for_tenant(request_id, rec.tenant_id)
+        if req is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Approval request {request_id} not found"
             )
-
-        req = approval_gate.pending_requests[request_id]
         return {
             "request_id": request_id,
             "state": req.state.value,
@@ -238,4 +249,4 @@ async def get_remediation_status(request_id: str, rec: Session):
         raise
     except Exception as e:
         logger.exception(f"Error fetching remediation status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="fetching remediation status failed")

@@ -9,6 +9,13 @@ DELETE /v1/console/control-plane/plugins/<id>
 GET    /v1/console/control-plane/plugins/audit-log
 
 ADR-2029: User-Centric CorvinOS Control Plane
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the
+control-plane plugin routes that used it answer 501 now. This is a SECOND
+plugin registry beside ``corvin_plugins`` (CLAUDE.md: one registry); nothing
+loads plugins from it. Its default path used to be hard-wired to
+``~/.corvin/plugins.json`` (ignoring ``CORVIN_HOME`` — tests wrote into the live
+home); it now resolves under ``corvin_home()``.
 """
 
 import json
@@ -63,7 +70,11 @@ class PluginManager:
 
     def __init__(self, registry_path: Optional[Path] = None):
         """Initialize plugin manager."""
-        self.registry_path = registry_path or Path.home() / ".corvin" / "plugins.json"
+        if registry_path is None:
+            from core.paths.tenant import corvin_home
+
+            registry_path = corvin_home() / "plugins.json"
+        self.registry_path = registry_path
         self.plugins = self._load_registry()  # tenant_id -> plugin_id -> plugin_info
         self.audit_events = []
 

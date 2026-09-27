@@ -8,6 +8,17 @@ Allows operator to control CE behavior:
 
 ADR-0275 (Vibe Engineering Surface) + ADR-0276 (License Gate).
 Wave 1-4 compatible.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — only
+``routes/context_engineering.py`` (itself unmounted) and tests import it, and
+nothing in the context-engineering pipeline reads the YAML it writes.
+
+Hardened 2026-09-27: the tenant id was used unvalidated as a path component
+(``tenant_id="../../x"`` wrote the YAML outside the tenant tree) and the root
+was hard-wired to ``~/.corvin``. The path now goes through
+``core.paths.tenant_home`` (validates the id, honours ``CORVIN_HOME``). The
+manager does NOT audit; its only caller (the route module) audits every
+mutation on the session tenant's chain.
 """
 
 import asyncio
@@ -133,9 +144,13 @@ class ContextEngineeringConfigManager:
     """
 
     def __init__(self, tenant_id: str = "_default", config_dir: Optional[Path] = None):
+        from core.paths.tenant import tenant_home
+
+        # Validates the id (raises ValueError) even when config_dir is injected.
+        default_dir = tenant_home(tenant_id) / "global"
         self.tenant_id = tenant_id
         if config_dir is None:
-            config_dir = Path.home() / ".corvin" / "tenants" / tenant_id / "global"
+            config_dir = default_dir
         self.config_path = config_dir / "context-engineering.yaml"
         self._config: Optional[ContextEngineeringConfigSchema] = None
         self._lock = asyncio.Lock()  # Atomic updates
@@ -180,18 +195,18 @@ class ContextEngineeringConfigManager:
             self._config = new_config
             logger.info(f"Updated CE config for {self.tenant_id}")
 
-            # TODO: Emit audit event (integration in Phase 1, Week 3)
-            # await audit_chain.append(
-            #     event_type="context_engineering_config_changed",
-            #     tenant_id=self.tenant_id,
-            #     payload={"changes": changes},
-            # )
+            # Audited by the caller (routes/context_engineering.py), which
+            # knows the session; see the module docstring.
 
             return new_config
 
     async def reset_to_defaults(self) -> ContextEngineeringConfigSchema:
         """Reset to factory defaults."""
         logger.info(f"Resetting CE config to defaults for {self.tenant_id}")
+        # ``update({})`` alone merged {} into the CURRENT config and rewrote it
+        # unchanged — "reset" reset nothing. Start from the schema defaults.
+        async with self._lock:
+            self._config = ContextEngineeringConfigSchema()
         return await self.update({})
 
     def get(self) -> ContextEngineeringConfigSchema:

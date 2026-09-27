@@ -319,8 +319,10 @@ class TestFeedbackBuffer:
         assert len(samples) == 1
         assert samples[0].outcome_feedback == OutcomeFeedbackType.YES
 
-        # Buffer should be empty after clear
-        assert len(buffer.buffers[("os.router", "task-123")]) == 0
+        # Buffer should be empty after clear — the key itself is dropped, so
+        # the dict does not grow by one entry per task ever seen
+        assert ("os.router", "task-123") not in buffer.buffers
+        assert buffer.get_and_clear("os.router", "task-123") == []
 
     def test_get_summary(self):
         """Get summary statistics from buffer."""

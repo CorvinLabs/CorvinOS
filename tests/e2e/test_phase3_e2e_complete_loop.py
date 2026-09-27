@@ -17,6 +17,11 @@ Validates:
 - Dashboard readiness (<500ms total)
 
 References: ADR-2086/2087/2088/2089 (Stream A/B/C)
+
+2026-09-27 (adversarial review): A3 used to fabricate its success/escalation
+counts, so this loop "worked" on any input. A3 now scores only records that
+carry MEASURED counts, and every stage commits to the tenant's core audit
+chain — so the records below carry counts and each test runs as its tenant.
 """
 
 import pytest
@@ -38,12 +43,30 @@ class MockHistogramBucket:
     audit_ref: str = "a1_audit_stub"
 
 
+@pytest.fixture(autouse=True)
+def _chain_env(monkeypatch):
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    yield monkeypatch
+
+
+def _as_tenant(monkeypatch, tid):
+    monkeypatch.setenv("CORVIN_TENANT_ID", tid)
+
+
 class TestPhase3E2ECompleteLearningLoop:
     """
     K=4: End-to-end proof that all streams work together.
     """
 
-    def test_e2e_a1_to_a4_b_c_complete_flow(self):
+    def test_e2e_bucket_without_counts_is_not_scored(self, _chain_env):
+        """A1 buckets carry no success split — A3 must not invent one."""
+        _as_tenant(_chain_env, "_prod")
+        b = MockHistogramBucket()
+        rec = OutcomeRecord(skill_id=b.skill_id, outcome_count=b.outcome_count,
+                            avg_confidence=b.avg_confidence, audit_ref=b.audit_ref)
+        assert ConfidenceScorer(tenant_id="_prod").score(rec) is None
+
+    def test_e2e_a1_to_a4_b_c_complete_flow(self, _chain_env):
         """
         Complete flow: A1 → A2 → A3 → A4 → B → C
 
@@ -54,6 +77,7 @@ class TestPhase3E2ECompleteLearningLoop:
         - Total latency <500ms
         """
         tenant_id = "_prod"
+        _as_tenant(_chain_env, tenant_id)
 
         # Setup all components
         a2_sink = OutcomeSink(tenant_id=tenant_id)
@@ -72,6 +96,7 @@ class TestPhase3E2ECompleteLearningLoop:
             outcome_count=bucket.outcome_count,
             avg_confidence=bucket.avg_confidence,
             audit_ref=bucket.audit_ref,
+            success_count=8, failed_count=1, timed_out_count=1,  # measured split
         )
 
         # Phase 2: A2 → A3
@@ -114,7 +139,7 @@ class TestPhase3E2ECompleteLearningLoop:
         # Verify SLA
         assert elapsed_ms < 500, f"End-to-end latency {elapsed_ms:.0f}ms exceeds 500ms SLA"
 
-    def test_e2e_tenant_isolation_across_streams(self):
+    def test_e2e_tenant_isolation_across_streams(self, _chain_env):
         """Verify tenant isolation held across all 3 streams."""
         tenant_a = "_tenant_a"
         tenant_b = "_tenant_b"
@@ -138,41 +163,51 @@ class TestPhase3E2ECompleteLearningLoop:
             outcome_count=5,
             avg_confidence=0.8,
             audit_ref="ref_a",
+            success_count=4, failed_count=1, timed_out_count=0,
         )
         record_b = OutcomeRecord(
             skill_id="skill_b",
             outcome_count=10,
             avg_confidence=0.7,
             audit_ref="ref_b",
+            success_count=7, failed_count=2, timed_out_count=1,
         )
 
+        _as_tenant(_chain_env, tenant_a)
         score_a = a3_a.score(record_a)
+        config_a = a4_a.optimize(score_a)
+        event_a = b_a.enrich(record_a, score_a)
+        _as_tenant(_chain_env, tenant_b)
         score_b = a3_b.score(record_b)
+        config_b = a4_b.optimize(score_b)
+        event_b = b_b.enrich(record_b, score_b)
+        # A score of tenant A is refused by tenant B's optimizer / enricher
+        assert a4_b.optimize(score_a) is None
+        assert b_b.enrich(record_a, score_a) is None
 
         # Verify isolation
         assert score_a.tenant_id == tenant_a
         assert score_b.tenant_id == tenant_b
 
-        config_a = a4_a.optimize(score_a)
-        config_b = a4_b.optimize(score_b)
-
         assert config_a.tenant_id == tenant_a
         assert config_b.tenant_id == tenant_b
 
-        # Stream B & C should also respect isolation
-        event_a = b_a.enrich(record_a, score_a)
-        event_b = b_b.enrich(record_b, score_b)
-
+        # Stream B should also respect isolation
         assert event_a.tenant_id == tenant_a
         assert event_b.tenant_id == tenant_b
 
-    def test_e2e_audit_chain_integrity(self):
-        """Verify audit refs flow through all streams"""
+    def test_e2e_audit_chain_integrity(self, _chain_env):
+        """Verify audit refs flow through all streams — and are REAL chain records."""
+        import json
+        from core.paths import tenant_audit_chain
+
+        _as_tenant(_chain_env, "_test")
         a2_record = OutcomeRecord(
             skill_id="os.skill",
             outcome_count=10,
             avg_confidence=0.85,
             audit_ref="a2_ref_xyz",
+            success_count=9, failed_count=1, timed_out_count=0,
         )
 
         a3 = ConfidenceScorer(tenant_id="_test")
@@ -187,6 +222,9 @@ class TestPhase3E2ECompleteLearningLoop:
         # Both A2 and A3 refs should be preserved in B
         assert event.a2_audit_ref == "a2_ref_xyz"
         assert event.a3_audit_ref == a3_audit
+        refs = {json.loads(ln)["details"].get("audit_ref")
+                for ln in tenant_audit_chain("_test").read_text().splitlines() if ln.strip()}
+        assert {a3_audit, event.audit_ref} <= refs
 
 
 if __name__ == "__main__":

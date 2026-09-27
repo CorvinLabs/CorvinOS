@@ -205,12 +205,17 @@ class TestLearningLoopK2PluginWiring:
         # Should find at least the test fixture
         assert len(loops) >= 2, f"Expected ≥2 loops, got {len(loops)}"
 
-        # All loops should have health data (k=2 enrichment)
+        # Health is either MEASURED from the audit chain or reported
+        # "not_measured" with null values — never a fabricated score
+        # (adversarial review 2026-09-27).
+        from core.console.corvin_console.routes.learning_loops import loop_manifest
         for loop in loops:
-            assert loop.last_event_ts is not None, f"Loop {loop.loop_id} missing last_event_ts"
-            assert loop.event_count_7d >= 0, f"Loop {loop.loop_id} has invalid event_count_7d"
-            assert loop.health_score is not None, f"Loop {loop.loop_id} missing health_score"
-            assert loop.status is not None, f"Loop {loop.loop_id} missing status"
+            m = loop_manifest(loop)
+            if m["status"] == "not_measured":
+                assert m["health_score"] is None and m["last_event_ts"] is None
+            else:
+                assert m["last_event_ts"] is not None, f"Loop {loop.loop_id} missing last_event_ts"
+            assert m["health_score"] != 0.85 or m["status"] != "active"
 
     def test_enrich_loop_with_health_data(self):
         """k=2: Enrich loop with synthetic health data (k=2 fixture-based)."""
@@ -232,14 +237,19 @@ class TestLearningLoopK2PluginWiring:
         assert base_loop.event_count_7d == 0
         assert base_loop.health_score is None
 
-        # Enrich with k=2 synthetic data
-        enriched = _enrich_loop_with_health_data(base_loop)
+        # The audit chain has no events for this fixture loop → the loop is
+        # NOT MEASURED. It used to be "enriched" with synthetic health
+        # (42 events / 0.85 / active); that fabrication is gone.
+        from unittest.mock import patch
+        from core.console.corvin_console.routes.learning_loops import loop_manifest
+        with patch("core.console.corvin_console.routes.learning_loops.AuditQueryHelper."
+                   "compute_loop_health_from_audit", return_value={"status": "unknown"}):
+            enriched = _enrich_loop_with_health_data(base_loop)
 
-        # Verify enrichment
-        assert enriched.last_event_ts is not None
-        assert enriched.event_count_7d == 42  # Synthetic k=2 value
-        assert enriched.health_score == 0.85  # Synthetic k=2 value
-        assert enriched.status == LoopStatus.ACTIVE
+        m = loop_manifest(enriched)
+        assert m["status"] == "not_measured"
+        assert m["health_score"] is None and m["last_event_ts"] is None
+        assert enriched.event_count_7d != 42 and enriched.health_score != 0.85
 
         # Verify original fields unchanged
         assert enriched.loop_id == base_loop.loop_id
@@ -322,6 +332,7 @@ class TestLearningLoopK3AuditIntegration:
     def test_audit_query_helper_status_computation(self):
         """k=3: AuditQueryHelper computes status from health + recency."""
         from core.learning.learning_loop_audit_integration import AuditQueryHelper
+        from datetime import datetime, timedelta
         
         # Recent event, healthy
         recent_event = {"timestamp": datetime.utcnow().isoformat() + "Z"}

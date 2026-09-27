@@ -101,6 +101,13 @@ def console_client(tmp_path: Path, tenant_id: str = "_default") -> Iterator[Cons
 
         rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+        # The learning feedback route is consent-gated (GDPR Art. 6,
+        # deny-by-default): record the operator's consent for this session.
+        from core.compliance import consent_store as _consent_store
+
+        _consent_store._stores.clear()
+        _consent_store.get_consent_store(tenant_id).grant_consent(
+            user_id=rec.sid_fingerprint, scope="learning_feedback")
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")
         with TestClient(app, raise_server_exceptions=False) as client:

@@ -14,6 +14,12 @@ Core systems:
 - Audit trail: Immutable, hash-chained, LoM-bound (ADR-0537, ADR-0232/0233)
 
 Compliance: GDPR (Art. 5/6/30/32), EU AI Act (Art. 5/50), Audit-First
+
+NOT WIRED (adversarial review 2026-09-27): the canary controller, validation
+engine and rollout orchestrators have no production caller; no router reads
+their traffic percentages. Only ``DeploymentStateManager`` / ``ManifestManager``
+are used by the gateway/console. Audit for all of them goes through
+``core.deployment.audit_sink`` onto ``tenant_audit_chain``.
 """
 
 from .state_sync import DeploymentStateManager
@@ -34,6 +40,7 @@ from .canary_validation import (
     AuditEventType,
     AuditBackend,
     LocalFileAuditBackend,
+    TenantChainAuditBackend,
     create_validation_engine,
 )
 from .phase3_rollout_orchestrator import (
@@ -67,6 +74,7 @@ __all__ = [
     "AuditEventType",
     "AuditBackend",
     "LocalFileAuditBackend",
+    "TenantChainAuditBackend",
     "create_validation_engine",
     # Phase 3: Rollout Orchestration
     "RolloutOrchestrator",

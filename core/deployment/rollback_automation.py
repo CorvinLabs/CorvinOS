@@ -1,6 +1,14 @@
 """
 Rollback Automation with 8 Fail-Closed Triggers
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Nothing
+feeds it live metrics and nothing acts on its locks; ``REVERT_VERSION`` calls
+``<CORVIN_SKILL_API_ENDPOINT>/<skill_id>/version``, a route no CorvinOS service
+serves, so a revert fails (honestly) on this build. Audit records go to the
+tenant chain through ``core.deployment.audit_sink`` (fail-closed); operator
+"authentication" is a caller-supplied dict, not a verified identity, and a
+CRITICAL unlock is refused unless a real 2FA verifier is injected.
+
 Implements automated rollback with 8 independent triggers:
 1. Correctness >2% drop → disable current phase skill, revert to previous version
 2. Latency >20% p99 → trigger escalation reduction or full phase rollback
@@ -33,7 +41,27 @@ import hashlib
 import threading
 from dataclasses import asdict
 
+from . import audit_sink
+
 logger = logging.getLogger(__name__)
+
+# Content-free detail fields only (ids, enums, counts, timestamps) — never the
+# free-text ``reason`` or an exception message.
+audit_sink.register_events({
+    "deployment.rollback_executed": {
+        "rollback_event_id", "trigger", "phase", "skill_id", "actions_taken",
+        "lockdown_until", "operator_ref",
+    },
+    "deployment.rollback_execution_failed": {"rollback_event_id", "error_type"},
+    "deployment.phase_unlocked": {"phase", "operator_ref", "is_critical_unlock"},
+})
+
+
+def _operator_ref(operator_id: Optional[str]) -> str:
+    """Pseudonymous operator reference for the audit chain (never the raw id)."""
+    if not operator_id:
+        return ""
+    return hashlib.sha256(str(operator_id).encode()).hexdigest()[:12]
 
 
 class RollbackTrigger(Enum):
@@ -126,9 +154,19 @@ class RollbackController:
     ROLLBACK_DEDUP_WINDOW_SECONDS = 300  # 5 minutes
     ROLLBACK_COOLDOWN_SECONDS = 600  # 10 minutes
 
-    def __init__(self):
+    def __init__(
+        self,
+        tenant_id: str = "_default",
+        twofa_verifier: Optional[Callable[[str, str], bool]] = None,
+    ):
+        self.tenant_id = tenant_id
+        # (user_id, token) -> bool. None = no verifier configured → CRITICAL
+        # unlocks are refused (fail-closed), never "any 6-char string passes".
+        self.twofa_verifier = twofa_verifier
         self.rollback_events: List[RollbackEvent] = []
         self.event_counter = 0
+        # Local mirror of the records this controller committed to the tenant
+        # audit chain (the chain itself is the source of truth).
         self.audit_trail: List[Dict] = []
         self.locked_phases: Dict[str, str] = {}  # phase -> unlock_time ISO string
         self.locked_skills: Dict[str, str] = {}  # skill_id -> unlock_time ISO string
@@ -285,7 +323,7 @@ class RollbackController:
 
     def _check_audit_chain_break(self, metrics: Dict[str, float]) -> Optional[RollbackEvent]:
         """Trigger 4: Audit chain break (CRITICAL, IMMEDIATE)"""
-        audit_chain_ok = metrics.get("audit_chain_verified", True)
+        audit_chain_ok = metrics.get("audit_chain_verified", False)  # not measured = not verified (fail-closed)
 
         if not audit_chain_ok:
             return RollbackEvent(
@@ -302,7 +340,8 @@ class RollbackController:
                     RollbackAction.ESCALATE_TO_PAGERDUTY,
                 ],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
-                reason="Audit chain hash verification failed - CRITICAL security incident",
+                reason=("Audit chain not verified (not measured) - CRITICAL" if "audit_chain_verified" not in metrics
+                        else "Audit chain hash verification failed - CRITICAL security incident"),
                 lom="rollback_automation.py::_check_audit_chain_break:261",
             )
 
@@ -310,7 +349,7 @@ class RollbackController:
 
     def _check_tenant_isolation_violation(self, metrics: Dict[str, float]) -> Optional[RollbackEvent]:
         """Trigger 5: Tenant isolation violation (CRITICAL, IMMEDIATE)"""
-        tenant_isolation_ok = metrics.get("tenant_isolation_verified", True)
+        tenant_isolation_ok = metrics.get("tenant_isolation_verified", False)  # not measured = not verified (fail-closed)
 
         if not tenant_isolation_ok:
             return RollbackEvent(
@@ -327,7 +366,8 @@ class RollbackController:
                     RollbackAction.ESCALATE_TO_PAGERDUTY,
                 ],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
-                reason="Cross-tenant data leakage detected - CRITICAL compliance violation",
+                reason=("Tenant isolation not verified (not measured) - CRITICAL" if "tenant_isolation_verified" not in metrics
+                        else "Cross-tenant data leakage detected - CRITICAL compliance violation"),
                 lom="rollback_automation.py::_check_tenant_isolation_violation:286",
             )
 
@@ -335,7 +375,7 @@ class RollbackController:
 
     def _check_security_failure(self, metrics: Dict[str, float]) -> Optional[RollbackEvent]:
         """Trigger 6: Security check failure (CRITICAL, IMMEDIATE)"""
-        security_checks_pass = metrics.get("security_checks_pass", True)
+        security_checks_pass = metrics.get("security_checks_pass", False)  # not measured = not verified (fail-closed)
 
         if not security_checks_pass:
             return RollbackEvent(
@@ -352,7 +392,8 @@ class RollbackController:
                     RollbackAction.ESCALATE_TO_PAGERDUTY,
                 ],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
-                reason="Security gate failure - requires security team review",
+                reason=("Security checks not run (not measured) - requires security team review" if "security_checks_pass" not in metrics
+                        else "Security gate failure - requires security team review"),
                 lom="rollback_automation.py::_check_security_failure:311",
             )
 
@@ -426,13 +467,12 @@ class RollbackController:
                 "event": "rollback_executed",
                 "rollback_event_id": event.event_id,
                 "trigger": event.trigger.value,
-                "reason": event.reason,
                 "phase": event.phase,
+                "skill_id": event.skill_id or "",
                 "actions_taken": [a.value for a in event.actions_taken],
-                "lockdown_until": event.lockdown_until,
-                "operator_id": operator_id,
+                "lockdown_until": event.lockdown_until or "",
+                "operator_ref": _operator_ref(operator_id or event.operator_id),
                 "lom": event.lom,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
             # Fail-closed: if audit fails, reject entire rollback
@@ -463,6 +503,7 @@ class RollbackController:
 
                     elif action == RollbackAction.LOCK_PHASE:
                         phase_name = event.phase or "unknown"
+                        # "" = locked until an operator unlocks it (no expiry).
                         self.locked_phases[phase_name] = event.lockdown_until or ""
                         logger.error(f"Phase {phase_name} LOCKED until {event.lockdown_until}")
 
@@ -490,9 +531,8 @@ class RollbackController:
             try:
                 self._audit_log({
                     "event": "rollback_execution_failed",
-                    "error": str(e),
+                    "error_type": type(e).__name__,
                     "rollback_event_id": event.event_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception as audit_e:
                 logger.critical(f"Failed to log rollback failure: {audit_e}")
@@ -519,7 +559,9 @@ class RollbackController:
             lom="rollback_automation.py::manual_rollback:420",
         )
 
-        self.execute_rollback(event, operator_id=operator_id)
+        if not self.execute_rollback(event, operator_id=operator_id):
+            # The caller gets the event either way; say loudly that it did NOT run.
+            logger.error(f"Manual rollback {event.event_id} was NOT executed")
         return event
 
     def is_phase_locked(self, phase: str) -> bool:
@@ -532,7 +574,10 @@ class RollbackController:
 
             unlock_time_str = self.locked_phases[phase]
             if not unlock_time_str:
-                return False
+                # No expiry recorded: locked until an operator unlocks it.
+                # (Reading "" as "unlocked" silently disarmed every LOCK_PHASE
+                # whose trigger carries no lockdown_until.)
+                return True
 
             try:
                 unlock_time = datetime.fromisoformat(unlock_time_str)
@@ -543,7 +588,7 @@ class RollbackController:
                 return True
             except ValueError:
                 logger.error(f"Invalid unlock time for phase {phase}: {unlock_time_str}")
-                return False
+                return True  # fail-closed: an unreadable lock stays locked
 
     def unlock_phase(
         self,
@@ -593,11 +638,11 @@ class RollbackController:
         audit_result = self._audit_log({
             "event": "phase_unlocked",
             "phase": phase,
-            "operator_id": operator_id or (operator_context.get("user_id") if operator_context else "unknown"),
-            "reason": reason,
+            "operator_ref": _operator_ref(
+                operator_id or (operator_context.get("user_id") if operator_context else "")
+            ),
             "is_critical_unlock": is_critical_lock,
-            "lom": "rollback_automation.py::unlock_phase:484",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "lom": "rollback_automation.py::unlock_phase",
         })
 
         if not audit_result:
@@ -615,9 +660,14 @@ class RollbackController:
     def _validate_operator_auth(
         self, phase: str, operator_context: Optional[Dict], operator_id: Optional[str]
     ) -> bool:
-        """RA-005: Validate operator authentication and RBAC"""
-        if not operator_context and not operator_id:
-            logger.error("No operator context provided for phase unlock")
+        """RA-005: Validate operator authentication and RBAC.
+
+        A bare ``operator_id`` string is NOT authentication — anyone can pass
+        one. An unlock needs an operator context that says it was authenticated
+        and carries an allowed role.
+        """
+        if not operator_context:
+            logger.error("No authenticated operator context provided for phase unlock")
             return False
 
         # Check RBAC: only admin/operator role can unlock
@@ -645,12 +695,19 @@ class RollbackController:
             logger.error("2FA token required but not provided")
             return False
 
-        # Validate 2FA token (implementation-specific)
-        # For now, just check it's not empty
-        if len(twofa_token) < 6:
-            logger.error("Invalid 2FA token")
+        # No verifier configured → there is nothing that can verify the token.
+        # Accepting any non-empty string would be a fabricated 2FA; refuse.
+        if self.twofa_verifier is None:
+            logger.error("No 2FA verifier configured — CRITICAL unlock refused (fail-closed)")
             return False
-
+        try:
+            ok = bool(self.twofa_verifier(str(operator_context.get("user_id", "")), str(twofa_token)))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"2FA verifier raised {type(e).__name__} — refused")
+            return False
+        if not ok:
+            logger.error("2FA token rejected by verifier")
+            return False
         logger.info("2FA verification passed")
         return True
 
@@ -715,8 +772,9 @@ class RollbackController:
                 if len(versions) > 1:
                     return versions[1].get("version")
 
-            # Fallback: return a default previous version
-            return "v1.0.0"
+            # No known prior version: never invent one (a made-up "v1.0.0"
+            # would "revert" to a version that may not exist).
+            return None
 
         except Exception as e:
             logger.warning(f"Failed to query version history for {skill_id}: {e}")
@@ -729,31 +787,23 @@ class RollbackController:
         return f"RB-{timestamp}-{self.event_counter:04d}"
 
     def _audit_log(self, event: Dict) -> bool:
-        """
-        Log audit event (immutable, hash-chained).
+        """Commit one record to the tenant audit chain (RA-001).
 
-        RA-001: Returns True if audit succeeds, False if fails.
+        Returns True only when the record is on the chain; False otherwise
+        (the caller then refuses the action — fail-closed). ``event["event"]``
+        names the record ``deployment.<event>``.
         """
+        details = {k: v for k, v in event.items() if k != "event"}
         try:
-            event["sequence_number"] = len(self.audit_trail)
-            event["timestamp"] = event.get("timestamp", datetime.now(timezone.utc).isoformat())
-
-            if self.audit_trail:
-                event["prior_hash"] = self.audit_trail[-1].get("hash", "")
-            else:
-                event["prior_hash"] = "GENESIS"
-
-            event_json = json.dumps(event, sort_keys=True, default=str)
-            event["hash"] = hashlib.sha256(event_json.encode()).hexdigest()
-
-            # Write to audit trail (immutable append-only)
-            self.audit_trail.append(event)
-            logger.debug(f"Audit event logged: {event.get('event')} (hash: {event['hash'][:16]}...)")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to log audit event: {e}")
+            record = audit_sink.emit(
+                f"deployment.{event['event']}", details, tenant_id=self.tenant_id,
+                severity="WARNING",
+            )
+        except audit_sink.AuditWriteFailed as e:
+            logger.error(f"Audit write failed (fail-closed): {e}")
             return False
+        self.audit_trail.append(record)
+        return True
 
     def get_rollback_history(self) -> List[RollbackEvent]:
         """Get complete rollback history"""
@@ -764,16 +814,20 @@ class RollbackController:
         active = {}
         now = datetime.now(timezone.utc)
 
-        # Check phases
-        for phase, unlock_time_str in self.locked_phases.items():
-            unlock_time = datetime.fromisoformat(unlock_time_str)
-            if now < unlock_time:
-                active[f"phase:{phase}"] = unlock_time_str
+        def _active(unlock_time_str: str) -> bool:
+            if not unlock_time_str:
+                return True  # no expiry: held until an operator unlocks
+            try:
+                return now < datetime.fromisoformat(unlock_time_str)
+            except ValueError:
+                return True  # unreadable lock stays active (fail-closed)
 
-        # Check skills
-        for skill_id, unlock_time_str in self.locked_skills.items():
-            unlock_time = datetime.fromisoformat(unlock_time_str)
-            if now < unlock_time:
-                active[f"skill:{skill_id}"] = unlock_time_str
+        with self.lock:
+            for phase, unlock_time_str in self.locked_phases.items():
+                if _active(unlock_time_str):
+                    active[f"phase:{phase}"] = unlock_time_str
+            for skill_id, unlock_time_str in self.locked_skills.items():
+                if _active(unlock_time_str):
+                    active[f"skill:{skill_id}"] = unlock_time_str
 
         return active

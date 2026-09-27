@@ -8,9 +8,12 @@ Tests the complete flow:
 Runs: pytest tests/e2e/test_session_continuity_e2e.py
 """
 
+import asyncio
+import contextvars
+import json
+
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 from core.infinite_session.session_bridge_producer import (
     SessionContextSnapshot,
@@ -20,7 +23,16 @@ from core.infinite_session.session_recovery import (
     SessionRecoveryManager,
     ContextLossSentinel,
 )
+from core.infinite_session.session_recovery import SnapshotVerificationError
 from core.concurrency.context_loss_sentinel import ContextLossError
+from core.concurrency.context_helpers import TASK_ID_VAR, TenantContextVar
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    """Scratch CORVIN_HOME + a configured snapshot key (fail-closed without one)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("CORVIN_SNAPSHOT_KEY", "test-snapshot-key-not-default")
 
 
 class TestSessionBridgeProducerE2E:
@@ -100,21 +112,11 @@ class TestSessionRecoveryE2E:
             plan_total_steps=5,
         )
 
-        # Save snapshot to disk (in real scenario, done by producer)
-        snapshot_dir = tmp_path / "snapshots" / "_default" / "task_123"
-        snapshot_dir.mkdir(parents=True)
-        import json
-        with open(snapshot_dir / "latest.json", "w") as f:
-            json.dump({"snapshot": snapshot.to_dict(), "signature": "dummy"}, f)
+        # Persist + sign exactly as production does (emit_bridge_event writes
+        # the signed latest.json under the tenant root, then the chain record).
+        producer.emit_bridge_event(snapshot=snapshot, source_session_id="sess_1")
 
-        # Create recovery manager pointing to tmp dir
-        recovery = SessionRecoveryManager(
-            event_store_path=tmp_path / "audit.jsonl",
-            snapshot_dir=tmp_path / "snapshots",
-        )
-
-        # Restore context
-        import asyncio
+        recovery = SessionRecoveryManager(event_store_path=tmp_path / "audit.jsonl")
         restored = asyncio.run(recovery.auto_restore_session_context(
             tenant_id="_default",
             task_id="task_123",
@@ -126,39 +128,77 @@ class TestSessionRecoveryE2E:
         assert restored["phase_name"] == "Phase Y"
         assert restored["plan_current_step"] == 2
 
+    def test_tampered_snapshot_is_rejected(self, tmp_path):
+        """A field edited after signing fails verification (fail-closed)."""
+        from core.infinite_session.paths import tenant_root
+
+        producer = SessionBridgeProducer(event_store_path=tmp_path / "audit.jsonl")
+        snapshot = producer.create_snapshot(
+            tenant_id="_default", task_id="task_t", session_id="s1",
+            last_message_hash="h", conversation_turn_count=1,
+            worktree_path="/w", base_commit="c", phase_name="P",
+        )
+        producer.emit_bridge_event(snapshot=snapshot, source_session_id="s1")
+        latest = tenant_root("_default") / "snapshots" / "task_t" / "latest.json"
+        assert oct(latest.stat().st_mode & 0o777) == "0o600"
+        data = json.loads(latest.read_text())
+        data["snapshot"]["phase_name"] = "Injected"
+        latest.write_text(json.dumps(data))
+
+        recovery = SessionRecoveryManager(event_store_path=tmp_path / "audit.jsonl")
+        with pytest.raises(SnapshotVerificationError) as exc_info:
+            asyncio.run(recovery.auto_restore_session_context(
+                tenant_id="_default", task_id="task_t"))
+        # The valid signature is never echoed back in the error.
+        assert data["signature"] not in str(exc_info.value)
+
+    def test_producer_fails_closed_without_snapshot_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CORVIN_SNAPSHOT_KEY")
+        producer = SessionBridgeProducer(event_store_path=tmp_path / "audit.jsonl")
+        snapshot = producer.create_snapshot(
+            tenant_id="_default", task_id="task_k", session_id="s1",
+            last_message_hash="h", conversation_turn_count=1,
+            worktree_path="/w", base_commit="c", phase_name="P",
+        )
+        with pytest.raises(RuntimeError, match="persistence failed"):
+            producer.emit_bridge_event(snapshot=snapshot, source_session_id="s1")
+        assert not (tmp_path / "audit.jsonl").exists()
+
 
 class TestContextLossSentinelE2E:
     """Test Context-Loss Sentinel (Phase 4)."""
 
+    # Each test runs in a fresh contextvars.Context so a value set by one test
+    # can never be observed by the next.
+
     def test_assert_context_success(self):
-        """Test assertion passes when context is present."""
-        # Mock ContextVar
-        with patch('core.concurrency.context_loss_sentinel._task_id_var.get', return_value="task_1"):
-            task_id = ContextLossSentinel.assert_task_context()
-            assert task_id == "task_1"
+        """Assertion returns the real ContextVar value (no placeholder)."""
+        def body():
+            TASK_ID_VAR.set("task_1")
+            TenantContextVar.set("tenant_x")
+            assert ContextLossSentinel.assert_task_context() == "task_1"
+            assert ContextLossSentinel.assert_tenant_context() == "tenant_x"
+        contextvars.Context().run(body)
 
     def test_assert_context_failure(self):
-        """Test assertion fails (fail-closed) when context is missing."""
-        # Mock ContextVar to return None
-        with patch('core.concurrency.context_loss_sentinel._task_id_var.get', return_value=None):
+        """Assertion fails (fail-closed) when context is missing."""
+        def body():
             with pytest.raises(ContextLossError) as exc_info:
                 ContextLossSentinel.assert_task_context()
             assert "task_id lost" in str(exc_info.value)
+            with pytest.raises(ContextLossError):
+                ContextLossSentinel.assert_tenant_context()
+        contextvars.Context().run(body)
 
     def test_with_context_propagation(self):
-        """Test explicit context propagation for async tasks."""
-        context = {
-            "task_id": "task_2",
-            "tenant_id": "_default",
-        }
+        """Explicit propagation sets the vars inside the block."""
+        context = {"task_id": "task_2", "tenant_id": "_default"}
 
-        with ContextLossSentinel.with_context_propagation(context):
-            # Inside context block, vars should be set
-            # (In real test, would check ContextVar.get())
-            pass
-
-        # Outside context block, vars should be reset
-        pass
+        def body():
+            with ContextLossSentinel.with_context_propagation(context):
+                assert ContextLossSentinel.assert_task_context() == "task_2"
+                assert ContextLossSentinel.assert_tenant_context() == "_default"
+        contextvars.Context().run(body)
 
 
 class TestMessageCompletenessE2E:
@@ -233,23 +273,23 @@ def test_full_session_continuity_flow(tmp_path):
     )
     assert event.hash != ""
 
-    # Phase 3: Session N+1 recovers context
-    recovery = SessionRecoveryManager(
-        event_store_path=tmp_path / "audit.jsonl",
-        snapshot_dir=tmp_path / "snapshots",
-    )
+    # Phase 3: Session N+1 recovers context from what Session N persisted
+    recovery = SessionRecoveryManager(event_store_path=tmp_path / "audit.jsonl")
+    restored = asyncio.run(recovery.auto_restore_session_context(
+        tenant_id="_default", task_id="e2e_task",
+    ))
+    assert restored is not None
+    assert restored["content_hash"] == snapshot.content_hash
+    assert restored["phase_name"] == "Phase E2E: Critical"
 
-    # Simulate snapshot on disk
-    snapshot_dir = tmp_path / "snapshots" / "_default" / "e2e_task"
-    snapshot_dir.mkdir(parents=True)
-    import json
-    with open(snapshot_dir / "latest.json", "w") as f:
-        json.dump({"snapshot": snapshot.to_dict(), "signature": "verified"}, f)
+    # Both hand-off records are on one verifiable hash chain.
+    from forge import security_events
 
-    # Recovery would happen here (async call)
-    # For test, we just verify structure exists
-    assert (tmp_path / "audit.jsonl").exists()
-    assert (snapshot_dir / "latest.json").exists()
+    chain = tmp_path / "audit.jsonl"
+    types = [json.loads(line)["event_type"] for line in chain.read_text().splitlines() if line.strip()]
+    assert types[-1] == "infinite_session.context_restored"
+    assert len(types) == 2
+    assert security_events.verify_chain(chain)[0]
 
 
 if __name__ == "__main__":

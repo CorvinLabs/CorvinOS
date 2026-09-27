@@ -20,6 +20,19 @@ Machine-verifiable proof of compliance gates:
 
 EXECUTION: python3 scripts/compliance_verification_e2e.py
 OUTPUT: JSON proof artifacts + pass/fail status
+
+DEFUSED (adversarial review 2026-09-27) — ``main()`` refuses (exit 2).
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+The "proofs" are self-referential: each check writes its OWN JSON lines to a
+temp file with ``open()`` / its own sha256 and then reads them back — e.g.
+finding 1 "proves" GDPR Art. 5 by reading back the line it just wrote, finding
+2 "proves" tenant isolation by filtering its own two lines, finding 3 "proves"
+audit-first by appending the strings "audit_written" then "action_executed" to
+a list. None of it touches CorvinOS's audit writer, tenant resolver or chain
+verifier, so a "15/15 PASS" is not evidence of anything and must not be cited
+as compliance proof. Real checks: ``forge.security_events.verify_chain`` on
+``tenant_audit_chain(tid)`` and the ADR-0232 boot tripwire
+(``corvin_compliance_reports.tripwire.assert_all``).
 """
 
 import json
@@ -731,8 +744,18 @@ class ComplianceVerifier:
         return self.proofs, artifacts
 
 
+DEFUSED_REASON = (
+    "compliance_verification_e2e.py is defused: its 15 'proofs' verify lines the "
+    "script itself wrote to a temp file, not CorvinOS. A pass is not compliance "
+    "evidence. Use forge.security_events.verify_chain on tenant_audit_chain() and "
+    "the ADR-0232 boot tripwire instead."
+)
+
+
 def main():
-    """Main entry point"""
+    """Main entry point — REFUSED (see module docstring)."""
+    print(f"ERROR: {DEFUSED_REASON}", file=sys.stderr)
+    return 2
     verifier = ComplianceVerifier()
     proofs, artifacts = verifier.run_all()
 

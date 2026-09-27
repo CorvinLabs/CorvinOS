@@ -24,16 +24,20 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 import os
+import tempfile
+import threading
 from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Any, Iterator
 
 
 def _corvin_home() -> Path:
-    env = os.environ.get("CORVIN_HOME")
-    if env:
-        return Path(os.path.expanduser(os.path.expandvars(env)))
-    return Path.home() / ".corvin"
+    # One resolver for the runtime root (CORVIN_HOME, repo-local .corvin, then
+    # ~/.corvin) — a private copy skipped the repo-local root the live services
+    # run on, so persisted stats landed outside the live install.
+    from core.paths.tenant import corvin_home  # noqa: PLC0415
+
+    return corvin_home()
 
 
 def _stats_path(tenant_id: str) -> Path:
@@ -63,6 +67,9 @@ def _load_file(tenant_id: str) -> dict[str, Any]:
         return {}
 
 
+_HELD = threading.local()
+
+
 @contextmanager
 def locked(tenant_id: str):
     """Exclusive per-tenant lock around a read-modify-write of the stats file.
@@ -72,7 +79,18 @@ def locked(tenant_id: str):
     Without this, two writers that loaded the same snapshot overwrite each
     other's samples; the chain then records n_samples 8 → 2 (review 2026-09-18).
     fcntl is POSIX-only; on a platform without it the lock is a no-op and the
-    single-writer assumption is stated, not silently broken."""
+    single-writer assumption is stated, not silently broken.
+
+    Re-entrant per thread: the read-modify-write helpers below take this lock
+    themselves (``cost_variance_optimizer`` called ``save_confidence_history``
+    without it), and the optimizer also calls them while already holding it —
+    a second ``flock`` on a new descriptor would deadlock against the first."""
+    held = getattr(_HELD, "tenants", None)
+    if held is None:
+        held = _HELD.tenants = set()
+    if tenant_id in held:
+        yield
+        return
     path = _stats_path(tenant_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(".lock")
@@ -83,18 +101,30 @@ def locked(tenant_id: str):
         return
     with open(lock_path, "a+", encoding="utf-8") as fh:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        held.add(tenant_id)
         try:
             yield
         finally:
+            held.discard(tenant_id)
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def _save_file(tenant_id: str, data: dict[str, Any]) -> None:
     path = _stats_path(tenant_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    # A unique temp name: a shared ".json.tmp" let two writers rename the same
+    # file and the second failed with FileNotFoundError.
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2))
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def list_entries(tenant_id: str) -> list[tuple[str, str]]:
@@ -130,11 +160,12 @@ def save_confidence_history(stat_key: str, history: list[float]) -> None:
     tenant_id = _tenant_from_stat_key(stat_key)
     if tenant_id is None:
         return
-    data = _load_file(tenant_id)
-    entry = data.get(stat_key) or {}
-    entry["confidence_history"] = history
-    data[stat_key] = entry
-    _save_file(tenant_id, data)
+    with locked(tenant_id):
+        data = _load_file(tenant_id)
+        entry = data.get(stat_key) or {}
+        entry["confidence_history"] = history
+        data[stat_key] = entry
+        _save_file(tenant_id, data)
 
 
 class PersistentConfidenceStore(MutableMapping):
@@ -163,19 +194,21 @@ class PersistentConfidenceStore(MutableMapping):
         tenant_id = _tenant_from_stat_key(stat_key)
         if tenant_id is None:
             return
-        data = _load_file(tenant_id)
-        entry = data.get(stat_key) or {}
-        entry["stats"] = value
-        data[stat_key] = entry
-        _save_file(tenant_id, data)
+        with locked(tenant_id):
+            data = _load_file(tenant_id)
+            entry = data.get(stat_key) or {}
+            entry["stats"] = value
+            data[stat_key] = entry
+            _save_file(tenant_id, data)
 
     def __delitem__(self, stat_key: str) -> None:
         tenant_id = _tenant_from_stat_key(stat_key)
         if tenant_id is None:
             return
-        data = _load_file(tenant_id)
-        data.pop(stat_key, None)
-        _save_file(tenant_id, data)
+        with locked(tenant_id):
+            data = _load_file(tenant_id)
+            data.pop(stat_key, None)
+            _save_file(tenant_id, data)
 
     def __contains__(self, stat_key: object) -> bool:
         if not isinstance(stat_key, str):

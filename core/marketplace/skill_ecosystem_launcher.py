@@ -1,5 +1,13 @@
 """Skill Ecosystem Launcher & Orchestration (ADR-0511 + ADR-0532).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``grep -rn skill_ecosystem_launcher`` outside tests finds no route, CLI, daemon
+or plugin that constructs a ``SkillEcosystemLauncher``. Until 2026-09-27 the
+module did not even import (it imported ``core.infinite_session.event_persistence``
+and ``core.infinite_session.security_events``, neither of which exists), and
+``_load_skill_manifests`` assigned to a frozen dataclass, so every manifest
+failed to load. Installations, ratings and install counts are IN-MEMORY only.
+
 Phase 3 Week 3+ parallel track: Enable skill distribution + community plugin framework.
 
 Responsibilities:
@@ -16,31 +24,49 @@ Architecture:
   - Tenant isolation: All queries filtered by tenant_id (GDPR Art. 5, 6, 32)
 
 Compliance:
-  - Audit-first: Every skill load/execute/feedback logged (ADR-0232/0233)
-  - Hash-chained: Every audit event immutable + cryptographically verified
+  - Audit-first, fail-closed: index load, install, rating and uninstall are
+    recorded on the tenant chain through ``core/deployment/audit_sink.py``
+    (``forge.security_events.write_event`` on ``tenant_audit_chain``) BEFORE
+    the in-memory state changes; ``AuditWriteFailed`` propagates.
   - Tenant-scoped: No cross-tenant leakage (ADR-0007)
-  - Learning loop: Feedback integration + optimizer closure (ADR-0314/0613)
+  - Learning loop: NOT integrated (no ADR-0314 events are emitted here).
 """
 
 from __future__ import annotations
 
-import hashlib
+import dataclasses
 import json
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Iterator, Optional
 from uuid import uuid4
 
+from core.deployment import audit_sink
+from core.paths.tenant import corvin_home
 from core.tenants.validation import validate_tenant_id
-from core.paths.tenant import tenant_home
-from core.infinite_session.event_persistence import EventStore
-from core.infinite_session.security_events import emit_audit_event
 
 logger = logging.getLogger(__name__)
+
+# Content-free field sets: ids, versions, counts, enum codes — never a path,
+# an exception text or a review comment.
+_AUDIT_EVENTS: dict[str, frozenset[str]] = {
+    "marketplace.index_loaded": frozenset({"total_skills", "buildin_count", "contributor_count", "invalid_count"}),
+    "marketplace.manifest_invalid": frozenset({"tier", "reason"}),
+    "marketplace.skill_installation_started": frozenset({"skill_id", "version"}),
+    "marketplace.skill_installation_completed": frozenset({"skill_id", "version", "installation_id"}),
+    "marketplace.skill_installation_failed": frozenset({"skill_id", "reason"}),
+    "marketplace.skill_rated": frozenset({"skill_id", "rating"}),
+    "marketplace.skill_uninstalled": frozenset({"skill_id"}),
+}
+audit_sink.register_events(_AUDIT_EVENTS)
+
+
+def _process_tenant() -> str:
+    return os.environ.get("CORVIN_TENANT_ID", "").strip() or "_default"
 
 __all__ = [
     "SkillEcosystemLauncher",
@@ -206,7 +232,9 @@ class SkillInstallation:
     skill_id: str
     installation_id: str = field(default_factory=lambda: str(uuid4()))
 
-    manifest: SkillManifest = field(default_factory=None)
+    # ``field(default_factory=None)`` made the dataclass call ``None()`` for a
+    # record built without a manifest (``from_dict`` always did) → TypeError.
+    manifest: Optional[SkillManifest] = None
     installed_version: str = ""
 
     # Installation state
@@ -219,7 +247,9 @@ class SkillInstallation:
     error_count: int = 0
     last_error: Optional[str] = None
     average_latency_ms: float = 0.0
-    confidence_score: float = 1.0  # From learning loop
+    # Not measured: nothing feeds a learning-loop confidence into this record.
+    # It used to default to 1.0 (a perfect score nobody computed).
+    confidence_score: Optional[float] = None
 
     # Config & learning
     learning_enabled: bool = True
@@ -229,7 +259,13 @@ class SkillInstallation:
     # Status
     enabled: bool = True
     auto_update: bool = True
-    rollback_available: bool = True
+    # No rollback is implemented for an installation — never claim one.
+    rollback_available: bool = False
+
+    @property
+    def tier(self) -> Optional[SkillTier]:
+        """Tier of the installed manifest (None when unknown)."""
+        return self.manifest.tier if self.manifest is not None else None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON."""
@@ -263,7 +299,7 @@ class SkillInstallation:
         inst.execution_count = data.get("execution_count", 0)
         inst.error_count = data.get("error_count", 0)
         inst.average_latency_ms = data.get("average_latency_ms", 0.0)
-        inst.confidence_score = data.get("confidence_score", 1.0)
+        inst.confidence_score = data.get("confidence_score")
         inst.enabled = data.get("enabled", True)
         inst.auto_update = data.get("auto_update", True)
         return inst
@@ -339,6 +375,7 @@ class CommunitySkillFramework:
 
     # Rating aggregates
     skill_ratings: dict[str, float] = field(default_factory=dict)  # skill_id -> avg rating (1-5)
+    skill_rating_counts: dict[str, int] = field(default_factory=dict)  # skill_id -> number of ratings
     skill_install_counts: dict[str, int] = field(default_factory=dict)  # skill_id -> installs
 
     # Feedback collection (append-only, tenant-scoped)
@@ -368,14 +405,13 @@ class CommunitySkillFramework:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
-        # Update running average
-        if skill_id not in self.skill_ratings:
-            self.skill_ratings[skill_id] = rating
-        else:
-            # Moving average
-            old_rating = self.skill_ratings[skill_id]
-            new_rating = (old_rating + rating) / 2.0
-            self.skill_ratings[skill_id] = new_rating
+        # Running arithmetic mean. It used to be ``(old + new) / 2``, which
+        # weights the latest rating as much as all previous ones together
+        # (5, 3, 1 → 2.5 instead of 3.0).
+        n = self.skill_rating_counts.get(skill_id, 0) + 1
+        old = self.skill_ratings.get(skill_id, 0.0)
+        self.skill_ratings[skill_id] = old + (rating - old) / n
+        self.skill_rating_counts[skill_id] = n
 
     def get_skill_rating(self, skill_id: str) -> Optional[float]:
         """Get current rating for a skill."""
@@ -469,33 +505,28 @@ class TenantSkillRegistry:
 
 
 class SkillEcosystemLauncher:
-    """Main skill ecosystem orchestrator (ADR-0511 + ADR-0532).
+    """Skill ecosystem orchestrator (ADR-0511 + ADR-0532) — NOT WIRED, in-memory.
 
     Responsibilities:
       1. Load marketplace index (buildin + contributor skills)
       2. Validate skill manifests against schema
-      3. Install skills per tenant with isolation
-      4. Orchestrate skill dependencies
-      5. Integrate with learning loop (ADR-0314)
-      6. Audit-first: every action logged (ADR-0232/0233)
+      3. Install skills per tenant with isolation (in-memory registries)
+      4. Audit-first, fail-closed: every state change is recorded on the
+         tenant chain before it is applied (``AuditWriteFailed`` propagates)
     """
 
-    def __init__(
-        self,
-        marketplace_root: Optional[Path] = None,
-        event_store: Optional[EventStore] = None,
-        audit_callback: Optional[Callable] = None,
-    ):
+    def __init__(self, marketplace_root: Optional[Path] = None):
         """Initialize ecosystem launcher.
 
         Args:
-            marketplace_root: Path to marketplace directory (buildin + contributor plugins)
-            event_store: Event store for audit trail (ADR-0314)
-            audit_callback: Callback for audit events (ADR-0232/0233)
+            marketplace_root: Marketplace directory (buildin + contributor
+                plugins). Defaults to ``<corvin_home>/marketplace`` (honours
+                ``CORVIN_HOME``; it used to hard-wire ``~/.corvin``).
+
+        There is deliberately no audit-callback seam: an injected callback
+        was the only audit this class ever had, i.e. an in-memory list.
         """
-        self.marketplace_root = marketplace_root or Path.home() / ".corvin" / "marketplace"
-        self.event_store = event_store
-        self.audit_callback = audit_callback or emit_audit_event
+        self.marketplace_root = marketplace_root or corvin_home() / "marketplace"
 
         # Skill registry (per tenant)
         self.tenant_registries: dict[str, TenantSkillRegistry] = {}
@@ -503,70 +534,73 @@ class SkillEcosystemLauncher:
         # Marketplace index
         self.discovery_index = SkillDiscoveryIndex()
 
-        # Community framework
+        # Community framework (in-memory aggregates)
         self.community_framework = CommunitySkillFramework(
             community_registry_url="https://marketplace.corvinOS.io/skills"
         )
+        self._invalid_manifest_count = 0
 
         logger.info(f"SkillEcosystemLauncher initialized (marketplace={self.marketplace_root})")
 
-    def load_marketplace_index(self) -> SkillDiscoveryIndex:
+    def load_marketplace_index(self, tenant_id: Optional[str] = None) -> SkillDiscoveryIndex:
         """Load marketplace index from disk.
 
-        Reads buildin + contributor skills from marketplace directory,
-        validates manifests, and populates discovery index.
-
-        Returns:
-            SkillDiscoveryIndex with all available skills
-
-        Audit:
-            - marketplace_index_loaded: successful load
-            - marketplace_validation_failed: manifest validation error
+        Reads buildin + contributor skills from the marketplace directory and
+        populates the discovery index. Each unreadable/invalid manifest is
+        audited as ``marketplace.manifest_invalid``; the load itself as
+        ``marketplace.index_loaded`` (on ``tenant_id``, default: process tenant).
         """
-        self.discovery_index = SkillDiscoveryIndex()
+        tenant = tenant_id or _process_tenant()
+        validate_tenant_id(tenant)
+        index = SkillDiscoveryIndex()
+        self._invalid_manifest_count = 0
 
-        # Load buildin skills
-        buildin_path = self.marketplace_root / "plugins" / "buildin"
-        if buildin_path.exists():
-            for manifest in self._load_skill_manifests(buildin_path, SkillTier.BUILDIN):
-                self.discovery_index.index_skill(manifest)
+        counts = {SkillTier.BUILDIN: 0, SkillTier.CONTRIBUTOR: 0}
+        for sub, tier in (("buildin", SkillTier.BUILDIN), ("contributor", SkillTier.CONTRIBUTOR)):
+            tier_path = self.marketplace_root / "plugins" / sub
+            if tier_path.exists():
+                for manifest in self._load_skill_manifests(tier_path, tier, tenant):
+                    index.index_skill(manifest)
+                    counts[tier] += 1
 
-        # Load contributor skills
-        contrib_path = self.marketplace_root / "plugins" / "contributor"
-        if contrib_path.exists():
-            for manifest in self._load_skill_manifests(contrib_path, SkillTier.CONTRIBUTOR):
-                self.discovery_index.index_skill(manifest)
-
-        # Audit: index loaded
-        self.audit_callback({
-            "event_type": "marketplace_index_loaded",
-            "total_skills": self.discovery_index.total_skills,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-
+        audit_sink.emit(
+            "marketplace.index_loaded",
+            {
+                "total_skills": index.total_skills,
+                "buildin_count": counts[SkillTier.BUILDIN],
+                "contributor_count": counts[SkillTier.CONTRIBUTOR],
+                "invalid_count": self._invalid_manifest_count,
+                "lom": "SkillEcosystemLauncher.load_marketplace_index",
+            },
+            tenant_id=tenant,
+        )
+        self.discovery_index = index
         return self.discovery_index
 
     def _load_skill_manifests(
         self,
         tier_path: Path,
         tier: SkillTier,
+        tenant_id: str,
     ) -> Iterator[SkillManifest]:
         """Load skill manifests from tier directory.
 
         Directory structure:
-            tier_path/[category]/[skill_id]/
-                - skill.json (manifest)
-                - src/ (implementation)
-                - tests/
+            tier_path/[category]/[skill_id]/skill.json
+
+        The directory decides the tier (a contributor manifest cannot claim
+        ``buildin``). ``SkillManifest`` is frozen: this used to assign
+        ``manifest.tier = tier``, which raised ``FrozenInstanceError`` for
+        EVERY manifest, so the index was always empty.
         """
         if not tier_path.exists():
             return
 
-        for category_dir in tier_path.iterdir():
+        for category_dir in sorted(tier_path.iterdir()):
             if not category_dir.is_dir():
                 continue
 
-            for skill_dir in category_dir.iterdir():
+            for skill_dir in sorted(category_dir.iterdir()):
                 if not skill_dir.is_dir():
                     continue
 
@@ -578,27 +612,25 @@ class SkillEcosystemLauncher:
                 try:
                     with open(manifest_file, "r") as f:
                         manifest_data = json.load(f)
-
-                    manifest = SkillManifest.from_dict(manifest_data)
-                    manifest.tier = tier
-
-                    yield manifest
-                except Exception as e:
+                    manifest = dataclasses.replace(SkillManifest.from_dict(manifest_data), tier=tier)
+                except Exception as e:  # noqa: BLE001 — any bad manifest is skipped, audited
                     logger.error(f"Failed to load manifest {manifest_file}: {e}")
-                    # Audit: validation failed
-                    self.audit_callback({
-                        "event_type": "marketplace_validation_failed",
-                        "skill_file": str(manifest_file),
-                        "error": str(e),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    self._invalid_manifest_count += 1
+                    audit_sink.emit(
+                        "marketplace.manifest_invalid",
+                        {
+                            "tier": tier.value,
+                            "reason": type(e).__name__,
+                            "lom": "SkillEcosystemLauncher._load_skill_manifests",
+                        },
+                        tenant_id=tenant_id,
+                        severity="WARNING",
+                    )
+                    continue
+                yield manifest
 
     def get_tenant_registry(self, tenant_id: str) -> TenantSkillRegistry:
-        """Get or create tenant-specific skill registry.
-
-        Implements ADR-0007 tenant isolation: each tenant has isolated skill
-        installations, learning models, and configurations.
-        """
+        """Get or create tenant-specific skill registry (ADR-0007)."""
         validate_tenant_id(tenant_id)
 
         if tenant_id not in self.tenant_registries:
@@ -612,84 +644,54 @@ class SkillEcosystemLauncher:
         skill_id: str,
         auto_update: bool = True,
     ) -> Optional[SkillInstallation]:
-        """Install a skill for a tenant.
+        """Install a skill for a tenant (in-memory registry).
 
-        Args:
-            tenant_id: Target tenant (ADR-0007)
-            skill_id: Skill ID from marketplace
-            auto_update: Enable automatic updates
-
-        Returns:
-            SkillInstallation on success, None on failure
-
-        Audit:
-            - skill_installation_started
-            - skill_installation_completed or skill_installation_failed
+        Returns the installation, or None when the skill is not in the index.
+        Raises ``AuditWriteFailed`` when an audit record does not commit — the
+        installation is then NOT applied.
         """
         validate_tenant_id(tenant_id)
 
-        # Find skill in marketplace
-        skill_manifest = None
-        for skill in self.discovery_index.skills:
-            if skill.id == skill_id:
-                skill_manifest = skill
-                break
-
+        skill_manifest = self.get_skill_details(skill_id)
         if not skill_manifest:
             logger.error(f"Skill {skill_id} not found in marketplace")
-            self.audit_callback({
-                "event_type": "skill_installation_failed",
-                "tenant_id": tenant_id,
-                "skill_id": skill_id,
-                "reason": "skill_not_found",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-            return None
-
-        # Audit: installation started
-        self.audit_callback({
-            "event_type": "skill_installation_started",
-            "tenant_id": tenant_id,
-            "skill_id": skill_id,
-            "version": skill_manifest.version,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-
-        try:
-            # Install for tenant
-            registry = self.get_tenant_registry(tenant_id)
-            installation = registry.install_skill(
-                skill_manifest,
-                version=skill_manifest.version,
-                auto_update=auto_update,
+            audit_sink.emit(
+                "marketplace.skill_installation_failed",
+                {"skill_id": skill_id, "reason": "skill_not_found",
+                 "lom": "SkillEcosystemLauncher.install_skill"},
+                tenant_id=tenant_id,
+                severity="WARNING",
             )
-
-            # Update community stats
-            self.community_framework.increment_install_count(skill_id)
-
-            # Audit: installation completed
-            self.audit_callback({
-                "event_type": "skill_installation_completed",
-                "tenant_id": tenant_id,
-                "skill_id": skill_id,
-                "installation_id": installation.installation_id,
-                "version": installation.installed_version,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-            logger.info(f"Skill {skill_id} installed for tenant {tenant_id}")
-            return installation
-
-        except Exception as e:
-            logger.error(f"Skill installation failed for {skill_id}: {e}")
-            self.audit_callback({
-                "event_type": "skill_installation_failed",
-                "tenant_id": tenant_id,
-                "skill_id": skill_id,
-                "reason": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
             return None
+
+        audit_sink.emit(
+            "marketplace.skill_installation_started",
+            {"skill_id": skill_id, "version": skill_manifest.version,
+             "lom": "SkillEcosystemLauncher.install_skill"},
+            tenant_id=tenant_id,
+        )
+
+        installation = SkillInstallation(
+            tenant_id=tenant_id,
+            skill_id=skill_manifest.id,
+            manifest=skill_manifest,
+            installed_version=skill_manifest.version,
+            auto_update=auto_update,
+        )
+        audit_sink.emit(
+            "marketplace.skill_installation_completed",
+            {"skill_id": skill_id, "version": installation.installed_version,
+             "installation_id": installation.installation_id,
+             "lom": "SkillEcosystemLauncher.install_skill"},
+            tenant_id=tenant_id,
+        )
+        # Applied only after the completion record committed.
+        registry = self.get_tenant_registry(tenant_id)
+        registry.installations[skill_manifest.id] = installation
+        self.community_framework.increment_install_count(skill_id)
+
+        logger.info(f"Skill {skill_id} installed for tenant {tenant_id}")
+        return installation
 
     def discover_skills(
         self,
@@ -697,16 +699,7 @@ class SkillEcosystemLauncher:
         tier: Optional[SkillTier] = None,
         search_text: Optional[str] = None,
     ) -> list[SkillManifest]:
-        """Discover skills from marketplace.
-
-        Args:
-            category: Filter by skill category
-            tier: Filter by tier (buildin / contributor)
-            search_text: Search skill name/description
-
-        Returns:
-            List of matching skill manifests
-        """
+        """Discover skills from the loaded index (category / tier / text filter)."""
         results = self.discovery_index.skills
 
         if category:
@@ -739,44 +732,30 @@ class SkillEcosystemLauncher:
         rating: float,
         comment: Optional[str] = None,
     ) -> bool:
-        """Rate a skill in community framework.
+        """Rate a skill (1-5). Returns False for an out-of-range rating.
 
-        Args:
-            tenant_id: Tenant rating the skill
-            skill_id: Skill being rated
-            rating: 1-5 stars
-            comment: Optional review comment
-
-        Returns:
-            True on success
-
-        Audit:
-            - skill_rated
+        The rating is audited (``marketplace.skill_rated``, never the comment)
+        before it is applied; ``AuditWriteFailed`` propagates.
         """
         validate_tenant_id(tenant_id)
-
-        try:
-            self.community_framework.rate_skill(
-                skill_id,
-                user_id=None,  # Pseudonymous rating
-                rating=rating,
-                comment=comment,
-                tenant_id=tenant_id,
-            )
-
-            # Audit: skill rated
-            self.audit_callback({
-                "event_type": "skill_rated",
-                "tenant_id": tenant_id,
-                "skill_id": skill_id,
-                "rating": rating,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-            return True
-        except Exception as e:
-            logger.error(f"Failed to rate skill {skill_id}: {e}")
+        if not 1.0 <= rating <= 5.0:
+            logger.error(f"Rating must be 1-5, got {rating}")
             return False
+
+        audit_sink.emit(
+            "marketplace.skill_rated",
+            {"skill_id": skill_id, "rating": rating,
+             "lom": "SkillEcosystemLauncher.rate_skill"},
+            tenant_id=tenant_id,
+        )
+        self.community_framework.rate_skill(
+            skill_id,
+            user_id=None,  # Pseudonymous rating
+            rating=rating,
+            comment=comment,
+            tenant_id=tenant_id,
+        )
+        return True
 
     def list_tenant_skills(self, tenant_id: str) -> list[SkillInstallation]:
         """List skills installed in a tenant."""
@@ -785,25 +764,16 @@ class SkillEcosystemLauncher:
         return registry.list_installed_skills()
 
     def uninstall_skill(self, tenant_id: str, skill_id: str) -> bool:
-        """Uninstall a skill from a tenant.
-
-        Audit:
-            - skill_uninstalled
-        """
+        """Uninstall a skill from a tenant (audited before removal)."""
         validate_tenant_id(tenant_id)
 
         registry = self.get_tenant_registry(tenant_id)
-        if skill_id in registry.installations:
-            del registry.installations[skill_id]
-
-            # Audit: uninstalled
-            self.audit_callback({
-                "event_type": "skill_uninstalled",
-                "tenant_id": tenant_id,
-                "skill_id": skill_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-            return True
-
-        return False
+        if skill_id not in registry.installations:
+            return False
+        audit_sink.emit(
+            "marketplace.skill_uninstalled",
+            {"skill_id": skill_id, "lom": "SkillEcosystemLauncher.uninstall_skill"},
+            tenant_id=tenant_id,
+        )
+        del registry.installations[skill_id]
+        return True

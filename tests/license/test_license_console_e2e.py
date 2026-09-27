@@ -1,194 +1,95 @@
-"""Console E2E Integration Tests for Licensing 1.0.0 (ADR-0092/0700-0704).
+"""Console licence routes (``/v1/console/license/*``) over HTTP, in-process.
 
-Tests the complete flow from HTTP API endpoints to React UI rendering:
-1. GET /v1/console/license/info — License status, limits, features, custom config
-2. POST /v1/console/license/key — Apply license key from textarea
-3. GET /v1/console/license/audit-tail — Recent license events
-4. GET /v1/console/license/status — License status
+The previous version assigned ``rec.tier = …`` on the frozen ``SessionRecord``
+(FrozenInstanceError before any request) — and a non-persisted change would not
+have reached ``require_session`` anyway, which loads the record from disk. Non-
+owner sessions are now real persisted records (``Console.session_with_tier``).
 
-Coverage:
-  ✅ Free tier: license info returns free-tier limits
-  ✅ Member tier: license info returns member-tier limits with expiry
-  ✅ License key application: POST /key accepts JWT-like key string
-  ✅ Audit trail: GET /audit-tail returns license events
-  ✅ Owner-only access: non-owner tier gets 403
-  ✅ CSRF enforcement: POST endpoints require X-CSRF-Token
+Current, verified behaviour on a build without the ``corvin_license`` plugin:
+  * ``/info`` — any authenticated session (documented: the UI renders feature
+    gates on every page), reads ``corvin_operator.license``.
+  * ``/status`` and ``/audit-tail`` — owner-only, then 503 "License plugin not
+    installed" (``_check_license_plugin``). The legacy ``corvin_license`` package
+    it imports from ``core/license/`` does not exist in this repo (nor in
+    Corvin-Marketplace), so on every build these two routes can only answer 503.
+  * ``POST /key`` — owner + CSRF; a key that does not verify is 400 and writes
+    nothing.
 """
 from __future__ import annotations
 
-import json
-import os
 import sys
-import tempfile
-import time
-import unittest
-from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest import mock
 
-_HERE = Path(__file__).resolve().parent
-_REPO = _HERE.parents[2]
-_OPERATOR = _REPO / "corvin_operator"
-_CONSOLE = _REPO / "core" / "console"
+import pytest
 
-for _p in [str(_OPERATOR), str(_OPERATOR / "license"), str(_CONSOLE)]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _license_console_sandbox import console  # noqa: E402
+
+BASE = "/v1/console/license"
 
 
-def _reset_modules():
-    for key in list(sys.modules):
-        if any(key.startswith(p) for p in ("corvin_console", "corvin_gateway", "forge")):
-            del sys.modules[key]
+@pytest.fixture
+def con(tmp_path):
+    with console(tmp_path) as c:
+        yield c
 
 
-@contextmanager
-def _sandbox(tmp_path: Path, *, tier: str = "owner"):
-    home = tmp_path / "corvin_home"
-    tenant_id = "_default"
-    (home / "tenants" / tenant_id / "global" / "auth").mkdir(parents=True)
-    (home / "tenants" / tenant_id / "global" / "forge").mkdir(parents=True)
-    (home / "tenants" / tenant_id / "global" / "console" / "sessions").mkdir(parents=True)
+def test_info_free_tier(con):
+    resp = con.client.get(f"{BASE}/info")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["tier"] == "free" and data["loaded"] is False
+    assert data["expires_at"] is None and data["jti_prefix"] is None
+    from corvin_operator.license.limits import FREE_TIER
 
-    prev = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
-    os.environ["CORVIN_HOME"] = str(home)
-    os.environ["CORVIN_TENANT_ID"] = tenant_id
-
-    try:
-        _reset_modules()
-        from corvin_console import auth as _auth
-        from corvin_console.app import router
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
-        rec.tier = tier
-        csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
-
-        app = FastAPI()
-        app.include_router(router, prefix="/v1/console")
-        client = TestClient(app, raise_server_exceptions=False)
-        client.cookies.set("corvin_console_sid", rec.sid)
-        client.headers.update({"X-CSRF-Token": csrf})
-
-        yield client, home, tenant_id, csrf, rec
-    finally:
-        for k, v in prev.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        _reset_modules()
+    assert data["free_tier"].keys() == dict(FREE_TIER).keys()
+    assert data["limits"]["compute_units_per_day"] == FREE_TIER["compute_units_per_day"]
+    assert any(e.get("event_type") == "console.action_performed" for e in con.audit_events())
 
 
-class TestLicenseInfoEndpoint(unittest.TestCase):
-    """GET /v1/console/license/info returns full license state."""
+def test_info_reports_the_resolved_member_tier(con):
+    import corvin_console.routes.license as license_route
 
-    def setUp(self):
-        self._tmp = tempfile.mkdtemp()
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_license_info_free_tier(self):
-        """Free tier: info returns free-tier limits and no expiry."""
-        with _sandbox(Path(self._tmp)) as (client, home, tid, csrf, rec):
-            with patch("corvin_console.routes.license._lic_active_tier", return_value="free"), \
-                 patch("corvin_console.routes.license._lic_is_loaded", return_value=False):
-                resp = client.get("/v1/console/license/info")
-                self.assertEqual(resp.status_code, 200)
-                data = resp.json()
-                self.assertEqual(data["tier"], "free")
-
-    def test_license_info_member_tier(self):
-        """Member tier: info returns member limits with expiry."""
-        with _sandbox(Path(self._tmp)) as (client, home, tid, csrf, rec):
-            expires_at = int(time.time()) + 30 * 86400
-            with patch("corvin_console.routes.license._lic_active_tier", return_value="member"), \
-                 patch("corvin_console.routes.license._lic_is_loaded", return_value=True):
-                resp = client.get("/v1/console/license/info")
-                self.assertEqual(resp.status_code, 200)
-                data = resp.json()
-                self.assertEqual(data["tier"], "member")
-
-    def test_license_info_non_owner_forbidden(self):
-        """Non-owner tier: returns 403 Forbidden."""
-        with _sandbox(Path(self._tmp), tier="viewer") as (client, home, tid, csrf, rec):
-            resp = client.get("/v1/console/license/info")
-            self.assertEqual(resp.status_code, 403)
+    with mock.patch.object(license_route, "_lic_active_tier", lambda: "member"), \
+         mock.patch.object(license_route, "_lic_is_loaded", lambda: True):
+        data = con.client.get(f"{BASE}/info").json()
+    assert data["tier"] == "member" and data["loaded"] is True
 
 
-class TestLicenseStatusEndpoint(unittest.TestCase):
-    """GET /v1/console/license/status returns license mode and tier."""
-
-    def setUp(self):
-        self._tmp = tempfile.mkdtemp()
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_license_status_free(self):
-        """Free tier: status returns mode=free."""
-        with _sandbox(Path(self._tmp)) as (client, home, tid, csrf, rec):
-            with patch("corvin_console.routes.license._lic_active_tier", return_value="free"):
-                resp = client.get("/v1/console/license/status")
-                self.assertEqual(resp.status_code, 200)
-                data = resp.json()
-                self.assertEqual(data["tier"], "free")
+def test_info_is_open_to_any_authenticated_session_but_not_anonymous(con):
+    viewer, _ = con.session_with_tier("viewer")
+    assert viewer.get(f"{BASE}/info").status_code == 200
+    assert con.anonymous().get(f"{BASE}/info").status_code == 401
 
 
-class TestLicenseKeyEndpoint(unittest.TestCase):
-    """POST /v1/console/license/key applies a license key from textarea."""
-
-    def setUp(self):
-        self._tmp = tempfile.mkdtemp()
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_apply_license_key_requires_csrf(self):
-        """POST /key without CSRF token returns 403."""
-        with _sandbox(Path(self._tmp)) as (client, home, tid, csrf, rec):
-            client.headers.pop("X-CSRF-Token")
-            resp = client.post(
-                "/v1/console/license/key",
-                json={"key": "CORVIN-test-key"},
-            )
-            self.assertEqual(resp.status_code, 403)
-
-    def test_apply_license_key_requires_owner(self):
-        """POST /key as non-owner returns 403."""
-        with _sandbox(Path(self._tmp), tier="viewer") as (client, home, tid, csrf, rec):
-            resp = client.post(
-                "/v1/console/license/key",
-                json={"key": "CORVIN-test-key"},
-            )
-            self.assertEqual(resp.status_code, 403)
+@pytest.mark.parametrize("path", ["status", "audit-tail"])
+def test_owner_only_reads(con, path):
+    viewer, _ = con.session_with_tier("viewer")
+    assert viewer.get(f"{BASE}/{path}").status_code == 403
+    assert con.anonymous().get(f"{BASE}/{path}").status_code == 401
+    owner = con.client.get(f"{BASE}/{path}")
+    assert owner.status_code == 503, owner.text
+    assert owner.json()["detail"] == "License plugin not installed"
 
 
-class TestLicenseAuditTailEndpoint(unittest.TestCase):
-    """GET /v1/console/license/audit-tail returns recent license events."""
-
-    def setUp(self):
-        self._tmp = tempfile.mkdtemp()
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_audit_tail_empty_when_no_events(self):
-        """Audit tail returns [] when no license events exist."""
-        with _sandbox(Path(self._tmp)) as (client, home, tid, csrf, rec):
-            with patch("corvin_console.routes.license._license_audit") as mock_audit:
-                mock_audit.get_audit_tail.return_value = []
-                resp = client.get("/v1/console/license/audit-tail")
-                self.assertEqual(resp.status_code, 200)
-                data = resp.json()
-                self.assertEqual(data, [])
+def test_apply_key_requires_csrf(con):
+    resp = con.client.post(f"{BASE}/key", json={"key": "CORVIN-test-key-0000"})
+    assert resp.status_code == 403, resp.text
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_apply_key_requires_owner(con):
+    viewer, viewer_csrf = con.session_with_tier("viewer")
+    resp = viewer.post(f"{BASE}/key", json={"key": "CORVIN-test-key-0000"},
+                       headers={"X-CSRF-Token": viewer_csrf})
+    assert resp.status_code == 403, resp.text
+    denied = [e for e in con.audit_events() if e.get("event_type") == "console.action_denied"]
+    assert any(e.get("details", {}).get("action") == "license.key_apply" for e in denied)
+
+
+def test_apply_unverifiable_key_is_rejected_and_not_written(con):
+    resp = con.client.post(f"{BASE}/key", json={"key": "CORVIN-test-key-0000"}, headers=con.h)
+    assert resp.status_code == 400, resp.text
+    assert "signature verification failed" in resp.json()["detail"]
+    assert not list(con.home.rglob("license.key"))
+    assert con.client.get(f"{BASE}/info").json()["tier"] == "free"

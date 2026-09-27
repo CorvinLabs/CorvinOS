@@ -88,14 +88,20 @@ def test_real_inbox_turn_reaches_outbox_with_disclosure_and_audit(tmp_path: Path
         "ADAPTER_DISABLE_VOICE": "1",
         "BRIDGE_PROGRESS_UPDATES": "0",
         "CORVIN_VOICE_PREWARM": "0",
-        # A cheap, fast model for the real turn.
-        "CORVIN_OS_MODEL": "claude-haiku-4-5",
-        "ADAPTER_MODEL": "claude-haiku-4-5",
+        # A cheap, fast model for the real turn — through the REAL pin
+        # mechanism: model_selector.resolve_os_model Tier 1
+        # (CORVIN_OS_MODEL_OVERRIDE). The former CORVIN_OS_MODEL /
+        # ADAPTER_MODEL are read by nothing, so the turn ran on Sonnet.
+        "CORVIN_OS_MODEL_OVERRIDE": "claude-haiku-4-5-20251001",
     }
     saved = {k: os.environ.get(k) for k in list(env_overrides) + ["ADAPTER_FAKE_CLAUDE"]}
     os.environ.pop("ADAPTER_FAKE_CLAUDE", None)  # the whole point: a REAL turn
     for k, v in env_overrides.items():
         os.environ[k] = v
+    cwd = os.getcwd()
+    work = tmp_path / "cwd"
+    work.mkdir()
+    os.chdir(work)  # a real claude turn must never write into the repo
     try:
         sys.modules.pop("adapter", None)
         adapter = importlib.import_module("adapter")
@@ -147,6 +153,9 @@ def test_real_inbox_turn_reaches_outbox_with_disclosure_and_audit(tmp_path: Path
             "audit records not hash-chained")
         for prev, cur in zip(events, events[1:]):
             assert cur.get("prev_hash") == prev.get("hash"), "hash chain link broken"
+        completed = [e for e in events if e.get("event_type") == "os_turn.completed"]
+        served = (completed[-1].get("details") or {}).get("model", "")
+        assert "haiku" in served, f"the haiku pin did not reach the turn: served {served!r}"
 
         # 4. no user text in the chain (metadata-only floor)
         raw_chain = audit_path.read_text(encoding="utf-8")
@@ -154,6 +163,7 @@ def test_real_inbox_turn_reaches_outbox_with_disclosure_and_audit(tmp_path: Path
         assert "u-live-e2e" not in raw_chain, "raw platform uid leaked into audit (PII floor)"
         print(f"LIVE E2E OK: {len(replies)} reply envelope(s), {len(events)} audit events, {elapsed:.1f}s")
     finally:
+        os.chdir(cwd)
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)

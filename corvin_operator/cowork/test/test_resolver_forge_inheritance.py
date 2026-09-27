@@ -151,6 +151,10 @@ def test_materialize_per_persona_root():
     args = cfg["mcpServers"]["forge"]["args"]
     t("args[0] resolved to absolute path",
       args[0].startswith("/") and args[0].endswith("corvin_operator/forge/forge.py"))
+    # 2026-09-27 review: the resolver injected {{REPO_ROOT}}/operator/forge/…
+    # after the operator → corvin_operator rename — a dead MCP spawn path.
+    t("args[0] exists on disk (the forge MCP server can actually start)",
+      Path(args[0]).is_file())
 
 
 def test_idempotency_resolve_twice():

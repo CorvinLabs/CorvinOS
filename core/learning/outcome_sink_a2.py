@@ -9,13 +9,15 @@ Learning Loop Closure Stream A (ADR-0613 + ADR-0574):
 Audit-first (ADR-0644): Write to core chain FIRST; if write fails, raise RuntimeError.
 Fail-closed: invalid outcomes rejected BEFORE audit write.
 Tenant isolation: All ops scoped by tenant_id (GDPR Art. 5, 6, 32).
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from collections import deque
 from typing import Any, Optional
-from datetime import datetime
 
 _log = logging.getLogger(__name__)
 
@@ -28,6 +30,12 @@ class OutcomeRecord:
     outcome_count: int
     avg_confidence: float
     audit_ref: str  # Reference to the audit event written
+    # Measured outcome split, when the producer has it. A3 scores ONLY a record
+    # that carries these (None = not measured; A1's HistogramBucket does not
+    # carry them yet).
+    success_count: Optional[int] = None
+    failed_count: Optional[int] = None
+    timed_out_count: Optional[int] = None
 
 
 class OutcomeSink:
@@ -47,6 +55,8 @@ class OutcomeSink:
     - Tenant isolation (no cross-tenant leakage)
     """
 
+    MAX_BUFFER = 1000
+
     def __init__(self, tenant_id: str, orchestrator: Optional[Any] = None):
         """Initialize OutcomeSink.
 
@@ -54,9 +64,13 @@ class OutcomeSink:
             tenant_id: Tenant identifier (scopes all operations)
             orchestrator: Task orchestrator (ADR-0574); if None, skips A3 enqueue
         """
+        from core.tenants import validate_tenant_id  # noqa: PLC0415
+
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.orchestrator = orchestrator
-        self._buffer: list[OutcomeRecord] = []
+        # Diagnostics buffer, bounded (it grew without limit).
+        self._buffer: deque[OutcomeRecord] = deque(maxlen=self.MAX_BUFFER)
 
     def validate_outcome(self, outcome_count: int, avg_confidence: float) -> bool:
         """Validate outcome metrics (bounds + NaN checks).

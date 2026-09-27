@@ -3,6 +3,8 @@ Skill Version Manager (ADR-0533)
 
 Implements semantic versioning and in-flight-freeze semantics.
 Ensures immutability and tenant version-pinning.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 import json
@@ -160,7 +162,10 @@ class SkillVersionManager:
             state_dir: Directory for storing in-flight run metadata
         """
         if state_dir is None:
-            state_dir = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "skills"
+            # Honour CORVIN_HOME (CLAUDE.md: never hard-wire ~/.corvin in skills).
+            from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+            state_dir = tenant_home("_default") / "global" / "skills"
         
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -389,9 +394,27 @@ class TenantVersionPin:
 class VersionResolver:
     """Resolves which version of a skill to use (pin > canary > installed)."""
     
-    def __init__(self):
-        """Initialize version resolver."""
-        self.version_manager = SkillVersionManager()
+    def __init__(self, version_manager: Optional[SkillVersionManager] = None):
+        """Initialize version resolver (no disk side effect until a manager is needed)."""
+        self._version_manager = version_manager
+
+    @property
+    def version_manager(self) -> SkillVersionManager:
+        if self._version_manager is None:
+            self._version_manager = SkillVersionManager()
+        return self._version_manager
+
+    @staticmethod
+    def _parsed(versions: List[str]) -> List[Tuple[SemanticVersion, str]]:
+        """Parse versions, DROPPING unparseable ones (never sort them as text:
+        ``"9.0.0" > "10.0.0"`` alphabetically)."""
+        out = []
+        for v in versions:
+            try:
+                out.append((SemanticVersion(v), v))
+            except (ValueError, TypeError):
+                continue
+        return out
     
     def resolve_version(
         self,
@@ -415,29 +438,33 @@ class VersionResolver:
         Returns:
             Selected version string
         """
-        # Check for explicit tenant pin
+        # 1. Explicit tenant pin. A pin is how an operator ROLLS BACK
+        # (ADR-0533 §2): an unavailable pinned version must fail, never fall
+        # through to "latest" — that silently re-installs the version the
+        # operator just rolled away from. A pin may name a pre-release.
         if tenant_pin:
             pinned_version = tenant_pin.get_skill_version(skill_id)
-            if pinned_version and pinned_version in available_versions:
-                return pinned_version
-        
-        # For now, return latest version
-        # TODO: Implement canary logic
+            if pinned_version:
+                if pinned_version in available_versions:
+                    return pinned_version
+                raise ValueError(
+                    f"Pinned version {pinned_version} of {skill_id} is not available"
+                )
+
+        # 2. Canary: not implemented here — never guessed.
         if not available_versions:
             raise ValueError(f"No versions available for skill: {skill_id}")
-        
-        # Sort by semver and return latest
-        try:
-            sorted_versions = sorted(
-                available_versions,
-                key=lambda v: SemanticVersion(v),
-                reverse=True
+
+        # 3. Latest STABLE version. Pre-releases (``2.0.0-beta``) are only
+        # reachable through an explicit pin; "latest" used to return them.
+        stable = [(sv, v) for sv, v in self._parsed(available_versions) if not sv.prerelease]
+        if not stable:
+            raise ValueError(
+                f"No stable version available for skill: {skill_id} "
+                "(pre-releases require an explicit tenant pin)"
             )
-            return sorted_versions[0]
-        except ValueError:
-            # Fallback to alphabetical sort
-            return sorted(available_versions, reverse=True)[0]
-    
+        return max(stable, key=lambda p: p[0])[1]
+
     def resolve_dependency_version(
         self,
         dependency_name: str,
@@ -460,9 +487,13 @@ class VersionResolver:
         """
         constraint = SkillVersionConstraint.from_string(constraint_str)
         
+        # A pre-release only satisfies a constraint that itself names a
+        # pre-release (npm/semver semantics): ">=1.0.0" must not resolve to
+        # "2.0.0-beta".
+        allow_pre = SemanticVersion(constraint.version).prerelease is not None
         matching = [
-            v for v in available_versions
-            if constraint.matches(v)
+            v for sv, v in self._parsed(available_versions)
+            if constraint.matches(v) and (allow_pre or not sv.prerelease)
         ]
         
         if not matching:
@@ -472,15 +503,7 @@ class VersionResolver:
             )
         
         # Return latest matching version
-        try:
-            sorted_versions = sorted(
-                matching,
-                key=lambda v: SemanticVersion(v),
-                reverse=True
-            )
-            return sorted_versions[0]
-        except ValueError:
-            return sorted(matching, reverse=True)[0]
+        return max(matching, key=SemanticVersion)
 
 
 # Singleton instance

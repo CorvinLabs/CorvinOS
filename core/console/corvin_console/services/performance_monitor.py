@@ -10,6 +10,14 @@ Production SLAs:
 
 @date 2026-09-25
 @phase Phase 3d: Performance Baselines
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+nothing imports this module.
+
+Fixed 2026-09-27: SLA compliance was ``p99 and p99 < limit`` — a measured
+p99 of 0.0 ms read as a FAILED SLA, and an unmeasured component returned
+``None`` that callers compared as "not compliant". Unmeasured is now
+explicitly ``None`` ("not measured"), measured values compare numerically.
 """
 
 import time
@@ -83,17 +91,22 @@ class PerformanceMonitor:
         idx = int(len(timings) * percentile / 100)
         return timings[idx] if idx < len(timings) else None
 
-    def get_sla_status(self) -> Dict[str, Dict[str, bool]]:
+    def get_sla_status(self) -> Dict[str, Dict[str, Optional[bool]]]:
         """
         Check SLA compliance (Phase 3d baseline).
         Returns: {component: {sla_name: is_compliant}}
         """
-        slas = {
-            "stt": {"p99_under_500ms": self.get_percentile("stt", 99) and self.get_percentile("stt", 99) < 500},
-            "db": {"p99_under_100ms": self.get_percentile("db", 99) and self.get_percentile("db", 99) < 100},
-            "type_detection": {"p99_under_50ms": self.get_percentile("type_detection", 99) and self.get_percentile("type_detection", 99) < 50},
-            "summary": {"p99_under_1000ms": self.get_percentile("summary", 99) and self.get_percentile("summary", 99) < 1000},
+        limits = {
+            "stt": ("p99_under_500ms", 500),
+            "db": ("p99_under_100ms", 100),
+            "type_detection": ("p99_under_50ms", 50),
+            "summary": ("p99_under_1000ms", 1000),
         }
+        slas = {}
+        for component, (name, limit) in limits.items():
+            p99 = self.get_percentile(component, 99)
+            # None = not measured (never "compliant", never "violated")
+            slas[component] = {name: None if p99 is None else p99 < limit}
         return slas
 
     def get_summary(self) -> Dict:
@@ -129,7 +142,7 @@ class PerformanceMonitor:
                 logger.info(f"  Avg: {stats['avg_ms']:.2f}ms, P50: {stats['p50_ms']:.2f}ms, P99: {stats['p99_ms']:.2f}ms")
 
                 for sla_name, is_compliant in sla_checks.items():
-                    status = "✅ PASS" if is_compliant else "❌ FAIL"
+                    status = "NOT MEASURED" if is_compliant is None else ("PASS" if is_compliant else "FAIL")
                     logger.info(f"  {sla_name}: {status}")
 
 

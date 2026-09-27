@@ -15,15 +15,20 @@ Architecture:
 
 Based on ADR-0541 Amendment (Session Bridging).
 Depends on: ADR-0314 (Learning Events), ADR-0232 (Audit Chain), ADR-0424 (Context Propagation)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``SessionRecoveryManager`` is constructed only by tests; chat_runtime.py does
+not call ``auto_restore_session_context``.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -32,50 +37,16 @@ from core.infinite_session.key_management import KeyManagementConfig
 logger = logging.getLogger(__name__)
 
 
-class ContextLossSentinel:
-    """Detect context loss in critical paths (fail-closed).
-
-    Used to assert that required ContextVars are available.
-    If not, raises ContextLossError to prevent silent failures.
-    """
-
-    @staticmethod
-    def assert_task_context() -> str:
-        """Raise if task_id is missing (critical path).
-
-        Must be called at the START of any operation that needs task_id.
-        """
-        from contextvars import ContextVar
-
-        # Placeholder: real implementation uses actual ContextVar
-        # For now, we assume the var exists and has been set by recovery
-        try:
-            # Try to get task_id from context (implementation detail)
-            # This would be: task_id_var.get(None)
-            task_id = "dummy_task_id"  # Placeholder
-            if task_id is None:
-                raise ContextLossError(
-                    "task_id lost (likely async boundary crossing).\n"
-                    "Call auto_restore_session_context() or use with_context() wrapper."
-                )
-            return task_id
-        except Exception as e:
-            logger.error(f"Context loss detected in task_id: {e}")
-            raise
-
-    @staticmethod
-    def assert_tenant_context() -> str:
-        """Raise if tenant_id is missing."""
-        # Placeholder
-        tenant_id = "_default"
-        if tenant_id is None:
-            raise ContextLossError("tenant_id lost — TenantContextVar not set")
-        return tenant_id
-
-
-class ContextLossError(Exception):
-    """Raised when required context is missing."""
-    pass
+# ONE sentinel, ONE error type: the canonical ContextVar-backed implementation.
+# This module used to ship its own placeholder ``ContextLossSentinel`` whose
+# ``assert_task_context()`` returned the literal "dummy_task_id" and whose
+# ``assert_tenant_context()`` returned "_default" — a context-loss detector
+# that could never detect a loss, and silently mapped every caller onto the
+# default tenant (adversarial review 2026-09-27).
+from core.concurrency.context_loss_sentinel import (  # noqa: E402
+    ContextLossError,
+    ContextLossSentinel,
+)
 
 
 class SnapshotVerificationError(Exception):
@@ -97,6 +68,32 @@ class SnapshotVerificationResult:
     verified_at: str = ""
     tenant_id: str = ""
     snapshot_hash: str = ""
+
+
+def _signed_payload(snapshot_dict: Dict[str, Any]) -> bytes:
+    return json.dumps(
+        # Every field is bound, including the chain link ``prev_snapshot_hash``
+        # (the old scheme left it out, so it could be rewritten undetected).
+        {k: v for k, v in snapshot_dict.items() if k != "signature"},
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def sign_snapshot(snapshot_dict: Dict[str, Any], *, key: Optional[str] = None) -> str:
+    """HMAC-SHA256 signature of a snapshot dict (hex).
+
+    The ONE signing function: ``SessionBridgeProducer`` signs with it when it
+    persists ``latest.json`` and ``SnapshotVerifier`` recomputes it to verify.
+    ``key`` defaults to ``KeyManagementConfig.get_snapshot_key()``, which raises
+    (fail-closed) when no production key is configured.
+
+    The previous scheme was ``sha256(payload + key)`` — not an HMAC despite the
+    docstring — and nothing ever produced it: the producer persisted snapshots
+    with NO signature, so every real snapshot failed verification.
+    """
+    if key is None:
+        key = KeyManagementConfig.get_snapshot_key()
+    return hmac.new(key.encode("utf-8"), _signed_payload(snapshot_dict), hashlib.sha256).hexdigest()
 
 
 class SnapshotVerifier:
@@ -126,23 +123,15 @@ class SnapshotVerifier:
         if external_key is None:
             external_key = KeyManagementConfig.get_snapshot_key()
 
-        # Compute expected signature
-        payload = json.dumps({
-            k: v for k, v in snapshot_dict.items()
-            if k not in ("signature", "prev_snapshot_hash")
-        }, sort_keys=True)
+        expected_signature = sign_snapshot(snapshot_dict, key=external_key)
 
-        expected_signature = (
-            hashlib.sha256(
-                (payload + external_key).encode()
-            ).hexdigest()
-        )
-
-        # Compare
         tenant_id = snapshot_dict.get("tenant_id", "")
         snapshot_hash = snapshot_dict.get("content_hash", "")
 
-        if signature == expected_signature:
+        # Constant-time compare; a missing/non-string signature never matches.
+        if isinstance(signature, str) and signature and hmac.compare_digest(
+            signature, expected_signature
+        ):
             return SnapshotVerificationResult(
                 is_valid=True,
                 reason="Signature verified",
@@ -150,13 +139,16 @@ class SnapshotVerifier:
                 tenant_id=tenant_id,
                 snapshot_hash=snapshot_hash,
             )
-        else:
-            return SnapshotVerificationResult(
-                is_valid=False,
-                reason=f"Signature mismatch: expected {expected_signature}, got {signature}",
-                tenant_id=tenant_id,
-                snapshot_hash=snapshot_hash,
-            )
+        # Never echo the expected signature: it used to be written into the
+        # reason (and from there into the raised exception and the error log),
+        # which handed anyone who could read either a valid signature for the
+        # snapshot they had just tampered with.
+        return SnapshotVerificationResult(
+            is_valid=False,
+            reason="Signature mismatch",
+            tenant_id=tenant_id,
+            snapshot_hash=snapshot_hash,
+        )
 
     def verify_tenant_isolation(
         self,
@@ -288,11 +280,15 @@ class SessionRecoveryManager:
             )
 
         # FIX #6: Timestamp validation (< 24h staleness)
-        snapshot_age_hours = (
-            (datetime.utcnow() - datetime.fromisoformat(snapshot_dict.get("timestamp", "")))
-            .total_seconds() / 3600
-        )
-        if snapshot_age_hours > 24:
+        try:
+            snapshot_ts = datetime.fromisoformat(str(snapshot_dict.get("timestamp", "")))
+        except ValueError as exc:
+            raise SnapshotExpiredError("Snapshot has no valid timestamp") from exc
+        if snapshot_ts.tzinfo is not None:  # compare naive-UTC with naive-UTC
+            snapshot_ts = snapshot_ts.astimezone(timezone.utc).replace(tzinfo=None)
+        snapshot_age_hours = (datetime.utcnow() - snapshot_ts).total_seconds() / 3600
+        # A future-dated snapshot is not "fresh": its age cannot be established.
+        if snapshot_age_hours > 24 or snapshot_age_hours < -0.1:
             raise SnapshotExpiredError(
                 f"Snapshot stale ({snapshot_age_hours:.1f}h old, max 24h)"
             )
@@ -441,4 +437,7 @@ __all__ = [
     "ContextVarRestorer",
     "SessionRecoveryManager",
     "ContextLossError",
+    "SnapshotExpiredError",
+    "SnapshotVerificationError",
+    "sign_snapshot",
 ]

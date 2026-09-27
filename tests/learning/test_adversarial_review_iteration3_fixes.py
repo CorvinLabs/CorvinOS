@@ -459,7 +459,7 @@ class TestIntegration:
             ("email@domain.com", "@domain.com"),
             ("555-123-4567", "123-4567"),  # phone
             ("123-45-6789", "45-6789"),    # SSN-like
-            ("user_name", "user"),         # username pattern
+            ("contact user42 today", "user42"),  # username pattern (user\d+)
             ("silvio@example.com", "@example.com"),
         ]
 

@@ -123,30 +123,80 @@ def permitted_engines(*, mode: str, bundled: str) -> frozenset[str]:
     return frozenset({bundled, WORKER_ENGINE_DEFAULT})
 
 
-def _get_phase_mode() -> str:
-    """Detect which Phase of ACP Skills is active (ADR-0532).
+#: Whether the Phase 2 auto-rollback guard is actually live. Phase 2
+#: (``phase2_dual_write`` / ``phase2_real``) SERVES the Skill's engine instead
+#: of the bundled rule's, and ADR-0532 only admits that behind an auto-rollback
+#: that fires when the Skill's routing degrades. That guard is not wired:
+#: ``dual_write.record_routing_outcome`` — the only feed of the correctness
+#: window the rollback detector reads — has no production caller, and it
+#: cannot honestly be given one, because it needs a per-request
+#: ``ground_truth`` ("which engine WOULD have been right"), a counterfactual no
+#: outcome sink observes (``TaskManager`` / ``core/learning/outcome_sink.py``
+#: only know whether the engine that actually ran succeeded). With no samples
+#: the detector never fires, so Phase 2 would change served routing with no
+#: brake — against ADR-0613 ("the shadow path must not alter routing") and the
+#: operator's own ``worker_engine`` selection (the Skill is not even given
+#: ``mode``). Until a real guard exists, a Phase 2 request is REFUSED: logged,
+#: audited once per process, and the turn stays in shadow mode.
+_PHASE2_ROLLBACK_GUARD_WIRED = False
 
-    Returns:
-        'phase1_shadow' — L5 routes through bundled rule, Skill logged in shadow only
-        'phase2_dual_write' — L5 routes through real Skill decision (confidence-threshold gated),
-                              dual-write monitoring, auto-rollback on degradation
-        'phase2_real' — L5 routes through real Skill decision unconditionally
-                       (no fallback to bundled, requires rollback recovery built-in)
+_PHASE2_MODES = ("phase2_dual_write", "phase2_real")
+_phase2_refusals_audited: set[tuple[str, str]] = set()
 
-    Environment Variable:
-        CORVIN_ACP_PHASE (default: phase1_shadow)
-        - phase1_shadow: Advisory mode, bundled routing stands
-        - phase2_dual_write: Real Skill routing with confidence threshold + auto-rollback
-        - phase2_real: Skill-primary routing (requires Phase 2b rollback recovery)
 
-    The default is phase1_shadow (most conservative). Phase 2 progression requires
-    explicit operator opt-in via CORVIN_ACP_PHASE env var.
+def _get_phase_mode(tenant_id: str = "_default") -> str:
+    """Which ACP L5 phase is in effect (ADR-0532), from ``CORVIN_ACP_PHASE``.
+
+    Returns ``'phase1_shadow'`` (the default, and the ONLY mode that can be in
+    effect today) or — only while :data:`_PHASE2_ROLLBACK_GUARD_WIRED` is true —
+    ``'phase2_dual_write'`` / ``'phase2_real'``. An unknown value degrades to
+    shadow. A Phase 2 request while the rollback guard is not wired is refused
+    (see :data:`_PHASE2_ROLLBACK_GUARD_WIRED`): the env var alone must never be
+    able to let a Skill change served routing.
     """
     import os
 
     mode = os.environ.get("CORVIN_ACP_PHASE", "phase1_shadow").lower().strip()
-    valid_modes = ("phase1_shadow", "phase2_dual_write", "phase2_real")
-    return mode if mode in valid_modes else "phase1_shadow"
+    if mode in _PHASE2_MODES:
+        if _PHASE2_ROLLBACK_GUARD_WIRED:
+            return mode
+        _refuse_phase2(mode, tenant_id)
+        return "phase1_shadow"
+    return "phase1_shadow"
+
+
+def _refuse_phase2(mode: str, tenant_id: str) -> None:
+    """Log + audit (once per process per tenant/mode) a refused Phase 2 request."""
+    key = (tenant_id, mode)
+    if key in _phase2_refusals_audited:
+        return
+    _phase2_refusals_audited.add(key)
+    import logging as _log  # noqa: PLC0415
+
+    _log.getLogger(__name__).warning(
+        "CORVIN_ACP_PHASE=%s refused: the Phase 2 auto-rollback guard is not "
+        "wired; L5 routing stays in shadow mode (bundled engine served)",
+        mode,
+    )
+    try:
+        from forge.security_events import register_event_allowlist  # noqa: PLC0415
+
+        register_event_allowlist(
+            "l5_routing_phase_refused",
+            frozenset({"requested_phase", "effective_phase", "reason_code", "tenant_id"}),
+        )
+    except Exception:  # noqa: BLE001 — bridge-only install; audit below is best-effort
+        pass
+    _audit_refusal(
+        "l5_routing_phase_refused",
+        {
+            "requested_phase": mode,
+            "effective_phase": "phase1_shadow",
+            "reason_code": "rollback_guard_not_wired",
+            "tenant_id": tenant_id,
+        },
+        tenant_id=tenant_id,
+    )
 
 
 def _acp_shadow_route(
@@ -193,6 +243,12 @@ def _acp_shadow_route(
             {
                 "complexity": complexity,
                 "task_type": task_type,
+                # The Skill's own rules 1/2 key on these flags. Omitting them
+                # made it answer "native" for every /delegate and big-data turn
+                # the bundled rule sent to ACS — a disagreement the learning
+                # signal recorded although both rules agree.
+                "force_delegate": force_delegate,
+                "is_big_data": is_big_data,
                 "user_context": {"mode": mode or "n/a"},
                 "tenant_id": tenant_id,
                 "shadow": True,
@@ -227,9 +283,11 @@ def resolve_worker_engine(
     routing, compared against the bundled rule, and both are tracked for correctness
     monitoring and auto-rollback on degradation.
 
-    The phase is determined by CORVIN_ACP_PHASE env var (default: phase1_shadow).
+    The phase is determined by CORVIN_ACP_PHASE env var (default: phase1_shadow),
+    and Phase 2 is refused while its rollback guard is not wired — see
+    :data:`_PHASE2_ROLLBACK_GUARD_WIRED`.
     """
-    phase = _get_phase_mode()
+    phase = _get_phase_mode(tenant_id)
 
     # Compute bundled engine (pure rule + extension point hook)
     bundled_engine = _resolve_worker_engine(

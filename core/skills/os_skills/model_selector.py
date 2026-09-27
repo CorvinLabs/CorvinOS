@@ -926,7 +926,12 @@ class ModelSelectionDecision:
 
 
 class Tier1Router:
-    """Complexity-based model selection with stratified sampling."""
+    """Complexity-based model selection with stratified sampling.
+
+    NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+    OS-model routing is ``resolve_os_model`` Tier 2.9 (ADR-0952), which uses
+    :class:`ModelSelector`, not this router.
+    """
     
     STRATIFICATION = {
         Complexity.SIMPLE: {
@@ -949,7 +954,10 @@ class Tier1Router:
     MODEL_NAMES = {
         ModelTier.HAIKU: "claude-haiku-4-5-20251001",
         ModelTier.SONNET: "claude-sonnet-5",
-        ModelTier.OPUS: "claude-opus-5-5",
+        # "claude-opus-5-5" is not a model id this codebase can route: it is
+        # absent from the bridge ``_MODEL_RANK`` (an unknown id ranks below
+        # Haiku) and from the registry.
+        ModelTier.OPUS: "claude-opus-5",
     }
     
     def route(self, task_id: str, complexity: str) -> ModelSelectionDecision:

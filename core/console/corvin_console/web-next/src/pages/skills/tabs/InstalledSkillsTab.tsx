@@ -1,22 +1,23 @@
 /**
- * Installed Skills Tab — List + Uninstall (Phase 5 K=3)
+ * Installed Skills Tab — list + uninstall.
  *
- * Displays installed skills with version, author, install date.
- * Uninstall button triggers polling via SkillManager context.
+ * GET /v1/console/skills-manager/skills/installed answers
+ * {skills: [{skill_id, version, boot_layer, verified}], total}; there is no
+ * name/author/install date on that record, so none is shown. Uninstall is the
+ * real DELETE route (it used to call the install path).
  */
 
 import { useEffect, useState, useCallback } from 'react';
 import { Trash2, RefreshCw } from 'lucide-react';
 import { useSkillManager } from '../SkillManagerContext';
 import { SkillCard } from '../components/SkillCard';
+import { SKILLS_INSTALLED, errorMessage } from '../endpoints';
 
 export interface SkillInfo {
   skill_id: string;
-  name: string;
   version: string;
-  author: string;
-  installed_at: string;
-  status: 'active' | 'inactive' | 'error';
+  boot_layer: string;
+  verified: boolean;
 }
 
 interface InstalledSkillsTabProps {
@@ -24,56 +25,39 @@ interface InstalledSkillsTabProps {
 }
 
 export function InstalledSkillsTab({ canUninstall }: InstalledSkillsTabProps) {
-  const { startInstall } = useSkillManager();
+  const { uninstall, revision } = useSkillManager();
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch installed skills on mount
-  useEffect(() => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    fetch('/v1/skills/installed')
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-        return r.json();
-      })
-      .then((data) => {
-        setSkills(data.skills || []);
-      })
-      .catch((err) => {
-        setError(String(err));
-        console.error('Failed to load installed skills:', err);
-      })
-      .finally(() => setLoading(false));
+    try {
+      const r = await fetch(SKILLS_INSTALLED, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(await errorMessage(r));
+      const data = await r.json();
+      setSkills(Array.isArray(data?.skills) ? data.skills : []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load, revision]);
 
   const handleUninstall = useCallback(
-    async (skillId: string, skillName: string) => {
-      if (!window.confirm(`Remove "${skillName}"? This cannot be undone.`)) {
+    async (skill: SkillInfo) => {
+      if (!window.confirm(`Remove "${skill.skill_id}" v${skill.version}? This cannot be undone.`)) {
         return;
       }
-      await startInstall(skillId, skillName, 'marketplace'); // Reuse startInstall for uninstall
+      await uninstall(skill.skill_id, skill.version);
     },
-    [startInstall],
+    [uninstall],
   );
-
-  const handleRefresh = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch('/v1/skills/installed')
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-        return r.json();
-      })
-      .then((data) => {
-        setSkills(data.skills || []);
-      })
-      .catch((err) => {
-        setError(String(err));
-      })
-      .finally(() => setLoading(false));
-  }, []);
 
   if (loading) {
     return <div className="text-center py-12">Loading installed skills…</div>;
@@ -84,7 +68,7 @@ export function InstalledSkillsTab({ canUninstall }: InstalledSkillsTabProps) {
       <div className="bg-destructive/10 border border-destructive rounded p-4 text-destructive">
         <p className="font-medium">Failed to load skills: {error}</p>
         <button
-          onClick={handleRefresh}
+          onClick={() => void load()}
           className="mt-2 px-3 py-1 text-sm bg-destructive text-destructive-foreground rounded hover:opacity-90"
         >
           Retry
@@ -97,7 +81,7 @@ export function InstalledSkillsTab({ canUninstall }: InstalledSkillsTabProps) {
     return (
       <div className="text-center py-12 text-muted-foreground">
         <p>No skills installed yet.</p>
-        <p className="text-sm mt-2">Visit the "Available" tab to install skills.</p>
+        <p className="text-sm mt-2">Use the "Upload" tab to install a skill package.</p>
       </div>
     );
   }
@@ -107,7 +91,7 @@ export function InstalledSkillsTab({ canUninstall }: InstalledSkillsTabProps) {
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold">Installed Skills ({skills.length})</h2>
         <button
-          onClick={handleRefresh}
+          onClick={() => void load()}
           className="px-3 py-1 text-sm bg-muted hover:bg-muted/80 rounded flex items-center gap-2"
         >
           <RefreshCw className="h-4 w-4" />
@@ -118,10 +102,16 @@ export function InstalledSkillsTab({ canUninstall }: InstalledSkillsTabProps) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {skills.map((skill) => (
           <SkillCard
-            key={skill.skill_id}
-            skill={skill}
+            key={`${skill.skill_id}@${skill.version}`}
+            skill={{
+              skill_id: skill.skill_id,
+              name: skill.skill_id,
+              version: skill.version,
+              status: skill.verified ? 'verified' : 'unverified',
+              boot_layer: skill.boot_layer,
+            }}
             action={canUninstall ? 'uninstall' : 'none'}
-            onAction={() => handleUninstall(skill.skill_id, skill.name)}
+            onAction={() => void handleUninstall(skill)}
             actionIcon={<Trash2 className="h-4 w-4" />}
             actionLabel="Uninstall"
           />

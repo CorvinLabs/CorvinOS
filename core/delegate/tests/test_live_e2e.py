@@ -38,7 +38,16 @@ import unittest
 from pathlib import Path
 
 
+if __name__ == "__main__":
+    # Plain-script run (run-all-tests.sh): no conftest — sandbox every runtime
+    # root BEFORE the product imports below resolve a home or a chain.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _script_sandbox
+
+    _script_sandbox.enter()
+
 _PLUGIN_DIR = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_PLUGIN_DIR))
 
 from corvin_delegate.mcp_config_builder import (  # noqa: E402
@@ -69,6 +78,18 @@ def _find_opencode() -> str | None:
     if home.exists():
         return str(home)
     return shutil.which("opencode")
+
+
+def _codex_version(binary: str) -> tuple[int, ...] | None:
+    """``codex --version`` → ``(major, minor, patch)``; None if unreadable."""
+    import re as _re
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True,
+                             text=True, timeout=15).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = _re.search(r"(\d+)\.(\d+)\.(\d+)", out)
+    return tuple(int(g) for g in m.groups()) if m else None
 
 
 _CODEX_BIN = _find_codex()
@@ -109,6 +130,20 @@ class ForgeMcpLiveTests(unittest.TestCase):
             env = os.environ.copy()
             env.update(forge_spec["env"])
             env["CORVIN_HOME"] = str(home)
+            # The server's registry root is FORGE_ROOT, else the scope of its
+            # cwd — for a cwd in this checkout ``<checkout>/.corvin/forge``,
+            # whatever CORVIN_HOME says. Pin both into the sandbox (a run from
+            # the live checkout appended to the live file, 2026-09-27).
+            env["FORGE_ROOT"] = str(tmp_path / "forge-root")
+            # The spec's PYTHONPATH names only corvin_operator/forge; without
+            # this checkout's root first, ``corvin_operator.*`` resolves via
+            # the venv's editable .pth — possibly into ANOTHER checkout.
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(_REPO_ROOT), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+            env.pop("VOICE_AUDIT_PATH", None)
+            project_chain = _REPO_ROOT / ".corvin" / "forge" / "audit.jsonl"
+            project_chain_size = (project_chain.stat().st_size
+                                  if project_chain.exists() else -1)
 
             cmd = [forge_spec["command"]] + forge_spec["args"]
             proc = subprocess.Popen(
@@ -117,6 +152,7 @@ class ForgeMcpLiveTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
+                cwd=str(tmp_path),
                 text=True,
                 bufsize=1,
             )
@@ -172,6 +208,11 @@ class ForgeMcpLiveTests(unittest.TestCase):
                             pass
 
             self.assertEqual(len(responses), 2, "expected init + tools/list")
+            self.assertEqual(
+                project_chain.stat().st_size if project_chain.exists() else -1,
+                project_chain_size,
+                f"forge MCP wrote into the checkout's project-scope chain {project_chain}",
+            )
             tools = responses[1]["result"]["tools"]
             names = [t["name"] for t in tools]
             for required in ("forge_tool", "forge_promote", "forge_list"):
@@ -205,6 +246,13 @@ class CodexConfigParseLiveTests(unittest.TestCase):
             )
             env = os.environ.copy()
             env.update(result["env_overlay"])
+
+            # Version gate FIRST: an older codex (e.g. the 0.114 snap found on
+            # PATH when $HOME has no nvm install) ignores CODEX_HOME and lists
+            # its OWN config — which no output heuristic reliably tells apart.
+            version = _codex_version(_CODEX_BIN)
+            if version is None or version < (0, 125):
+                self.skipTest(f"codex {version} < 0.125 ignores CODEX_HOME ({_CODEX_BIN})")
 
             try:
                 r = subprocess.run(

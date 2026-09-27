@@ -426,7 +426,7 @@ class TestSkillCompilation:
                 "name": "os.test_skill",
                 "version": "1.0.0",
                 "goal": "Test skill",
-                "description": "A test skill",
+                "description": "A test skill used by the compiler E2E",
                 "author": "Test",
                 "license": "Apache-2.0",
                 "created_at": "2026-09-01T00:00:00Z",
@@ -454,7 +454,7 @@ class TestSkillCompilation:
                     "additionalProperties": False,
                 },
                 "learning_signal": {
-                    "metrics": ["accuracy"],
+                    "metrics": ["quality_score_outcome"],
                     "scoring_rule": "accuracy >= 0.95",
                     "feedback_sources": [
                         {"event_type": "turn_completed", "extract": ["accuracy"]}
@@ -514,8 +514,8 @@ def execute(input_data):
             manifest = {
                 "name": "os.bad_skill",
                 "version": "1.0.0",
-                "goal": "Bad skill",
-                "description": "Skill with bad imports",
+                "goal": "Skill that must fail compilation",
+                "description": "Skill with a forbidden direct import",
                 "author": "Test",
                 "license": "Apache-2.0",
                 "created_at": "2026-09-01T00:00:00Z",
@@ -533,7 +533,7 @@ def execute(input_data):
                 "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
                 "output_schema": {"type": "object", "properties": {}, "additionalProperties": False},
                 "learning_signal": {
-                    "metrics": ["accuracy"],
+                    "metrics": ["quality_score_outcome"],
                     "scoring_rule": "accuracy >= 0.95",
                     "feedback_sources": [{"event_type": "turn_completed", "extract": ["accuracy"]}],
                     "sanitization": {"disallow_fields": [], "pii_patterns": ["email"], "fail_closed": True},
@@ -575,7 +575,7 @@ class TestIntegration:
                 "name": "os.integration_test",
                 "version": "2.0.0",
                 "goal": "Integration test",
-                "description": "Test integration",
+                "description": "Validate a manifest read from a file path",
                 "author": "Test",
                 "license": "Apache-2.0",
                 "created_at": "2026-09-01T00:00:00Z",
@@ -593,7 +593,7 @@ class TestIntegration:
                 "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
                 "output_schema": {"type": "object", "properties": {}, "additionalProperties": False},
                 "learning_signal": {
-                    "metrics": ["accuracy"],
+                    "metrics": ["quality_score_outcome"],
                     "scoring_rule": "accuracy >= 0.9",
                     "feedback_sources": [{"event_type": "turn_completed", "extract": ["accuracy"]}],
                     "sanitization": {"disallow_fields": [], "pii_patterns": ["email"], "fail_closed": True},
@@ -621,7 +621,7 @@ class TestIntegration:
                 "name": "os.complete_workflow",
                 "version": "1.5.0",
                 "goal": "Complete workflow test",
-                "description": "Test complete workflow",
+                "description": "Test the complete validate-version-compile workflow",
                 "author": "Test",
                 "license": "Apache-2.0",
                 "created_at": "2026-09-01T00:00:00Z",
@@ -639,7 +639,7 @@ class TestIntegration:
                 "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
                 "output_schema": {"type": "object", "properties": {}, "additionalProperties": False},
                 "learning_signal": {
-                    "metrics": ["accuracy"],
+                    "metrics": ["quality_score_outcome"],
                     "scoring_rule": "accuracy >= 0.9",
                     "feedback_sources": [{"event_type": "turn_completed", "extract": ["accuracy"]}],
                     "sanitization": {"disallow_fields": [], "pii_patterns": ["email"], "fail_closed": True},

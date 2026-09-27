@@ -125,6 +125,16 @@ _MCP_SERVER_FILES: dict[str, str] = {
     "corvin_operator/mcp_manager/servers/imagegen-zero-config/main.py": "imagegen-zero-config",
 }
 
+# MCP server files with NO spawner anywhere (no persona, no mcp config, no
+# importer of their bootstrap): not a capability, so no registry entry. Each
+# stays listed only while nothing references it — the check below fails the
+# moment something does, forcing a registry entry in the same commit.
+_UNWIRED_MCP_SERVER_FILES: dict[str, str] = {
+    "core/skills/os_skills/knowledge_graph/mcp_server.py":
+        "only knowledge_graph/bootstrap.py names it, and nothing imports that "
+        "bootstrap (2026-09-27 adversarial review)",
+}
+
 # Infra-level tools deliberately NOT user-facing capabilities (never shown
 # in the capability map, not meaningful chat verbs) — documented here
 # instead of silently skipped.
@@ -188,14 +198,44 @@ def _check_reverse_direction(reg) -> None:
 
     # 2. No unmapped mcp_server.py anywhere in the tree.
     skip_parts = _SKIP_DIR_PARTS | {"tests", "test"}
-    for base in ("operator", "core"):
+    for base in ("corvin_operator", "core"):
         for f in (REPO_ROOT / base).rglob("mcp_server.py"):
             if skip_parts.intersection(f.parts):
                 continue
             rel = str(f.relative_to(REPO_ROOT))
+            if rel in _UNWIRED_MCP_SERVER_FILES:
+                expect(not _has_spawner(rel),
+                       f"reverse: {rel} is still unwired (listed in _UNWIRED_MCP_SERVER_FILES)",
+                       "something now references it — give it a registry entry")
+                continue
             expect(rel in _MCP_SERVER_FILES,
                    f"reverse: MCP server file {rel} is known to this check",
                    "add it to _MCP_SERVER_FILES and give it a registry entry")
+
+
+def _has_spawner(rel: str) -> bool:
+    """True if any source/config outside the server's own package names it."""
+    pkg_dir = (REPO_ROOT / rel).parent
+    mod = rel[:-3].replace("/", ".")
+    pkg_mod = str(Path(rel).parent).replace("/", ".")
+    pkg = Path(rel).parent.name
+    # The server file itself, or ANY import of its package (a bootstrap that
+    # spawns it counts as wiring once something imports it).
+    needles = (rel, mod, pkg + "/mcp_server", pkg_mod, f"{pkg} import", f"from .{pkg}")
+    for base in ("corvin_operator", "core"):
+        for f in (REPO_ROOT / base).rglob("*"):
+            if f.suffix not in (".py", ".json", ".yaml", ".yml") or not f.is_file():
+                continue
+            if pkg_dir in f.parents or _SKIP_DIR_PARTS.intersection(f.parts) \
+                    or {"tests", "test"}.intersection(f.parts):
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if any(n in text for n in needles):
+                return True
+    return False
 
 
 def main() -> int:

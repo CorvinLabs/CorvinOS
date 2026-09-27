@@ -14,10 +14,10 @@ history view and the chain hash that ties it to the chain record.
 Rollups (progress, status counts, overdue) are derived on every read and never
 stored, so they cannot drift from the items they summarise.
 
-**ADR Deduplication (2026-09-27):** Task creation validates that external_ref
-(when it's an ADR ID) doesn't already exist in the registry with a different
-item ID. This prevents duplicate ADR IDs from silently creating multiple task rows.
-See :func:`_check_adr_uniqueness` + ADR-0516 knowledge-graph-foundation.
+**External-ref deduplication (2026-09-27):** an importer-supplied
+``external_ref`` (e.g. an ADR id) maps to exactly one item per tenant — the
+store's UNIQUE constraint; :func:`_check_adr_uniqueness` turns a collision into
+a TaskTrackingError instead of an IntegrityError.
 """
 from __future__ import annotations
 
@@ -158,30 +158,29 @@ def _fetch(conn: sqlite3.Connection, tenant_id: str, item_id: str, *, deleted_ok
 
 
 def _check_adr_uniqueness(conn: sqlite3.Connection, tenant_id: str, external_ref: Optional[str]) -> None:
-    """Validate that an ADR ID (external_ref) is not already assigned to another task.
+    """Refuse an ``external_ref`` another item of this tenant already carries.
 
-    If external_ref matches ADR-NNNN pattern, query the registry to ensure no other
-    item has this ADR ID. This prevents duplicate ADR task rows (ADR-0516 enforcement).
+    The store enforces ``UNIQUE (tenant_id, external_ref)`` over EVERY row,
+    soft-deleted ones included. This check mirrors that constraint exactly so
+    the caller gets a TaskTrackingError (HTTP 400) naming the holder instead of
+    a raw ``sqlite3.IntegrityError`` (HTTP 500). Until 2026-09-27 it checked
+    only ``ADR-NNNN`` refs on non-deleted rows, so a JIRA-style duplicate or an
+    ADR held by a deleted item fell through to the constraint.
 
-    Raises TaskTrackingError if a duplicate is found.
+    ``external_ref`` is set by importers (``extra=``), never by a console
+    create/PATCH body — ``ItemCreate``/``ItemPatch`` forbid it.
     """
     if not external_ref:
         return
-
-    # Check if this looks like an ADR ID (ADR-NNNN)
-    if not re.match(r'^ADR-\d{4}$', external_ref):
-        return  # Not an ADR; no dedup check needed
-
-    # Query: does any other item have this ADR ID?
     existing = conn.execute(
-        "SELECT id, title FROM items WHERE tenant_id=? AND external_ref=? AND deleted_at IS NULL",
+        "SELECT id, deleted_at FROM items WHERE tenant_id=? AND external_ref=?",
         (tenant_id, external_ref),
     ).fetchone()
-
     if existing:
+        where = " (deleted — restore it instead)" if existing["deleted_at"] else ""
         raise TaskTrackingError(
-            f"ADR {external_ref} is already tracked by task {existing['id']} ({existing['title']}). "
-            f"Each ADR can only have one task. Link to the existing task instead, or clear external_ref."
+            f"{external_ref} is already tracked by item {existing['id']}{where}. "
+            "Each external reference maps to exactly one item."
         )
 
 

@@ -1,5 +1,7 @@
 # Phase C (k=3) Loop Closure — Learning Loop Integration
 
+> **Status note (2026-09-27, adversarial review):** `core/learning/audit_consumer.py`, `confidence_scoreboard.py` and `optimizer_loop.py` have no production caller — only tests construct them, so no live score or parameter update comes from this loop. The closed learning loop in production is the ADR-0613 path (`outcome_sink` → `EventStore` → `SkillAdapter`, see `docs/claude-ref/learning-loop.md`).
+
 **Date:** 2026-09-27  
 **Phase:** Loop-Driven Engineering, Phase C k=3  
 **Status:** ✅ COMPLETE

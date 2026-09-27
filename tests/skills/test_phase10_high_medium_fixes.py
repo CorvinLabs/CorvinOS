@@ -76,14 +76,18 @@ class TestHigh6DeterministicSampling:
 
         manager.start_canary(CanaryStage.STAGE_10)
 
-        # Many different task_ids should have ~10% routed to canary
-        canary_count = 0
-        for i in range(100):
-            if manager.should_use_canary(f"task_{i}", "_default"):
-                canary_count += 1
-
-        # 10% ± 5% (statistical tolerance)
-        assert 5 <= canary_count <= 15, f"Expected ~10% canary, got {canary_count}%"
+        # Many different task_ids should have ~10% routed to canary. With
+        # n=100 the binomial sigma is 3 points, so "5..15" was a ~1.7-sigma
+        # band and the (deterministic) sample of task_0..task_99 lands on 4.
+        # n=2000 gives sigma ≈ 0.67 points; 8%..12% is a ±3-sigma band.
+        n = 2000
+        canary_count = sum(
+            1 for i in range(n) if manager.should_use_canary(f"task_{i}", "_default")
+        )
+        share = canary_count / n
+        assert 0.08 <= share <= 0.12, f"Expected ~10% canary, got {share:.1%}"
+        # ...and both arms are actually used.
+        assert 0 < canary_count < n
 
 
 class TestHigh7RaceConditionPromotion:

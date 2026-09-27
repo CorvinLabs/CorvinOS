@@ -1,5 +1,7 @@
 # k=2 Tier 1 Router — Algorithm & Implementation
 
+> **Status note (2026-09-27, adversarial review):** `Tier1Router` in `core/skills/os_skills/model_selector.py` has no production caller. OS-model routing is `resolve_os_model` Tier 2.9 (ADR-0952), which uses `ModelSelector`, not this router; the algorithm below describes code that routes nothing.
+
 **Status:** k=2 Loop 2 Documentation  
 **Related:** ADR-0845 (k=2 core), model_selector.py (implementation)
 

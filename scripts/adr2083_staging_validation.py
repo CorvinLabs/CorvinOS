@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-ADR-2083 Staging Validation Suite
+ADR-2083 Staging Validation Suite — IN-PROCESS SIMULATION, NOT A STAGING RUN
 
-Runs 100+ Discord loop tests + 50+ Slack workflow tests
-Validates:
-- Basic functionality (background mode, audit logging)
-- Edge cases (timeouts, rate limits, special chars)
-- Load (12h continuous execution)
-- Audit trail (hash-chain integrity)
+What this actually runs (adversarial review 2026-09-27): 12 in-process checks
+(8 "Discord loop", 4 "Slack workflow") against STUB executors defined in this
+file — no Discord or Slack message is sent or received, no bridge process is
+started, and the "load" check is 20 iterations with ``time.sleep``, not 12 h.
+It used to advertise "100+ Discord loop tests + 50+ Slack workflow tests" and,
+on success, print "VALIDATION PASSED / Ready for Phase 2 Canary".
+
+It therefore NEVER reports a staging pass: the exit code is 1 when a check
+fails and 3 ("simulated only — no staging evidence") when every in-process
+check passes. The ``--discord/--slack/--load-test`` flags the old usage line
+named were never parsed.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 
 Usage:
-    python3 scripts/adr2083_staging_validation.py --discord --slack --load-test
+    python3 scripts/adr2083_staging_validation.py
 """
 
 import sys
@@ -651,10 +658,10 @@ def main():
     total_tests = len(all_results)
     passed_tests = sum(1 for r in all_results if r.passed)
 
-    print(f"Total Tests: {total_tests}")
+    print(f"In-process checks (SIMULATED, stub executors): {total_tests}")
     print(f"Passed: {passed_tests}/{total_tests}")
     print(f"Failed: {total_tests - passed_tests}/{total_tests}")
-    print(f"Pass Rate: {100 * passed_tests / total_tests:.1f}%")
+    print("Discord/Slack traffic exercised: 0 (no bridge, no webhook, no network)")
 
     if not discord_passed or not slack_passed:
         print("\n❌ VALIDATION FAILED")
@@ -664,9 +671,10 @@ def main():
                 print(f"  - {r.name}: {r.error}")
         return 1
     else:
-        print("\n✅ VALIDATION PASSED")
-        print("Ready for Phase 2 Canary")
-        return 0
+        print("\nSIMULATED ONLY — every in-process check passed, but nothing here is")
+        print("staging evidence: no Discord or Slack path was exercised. NOT a")
+        print("go-ahead for any canary. (exit 3)")
+        return 3
 
 
 if __name__ == "__main__":

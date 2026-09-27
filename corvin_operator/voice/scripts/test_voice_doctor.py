@@ -124,5 +124,20 @@ class RealRoundTripTests(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+
+class EdgeTtsFfmpegRowTests(unittest.TestCase):
+    """Round-2 review: ``_tts_provider_rows`` called ``adapter._resolve_ffmpeg_bin``
+    without importing ``adapter``; the NameError was swallowed and edge-tts was
+    reported "ffmpeg not found" on every host."""
+
+    def test_edge_row_uses_the_real_ffmpeg_resolver(self):
+        import types
+        fake_adapter = types.ModuleType("adapter")
+        fake_adapter._resolve_ffmpeg_bin = lambda: "/usr/bin/ffmpeg"
+        with mock.patch.dict(sys.modules, {"adapter": fake_adapter,
+                                           "edge_tts": types.ModuleType("edge_tts")}):
+            rows = dict((n, (ok, why)) for n, ok, why in voice_doctor._tts_provider_rows())
+        self.assertEqual(rows["edge-tts"][0], True, rows["edge-tts"])
+
 if __name__ == "__main__":
     unittest.main()

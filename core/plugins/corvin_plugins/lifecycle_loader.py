@@ -1,4 +1,12 @@
-"""Plugin lifecycle loader — reads tenant config and loads plugins."""
+"""Plugin lifecycle loader — reads tenant config and loads plugins.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The
+real tenant loader is ``corvin_plugins.bootstrap.bootstrap_tenant``. This
+module called ``registry.list_plugin_ids()`` / ``registry.get_plugin()``, which
+do not exist, so :func:`load_plugins_for_tenant` could never run; it now says
+so instead of failing with an AttributeError, and :func:`register_lifecycle_hooks`
+no longer reports hooks it never registered.
+"""
 from __future__ import annotations
 
 import logging
@@ -7,7 +15,6 @@ from typing import Any, Optional
 import yaml
 
 from forge import paths as forge_paths
-from . import registry
 
 
 logger = logging.getLogger(__name__)
@@ -15,13 +22,8 @@ logger = logging.getLogger(__name__)
 
 def read_tenant_config(tenant_id: str) -> dict[str, Any]:
     """Read tenant.corvin.yaml for plugin enable/disable state."""
-    tenant_path = (
-        forge_paths.corvin_home()
-        / "tenants"
-        / tenant_id
-        / "global"
-        / "tenant.corvin.yaml"
-    )
+    # tenant_global_dir validates the id (no traversal via a crafted tenant)
+    tenant_path = forge_paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
 
     if not tenant_path.exists():
         return {}
@@ -35,52 +37,15 @@ def read_tenant_config(tenant_id: str) -> dict[str, Any]:
 
 
 def load_plugins_for_tenant(tenant_id: str) -> dict[str, bool]:
-    """Load plugins; respect tenant's enable/disable settings.
+    """Not implemented — use ``corvin_plugins.bootstrap.bootstrap_tenant``.
 
-    Returns: dict[plugin_id] -> is_loaded (True/False)
+    Raises NotImplementedError rather than reporting plugins as loaded: the
+    registry API this was written against does not exist.
     """
-    config = read_tenant_config(tenant_id)
-    plugins_config = config.get("plugins", {})
-
-    results = {}
-
-    for plugin_id in registry.list_plugin_ids():
-        plugin = registry.get_plugin(plugin_id)
-        if plugin is None:
-            logger.warning(f"Plugin {plugin_id} registered but not found")
-            results[plugin_id] = False
-            continue
-
-        # Default: enabled=true (unless explicitly disabled)
-        enabled = plugins_config.get(plugin_id, {}).get("enabled", True)
-
-        if enabled:
-            try:
-                plugin.initialize()
-                # Emit audit event
-                _emit_audit_event(
-                    "plugin_loaded",
-                    plugin_id=plugin_id,
-                    tenant_id=tenant_id,
-                    version=getattr(plugin, "version", "unknown")
-                )
-                results[plugin_id] = True
-                logger.info(f"Loaded plugin: {plugin_id}")
-            except Exception as e:
-                logger.error(f"Failed to load plugin {plugin_id}: {e}")
-                results[plugin_id] = False
-        else:
-            # Emit audit event for disabled plugin
-            _emit_audit_event(
-                "plugin_disabled",
-                plugin_id=plugin_id,
-                tenant_id=tenant_id,
-                reason="disabled in tenant config"
-            )
-            results[plugin_id] = False
-            logger.info(f"Skipped plugin (disabled): {plugin_id}")
-
-    return results
+    raise NotImplementedError(
+        "lifecycle_loader.load_plugins_for_tenant has no registry to load from; "
+        "the tenant loader is corvin_plugins.bootstrap.bootstrap_tenant"
+    )
 
 
 def _emit_audit_event(event_type: str, **kwargs: Any) -> None:
@@ -105,45 +70,37 @@ def _emit_audit_event(event_type: str, **kwargs: Any) -> None:
 
 
 def validate_plugins_loaded(results: dict[str, bool], tenant_id: str) -> bool:
-    """Boot tripwire: verify all enabled plugins loaded (fail-closed)."""
+    """Boot tripwire: every plugin enabled for the tenant must have loaded.
+
+    A plugin is "enabled" when the tenant config does not set
+    ``enabled: false`` for it; the ids checked are those declared in the
+    tenant config plus those present in ``results``. Fail-closed: a declared
+    or attempted plugin that is enabled but not loaded raises RuntimeError.
+    """
     config = read_tenant_config(tenant_id)
-    plugins_config = config.get("plugins", {})
+    plugins_config = config.get("plugins") or {}
+    if not isinstance(plugins_config, dict):
+        raise RuntimeError("plugin boot tripwire failed: tenant 'plugins' config is not a mapping")
 
-    for plugin_id in registry.list_plugin_ids():
-        enabled = plugins_config.get(plugin_id, {}).get("enabled", True)
-        loaded = results.get(plugin_id, False)
-
-        if enabled and not loaded:
+    for plugin_id in sorted(set(plugins_config) | set(results)):
+        entry = plugins_config.get(plugin_id) or {}
+        enabled = entry.get("enabled", True) if isinstance(entry, dict) else True
+        if enabled and not results.get(plugin_id, False):
             error_msg = (
-                f"Boot tripwire failed: plugin {plugin_id} declared enabled "
+                f"plugin boot tripwire failed: plugin {plugin_id} declared enabled "
                 f"but failed to load. Check logs for details."
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-    logger.info(f"✅ Boot tripwire passed: all enabled plugins loaded (tenant={tenant_id})")
+    logger.info("plugin boot tripwire passed: all enabled plugins loaded (tenant=%s)", tenant_id)
     return True
 
 
 def register_lifecycle_hooks(tenant_id: str = "_default") -> None:
-    """Register plugin lifecycle audit hooks (ADR-0682).
-
-    Injects audit emission callbacks into plugin registry:
-    - on_plugin_loaded: emit_plugin_loaded
-    - on_plugin_executed: emit_plugin_executed
-    - on_plugin_error: emit_plugin_error
-    - on_plugin_disabled: emit_plugin_disabled
-
-    Called during tenant bootstrap to set up audit integration.
-
-    Args:
-        tenant_id: Tenant scope (default '_default')
-    """
-    try:
-        from core.plugins.corvin_plugins import lifecycle as plugin_lifecycle
-
-        # Register hooks in plugin registry
-        # (Hook registration interface TBD; for now, logs that hooks are registered)
-        logger.info(f"✅ Lifecycle hooks registered (tenant={tenant_id})")
-    except Exception as e:
-        logger.warning(f"Failed to register lifecycle hooks: {e}")
+    """Not implemented: the plugin registry has no hook interface for these
+    emitters. Raises instead of logging a registration that never happened."""
+    raise NotImplementedError(
+        "plugin lifecycle hooks cannot be registered: the registry exposes no hook "
+        "interface (the registry audits load/disable itself via PluginContext.audit_emit)"
+    )

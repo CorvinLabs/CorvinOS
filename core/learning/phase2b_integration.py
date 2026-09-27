@@ -4,8 +4,14 @@ Bridges Phase2bOptimizer and ConvergenceDetector with EventStore for audit loggi
 All learning events (confidence recorded, convergence detected, optimization triggered,
 threshold adjusted, divergence detected) are logged to EventStore with tenant isolation.
 
-Fail-closed: if EventStore write fails, the optimization still proceeds but is logged
-as an audit failure.
+Fail-closed (fixed 2026-09-27): every ``log_*`` call commits one content-free
+record to the tenant's core audit chain (``event_persistence.core_audit_event``,
+event ``learning.phase2b.<type>``) and RAISES ``RuntimeError`` if it does not
+commit. Until 2026-09-27 each call invoked ``event_store.write_event`` with a
+signature no EventStore has, the TypeError was caught, and the method returned
+``None`` — not one of these "audit-first" records was ever written.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 
 Integration Points:
 - phase2b_optimizer.record_confidence_score → emit confidence_trend_recorded event
@@ -31,13 +37,24 @@ class Phase2bAuditIntegration:
     All operations emit immutable, tenant-scoped audit events.
     """
 
-    def __init__(self, event_store):
+    def __init__(self, event_store=None):
         """Initialize integration.
 
         Args:
-            event_store: EventStore instance (from core.learning.event_store)
+            event_store: unused; kept for call-compatibility. The record goes to
+                the core audit chain, not to a learning EventStore.
         """
         self.event_store = event_store
+
+    @staticmethod
+    def _write(event_type: str, event_data: dict, tenant_id: str) -> str:
+        """Commit one content-free record; return its audit_ref (fail-closed)."""
+        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
+
+        details = {k: v for k, v in event_data.items() if k not in ("event_type", "timestamp")}
+        details["tenant_id"] = tenant_id
+        return core_audit_event(f"learning.phase2b.{event_type}", tenant_id=tenant_id,
+                                details=details)
 
     def log_confidence_trend(
         self,
@@ -53,7 +70,7 @@ class Phase2bAuditIntegration:
             tenant_id: Tenant ID for isolation
 
         Returns:
-            Audit event ID if successful, None on failure
+            audit_ref of the committed record (raises RuntimeError if it did not commit)
         """
         try:
             event_data = {
@@ -70,11 +87,7 @@ class Phase2bAuditIntegration:
             }
 
             # Write to EventStore (audit-first)
-            audit_id = self.event_store.write_event(
-                event_type="confidence_trend_recorded",
-                payload=event_data,
-                tenant_id=tenant_id,
-            )
+            audit_id = self._write("confidence_trend_recorded", event_data, tenant_id)
 
             logger.debug(
                 f"audit_logged: confidence_trend_recorded: {skill_id}: "
@@ -85,7 +98,7 @@ class Phase2bAuditIntegration:
 
         except Exception as e:
             logger.error(f"log_confidence_trend_error: {skill_id}: {e}")
-            return None
+            raise
 
     def log_phase_transition(
         self,
@@ -99,7 +112,7 @@ class Phase2bAuditIntegration:
             tenant_id: Tenant ID for isolation
 
         Returns:
-            Audit event ID if successful, None on failure
+            audit_ref of the committed record (raises RuntimeError if it did not commit)
         """
         try:
             event_data = {
@@ -114,11 +127,7 @@ class Phase2bAuditIntegration:
             }
 
             # Write to EventStore
-            audit_id = self.event_store.write_event(
-                event_type="phase_transition_recorded",
-                payload=event_data,
-                tenant_id=tenant_id,
-            )
+            audit_id = self._write("phase_transition_recorded", event_data, tenant_id)
 
             logger.info(
                 f"audit_logged: phase_transition_recorded: {transition.skill_id}: "
@@ -129,7 +138,7 @@ class Phase2bAuditIntegration:
 
         except Exception as e:
             logger.error(f"log_phase_transition_error: {transition.skill_id}: {e}")
-            return None
+            raise
 
     def log_optimization_triggered(
         self,
@@ -145,7 +154,7 @@ class Phase2bAuditIntegration:
             tenant_id: Tenant ID for isolation
 
         Returns:
-            Audit event ID if successful, None on failure
+            audit_ref of the committed record (raises RuntimeError if it did not commit)
         """
         try:
             event_data = {
@@ -161,11 +170,7 @@ class Phase2bAuditIntegration:
             }
 
             # Write to EventStore
-            audit_id = self.event_store.write_event(
-                event_type="optimization_triggered",
-                payload=event_data,
-                tenant_id=tenant_id,
-            )
+            audit_id = self._write("optimization_triggered", event_data, tenant_id)
 
             logger.info(
                 f"audit_logged: optimization_triggered: {delta.skill_id}: "
@@ -176,7 +181,7 @@ class Phase2bAuditIntegration:
 
         except Exception as e:
             logger.error(f"log_optimization_triggered_error: {delta.skill_id}: {e}")
-            return None
+            raise
 
     def log_threshold_adjusted(
         self,
@@ -196,7 +201,7 @@ class Phase2bAuditIntegration:
             tenant_id: Tenant ID for isolation
 
         Returns:
-            Audit event ID if successful, None on failure
+            audit_ref of the committed record (raises RuntimeError if it did not commit)
         """
         try:
             event_data = {
@@ -210,11 +215,7 @@ class Phase2bAuditIntegration:
             }
 
             # Write to EventStore
-            audit_id = self.event_store.write_event(
-                event_type="threshold_adjusted",
-                payload=event_data,
-                tenant_id=tenant_id,
-            )
+            audit_id = self._write("threshold_adjusted", event_data, tenant_id)
 
             logger.debug(
                 f"audit_logged: threshold_adjusted: {skill_id}: "
@@ -225,7 +226,7 @@ class Phase2bAuditIntegration:
 
         except Exception as e:
             logger.error(f"log_threshold_adjusted_error: {skill_id}: {e}")
-            return None
+            raise
 
     def log_divergence_detected(
         self,
@@ -239,7 +240,7 @@ class Phase2bAuditIntegration:
             tenant_id: Tenant ID for isolation
 
         Returns:
-            Audit event ID if successful, None on failure
+            audit_ref of the committed record (raises RuntimeError if it did not commit)
         """
         try:
             event_data = {
@@ -254,11 +255,7 @@ class Phase2bAuditIntegration:
             }
 
             # Write to EventStore
-            audit_id = self.event_store.write_event(
-                event_type="divergence_detected",
-                payload=event_data,
-                tenant_id=tenant_id,
-            )
+            audit_id = self._write("divergence_detected", event_data, tenant_id)
 
             logger.warning(
                 f"audit_logged: divergence_detected: {alert.skill_id}: "
@@ -269,7 +266,7 @@ class Phase2bAuditIntegration:
 
         except Exception as e:
             logger.error(f"log_divergence_detected_error: {alert.skill_id}: {e}")
-            return None
+            raise
 
     def log_convergence_detected(
         self,
@@ -289,7 +286,7 @@ class Phase2bAuditIntegration:
             tenant_id: Tenant ID for isolation
 
         Returns:
-            Audit event ID if successful, None on failure
+            audit_ref of the committed record (raises RuntimeError if it did not commit)
         """
         try:
             event_data = {
@@ -302,11 +299,7 @@ class Phase2bAuditIntegration:
             }
 
             # Write to EventStore
-            audit_id = self.event_store.write_event(
-                event_type="convergence_detected",
-                payload=event_data,
-                tenant_id=tenant_id,
-            )
+            audit_id = self._write("convergence_detected", event_data, tenant_id)
 
             logger.info(
                 f"audit_logged: convergence_detected: {skill_id}: "
@@ -317,7 +310,7 @@ class Phase2bAuditIntegration:
 
         except Exception as e:
             logger.error(f"log_convergence_detected_error: {skill_id}: {e}")
-            return None
+            raise
 
     def log_false_convergence_detected(
         self,
@@ -337,7 +330,7 @@ class Phase2bAuditIntegration:
             tenant_id: Tenant ID for isolation
 
         Returns:
-            Audit event ID if successful, None on failure
+            audit_ref of the committed record (raises RuntimeError if it did not commit)
         """
         try:
             event_data = {
@@ -350,11 +343,7 @@ class Phase2bAuditIntegration:
             }
 
             # Write to EventStore
-            audit_id = self.event_store.write_event(
-                event_type="false_convergence_detected",
-                payload=event_data,
-                tenant_id=tenant_id,
-            )
+            audit_id = self._write("false_convergence_detected", event_data, tenant_id)
 
             logger.info(
                 f"audit_logged: false_convergence_detected: {skill_id}: "
@@ -366,7 +355,7 @@ class Phase2bAuditIntegration:
 
         except Exception as e:
             logger.error(f"log_false_convergence_detected_error: {skill_id}: {e}")
-            return None
+            raise
 
 
 __all__ = ["Phase2bAuditIntegration"]

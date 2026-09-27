@@ -64,6 +64,14 @@ GOOD_BODY = (
 )
 
 
+_MEMBER_TIER_SERVER_BOOT = (
+    "import runpy\n"
+    "from corvin_operator.license import capability_api as _ca\n"
+    "_ca.active_tier = lambda **_k: 'member'\n"
+    "runpy.run_module('skill_forge.mcp_server', run_name='__main__')\n"
+)
+
+
 # -- minimal stdio MCP client ------------------------------------------------
 
 class _SFMCPClient:
@@ -84,8 +92,12 @@ class _SFMCPClient:
             f"{SKILL_FORGE}{os.pathsep}{FORGE}"
             + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         )
+        # Skill authoring is licence-gated (ADR-0701 G2, member tier,
+        # fail-closed). The server runs in a subprocess, so the conftest's
+        # in-process tier pin does not reach it: pin the tier resolver in
+        # the child the same way (the gate itself still runs for real).
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "skill_forge.mcp_server"],
+            [sys.executable, "-c", _MEMBER_TIER_SERVER_BOOT],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1, env=env,
         )

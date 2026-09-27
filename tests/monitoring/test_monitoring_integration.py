@@ -11,6 +11,7 @@ This test ensures all 4 components work together correctly.
 """
 
 import pytest
+
 import json
 from pathlib import Path
 from corvin_console.monitoring import (

@@ -1187,6 +1187,10 @@ class TestIter5ResponseBodyCap(unittest.TestCase):
         # Build a mock HTTP server that returns more than _MAX_RESPONSE_BYTES
         class BigResponseHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
+                # Drain the request body first: closing a socket with unread
+                # input makes the kernel send RST, and the client then sees
+                # ConnectionResetError before it reaches the size cap (flaky).
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 # Send Content-Length larger than _MAX_RESPONSE_BYTES

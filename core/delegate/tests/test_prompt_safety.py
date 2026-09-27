@@ -22,6 +22,14 @@ from pathlib import Path
 os.environ.setdefault("CORVIN_AGENTS_SKIP_LIVE", "1")
 os.environ.setdefault("CORVIN_INTEGRATION_TEST", "1")
 
+if __name__ == "__main__":
+    # Plain-script run (run-all-tests.sh): no conftest — sandbox every runtime
+    # root BEFORE the product imports below resolve a home or a chain.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _script_sandbox
+
+    _script_sandbox.enter()
+
 _PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PLUGIN_DIR))
 _AGENTS_PARENT = _PLUGIN_DIR.parents[1] / "corvin_operator" / "bridges" / "shared"

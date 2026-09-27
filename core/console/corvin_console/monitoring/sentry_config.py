@@ -21,11 +21,42 @@ import os
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sentry_sdk.integrations.starlette import StarletteIntegration
-
 logger = logging.getLogger(__name__)
+
+# ``sentry_sdk`` is an OPTIONAL, undeclared dependency. It used to be imported
+# unconditionally, so on any install without it ``import
+# corvin_console.monitoring`` raised — the metrics/Grafana/alert helpers in the
+# same package were unimportable for a reason that has nothing to do with them.
+# Without the SDK every Sentry call below is a no-op and
+# ``initialize_sentry`` warns once.
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+    SENTRY_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the environment
+    SENTRY_AVAILABLE = False
+
+    class _NoOp:
+        """Stands in for ``sentry_sdk`` / a scope: every call does nothing."""
+
+        def __getattr__(self, _name):
+            return self
+
+        def __call__(self, *_a, **_k):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def __str__(self):
+            return ""
+
+    sentry_sdk = _NoOp()  # type: ignore[assignment]
+    FastApiIntegration = StarletteIntegration = _NoOp()  # type: ignore[assignment]
 
 
 def initialize_sentry(
@@ -47,6 +78,10 @@ def initialize_sentry(
 
     CRITICAL: Must be called at app startup before any request handling.
     """
+    if not SENTRY_AVAILABLE:
+        logger.warning("sentry_sdk is not installed; Sentry error tracking is disabled.")
+        return
+
     dsn = dsn or os.environ.get("SENTRY_DSN")
 
     if not dsn:

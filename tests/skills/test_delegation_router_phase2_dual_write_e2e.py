@@ -93,19 +93,22 @@ class TestPhase2DualWriteBasics:
 
         # Test phase1_shadow (default)
         os.environ.pop("CORVIN_ACP_PHASE", None)
-        assert delegation_policy._get_phase_mode() == "phase1_shadow"
+        try:
+            assert delegation_policy._get_phase_mode() == "phase1_shadow"
 
-        # Test phase2_dual_write
-        os.environ["CORVIN_ACP_PHASE"] = "phase2_dual_write"
-        assert delegation_policy._get_phase_mode() == "phase2_dual_write"
+            # Phase 2 is REFUSED while its auto-rollback guard is not wired
+            # (record_routing_outcome has no production feed): the env var
+            # alone must never let the Skill change served routing.
+            for phase in ("phase2_dual_write", "phase2_real"):
+                os.environ["CORVIN_ACP_PHASE"] = phase
+                assert delegation_policy._PHASE2_ROLLBACK_GUARD_WIRED is False
+                assert delegation_policy._get_phase_mode() == "phase1_shadow"
 
-        # Test phase2_real
-        os.environ["CORVIN_ACP_PHASE"] = "phase2_real"
-        assert delegation_policy._get_phase_mode() == "phase2_real"
-
-        # Test invalid value falls back to default
-        os.environ["CORVIN_ACP_PHASE"] = "phase3_invalid"
-        assert delegation_policy._get_phase_mode() == "phase1_shadow"
+            # Test invalid value falls back to default
+            os.environ["CORVIN_ACP_PHASE"] = "phase3_invalid"
+            assert delegation_policy._get_phase_mode() == "phase1_shadow"
+        finally:
+            os.environ.pop("CORVIN_ACP_PHASE", None)
 
     def test_confidence_threshold_default(self):
         """Test default confidence threshold is 0.75."""
@@ -118,8 +121,8 @@ class TestPhase2DualWriteBasics:
         """Test Skill decision fetching gracefully degrades on unavailable registry."""
         from core.skills.os_skills.monitoring.dual_write import _fetch_skill_decision
 
-        # Mock registry unavailable
-        with patch("core.skills.os_skills.monitoring.dual_write.skill_registry_phase1"):
+        # Registry not booted in this process
+        with patch("core.skills.skill_registry_phase1._global_registry", None):
             result = _fetch_skill_decision(
                 complexity=5,
                 task_type="chat",
@@ -148,9 +151,6 @@ class TestPhase2ConfidenceThresholdLogic:
         skill_decision = {"decision": "acs", "confidence": 0.85, "reasoning": "Big data"}
 
         with patch(
-            "core.skills.os_skills.monitoring.dual_write.detector.update",
-            return_value=False,  # No rollback
-        ), patch(
             "core.skills.os_skills.monitoring.dual_write.get_detector",
             return_value=Mock(update=Mock(return_value=False)),
         ), patch(
@@ -256,7 +256,9 @@ class TestPhase2AgreementRateTracking:
             # Verify agreement metric was emitted
             metrics_mock.assert_called_once()
             call_kwargs = metrics_mock.call_args[1]
-            assert call_kwargs["agreement"] == 1.0 or call_kwargs["skill_engine"] == call_kwargs["bundled_engine"]
+            # _emit_decision_metrics derives ``agreement`` itself from these two
+            assert call_kwargs["skill_engine"] == call_kwargs["bundled_engine"] == "native"
+            assert call_kwargs["used_engine"] == "native"
 
     def test_agreement_rate_disagreement(self):
         """Track disagreement when Skill and bundled decisions differ."""
@@ -297,7 +299,9 @@ class TestPhase2AgreementRateTracking:
             # Verify disagreement was tracked
             metrics_mock.assert_called_once()
             call_kwargs = metrics_mock.call_args[1]
-            assert call_kwargs["agreement"] == 0.0 or call_kwargs["skill_engine"] != call_kwargs["bundled_engine"]
+            assert call_kwargs["skill_engine"] == "acs"
+            assert call_kwargs["bundled_engine"] == "native"
+            assert call_kwargs["used_engine"] == "acs"
 
 
 class TestPhase2AutoRollback:
@@ -343,7 +347,7 @@ class TestPhase2LearningFeedbackIntegration:
     """Test integration with ADR-0314 learning loop."""
 
     def test_decision_metrics_emitted_for_learning(self):
-        """Verify decision metrics are emitted for learning feedback."""
+        """The metrics event carries agreement + threshold_met (derived, not passed in)."""
         from core.skills.os_skills.monitoring.dual_write import (
             resolve_worker_engine_dual_write,
         )
@@ -357,10 +361,8 @@ class TestPhase2LearningFeedbackIntegration:
             "core.skills.os_skills.monitoring.dual_write.get_tracker",
             return_value=Mock(),
         ), patch(
-            "core.skills.os_skills.monitoring.dual_write._emit_decision_metrics"
-        ) as metrics_mock, patch(
-            "core.skills.os_skills.monitoring.dual_write._emit_dual_routing_audit"
-        ), patch(
+            "core.skills.os_skills.monitoring.dual_write._audit"
+        ) as audit_mock, patch(
             "core.skills.os_skills.monitoring.dual_write._load_confidence_threshold",
             return_value=0.75,
         ):
@@ -375,17 +377,15 @@ class TestPhase2LearningFeedbackIntegration:
                 tenant_id="_default",
             )
 
-            # Verify metrics were emitted
-            metrics_mock.assert_called_once()
-            call_kwargs = metrics_mock.call_args[1]
-
-            # Check expected fields for learning integration
-            assert "request_id" in call_kwargs
-            assert "agreement" in call_kwargs  # 1.0 or 0.0
-            assert "threshold_met" in call_kwargs  # 1.0 (0.82 >= 0.75) or 0.0
-            assert "skill_confidence" in call_kwargs
-            assert "threshold" in call_kwargs
-            assert call_kwargs["threshold_met"] == 1.0  # confidence 0.82 >= 0.75
+        assert result == "acs"
+        by_type = {c.args[0]: c.args[1] for c in audit_mock.call_args_list}
+        metrics = by_type["l5_routing_metrics"]
+        assert metrics["request_id"] == "test_006"
+        assert metrics["agreement"] == 0.0  # acs vs native
+        assert metrics["threshold_met"] == 1.0  # 0.82 >= 0.75
+        assert metrics["skill_confidence"] == 0.82
+        assert metrics["threshold"] == 0.75
+        assert by_type["l5_routing_dual_write"]["agreement"] is False
 
 
 class TestPhase2AuditTrail:
@@ -534,22 +534,14 @@ class TestPhase2Fallback:
 class TestPhase2MetricsCollection:
     """Test metrics collection for monitoring dashboard."""
 
-    def test_agreement_rate_metric_collection(self):
-        """Verify agreement rate metrics collected for dashboard."""
-        from core.skills.os_skills.monitoring.monitoring.dual_write import (
-            get_monitoring_dashboard,
-        )
+    def test_agreement_rate_metric_collection(self, tmp_path):
+        """The dashboard reads the real tracker (no swallowed exceptions)."""
+        from core.skills.os_skills.monitoring import dual_write
 
-        # This would be populated after multiple calls
-        # For now, test that the dashboard function exists and is callable
-        try:
-            dashboard = get_monitoring_dashboard()
-            assert isinstance(dashboard, dict)
-            assert "is_rolled_back" in dashboard
-            assert "correctness_metrics" in dashboard
-        except Exception as e:
-            # Expected if modules not fully initialized
-            logger.debug("Dashboard retrieval not available: %s", e)
+        dual_write.initialize_dual_write(storage_dir=tmp_path / "metrics")
+        dashboard = dual_write.get_monitoring_dashboard()
+        assert dashboard["is_rolled_back"] is False
+        assert dashboard["correctness_metrics"]["total_count"] == 0
 
 
 if __name__ == "__main__":

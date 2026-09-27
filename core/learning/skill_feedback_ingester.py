@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -313,7 +314,7 @@ class SkillFeedbackIngester:
             success_rate = 0.5  # Neutral if no outcomes
 
         # Confidence increases with sample size (sqrt curve, saturates at 100+)
-        sample_size_confidence = min(1.0, window.size() / 100.0)
+        sample_size_confidence = min(1.0, math.sqrt(window.size() / 100.0))
 
         strength = success_rate * sample_size_confidence
 
@@ -335,7 +336,9 @@ class SkillFeedbackIngester:
             signal_type=winning_signal_type,
             strength=strength,
             count=window.size(),
-            timestamp=datetime.now(timezone.utc).isoformat() + "Z",
+            # Aware datetime: isoformat() already ends in +00:00 — appending
+            # "Z" produced an unparseable "...+00:00Z".
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             metadata=metadata,
         )
 

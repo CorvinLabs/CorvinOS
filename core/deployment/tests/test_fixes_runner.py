@@ -26,22 +26,53 @@ from threading import Thread, RLock
 import tempfile
 import time
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import os
+import shutil
 
-from incident_response_procedures import (
+import core.deployment.incident_response_procedures as irp
+from core.deployment.incident_response_procedures import (
     IncidentDetector,
     IncidentNotifier,
     Incident,
     IncidentType,
     IncidentSeverity,
 )
-from rollback_automation import (
+from core.deployment.rollback_automation import (
     RollbackController,
     RollbackEvent,
     RollbackTrigger,
     RollbackAction,
 )
+
+
+_ENV_KEYS = ("CORVIN_HOME", "HOME", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "FORGE_ROOT")
+_saved_env: dict = {}
+_tmp_root = None
+_saved_sleep = None
+
+
+def setUpModule():
+    """The audit chain is real: isolate CORVIN_HOME/HOME so nothing reaches a live install."""
+    global _tmp_root, _saved_sleep
+    _tmp_root = tempfile.mkdtemp(prefix="fixes_runner_")
+    for k in _ENV_KEYS:
+        _saved_env[k] = os.environ.get(k)
+    os.environ["CORVIN_HOME"] = os.path.join(_tmp_root, "corvin")
+    os.environ["HOME"] = os.path.join(_tmp_root, "home")
+    for k in ("CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "FORGE_ROOT"):
+        os.environ.pop(k, None)
+    _saved_sleep = irp._sleep
+    irp._sleep = lambda s: None
+
+
+def tearDownModule():
+    for k, v in _saved_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    irp._sleep = _saved_sleep
+    shutil.rmtree(_tmp_root, ignore_errors=True)
 
 
 class TestIR001NotifyReturnsFailure(unittest.TestCase):
@@ -51,7 +82,7 @@ class TestIR001NotifyReturnsFailure(unittest.TestCase):
         self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
-        self.notifier = IncidentNotifier(audit_path=self.temp_path)
+        self.notifier = IncidentNotifier(start_dlq_worker=False)
 
     def tearDown(self):
         if self.temp_path.exists():
@@ -94,7 +125,7 @@ class TestIR002SMTPWithRetries(unittest.TestCase):
         self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
-        self.notifier = IncidentNotifier(audit_path=self.temp_path)
+        self.notifier = IncidentNotifier(start_dlq_worker=False)
 
     def tearDown(self):
         if self.temp_path.exists():
@@ -148,7 +179,7 @@ class TestIR003RateLimiting(unittest.TestCase):
         self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
-        self.notifier = IncidentNotifier(audit_path=self.temp_path)
+        self.notifier = IncidentNotifier(start_dlq_worker=False)
 
     def tearDown(self):
         if self.temp_path.exists():
@@ -202,7 +233,7 @@ class TestIR004FallbackChain(unittest.TestCase):
         self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
-        self.notifier = IncidentNotifier(audit_path=self.temp_path)
+        self.notifier = IncidentNotifier(start_dlq_worker=False)
 
     def tearDown(self):
         if self.temp_path.exists():
@@ -247,7 +278,7 @@ class TestIR005DeadLetterQueue(unittest.TestCase):
         self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
         self.temp_path = Path(self.temp_file.name)
         self.temp_file.close()
-        self.notifier = IncidentNotifier(audit_path=self.temp_path)
+        self.notifier = IncidentNotifier(start_dlq_worker=False)
 
     def tearDown(self):
         if self.temp_path.exists():
@@ -456,7 +487,9 @@ class TestRA005OperatorAuth(unittest.TestCase):
             result = controller.unlock_phase(phase_name, operator_context=context)
             self.assertFalse(result)
 
-        # Test 4: Admin with 2FA → succeed
+        # Test 4: Admin with a token the configured verifier accepts → succeed
+        # (without a verifier a CRITICAL unlock is refused — fail-closed)
+        controller.twofa_verifier = lambda user, token: token == "123456"
         with patch.object(controller, '_audit_log', return_value=True):
             context = {
                 "user_id": "admin1",
@@ -477,41 +510,8 @@ class TestRA005OperatorAuth(unittest.TestCase):
         print("✓ RA-005 VERIFIED: Operator auth (RBAC + 2FA) works")
 
 
-class MachineVerifiableProof(unittest.TestCase):
-    """Collect machine-verifiable proof"""
-
-    def test_proof_summary(self):
-        """Generate proof summary"""
-        proof = {
-            "execution_timestamp": datetime.now(timezone.utc).isoformat(),
-            "fixes_verified": 10,
-            "findings": {
-                "IR-001": {"status": "PASSED", "proof": "notify() returns False on channel failure ✓"},
-                "IR-002": {"status": "PASSED", "proof": "SMTP retries 3 times ✓"},
-                "IR-003": {"status": "PASSED", "proof": "Rate limit at 10 alerts/min ✓"},
-                "IR-004": {"status": "PASSED", "proof": "Fallback chain works ✓"},
-                "IR-005": {"status": "PASSED", "proof": "DLQ retry succeeds ✓"},
-                "RA-001": {"status": "PASSED", "proof": "Audit-first semantics enforced ✓"},
-                "RA-002": {"status": "PASSED", "proof": "Version revert API called ✓"},
-                "RA-003": {"status": "PASSED", "proof": "RLock protects concurrent access ✓"},
-                "RA-004": {"status": "PASSED", "proof": "Cascade prevention blocks duplicates ✓"},
-                "RA-005": {"status": "PASSED", "proof": "RBAC + 2FA enforced ✓"},
-            }
-        }
-
-        print("\n" + "="*80)
-        print("MACHINE-VERIFIABLE PROOF — REMEDIATION CYCLE 2")
-        print("="*80)
-        print(json.dumps(proof, indent=2))
-        print("="*80)
-
-        # Write proof to file
-        proof_file = Path("/tmp/proof_cycle2_verified.json")
-        with open(proof_file, 'w') as f:
-            json.dump(proof, f, indent=2)
-
-        print(f"\nProof written to: {proof_file}")
-        self.assertEqual(len(proof["findings"]), 10)
+# MachineVerifiableProof removed (adversarial review 2026-09-27): it asserted a
+# hard-coded dict of "PASSED" claims and wrote it to /tmp — a fabricated proof.
 
 
 if __name__ == '__main__':

@@ -50,14 +50,30 @@ def _resolve_corvin_home(corvin_home: Path | None) -> Path:
     """Return a resolved corvin home path, expanding env vars and ~."""
     if corvin_home is not None:
         return Path(os.path.expanduser(os.path.expandvars(str(corvin_home))))
-    env = os.environ.get("CORVIN_HOME")
-    if env:
-        return Path(os.path.expanduser(os.path.expandvars(env)))
-    try:
-        from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore
-        return _ch()
-    except Exception:  # noqa: BLE001
-        return Path.home() / ".corvin"
+    # CORVIN_HOME, else THIS checkout's repo-marker home. Resolved by the
+    # sibling ``paths.py`` loaded by file path — never
+    # ``corvin_operator.forge.forge.paths``, which the live venv's editable
+    # ``.pth`` can resolve into a DIFFERENT checkout (whose home is that
+    # checkout's live ``.corvin``; 2026-09-27 split-brain incident).
+    return _sibling_paths().corvin_home()
+
+
+_SIBLING_PATHS = None
+
+
+def _sibling_paths():
+    """``paths.py`` from this file's own directory, loaded by file path."""
+    global _SIBLING_PATHS
+    if _SIBLING_PATHS is None:
+        import importlib.util as _ilu  # noqa: PLC0415
+
+        spec = _ilu.spec_from_file_location(
+            "_paths_spawn_gates", Path(__file__).resolve().parent / "paths.py",
+        )
+        mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        _SIBLING_PATHS = mod
+    return _SIBLING_PATHS
 
 
 def _load_l34_guard(tenant_id: str, corvin_home: Path | None):

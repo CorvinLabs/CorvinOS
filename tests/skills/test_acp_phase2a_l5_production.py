@@ -214,68 +214,140 @@ class TestRollbackDetector:
         assert detector.is_rolled_back
 
 
+class TestBaselineIsNotOneSample:
+    """2026-09-27: the baseline used to be the FIRST sample (0.0 or 1.0)."""
+
+    @staticmethod
+    def _outcome(i: int, ok: bool) -> RoutingOutcome:
+        d = RoutingDecision(request_id=f"r{i}", timestamp=time.time(), engine="acs",
+                            decision_source="skill", confidence=0.9, task_type="chat",
+                            tenant_id="_default")
+        return RoutingOutcome(request_id=f"r{i}", real_decision=d, shadow_decision=d,
+                              success=ok, ground_truth="acs", latency_ms=1.0)
+
+    def test_first_sample_failure_does_not_disable_the_gate(self):
+        tracker = CorrectnessTracker(window_size=100, bootstrap_samples=10)
+        tracker.record_outcome(self._outcome(0, False))  # old code: baseline 0.0
+        for i in range(1, 10):
+            tracker.record_outcome(self._outcome(i, True))  # baseline 0.9
+        for i in range(10, 20):
+            tracker.record_outcome(self._outcome(i, False))
+        assert tracker.should_rollback()
+
+    def test_single_miss_does_not_trip(self):
+        """Old code: a perfect first sample made the baseline 1.0 and the first
+        100-sample check trip on 2 misses in 100 (from a baseline of ONE)."""
+        tracker = CorrectnessTracker(window_size=200, bootstrap_samples=50)
+        for i in range(50):
+            tracker.record_outcome(self._outcome(i, True))
+        for i in range(50, 100):
+            tracker.record_outcome(self._outcome(i, i != 70))  # 98% == exactly 2% drop
+        assert not tracker.should_rollback()
+
+    def test_no_check_before_bootstrap(self):
+        tracker = CorrectnessTracker(window_size=100, bootstrap_samples=50)
+        for i in range(60):
+            tracker.record_outcome(self._outcome(i, i < 50))  # 10 post-baseline misses
+        assert not tracker.should_rollback()  # only 10 of 50 post-baseline samples
+
+
 class TestDualWriteIntegration:
-    """Dual-write routing integration."""
+    """Dual-write routing integration (module level; not reachable from routing)."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path):
+        from core.skills.os_skills.monitoring import dual_write
+
+        dual_write.initialize_dual_write(storage_dir=tmp_path / "metrics")
+        self.dw = dual_write
+        self.tmp = tmp_path
 
     def test_resolve_worker_engine_dual_write_uses_skill_decision(self):
-        """resolve_worker_engine_dual_write returns Skill decision."""
-        result = resolve_worker_engine_dual_write(
-            request_id="req_test_001",
-            bundled_engine="opus",
-            bundled_confidence=1.0,
-            skill_decision={"engine": "sonnet", "confidence": 0.92},
-            task_type="chat",
-            tenant_id="_default",
-        )
-
-        # Should return Skill's engine
-        assert result == "sonnet"
+        """A confident Skill answer (key ``decision``) is the served engine."""
+        with patch.object(self.dw, "_audit"):
+            result = resolve_worker_engine_dual_write(
+                request_id="req_test_001",
+                bundled_engine="native",
+                bundled_confidence=1.0,
+                skill_decision={"decision": "acs", "confidence": 0.92},
+                task_type="chat",
+                tenant_id="_default",
+            )
+        assert result == "acs"
 
     def test_resolve_worker_engine_dual_write_falls_back_on_rollback(self):
         """Falls back to bundled engine when rollback is active."""
-        tracker = CorrectnessTracker(window_size=50, bootstrap_samples=5)
-        detector = RollbackDetector(correctness_tracker=tracker)
-
-        # Manually trigger rollback (for testing only)
+        detector = self.dw.get_detector()
         detector._state = detector._state.__class__.ROLLBACK_TRIGGERED
-        detector._rollback_triggered_at = time.time()
-
-        # Even though Skill says sonnet, should return bundled (opus)
-        # This would require mocking the global detector, skip for now
-        # Result should be: bundled engine returned
-        assert detector.is_rolled_back
+        with patch.object(self.dw, "_audit") as audit:
+            result = resolve_worker_engine_dual_write(
+                request_id="req_rb",
+                bundled_engine="native",
+                skill_decision={"decision": "acs", "confidence": 0.99},
+                task_type="chat",
+                tenant_id="_default",
+            )
+        assert result == "native"
+        assert audit.call_args_list[0].args[0] == "l5_routing_rollback_active"
 
     def test_record_routing_outcome_logs_correctness(self):
-        """Record outcome updates correctness metrics."""
-        # Clear global tracker (for test isolation)
-        from core.skills.os_skills.monitoring.dual_write import (
-            _tracker,
-            _detector,
-        )
-
-        # Record an outcome
+        """Record outcome updates the tracker AND persists (used to raise
+        AttributeError on ``outcome.timestamp`` and persist nothing)."""
         record_routing_outcome(
             request_id="req_outcome_001",
-            real_engine="sonnet",
-            shadow_engine="opus",
+            real_engine="acs",
+            shadow_engine="native",
             success=True,
-            ground_truth="sonnet",
+            ground_truth="acs",
             latency_ms=50.0,
         )
+        m = self.dw.get_tracker().current_metrics()
+        assert (m.total_count, m.correct_count) == (1, 1)
+        lines = (self.tmp / "metrics" / "correctness.jsonl").read_text().splitlines()
+        assert len(lines) == 1 and '"req_outcome_001"' in lines[0]
 
-        # Metrics should be updated
-        # (This would need mock setup for proper isolation)
+    def test_reload_from_disk_does_not_duplicate(self):
+        from core.skills.os_skills.monitoring.correctness_tracker import load_tracker_from_disk
+
+        for i in range(3):
+            record_routing_outcome(request_id=f"r{i}", real_engine="acs", shadow_engine="native",
+                                   success=True, ground_truth="acs", latency_ms=1.0)
+        path = self.tmp / "metrics" / "correctness.jsonl"
+        t = load_tracker_from_disk(path)
+        assert t.current_metrics().total_count == 3
+        assert len(path.read_text().splitlines()) == 3
+
+    def test_rollback_is_chained(self, tmp_path, monkeypatch):
+        """The rollback event reaches the tenant audit chain (used to import a
+        non-existent module and vanish)."""
+        home = tmp_path / "ch"
+        chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        chain.parent.mkdir(parents=True)
+        monkeypatch.setenv("CORVIN_HOME", str(home))
+        monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
+        tracker = CorrectnessTracker(window_size=50, bootstrap_samples=5)
+        detector = RollbackDetector(correctness_tracker=tracker)
+        for i in range(10):
+            tracker.record_outcome(TestBaselineIsNotOneSample._outcome(i, i < 5))
+        assert detector.update()
+        import json as _json
+        recs = [_json.loads(x) for x in chain.read_text().splitlines()]
+        rb = [r for r in recs if r.get("event_type") == "l5_rollback_triggered"]
+        assert rb, [r.get("event_type") for r in recs]
+        d = rb[0].get("details") or rb[0]
+        assert d["reason_code"] == "correctness_drop"
+        assert d["correctness"] == 0.0 and d["baseline_correctness"] == 1.0
 
 
 class TestMonitoringDashboard:
     """Monitoring dashboard metrics."""
 
-    def test_get_monitoring_dashboard_structure(self):
+    def test_get_monitoring_dashboard_structure(self, tmp_path):
         """Dashboard returns expected structure."""
         # Initialize dual-write system
         from core.skills.os_skills.monitoring.dual_write import initialize_dual_write
 
-        initialize_dual_write()
+        initialize_dual_write(storage_dir=tmp_path / "metrics")
 
         dashboard = get_monitoring_dashboard()
 
@@ -288,32 +360,6 @@ class TestMonitoringDashboard:
         assert "correctness" in metrics
         assert "shadow_correctness" in metrics
         assert "correctness_drop_percent" in metrics
-
-
-# ============================================================================
-# E2E TESTS (full integration with delegation_policy.py)
-# ============================================================================
-
-
-@pytest.mark.e2e
-class TestPhase2aE2EProof:
-    """End-to-end proof of Phase 2a L5 production wiring."""
-
-    def test_e2e_dual_write_routing_flow(self):
-        """Full flow: request → dual-write → both logged → correctness tracked."""
-        pytest.skip("Requires full system boot; run in integration test suite")
-
-    def test_e2e_correctness_monitoring_live(self):
-        """Correctness metrics live after 100 requests."""
-        pytest.skip("Requires full system boot; run in integration test suite")
-
-    def test_e2e_rollback_triggered_and_fallback_active(self):
-        """Rollback triggered and subsequent requests use bundled routing."""
-        pytest.skip("Requires full system boot; run in integration test suite")
-
-    def test_e2e_audit_trail_links_decision_to_outcome(self):
-        """Audit trail: decision event + outcome event linked via request_id."""
-        pytest.skip("Requires full system boot; run in integration test suite")
 
 
 if __name__ == "__main__":

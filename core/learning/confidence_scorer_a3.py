@@ -8,6 +8,19 @@ Escalation_rate = (failed + timed_out) / total outcomes
 Rolling window = 10 samples for trend detection (improving/degrading/stable)
 
 References: ADR-2086, ADR-2075, ADR-0081
+
+Adversarial review 2026-09-27:
+- success/escalation counts are READ from the input record
+  (``success_count`` + ``failed_count``/``timed_out_count`` or
+  ``escalation_count``). They used to be fabricated (success = every outcome,
+  escalation = a constant 10%), so the "score" was the same 0.99 for any data.
+  A record without them is NOT scored (``None``, "not measured") — A2's
+  ``OutcomeRecord`` does not carry them yet.
+- the trend compared the OLDEST five samples as "recent" (inverted labels).
+- the audit record was a stub uuid; it is now committed to the tenant's core
+  chain (``learning.confidence_scored``) and a failed commit raises.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from dataclasses import dataclass, field
@@ -54,6 +67,9 @@ class ConfidenceScorer:
 
     def __init__(self, tenant_id: str, window_size: int = 10):
         """Initialize A3 ConfidenceScorer with rolling window."""
+        from core.tenants import validate_tenant_id  # noqa: PLC0415
+
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.window_size = window_size
         self._delta_window: Deque[float] = deque(maxlen=window_size)
@@ -79,13 +95,23 @@ class ConfidenceScorer:
             return None
 
         try:
-            # Phase 2: Compute success_rate and escalation_rate
+            # Phase 2: Compute success_rate and escalation_rate from MEASURED counts
             total = max(1, outcome_record.outcome_count)
-
-            # Assume: success_count ≈ outcome_count (Phase 1 stub value)
-            # In production, A2 would track success/failed/timed_out separately
-            success_count = outcome_record.outcome_count
-            escalation_count = max(0, int(outcome_record.outcome_count * 0.1))  # Stub: 10% escalation rate
+            success_count = getattr(outcome_record, "success_count", None)
+            escalation_count = getattr(outcome_record, "escalation_count", None)
+            if escalation_count is None and (
+                hasattr(outcome_record, "failed_count") or hasattr(outcome_record, "timed_out_count")
+            ):
+                escalation_count = (int(getattr(outcome_record, "failed_count", 0) or 0)
+                                    + int(getattr(outcome_record, "timed_out_count", 0) or 0))
+            if not isinstance(success_count, int) or not isinstance(escalation_count, int):
+                logger.warning("ConfidenceScorer: %s carries no success/escalation counts — "
+                               "not measured, not scored", outcome_record.skill_id)
+                return None
+            if (success_count < 0 or escalation_count < 0
+                    or success_count + escalation_count > outcome_record.outcome_count):
+                logger.error("ConfidenceScorer: inconsistent counts for %s", outcome_record.skill_id)
+                return None
 
             success_rate = success_count / total
             escalation_rate = escalation_count / total
@@ -99,6 +125,7 @@ class ConfidenceScorer:
 
             # Emit audit events
             audit_ref = self._emit_confidence_scored(
+                source_audit_ref=str(getattr(outcome_record, "audit_ref", "") or ""),
                 skill_id=outcome_record.skill_id,
                 outcome_count=outcome_record.outcome_count,
                 success_count=success_count,
@@ -142,9 +169,9 @@ class ConfidenceScorer:
         if len(self._delta_window) < 10:
             return "stable"  # Insufficient samples
 
-        deltas = list(self._delta_window)
-        recent_avg = sum(deltas[:5]) / 5
-        older_avg = sum(deltas[5:10]) / 5
+        deltas = list(self._delta_window)  # oldest -> newest (deque appends right)
+        older_avg = sum(deltas[-10:-5]) / 5
+        recent_avg = sum(deltas[-5:]) / 5
         diff = recent_avg - older_avg
 
         if diff > 0.05:
@@ -162,21 +189,25 @@ class ConfidenceScorer:
         escalation_count: int,
         confidence_delta: float,
         trend: str,
+        source_audit_ref: str = "",
     ) -> str:
-        """
-        Emit learning.confidence_scored + learning.trend_detected to audit chain.
+        """Commit ``learning.confidence_scored`` to the tenant's core chain (fail-closed)."""
+        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
 
-        Phase 2: Stub with UUID (integrate with forge.security_events.write_event in Phase 3)
-        """
-        import uuid
-
-        audit_ref = uuid.uuid4().hex[:16]
-        logger.debug(
-            f"[AUDIT STUB] learning.confidence_scored: "
-            f"{skill_id} delta={confidence_delta:.4f} "
-            f"esc={escalation_count} trend={trend} ref={audit_ref}"
+        return core_audit_event(
+            "learning.confidence_scored",
+            tenant_id=self.tenant_id,
+            details={
+                "skill_id": str(skill_id)[:128],
+                "outcome_count": int(outcome_count),
+                "success_count": int(success_count),
+                "escalation_count": int(escalation_count),
+                "confidence_delta": round(float(confidence_delta), 6),
+                "trend": trend,
+                "source_audit_ref": source_audit_ref[:64],
+                "tenant_id": self.tenant_id,
+            },
         )
-        return audit_ref
 
     def get_processed_count(self) -> int:
         """Return count of processed outcomes."""

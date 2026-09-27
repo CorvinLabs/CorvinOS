@@ -28,16 +28,14 @@ import tempfile
 
 # Import the modules under test
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from incident_response_procedures import (
+from core.deployment.incident_response_procedures import (
     IncidentDetector,
     IncidentNotifier,
     Incident,
     IncidentType,
     IncidentSeverity,
 )
-from rollback_automation import (
+from core.deployment.rollback_automation import (
     RollbackController,
     RollbackEvent,
     RollbackTrigger,
@@ -45,7 +43,31 @@ from rollback_automation import (
 )
 
 
+from core.deployment import audit_sink
+import core.deployment.incident_response_procedures as irp
+
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime(tmp_path, monkeypatch):
+    """The audit chain is real: every test writes into its own CORVIN_HOME."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    monkeypatch.setattr(irp, "_sleep", lambda s: None)  # no real SMTP back-off
+    yield
+
+
+def _chain_records():
+    se, fp = audit_sink._forge()
+    chain = fp.tenant_audit_chain("_default")
+    if not chain.exists():
+        return [], (True, [])
+    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return recs, se.verify_chain(chain)
 
 
 class TestIncidentResponseFixes:
@@ -65,7 +87,7 @@ class TestIncidentResponseFixes:
     @pytest.fixture
     def incident_notifier(self, temp_audit_path):
         """Create incident notifier with temp audit path"""
-        return IncidentNotifier(audit_path=temp_audit_path)
+        return IncidentNotifier(start_dlq_worker=False)
 
     def test_ir001_notify_returns_false_on_channel_failure(self, incident_notifier, temp_audit_path):
         """
@@ -101,7 +123,7 @@ class TestIncidentResponseFixes:
 
             mock_post.side_effect = side_effect
 
-            with patch.object(incident_notifier, '_send_smtp_notification', return_value=False):
+            with patch.object(incident_notifier, '_send_email_notification', return_value=False):
                 # Call notify() with only Slack (success) and Email (failure)
                 result = incident_notifier.notify(
                     incident,
@@ -114,16 +136,14 @@ class TestIncidentResponseFixes:
                 assert incident_notifier.channel_results['slack'] is True
                 assert incident_notifier.channel_results['email'] is False
 
-        # Verify audit trail was written (audit-first)
-        audit_entries = []
-        if temp_audit_path.exists():
-            with open(temp_audit_path, 'r') as f:
-                for line in f:
-                    if line.strip():
-                        audit_entries.append(json.loads(line))
-
-        assert len(audit_entries) > 0, "Audit trail should have incident records"
-        assert any(e.get('incident_id') == 'INC-TEST-001' for e in audit_entries)
+        # Verify the incident is on the real tenant chain (audit-first) and it verifies
+        recs, (ok, problems) = _chain_records()
+        assert ok, problems
+        assert any(
+            r["event_type"] == "deployment.incident_detected"
+            and r["details"].get("incident_id") == "INC-TEST-001"
+            for r in recs
+        )
 
     def test_ir002_smtp_email_with_3_retries(self, incident_notifier, temp_audit_path):
         """
@@ -151,7 +171,8 @@ class TestIncidentResponseFixes:
             mock_server = MagicMock()
             if attempt_count[0] < 3:
                 # First two attempts fail
-                mock_server.send_message.side_effect = Exception(f"SMTP attempt {attempt_count[0]} failed")
+                import smtplib
+                mock_server.send_message.side_effect = smtplib.SMTPException(f"SMTP attempt {attempt_count[0]} failed")
             else:
                 # Third attempt succeeds
                 mock_server.send_message.return_value = None
@@ -160,15 +181,15 @@ class TestIncidentResponseFixes:
             return mock_server
 
         with patch('smtplib.SMTP', side_effect=mock_smtp):
-            with patch('threading.Event().wait'):  # Mock sleep for exponential backoff
-                result = incident_notifier._send_email_notification(
-                    incident,
-                    "operator@example.com"
-                )
+            # back-off sleep is stubbed by the autouse fixture
+            result = incident_notifier._send_email_notification(
+                incident,
+                "operator@example.com"
+            )
 
-                # PROOF: Should succeed after retries
-                assert result is True, "Email should succeed after retries"
-                assert attempt_count[0] == 3, f"Should have attempted 3 times, got {attempt_count[0]}"
+            # PROOF: Should succeed after retries
+            assert result is True, "Email should succeed after retries"
+            assert attempt_count[0] == 3, f"Should have attempted 3 times, got {attempt_count[0]}"
 
     def test_ir003_deduplication_and_rate_limiting(self, incident_notifier, temp_audit_path):
         """
@@ -211,7 +232,7 @@ class TestIncidentResponseFixes:
                 )
                 # PROOF: Rate limit should trigger
                 assert result is False, "11th incident should be rate-limited"
-                assert len(incident_notifier.failed_notifications_queue.qsize()) > 0
+                assert incident_notifier.failed_notifications_queue.qsize() > 0
 
     def test_ir004_retry_fallback_chain(self, incident_notifier, temp_audit_path):
         """
@@ -322,20 +343,20 @@ class TestRollbackAutomationFixes:
             assert result is False, "Rollback should fail if audit-first fails"
             assert len(rollback_controller.rollback_events) == 0, "No rollback event should be recorded"
 
-        # Mock audit to succeed
-        with patch.object(rollback_controller, '_audit_log', return_value=True):
-            with patch.object(rollback_controller, '_execute_version_revert', return_value=True):
-                result = rollback_controller.execute_rollback(event)
+        # Real audit write succeeds (only the skill API call is stubbed)
+        with patch.object(rollback_controller, '_execute_version_revert', return_value=True):
+            result = rollback_controller.execute_rollback(event)
 
-                # PROOF: Rollback should succeed if audit succeeds
-                assert result is True, "Rollback should succeed if audit-first succeeds"
-                assert len(rollback_controller.rollback_events) == 1
-                assert rollback_controller.rollback_events[0].event_id == "RB-TEST-001"
+        # PROOF: Rollback should succeed if audit succeeds
+        assert result is True, "Rollback should succeed if audit-first succeeds"
+        assert len(rollback_controller.rollback_events) == 1
+        assert rollback_controller.rollback_events[0].event_id == "RB-TEST-001"
 
-                # Verify audit trail has the event
-                assert len(rollback_controller.audit_trail) > 0
-                audit_events = [e for e in rollback_controller.audit_trail if e.get('event') == 'rollback_executed']
-                assert len(audit_events) > 0, "Audit trail should contain rollback_executed event"
+        # The record is on the real tenant chain, which verifies
+        recs, (ok, problems) = _chain_records()
+        assert ok, problems
+        rb = [r for r in recs if r["event_type"] == "deployment.rollback_executed"]
+        assert rb and rb[-1]["details"]["rollback_event_id"] == "RB-TEST-001"
 
     def test_ra002_execute_version_revert_api_call(self, rollback_controller):
         """
@@ -491,7 +512,9 @@ class TestRollbackAutomationFixes:
             result = rollback_controller.unlock_phase(phase_name, operator_context=operator_context)
             assert result is False, "Should fail without 2FA for CRITICAL lock"
 
-        # Test 4: Admin role with valid 2FA → should succeed
+        # Test 4: Admin role with a token the configured verifier accepts → succeeds
+        # (without a verifier a CRITICAL unlock is refused — fail-closed)
+        rollback_controller.twofa_verifier = lambda user, token: token == "123456"
         with patch.object(rollback_controller, '_audit_log', return_value=True):
             operator_context = {
                 "user_id": "admin_user",
@@ -514,134 +537,34 @@ class TestAuditTrailIntegrity:
 
     def test_audit_chain_integrity_immutable(self):
         """
-        PROOF: Audit trail is immutable and hash-chained
+        PROOF: records go to the ONE tenant chain, which hash-verifies;
+        undeclared event types are refused (fail-closed).
         """
         controller = RollbackController()
 
-        # Add several audit events
         for i in range(3):
             result = controller._audit_log({
-                "event": f"test_event_{i}",
-                "data": f"payload_{i}",
+                "event": "rollback_executed",
+                "rollback_event_id": f"RB-{i}",
+                "phase": "PHASE_1",
             })
             assert result is True
 
-        # Verify chain integrity
-        audit_trail = controller.audit_trail
-        assert len(audit_trail) == 3
+        assert controller._audit_log({"event": "test_event_undeclared"}) is False
 
-        # Verify hash chain
-        for i in range(1, len(audit_trail)):
-            prior_event = audit_trail[i - 1]
-            current_event = audit_trail[i]
-
-            assert current_event['prior_hash'] == prior_event['hash']
-            assert current_event['sequence_number'] == i
-
-        # PROOF: First event should have GENESIS as prior_hash
-        assert audit_trail[0]['prior_hash'] == "GENESIS"
+        recs, (ok, problems) = _chain_records()
+        assert ok, problems
+        ids = [r["details"]["rollback_event_id"] for r in recs
+               if r["event_type"] == "deployment.rollback_executed"]
+        assert ids == ["RB-0", "RB-1", "RB-2"]
+        assert [m["hash"] for m in controller.audit_trail] == [
+            r["hash"] for r in recs if r["event_type"] == "deployment.rollback_executed"
+        ]
 
 
-class TestMachineVerifiableProof:
-    """Machine-verifiable proof collection for all fixes"""
-
-    @pytest.fixture
-    def proof_collector(self):
-        """Collect test execution proof"""
-        return {
-            "findings": {
-                "IR-001": {"name": "notify() returns False on channel failure", "passed": False, "proof": []},
-                "IR-002": {"name": "SMTP email with 3 retries", "passed": False, "proof": []},
-                "IR-003": {"name": "Dedup + rate limiting", "passed": False, "proof": []},
-                "IR-004": {"name": "Retry fallback chain", "passed": False, "proof": []},
-                "IR-005": {"name": "Dead letter queue", "passed": False, "proof": []},
-                "RA-001": {"name": "Audit-BEFORE semantics", "passed": False, "proof": []},
-                "RA-002": {"name": "Version revert API call", "passed": False, "proof": []},
-                "RA-003": {"name": "Thread-safe RLock", "passed": False, "proof": []},
-                "RA-004": {"name": "Cascade prevention", "passed": False, "proof": []},
-                "RA-005": {"name": "Operator auth + 2FA", "passed": False, "proof": []},
-            },
-            "execution_log": [],
-            "summary": {}
-        }
-
-    def test_proof_collection_summary(self, proof_collector):
-        """
-        Collect and summarize proof for all 14 findings
-        """
-        # Run all tests and collect proof
-        proof_data = {
-            "test_execution_timestamp": datetime.now(timezone.utc).isoformat(),
-            "tests_run": 10,
-            "tests_passed": 0,
-            "tests_failed": 0,
-            "findings_verified": {
-                "IR-001": {
-                    "test": "test_ir001_notify_returns_false_on_channel_failure",
-                    "assertion": "notify() returns False when any channel fails",
-                    "proof": "channel_results tracked, False returned ✓"
-                },
-                "IR-002": {
-                    "test": "test_ir002_smtp_email_with_3_retries",
-                    "assertion": "SMTP connection succeeds after 3 attempts",
-                    "proof": "attempt_count==3, result==True ✓"
-                },
-                "IR-003": {
-                    "test": "test_ir003_deduplication_and_rate_limiting",
-                    "assertion": "Rate limit triggers on 11th alert",
-                    "proof": "11th incident rate-limited, DLQ populated ✓"
-                },
-                "IR-004": {
-                    "test": "test_ir004_retry_fallback_chain",
-                    "assertion": "Fallback to other channels when Slack fails",
-                    "proof": "Slack failed, PagerDuty+Email succeeded ✓"
-                },
-                "IR-005": {
-                    "test": "test_ir005_dead_letter_queue_retry",
-                    "assertion": "Failed notifications retried from DLQ",
-                    "proof": "DLQ populated on failure, emptied on retry ✓"
-                },
-                "RA-001": {
-                    "test": "test_ra001_audit_first_semantics",
-                    "assertion": "Rollback rejected if audit fails",
-                    "proof": "audit_log fails → execute_rollback returns False ✓"
-                },
-                "RA-002": {
-                    "test": "test_ra002_execute_version_revert_api_call",
-                    "assertion": "API endpoint called with correct version",
-                    "proof": "requests.put called with /version endpoint ✓"
-                },
-                "RA-003": {
-                    "test": "test_ra003_thread_safe_rlock",
-                    "assertion": "RLock protects concurrent dict access",
-                    "proof": "5 concurrent threads, 5 phases locked safely ✓"
-                },
-                "RA-004": {
-                    "test": "test_ra004_cascade_prevention_dedup_and_cooldown",
-                    "assertion": "Same phase can't rollback twice in 5 min",
-                    "proof": "event2 rollback blocked, cascade_prevention triggered ✓"
-                },
-                "RA-005": {
-                    "test": "test_ra005_operator_authentication_rbac_2fa",
-                    "assertion": "RBAC enforced, 2FA required for CRITICAL",
-                    "proof": "4 scenarios tested: no_auth, wrong_role, no_2fa, success ✓"
-                },
-            }
-        }
-
-        # PROOF: All findings verified
-        print("\n" + "="*80)
-        print("MACHINE-VERIFIABLE PROOF — REMEDIATION CYCLE 2")
-        print("="*80)
-        print(json.dumps(proof_data, indent=2))
-        print("="*80)
-
-        # Write proof to file
-        proof_file = Path(__file__).parent / "proof_cycle2.json"
-        with open(proof_file, 'w') as f:
-            json.dump(proof_data, f, indent=2)
-
-        assert len(proof_data["findings_verified"]) == 10
+# TestMachineVerifiableProof removed (adversarial review 2026-09-27): it asserted
+# a hard-coded dict of "✓" claims and wrote it to proof_cycle2.json inside the
+# repo tree — a fabricated proof, not a test.
 
 
 if __name__ == "__main__":

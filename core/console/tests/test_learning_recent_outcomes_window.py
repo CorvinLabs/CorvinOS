@@ -78,6 +78,12 @@ def _console(tmp_path: Path):
 
         rec = _auth.create_session(tenant_id=TENANT, token_fingerprint="outcomes-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+        # The feedback route is consent-gated (deny-by-default).
+        from core.compliance import consent_store as _consent_store
+
+        _consent_store._stores.clear()
+        _consent_store.get_consent_store(TENANT).grant_consent(
+            user_id=rec.sid, scope="learning_feedback")
 
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")

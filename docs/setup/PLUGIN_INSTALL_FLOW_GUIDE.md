@@ -4,13 +4,24 @@
 
 This document provides a complete walkthrough of the plugin installation flow implementation for ADR-0249 Stage 6.
 
+> **Status note (2026-09-27, adversarial review):** the console upload surface is
+> `/v1/console/plugin-uploads` (`core/console/corvin_console/routes/plugin_upload.py`):
+> `POST /plugin-uploads` (multipart `file`, a ZIP — validated and **staged**, answers
+> `status: "pending_approval"`), `GET /plugin-uploads`, `POST /plugin-uploads/{id}/approve`,
+> `POST /plugin-uploads/{id}/reject`, `GET /plugin-uploads/{id}/manifest`. Every route needs
+> a live console session and the owner/admin tier; every mutation also needs the CSRF token.
+> The upload does not install or enable anything — the `checksum` / `auto_enable` form
+> fields and the "installed" responses described below are not part of that contract.
+> The SPA component that calls it is `web-next/src/components/ConsolePluginUploadModal.tsx`
+> (`components/PluginUpload.tsx`, named below, does not exist).
+
 ## Deliverables Summary
 
 ### 1. Backend Upload Endpoint ✅
 
 **File**: `/core/console/corvin_console/routes/plugin_upload.py`
 
-**Endpoint**: `POST /v1/console/plugins/upload`
+**Endpoint**: `POST /v1/console/plugin-uploads`
 
 **Features**:
 - Accepts multipart/form-data with .tar.gz plugin archive
@@ -119,7 +130,7 @@ File validated (must be .tar.gz, not empty)
 ↓
 Form data prepared with optional checksum
 ↓
-POST /v1/console/plugins/upload sent to backend
+POST /v1/console/plugin-uploads sent to backend
 ```
 
 ### Stage 2: Verify
@@ -193,7 +204,7 @@ Status is informational (never fails the request)
 ### Request
 
 ```http
-POST /v1/console/plugins/upload HTTP/1.1
+POST /v1/console/plugin-uploads HTTP/1.1
 Host: localhost:8765
 Content-Type: multipart/form-data; boundary=---FormBoundary
 X-CSRF-Token: {csrf_token}
@@ -277,7 +288,7 @@ CSRF_TOKEN=$(curl -s -b cookies.txt http://localhost:8765/v1/console/settings/fe
   | jq -r '.features[0].id' 2>/dev/null || echo "your-csrf-token")
 
 # Upload plugin
-curl -X POST http://localhost:8765/v1/console/plugins/upload \
+curl -X POST http://localhost:8765/v1/console/plugin-uploads \
   -H "X-CSRF-Token: $CSRF_TOKEN" \
   -b cookies.txt \
   -F "file=@my-plugin.tar.gz" \
@@ -294,7 +305,7 @@ CHECKSUM=$(sha256sum my-plugin.tar.gz | cut -d' ' -f1)
 
 echo "Uploading with checksum: $CHECKSUM"
 
-curl -X POST http://localhost:8765/v1/console/plugins/upload \
+curl -X POST http://localhost:8765/v1/console/plugin-uploads \
   -H "X-CSRF-Token: $CSRF_TOKEN" \
   -b cookies.txt \
   -F "file=@my-plugin.tar.gz" \

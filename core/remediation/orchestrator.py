@@ -3,6 +3,17 @@ Phase 5: Remediation Orchestrator
 
 Coordinates safe auto-remediation and approval workflows.
 Handles state machine, multi-drift scenarios, and rollback coordination.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
+Honesty rules (2026-09-27): a drift is REMEDIATED only when a fix executor
+reported a verified SUCCESS — none exists yet, so today nothing reaches
+REMEDIATED. A high-risk drift is never blocked on: ``process_drift`` files the
+approval request and returns ``AWAITING_APPROVAL`` immediately (it used to
+poll for up to 60 s with ``time.sleep``), and ``resume_after_decision`` picks
+the request up once an operator decided. An APPROVED high-risk drift is not a
+fixed one: without a high-risk executor it ends FAILED (``not_implemented``),
+never REMEDIATED. Every lifecycle event is written to the tenant's core chain.
 """
 
 import logging
@@ -12,8 +23,9 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
 from .drift_categories import DriftCategory, DriftCategorizer, RiskAssessment
-from .auto_remediate import SafeAutoRemediator, RemediationResult
+from .auto_remediate import NOT_IMPLEMENTED, SafeAutoRemediator, RemediationResult
 from .approval_workflow import ApprovalGate, ApprovalRequest, ApprovalState
+from ._audit import remediation_audit
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +80,8 @@ class RemediationOrchestrator:
         plugin_installer=None,
         pagerduty_alerter=None,
         slack_alerter=None,
+        *,
+        tenant_id: str = "_default",
     ):
         """
         Initialize orchestrator.
@@ -78,9 +92,10 @@ class RemediationOrchestrator:
             pagerduty_alerter: PagerDuty integration
             slack_alerter: Slack integration
         """
+        self.tenant_id = tenant_id
         self.categorizer = DriftCategorizer()
         self.remediator = SafeAutoRemediator(
-            audit_backend=audit_backend, plugin_installer=plugin_installer
+            audit_backend=audit_backend, plugin_installer=plugin_installer, tenant_id=tenant_id
         )
         self.approval_gate = ApprovalGate(
             audit_backend=audit_backend,
@@ -196,14 +211,24 @@ class RemediationOrchestrator:
             )
             results[assessment.drift_id] = (state, result_id)
 
-        # Emit plan summary
+        # Emit plan summary — its state is what the drifts actually reached,
+        # never a blanket REMEDIATED.
+        states = [st for st, _ in results.values()]
+        if states and all(st == RemediationState.REMEDIATED for st in states):
+            summary_state = RemediationState.REMEDIATED
+        elif any(st == RemediationState.FAILED for st in states):
+            summary_state = RemediationState.FAILED
+        elif any(st == RemediationState.AWAITING_APPROVAL for st in states):
+            summary_state = RemediationState.AWAITING_APPROVAL
+        else:
+            summary_state = RemediationState.BLOCKED
         self._emit_event(
             RemediationEvent(
                 event_type="multi_drift_orchestrated",
                 drift_id=plan_id,
                 drift_type="multi",
                 instance_id="cluster",
-                state=RemediationState.REMEDIATED,
+                state=summary_state,
                 details={
                     "total": plan.total_drifts,
                     "safe": plan.safe_drifts,
@@ -251,6 +276,19 @@ class RemediationOrchestrator:
             )
             logger.info(f"✅ Safe drift REMEDIATED: {assessment.drift_id}")
             return RemediationState.REMEDIATED, result.drift_id
+        elif result.status == NOT_IMPLEMENTED:
+            self._emit_event(
+                RemediationEvent(
+                    event_type="remediation_not_implemented",
+                    drift_id=assessment.drift_id,
+                    drift_type=assessment.drift_type,
+                    instance_id=instance_id,
+                    state=RemediationState.FAILED,
+                    error=result.error,
+                )
+            )
+            logger.warning(f"Safe drift NOT remediated (no executor): {assessment.drift_id}")
+            return RemediationState.FAILED, None
         elif result.status == "ROLLED_BACK":
             self._emit_event(
                 RemediationEvent(
@@ -293,101 +331,66 @@ class RemediationOrchestrator:
             )
         )
 
-        # 2. REQUEST APPROVAL
-        approval_request = self.approval_gate.request_approval(assessment, instance_id)
+        # 2. REQUEST APPROVAL — and return. The decision arrives later through
+        # the console approve/reject routes; see ``resume_after_decision``.
+        approval_request = self.approval_gate.request_approval(
+            assessment, instance_id, tenant_id=self.tenant_id
+        )
+        return RemediationState.AWAITING_APPROVAL, approval_request.request_id
 
-        # 3. WAIT FOR DECISION
-        decision = self.approval_gate.wait_for_approval(
-            approval_request.request_id, timeout_seconds=60
+    def resume_after_decision(self, request_id: str) -> Tuple[RemediationState, Optional[str]]:
+        """Advance a high-risk drift once its approval request was decided.
+
+        Non-blocking. APPROVED does not mean fixed: there is no high-risk fix
+        executor, so an approved drift ends FAILED (``not_implemented``) —
+        never REMEDIATED. REJECTED / EXPIRED → BLOCKED; still open →
+        AWAITING_APPROVAL.
+        """
+        decision = self.approval_gate.get_request_for_tenant(request_id, self.tenant_id)
+        if decision is None:
+            return RemediationState.FAILED, None
+        self.approval_gate._expire_if_due(decision)
+        base = dict(
+            drift_id=decision.drift_id,
+            drift_type=decision.drift_type,
+            instance_id=decision.instance_id,
         )
 
-        if decision is None:
-            logger.error(f"❌ Approval decision timeout: {assessment.drift_id}")
-            return RemediationState.FAILED, approval_request.request_id
-
-        # 4. HANDLE DECISION
         if decision.state == ApprovalState.APPROVED:
-            logger.info(f"✓ Approval received: {assessment.drift_id}, proceeding with fix")
+            self._emit_event(RemediationEvent(
+                event_type="approval_approved",
+                state=RemediationState.APPROVED_AWAITING_FIX,
+                details={"approved_by": decision.approved_by},
+                **base,
+            ))
+            self._emit_event(RemediationEvent(
+                event_type="remediation_not_implemented",
+                state=RemediationState.FAILED,
+                error="high_risk_executor_not_implemented",
+                **base,
+            ))
+            logger.warning(f"Approved high-risk drift NOT remediated (no executor): {decision.drift_id}")
+            return RemediationState.FAILED, request_id
 
-            # 5. APPROVED_AWAITING_FIX
-            self._emit_event(
-                RemediationEvent(
-                    event_type="approval_approved",
-                    drift_id=assessment.drift_id,
-                    drift_type=assessment.drift_type,
-                    instance_id=instance_id,
-                    state=RemediationState.APPROVED_AWAITING_FIX,
-                    details={"approved_by": decision.approved_by},
-                )
-            )
+        if decision.state == ApprovalState.REJECTED:
+            self._emit_event(RemediationEvent(
+                event_type="approval_rejected",
+                state=RemediationState.BLOCKED,
+                details={"rejected_by": decision.rejected_by},
+                **base,
+            ))
+            return RemediationState.BLOCKED, request_id
 
-            # 6. FIXING
-            self._emit_event(
-                RemediationEvent(
-                    event_type="remediation_started",
-                    drift_id=assessment.drift_id,
-                    drift_type=assessment.drift_type,
-                    instance_id=instance_id,
-                    state=RemediationState.FIXING,
-                )
-            )
+        if decision.state == ApprovalState.EXPIRED:
+            self._emit_event(RemediationEvent(
+                event_type="approval_expired",
+                state=RemediationState.BLOCKED,
+                error="approval_expired",
+                **base,
+            ))
+            return RemediationState.BLOCKED, request_id
 
-            # 7. EXECUTE REMEDIATION (high-risk handler needed)
-            # For now, return as approved (real implementation would execute fix)
-            self._emit_event(
-                RemediationEvent(
-                    event_type="remediation_approved_fix_executed",
-                    drift_id=assessment.drift_id,
-                    drift_type=assessment.drift_type,
-                    instance_id=instance_id,
-                    state=RemediationState.REMEDIATED,
-                )
-            )
-            logger.info(f"✅ High-risk drift REMEDIATED: {assessment.drift_id}")
-            return RemediationState.REMEDIATED, approval_request.request_id
-
-        elif decision.state == ApprovalState.REJECTED:
-            logger.info(f"❌ Approval rejected: {assessment.drift_id}")
-            self._emit_event(
-                RemediationEvent(
-                    event_type="approval_rejected",
-                    drift_id=assessment.drift_id,
-                    drift_type=assessment.drift_type,
-                    instance_id=instance_id,
-                    state=RemediationState.BLOCKED,
-                    details={"rejected_by": decision.rejected_by},
-                    error=decision.decision_reason,
-                )
-            )
-            return RemediationState.BLOCKED, approval_request.request_id
-
-        elif decision.state == ApprovalState.EXPIRED:
-            logger.warning(f"⏰ Approval timeout: {assessment.drift_id}")
-            self._emit_event(
-                RemediationEvent(
-                    event_type="approval_expired",
-                    drift_id=assessment.drift_id,
-                    drift_type=assessment.drift_type,
-                    instance_id=instance_id,
-                    state=RemediationState.BLOCKED,
-                    error="Approval request expired",
-                )
-            )
-            return RemediationState.BLOCKED, approval_request.request_id
-
-        else:
-            logger.warning(f"⚠️ Approval escalated: {assessment.drift_id}")
-            self._emit_event(
-                RemediationEvent(
-                    event_type="approval_escalated",
-                    drift_id=assessment.drift_id,
-                    drift_type=assessment.drift_type,
-                    instance_id=instance_id,
-                    state=RemediationState.AWAITING_APPROVAL,
-                    details={"escalated_to": "pagerduty"},
-                )
-            )
-            return RemediationState.AWAITING_APPROVAL, approval_request.request_id
+        return RemediationState.AWAITING_APPROVAL, request_id
 
     def _handle_blocked_drift(self, assessment: RiskAssessment, instance_id: str) -> Tuple[RemediationState, Optional[str]]:
         """Handle blocked drift (stay in failed state, alert operator)"""
@@ -408,13 +411,25 @@ class RemediationOrchestrator:
         return RemediationState.BLOCKED, None
 
     def _emit_event(self, event: RemediationEvent):
-        """Emit remediation event to audit trail"""
+        """Record the event: tenant core chain FIRST (raises if it does not
+        commit), then the in-process list, then an additive ``audit_backend``
+        copy. Free text (``error`` may carry an operator's reason or a drift
+        note) never enters the chain — only whether there was one."""
+        remediation_audit(
+            "remediation.lifecycle",
+            tenant_id=self.tenant_id,
+            event=event.event_type,
+            drift_id=event.drift_id,
+            drift_type=event.drift_type,
+            instance_id=event.instance_id,
+            state=event.state.value,
+            error_code="present" if event.error else None,
+        )
         self.events.append(event)
 
-        # Write to audit backend
         if self.audit_backend:
             try:
-                audit_event = {
+                self.audit_backend.write_event({
                     "event_type": event.event_type,
                     "drift_id": event.drift_id,
                     "drift_type": event.drift_type,
@@ -423,7 +438,6 @@ class RemediationOrchestrator:
                     "timestamp": event.timestamp,
                     "details": event.details,
                     "error": event.error,
-                }
-                self.audit_backend.write_event(audit_event)
+                })
             except Exception as e:
-                logger.error(f"Failed to write audit event: {e}")
+                logger.error(f"audit_backend copy failed (core chain record committed): {e}")

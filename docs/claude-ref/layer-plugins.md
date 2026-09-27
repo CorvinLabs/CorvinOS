@@ -924,6 +924,12 @@ enable/disable/delete echoed success, tenant from a request header);
 (`panels/marketplace.tsx`, `MarketplaceTab`, `InstalledTab`,
 `components/marketplace/*`, `CustomRepositories*`, `PackageMarketplace`) and the
 Playwright specs that drove them.
+The skill install / uninstall / list surface that remains is
+`routes/skill_manager.py`, mounted at `/v1/console/skills-manager`: every route
+needs a live console session; install and uninstall additionally need the CSRF
+token and the owner (or admin) tier. Console plugin uploads are
+`/v1/console/plugin-uploads` (`routes/plugin_upload.py`; session + owner/admin
+tier on every route, CSRF on mutations; an upload is only staged until approved).
 
 **Two defects found on the way, both fixed in the same commit:**
 

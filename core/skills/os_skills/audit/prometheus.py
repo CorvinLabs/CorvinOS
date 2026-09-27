@@ -1,5 +1,7 @@
 """Prometheus Metrics Export for DataHub Creator Monitoring.
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
 Metrics:
 - datahub_skill_generation_count: total skills created
 - datahub_weight_updates_total: total weight changes

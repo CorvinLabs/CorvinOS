@@ -32,7 +32,7 @@ class TestSkillCrashIsolation:
         # Should fallback, not crash
         assert result["skill_executed"] is False
         assert "error" in result
-        assert result["engine"] is not None  # Fallback provided
+        assert result["decision"] == "native"  # Fallback provided (degrade floor)
 
     def test_multiple_skill_crashes_isolated(self):
         """Multiple crash attempts don't accumulate → each isolated."""
@@ -43,7 +43,7 @@ class TestSkillCrashIsolation:
         for i in range(3):
             result = self.integration.route_task_l5(complexity=5, task_type="chat")
             # Each attempt should be handled independently
-            assert result["engine"] is not None
+            assert result["decision"] == "native"
 
     def test_crash_doesnt_disable_other_skills(self):
         """One Skill crash doesn't disable other Skills."""
@@ -220,11 +220,22 @@ class TestConfigDriftDetection:
         self.integration = initialize_integration()
 
     def test_skill_version_mismatch_detected(self):
-        """Skill version mismatch detected (future-proofing)."""
-        # Register with v0.1.0
+        """The Skill class and its bundled manifest must declare ONE version.
+
+        Used to pin the literal "0.1.0" and went red the day the class became
+        1.0.0 — it asserted a number, not the absence of drift.
+        """
+        from pathlib import Path
+
+        import yaml
+
         from core.skills.os_skills_phase1 import DelegationRouterSkill
         skill = DelegationRouterSkill()
-        assert skill.metadata.version == "0.1.0"
+        manifest = Path(__file__).resolve().parents[2] / (
+            "core/skills/bundled/os_delegation_router_v1.0/manifest.yaml")
+        declared = yaml.safe_load(manifest.read_text())
+        assert declared["name"] == skill.metadata.id
+        assert skill.metadata.version == declared["version"]
 
     def test_skill_metadata_immutable(self):
         """Skill metadata can't be modified (fail-closed)."""

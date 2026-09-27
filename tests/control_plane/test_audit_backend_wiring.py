@@ -267,7 +267,7 @@ class TestIntentRouterAuditWiring:
         assert audit_chain.verify_chain(), "Audit chain should be valid after multiple classifications"
 
         # Verify event count
-        assert audit_chain._event_count == len(intents), "Should have N events for N classifications"
+        assert audit_chain.get_event_count() == len(intents), "Should have N events for N classifications"
 
 
 class TestAuditChainIntegrity:

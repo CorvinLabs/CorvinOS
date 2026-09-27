@@ -34,7 +34,7 @@ class ConsentStoreCorruptionTests(unittest.TestCase):
 
     def _store_path(self, channel: str, chat_key: str) -> Path:
         """Resolve the consent store path using the same logic as the module."""
-        return consent._store_path(channel, chat_key)
+        return consent._store_path(channel, chat_key, tenant_id="_default")
 
     # ------------------------------------------------------------------
     # Corruption handling
@@ -208,7 +208,7 @@ class ConsentStoreTypeConfusionTests(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _store_path(self, channel: str, chat_key: str) -> Path:
-        return consent._store_path(channel, chat_key)
+        return consent._store_path(channel, chat_key, tenant_id="_default")
 
     def test_string_expires_at_survives_prune_unneutralized(self):
         """_prune()'s isinstance guard must not silently keep a type-confused

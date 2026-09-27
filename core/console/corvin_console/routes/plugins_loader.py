@@ -4,6 +4,27 @@ Loads marketplace plugins with console adapters, falling back to console routes
 when plugins are unavailable. Enables canary deployment and zero-downtime migration.
 
 ADR-0039 (Workflow Builder) — Phase 6: Plugin Integration.
+
+Status (2026-09-27 adversarial review): the console routes
+(``routes/workflows.py``) are the ONLY workflow implementation this loader
+mounts. cab585611 deleted them on the claim that the marketplace plugin
+(``Corvin-Marketplace/plugins/buildin/orchestration/workflows``) had taken
+over; it had not — the plugin was never importable here (the
+``corvin_marketplace`` package does not exist), so every console since booted
+WITHOUT ``/workflows`` ("Workflows router failed to load"). The plugin is also
+not mountable as it stands, even with the right ``sys.path``:
+
+* its routes take ``tenant_id`` / ``sid_fingerprint`` as QUERY parameters and
+  never consult the session backend — any caller could read or write any
+  tenant's workflows without a session or CSRF token;
+* its router is prefixed ``/workflows`` and its routes are ``/workflows...``,
+  so paths come out as ``/workflows/workflows`` — not what the SPA calls;
+* it defaults to a no-op audit backend and a hard-coded ``~/.corvin`` path;
+* it imports ``croniter`` / ``pytz`` / ``aiofiles`` (absent from the console
+  venv) and its chat route fails FastAPI response-model analysis.
+
+The marketplace path is therefore refused rather than attempted, until the
+plugin binds the tenant to the authenticated session.
 """
 
 from __future__ import annotations
@@ -14,6 +35,12 @@ from typing import Any, Optional
 from fastapi import APIRouter
 
 _log = logging.getLogger(__name__)
+
+
+#: False until the marketplace workflows plugin authenticates through the
+#: console session (see the module docstring). Not an operator switch: the
+#: value is a statement about the plugin's code, changed only together with it.
+_MARKETPLACE_WORKFLOWS_MOUNTABLE = False
 
 
 class PluginLoaderError(Exception):
@@ -66,7 +93,7 @@ class PluginLoader:
 
         router: Optional[APIRouter] = None
 
-        if not force_fallback:
+        if not force_fallback and _MARKETPLACE_WORKFLOWS_MOUNTABLE:
             try:
                 router = self._try_load_marketplace_plugin(
                     session_auth_module=session_auth_module,

@@ -11,8 +11,10 @@ The path is the production one, not a re-implementation:
 2. ``corvin_operator/bridges/shared/delegation_policy.resolve_worker_engine`` — the one
    shared routing function every surface calls — decides the engine and runs
    ``os.delegation_router`` in SHADOW mode (ADR-0613);
-3. the chosen engine (``native``) is what ``claude -p --model haiku`` is asked
-   for, and the model's answer is checked;
+3. the chosen engine (``native``) selects the real ``claude -p --model haiku``
+   call (any other engine fails the test), run in a temp cwd with a scratch
+   XDG_CONFIG_HOME, and its answer must echo a per-run nonce — so the output
+   checked is provably THIS call's, not a canned word;
 4. the tenant chain on disk carries exactly one ``skill.executed`` for the
    router with ``lom`` set to the shadow call site, its ``lom_hash`` bound to
    that function, and a content-free ``decision`` (engine + shadow + bundled).
@@ -54,7 +56,6 @@ def _load_delegation_policy():
 
 
 @pytest.mark.live
-@pytest.mark.live
 @live
 def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Path, monkeypatch):
     home = tmp_path / "corvin-home"
@@ -80,13 +81,25 @@ def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Pat
     assert engine == "native"
 
     # 3. the real LLM turn on the engine the policy chose (native = claude -p)
+    import secrets
+
+    runners = {"native": ["claude", "-p"]}
+    assert engine in runners, f"policy chose {engine!r}; this test only drives native"
+    nonce = f"PONG-{secrets.token_hex(4).upper()}"
+    work = tmp_path / "cwd"
+    work.mkdir()
+    env = dict(os.environ)
+    env["XDG_CONFIG_HOME"] = str(tmp_path / "xdg")
     proc = subprocess.run(
-        ["claude", "-p", "Reply with exactly the single word PONG and nothing else.", "--model", "haiku"],
-        capture_output=True, text=True, timeout=180,
+        [*runners[engine], f"Reply with exactly the single token {nonce} and nothing else.",
+         "--model", "haiku"],
+        capture_output=True, text=True, timeout=180, cwd=work, env=env,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     print("\n[live] haiku said:", proc.stdout.strip()[:80])
-    assert "PONG" in proc.stdout.upper()
+    assert nonce in proc.stdout.upper()
+    # (the operator's global Claude Code hooks may drop .claude/.ldd into the
+    # temp cwd — that is why it is a temp dir and never the repo root)
 
     # 4. attribution on disk
     records = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
@@ -106,8 +119,10 @@ def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Pat
     assert d["lom_hash"] == hashlib.sha256(ast.get_source_segment(src, node).encode()).hexdigest()
     assert d["decision"]["shadow"] is True
     assert d["decision"]["bundled_engine"] == "native"
-    assert d["decision"]["engine"].startswith("claude-")
-    assert "PONG" not in json.dumps(records)  # content-free chain
+    # the Skill's own advice (key ``decision``, engine vocabulary) — it agrees
+    # with the bundled rule now that it is given the same signals
+    assert d["decision"]["decision"] == "native"
+    assert nonce not in json.dumps(records)  # content-free chain
     assert "_dropped_fields" not in d, d
     assert isinstance(get_registry(), SkillsRegistry)
     print("[live] shadow record:", json.dumps(d["decision"]), "lom_hash=", d["lom_hash"][:16])

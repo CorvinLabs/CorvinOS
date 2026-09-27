@@ -15,13 +15,73 @@ from pydantic import BaseModel
 from ..auth import SessionRecord
 from ..deps import require_session as get_session
 
+import logging
+
+_log = logging.getLogger(__name__)
+
 try:
     from corvin_operator.license.capability_api import (
         require_capability, LicenseDenied
     )
 except ImportError:
+    class LicenseDenied(Exception):  # type: ignore[no-redef]
+        """Placeholder so the ``except`` clauses below stay valid."""
+
     def require_capability(*a, **k):
         raise RuntimeError("License API unavailable")
+
+
+def _gate(
+    rec: SessionRecord,
+    *,
+    capability: str,
+    entry_point: str,
+    deny_reason: str,
+    upgrade_url: str | None = None,
+) -> SessionRecord:
+    """Resolve ``capability`` for the session's tenant — 402 on deny, 503 on error.
+
+    ``require_capability`` signals a denial by RAISING ``LicenseDenied``; it
+    returns a decision only for ALLOW or ENFORCEMENT_UNAVAILABLE. The 402 must
+    therefore be produced from the ``LicenseDenied`` branch, and must not sit
+    inside a catch-all ``except Exception`` — an ``HTTPException(402)`` raised
+    inside such a block was converted into a 500 until 2026-09-27.
+    Enforcement failures stay fail-closed (never pass-through).
+    """
+    try:
+        decision = require_capability(
+            capability,
+            requested=1,
+            tenant_id=rec.tenant_id,
+            entry_point=entry_point,
+        )
+    except LicenseDenied as exc:
+        detail: dict = {
+            "error": "license_required",
+            "capability": capability,
+            "reason": getattr(exc, "reason", None) or deny_reason,
+        }
+        if upgrade_url:
+            detail["upgrade_url"] = upgrade_url
+        raise HTTPException(status_code=402, detail=detail) from None
+    except Exception:  # noqa: BLE001 — fail-closed on enforcement error
+        _log.exception("license enforcement failed for %s", capability)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "license_enforcement_unavailable", "capability": capability},
+        ) from None
+
+    verdict = getattr(getattr(decision, "decision", None), "value", None)
+    if verdict != "allow":
+        # ENFORCEMENT_UNAVAILABLE (e.g. invalid tenant) comes back as a
+        # decision instead of an exception — still a deny. Keyed on the
+        # verdict, NOT on ``allowed``: an unlimited member tier reports
+        # ``allowed=None``, which is falsy.
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "license_enforcement_unavailable", "capability": capability},
+        )
+    return rec
 
 
 async def require_forge_capability(
@@ -29,46 +89,20 @@ async def require_forge_capability(
 ) -> SessionRecord:
     """FastAPI dependency: gate forge.create capability.
 
-    Applied to: `/skill-creator/generate`, `/skills/manual`, `/tools/*/promote`,
-    `/skills/*/promote`, `/panels` (POST/PUT), and plugin lifecycle `install()`.
-
-    On deny: returns HTTP 402 Payment Required with error details.
-    On error: fail-closed, deny.
-
-    Args:
-        rec: SessionRecord with tenant_id and user context
-
-    Returns:
-        rec if allowed (passing through to the route)
+    Applied to: `/skill-creator/generate`, `/tools/*/promote`,
+    `/skills/*/promote`, `/panels` (POST/PUT).
 
     Raises:
-        HTTPException(402) if capability is denied
-        HTTPException(500) if enforcement fails
+        HTTPException(402) if the capability is denied for the tenant's tier
+        HTTPException(503) if enforcement is unavailable (fail-closed)
     """
-    try:
-        decision = require_capability(
-            "forge.create",
-            requested=1,
-            tenant_id=rec.tenant_id,
-            entry_point=f"console:routes:forge"
-        )
-        if not decision.allowed:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "license_required",
-                    "capability": "forge.create",
-                    "reason": decision.reason or "Forge is a member-only feature",
-                    "upgrade_url": "https://corvin-labs.com/upgrade"
-                }
-            )
-        return rec
-    except (ImportError, LicenseDenied, Exception) as e:
-        # Fail-closed on enforcement error
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "license_enforcement_unavailable", "reason": str(e)}
-        )
+    return _gate(
+        rec,
+        capability="forge.create",
+        entry_point="console:routes:forge",
+        deny_reason="Forge is a member-only feature",
+        upgrade_url="https://corvin-labs.com/upgrade",
+    )
 
 
 async def require_marketplace_capability(
@@ -76,30 +110,13 @@ async def require_marketplace_capability(
 ) -> SessionRecord:
     """FastAPI dependency: gate marketplace.publish capability.
 
-    Applied to: POST /marketplace/submit
-
-    On deny: returns HTTP 402 Payment Required
+    Raises:
+        HTTPException(402) if the capability is denied for the tenant's tier
+        HTTPException(503) if enforcement is unavailable (fail-closed)
     """
-    try:
-        decision = require_capability(
-            "marketplace.publish",
-            requested=1,
-            tenant_id=rec.tenant_id,
-            entry_point=f"console:routes:marketplace"
-        )
-        if not decision.allowed:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "license_required",
-                    "capability": "marketplace.publish",
-                    "reason": "Publishing to the marketplace is a member-only feature"
-                }
-            )
-        return rec
-    except (ImportError, LicenseDenied, Exception) as e:
-        # Fail-closed on enforcement error
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "license_enforcement_unavailable", "reason": str(e)}
-        )
+    return _gate(
+        rec,
+        capability="marketplace.publish",
+        entry_point="console:routes:marketplace",
+        deny_reason="Publishing to the marketplace is a member-only feature",
+    )

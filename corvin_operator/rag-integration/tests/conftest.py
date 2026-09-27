@@ -19,3 +19,20 @@ for _p in (
 ):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+
+# ── Live-install isolation (incident 2026-09-27) ──────────────────────────────
+# ``corvin_operator/rag-integration/pytest.ini`` makes THIS directory the pytest
+# rootdir, so the repo-root ``conftest.py`` (sandbox CORVIN_HOME / XDG_CONFIG_HOME /
+# CORVIN_AUDIT_ANCHOR_KEY + the live-chain tripwire) is never loaded for it.
+# Load it by path and re-export its hooks and autouse fixtures.
+import importlib.util as _ilu  # noqa: E402
+
+_root_spec = _ilu.spec_from_file_location("_corvin_root_conftest", _REPO / "conftest.py")
+_root_conftest = _ilu.module_from_spec(_root_spec)
+_root_spec.loader.exec_module(_root_conftest)
+for _name in dir(_root_conftest):
+    if _name.startswith("pytest_") or _name in (
+        "_isolated_bridge_outbox", "_live_state_tripwire", "_corvin_live_isolation_env",
+    ):
+        globals()[_name] = getattr(_root_conftest, _name)

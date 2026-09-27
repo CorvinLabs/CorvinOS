@@ -305,8 +305,15 @@ def _r13_r14_state_fields(data: dict, res: ValidationResult) -> None:
         )
 
 
-def _r19_r26_codemode(agents_data: list[dict], res: ValidationResult) -> None:
-    """R19–R26: code mode rules."""
+def _r19_r26_codemode(data: dict, agents_data: list[dict], res: ValidationResult) -> None:
+    """R19–R26: code mode rules.
+
+    ``data`` is the workflow document: R25/R26 check the agent's
+    ``tool_creation`` against the WORKFLOW's ``dynamic_tools`` section. It used
+    to be read as an undefined name, so any codemode agent with
+    ``tool_creation`` made ``validate_workflow_dict`` raise NameError instead
+    of returning a result.
+    """
     for i, agent in enumerate(agents_data):
         if not isinstance(agent, dict):
             continue
@@ -652,7 +659,7 @@ def validate_workflow_dict(
         _r9_output_contracts(agents_data, res)
         _r10_r11_tool_namespaces(data, agents_data, res)
         _r12_agent_id_format(agents_data, res)
-        _r19_r26_codemode(agents_data, res)
+        _r19_r26_codemode(data, agents_data, res)
 
     return res
 

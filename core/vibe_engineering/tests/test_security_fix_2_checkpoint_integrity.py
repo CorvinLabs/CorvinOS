@@ -416,8 +416,9 @@ class TestCheckpointAuditTrail:
                 event = json.loads(line)
                 if event.get("event_type") == "checkpoint_integrity_failed":
                     found_event = True
-                    assert event["severity"] == "critical"
-                    assert str(filepath) in event["details"]["checkpoint_path"]
+                    assert event["severity"] == "CRITICAL"
+                    assert event["details"]["checkpoint_file"] == Path(filepath).name
+                    assert str(filepath) not in line  # full path never enters the chain
                     break
 
         assert found_event, "checkpoint_integrity_failed event not found in audit log"

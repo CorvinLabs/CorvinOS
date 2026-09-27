@@ -227,6 +227,36 @@ def test_pid_alive_false_when_process_gone(tm, monkeypatch):
     assert tm._task_pid_alive(nopid) is False
 
 
+@pytest.mark.skipif(not Path("/proc/self/cmdline").exists(), reason="needs Linux /proc")
+@pytest.mark.parametrize("argv0", ["codex", "opencode", "copilot", "claude"])
+def test_pid_alive_true_for_every_engine_cli(tm, argv0):
+    """Round-2 review: only ``claude`` passed the /proc cmdline check, so a
+    live Codex/OpenCode turn was reaped by the next adapter boot."""
+    import subprocess
+    proc = subprocess.Popen([argv0, "30"], executable="/bin/sleep")
+    try:
+        rid = tm.create_task(chat_key="web:test", instruction="live engine")
+        tm.record_event(rid, {"event": "task.started", "pid": proc.pid})
+        assert tm._task_pid_alive(rid) is True
+        assert tm.reap_stale_running() == []
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.skipif(not Path("/proc/self/cmdline").exists(), reason="needs Linux /proc")
+def test_pid_alive_false_for_recycled_unrelated_pid(tm):
+    import subprocess
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        rid = tm.create_task(chat_key="web:test", instruction="recycled")
+        tm.record_event(rid, {"event": "task.started", "pid": proc.pid})
+        assert tm._task_pid_alive(rid) is False
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_events_since():
     """Test events_since iterator (async simulation)."""
     with tempfile.TemporaryDirectory() as tmpdir:

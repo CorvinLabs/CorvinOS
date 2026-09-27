@@ -140,7 +140,11 @@ class MeasurementCollector:
         self.tenant_id = tenant_id
         self.session_id = session_id
         self.skill_id = skill_id
-        self.tenant_home = tenant_home or Path.home() / ".corvin" / "tenants" / tenant_id
+        if tenant_home is None:
+            from core.paths.tenant import tenant_home as _resolve_tenant_home  # noqa: PLC0415
+
+            tenant_home = _resolve_tenant_home(tenant_id)
+        self.tenant_home = tenant_home
 
         # In-memory buffer for measurements (audit-first design)
         self._measurements: List[Measurement] = []

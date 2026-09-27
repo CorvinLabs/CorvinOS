@@ -44,6 +44,54 @@ from core.marketplace.plugin_signing import (
 # ============================================================================
 
 
+def _signed(verifier, manifest, key_id="maintainer-real"):
+    """Register a fresh Ed25519 maintainer key and sign ``manifest`` with it."""
+    from base64 import b64encode
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from core.marketplace.plugin_signing import canonical_manifest_bytes, manifest_digest
+
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    verifier.register_maintainer_key(key_id=key_id, public_key=b64encode(pub).decode(),
+                                     subject="Real Maintainer")
+    return PluginSignature(
+        plugin_id=manifest.plugin_id,
+        signature=b64encode(priv.sign(canonical_manifest_bytes(manifest))).decode(),
+        manifest_hash=manifest_digest(manifest),
+        signing_key_id=key_id,
+        algorithm=SignatureAlgorithm.ED25519,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit(tmp_path, monkeypatch):
+    """Denials / signature checks go to the REAL tenant chain — in a scratch
+    CORVIN_HOME, as the tenant the gate serves."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "test_tenant_default")
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    yield
+
+
+def chain_events(event_type: str, tenant: str = "test_tenant_default") -> list[dict]:
+    import json
+
+    from forge import paths as fp
+
+    chain = fp.tenant_audit_chain(tenant)
+    if not chain.exists():
+        return []
+    recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return [r["details"] for r in recs if r["event_type"] == event_type]
+
+
 @pytest.fixture
 def tenant_id():
     """Test tenant ID."""
@@ -213,11 +261,28 @@ class TestPluginTierGateCapabilities:
             version="1.0.0",
             source_url="https://marketplace.corvin.io",
             signature="sig",
+            signature_verified=True,
         )
         # Should not raise
         assert plugin_tier_gate.check_capability(
             "community", PluginCapability.SKILL_EXECUTION
         )
+
+    def test_unverified_signature_gets_no_capability(self, plugin_tier_gate):
+        """A signed-tier plugin whose signature was never verified is denied
+        everything (it used to receive its tier's full capability set)."""
+        plugin_tier_gate.register_plugin(
+            plugin_id="unverified",
+            tier=PluginTier.VETTED,
+            version="1.0.0",
+            source_url="https://marketplace.corvin.io",
+            signature="sig",
+        )
+        with pytest.raises(CapabilityDeniedError, match="signature_not_verified"):
+            plugin_tier_gate.check_capability("unverified", PluginCapability.SKILL_EXECUTION)
+        denied = chain_events("marketplace.plugin_capability_denied")
+        assert denied[-1]["plugin_id"] == "unverified"
+        assert denied[-1]["reason"] == "signature_not_verified"
 
     def test_unregistered_plugin_fails(self, plugin_tier_gate):
         """Should fail if plugin not registered."""
@@ -416,7 +481,12 @@ class TestPluginSignatureVerification:
     """Tests for Ed25519 signature verification."""
 
     def test_verify_valid_signature(self, signature_verifier, sample_manifest):
-        """Should verify valid signature from Corvin key."""
+        """A real Ed25519 signature over the canonical manifest verifies."""
+        sig = _signed(signature_verifier, sample_manifest)
+        assert signature_verifier.verify_plugin_signature(sig, sample_manifest) is True
+
+    def test_forged_signature_fails(self, signature_verifier, sample_manifest):
+        """Arbitrary bytes used to 'verify' (verified = True placeholder)."""
         signature = PluginSignature(
             plugin_id="test_plugin",
             signature="valid_signature_base64",
@@ -424,8 +494,18 @@ class TestPluginSignatureVerification:
             signing_key_id="corvin-root-2026",
             algorithm=SignatureAlgorithm.ED25519,
         )
-        # Should not raise
-        assert signature_verifier.verify_plugin_signature(signature, sample_manifest)
+        with pytest.raises(SignatureVerificationError):
+            signature_verifier.verify_plugin_signature(signature, sample_manifest)
+        checks = chain_events("marketplace.plugin_signature_checked")
+        assert checks[-1]["status"] == "signature_invalid"
+
+    def test_tampered_manifest_fails(self, signature_verifier, sample_manifest):
+        import dataclasses
+
+        sig = _signed(signature_verifier, sample_manifest)
+        tampered = dataclasses.replace(sample_manifest, code_hash="evil")
+        with pytest.raises(SignatureVerificationError):
+            signature_verifier.verify_plugin_signature(sig, tampered)
 
     def test_verify_missing_certificate_fails(self, signature_verifier, sample_manifest):
         """Should fail if signing certificate not found."""
@@ -448,6 +528,7 @@ class TestPluginSignatureVerification:
             subject="Revoked Author",
         )
         signature_verifier.revoke_certificate("revoked-key", reason="Compromised")
+        assert signature_verifier.get_certificate("revoked-key").revoked is True
 
         signature = PluginSignature(
             plugin_id="test_plugin",
@@ -484,15 +565,12 @@ class TestPluginSignatureVerification:
             signature_verifier.verify_plugin_signature(signature, sample_manifest)
 
     def test_verify_audited(self, signature_verifier, sample_manifest):
-        """Signature verification should be audited."""
-        signature = PluginSignature(
-            plugin_id="test_plugin",
-            signature="signature",
-            manifest_hash="hash",
-            signing_key_id="corvin-root-2026",
-            algorithm=SignatureAlgorithm.ED25519,
-        )
+        """Signature verification should be audited — on the tenant chain."""
+        signature = _signed(signature_verifier, sample_manifest)
         signature_verifier.verify_plugin_signature(signature, sample_manifest)
+        checks = chain_events("marketplace.plugin_signature_checked")
+        assert checks[-1]["status"] == "verified"
+        assert checks[-1]["tenant_id"] == "test_tenant_default"
 
         history = signature_verifier.get_verification_history()
         assert len(history) > 0
@@ -556,7 +634,8 @@ class TestComplianceAndSecurity:
             signing_key_id="corvin-root-2026",
             algorithm=SignatureAlgorithm.ED25519,
         )
-        signature_verifier.verify_plugin_signature(signature, sample_manifest)
+        with pytest.raises(SignatureVerificationError):
+            signature_verifier.verify_plugin_signature(signature, sample_manifest)
 
         history = signature_verifier.get_verification_history()
         event = history[-1]

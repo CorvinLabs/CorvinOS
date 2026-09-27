@@ -81,10 +81,14 @@ class FeatureExtractor:
         for keyword in self._DEPENDENCY_KEYWORDS:
             dependency_count += task_input.lower().count(keyword)
 
-        # Determine keyword-based complexity
+        # Determine keyword-based complexity. A keyword must START a word
+        # (``implement`` still matches "implements", ``sort`` "sorted"): plain
+        # substring matching counted "format" in "information", "list" in
+        # "specialist", "count" in "account" and "system" in "ecosystem", so
+        # unrelated prose shifted the Tier 2.9 complexity verdict.
         task_lower = task_input.lower()
-        complex_score = sum(1 for kw in self._COMPLEX_KEYWORDS if kw in task_lower)
-        simple_score = sum(1 for kw in self._SIMPLE_KEYWORDS if kw in task_lower)
+        complex_score = sum(1 for kw in self._COMPLEX_KEYWORDS if self._starts_word(kw, task_lower))
+        simple_score = sum(1 for kw in self._SIMPLE_KEYWORDS if self._starts_word(kw, task_lower))
 
         if complex_score > simple_score:
             keyword_complexity = "complex"
@@ -98,7 +102,9 @@ class FeatureExtractor:
                            "background:" in task_lower or "you are" in task_lower[:100]
 
         # Detect pseudocode / logic flow
-        has_pseudocode = bool(re.search(r'(if|for|while|function|return|step|then|else)', task_lower))
+        # Whole words only: the unanchored pattern matched "if" in "life",
+        # "for" in "information" and "step" in "footstep".
+        has_pseudocode = bool(re.search(r'\b(if|for|while|function|return|step|then|else)\b', task_lower))
 
         # Estimate reasoning depth (1-5 based on task length and complexity)
         reasoning_depth = min(5, max(1, token_estimate // 100 + (1 if complex_score > 0 else 0)))
@@ -116,6 +122,11 @@ class FeatureExtractor:
             has_pseudocode=has_pseudocode,
             intent_clarity=intent_clarity,
         )
+
+    @staticmethod
+    def _starts_word(keyword: str, text_lower: str) -> bool:
+        """True when ``keyword`` occurs at the start of a word in ``text_lower``."""
+        return re.search(r"(?<![a-z0-9_])" + re.escape(keyword), text_lower) is not None
 
     def _estimate_intent_clarity(self, task_input: str) -> float:
         """

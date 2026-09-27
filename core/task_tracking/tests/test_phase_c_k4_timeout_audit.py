@@ -132,40 +132,39 @@ class TestAuditLogging:
         print("✅ Audit event immutability test passed")
 
     async def test_approval_decision_recorded_to_audit(self):
-        """Test that approval decisions are logged to audit chain."""
-        # This is a high-level test; full audit-chain integration requires
-        # core/audit/chain.py which may not be in this test environment
-        from core.task_tracking.audit import emit_approval_decision_event
+        """An approval decision lands on THE tenant chain, content-free."""
+        from core.paths import tenant_audit_chain
+        from core.task_tracking.audit import APPROVAL_EVENT_TYPE, emit_approval_decision_event
 
-        # Mock: verify function signature and basic behavior
-        # (real audit-chain write would happen with write_entry)
-        try:
-            # This should raise because write_entry is not mocked,
-            # but we can verify the function exists and the signature is correct
-            await emit_approval_decision_event(
-                task_id="task_1",
-                actor="reviewer",
-                decision="approve",
-                tenant_id="_default",
-                rationale="LGTM",
-                validator_ids_applied=["v1"],
-                validation_results={"v1": True},
-            )
-        except Exception as e:
-            # Expected: audit chain not available in test
-            assert "Audit chain" in str(e) or "write_entry" in str(e)
-
-        print("✅ Audit decision function signature test passed")
+        h = await emit_approval_decision_event(
+            task_id="task_1",
+            actor="user:alice@example.com",
+            decision="approve",
+            tenant_id="_default",
+            rationale="LGTM",
+            validator_ids_applied=["v1"],
+            validation_results={"v1": True},
+        )
+        assert h
+        recs = [json.loads(line) for line in
+                tenant_audit_chain("_default").read_text().splitlines() if line.strip()]
+        rec = [r for r in recs if r["event_type"] == APPROVAL_EVENT_TYPE][-1]
+        assert rec["hash"] == h
+        assert rec["details"]["item_id"] == "task_1"
+        raw = json.dumps(rec)
+        assert "alice@example.com" not in raw and "LGTM" not in raw
 
 
 class TestEUAIActCompliance:
     """Test k=4: EU AI Act Art. 50 + GDPR Art. 30 compliance."""
 
     async def test_approval_attribution_recorded(self):
-        """Test that approval decisions record actor + validators (Art. 50)."""
+        """Approval decisions record WHO (actor kind) and WHICH validators ran (Art. 50)."""
+        from core.paths import tenant_audit_chain
+        from core.task_tracking.audit import APPROVAL_EVENT_TYPE, emit_approval_decision_event
+
         registry = governance.ValidatorRegistry()
 
-        # Simple validator for testing
         class TestValidator(governance.ValidatorInterface):
             async def validate_approval(self, task_id, actor, decision):
                 return governance.ValidationResult(
@@ -177,16 +176,26 @@ class TestEUAIActCompliance:
                 )
 
         registry.register(TestValidator("test_v", version="1.0.0"))
-
-        # Check approval (should pass, all validators pass)
         policy = await registry.check_approval_allowed("task_1", "reviewer", "approve")
-
-        # Verify attribution is recorded
         assert policy.approved
-        assert "reviewer" in str(policy)  # Actor should be in decision
-        assert "test_v" in policy.validators_run  # Validator ID recorded
+        assert policy.validators_run == ["test_v"]
 
-        print("✅ EU AI Act Art. 50 attribution test passed")
+        await emit_approval_decision_event(
+            task_id="task_1",
+            actor="reviewer:console",
+            decision="approve",
+            tenant_id="_default",
+            rationale="",
+            validator_ids_applied=policy.validators_run,
+            validation_results={k: v.passed for k, v in policy.validation_results.items()},
+        )
+        recs = [json.loads(line) for line in
+                tenant_audit_chain("_default").read_text().splitlines() if line.strip()]
+        d = [r for r in recs if r["event_type"] == APPROVAL_EVENT_TYPE][-1]["details"]
+        assert d["actor_kind"] == "reviewer"
+        assert d["validator_ids"] == "test_v"
+        assert d["validator_count"] == 1
+        assert d["validators_failed"] == 0
 
     async def test_fail_closed_on_timeout(self):
         """Test fail-closed semantics: timeout = denied (not approved)."""

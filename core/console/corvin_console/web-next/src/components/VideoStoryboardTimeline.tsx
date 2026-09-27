@@ -7,6 +7,10 @@
  * - Credential rotation status (ADR-0565)
  * - Learning metrics (ADR-0314)
  * - Audit trail integration (ADR-0232)
+ *
+ * NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+ * nothing imports this component, and no router serves /api/v1/timeline/*;
+ * a 404 renders "not available on this build" and stops polling.
  */
 
 'use client';
@@ -44,7 +48,7 @@ interface FrameState {
   status: 'pending' | 'running' | 'completed' | 'error';
   progress?: number;
   errorMessage?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   skillConfidence?: SkillConfidence;
   credentialStatus?: CredentialStatus;
   auditEventHash?: string;
@@ -92,16 +96,6 @@ function getWorkerIcon(workerType: string): string {
   return icons[workerType] || '⚙️';
 }
 
-function getStatusColor(status: string): string {
-  const colors: Record<string, string> = {
-    pending: 'var(--color-pending)',
-    running: 'var(--color-running)',
-    completed: 'var(--color-completed)',
-    error: 'var(--color-error)',
-  };
-  return colors[status] || 'var(--color-default)';
-}
-
 function formatConfidence(confidence: number): string {
   const percent = Math.round(confidence * 100);
   return `${percent}%`;
@@ -124,12 +118,20 @@ export function VideoStoryboardTimeline({ taskId }: { taskId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [expandedFrameId, setExpandedFrameId] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [unavailable, setUnavailable] = useState(false);
 
   // Fetch timeline state
   useEffect(() => {
+    if (unavailable) return;
     const fetchTimeline = async () => {
       try {
-        const response = await fetch(`/api/v1/timeline/state/${taskId}`);
+        const response = await fetch(`/api/v1/timeline/state/${encodeURIComponent(taskId)}`);
+        if (response.status === 404) {
+          // No router serves /api/v1/timeline/* on this build.
+          setUnavailable(true);
+          setLoading(false);
+          return;
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json() as TimelineState;
         setTimeline(data);
@@ -143,7 +145,7 @@ export function VideoStoryboardTimeline({ taskId }: { taskId: string }) {
     fetchTimeline();
 
     // Auto-refresh if executor is running
-    let interval: NodeJS.Timeout | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
       interval = setInterval(fetchTimeline, 3000); // Refresh every 3 seconds
     }
@@ -151,7 +153,11 @@ export function VideoStoryboardTimeline({ taskId }: { taskId: string }) {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [taskId, autoRefresh]);
+  }, [taskId, autoRefresh, unavailable]);
+
+  if (unavailable) {
+    return <div className={styles.error} data-testid="storyboard-unavailable">The storyboard timeline is not available on this build.</div>;
+  }
 
   if (loading) {
     return <div className={styles.loading}>Loading timeline...</div>;

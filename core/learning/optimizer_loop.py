@@ -10,12 +10,25 @@ Invariants:
 - Only trends with n >= 10 trigger updates (statistical validity)
 - Parameter updates are immutable (append-only in audit trail)
 - Each update carries trend_id (traceability)
-- Tenant-scoped (per tenant_id)
+- Tenant-scoped (per tenant_id): an optimisation step reads only that
+  tenant's trends
+- Audit-FIRST: every recorded update is committed to the tenant's core audit
+  chain (``event_persistence.core_audit_event``) BEFORE it is kept or
+  persisted; no chain commit -> no update (RuntimeError)
+
+Nothing reads the recorded parameters back into a model: this module RECORDS
+proposed parameter values, it does not apply them anywhere. ``old_value`` is
+``None`` ("not measured") because there is no parameter registry to read it
+from — it used to be a fabricated 0.0.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from __future__ import annotations
 
 import json
+import logging
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +36,14 @@ from typing import Optional
 
 from core.paths import tenant_home
 from core.learning.confidence_scoreboard import ConfidenceTrend
+
+logger = logging.getLogger(__name__)
+
+#: Chain event for one recorded parameter update (content-free; allowlisted in
+#: ``event_persistence._LEARNING_EVENT_ALLOWLISTS``).
+PARAMETER_UPDATE_EVENT = "learning.parameter_update_recorded"
+#: In-process cap on remembered update groups (oldest evicted first).
+MAX_TRACKED_UPDATES = 10_000
 
 
 @dataclass(frozen=True)
@@ -35,12 +56,13 @@ class ParameterUpdate:
     model_id: str
     pattern_key: str
     parameter_name: str  # e.g., "temperature", "context_window", "retry_count"
-    old_value: float
+    old_value: Optional[float]  # None = not measured (no parameter registry exists)
     new_value: float
     confidence_delta: float  # (new_confidence - old_confidence)
     reasoning: str  # Why this change was made
     timestamp: str  # ISO-8601 UTC
-    audit_chain_hash: str  # Link to audit chain (for verification)
+    audit_chain_hash: str  # Link to the audit window that produced the trend
+    audit_ref: str = ""  # The core-chain record of THIS update (audit-first)
 
 
 class OptimizerLoop:
@@ -53,7 +75,10 @@ class OptimizerLoop:
           min_confidence_threshold: trends below this are not optimized
         """
         self.min_confidence_threshold = max(0.0, min(min_confidence_threshold, 1.0))
-        self._parameter_updates: dict[str, ParameterUpdate] = {}
+        # update_id -> one ParameterUpdate per parameter of that update. It was
+        # a single slot per update_id, so a two-parameter update kept only the
+        # last parameter and the first was silently lost.
+        self._parameter_updates: "OrderedDict[str, list[ParameterUpdate]]" = OrderedDict()
 
     async def compute_parameter_delta(
         self, trend: ConfidenceTrend
@@ -113,33 +138,53 @@ class OptimizerLoop:
         """
         import uuid
 
+        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
+
         if not parameter_delta:
             return None
 
         update_id = f"upd_{uuid.uuid4().hex[:16]}"
         now = datetime.now(timezone.utc).isoformat()
 
-        # For each parameter, create an update record
+        # Audit FIRST: raises RuntimeError when the record does not commit, and
+        # then nothing below runs (no in-memory record, no persisted line).
+        audit_ref = core_audit_event(
+            PARAMETER_UPDATE_EVENT,
+            tenant_id=tenant_id,
+            details={
+                "update_id": update_id,
+                "trend_id": str(trend_id)[:128],
+                "model_id": str(trend.model_id)[:128],
+                "pattern_key": str(trend.pattern_key)[:128],
+                "parameter_names": ",".join(sorted(parameter_delta))[:512],
+                "update_count": len(parameter_delta),
+                "tenant_id": tenant_id,
+            },
+        )
+
         updates = []
         for param_name, new_value in parameter_delta.items():
-            update = ParameterUpdate(
+            updates.append(ParameterUpdate(
                 update_id=update_id,
                 trend_id=trend_id,
                 tenant_id=tenant_id,
                 model_id=trend.model_id,
                 pattern_key=trend.pattern_key,
                 parameter_name=param_name,
-                old_value=0.0,  # Would retrieve from model registry in real impl
+                old_value=None,
                 new_value=new_value,
                 confidence_delta=trend.mean_confidence - 0.5,  # Relative to baseline
                 reasoning=f"Trend {trend.trend_direction}: confidence {trend.mean_confidence:.2f}",
                 timestamp=now,
                 audit_chain_hash=audit_chain_hash,
-            )
-            updates.append(update)
-            self._parameter_updates[update_id] = update
+                audit_ref=audit_ref,
+            ))
+        self._parameter_updates[update_id] = updates
+        while len(self._parameter_updates) > MAX_TRACKED_UPDATES:
+            self._parameter_updates.popitem(last=False)
 
-        # Persist updates (append-only)
+        # Persist updates (append-only). The chain record already stands; a
+        # disk failure is reported, not swallowed.
         await self._persist_updates(tenant_id, updates)
 
         return update_id
@@ -160,29 +205,30 @@ class OptimizerLoop:
                     json.dump(asdict(update), f)
                     f.write("\n")
                 f.flush()
-        except Exception:
-            # Non-blocking: persistence failure should not crash optimization
-            pass
+        except OSError as exc:
+            raise IOError(
+                f"parameter update {updates[0].update_id if updates else ''} is on the audit "
+                f"chain but could not be persisted: {type(exc).__name__}"
+            ) from exc
 
-    async def get_updates_for_model(self, model_id: str) -> list[ParameterUpdate]:
-        """Get all parameter updates for a model."""
-        return [u for u in self._parameter_updates.values() if u.model_id == model_id]
+    async def get_updates_for_model(self, model_id: str, *, tenant_id: str) -> list[ParameterUpdate]:
+        """Get all remembered parameter updates for a model of ONE tenant."""
+        return [u for group in self._parameter_updates.values() for u in group
+                if u.model_id == model_id and u.tenant_id == tenant_id]
 
     async def get_latest_parameter_state(
-        self, model_id: str
+        self, model_id: str, *, tenant_id: str
     ) -> dict[str, float]:
-        """Get the latest parameter values for a model.
+        """Get the latest recorded parameter values for a model of ONE tenant.
 
         Returns:
           {param_name: latest_value}
         """
         latest = {}
-
-        for update in self._parameter_updates.values():
-            if update.model_id == model_id:
-                # Keep only the latest value per parameter
-                latest[update.parameter_name] = update.new_value
-
+        for group in self._parameter_updates.values():  # insertion order = time order
+            for update in group:
+                if update.model_id == model_id and update.tenant_id == tenant_id:
+                    latest[update.parameter_name] = update.new_value
         return latest
 
     async def clear_cache(self) -> None:
@@ -218,8 +264,9 @@ class ModelOptimizationLoop:
         """
         applied_updates = []
 
-        # Get all triggerable trends
-        trends = await self.scoreboard.list_triggerable_trends()
+        # Only THIS tenant's trends (previously every tenant's trends were
+        # applied under the caller's tenant id).
+        trends = await self.scoreboard.list_triggerable_trends(tenant_id=tenant_id)
 
         for trend in trends:
             # Compute parameter delta

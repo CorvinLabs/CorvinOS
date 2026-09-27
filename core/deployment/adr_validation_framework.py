@@ -9,6 +9,11 @@ Validates adherence to key ADRs during production rollout:
 
 Generates weekly compliance reports and blocks phase transitions if ADRs are violated.
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). A metric
+that was not supplied is NOT MEASURED and its check FAILS — no default baseline,
+no default latency/correctness value that reads as a pass. Report records go to
+the tenant audit chain through ``core.deployment.audit_sink`` (fail-closed).
+
 Compliance: GDPR (Art. 5/6/30/32), EU AI Act (Art. 5/50), audit-first (ADR-0232/0233)
 
 Adversarial Review Fixes:
@@ -25,7 +30,21 @@ import logging
 from pathlib import Path
 import threading
 
+from . import audit_sink
+
 logger = logging.getLogger(__name__)
+
+audit_sink.register_events({
+    "deployment.adr_violation_detected": {"week", "violation_count", "violations"},
+    "deployment.weekly_compliance_report": {
+        "week", "overall_status", "total_checks", "passed_checks", "failed_checks",
+    },
+    "deployment.compliance_approved_for_transition": {"week"},
+})
+
+# ADRs whose FAIL blocks a phase transition. ADR-0186 carries the geo-consent
+# check: a consent violation must block, not merely lower the overall status.
+BLOCKING_ADRS = ("ADR-0206", "ADR-0205", "ADR-0369", "ADR-0186")
 
 
 class ComplianceStatus(Enum):
@@ -62,10 +81,12 @@ class WeeklyComplianceReport:
 
     def add_check(self, check: ADRComplianceCheck) -> None:
         """Add compliance check result (F024: edge case handling for empty metrics)"""
-        # F024: Edge case handling - skip invalid checks
+        # F024: a check without a value was not measured — it FAILS. Skipping
+        # it (the old behaviour) let a report with no data read as PASS.
         if check.actual_value is None or check.threshold is None:
-            logger.warning(f"Skipping invalid check {check.adr_id}/{check.check_name}: None values")
-            return
+            logger.warning(f"Check {check.adr_id}/{check.check_name} not measured → FAIL")
+            check.status = ComplianceStatus.FAIL
+            check.message = f"{check.check_name}: not measured"
 
         self.checks.append(check)
 
@@ -73,7 +94,7 @@ class WeeklyComplianceReport:
         if check.status == ComplianceStatus.FAIL:
             self.overall_status = ComplianceStatus.FAIL
             # Critical ADRs that block phase progression: canary (0206), learning (0205), edge cases (0369)
-            if check.adr_id in ["ADR-0206", "ADR-0205", "ADR-0369"]:
+            if check.adr_id in BLOCKING_ADRS:
                 self.blocking_violations.append(f"{check.adr_id}/{check.check_name}")
         elif check.status == ComplianceStatus.WARNING and self.overall_status == ComplianceStatus.PASS:
             self.overall_status = ComplianceStatus.WARNING
@@ -145,7 +166,7 @@ class ADRComplianceValidator:
         self,
         week_number: int,
         metrics: Dict[str, float],
-        baseline_latency_ms: float,
+        baseline_latency_ms: Optional[float],
     ) -> List[ADRComplianceCheck]:
         """
         Validate ADR-0206: Canary Strategy compliance (F023, F024-F031).
@@ -178,10 +199,11 @@ class ADRComplianceValidator:
             ))
             return checks
 
-        # F026: Validate baseline latency
-        if baseline_latency_ms <= 0:
-            logger.error(f"Invalid baseline latency: {baseline_latency_ms}")
-            baseline_latency_ms = 100.0  # Default
+        # F026: no measured Phase 1 baseline → the latency check cannot pass.
+        # (Substituting a 100 ms default fabricated the comparison.)
+        baseline_ok = isinstance(baseline_latency_ms, (int, float)) and baseline_latency_ms > 0
+        if not baseline_ok:
+            logger.error(f"Baseline latency not measured/invalid: {baseline_latency_ms!r}")
 
         # Get thresholds for this week
         week_key = min(week_number, 6)  # Week 6+ use week 6 thresholds
@@ -209,32 +231,56 @@ class ADRComplianceValidator:
             tenant_id=self.tenant_id,  # F023
         ))
 
-        # Check 2: Latency p99
-        actual_latency_ms = metrics.get("latency_p99_ms", 0.0)
+        # Check 2: Latency p99 (missing metric or missing baseline = FAIL)
         max_latency_pct = thresholds["latency_p99_threshold_pct"]
-        allowed_latency_ms = baseline_latency_ms * (1 + max_latency_pct)
-
-        if actual_latency_ms <= allowed_latency_ms:
-            status = ComplianceStatus.PASS
-        elif actual_latency_ms <= allowed_latency_ms * 1.1:  # 10% tolerance
-            status = ComplianceStatus.WARNING
+        if "latency_p99_ms" not in metrics or not baseline_ok:
+            checks.append(ADRComplianceCheck(
+                adr_id="ADR-0206",
+                check_name="latency_p99",
+                status=ComplianceStatus.FAIL,
+                actual_value=float(metrics.get("latency_p99_ms", -1.0)),
+                threshold=-1.0,
+                tolerance=0.0,
+                message=("Latency p99 not measured" if "latency_p99_ms" not in metrics
+                         else "Phase 1 baseline latency not measured"),
+                tenant_id=self.tenant_id,
+            ))
         else:
-            status = ComplianceStatus.FAIL
+            actual_latency_ms = metrics["latency_p99_ms"]
+            allowed_latency_ms = baseline_latency_ms * (1 + max_latency_pct)
 
-        checks.append(ADRComplianceCheck(
-            adr_id="ADR-0206",
-            check_name="latency_p99",
-            status=status,
-            actual_value=actual_latency_ms,
-            threshold=allowed_latency_ms,
-            tolerance=allowed_latency_ms * 0.1,
-            message=f"Latency p99 {actual_latency_ms:.1f}ms vs. allowed {allowed_latency_ms:.1f}ms",
-            tenant_id=self.tenant_id,  # F023
-        ))
+            if actual_latency_ms <= allowed_latency_ms:
+                status = ComplianceStatus.PASS
+            elif actual_latency_ms <= allowed_latency_ms * 1.1:  # 10% tolerance
+                status = ComplianceStatus.WARNING
+            else:
+                status = ComplianceStatus.FAIL
 
-        # Check 3: Correctness delta (if applicable)
-        if thresholds["correctness_delta"] is not None:
-            actual_delta = metrics.get("correctness_delta", 0.0)
+            checks.append(ADRComplianceCheck(
+                adr_id="ADR-0206",
+                check_name="latency_p99",
+                status=status,
+                actual_value=actual_latency_ms,
+                threshold=allowed_latency_ms,
+                tolerance=allowed_latency_ms * 0.1,
+                message=f"Latency p99 {actual_latency_ms:.1f}ms vs. allowed {allowed_latency_ms:.1f}ms",
+                tenant_id=self.tenant_id,  # F023
+            ))
+
+        # Check 3: Correctness delta (if applicable; missing = FAIL)
+        if thresholds["correctness_delta"] is not None and "correctness_delta" not in metrics:
+            checks.append(ADRComplianceCheck(
+                adr_id="ADR-0206",
+                check_name="correctness_delta",
+                status=ComplianceStatus.FAIL,
+                actual_value=-1.0,
+                threshold=thresholds["correctness_delta"],
+                tolerance=0.0,
+                message="Correctness delta not measured",
+                tenant_id=self.tenant_id,
+            ))
+        elif thresholds["correctness_delta"] is not None:
+            actual_delta = metrics["correctness_delta"]
             max_delta = thresholds["correctness_delta"]
 
             if abs(actual_delta) <= max_delta:
@@ -493,7 +539,7 @@ class ADRComplianceValidator:
             )
 
             # ADR-0206: Canary Strategy
-            baseline_latency = metrics.get("baseline_latency_ms", 100.0)
+            baseline_latency = metrics.get("baseline_latency_ms")  # None = not measured
             canary_checks = self.validate_adr_0206_canary(
                 week_number,
                 metrics.get("canary_metrics", {}),
@@ -536,34 +582,28 @@ class ADRComplianceValidator:
 
             return report
 
+    def _emit(self, event: str, details: Dict[str, Any]) -> None:
+        """Commit one record to the tenant chain; raises AuditWriteFailed (fail-closed)."""
+        record = audit_sink.emit(f"deployment.{event}", details, tenant_id=self.tenant_id)
+        self.audit_trail.append(record)
+
     def _record_audit_violation(self, week_number: int, violations: List[str]) -> None:
-        """
-        Record ADR violations in audit trail (F027).
-        """
-        audit_event = {
-            "event": "adr_violation_detected",
+        """Record ADR violations in the audit chain (F027)."""
+        self._emit("adr_violation_detected", {
             "week": week_number,
-            "violations": violations,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tenant_id": self.tenant_id,
-        }
-        self.audit_trail.append(audit_event)
+            "violation_count": len(violations),
+            "violations": list(violations),  # "ADR-NNNN/check_name" codes only
+        })
 
     def _record_audit_report(self, week_number: int, report: WeeklyComplianceReport) -> None:
-        """
-        Record weekly compliance report in audit trail (F027).
-        """
-        audit_event = {
-            "event": "weekly_compliance_report",
+        """Record the weekly compliance report summary in the audit chain (F027)."""
+        self._emit("weekly_compliance_report", {
             "week": week_number,
             "overall_status": report.overall_status.value,
             "total_checks": len(report.checks),
             "passed_checks": sum(1 for c in report.checks if c.status == ComplianceStatus.PASS),
             "failed_checks": sum(1 for c in report.checks if c.status == ComplianceStatus.FAIL),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tenant_id": self.tenant_id,
-        }
-        self.audit_trail.append(audit_event)
+        })
 
     def can_proceed_with_phase_transition(self, week_number: int) -> Tuple[bool, List[str]]:
         """
@@ -589,12 +629,11 @@ class ADRComplianceValidator:
                 reasons = [f"{v} (blocks phase transition)" for v in report.blocking_violations]
                 return False, reasons
 
-            # All critical checks must pass
-            critical_passes = all(
-                check.status == ComplianceStatus.PASS
-                for check in report.checks
-                if check.adr_id in ["ADR-0206", "ADR-0205"]
-            )
+            # All critical checks must pass — and there must BE critical checks.
+            critical = [c for c in report.checks if c.adr_id in ["ADR-0206", "ADR-0205"]]
+            if not critical:
+                return False, ["No ADR-0206/ADR-0205 checks in report (not measured)"]
+            critical_passes = all(check.status == ComplianceStatus.PASS for check in critical)
 
             if not critical_passes:
                 failed_checks = [
@@ -604,22 +643,17 @@ class ADRComplianceValidator:
                 ]
                 return False, failed_checks
 
-            # F028: Record compliance approval in audit trail
-            self._record_audit_compliance_approval(week_number, report)
+            # F028: Record compliance approval in the audit chain. No record → no approval.
+            try:
+                self._record_audit_compliance_approval(week_number, report)
+            except audit_sink.AuditWriteFailed as e:
+                return False, [f"Audit write failed (fail-closed): {e}"]
 
             return True, []
 
     def _record_audit_compliance_approval(self, week_number: int, report: WeeklyComplianceReport) -> None:
-        """
-        Record compliance approval in audit trail (F028).
-        """
-        audit_event = {
-            "event": "compliance_approved_for_transition",
-            "week": week_number,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tenant_id": self.tenant_id,
-        }
-        self.audit_trail.append(audit_event)
+        """Record compliance approval in the audit chain (F028)."""
+        self._emit("compliance_approved_for_transition", {"week": week_number})
 
     def get_compliance_status(self, week_number: int) -> Dict:
         """

@@ -6,10 +6,29 @@ Implements Skill-based decisions, audit-first design, and fail-closed validation
 
 Related: ADR-0206 (canary strategy), ADR-0867 (watchdog), ADR-0532 (OS-Skills)
 Compliance: GDPR Art. 30/32 (audit trail), EU AI Act Art. 50 (transparency)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The only
+importer is ``core/deployment/__init__.py``. "Traffic percent" here is a number
+in a JSON state file; NO router reads it — ``os.delegation_router`` runs in
+shadow mode (``delegation_policy._acp_shadow_route``) regardless of what this
+file says, and ``CORVIN_ACP_PHASE`` is unset in every systemd unit. Escalating
+this controller to 100% does not move a single request.
+
+Honesty contract (adversarial review 2026-09-27):
+- ``escalate()`` evaluates the gates itself and refuses unless they pass (it
+  used to escalate unconditionally and trust the caller to have checked).
+- status is UNKNOWN until caller-supplied metrics were evaluated; nothing here
+  reports HEALTHY without a measurement.
+- every decision is written to ``tenant_audit_chain(tenant_id)`` through
+  ``core.deployment.audit_sink`` BEFORE it is applied (``decision_history`` is
+  only a local mirror); a failed chain write refuses the decision.
+- state lives under ``<tenant_home>/global/deployment/`` (honours
+  ``CORVIN_HOME``), not a hard-coded ``~/.corvin``.
 """
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from enum import Enum
@@ -17,7 +36,22 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
+from core.deployment import audit_sink
+
 logger = logging.getLogger(__name__)
+
+_AUDIT_FIELDS = frozenset({
+    "decision", "traffic_percent", "from_traffic_percent", "skill_id", "status",
+})
+audit_sink.register_events({
+    "deployment.canary.decision": _AUDIT_FIELDS,
+})
+
+
+def _default_state_file(tenant_id: str) -> Path:
+    from core.paths import tenant_home  # noqa: PLC0415 — validates tenant_id
+
+    return tenant_home(tenant_id) / "global" / "deployment" / "canary_state.json"
 
 
 class TrafficPercent(Enum):
@@ -168,9 +202,11 @@ class CanaryTrafficController:
         ],
     }
 
-    def __init__(self, state_file: str = "~/.corvin/canary_state.json"):
+    def __init__(self, state_file: Optional[str] = None, *, tenant_id: str = "_default"):
         """Initialize canary controller"""
-        self.state_file = Path(state_file).expanduser()
+        self.tenant_id = tenant_id
+        self.state_file = (Path(state_file).expanduser() if state_file
+                           else _default_state_file(tenant_id))
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load_state()
         self.metrics_history: Dict[int, List[TrafficMetrics]] = defaultdict(list)
@@ -203,8 +239,14 @@ class CanaryTrafficController:
     def _save_state(self) -> bool:
         """Save canary state to disk (fail-closed if unsuccessful)"""
         try:
-            with open(self.state_file, "w") as f:
+            tmp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
+            with open(tmp, "w") as f:
                 json.dump(self.state.to_dict(), f, indent=2)
+            # Atomic replace; a read-only target directory/file refuses it.
+            if self.state_file.exists() and not os.access(self.state_file, os.W_OK):
+                tmp.unlink(missing_ok=True)
+                raise PermissionError(f"state file not writable: {self.state_file.name}")
+            os.replace(tmp, self.state_file)
             logger.info(f"Saved canary state: {self.state.current_traffic_percent}%")
             return True
         except Exception as e:
@@ -221,19 +263,21 @@ class CanaryTrafficController:
             logger.warning(f"Canary already started at {self.state.current_traffic_percent}%")
             return self.state
 
-        logger.info(f"🚀 Starting canary deployment at {initial_traffic}% traffic")
-        self.state.current_traffic_percent = initial_traffic
-        self.state.status = CanaryHealth.HEALTHY
-        self.state.started_at = datetime.utcnow().isoformat() + "Z"
-
-        # Record decision
+        logger.info(f"Starting canary deployment at {initial_traffic}% traffic")
+        # Audit-first (raises AuditWriteFailed → nothing started).
         self._record_decision(
             decision=EscalationDecision.ESCALATE.value,
             reason=f"Canary started: {initial_traffic}% traffic",
             metrics=None,
+            traffic_percent=initial_traffic,
         )
+        self.state.current_traffic_percent = initial_traffic
+        # No measurement yet → health is UNKNOWN, never assumed HEALTHY.
+        self.state.status = CanaryHealth.UNKNOWN
+        self.state.started_at = datetime.utcnow().isoformat() + "Z"
 
         if not self._save_state():
+            self.state.current_traffic_percent = 0
             raise RuntimeError("Cannot save canary state — deployment blocked (fail-closed)")
 
         logger.info(f"✅ Canary started at {initial_traffic}%")
@@ -293,10 +337,12 @@ class CanaryTrafficController:
         if latest_metrics.error_rate_pct > 1.0:
             reason = f"Error rate {latest_metrics.error_rate_pct}% > 1% threshold (ROLLBACK)"
             logger.error(f"❌ {reason}")
+            self.state.status = CanaryHealth.UNHEALTHY
             return EscalationDecision.ROLLBACK, reason, latest_metrics
 
         # Check for escalation: ALL gates must pass
         all_gates_pass = all(passed for _, _, passed in gate_results)
+        self.state.status = CanaryHealth.HEALTHY if all_gates_pass else CanaryHealth.DEGRADED
 
         if all_gates_pass:
             next_traffic = self._get_next_traffic_level(self.state.current_traffic_percent)
@@ -315,41 +361,49 @@ class CanaryTrafficController:
         """
         Escalate to next traffic level (Skill-initiated).
 
-        Call evaluate_escalation() first to get decision.
+        The gates are evaluated HERE: an escalation whose gates do not pass on
+        recorded metrics is refused (it used to escalate unconditionally).
 
         Returns: (success, reason, new_traffic_percent)
-        Emits: traffic_escalated (audit event + skill feedback)
+        Emits: deployment.canary.decision (audit, before the state changes)
         """
         current = self.state.current_traffic_percent
         next_traffic = self._get_next_traffic_level(current)
 
         if not next_traffic:
-            msg = "Already at 100% — Phase 2b activation"
-            logger.info(f"🎉 {msg}")
-            self.state.phase_2b_activated = True
-            self.state.status = CanaryHealth.HEALTHY
-            self._save_state()
-            return True, msg, 100
+            return False, "Already at 100% — nothing to escalate", current
 
-        logger.info(f"⬆️ Escalating traffic: {current}% → {next_traffic}%")
-        self.state.current_traffic_percent = next_traffic
-        self.state.last_decision_at = datetime.utcnow().isoformat() + "Z"
+        decision, gate_reason, _latest = self.evaluate_escalation()
+        if decision != EscalationDecision.ESCALATE:
+            logger.warning(f"Escalation refused: {decision.value} — {gate_reason}")
+            return False, f"Escalation refused ({decision.value}): {gate_reason}", current
 
-        # Record decision with skill attribution
+        logger.info(f"Escalating traffic: {current}% → {next_traffic}%")
+        reason = f"Escalated by {skill_id} from {current}% to {next_traffic}%"
+        if next_traffic == 100:
+            reason += " (Phase 2b flag set — no router reads it)"
+        # Audit-first with skill attribution (raises AuditWriteFailed → no change)
         self._record_decision(
             decision=EscalationDecision.ESCALATE.value,
-            reason=f"Escalated by {skill_id} from {current}% to {next_traffic}%",
+            reason=reason,
             metrics=None,
             skill_id=skill_id,
+            traffic_percent=next_traffic,
+            from_traffic_percent=current,
         )
+        self.state.current_traffic_percent = next_traffic
+        self.state.last_decision_at = datetime.utcnow().isoformat() + "Z"
+        if next_traffic == 100:
+            self.state.phase_2b_activated = True
 
         if not self._save_state():
             logger.error("Failed to save escalated state — reverting (fail-closed)")
             self.state.current_traffic_percent = current
+            self.state.phase_2b_activated = False
             return False, "Cannot persist escalation", current
 
-        logger.info(f"✅ Traffic escalated to {next_traffic}%")
-        return True, f"Escalated to {next_traffic}%", next_traffic
+        logger.info(f"Traffic escalated to {next_traffic}%")
+        return True, reason, next_traffic
 
     def hold(self, reason: str = "Metrics not ready") -> Tuple[bool, str]:
         """
@@ -359,7 +413,7 @@ class CanaryTrafficController:
         Emits: escalation_held (audit event)
         """
         current = self.state.current_traffic_percent
-        logger.warning(f"⏸️ Holding at {current}%: {reason}")
+        logger.warning(f"Holding at {current}%: {reason}")
 
         self._record_decision(
             decision=EscalationDecision.HOLD.value,
@@ -385,21 +439,30 @@ class CanaryTrafficController:
             logger.error(msg)
             return False, msg, current
 
-        logger.error(f"🔴 ROLLBACK: {current}% → {target_traffic}%. Reason: {reason}")
+        logger.error(f"ROLLBACK: {current}% → {target_traffic}%. Reason: {reason}")
 
-        self.state.current_traffic_percent = target_traffic
-        self.state.status = CanaryHealth.DEGRADED
-        self.state.rollback_reason = reason
-        self.state.last_decision_at = datetime.utcnow().isoformat() + "Z"
-
+        prior = (self.state.current_traffic_percent, self.state.status,
+                 self.state.rollback_reason, self.state.last_decision_at,
+                 self.state.phase_2b_activated)
         self._record_decision(
             decision=EscalationDecision.ROLLBACK.value,
             reason=reason,
             metrics=None,
+            traffic_percent=target_traffic,
+            from_traffic_percent=current,
         )
+        self.state.current_traffic_percent = target_traffic
+        self.state.status = CanaryHealth.DEGRADED
+        self.state.rollback_reason = reason
+        self.state.last_decision_at = datetime.utcnow().isoformat() + "Z"
+        self.state.phase_2b_activated = False
 
         if not self._save_state():
-            logger.error("❌ FAIL-CLOSED: Cannot save rollback state")
+            logger.error("FAIL-CLOSED: Cannot save rollback state")
+            # Keep memory == disk: the returned "unchanged" must be true.
+            (self.state.current_traffic_percent, self.state.status,
+             self.state.rollback_reason, self.state.last_decision_at,
+             self.state.phase_2b_activated) = prior
             return False, "Cannot persist rollback", current
 
         logger.info(f"✅ Rolled back to {target_traffic}%")
@@ -471,13 +534,36 @@ class CanaryTrafficController:
         reason: str,
         metrics: Optional[TrafficMetrics],
         skill_id: str = "os.canary_router",
+        traffic_percent: Optional[int] = None,
+        from_traffic_percent: Optional[int] = None,
     ) -> None:
-        """Record escalation decision to state (audit-first)"""
+        """Commit the decision to the tenant audit chain, then mirror it.
+
+        Raises ``audit_sink.AuditWriteFailed`` when the chain write does not
+        commit — callers record BEFORE mutating state, so nothing is applied.
+        The free-text ``reason`` stays in the local mirror only (never in the
+        chain record).
+        """
+        tp = self.state.current_traffic_percent if traffic_percent is None else traffic_percent
+        audit_sink.emit(
+            "deployment.canary.decision",
+            {
+                "decision": decision,
+                "traffic_percent": tp,
+                "from_traffic_percent": (self.state.current_traffic_percent
+                                         if from_traffic_percent is None else from_traffic_percent),
+                "skill_id": skill_id,
+                "status": getattr(self.state.status, "value", str(self.state.status)),
+                "lom": "core/deployment/canary_traffic_controller.py:_record_decision",
+            },
+            tenant_id=self.tenant_id,
+            severity="WARNING" if decision == EscalationDecision.ROLLBACK.value else "INFO",
+        )
         decision_record = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "decision": decision,
             "reason": reason,
-            "traffic_percent": self.state.current_traffic_percent,
+            "traffic_percent": tp,
             "skill_id": skill_id,
         }
 
@@ -489,6 +575,6 @@ class CanaryTrafficController:
                     f"({skill_id})")
 
 
-def create_controller(state_file: str = "~/.corvin/canary_state.json") -> CanaryTrafficController:
+def create_controller(state_file: Optional[str] = None, *, tenant_id: str = "_default") -> CanaryTrafficController:
     """Factory function to create a canary traffic controller"""
-    return CanaryTrafficController(state_file)
+    return CanaryTrafficController(state_file, tenant_id=tenant_id)

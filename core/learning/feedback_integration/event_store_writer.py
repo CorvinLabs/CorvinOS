@@ -20,6 +20,7 @@ Guarantees:
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import threading
 import time
@@ -169,9 +170,14 @@ class EventStoreWriter:
         learning_event = self._feedback_to_learning_event(feedback, lom=lom)
 
         try:
-            # Write to EventStore (audit-chain FIRST, fail-closed)
-            await self.event_store.write_event(learning_event, feedback.tenant_id)
-            return learning_event.audit_ref or "unknown"
+            # Write to EventStore (audit-chain FIRST, fail-closed). The store's
+            # write_event is SYNCHRONOUS and takes one argument: awaiting it
+            # (as this did) raised TypeError AFTER the record was written, and
+            # the returned ref was always "unknown". Run it off the event loop.
+            audit_ref = await asyncio.to_thread(self.event_store.write_event, learning_event)
+            if not audit_ref:
+                raise RuntimeError("EventStore returned no audit_ref (not committed)")
+            return audit_ref
 
         except RuntimeError as e:
             # EventStore unavailable or chain write failed
@@ -222,9 +228,9 @@ class EventStoreWriter:
 
                 try:
                     # Retry the write
-                    await self.event_store.write_event(
+                    await asyncio.to_thread(
+                        self.event_store.write_event,
                         self._feedback_to_learning_event(queued.feedback, lom=queued.feedback.lom),
-                        queued.feedback.tenant_id
                     )
                     logger.info(
                         f"Flushed queued feedback {queued.feedback.feedback_id} "

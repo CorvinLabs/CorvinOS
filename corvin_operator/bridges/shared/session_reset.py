@@ -506,7 +506,8 @@ def reset_session(
     # the reset itself.
     try:
         _dialectic_session_reset(channel=channel, chat_id=chat_id,
-                                 forge_chan_id=forge_chan_id, reason=reason)
+                                 forge_chan_id=forge_chan_id, reason=reason,
+                                 tenant_id=tenant_id)
     except Exception:  # noqa: BLE001
         pass
     audit_event_id, audit_event_type = _write_audit(
@@ -691,13 +692,19 @@ def collect_unpinned_artifacts(
 
 
 def _dialectic_session_reset(*, channel: str, chat_id: str,
-                              forge_chan_id: str, reason: str) -> None:
+                              forge_chan_id: str, reason: str,
+                              tenant_id: str = "_default") -> None:
     """Best-effort dialectic decision-point for session-reset.
 
     Heat is raised by skill-grade-count and tool-count in the session
     workspace — a session with 5 promoted skills and 12 tools is a
     high-value target where the operator should at least see an audit
     entry recording the opportunity-cost.
+
+    ``tenant_id`` locates the session workspace. It used to be read as a free
+    name that did not exist here; the NameError was swallowed by the probe's
+    ``except`` and every reset reported 0 skills / 0 tools, so the heat score
+    never crossed the threshold.
     """
     try:
         import sys as _sys

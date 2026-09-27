@@ -60,6 +60,36 @@ def _check_allow_list(event: str, details: dict[str, Any]) -> None:
         )
 
 
+def _core_write_event() -> Callable[..., Any]:
+    """``forge.security_events.write_event``, importable in ANY process.
+
+    In-process callers usually have ``corvin_operator/forge`` on ``sys.path``
+    because the bridges ``audit`` module put it there. The Blender CLI
+    (``python -m ...blender_cli``) is a fresh process: with only
+    ``corvin_operator`` on PYTHONPATH, ``import forge`` resolved to the
+    ``corvin_operator/forge`` DIRECTORY as a namespace package, so
+    ``forge.security_events`` did not exist and every CLI render failed
+    audit-first before rendering a frame.
+    """
+    try:
+        from forge.security_events import write_event as _we  # type: ignore[import]
+        return _we
+    except ImportError:
+        pass
+    import sys  # noqa: PLC0415
+
+    forge_root = Path(__file__).resolve().parents[4] / "corvin_operator" / "forge"
+    if str(forge_root) not in sys.path:
+        sys.path.insert(0, str(forge_root))
+    cached = sys.modules.get("forge")
+    if cached is not None and getattr(cached, "__file__", None) is None:
+        # a namespace-package "forge" from the wrong root — drop it and re-resolve
+        for name in [m for m in sys.modules if m == "forge" or m.startswith("forge.")]:
+            sys.modules.pop(name, None)
+    from forge.security_events import write_event as _we  # type: ignore[import]
+    return _we
+
+
 def emit(
     event: str,
     *,
@@ -86,8 +116,7 @@ def emit(
     _check_allow_list(event, payload)
 
     if write_event_fn is None:
-        from forge.security_events import write_event as _we  # type: ignore[import]
-        write_event_fn = _we
+        write_event_fn = _core_write_event()
 
     try:
         write_event_fn(path, event, details=payload, severity=severity)

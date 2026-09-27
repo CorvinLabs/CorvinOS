@@ -15,6 +15,12 @@ Notifications: Slack (#corvinOS-production), PagerDuty (CRITICAL only), Email (o
 
 Compliance: GDPR (Art. 5/6/30/32), EU AI Act (Art. 5/50), audit-first (ADR-0232/0233)
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Nothing
+feeds the detector live metrics. Incident records go to the tenant audit chain
+through ``core.deployment.audit_sink`` (content-free fields only; fail-closed).
+``notify`` reports success only for channels that actually delivered; with no
+channel configured nothing is delivered and it returns False.
+
 FIXES IMPLEMENTED (14 Findings):
 - IR-001: notify() returns False if ANY channel fails (per-channel tracking)
 - IR-002: Email actually sent via SMTP with retry logic (3 attempts)
@@ -36,8 +42,21 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from queue import Queue, Empty
 import threading
+import time
+
+from . import audit_sink
 
 logger = logging.getLogger(__name__)
+
+# Indirection so tests can stub the SMTP back-off without sleeping.
+_sleep = time.sleep
+
+audit_sink.register_events({
+    "deployment.incident_detected": {
+        "incident_id", "incident_type", "incident_severity", "metric_name",
+        "actual_value", "threshold",
+    },
+})
 
 
 class IncidentSeverity(Enum):
@@ -200,7 +219,11 @@ class IncidentDetector:
         """Detect confidence regression (>10% unexpected)"""
         incidents = []
 
-        actual_confidence = metrics.get("confidence", 0.5)
+        # A metric that was not measured is not an incident (a default of 0.5
+        # used to raise a CRITICAL "confidence below minimum" out of nothing).
+        if "confidence" not in metrics:
+            return incidents
+        actual_confidence = metrics["confidence"]
         prior_confidence = self.prior_metrics.get("confidence", actual_confidence)
 
         # Calculate regression
@@ -256,7 +279,9 @@ class IncidentDetector:
         """Detect negative feedback surge (<70% positive)"""
         incidents = []
 
-        positive_feedback_rate = metrics.get("positive_feedback_rate", 0.7)
+        if "positive_feedback_rate" not in metrics:
+            return incidents
+        positive_feedback_rate = metrics["positive_feedback_rate"]
         prior_rate = self.prior_metrics.get("positive_feedback_rate", positive_feedback_rate)
 
         # Check for drop in positive feedback
@@ -436,73 +461,67 @@ class IncidentNotifier:
     # Dead letter queue retry interval
     DLQ_RETRY_INTERVAL_SECONDS = 300
 
-    def __init__(self, audit_path: Optional[Path] = None):
+    def __init__(self, tenant_id: str = "_default", start_dlq_worker: bool = True):
+        self.tenant_id = tenant_id
         self.notifications_sent: List[Dict] = []
         self.failed_notifications_queue: Queue = Queue()  # IR-005: Dead letter queue
         self.incident_dedup_cache: Dict[str, float] = {}  # IR-003: incident_id → timestamp
         self.rate_limit_window: List[float] = []  # IR-003: sliding window of notification timestamps
         self.channel_results: Dict[str, bool] = {}  # IR-001: per-channel success tracking
         self.lock = threading.RLock()  # Thread-safe access
-        self.audit_path = audit_path or Path.home() / ".corvin" / "orchestrator_audit.jsonl"  # GDPR Art. 32
-        # Start DLQ retry thread (IR-005)
-        self._start_dlq_retry_thread()
+        # Local mirror of the incident records committed to the tenant chain.
+        self.audit_trail: List[Dict] = []
+        self._stop = threading.Event()
+        if start_dlq_worker:
+            self._start_dlq_retry_thread()
 
     def _start_dlq_retry_thread(self) -> None:
-        """Start background thread to retry failed notifications"""
+        """Start background thread to retry failed notifications (stop with close())."""
         def retry_loop():
-            while True:
+            while not self._stop.wait(self.DLQ_RETRY_INTERVAL_SECONDS):
                 try:
-                    threading.Event().wait(self.DLQ_RETRY_INTERVAL_SECONDS)
                     self._retry_failed_notifications()
                 except Exception as e:
-                    logger.error(f"DLQ retry thread error: {e}")
+                    logger.error(f"DLQ retry thread error: {type(e).__name__}")
 
         thread = threading.Thread(target=retry_loop, daemon=True)
         thread.start()
 
+    def close(self) -> None:
+        """Stop the DLQ retry thread."""
+        self._stop.set()
+
     def _write_incident_to_audit(self, incident: Incident) -> bool:
         """
-        GDPR Art. 32: Write incident to audit trail before notifications (audit-first).
+        GDPR Art. 32: commit the incident to the tenant audit chain before any
+        notification (audit-first). Content-free fields only — never the free
+        text ``message`` or ``details``.
 
-        Fail-closed: if audit write fails, do not send notifications.
-        Returns: True if written successfully, False otherwise.
+        Fail-closed: returns False (and nothing is sent) when the chain write
+        does not commit.
         """
+        tenant_id = incident.tenant_id or self.tenant_id
         try:
-            import uuid
-
-            # Ensure tenant_id is present (ADR-0563)
-            tenant_id = incident.tenant_id or "_default"
-
-            # Create audit event
-            audit_event = {
-                "event_id": f"incident-{uuid.uuid4().hex[:12]}",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "tenant_id": tenant_id,  # MANDATORY (ADR-0563)
-                "event_type": "incident_detected",
-                "incident_id": incident.incident_id,
-                "incident_type": incident.incident_type.value,
-                "severity": incident.severity.value,
-                "metric_name": incident.metric_name,
-                "actual_value": incident.actual_value,
-                "threshold": incident.threshold,
-                "message": incident.message,
-                "details": dict(incident.details),
-            }
-
-            # Write to audit trail (fail-closed)
-            self.audit_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.audit_path, 'a') as f:
-                f.write(json.dumps(audit_event) + "\n")
-
-            # Store audit event ID in incident for traceability
-            incident.audit_event_id = audit_event["event_id"]
-
-            logger.info(f"Incident {incident.incident_id} written to audit trail (tenant {tenant_id})")
-            return True
-
-        except Exception as e:
+            record = audit_sink.emit(
+                "deployment.incident_detected",
+                {
+                    "incident_id": incident.incident_id,
+                    "incident_type": incident.incident_type.value,
+                    "incident_severity": incident.severity.value,
+                    "metric_name": incident.metric_name,
+                    "actual_value": incident.actual_value,
+                    "threshold": incident.threshold,
+                },
+                tenant_id=tenant_id,
+                severity="CRITICAL" if incident.severity == IncidentSeverity.CRITICAL else "WARNING",
+            )
+        except audit_sink.AuditWriteFailed as e:
             logger.error(f"FAILED to write incident to audit trail (GDPR Art. 32): {e}")
             return False  # Fail-closed
+        incident.audit_event_id = str(record.get("hash", ""))
+        self.audit_trail.append(record)
+        logger.info(f"Incident {incident.incident_id} written to audit trail (tenant {tenant_id})")
+        return True
 
     def notify(
         self,
@@ -553,11 +572,13 @@ class IncidentNotifier:
         }
 
         all_success = True
+        attempted = False
 
         # IR-004: Retry chain: Slack → PagerDuty → Email → log
         try:
             # Slack notification (all incidents)
             if slack_webhook:
+                attempted = True
                 if self._send_slack_notification(incident, slack_webhook):
                     self.channel_results["slack"] = True
                 else:
@@ -566,6 +587,7 @@ class IncidentNotifier:
 
             # PagerDuty (CRITICAL only)
             if pagerduty_key and incident.severity == IncidentSeverity.CRITICAL:
+                attempted = True
                 if self._send_pagerduty_alert(incident, pagerduty_key):
                     self.channel_results["pagerduty"] = True
                 else:
@@ -574,6 +596,7 @@ class IncidentNotifier:
 
             # Email (operator receipt) — IR-002: actual SMTP implementation
             if email_to:
+                attempted = True
                 if self._send_email_notification(incident, email_to):
                     self.channel_results["email"] = True
                 else:
@@ -587,7 +610,12 @@ class IncidentNotifier:
                     })
 
         except Exception as e:
-            logger.error(f"Notification error for {incident.incident_id}: {e}")
+            logger.error(f"Notification error for {incident.incident_id}: {type(e).__name__}")
+            all_success = False
+
+        if not attempted:
+            # Nothing was delivered anywhere: that is not a successful notification.
+            logger.error(f"Incident {incident.incident_id}: no notification channel configured — NOT notified")
             all_success = False
 
         # Log notification result
@@ -596,8 +624,7 @@ class IncidentNotifier:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "severity": incident.severity.value,
             "type": incident.incident_type.value,
-            "message": incident.message,
-            "channel_results": self.channel_results,  # IR-001: per-channel tracking
+            "channel_results": dict(self.channel_results),  # IR-001: per-channel tracking
             "all_success": all_success,
         }
         self.notifications_sent.append(notification_record)
@@ -641,7 +668,7 @@ class IncidentNotifier:
                 email_to = failed.get("email_to")
 
                 if incident and email_to:
-                    logger.info(f"DLQ retry: email to {email_to} for {incident.incident_id}")
+                    logger.info(f"DLQ retry: email for {incident.incident_id}")
                     if self._send_email_notification(incident, email_to):
                         logger.info(f"DLQ email succeeded for {incident.incident_id}")
                     else:
@@ -797,19 +824,20 @@ CorvinOS Production Orchestrator
                             server.login(smtp_config["username"], smtp_config["password"])
 
                         server.send_message(msg)
-                        logger.info(f"Email sent to {email_to} for {incident.incident_id}")
+                        logger.info(f"Email sent for {incident.incident_id}")
                         return True
 
-                except smtplib.SMTPException as e:
+                except (smtplib.SMTPException, OSError) as e:
+                    # Never log the recipient address (PII) or the server's text.
                     if attempt < max_retries - 1:
-                        logger.warning(f"SMTP attempt {attempt + 1} failed for {email_to}: {e}, retrying...")
-                        threading.Event().wait(2 ** attempt)  # Exponential backoff
+                        logger.warning(f"SMTP attempt {attempt + 1} failed ({type(e).__name__}), retrying...")
+                        _sleep(2 ** attempt)  # Exponential backoff
                     else:
-                        logger.error(f"Email failed after {max_retries} retries for {email_to}: {e}")
+                        logger.error(f"Email failed after {max_retries} attempts ({type(e).__name__})")
                         return False
 
         except Exception as e:
-            logger.error(f"Failed to send email notification: {e}")
+            logger.error(f"Failed to send email notification: {type(e).__name__}")
             return False
 
         return False

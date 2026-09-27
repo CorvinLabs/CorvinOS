@@ -1,6 +1,6 @@
 # Phase 2 Dual-Write Implementation Guide
 
-**Status:** Implementation Complete (Phase 2a)  
+**Status:** Code present, NOT ACTIVATABLE — every Phase 2 mode is refused (see "Current status" below)  
 **Version:** 1.0.0  
 **Last Updated:** 2026-09-27  
 **ADR Reference:** ADR-0532 (OS-Skills Architecture)  
@@ -8,20 +8,47 @@
 
 ---
 
+## Current status (2026-09-27, adversarial review) — read this first
+
+**Phase 2 cannot be switched on.** `CORVIN_ACP_PHASE=phase2_dual_write` and
+`CORVIN_ACP_PHASE=phase2_real` are REFUSED by
+`corvin_operator/bridges/shared/delegation_policy.py::_get_phase_mode`: the
+request is logged as a warning, audited once per process and tenant as
+`l5_routing_phase_refused` (`requested_phase`, `effective_phase=phase1_shadow`,
+`reason_code=rollback_guard_not_wired`), and L5 routing stays in **Phase 1
+shadow mode** — the bundled engine is served, the Skill's answer is only
+audited (ADR-0613).
+
+Why: Phase 2 serves the Skill's engine, and ADR-0532 admits that only behind a
+working auto-rollback. The rollback detector reads a correctness window that
+only `dual_write.record_routing_outcome` feeds, and that function has no
+production caller — it needs a per-request `ground_truth` ("which engine WOULD
+have been right") that no outcome sink observes. With no samples the detector
+never fires, so Phase 2 would change served routing with no brake. The guard
+flag `_PHASE2_ROLLBACK_GUARD_WIRED` is `False`; `dual_write.py`,
+`rollback_detector.py` and `correctness_tracker.py` carry the
+"NOT WIRED: no production caller" marker.
+
+Also not present: there is no `spec.acp` block read from `tenant.corvin.yaml`
+and no `/v1/console/l5-routing/metrics` route. The configuration, rollout and
+activation sections below describe the DESIGN; none of their commands changes
+routing today. Setting the env var to a Phase 2 value only produces the refusal
+record.
+
 ## Executive Summary
 
-This document describes the Phase 2a implementation of the os.delegation_router L5 routing upgrade. Phase 2 transitions from Phase 1's shadow mode (advisory-only) to dual-write mode, where the Skill-driven routing decision is used for real routing while the bundled decision is tracked for correctness monitoring and auto-rollback.
+This document describes the Phase 2a design of the os.delegation_router L5 routing upgrade (code present, activation refused — see above). Phase 2 transitions from Phase 1's shadow mode (advisory-only) to dual-write mode, where the Skill-driven routing decision is used for real routing while the bundled decision is tracked for correctness monitoring and auto-rollback.
 
-**Key Achievements:**
+**Implemented components (none of them serves routing today):**
 
 - ✅ Dual-write decision executor (`resolve_worker_engine_dual_write()`)
 - ✅ Confidence threshold gating (default 0.75, learned override)
-- ✅ Auto-rollback trigger (>2% correctness drop)
+- ⚠️ Auto-rollback trigger (>2% correctness drop) — detector exists, but nothing feeds its correctness window, so it can never fire
 - ✅ Agreement rate tracking (Skill vs. bundled decision comparison)
 - ✅ Audit trail integration (ADR-0722 decision attribution)
 - ✅ Learning feedback integration (ADR-0314 optimizer signals)
 - ✅ E2E test suite (15+ tests covering all scenarios)
-- ✅ Feature flag support (CORVIN_ACP_PHASE env var)
+- ⚠️ `CORVIN_ACP_PHASE` env var — only `phase1_shadow` takes effect; Phase 2 values are refused and audited (`l5_routing_phase_refused`)
 
 ---
 
@@ -282,28 +309,24 @@ The ADR-0314 learning optimizer reads these signals to:
 
 ### CORVIN_ACP_PHASE Environment Variable
 
-Controls which phase of L5 routing is active.
+Selects the L5 routing phase. Only Phase 1 can be in effect today.
 
-| Value | Behavior | Use Case |
-|-------|----------|----------|
-| `phase1_shadow` (default) | Advisory mode; bundled stands | Safe default, data collection |
-| `phase2_dual_write` | Skill-driven real routing; threshold-gated; auto-rollback | Gradual rollout, monitoring |
-| `phase2_real` | Skill-primary routing (no fallback) | Future: requires Phase 2b recovery |
+| Value | Behavior today |
+|-------|----------------|
+| `phase1_shadow` (default) | Advisory mode; bundled engine served; Skill decision audited |
+| `phase2_dual_write` | **Refused** — logged + audited as `l5_routing_phase_refused`; stays `phase1_shadow` |
+| `phase2_real` | **Refused** — logged + audited as `l5_routing_phase_refused`; stays `phase1_shadow` |
+| anything else | Treated as `phase1_shadow` |
 
 ### Activation
 
-```bash
-# Default (safe): Phase 1 shadow mode
-docker run corvinOS
+There is nothing to activate. Do not set `CORVIN_ACP_PHASE` to a Phase 2
+value in production: it does not change routing, it only writes the refusal
+record. Phase 2 becomes activatable only when a real correctness feed for the
+rollback detector exists and `_PHASE2_ROLLBACK_GUARD_WIRED` is flipped in the
+same change (with an ADR).
 
-# Phase 2 dual-write (with monitoring + auto-rollback)
-docker run -e CORVIN_ACP_PHASE=phase2_dual_write corvinOS
-
-# Phase 2 real (future, requires rollback recovery)
-docker run -e CORVIN_ACP_PHASE=phase2_real corvinOS
-```
-
-### Configuration via tenant.corvin.yaml
+### Configuration via tenant.corvin.yaml (design only — not read by any code)
 
 ```yaml
 spec:
@@ -318,7 +341,7 @@ spec:
 
 ## Deployment & Rollout Strategy
 
-### Phase 2a Rollout (Dual-Write with Monitoring)
+### Phase 2a Rollout (design only — blocked, see "Current status")
 
 **Stage 1: Internal Testing (1–2 weeks)**
 - Enable on staging + canary instances
@@ -339,9 +362,9 @@ spec:
 - Set CORVIN_ACP_PHASE=phase2_dual_write as default
 - Maintain Phase 1 shadow mode for rollback/safety
 
-### Monitoring Dashboard
+### Monitoring Dashboard (not built — no such route exists)
 
-Console `/v1/console/l5-routing/metrics`:
+Planned console `/v1/console/l5-routing/metrics`:
 
 ```json
 {
@@ -443,7 +466,7 @@ Console `/v1/console/l5-routing/metrics`:
 
 ---
 
-## Migration from Phase 1 to Phase 2a
+## Migration from Phase 1 to Phase 2a (blocked — every Phase 2 mode is refused today)
 
 ### Pre-Activation Checklist
 
@@ -533,7 +556,7 @@ Compose multiple Skills (routing + context + workflow):
 
 ## Appendix: Configuration Examples
 
-### Minimal Phase 2 Config
+### Minimal Phase 2 Config (design only — `spec.acp` is not read)
 
 ```yaml
 # tenant.corvin.yaml
@@ -543,7 +566,7 @@ spec:
     confidence_threshold: 0.75
 ```
 
-### Production-Grade Phase 2 Config
+### Production-Grade Phase 2 Config (design only — `spec.acp` is not read)
 
 ```yaml
 # tenant.corvin.yaml
@@ -577,5 +600,5 @@ monitoring:
 
 **Document Version:** 1.0.0  
 **Last Updated:** 2026-09-27  
-**Status:** Implementation Complete (Phase 2a)  
+**Status:** Code present, activation refused (Phase 1 shadow is the only effective mode)  
 **Next Review:** 2026-10-11 (2 weeks post-activation)

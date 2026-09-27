@@ -19,7 +19,6 @@ from prometheus_client import (
     Counter,
     Gauge,
     Histogram,
-    Registry,
     generate_latest,
     CollectorRegistry,
     CONTENT_TYPE_LATEST,

@@ -114,6 +114,9 @@ def _tts_provider_rows() -> list[tuple[str, bool, str]]:
         edge_ok, edge_reason = False, "edge-tts package missing (pip install edge-tts)"
     if edge_ok:
         try:
+            # ``adapter`` was referenced without an import: the NameError was
+            # swallowed below and edge-tts always read "ffmpeg not found".
+            import adapter  # noqa: PLC0415
             ffmpeg_bin = adapter._resolve_ffmpeg_bin()
         except Exception:  # noqa: BLE001
             ffmpeg_bin = None

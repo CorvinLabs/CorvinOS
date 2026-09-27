@@ -20,6 +20,8 @@ import tempfile
 from contextlib import redirect_stderr
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 PASS = 0
 FAIL = 0
@@ -33,6 +35,17 @@ def t(label: str, ok: bool, *, detail: str = "") -> None:
         PASS += 1
     else:
         FAIL += 1
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """These tests pop/set CORVIN_HOME and the slot vars directly; restore
+    the process environment afterwards so the sandbox the suite runs in
+    (and the root conftest's isolation check) is left as it was found."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def _clear_env() -> None:

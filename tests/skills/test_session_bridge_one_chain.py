@@ -40,7 +40,9 @@ def _snapshot(producer, **kw):
     return producer.create_snapshot(**base)
 
 
-def test_bridge_event_lands_in_tenant_chain_and_verifies(home):
+def test_bridge_event_lands_in_tenant_chain_and_verifies(home, monkeypatch):
+    # The persisted snapshot is HMAC-signed; without a key emit fails closed.
+    monkeypatch.setenv("CORVIN_SNAPSHOT_KEY", "test-snapshot-key-not-default")
     from core.infinite_session.session_bridge_producer import SessionBridgeProducer
     from core.paths import tenant_audit_chain
 

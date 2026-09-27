@@ -310,9 +310,19 @@ class TestPhase2WeightPersistence(unittest.TestCase):
 
         with patch.object(self.event_store, "write_event") as mock_write:
             self.confidence_calc.save_weights(weights)
-            # Should emit CONFIG_UPDATED to audit chain
-            # (verify the mock was called)
-            # Note: actual implementation details may vary
+        mock_write.assert_called_once()
+        event = mock_write.call_args.args[0]
+        self.assertEqual(event.event_type, EventType.CONFIG_UPDATED)
+        self.assertIn("simple_haiku", event.signal["config_delta"])
+
+    def test_audit_failure_persists_nothing(self):
+        """Audit-first: a failed CONFIG_UPDATED write leaves no weights on disk."""
+        weights = RoutingWeights(weights={"simple_haiku": 0.10}, feedback_count=1)
+        with patch.object(self.event_store, "write_event",
+                          side_effect=RuntimeError("chain down")):
+            with self.assertRaises(RuntimeError):
+                self.confidence_calc.save_weights(weights)
+        self.assertFalse(self.confidence_calc.weights_file.exists())
 
 
 class TestPhase2FullLoop(unittest.TestCase):

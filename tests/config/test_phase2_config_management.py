@@ -24,7 +24,21 @@ from core.config.centralized_manager import (
     ConfigDrift,
     DEFAULT_SAFE_CONFIG,
 )
-from core.compliance.audit_chain_writer import AuditChainWriter
+
+
+def _chain(tenant_id="_default"):
+    """(records, verify_ok) of the REAL tenant audit chain under this test's CORVIN_HOME."""
+    import json as _json
+
+    from core.deployment.audit_sink import _forge
+
+    se, fp = _forge()
+    path = fp.tenant_audit_chain(tenant_id)
+    if not path.exists():
+        return [], True
+    recs = [_json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    ok, _problems = se.verify_chain(path)
+    return recs, ok
 
 
 @pytest.fixture(autouse=True)
@@ -309,9 +323,19 @@ class TestAuditIntegration:
             reason="test_audit",
         )
 
-        if result:
-            # Check audit chain has events
-            assert manager_with_audit.audit_chain is not None
+        assert result is True
+        recs, ok = _chain()
+        assert ok, "config events must keep the tenant chain verifiable"
+        assert any(r["event_type"] == "config.set_success" for r in recs)
+
+    def test_create_with_audit_ignores_a_private_path(self, temp_audit_log, sample_valid_config):
+        """create_with_audit(path) used to bind AuditChainWriter (a second hash
+        scheme) to that path. It now writes to the tenant chain only."""
+        mgr = CentralizedConfigManager.create_with_audit(temp_audit_log)
+        assert mgr.set_config(tenant_id="_default", config=sample_valid_config, reason="x") is True
+        assert not temp_audit_log.exists()
+        recs, ok = _chain()
+        assert ok and any(r["event_type"] == "config.set_success" for r in recs)
 
     def test_audit_event_on_validation_failure(self, manager_with_audit):
         """Test audit event logged on validation failure."""
@@ -325,9 +349,9 @@ class TestAuditIntegration:
         )
 
         assert result is False
-        # Audit event should be logged even on failure
-        if manager_with_audit.audit_chain:
-            assert manager_with_audit.audit_chain.get_event_count() >= 0
+        # Audit event is logged on failure too
+        recs, ok = _chain()
+        assert ok and any(r["event_type"] == "config.set_rejected" for r in recs)
 
     def test_audit_event_on_drift_detection(self, manager_with_audit, sample_valid_config):
         """Test audit event logged on drift detection."""
@@ -340,10 +364,11 @@ class TestAuditIntegration:
             instance_config=instance,
         )
 
-        # Audit events should be logged for drifts
-        if manager_with_audit.audit_chain:
-            count = manager_with_audit.audit_chain.get_event_count()
-            assert count >= 0
+        # Audit events are logged for drifts
+        assert drifts
+        recs, ok = _chain()
+        assert ok
+        assert sum(r["event_type"] == "config.drift_detected" for r in recs) == len(drifts)
 
 
 class TestFailClosedBehavior:
@@ -458,10 +483,11 @@ class TestE2EMultiInstanceScenario:
         assert isinstance(london_drifts, list)
         assert isinstance(sydney_drifts, list)
 
-        # Audit events should be logged
-        if manager_with_audit.audit_chain:
-            total_events = manager_with_audit.audit_chain.get_event_count()
-            assert total_events >= 0  # Should have logged drift events
+        # Every reported drift was recorded on the tenant chain
+        recs, ok = _chain()
+        assert ok
+        n = len(nyc_drifts) + len(london_drifts) + len(sydney_drifts)
+        assert sum(r["event_type"] == "config.drift_detected" for r in recs) == n
 
 
 class TestTenantIsolation:
@@ -485,18 +511,22 @@ class TestTenantIsolation:
         assert "tenant-a:instance-1" in manager_with_audit._instance_overrides
         assert "tenant-b:instance-1" in manager_with_audit._instance_overrides
 
-    def test_audit_events_include_tenant_id(self, manager_with_audit, sample_valid_config):
-        """Test audit events include tenant_id for isolation."""
-        manager_with_audit.set_config(
+    def test_audit_events_include_tenant_id(self, manager_with_audit, sample_valid_config, monkeypatch):
+        """Audit events land on THAT tenant's chain, tagged with its id, and
+        nothing reaches another tenant's chain."""
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant-x")
+        assert manager_with_audit.set_config(
             tenant_id="tenant-x",
             config=sample_valid_config,
             reason="test_isolation",
-        )
+        ) is True
 
-        if manager_with_audit.audit_chain:
-            events = manager_with_audit.audit_chain.read_events(tenant_id="tenant-x")
-            # Events should be isolated to tenant-x
-            assert all(e.tenant_id == "tenant-x" for e in events)
+        recs, ok = _chain("tenant-x")
+        assert ok and recs
+        assert all(r["details"].get("tenant_id") == "tenant-x"
+                   for r in recs if r["event_type"].startswith("config."))
+        other, _ = _chain("_default")
+        assert not any(r["event_type"].startswith("config.") for r in other)
 
 
 if __name__ == "__main__":

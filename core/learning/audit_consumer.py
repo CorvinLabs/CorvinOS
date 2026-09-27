@@ -11,12 +11,16 @@ Invariants:
 - Events deduplicated by event_id (idempotent reads)
 - Tenant-scoped (per tenant_id)
 - Eventual-consistency: async, non-blocking
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +28,11 @@ from typing import Optional
 
 from core.paths import tenant_home
 from core.task_tracking.audit import verify_audit_chain
+
+logger = logging.getLogger(__name__)
+
+#: Cap on remembered event ids (idempotency window); oldest evicted first.
+MAX_REMEMBERED_EVENTS = 100_000
 
 
 @dataclass
@@ -73,7 +82,20 @@ class AuditEventConsumer:
         """
         self.batch_size = max(10, min(batch_size, 10000))  # Clamp to sensible range
         self.window_seconds = max(30, min(window_seconds, 3600))  # 30sec–1hr
-        self._processed_hashes: set[str] = set()  # For idempotency
+        # Idempotency by EVENT ID, bounded. It was an unbounded set of chain
+        # hashes: rows without a chain hash all shared "" and every one after
+        # the first was skipped as "already processed".
+        self._processed_ids: "OrderedDict[str, None]" = OrderedDict()
+
+    @property
+    def _processed_hashes(self) -> set[str]:
+        """Back-compat view: ids of the processed events."""
+        return set(self._processed_ids)
+
+    def _mark_processed(self, event_id: str) -> None:
+        self._processed_ids[event_id] = None
+        while len(self._processed_ids) > MAX_REMEMBERED_EVENTS:
+            self._processed_ids.popitem(last=False)
 
     async def read_unprocessed_events(
         self,
@@ -123,7 +145,7 @@ class AuditEventConsumer:
                         continue
 
                     # Skip if already processed
-                    if chain_hash in self._processed_hashes:
+                    if row["event_id"] in self._processed_ids:
                         continue
 
                     # Extract action from delta (if present)
@@ -142,18 +164,22 @@ class AuditEventConsumer:
                         event_type=row["event_type"],
                         task_id=row["item_id"],
                         tenant_id=tenant_id,
-                        actor=row["actor"] or "system",
+                        # Actor KIND only ("user:alice" -> "user"): windows
+                        # feed statistics, never identities.
+                        actor=str(row["actor"] or "system").split(":", 1)[0][:64],
                         action=action,
                         timestamp=row["ts"],
                         chain_hash=chain_hash,
                     )
 
                     events.append(event)
-                    self._processed_hashes.add(chain_hash)
+                    self._mark_processed(row["event_id"])
 
-        except Exception as e:
-            # Non-blocking: log and return empty
-            # Consumer is async, failures should not crash the task service
+        except Exception as e:  # noqa: BLE001
+            # Non-blocking (the consumer must not crash the task service), but
+            # never silent: an unreadable store is not "no events".
+            logger.warning("audit consumer: reading events for tenant %r failed: %s",
+                           tenant_id, type(e).__name__)
             return []
 
         return events

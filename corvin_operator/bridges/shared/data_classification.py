@@ -828,6 +828,67 @@ def make_forge_audit_writer(audit_path: Path) -> AuditWriter:
     return _writer
 
 
+_SIBLING_PATHS = None
+
+
+def _sibling_paths():
+    """The ``paths`` module that sits next to THIS file, loaded by file path.
+
+    Never ``corvin_operator.forge.forge.paths`` and never a bare ``import
+    paths``: with the live venv's editable ``.pth`` on ``sys.path`` the dotted
+    name can resolve into a DIFFERENT checkout, whose repo-marker home is that
+    checkout's ``.corvin`` — the split-brain that let a worktree test run
+    append 34 foreign-MAC ``data_flow.*`` records to the live install's chain
+    (2026-09-27). A bare ``paths`` can resolve to ``corvin_operator/forge/paths.py``
+    (a different module of the same name without ``tenant_audit_chain``).
+    """
+    global _SIBLING_PATHS
+    if _SIBLING_PATHS is None:
+        import importlib.util as _ilu  # noqa: PLC0415
+
+        spec = _ilu.spec_from_file_location(
+            "_paths_l34", Path(__file__).resolve().parent / "paths.py",
+        )
+        mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        _SIBLING_PATHS = mod
+    return _SIBLING_PATHS
+
+
+def _default_home() -> Path:
+    """``CORVIN_HOME``, else THIS checkout's repo-marker home — via the sibling
+    ``paths`` module, never a dotted import that may land in a different
+    checkout (see :func:`_sibling_paths`)."""
+    return Path(_sibling_paths().corvin_home())
+
+
+def _guard_audit_chain(tenant_id: str, home: Path) -> Path:
+    """The chain the L34 guard's ``data_flow.*`` records go to.
+
+    Used to be composed by hand as ``<cfg dir>/forge/audit.jsonl``: a second
+    per-tenant layout next to the canonical chain, blind to the redirects
+    every other bridge writer honours. Now the same precedence as the bridge
+    audit writer (``audit.audit_path()``): ``VOICE_AUDIT_PATH`` (file) >
+    ``FORGE_ROOT/audit.jsonl`` (dir) > the canonical ``tenant_audit_chain``
+    layout of the sibling ``paths`` module, applied under ``home`` (the home
+    the tenant config was read from, so an explicit ``corvin_home`` keeps the
+    guard's records under that home).
+    """
+    redirect = os.environ.get("VOICE_AUDIT_PATH", "").strip()
+    if redirect:
+        return Path(redirect).expanduser()
+    forge_root = os.environ.get("FORGE_ROOT", "").strip()
+    if forge_root:
+        return Path(forge_root).expanduser() / "audit.jsonl"
+    mirror = _sibling_paths()
+    canonical = Path(mirror.tenant_audit_chain(tenant_id))
+    try:
+        rel = canonical.relative_to(Path(mirror.corvin_home()))
+    except ValueError:
+        return canonical
+    return home / rel
+
+
 def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) -> "DataFlowGuard | None":
     """Build an enforcing DataFlowGuard for a tenant, or None to fail-open.
 
@@ -857,15 +918,7 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
             return None
     home = corvin_home
     if home is None:
-        env = os.environ.get("CORVIN_HOME")
-        if env:
-            home = Path(os.path.expanduser(os.path.expandvars(env)))
-        else:
-            try:
-                from corvin_operator.forge.forge.paths import corvin_home as _ch  # type: ignore
-                home = _ch()
-            except Exception:  # noqa: BLE001
-                home = Path.home() / ".corvin"
+        home = _default_home()
     # Expand the explicitly-passed home too (callers like ACS may pass a raw
     # "~/.corvin"/"$HOME/.corvin"); without this the same tenant is enforced
     # on some spawn paths and not others.
@@ -877,7 +930,7 @@ def load_guard_for_tenant(tenant_id: str, *, corvin_home: Path | None = None) ->
         return None
     if not cfg_path.is_file():
         return None  # opt-in: no config → no enforcement (adapter parity)
-    audit_path = cfg_path.parent / "forge" / "audit.jsonl"
+    audit_path = _guard_audit_chain(tenant_id, home)
     try:
         import yaml  # type: ignore
         cfg = yaml.safe_load(cfg_path.read_text("utf-8"))

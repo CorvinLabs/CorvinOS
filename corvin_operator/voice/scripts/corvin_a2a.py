@@ -948,13 +948,13 @@ def _cmd_invite(args: argparse.Namespace) -> int:
     exp_str = ""
     if token.exp:
         import datetime
-        exp_str = f" · gültig bis {datetime.datetime.fromtimestamp(token.exp).strftime('%Y-%m-%d %H:%M')}"
+        exp_str = f" · valid until {datetime.datetime.fromtimestamp(token.exp).strftime('%Y-%m-%d %H:%M')}"
 
-    print(f"# Invite-Token ({('single-use, ' if token.su else '')}{'kein Ablauf' if not token.exp else f'läuft ab{exp_str}'}):")
+    print(f"# Invite-Token ({('single-use, ' if token.su else '')}{'no expiry' if not token.exp else f'expires{exp_str}'}):")
     print()
     print(token_str)
     print()
-    print("# Gegenstelle führt aus:")
+    print("# The peer runs:")
     print(f"#   corvin-a2a accept <token>")
 
     if args.qr:
@@ -975,7 +975,7 @@ def _cmd_invite(args: argparse.Namespace) -> int:
             img.save(out_path)
             print(f"# QR-Code gespeichert: {out_path}")
         except ImportError:
-            print("# (qrcode-Paket nicht installiert — ASCII-QR nicht verfügbar)", file=sys.stderr)
+            print("# (qrcode package not installed — ASCII QR unavailable)", file=sys.stderr)
 
     return 0
 
@@ -988,7 +988,7 @@ def _cmd_accept(args: argparse.Namespace) -> int:
     try:
         result = _inv.parse_invite(token_str)
     except _inv.InviteError as exc:
-        print(f"error: ungültiger Token: {exc}", file=sys.stderr)
+        print(f"error: invalid token: {exc}", file=sys.stderr)
         return 1
 
     # parse_invite returns a 3-tuple
@@ -1000,12 +1000,12 @@ def _cmd_accept(args: argparse.Namespace) -> int:
     if token.iid == local_iid:
         registry = _reg.InviteRegistry()
         if not _inv.verify_invite_sig(payload_bytes, sig_bytes):
-            print("error: Token-Signatur ungültig (HMAC-Mismatch)", file=sys.stderr)
+            print("error: token signature invalid (HMAC mismatch)", file=sys.stderr)
             return 1
 
     validation = _inv.validate_invite(token, registry=registry)
     if not validation.ok:
-        print(f"error: Token abgelehnt: {validation.reason}", file=sys.stderr)
+        print(f"error: token rejected: {validation.reason}", file=sys.stderr)
         return 1
     if token.iid != local_iid:
         # Same host gate as the console accept and every friendship import:
@@ -1020,15 +1020,15 @@ def _cmd_accept(args: argparse.Namespace) -> int:
     endpoint_path = _endpoints_dir() / f"{token.oid}.json"
     if (origin_path.exists() or endpoint_path.exists()) and not args.overwrite:
         print(
-            f"warn: {token.oid} existiert bereits. Nutze --overwrite zum Überschreiben.",
+            f"warn: {token.oid} already exists. Use --overwrite to replace it.",
             file=sys.stderr,
         )
         if not args.overwrite:
             return 1
 
     if args.dry_run:
-        print(f"[dry-run] Würde origin schreiben:   {origin_path}")
-        print(f"[dry-run] Würde endpoint schreiben: {endpoint_path}")
+        print(f"[dry-run] Would write origin:   {origin_path}")
+        print(f"[dry-run] Would write endpoint: {endpoint_path}")
         print(f"[dry-run] oid={token.oid}  url={token.url}  personas={token.pa}")
         return 0
 
@@ -1039,7 +1039,7 @@ def _cmd_accept(args: argparse.Namespace) -> int:
     if registry is not None:
         claim = registry.claim(token.ikey)
         if claim != "ok":
-            print(f"error: Token abgelehnt: {claim}", file=sys.stderr)
+            print(f"error: token rejected: {claim}", file=sys.stderr)
             return 1
 
     # Write files
@@ -1048,15 +1048,15 @@ def _cmd_accept(args: argparse.Namespace) -> int:
     _atomic_write(origin_path, origin_cfg)
     _atomic_write(endpoint_path, endpoint_cfg)
 
-    print(f"[OK] Verbindung zu {token.oid!r} hergestellt.")
+    print(f"[OK] Connection to {token.oid!r} established.")
     print(f"     URL:              {token.url}")
     print(f"     Personas:         {', '.join(token.pa)}")
     print(f"     spawn_worker:     {token.spawn_worker}")
     if token.exp:
         import datetime
-        print(f"     Läuft ab:         {datetime.datetime.fromtimestamp(token.exp).strftime('%Y-%m-%d %H:%M')}")
-    print(f"     Origin-Datei:     {origin_path}")
-    print(f"     Endpoint-Datei:   {endpoint_path}")
+        print(f"     Expires:          {datetime.datetime.fromtimestamp(token.exp).strftime('%Y-%m-%d %H:%M')}")
+    print(f"     Origin file:      {origin_path}")
+    print(f"     Endpoint file:    {endpoint_path}")
     print()
     print(f"     Test: corvin-a2a send {token.oid} \"ping\"")
 
@@ -1064,7 +1064,7 @@ def _cmd_accept(args: argparse.Namespace) -> int:
         # Generate a return invite so the issuer can accept our side.
         our_url = args.respond_url or ""
         if not our_url:
-            print("\nwarn: --respond-url fehlt — kein Rück-Token generiert.", file=sys.stderr)
+            print("\nwarn: --respond-url missing — no return token generated.", file=sys.stderr)
             return 0
         try:
             _ret_token, ret_str = _inv.generate_invite(
@@ -1074,10 +1074,10 @@ def _cmd_accept(args: argparse.Namespace) -> int:
                 ttl_seconds=args.respond_ttl,
                 allowed_personas=token.pa,
                 single_use=True,
-                label=f"Rück-Token für {token.oid}",
+                label=f"Return token for {token.oid}",
             )
         except _inv.InviteError as exc:
-            print(f"warn: Rück-Token-Generierung fehlgeschlagen: {exc}", file=sys.stderr)
+            print(f"warn: return-token generation failed: {exc}", file=sys.stderr)
             return 0
         _reg.InviteRegistry().create(_reg.InviteEntry(
             ikey=_ret_token.ikey,
@@ -1088,7 +1088,7 @@ def _cmd_accept(args: argparse.Namespace) -> int:
             su=_ret_token.su,
         ))
         print()
-        print("# Rück-Token für Gegenstelle (einmal einlösen):")
+        print("# Return token for the peer (redeem once):")
         print()
         print(ret_str)
 
@@ -1103,17 +1103,17 @@ def _cmd_list_invites(args: argparse.Namespace) -> int:
     if args.clean:
         removed = registry.cleanup()
         if removed:
-            print(f"Bereinigt: {removed} abgelaufene Einträge entfernt.")
+            print(f"Cleaned up: removed {removed} expired entries.")
     entries = registry.list_all()
     if not entries:
-        print("(keine Invites)")
+        print("(no invites)")
         return 0
     if getattr(args, "json", False):
         print(json.dumps([e.to_dict() for e in entries], indent=2))
         return 0
     import datetime
     for e in entries:
-        exp_str = datetime.datetime.fromtimestamp(e.exp).strftime("%Y-%m-%d %H:%M") if e.exp else "kein Ablauf"
+        exp_str = datetime.datetime.fromtimestamp(e.exp).strftime("%Y-%m-%d %H:%M") if e.exp else "no expiry"
         su_str = " [single-use]" if e.su else ""
         lbl_str = f" [{e.lbl}]" if e.lbl else ""
         print(f"{e.ikey}  {e.oid:<30s}  {e.status:<10s}  {exp_str}{su_str}{lbl_str}")
@@ -1130,12 +1130,12 @@ def _cmd_revoke_invite(args: argparse.Namespace) -> int:
     if len(ikey) != 16 or not all(c in "0123456789abcdef" for c in ikey.lower()):
         entry = registry.find_by_label(ikey)
         if entry is None:
-            print(f"error: kein Invite mit Label {ikey!r} gefunden", file=sys.stderr)
+            print(f"error: no invite with label {ikey!r} found", file=sys.stderr)
             return 1
         ikey = entry.ikey
     ok = registry.revoke(ikey)
     if not ok:
-        print(f"error: Invite {ikey!r} nicht gefunden", file=sys.stderr)
+        print(f"error: invite {ikey!r} not found", file=sys.stderr)
         return 1
     print(f"[OK] Invite {ikey} widerrufen.")
     return 0
@@ -1211,7 +1211,7 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
             try:
                 ttl = float(raw)
             except ValueError:
-                print(f"error: ungültiges TTL-Format: {args.ttl!r} (z.B. 7d, 24h, never)", file=sys.stderr)
+                print(f"error: invalid TTL format: {args.ttl!r} (e.g. 7d, 24h, never)", file=sys.stderr)
                 return 2
 
     personas: list[str] | None = None
@@ -1265,8 +1265,8 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
         return 0
 
     print()
-    print("WICHTIG: Dieser Token enthält ein kryptografisches Geheimnis.")
-    print("         Teile ihn wie ein Passwort — nur über verschlüsselte Kanäle!")
+    print("IMPORTANT: this token contains a cryptographic secret.")
+    print("           Share it like a password — over encrypted channels only!")
     print()
     print(token_str)
     print()
@@ -1274,15 +1274,15 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
     if token.url:
         print(f"# URL: {token.url}")
     else:
-        print("# URL: (nicht gesetzt — wird nach dem Import mit 'set-url' ergänzt)")
+        print("# URL: (not set — add it after import with 'set-url')")
     if token.expires:
         import datetime
-        print(f"# Gültig bis: {datetime.datetime.fromtimestamp(token.expires).strftime('%Y-%m-%d %H:%M')}")
+        print(f"# Valid until: {datetime.datetime.fromtimestamp(token.expires).strftime('%Y-%m-%d %H:%M')}")
     print()
-    print("# Gegenstelle führt aus:")
+    print("# The peer runs:")
     print("#   corvin-a2a import-token <token>")
     if not token.url:
-        print("#   corvin-a2a set-url <kid> <url-der-gegenstelle>")
+        print("#   corvin-a2a set-url <kid> <peer-url>")
 
     if args.qr:
         try:
@@ -1300,7 +1300,7 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
             qr.make_image().save(out_path)
             print(f"# QR-Code gespeichert: {out_path}")
         except ImportError:
-            print("# (qrcode-Paket nicht installiert — QR nicht verfügbar)", file=sys.stderr)
+            print("# (qrcode package not installed — QR unavailable)", file=sys.stderr)
 
     return 0
 
@@ -1311,7 +1311,7 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
     try:
         token = _friendship.parse_and_verify(token_str)
     except _friendship.FriendshipError as exc:
-        print(f"error: ungültiger Token: {exc}", file=sys.stderr)
+        print(f"error: invalid token: {exc}", file=sys.stderr)
         return 1
 
     # Override URL from --url flag
@@ -1326,7 +1326,7 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
     if (_friendship.load_pending_friendship(token.kid, pending_dir=_pending_friendships_dir()) is not None
             or (token.bind_pub is not None
                 and token.bind_pub == __import__("a2a_binding").local_bind_pub())):
-        print("error: das ist dein eigener Token — gib ihn dem anderen Agenten zum Import",
+        print("error: this is your own token — give it to the other agent to import",
               file=sys.stderr)
         return 1
 
@@ -1341,7 +1341,7 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
 
     if (origin_path.exists() or endpoint_path.exists()) and not args.overwrite:
         print(
-            f"warn: Verbindung {token.kid!r} existiert bereits. --overwrite verwenden.",
+            f"warn: connection {token.kid!r} already exists. Use --overwrite.",
             file=sys.stderr,
         )
         return 1
@@ -1349,8 +1349,8 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
     if args.dry_run:
         state = "ACTIVE" if token.url else "PENDING"
         print(f"[dry-run] kid={token.kid}  state={state}  url={token.url or '(leer)'}  label={token.issuer_name or token.label or '—'}")
-        print(f"[dry-run] Würde schreiben: {origin_path}")
-        print(f"[dry-run] Würde schreiben: {endpoint_path}")
+        print(f"[dry-run] Would write: {origin_path}")
+        print(f"[dry-run] Would write: {endpoint_path}")
         return 0
 
     previous: dict[Path, bytes | None] = {}
@@ -1371,7 +1371,7 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
     relay_decision = _friendship.adopt_token_relay(
         token.relay_url, endpoints_dir=_endpoints_dir(), exclude_kid=token.kid)
     if relay_decision in ("rejected", "kept_existing"):
-        print(f"warn: Relay des Tokens nicht übernommen ({relay_decision}).", file=sys.stderr)
+        print(f"warn: the token's relay was not adopted ({relay_decision}).", file=sys.stderr)
     if token.relay_url and _friendship.get_my_relay_url() == token.relay_url:
         _maybe_enable_relay_fallback(reason="enabled_for_pairing")
 
@@ -1412,8 +1412,8 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
                     "a2a.friendship.imported", "WARNING",
                     endpoint_id=token.kid, reason="peer_license_limit", source="cli",
                 )
-                print("error: die Lizenz des Peers erlaubt keine weitere A2A-Verbindung "
-                      "(a2a_peers_max) — nichts importiert", file=sys.stderr)
+                print("error: the peer's licence allows no further A2A connection "
+                      "(a2a_peers_max) — nothing imported", file=sys.stderr)
                 return 1
             peer_knows_us = bool(ack_result.get("ok"))
             peer_reports_reachable = bool(ack_result.get("reachable"))
@@ -1451,17 +1451,17 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
         endpoint_id=token.kid, reason=str(state).lower(), source="cli",
     )
 
-    print(f"[OK] Verbindung importiert (kid={token.kid}, state={state})")
+    print(f"[OK] Connection imported (kid={token.kid}, state={state})")
     _shown_name = token.issuer_name or token.label
     if _shown_name:
         print(f"     Label:   {_shown_name}")
     if token.url:
         print(f"     URL:     {token.url}")
     else:
-        print(f"     URL:     (noch nicht gesetzt)")
-        print(f"     → URL ergänzen: corvin-a2a set-url {token.kid} <peer-url>")
-    print(f"     Peer weiß von uns:       {'ja' if peer_knows_us else 'nein'}")
-    print(f"     Peer meldet uns erreichbar: {'ja' if peer_reports_reachable else 'nein'}")
+        print(f"     URL:     (not set yet)")
+        print(f"     → add the URL: corvin-a2a set-url {token.kid} <peer-url>")
+    print(f"     Peer knows us:              {'yes' if peer_knows_us else 'no'}")
+    print(f"     Peer reports us reachable:  {'yes' if peer_reports_reachable else 'no'}")
     print(f"     Origin:  {origin_path}")
     print(f"     Endpoint:{endpoint_path}")
     return 0
@@ -1480,7 +1480,7 @@ def _cmd_set_url(args: argparse.Namespace) -> int:
     except _friendship.FriendshipError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"[OK] Verbindung {kid!r} aktiviert (ACTIVE).")
+    print(f"[OK] Connection {kid!r} activated (ACTIVE).")
     print(f"     URL: {peer_url}")
     print(f"     Test: corvin-a2a send {kid} \"ping\"")
     return 0
@@ -1491,15 +1491,15 @@ def _cmd_my_url(args: argparse.Namespace) -> int:
     if args.url:
         new_url = args.url.strip().rstrip("/")
         _friendship.set_my_url(new_url)
-        print(f"[OK] Eigene URL gesetzt: {new_url}")
+        print(f"[OK] Own URL set: {new_url}")
         return 0
     current = _friendship.get_my_url()
     if current:
         print(current)
     else:
-        print("(keine eigene URL konfiguriert)")
-        print("Setzen: corvin-a2a my-url <url>")
-        print("   oder CORVIN_A2A_URL=<url> setzen")
+        print("(no own URL configured)")
+        print("Set it: corvin-a2a my-url <url>")
+        print("    or set CORVIN_A2A_URL=<url>")
     return 0
 
 
@@ -1510,7 +1510,7 @@ def _cmd_revoke_token(args: argparse.Namespace) -> int:
     the ack paths use, and revoke a still-unredeemed token too."""
     kid = args.kid
     if not _friendship.is_valid_kid(kid):
-        print(f"error: ungültige kid: {kid!r}", file=sys.stderr)
+        print(f"error: invalid kid: {kid!r}", file=sys.stderr)
         return 2
     origin_path = _origins_dir() / f"{kid}.json"
     endpoint_path = _endpoints_dir() / f"{kid}.json"
@@ -1531,15 +1531,15 @@ def _cmd_revoke_token(args: argparse.Namespace) -> int:
             pending_deleted = _friendship.delete_pending_friendship(kid, pending_dir=pending_dir)
             found = _is_friendship(origin_path) or _is_friendship(endpoint_path)
             if not found and not pending_deleted:
-                print(f"error: Friendship-Verbindung {kid!r} nicht gefunden", file=sys.stderr)
+                print(f"error: friendship connection {kid!r} not found", file=sys.stderr)
                 return 1
             origin_path.unlink(missing_ok=True)
             endpoint_path.unlink(missing_ok=True)
     except _friendship.FriendshipLockBusy:
-        print("error: Konfiguration gerade gesperrt — bitte erneut versuchen", file=sys.stderr)
+        print("error: configuration is locked right now — please try again", file=sys.stderr)
         return 1
-    print(f"[OK] Verbindung {kid!r} gelöscht."
-          + (" Peer benachrichtigt." if notified else ""))
+    print(f"[OK] Connection {kid!r} deleted."
+          + (" Peer notified." if notified else ""))
     return 0
 
 

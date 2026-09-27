@@ -1,5 +1,8 @@
 """Stream 1 Phase 3: A/B Testing Framework (Days 5–10 of Week 3).
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Only
+tests import CanaryManager.
+
 Canary deployment logic for learned routing weights:
 - 10% canary (learned) vs 90% control (baseline)
 - Measure accuracy improvement
@@ -170,13 +173,11 @@ class CanaryManager:
             created_at=datetime.utcnow().isoformat() + "Z",
         )
 
-        # Persist config
-        self._save_config(new_config)
-        self.config = new_config
-
-        # Emit audit event
+        # Audit FIRST: the event must commit before the config changes, so no
+        # canary split is ever live without its record (EventStore.write_event
+        # is itself audit-first on the core chain).
         config_event = LearningEvent.create(
-            event_type=EventType.CONFIG,
+            event_type=EventType.CONFIG_UPDATED,
             skill_id=self.skill_id,
             tenant_id=self.tenant_id,
             signal={
@@ -193,6 +194,9 @@ class CanaryManager:
         except (RuntimeError, IOError) as e:
             logger.error(f"Failed to write canary start event: {e}")
             raise
+
+        self._save_config(new_config)
+        self.config = new_config
 
         logger.info(f"Canary started: stage={stage.value}, percentage={canary_pct:.1%}")
         return new_config
@@ -370,13 +374,10 @@ class CanaryManager:
             promotion_reason=f"Promoted from {old_stage.value}",
         )
 
-        # Persist config
-        self._save_config(new_config)
-        self.config = new_config
-
-        # Emit audit event (HIGH #7: use old_stage captured BEFORE config update)
+        # Audit FIRST, then persist (see start_canary).
+        # HIGH #7: use old_stage captured BEFORE config update
         promotion_event = LearningEvent.create(
-            event_type=EventType.CONFIG,
+            event_type=EventType.CONFIG_UPDATED,
             skill_id=self.skill_id,
             tenant_id=self.tenant_id,
             signal={
@@ -395,8 +396,11 @@ class CanaryManager:
             logger.error(f"Failed to write promotion event: {e}")
             raise
 
+        self._save_config(new_config)
+        self.config = new_config
+
         logger.info(
-            f"Canary promoted: {self.config.stage.value} → {next_stage.value}, "
+            f"Canary promoted: {old_stage.value} → {next_stage.value}, "
             f"percentage={canary_pct:.1%}"
         )
 

@@ -24,9 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from core.paths import corvin_home
-from corvin_operator.skill_forge.automation.cron_trigger_poller import (
-    CronTriggerPoller,
-)
+from .cron_trigger_poller import CronTriggerPoller  # dashed tree: relative
 
 logger = logging.getLogger(__name__)
 

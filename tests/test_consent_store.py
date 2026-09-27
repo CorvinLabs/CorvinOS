@@ -138,14 +138,30 @@ class TestConsentTTLAndExpiry:
 
     def test_expired_consent_not_active(self, store):
         """Test that expired consent is not considered active"""
-        record = store.grant_consent(user_id="user1", scope="skill_generation", ttl_days=0)
+        # ~86 ms window (a zero/negative TTL is refused, see below)
+        store.grant_consent(user_id="user1", scope="skill_generation", ttl_days=1e-6)
 
-        # Immediately check (should be expired or close)
         import time
-        time.sleep(0.1)
+        time.sleep(0.2)
 
         has_consent = store.get_consent(user_id="user1", scope="skill_generation")
         assert has_consent is False
+
+
+    def test_non_positive_ttl_refused(self, store):
+        from core.compliance.consent_store import ConsentStoreError
+        for bad in (0, -1, float("nan"), "x"):
+            with pytest.raises(ConsentStoreError):
+                store.grant_consent(user_id="user1", scope="skill_generation", ttl_days=bad)
+        assert store.get_consent(user_id="user1", scope="skill_generation") is False
+
+    def test_ttl_is_capped(self, store):
+        from datetime import datetime
+        from core.compliance.consent_store import MAX_TTL_DAYS
+        rec = store.grant_consent(user_id="user1", scope="skill_generation", ttl_days=10_000)
+        window = datetime.fromisoformat(rec.expires_at) - datetime.fromisoformat(rec.granted_at)
+        assert window.days == MAX_TTL_DAYS
+        assert window.total_seconds() <= MAX_TTL_DAYS * 86400
 
 
 class TestTenantIsolation:
@@ -332,3 +348,35 @@ class TestConsentImmutability:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestAdversarialReview20260927:
+    """Regressions: is_active NameError, per-tenant cache ignoring
+    CORVIN_HOME, tenant traversal (adversarial review 2026-09-27)."""
+
+    def test_is_active_reflects_state(self, tmp_path):
+        store = ConsentStore(tenant_id="tenant1", corvin_home=tmp_path)
+        rec = store.grant_consent(user_id="u", scope="skill_generation")
+        assert rec.is_active() is True          # raised NameError before
+        revoked = store.revoke_consent(user_id="u", scope="skill_generation")
+        assert revoked.is_active() is False
+
+    def test_cache_follows_corvin_home(self, tmp_path, monkeypatch):
+        from core.compliance import consent_store as cs
+
+        a, b = tmp_path / "a", tmp_path / "b"
+        monkeypatch.setenv("CORVIN_HOME", str(a))
+        cs.get_consent_store("tenant1").grant_consent(user_id="u", scope="skill_generation")
+        monkeypatch.setenv("CORVIN_HOME", str(b))
+        store_b = cs.get_consent_store("tenant1")
+        assert store_b.db_path.is_relative_to(b)
+        assert store_b.get_consent(user_id="u", scope="skill_generation") is False
+        # explicit root is honoured too, even after the tenant was cached
+        assert cs.get_consent_store("tenant1", corvin_home=a).get_consent(
+            user_id="u", scope="skill_generation") is True
+
+    @pytest.mark.parametrize("bad", ["../escape", "a/b", "UPPER", ".."])
+    def test_traversal_tenant_refused(self, tmp_path, bad):
+        with pytest.raises(TenantIsolationError):
+            ConsentStore(tenant_id=bad, corvin_home=tmp_path)
+        assert not (tmp_path / "escape").exists()

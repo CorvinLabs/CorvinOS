@@ -97,8 +97,8 @@ class TestL5EntryPointContract:
             complexity=7, task_type="analysis", user_context={"user_id": "test_user"}
         )
 
-        # Verify result has expected fields
-        assert "engine" in result
+        # Verify result has expected fields (the Skill's output schema)
+        assert result["decision"] in ("native", "acs", "tde")
         assert "confidence" in result
         assert "reasoning" in result
         assert "skill_executed" in result
@@ -127,13 +127,12 @@ class TestL5EntryPointContract:
         )
         assert high_result["skill_executed"] is True
 
-        # Verify different engines were chosen (heuristic-based routing)
-        # Low complexity should prefer cheaper engine
-        low_engine = low_result["engine"]
-        high_engine = high_result["engine"]
-        # This is implementation-dependent, but at minimum both should be valid
-        assert low_engine in ["claude-haiku-4", "claude-sonnet-4", "claude-opus-5"]
-        assert high_engine in ["claude-haiku-4", "claude-sonnet-4", "claude-opus-5"]
+        # Both answers use the Skill's engine vocabulary; complexity alone
+        # never delegates (only /delegate and big-data do), so both stay native
+        # but carry the complexity-specific reasoning.
+        assert low_result["decision"] == "native"
+        assert high_result["decision"] == "native"
+        assert low_result["reasoning"] != high_result["reasoning"]
 
     def test_l5_fallback_on_skill_timeout(self):
         """PROOF: Fallback routing works when Skill times out."""
@@ -158,10 +157,11 @@ class TestL5EntryPointContract:
         assert result["error"] is not None
         assert "timeout" in result["error"].lower()
 
-        # Verify fallback still provides valid routing
-        assert "engine" in result
-        assert "confidence" in result
-        assert result["engine"] in ["claude-haiku-4", "claude-sonnet-4", "claude-opus-5"]
+        # Fallback answers in the SAME shape/vocabulary as the Skill: the
+        # native degrade floor (it used to return a model id under "engine").
+        assert result["decision"] == "native"
+        assert "engine" not in result
+        assert result["confidence"] == 0.5
 
     def test_l5_tenant_isolation(self):
         """PROOF: Tenant isolation enforced (GDPR Art. 5, 6)."""

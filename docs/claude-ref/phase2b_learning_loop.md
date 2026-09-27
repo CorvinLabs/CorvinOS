@@ -1,6 +1,9 @@
 # Phase 2b Learning Loop Optimization
 
 **Status:** Phase 2b (in development)  
+**Status note (2026-09-27, adversarial review):** `convergence_detector.py` and
+`phase2b_integration.py` carry "NOT WIRED: no production caller" — only tests
+construct them, and nothing routes on the 0.75 switch below.  
 **ADRs:** 0314 (learning events), 0532 (skills), 0722 (loss signals)  
 **Files:**
 - `core/learning/phase2b_optimizer.py` (confidence monitoring, parameter optimization)

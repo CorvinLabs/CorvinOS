@@ -262,6 +262,49 @@ LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_RETRY_INTERVAL_SECONDS = 0.02
 
 
+def _require_forge_create_licence() -> None:
+    """ADR-0701 G2 licence gate for skill authoring — FAIL-CLOSED.
+
+    Raises ``ValueError("license_required: ...")`` unless the licensing API
+    answers ``Decision.ALLOW`` for ``forge.create``.
+
+    Two defects this replaces (adversarial review 2026-09-27):
+    * an ``ImportError`` of the licensing module fell through to ALLOW, so a
+      process that could not load the gate could author skills freely;
+    * the check read ``decision.allowed`` — the tier LIMIT, which is ``None``
+      for the unlimited ``member`` tier — as a boolean, so every paying
+      member was refused (via a ``LicenseDenied`` constructed with the wrong
+      arity, i.e. a ``TypeError``).
+    The verdict is ``decision.decision``; the limit is not a verdict.
+    """
+    try:
+        from corvin_operator.license.capability_api import (
+            Decision, LicenseDenied, require_capability,
+        )
+    except ImportError as exc:
+        raise ValueError(
+            "license_required: licensing module unavailable — skill "
+            "authoring is refused (fail-closed)"
+        ) from exc
+    # The registry has no session context; the tenant is the process's.
+    tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+    try:
+        decision = require_capability(
+            "forge.create",
+            requested=1,
+            tenant_id=tenant_id,
+            entry_point="skill-forge:create",
+        )
+    except LicenseDenied as exc:
+        raise ValueError(f"license_required: {exc}") from exc
+    if decision is None or decision.decision is not Decision.ALLOW:
+        verdict = getattr(getattr(decision, "decision", None), "value", "none")
+        reason = getattr(decision, "reason", None) or "not_allowed"
+        raise ValueError(
+            f"license_required: forge.create {verdict} ({reason})"
+        )
+
+
 class SkillRegistryLockBusy(TimeoutError):
     """The SkillForge registry lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
 
@@ -753,25 +796,7 @@ class SkillRegistry:
         self._namespace_gate(name, operation="update" if overwrite else "create")
 
         # ADR-0701: License gate (G2) — require_capability("forge.create")
-        try:
-            from corvin_operator.license.capability_api import (
-                require_capability, LicenseDenied
-            )
-            # Default to "_default" tenant for Skill-Forge (registry doesn't have session context)
-            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
-            decision = require_capability(
-                "forge.create",
-                requested=1,
-                tenant_id=tenant_id,
-                entry_point="skill-forge:create"
-            )
-            if not decision.allowed:
-                raise LicenseDenied(f"forge.create denied: {decision.reason or 'member-only feature'}")
-        except ImportError:
-            # Licensing unavailable (e.g. in tests) — default to allow
-            pass
-        except LicenseDenied as e:
-            raise ValueError(f"license_required: {e}") from e
+        _require_forge_create_licence()
 
         # Linter — fail-closed: violations block the write
         result = lint(body_md)

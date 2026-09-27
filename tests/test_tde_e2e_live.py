@@ -47,13 +47,31 @@ STATEMENT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _temp_cwd(tmp_path, monkeypatch):
+    """Real `claude -p` workers write relative to cwd — never the repo."""
+    work = tmp_path / "cwd"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+
 @pytest.fixture()
 def audit_sandbox(tmp_path, monkeypatch):
-    """Route the hash chain to a sandbox and reset the TDE audit resolver."""
-    monkeypatch.setenv("FORGE_ROOT", str(tmp_path))
+    """The sandboxed hash chain this test's tde.* events land on.
+
+    Yields the chain FILE. It used to set FORGE_ROOT and read
+    ``tmp_path/audit.jsonl`` — but the repo conftest's autouse
+    VOICE_AUDIT_PATH (under the per-test CORVIN_HOME) takes precedence over
+    FORGE_ROOT in the writer, so the events were written elsewhere and the
+    test failed "tde.* events were not persisted" on a working chain.
+    """
+    import os as _os
+
+    chain = Path(_os.environ["VOICE_AUDIT_PATH"])
+    assert str(chain).startswith(str(tmp_path)), chain  # never the live chain
     from tde import tde_audit
     tde_audit.reset_for_tests()
-    yield tmp_path
+    yield chain
     tde_audit.reset_for_tests()
 
 
@@ -106,7 +124,7 @@ def test_live_tde_delegation_with_audit(audit_sandbox):
         assert r.output
 
     # Audit: tde.* events on a verifying hash chain
-    audit_file = audit_sandbox / "audit.jsonl"
+    audit_file = audit_sandbox
     assert audit_file.exists(), "tde.* events were not persisted"
     events = [json.loads(l) for l in audit_file.read_text().splitlines() if l.strip()]
     etypes = [e.get("event_type", "") for e in events]

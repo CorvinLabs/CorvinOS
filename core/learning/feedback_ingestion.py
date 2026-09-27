@@ -1,10 +1,12 @@
 """Phase 2a.1: Learning Feedback Ingestion — User feedback API for closed-loop learning.
 
 Compliance: GDPR Art. 6 (feedback consent), Art. 30 (audit trail), Art. 32 (data security)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from enum import Enum
 import logging
@@ -70,8 +72,11 @@ class SkillFeedback:
                     "Set CORVIN_FEEDBACK_SECRET env var or pass secret explicitly."
                 )
 
-        # Signature covers: skill_id + task_id + feedback_type + timestamp (not reason for stability)
-        message = f"{self.skill_id}:{self.task_id}:{self.feedback_type.value}:{self.timestamp}"
+        # Signature covers: tenant_id + skill_id + task_id + feedback_type +
+        # timestamp (not reason, for stability). tenant_id is bound so a record
+        # signed for one tenant cannot be replayed into another tenant's loop.
+        message = (f"{self.tenant_id}:{self.skill_id}:{self.task_id}:"
+                   f"{self.feedback_type.value}:{self.timestamp}")
         sig = hmac.new(
             secret.encode("utf-8"),
             message.encode("utf-8"),
@@ -184,7 +189,12 @@ class FeedbackIngestionValidator:
         """Check if feedback timestamp is within allowed window."""
         try:
             feedback_time = datetime.fromisoformat(timestamp_iso.replace('Z', '+00:00'))
-            now = datetime.utcnow()
+            if feedback_time.tzinfo is None:  # naive = UTC by this module's convention
+                feedback_time = feedback_time.replace(tzinfo=timezone.utc)
+            # Aware "now": subtracting an aware timestamp from a naive utcnow()
+            # raised TypeError, which the except below turned into "too old" —
+            # every feedback record was rejected.
+            now = datetime.now(timezone.utc)
             delta = (now - feedback_time).total_seconds()
             return 0 <= delta <= (FeedbackIngestionValidator.FEEDBACK_WINDOW_MINUTES * 60)
         except Exception:
@@ -197,8 +207,15 @@ class FeedbackIngestionValidator:
 
     def _task_exists_in_audit(self, task_id: str, tenant_id: str) -> bool:
         """Verify task executed (via event store lookup)."""
-        # Simplified check; full implementation queries EventStore.get_events()
-        return True  # Placeholder; EventStore integration in Phase 2a.3
+        # Fail-closed: a task we cannot find is a task we cannot vouch for.
+        # (This used to be a hard-coded ``return True`` placeholder.)
+        lookup = getattr(self.event_store, "task_exists", None)
+        if not callable(lookup):
+            return False
+        try:
+            return bool(lookup(task_id, tenant_id))
+        except Exception:  # noqa: BLE001 — lookup failure = not verified
+            return False
 
 
 class FeedbackIngestionBackend:

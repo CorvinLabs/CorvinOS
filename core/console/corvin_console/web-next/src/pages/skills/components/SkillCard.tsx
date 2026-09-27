@@ -12,8 +12,9 @@ interface SkillCardProps {
     skill_id: string;
     name: string;
     version: string;
-    author: string;
+    author?: string;
     description?: string;
+    boot_layer?: string;
     status?: string;
     installed_at?: string;
     category?: string;
@@ -71,9 +72,16 @@ export function SkillCard({
 
       {/* Meta info */}
       <div className="space-y-1 text-xs text-muted-foreground">
-        <p>
-          <span className="font-medium">Author:</span> {skill.author}
-        </p>
+        {skill.author && (
+          <p>
+            <span className="font-medium">Author:</span> {skill.author}
+          </p>
+        )}
+        {skill.boot_layer && (
+          <p>
+            <span className="font-medium">Boot layer:</span> {skill.boot_layer}
+          </p>
+        )}
         {skill.category && (
           <p>
             <span className="font-medium">Category:</span>{' '}
@@ -89,7 +97,7 @@ export function SkillCard({
           <p>
             <span className="font-medium">Status:</span>{' '}
             <span
-              className={skill.status === 'active' ? 'text-green-600' : 'text-amber-600'}
+              className={skill.status === 'active' || skill.status === 'verified' ? 'text-green-600' : 'text-amber-600'}
             >
               {skill.status}
             </span>

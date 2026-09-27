@@ -32,11 +32,14 @@ TENANT = "_default"
 
 
 def _claude_turn(prompt: str) -> tuple[int, str]:
+    import tempfile
+
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
-    proc = subprocess.run(
-        ["claude", "-p", prompt, "--model", "haiku"],
-        capture_output=True, text=True, timeout=180, env=env,
-    )
+    with tempfile.TemporaryDirectory() as work:  # never run a real turn in the repo
+        proc = subprocess.run(
+            ["claude", "-p", prompt, "--model", "haiku"],
+            capture_output=True, text=True, timeout=180, env=env, cwd=work,
+        )
     return proc.returncode, proc.stdout.strip()
 
 

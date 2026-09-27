@@ -8,6 +8,7 @@ All tests are pure-Python; no forge / claude / docker dependencies.
 """
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -664,5 +665,153 @@ class TestAdr2087LocalEnginesRemoved(unittest.TestCase):
         self.assertIn("engine_compliance", str(cm2.exception))
 
 
+class TestGuardAuditChainResolution(unittest.TestCase):
+    """2026-09-27: the loader composed ``<cfg dir>/forge/audit.jsonl`` by hand and
+    ignored VOICE_AUDIT_PATH — a test process wrote data_flow.approved records
+    into the LIVE chain. The chain now comes from the redirect or the canonical
+    ``paths.tenant_audit_chain`` layout."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = Path(tempfile.mkdtemp(prefix="dc-chain-test-"))
+        self._saved = {k: os.environ.get(k)
+                       for k in ("VOICE_AUDIT_PATH", "FORGE_ROOT", "CORVIN_HOME")}
+        os.environ.pop("FORGE_ROOT", None)
+
+    def tearDown(self):
+        import shutil
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_voice_audit_path_redirect_is_honoured(self):
+        from data_classification import _guard_audit_chain
+        target = self._tmp / "redirect" / "audit.jsonl"
+        os.environ["VOICE_AUDIT_PATH"] = str(target)
+        self.assertEqual(_guard_audit_chain("_default", self._tmp / "elsewhere"), target)
+
+    def test_explicit_home_gets_the_canonical_tenant_layout(self):
+        from data_classification import _guard_audit_chain
+        os.environ.pop("VOICE_AUDIT_PATH", None)
+        os.environ["CORVIN_HOME"] = str(self._tmp / "process-home")
+        home = self._tmp / "cfg-home"
+        self.assertEqual(
+            _guard_audit_chain("_default", home),
+            home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl",
+        )
+
+    def test_guard_records_land_in_the_redirected_chain(self):
+        from data_classification import DataClassification, load_guard_for_tenant
+        home = self._tmp / "home"
+        d = home / "tenants" / "_default" / "global"
+        d.mkdir(parents=True)
+        (d / "tenant.corvin.yaml").write_text(
+            "spec:\n  data_classification:\n    matrix:\n      INTERNAL: [local]\n")
+        target = self._tmp / "redirect" / "audit.jsonl"
+        os.environ["VOICE_AUDIT_PATH"] = str(target)
+        guard = load_guard_for_tenant("_default", corvin_home=home)
+        guard.validate(classification=DataClassification.INTERNAL, engine_id="hermes")
+        self.assertTrue(target.exists())
+        self.assertFalse((d / "forge" / "audit.jsonl").exists())
+
+    def test_forge_root_redirect_matches_the_bridge_audit_writer(self):
+        """Same precedence as ``audit.audit_path()``: VOICE_AUDIT_PATH >
+        FORGE_ROOT/audit.jsonl > the canonical tenant chain."""
+        from data_classification import _guard_audit_chain
+        os.environ.pop("VOICE_AUDIT_PATH", None)
+        os.environ["FORGE_ROOT"] = str(self._tmp / "fr")
+        self.assertEqual(_guard_audit_chain("_default", self._tmp / "h"),
+                         self._tmp / "fr" / "audit.jsonl")
+        os.environ["VOICE_AUDIT_PATH"] = str(self._tmp / "v.jsonl")
+        self.assertEqual(_guard_audit_chain("_default", self._tmp / "h"),
+                         self._tmp / "v.jsonl")
+
+
+class TestGuardHomeNotFromAnotherCheckout(unittest.TestCase):
+    """2026-09-27 split brain: with the live venv's editable ``.pth`` on
+    ``sys.path``, ``corvin_operator.forge.forge.paths`` resolved into the LIVE
+    checkout, whose repo-marker home is the live install. The guard (and the
+    spawn-gate cache key) must resolve its home — and with it the chain — in
+    the SAME checkout as data_classification.py."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = Path(tempfile.mkdtemp(prefix="dc-split-brain-"))
+        self._saved_env = {k: os.environ.get(k) for k in
+                           ("CORVIN_HOME", "VOICE_AUDIT_PATH", "FORGE_ROOT")}
+        for k in self._saved_env:
+            os.environ.pop(k, None)
+        self._saved_path = list(sys.path)
+        self._saved_mods = {k: v for k, v in sys.modules.items()
+                            if k == "corvin_operator" or k.startswith("corvin_operator.")}
+        for k in self._saved_mods:
+            del sys.modules[k]
+        # A fake second checkout whose forge paths name its own home, holding a
+        # tenant config that must never be read.
+        other = self._tmp / "other-checkout"
+        pkg = other / "corvin_operator" / "forge" / "forge"
+        pkg.mkdir(parents=True)
+        for d in (other / "corvin_operator", other / "corvin_operator" / "forge", pkg):
+            (d / "__init__.py").write_text("")
+        self._other_home = other / ".corvin"
+        (pkg / "paths.py").write_text(
+            "from pathlib import Path\n"
+            f"def corvin_home():\n    return Path({str(self._other_home)!r})\n")
+        cfg = self._other_home / "tenants" / "zz_split_probe" / "global"
+        cfg.mkdir(parents=True)
+        (cfg / "tenant.corvin.yaml").write_text("spec: {}\n")
+        sys.path.insert(0, str(other))
+
+    def tearDown(self):
+        import shutil
+        sys.path[:] = self._saved_path
+        for k in [k for k in sys.modules
+                  if k == "corvin_operator" or k.startswith("corvin_operator.")]:
+            del sys.modules[k]
+        sys.modules.update(self._saved_mods)
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _own_repo_home(self) -> Path:
+        here = Path(__file__).resolve()
+        for parent in here.parents:
+            if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+                return parent / ".corvin"
+        return Path.home() / ".corvin"
+
+    def test_the_fake_checkout_is_what_a_dotted_import_would_see(self):
+        """Positive control: the fake checkout really shadows the dotted name."""
+        from corvin_operator.forge.forge.paths import corvin_home
+        self.assertEqual(corvin_home(), self._other_home)
+
+    def test_guard_home_and_chain_stay_in_this_checkout(self):
+        import data_classification as dc
+        home = dc._default_home()
+        self.assertEqual(home, self._own_repo_home())
+        chain = dc._guard_audit_chain("_default", home)
+        self.assertEqual(chain, home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl")
+        self.assertNotIn(str(self._tmp), str(chain))
+
+    def test_guard_does_not_load_the_other_checkouts_tenant_config(self):
+        import data_classification as dc
+        if (self._own_repo_home() / "tenants" / "zz_split_probe").exists():
+            self.skipTest("probe tenant unexpectedly exists in this checkout")
+        self.assertIsNone(dc.load_guard_for_tenant("zz_split_probe"))
+
+    def test_spawn_gates_home_stays_in_this_checkout(self):
+        try:
+            import spawn_gates
+        except Exception as exc:  # noqa: BLE001
+            self.skipTest(f"spawn_gates not importable standalone: {exc!r}")
+        self.assertEqual(spawn_gates._resolve_corvin_home(None), self._own_repo_home())
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

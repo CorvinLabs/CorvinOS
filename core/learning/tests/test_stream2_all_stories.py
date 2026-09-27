@@ -161,10 +161,17 @@ class TestABTestFramework:
         for _ in range(95):
             self.ab.record_result(test_id, "B", success=True)
 
+        # A test completes only when BOTH variants reached the sample size.
         status = self.ab.get_test_status(test_id)
-        assert status["status"] == "completed"
+        assert status["status"] == "running"
         assert status["progress_a"] == "100/100"
         assert status["progress_b"] == "95/100"
+
+        for _ in range(5):
+            self.ab.record_result(test_id, "B", success=True)
+        status = self.ab.get_test_status(test_id)
+        assert status["status"] == "completed"
+        assert status["progress_b"] == "100/100"
 
     def test_winner_determination(self):
         """Test determining test winner (B > A by 5%)."""

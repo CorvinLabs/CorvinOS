@@ -14,6 +14,20 @@ from .screenshot_capturer import ScreenshotCapturerWorker, ScreenshotResult
 from .video_assembler import VideoAssemblerWorker, VideoResult
 from .youtube_uploader import YouTubeUploaderWorker, UploadResult
 
+# Phase 6b generic workers (formerly the shadowed ``video_producer/workers.py``).
+# NOT IMPLEMENTED — each fails closed with a ``not_implemented:`` error.
+from .phase6b import (
+    NOT_IMPLEMENTED,
+    WORKERS,
+    BaseWorker,
+    FFmpegWorker,
+    ScreenshotWorker,
+    TTSWorker,
+    WorkerResult,
+    YouTubeWorker,
+    get_worker,
+)
+
 __all__ = [
     "AssetAnalyzerWorker",
     "AnalysisStatus",
@@ -26,4 +40,13 @@ __all__ = [
     "VideoResult",
     "YouTubeUploaderWorker",
     "UploadResult",
+    "NOT_IMPLEMENTED",
+    "WORKERS",
+    "BaseWorker",
+    "FFmpegWorker",
+    "ScreenshotWorker",
+    "TTSWorker",
+    "WorkerResult",
+    "YouTubeWorker",
+    "get_worker",
 ]

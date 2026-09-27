@@ -51,13 +51,15 @@ service.decide(decision="approve", actor="reviewer")
 
 [future: operator requests rollback to version M]
   ↓
-rollback_to_version(target_version=M, actor="admin")
-  ├─ Query snapshot-index for version=M → snapshot_ts
-  ├─ Fetch events WHERE ts <= snapshot_ts
-  ├─ Reconstruct state (apply deltas in order)
-  ├─ UPDATE items table
-  └─ EMIT chain_event("task_item.rollback_executed")
-  ↓ [approval_state, status, other fields rolled back]
+rollback_to_version(target_version=M, actor="admin")   # NOT WIRED (2026-09-27)
+  ├─ One transaction (service._txn, tenant lock)
+  ├─ Invert the [old, new] deltas of the version bumps after M, newest first
+  │    refused (success=False) if the range holds a delete/restore, an approval
+  │    decision, a kind/parent change, or if the events do not account for every
+  │    version bump (e.g. a cascade) — the state is exact or not restored at all
+  ├─ EMIT chain_event("task_item.rollback_executed")   ← audit FIRST
+  └─ UPDATE items to the restored values as version N+1 (forward-only; never
+     re-issues version M, so a stale client gets a 409)
 ```
 
 ---
@@ -117,13 +119,12 @@ async def take_snapshot(tenant_id, item_id, version) → snapshot_ts:
     # Return timestamp for temporal queries
 
 async def rollback_to_version(tenant_id, item_id, target_version, actor) → RollbackResult:
-    """Rollback task to previous version via temporal reconstruction."""
-    # 1. Get snapshot_ts from snapshot-index
-    # 2. Query events WHERE ts <= snapshot_ts ORDER BY ts
-    # 3. Reconstruct state by applying deltas in order
-    # 4. UPDATE items table
-    # 5. EMIT chain_event("task_item.rollback_executed")
-    # 6. Return RollbackResult(success, from_version, to_version)
+    """Restore the field values of target_version as a NEW version (NOT WIRED)."""
+    # 1. In service._txn: fetch item, refuse deleted / stale expected_version
+    # 2. Invert version-bump deltas newest-first; refuse non-invertible ranges
+    # 3. EMIT chain_event("task_item.rollback_executed")  (audit first)
+    # 4. UPDATE items ... version = current + 1 (optimistic check)
+    # 5. Return RollbackResult(success, from_version, to_version)
 
 async def list_versions(tenant_id, item_id, limit=50) → list[snapshot]:
     """List version snapshots for operator UI."""

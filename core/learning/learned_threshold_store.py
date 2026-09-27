@@ -346,9 +346,11 @@ class LearnedThresholdStore:
 
             # Parse thresholds
             thresholds = []
-            for item in data.get("thresholds", []):
+            for item in self._entries(data.get("thresholds")):
                 try:
                     stored = StoredThreshold.from_dict(item)
+                    if stored.tenant_id != self.tenant_id:
+                        raise ValueError("entry of another tenant")
                     thresholds.append(stored)
                 except Exception as e:
                     logger.warning(f"Failed to parse threshold entry: {e}, skipping")
@@ -389,6 +391,18 @@ class LearnedThresholdStore:
     # ── Private helpers ────────────────────────────────────────────────────
 
     @staticmethod
+    def _entries(raw: Any) -> List[Any]:
+        """The on-disk file stores ``thresholds`` as a ``{key: entry}`` map;
+        ``export_json`` emits a list. Accept both. Iterating the map directly
+        yielded its KEYS, every entry failed to parse, and every learned
+        threshold was silently lost on the next process start."""
+        if isinstance(raw, dict):
+            return list(raw.values())
+        if isinstance(raw, list):
+            return raw
+        return []
+
+    @staticmethod
     def _make_key(task_type: str, subsystem: str) -> str:
         """Make cache key from task_type + subsystem."""
         return f"{task_type}:{subsystem}"
@@ -416,7 +430,7 @@ class LearnedThresholdStore:
                 logger.warning(f"Unknown store version: {data.get('version')}")
                 return
 
-            for item in data.get("thresholds", []):
+            for item in self._entries(data.get("thresholds")):
                 try:
                     stored = StoredThreshold.from_dict(item)
                     if stored.tenant_id == self.tenant_id:

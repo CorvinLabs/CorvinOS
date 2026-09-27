@@ -2,11 +2,14 @@
  * UploadTab — Staged Plugin Management
  *
  * Lists pending uploads, shows validation status, approve/reject.
- * Polls GET /v1/skills/uploads every 2 seconds.
+ * Polls GET /v1/console/plugin-uploads (routes/plugin_upload.py) with backoff.
+ * Approve/reject are POSTs that carry X-CSRF-Token via lib/csrf-fetch.ts.
+ * (These used to call /v1/skills/uploads*, served by no router.)
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, AlertCircle, Trash2, Upload } from 'lucide-react';
 import { ConsolePluginUploadModal } from '../../../components/ConsolePluginUploadModal';
+import { PLUGIN_UPLOADS, pluginUploadActionPath } from '../endpoints';
 
 interface StagedUpload {
   upload_id: string;
@@ -14,7 +17,7 @@ interface StagedUpload {
   file_size: number;
   upload_timestamp: string;
   status: 'pending_approval' | 'approved' | 'rejected';
-  validation_errors: string[];
+  validation_errors?: string[];
 }
 
 export const UploadTab: React.FC = () => {
@@ -25,7 +28,7 @@ export const UploadTab: React.FC = () => {
 
   const fetchUploads = useCallback(async (): Promise<void> => {
     try {
-      const response = await fetch('/v1/skills/uploads');
+      const response = await fetch(PLUGIN_UPLOADS);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       setUploads(data.uploads || []);
@@ -40,7 +43,7 @@ export const UploadTab: React.FC = () => {
     const controller = new AbortController();
     let backoffMs = 2000;
     const maxBackoffMs = 30000;
-    let timeoutId: NodeJS.Timeout | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     const scheduleNextFetch = (delayMs: number): void => {
       if (controller.signal.aborted) return;
@@ -49,16 +52,20 @@ export const UploadTab: React.FC = () => {
 
     const fetchUploadsWithBackoff = async (): Promise<void> => {
       try {
-        const response = await fetch('/v1/skills/uploads', {
+        const response = await fetch(PLUGIN_UPLOADS, {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         setUploads(data.uploads || []);
+        // The mount load goes through THIS path, not fetchUploads — without
+        // clearing it here the tab showed "Loading uploads…" forever.
+        setLoading(false);
         backoffMs = 2000; // reset on success
         scheduleNextFetch(backoffMs);
       } catch (err) {
         if (err instanceof Error && err.name !== 'AbortError') {
+          setLoading(false);
           backoffMs = Math.min(backoffMs * 1.5, maxBackoffMs);
           console.warn(`Fetch failed, backing off to ${backoffMs}ms:`, err);
           scheduleNextFetch(backoffMs);
@@ -77,7 +84,7 @@ export const UploadTab: React.FC = () => {
   const handleApprove = useCallback(async (uploadId: string): Promise<void> => {
     setApprovingId(uploadId);
     try {
-      const response = await fetch(`/v1/skills/uploads/${uploadId}/approve`, {
+      const response = await fetch(pluginUploadActionPath(uploadId, 'approve'), {
         method: 'POST',
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -91,7 +98,7 @@ export const UploadTab: React.FC = () => {
 
   const handleReject = useCallback(async (uploadId: string): Promise<void> => {
     try {
-      const response = await fetch(`/v1/skills/uploads/${uploadId}/reject`, {
+      const response = await fetch(pluginUploadActionPath(uploadId, 'reject'), {
         method: 'POST',
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -146,7 +153,7 @@ export const UploadTab: React.FC = () => {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 ml-2">
-                  {upload.validation_errors.length === 0 ? (
+                  {(upload.validation_errors ?? []).length === 0 ? (
                     <CheckCircle2 className="h-5 w-5 text-green-600" />
                   ) : (
                     <AlertCircle className="h-5 w-5 text-amber-600" />
@@ -156,10 +163,10 @@ export const UploadTab: React.FC = () => {
               </div>
 
               {/* Validation errors */}
-              {upload.validation_errors.length > 0 && (
+              {(upload.validation_errors ?? []).length > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded p-2 mb-3">
                   <ul className="text-xs text-amber-900 list-disc list-inside">
-                    {upload.validation_errors.map((err, idx) => (
+                    {(upload.validation_errors ?? []).map((err, idx) => (
                       <li key={idx}>{err}</li>
                     ))}
                   </ul>
@@ -178,7 +185,7 @@ export const UploadTab: React.FC = () => {
                 <button
                   onClick={() => handleApprove(upload.upload_id)}
                   disabled={
-                    upload.validation_errors.length > 0 || approvingId === upload.upload_id
+                    (upload.validation_errors ?? []).length > 0 || approvingId === upload.upload_id
                   }
                   className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
                 >

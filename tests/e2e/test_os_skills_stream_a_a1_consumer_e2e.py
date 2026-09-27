@@ -163,7 +163,7 @@ class TestFeedbackFilterPIIScrubbing:
 
         assert scrubbed is not None
         assert "reason" not in scrubbed.payload
-        assert scrubbed.payload["reason_length"] == 27  # len("user was confused")
+        assert scrubbed.payload["reason_length"] == len("user was confused")  # 17
 
     def test_operator_id_dropped(self):
         """'operator_id' removed (PII)."""
