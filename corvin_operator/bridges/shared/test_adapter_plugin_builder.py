@@ -44,7 +44,7 @@ def _fresh_adapter(env_overrides: dict):
     """Same recipe as test_bg_task.py/test_adapter_reset_prewarn.py: isolate
     CORVIN_HOME + inbox/outbox/processed, purge and re-import `adapter` so
     every lazily-imported module reads the fresh env, and stub the house-
-    rules classifier so a real Hermes/Ollama call is never attempted."""
+    rules classifier so a real classifier call is never attempted."""
     os.environ["CORVIN_OS_ENGINE"] = "claude_code"
     os.environ["ADAPTER_FAKE_CLAUDE"] = "1"
     os.environ["ADAPTER_DISABLE_VOICE"] = "1"

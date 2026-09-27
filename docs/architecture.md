@@ -38,7 +38,7 @@ A naïve "agent framework" merges these axes silently. That works until
 the first time you need to:
 
 - run two engines concurrently for different chats (e.g. Claude Code for
-  most chats, OpenCode + Ollama for a privacy-first chat) →
+  most chats, OpenCode on a self-hosted server for a privacy-first chat) →
   **engine** must be separable from **persona**
 - give a Discord chat a stricter sandbox than a Slack chat with the
   same persona → **surface** must be separable from **persona**
@@ -125,25 +125,25 @@ class WorkerEngine(Protocol):
     capabilities: dict[str, bool]   # mid_stream_inject, hooks, skills_tool, ...
 ```
 
-Five implementations ship today: `ClaudeCodeEngine` (default),
-`CodexCliEngine`, `OpenCodeEngine`, `HermesEngine` (local Ollama,
-zero egress, L34 CONFIDENTIAL-capable), and `CopilotCliEngine`
-(GitHub Copilot CLI, worker-only). The adapter dispatches per
-call based on `profile.default_engine`.
+Four implementations ship today: `ClaudeCodeEngine` (default),
+`CodexCliEngine`, `OpenCodeEngine`, and `CopilotCliEngine`
+(GitHub Copilot CLI, worker-only). The local `HermesEngine` (Ollama) was
+removed in ADR-2087; a stored `hermes` engine id is read as `claude_code`.
+The adapter dispatches per call based on `profile.default_engine`.
 
 **EAOS — engine-agnostic guarantees:** Every engine now
 receives L10 path-gate, L16 audit, and L33 artifact registration via
 the Tool Execution Broker (TEB) in the Forge MCP server. Engine Command
 Interface (ECI) adds `EngineCommandManifest` — `/btw` routes to live
-inject (CC) or, on engines without live mid-stream inject (Hermes / Codex /
+inject (CC) or, on engines without live mid-stream inject (Codex /
 OpenCode), queues into the `/btw` buffer and is drained into the next spawn.
 An engine-agnostic active-turn marker lets `/btw` tell a running task from a
 truly idle chat regardless of which engine serves the turn.
-MCP tool-calling reaches Hermes via the Function-Call Bridge (FCB).
+MCP tool-calling reaches Copilot via the Function-Call Bridge (FCB).
 
 Crucially, this means **you can run the same chat against different
 backends per persona** — a `coder` chat hits Claude Code while an engine-pinned chat
-hits OpenCode + Ollama, side by side, in the same bridge process.
+hits OpenCode, side by side, in the same bridge process.
 
 ### 5. Surface — where the user lives
 
@@ -251,5 +251,4 @@ For the dispatch glue see `corvin_operator/bridges/shared/adapter.py`
   long-running optimization without burning the LLM context
 - [Audit and compliance](audit-and-compliance.md) — the hash-chain
   substrate and the EU AI Act / GDPR design constraints
-- [Engine layer](engine-layer.md) — backend-agnostic LLM execution,
-  local-first via Ollama
+- [Engine layer](engine-layer.md) — backend-agnostic LLM execution

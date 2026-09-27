@@ -4,7 +4,6 @@ ADR-0087 Real-World E2E Validation
 Tests M5–M8 capabilities with live LLM calls across all available engines:
 - Codex (OpenAI CLI)
 - Copilot (GitHub CLI)
-- Hermes (Ollama local)
 
 Validates:
 - M5: Function-Call Bridge (Copilot only)
@@ -279,149 +278,12 @@ class CopilotE2ETester(EngineE2ETester):
         }
 
 
-class HermesE2ETester(EngineE2ETester):
-    """Ollama Hermes local testing."""
-
-    def __init__(self):
-        super().__init__("hermes")
-        self.results = []
-
-    def test_system_prompt_injection(self, prompt: str, system_prompt: str) -> Dict[str, Any]:
-        """
-        Test M6: System-Prompt Injection via {"role": "system"} in messages.
-
-        Expected format (from M6 spec):
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ]
-        """
-        try:
-            payload = {
-                "model": "hermes-2.5-mistral-7b",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                "stream": False,
-            }
-
-            result = subprocess.run(
-                ["curl", "-s", "http://localhost:11434/api/chat"],
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-
-            if result.returncode == 0:
-                try:
-                    response = json.loads(result.stdout)
-                    message = response.get("message", {}).get("content", "")
-                    return {
-                        "status": "pass",
-                        "engine": "hermes",
-                        "test": "system_prompt_injection",
-                        "system_prompt_formatted": True,
-                        "output_length": len(message),
-                        "output_preview": message[:200],
-                    }
-                except json.JSONDecodeError:
-                    return {
-                        "status": "fail",
-                        "engine": "hermes",
-                        "test": "system_prompt_injection",
-                        "error": "Invalid JSON response",
-                    }
-            else:
-                return {
-                    "status": "fail",
-                    "engine": "hermes",
-                    "test": "system_prompt_injection",
-                    "error": result.stderr[:200],
-                }
-        except Exception as e:
-            return {
-                "status": "error",
-                "engine": "hermes",
-                "test": "system_prompt_injection",
-                "error": str(e),
-            }
-
-    def test_capability_matrix_lookup(self) -> Dict[str, Any]:
-        """Test M8: Verify Hermes capabilities."""
-        try:
-            from engines.capability_matrix import CANONICAL_CAPABILITY_MATRIX
-
-            hermes_caps = CANONICAL_CAPABILITY_MATRIX.get("hermes", {})
-
-            expected = {
-                "mid_stream_inject": "buffered",
-                "hooks": "teb_brokered",
-                "skills": "system_message",
-                "system_prompt": "message_role",
-                "mcp": None,  # Ollama doesn't have MCP
-            }
-
-            matches = all(
-                hermes_caps.get(k) == v for k, v in expected.items()
-            )
-
-            return {
-                "status": "pass" if matches else "fail",
-                "engine": "hermes",
-                "test": "capability_matrix_lookup",
-                "expected_capabilities": expected,
-                "actual_capabilities": hermes_caps,
-                "matches": matches,
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "engine": "hermes",
-                "test": "capability_matrix_lookup",
-                "error": str(e),
-            }
-
-    def run_all_tests(self) -> Dict[str, Any]:
-        """Run all Hermes tests."""
-        logger.info("=" * 70)
-        logger.info("HERMES (Ollama) — Real-World E2E Testing")
-        logger.info("=" * 70)
-
-        # Test 1: System-Prompt Injection (M6)
-        logger.info("\nTest 1: System-Prompt Injection (M6)")
-        result1 = self.test_system_prompt_injection(
-            prompt="Write a function that adds two numbers.",
-            system_prompt="You are a Python expert. Always provide clean, well-documented code.",
-        )
-        logger.info(f"  Status: {result1['status']}")
-        if result1["status"] == "pass":
-            logger.info(f"  Output preview: {result1['output_preview'][:100]}...")
-        self.results.append(result1)
-
-        # Test 2: Capability Matrix (M8)
-        logger.info("\nTest 2: Capability Matrix (M8)")
-        result2 = self.test_capability_matrix_lookup()
-        logger.info(f"  Status: {result2['status']}")
-        logger.info(f"  Capabilities match: {result2.get('matches', False)}")
-        self.results.append(result2)
-
-        return {
-            "engine": "hermes",
-            "total_tests": 2,
-            "passed": sum(1 for r in self.results if r["status"] == "pass"),
-            "results": self.results,
-        }
-
-
 def run_e2e_validation() -> Dict[str, Any]:
     """Run E2E validation across all available engines."""
 
     testers = [
         CodexE2ETester(),
         CopilotE2ETester(),
-        HermesE2ETester(),
     ]
 
     all_results = {

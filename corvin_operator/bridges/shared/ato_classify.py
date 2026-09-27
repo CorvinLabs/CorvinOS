@@ -49,8 +49,14 @@ _QUESTION_START = re.compile(
     re.I,
 )
 
-# Data-classification values that force local-only delegation.
+# Data-classification values that require a local engine. ADR-2087 removed the
+# only bundled local engine (Hermes), so these classes produce an explicit L34
+# refusal (``DELEGATION_L34_BLOCK``) — they must NEVER fall through to a cloud
+# engine such as claude_code.
 _LOCAL_ONLY_CLASSES = frozenset({"CONFIDENTIAL", "SECRET"})
+
+# M5 delegation_target value meaning "refuse this turn (L34 locality gate)".
+DELEGATION_L34_BLOCK = "l34_block"
 
 
 # ── Result dataclass ─────────────────────────────────────────────────────────
@@ -136,7 +142,7 @@ def classify(
     delegation_target: str | None = None
     if engine_id == "claude_code":
         if dc in _LOCAL_ONLY_CLASSES:
-            delegation_target = "delegate_hermes"
+            delegation_target = DELEGATION_L34_BLOCK
         elif best_type == "one_shot" and len(task) < 1500:
             delegation_target = "delegate_copilot"
 

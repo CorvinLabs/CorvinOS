@@ -11,7 +11,7 @@ What it covers:
      outbox depending on whether anything was running.
   5. End-to-end: spawn a slow fake-claude through call_claude_streaming,
      send /cancel via inbox, verify the subproc dies AND the ACK lands.
-  6. WA-10 regression: /stop against a subprocess-less engine (Hermes/
+  6. WA-10 regression: /stop against a subprocess-less engine (
      OpenCode/Codex) — previously always false-negatived "No task was
      running" because `_cancel_chat` only ever looked at
      `_running_subprocs`, which those engines never populate.
@@ -268,12 +268,12 @@ def test_registry_clean_after_natural_exit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. WA-10: /stop against a subprocess-less engine (Hermes/OpenCode/Codex)
+# 6. WA-10: /stop against a subprocess-less engine (OpenCode/Codex)
 # ---------------------------------------------------------------------------
 
 
 class _FakeCancellableEngine:
-    """Stand-in for HermesEngine/OpenCodeEngine/CodexCliEngine — no Popen,
+    """Stand-in for OpenCodeEngine/CodexCliEngine — no Popen,
     just a .cancel() the adapter can reach through `_running_engines`."""
 
     def __init__(self) -> None:
@@ -284,17 +284,17 @@ class _FakeCancellableEngine:
 
 
 def test_cancel_chat_cancels_engine_only_no_subproc() -> None:
-    _section("cancel_chat calls engine.cancel() when no subproc exists (Hermes-class)")
+    _section("cancel_chat calls engine.cancel() when no subproc exists (OpenCode-class)")
     adapter = _fresh_adapter()
     engine = _FakeCancellableEngine()
-    adapter._register_engine("chatHermes", engine)
+    adapter._register_engine("chatOpencode", engine)
 
-    n = adapter._cancel_chat("chatHermes")
+    n = adapter._cancel_chat("chatOpencode")
 
     assert n == 1, f"expected 1 (engine cancelled, no subproc to count), got {n}"
     assert engine.cancelled, "engine.cancel() was never called"
     with adapter._running_engines_guard:
-        assert "chatHermes" not in adapter._running_engines, \
+        assert "chatOpencode" not in adapter._running_engines, \
             "_cancel_chat must unregister the engine it just cancelled"
     print("PASS: subprocess-less engine is reached and cancelled via _running_engines")
 
@@ -317,7 +317,7 @@ def test_cancel_chat_does_not_double_count_claude_style_engine_plus_subproc() ->
 
 
 def test_process_one_cancel_engine_only_running() -> None:
-    _section("process_one /stop against a Hermes-class turn (no subproc registered)")
+    _section("process_one /stop against a OpenCode-class turn (no subproc registered)")
     inbox, outbox, processed = _setup_sandbox()
     try:
         adapter = _fresh_adapter({
@@ -325,32 +325,32 @@ def test_process_one_cancel_engine_only_running() -> None:
             "ADAPTER_OUTBOX":    str(outbox),
             "ADAPTER_PROCESSED": str(processed),
         })
-        chat_key = "chat-hermes-1"
+        chat_key = "chat-opencode-1"
         engine = _FakeCancellableEngine()
         adapter._register_engine(chat_key, engine)
 
         env = {
-            "id": "msg-cancel-hermes",
+            "id": "msg-cancel-opencode",
             "channel": "sandbox-cancel",
             "from": "u999",
             "chat_id": chat_key,
             "_cancel": True,
             "ts": time.time(),
         }
-        in_file = inbox / "msg-cancel-hermes.json"
+        in_file = inbox / "msg-cancel-opencode.json"
         in_file.write_text(json.dumps(env))
 
         adapter.process_one(in_file, settings={"whitelist": ["u123", "u999"]})
 
-        assert engine.cancelled, "Hermes-class engine was never cancelled by /stop"
-        out_files = list(outbox.glob("msg-cancel-hermes_*.json"))
+        assert engine.cancelled, "OpenCode-class engine was never cancelled by /stop"
+        out_files = list(outbox.glob("msg-cancel-opencode_*.json"))
         assert len(out_files) == 1, f"expected 1 outbox ack, got {len(out_files)}"
         ack = json.loads(out_files[0].read_text())
         assert "No task was running" not in ack["text"], (
             f"WA-10 regression: /stop falsely reported nothing running: {ack['text']!r}"
         )
         assert "aborted" in ack["text"], f"unexpected ack: {ack['text']!r}"
-        print(f"PASS: Hermes-class /stop cancels + writes correct ACK: {ack['text']!r}")
+        print(f"PASS: OpenCode-class /stop cancels + writes correct ACK: {ack['text']!r}")
     finally:
         shutil.rmtree(inbox.parent, ignore_errors=True)
 

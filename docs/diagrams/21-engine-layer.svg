@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1380 820" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
-  <title>Engine layer — five backends, one protocol, engine-agnostic OS guarantees (ADR-0069, ADR-0071)</title>
-  <desc>Five WorkerEngine implementations share the WorkerEngine Protocol. Corvin adapts
-  capabilities per engine: ClaudeCode (native full set), Codex/OpenCode (TEB-bridged), Hermes
-  (TEB + FCB-bridged MCP, buffered /btw), CopilotCliEngine (worker-only, TEB-bridged, /btw=None,
-  L34=us_cloud, ADR-0071). ADR-0069 EAOS ensures all engines receive L10/L16/L33
+  <title>Engine layer — four backends, one protocol, engine-agnostic OS guarantees (ADR-0069, ADR-0071)</title>
+  <desc>Four WorkerEngine implementations share the WorkerEngine Protocol. Corvin adapts
+  capabilities per engine: ClaudeCode (native full set), Codex/OpenCode (TEB-bridged),
+  CopilotCliEngine (worker-only, TEB-bridged, /btw=None,
+  L34=us_cloud, ADR-0071). HermesEngine (local Ollama) was removed by ADR-2087. ADR-0069 EAOS ensures all engines receive L10/L16/L33
   guarantees through the Tool Execution Broker in the Forge MCP server.</desc>
 
   <defs>
@@ -20,7 +20,7 @@
   </defs>
 
   <!-- ── Title ─────────────────────────────────────────────────────── -->
-  <text x="690" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Engine layer — one protocol, five backends, engine-agnostic OS guarantees</text>
+  <text x="690" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Engine layer — one protocol, four backends, engine-agnostic OS guarantees</text>
   <text x="690" y="50" text-anchor="middle" font-size="11" fill="#64748b">ADR-0069 EAOS + ADR-0071: all engines share L10 path-gate · L16 audit · L33 artifacts via Tool Execution Broker</text>
 
   <!-- ── WorkerEngine Protocol ──────────────────────────────────────── -->
@@ -37,9 +37,8 @@
 
   <!-- arrows from adapter to each engine -->
   <line x1="560" y1="207" x2="160" y2="238" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
-  <line x1="600" y1="207" x2="380" y2="238" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
-  <line x1="700" y1="207" x2="720" y2="238" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
-  <line x1="750" y1="207" x2="940" y2="238" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
+  <line x1="620" y1="207" x2="510" y2="238" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
+  <line x1="760" y1="207" x2="870" y2="238" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
   <line x1="800" y1="207" x2="1200" y2="238" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
 
   <!-- ── ClaudeCodeEngine ───────────────────────────────────────────── -->
@@ -64,6 +63,7 @@
   <text x="150" y="474" text-anchor="middle" font-size="9" fill="#3b82f6">stdin pipe · /btw inject · hooks in CC</text>
   <text x="150" y="488" text-anchor="middle" font-size="9" fill="#3b82f6">ECI: command_manifest (stdin_json, /e:resume)</text>
 
+  <g transform="translate(85,0)">
   <!-- ── CodexCliEngine ─────────────────────────────────────────────── -->
   <rect x="295" y="240" width="260" height="260" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
   <text x="425" y="264" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">CodexCliEngine</text>
@@ -85,11 +85,13 @@
   <text x="425" y="462" text-anchor="middle" font-size="9" fill="#7c3aed">spawns codex exec --json --ephemeral</text>
   <text x="425" y="476" text-anchor="middle" font-size="9" fill="#7c3aed">ECI: command_manifest (mid_stream=None)</text>
   <text x="425" y="490" text-anchor="middle" font-size="9" fill="#7c3aed">/btw queued → prepended next turn</text>
+  </g>
 
+  <g transform="translate(170,0)">
   <!-- ── OpenCodeEngine ─────────────────────────────────────────────── -->
   <rect x="570" y="240" width="260" height="260" rx="12" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
   <text x="700" y="264" text-anchor="middle" font-size="13" font-weight="700" fill="#064e3b">OpenCodeEngine</text>
-  <text x="700" y="280" text-anchor="middle" font-size="10" fill="#047857">provider-agnostic (Claude / OpenAI / Ollama)</text>
+  <text x="700" y="280" text-anchor="middle" font-size="10" fill="#047857">provider-agnostic (Claude / OpenAI / self-hosted)</text>
   <line x1="586" y1="290" x2="814" y2="290" stroke="#059669" stroke-width="1"/>
   <g font-size="10" font-family="'Courier New', monospace" fill="#064e3b">
     <text x="586" y="308">mid_stream_inject: None  → queued next turn</text>
@@ -107,28 +109,7 @@
   <text x="700" y="462" text-anchor="middle" font-size="9" fill="#059669">spawns opencode run --format json</text>
   <text x="700" y="476" text-anchor="middle" font-size="9" fill="#059669">ECI: command_manifest (/e:model → override)</text>
   <text x="700" y="490" text-anchor="middle" font-size="9" fill="#059669">/btw queued → prepended next turn</text>
-
-  <!-- ── HermesEngine ───────────────────────────────────────────────── -->
-  <rect x="845" y="240" width="240" height="260" rx="12" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
-  <text x="965" y="264" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">HermesEngine</text>
-  <text x="965" y="280" text-anchor="middle" font-size="10" fill="#c2410c">Ollama HTTP · L34 CONFIDENTIAL</text>
-  <line x1="861" y1="290" x2="1069" y2="290" stroke="#ea580c" stroke-width="1"/>
-  <g font-size="10" font-family="'Courier New', monospace" fill="#7c2d12">
-    <text x="861" y="308">mid_stream_inject: buffered (ECI)</text>
-    <text x="861" y="323">hooks:             False (native)</text>
-    <text x="861" y="338">skills_tool:       False</text>
-    <text x="861" y="353">mcp:               FCB-bridged</text>
-    <text x="861" y="368">session_pinning:   False</text>
-    <text x="861" y="383">_temperature:      /e:temp sets this</text>
-    <text x="861" y="398">network_egress:    none (local)</text>
   </g>
-  <line x1="861" y1="410" x2="1069" y2="410" stroke="#ea580c" stroke-width="0.8"/>
-  <rect x="885" y="418" width="160" height="16" rx="4" fill="#ea580c"/>
-  <text x="965" y="430" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">✓ TEB via Forge MCP (ADR-0069)</text>
-  <text x="965" y="446" text-anchor="middle" font-size="10" fill="#9a3412">L10 · L16 · L33 · MCP via FCB</text>
-  <text x="965" y="462" text-anchor="middle" font-size="9" fill="#ea580c">HTTP POST /api/chat · no subprocess</text>
-  <text x="965" y="476" text-anchor="middle" font-size="9" fill="#ea580c">ECI: /e:model /e:temp /e:ctx</text>
-  <text x="965" y="490" text-anchor="middle" font-size="9" fill="#ea580c">/btw queued → prepended next turn</text>
 
   <!-- ── CopilotCliEngine ──────────────────────────────────────────── -->
   <rect x="1105" y="240" width="250" height="260" rx="12" fill="#fce7f3" stroke="#db2777" stroke-width="2"/>
@@ -173,7 +154,7 @@
   <rect x="660" y="585" width="220" height="58" rx="8" fill="#d97706"/>
   <text x="770" y="602" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Function-Call Bridge (FCB)</text>
   <text x="770" y="616" text-anchor="middle" font-size="10" fill="#fef3c7">MCP ↔ OpenAI format translation</text>
-  <text x="770" y="630" text-anchor="middle" font-size="10" fill="#fef3c7">Hermes tool-use loop (max 8 rounds)</text>
+  <text x="770" y="630" text-anchor="middle" font-size="10" fill="#fef3c7">for OpenAI-compatible engines</text>
 
   <!-- SkillCompiler box -->
   <rect x="900" y="585" width="170" height="58" rx="8" fill="#7c3aed"/>
@@ -183,57 +164,48 @@
 
   <!-- Capability comparison legend -->
   <text x="690" y="685" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">Capability comparison</text>
-  <text x="140" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#1e3a8a">Claude Code</text>
-  <text x="370" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#4c1d95">Codex CLI</text>
-  <text x="580" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#064e3b">OpenCode</text>
-  <text x="820" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#7c2d12">Hermes</text>
-  <text x="1110" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#831843">Copilot CLI</text>
+  <text x="190" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#1e3a8a">Claude Code</text>
+  <text x="525" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#4c1d95">Codex CLI</text>
+  <text x="860" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#064e3b">OpenCode</text>
+  <text x="1195" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#831843">Copilot CLI</text>
 
   <text x="45" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: live stdin_json</text>
-  <text x="275" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: queued → next turn</text>
-  <text x="490" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: queued → next turn</text>
-  <text x="720" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: buffered → next turn</text>
-  <text x="1010" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: None (worker-only)</text>
+  <text x="385" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: queued → next turn</text>
+  <text x="720" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: queued → next turn</text>
+  <text x="1055" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: None (worker-only)</text>
 
   <text x="45" y="728" text-anchor="start" font-size="9" fill="#475569">hooks: native CC</text>
-  <text x="275" y="728" text-anchor="start" font-size="9" fill="#475569">hooks: ✓ TEB</text>
-  <text x="490" y="728" text-anchor="start" font-size="9" fill="#475569">hooks: ✓ TEB</text>
+  <text x="385" y="728" text-anchor="start" font-size="9" fill="#475569">hooks: ✓ TEB</text>
   <text x="720" y="728" text-anchor="start" font-size="9" fill="#475569">hooks: ✓ TEB</text>
-  <text x="1010" y="728" text-anchor="start" font-size="9" fill="#475569">hooks: ✓ TEB</text>
+  <text x="1055" y="728" text-anchor="start" font-size="9" fill="#475569">hooks: ✓ TEB</text>
 
   <text x="45" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: native</text>
-  <text x="275" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: native</text>
-  <text x="490" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: native</text>
-  <text x="720" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: ✓ FCB-bridged</text>
-  <text x="1010" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: None (no subprocess)</text>
+  <text x="385" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: native</text>
+  <text x="720" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: native</text>
+  <text x="1055" y="742" text-anchor="start" font-size="9" fill="#475569">MCP: None (no subprocess)</text>
 
   <text x="45" y="756" text-anchor="start" font-size="9" fill="#475569">L34: cloud / EU</text>
-  <text x="275" y="756" text-anchor="start" font-size="9" fill="#475569">L34: cloud / EU</text>
-  <text x="490" y="756" text-anchor="start" font-size="9" fill="#475569">L34: flex (provider)</text>
-  <text x="720" y="756" text-anchor="start" font-size="9" fill="#475569">L34: local CONFIDENTIAL</text>
-  <text x="1010" y="756" text-anchor="start" font-size="9" fill="#475569">L34: us_cloud (GitHub)</text>
+  <text x="385" y="756" text-anchor="start" font-size="9" fill="#475569">L34: cloud / EU</text>
+  <text x="720" y="756" text-anchor="start" font-size="9" fill="#475569">L34: flex (provider)</text>
+  <text x="1055" y="756" text-anchor="start" font-size="9" fill="#475569">L34: us_cloud (GitHub)</text>
 
   <text x="45" y="770" text-anchor="start" font-size="9" fill="#475569">plan_mode: ✓</text>
-  <text x="275" y="770" text-anchor="start" font-size="9" fill="#475569">plan_mode: ✗</text>
-  <text x="490" y="770" text-anchor="start" font-size="9" fill="#475569">plan_mode: ✗</text>
+  <text x="385" y="770" text-anchor="start" font-size="9" fill="#475569">plan_mode: ✗</text>
   <text x="720" y="770" text-anchor="start" font-size="9" fill="#475569">plan_mode: ✗</text>
-  <text x="1010" y="770" text-anchor="start" font-size="9" fill="#475569">plan_mode: ✗</text>
+  <text x="1055" y="770" text-anchor="start" font-size="9" fill="#475569">plan_mode: ✗</text>
 
   <text x="45" y="784" text-anchor="start" font-size="9" fill="#475569">compact: ✓</text>
-  <text x="275" y="784" text-anchor="start" font-size="9" fill="#475569">compact: ✗</text>
-  <text x="490" y="784" text-anchor="start" font-size="9" fill="#475569">compact: ✗</text>
+  <text x="385" y="784" text-anchor="start" font-size="9" fill="#475569">compact: ✗</text>
   <text x="720" y="784" text-anchor="start" font-size="9" fill="#475569">compact: ✗</text>
-  <text x="1010" y="784" text-anchor="start" font-size="9" fill="#475569">compact: ✗</text>
+  <text x="1055" y="784" text-anchor="start" font-size="9" fill="#475569">compact: ✗</text>
 
   <text x="45" y="798" text-anchor="start" font-size="9" fill="#475569">session_pinning: ✓</text>
-  <text x="275" y="798" text-anchor="start" font-size="9" fill="#475569">session_pinning: ✗</text>
-  <text x="490" y="798" text-anchor="start" font-size="9" fill="#475569">session_pinning: ✗</text>
+  <text x="385" y="798" text-anchor="start" font-size="9" fill="#475569">session_pinning: ✗</text>
   <text x="720" y="798" text-anchor="start" font-size="9" fill="#475569">session_pinning: ✗</text>
-  <text x="1010" y="798" text-anchor="start" font-size="9" fill="#475569">session_pinning: ✗</text>
+  <text x="1055" y="798" text-anchor="start" font-size="9" fill="#475569">session_pinning: ✗</text>
 
   <!-- Vertical separators in comparison -->
-  <line x1="265" y1="690" x2="265" y2="805" stroke="#e2e8f0" stroke-width="1"/>
-  <line x1="480" y1="690" x2="480" y2="805" stroke="#e2e8f0" stroke-width="1"/>
-  <line x1="710" y1="690" x2="710" y2="805" stroke="#e2e8f0" stroke-width="1"/>
-  <line x1="1000" y1="690" x2="1000" y2="805" stroke="#e2e8f0" stroke-width="1"/>
+  <line x1="360" y1="690" x2="360" y2="805" stroke="#e2e8f0" stroke-width="1"/>
+  <line x1="695" y1="690" x2="695" y2="805" stroke="#e2e8f0" stroke-width="1"/>
+  <line x1="1030" y1="690" x2="1030" y2="805" stroke="#e2e8f0" stroke-width="1"/>
 </svg>

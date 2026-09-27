@@ -16,13 +16,12 @@
 #     default — true on the entry that is the registry default for that role
 #
 # Empty os_models / worker_models → no model selection for that role.
-# Hermes models are Ollama aliases; actual model IDs can be set as free-text.
 #
 # ADR-0181 — Providers: a model source + how to reach it. Each engine lists the
 # providers it can drive (supported_providers); the console offers those, merges
 # the curated os_models/worker_models above with live-fetched + free-text models.
 #   base_url       — provider API base (must be on the L35 egress allowlist for cloud)
-#   model_source   — static | ollama | openrouter (how the live list is fetched)
+#   model_source   — static | ollama (Ollama Cloud) | openrouter (how the live list is fetched)
 #   credential_env — env-var NAME for the API key (value lives in the L16 vault; never here)
 #   kind           — local | cloud (cloud = network egress → L34/L35 re-evaluated on assign)
 #   auth_mode      — api_key | platform   (ADR-0759)
@@ -66,12 +65,6 @@ providers:
     model_source: "openai"
     credential_env: "OPENAI_API_KEY"
     kind: "cloud"
-  ollama_local:
-    label: "Ollama (local)"
-    base_url: "http://localhost:11434"
-    model_source: "ollama"
-    credential_env: ""
-    kind: "local"
   ollama_cloud:
     label: "Ollama Cloud"
     base_url: "https://ollama.com"
@@ -177,9 +170,6 @@ engines:
       - provider: "anthropic"
         native: true
         note: ""
-      - provider: "ollama_local"
-        native: false
-        note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
       - provider: "ollama_cloud"
         native: false
         note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
@@ -244,9 +234,6 @@ engines:
       - provider: "openai"
         native: true
         note: ""
-      - provider: "ollama_local"
-        native: true
-        note: ""
       - provider: "ollama_cloud"
         native: true
         note: ""
@@ -263,10 +250,6 @@ engines:
         label: "Claude Opus 5.5 (Anthropic)"
       - id: "anthropic/claude-opus-5"
         label: "Claude Opus 5 (Anthropic)"
-      - id: "ollama/qwen3:8b"
-        label: "Qwen3 8B (local Ollama)"
-      - id: "ollama/qwen3:14b"
-        label: "Qwen3 14B (local Ollama)"
     worker_models:
       - id: ""
         label: "Provider default"
@@ -275,8 +258,6 @@ engines:
         label: "Claude Sonnet 5 (Anthropic)"
       - id: "anthropic/claude-haiku-4-5-20251001"
         label: "Claude Haiku 4.5 (Anthropic)"
-      - id: "ollama/qwen3:8b"
-        label: "Qwen3 8B (local Ollama)"
 
   codex_cli:
     label: "Codex CLI"

@@ -677,7 +677,7 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
 - **L10** Path-Gate (FS-write protection, fail-closed)
 - **L16** Security hardening (TOCTOU, audit framing, consent)
 - **L18–21** User management (roles, disclosure, quota, proposals)
-- **L22** WorkerEngine protocol (ClaudeCodeEngine, HermesEngine, etc.)
+- **L22** WorkerEngine protocol (ClaudeCodeEngine, CodexCliEngine, etc.)
 - **L23** Speech-to-Text (metadata-only audit)
 - **L24** Large-Data Snapshot + **L25** Compute Worker + **L32** Anonymisation
 - **L28** Conversation Recall + User Modeling

@@ -1,7 +1,7 @@
 """ADR-0087 M1: Context Checkpoint System — universal session state persistence.
 
 Stores engine-agnostic conversation snapshots in append-only JSONL format.
-Enables multi-turn context transfer across engine boundaries (Claude Code → Codex → Hermes, etc.).
+Enables multi-turn context transfer across engine boundaries (Claude Code → Codex → OpenCode, etc.).
 
 Storage: <corvin_home>/tenants/<tid>/sessions/<bridge>:<chat>/context_checkpoints.jsonl
 One JSON object per line (JSONL). Load latest line for current context.

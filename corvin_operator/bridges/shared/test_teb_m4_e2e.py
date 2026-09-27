@@ -122,7 +122,6 @@ def test_all_engines_support_teb_hooks():
     from agents.claude_code import ClaudeCodeEngine
     from agents.codex_cli import CodexCliEngine
     from agents.opencode_cli import OpenCodeEngine
-    from agents.hermes_engine import HermesEngine
 
     # Claude Code uses native hooks (not TEB)
     # But all others use TEB-brokered
@@ -131,12 +130,11 @@ def test_all_engines_support_teb_hooks():
         ("claude_code", ClaudeCodeEngine),
         ("codex_cli", CodexCliEngine),
         ("opencode_cli", OpenCodeCliEngine),
-        ("hermes_engine", HermesEngine),
     ]
 
     for engine_name, engine_class in engines:
         cap = engine_class.capabilities.get("hooks")
-        # Codex/OpenCode/Hermes should all be "teb_brokered"
+        # Codex/OpenCode should all be "teb_brokered"
         # Claude Code might be native or could also use TEB
         assert cap is not None, f"{engine_name} has no hooks capability"
 

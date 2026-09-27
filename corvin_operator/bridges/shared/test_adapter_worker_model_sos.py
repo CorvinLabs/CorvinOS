@@ -75,7 +75,7 @@ def test_bridge_reads_tenant_yaml_worker_model_global_fallback():
 
         env = _build_spawn_env(
             tenant_id="_default",
-            engine_id="hermes",  # Engine not in engine_models
+            engine_id="copilot",  # Engine not in engine_models
             profile=None,
             chat_key="test-chat",
             channel="console",

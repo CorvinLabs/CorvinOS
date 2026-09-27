@@ -448,7 +448,7 @@ subprocess, parses the streaming output into normalised `StreamEvent`s
 `error`), and declares its capabilities (`mid_stream_inject`, `hooks`,
 `skills_tool`, `mcp`, `permission_modes`).
 
-In-tree today: `ClaudeCodeEngine`, `CodexCliEngine`, `OpenCodeEngine`, `HermesEngine` (local Ollama, zero egress, L34 CONFIDENTIAL-capable).
+In-tree today: `ClaudeCodeEngine`, `CodexCliEngine`, `OpenCodeEngine`, `CopilotCliEngine`. (The local `HermesEngine` on Ollama was removed in ADR-2087; zero-egress execution now needs an operator-written engine or a self-hosted `opencode_http` server.)
 Operator-written adapters in the field: AWS Bedrock CLI, vLLM
 streaming, Azure OpenAI streaming, internal model gateways. New
 adapter ≈ 200 LOC + one capability declaration + a per-subtask E2E
@@ -520,8 +520,8 @@ load-bearing:
   envelope.
 * Corvin reads those schemas via three modules — `awp_dag_parser`,
   `awp_validator`, `awp_walker` — and walks each DAG node through the
-  *engine layer* (Claude Code / Codex CLI / Gemini CLI / Ollama / vLLM
-  via the `WorkerEngine` protocol). No code path imports `awp.runtime.*`,
+  *engine layer* (Claude Code / Codex CLI / OpenCode / Copilot CLI, or an
+  operator-written engine via the `WorkerEngine` protocol). No code path imports `awp.runtime.*`,
   enforced by a CI-linter test.
 
 What this gives you, the integrator:
@@ -728,7 +728,8 @@ quarterly engine version audit.
 To avoid disappointment downstream:
 
 * **Not an LLM provider.** Bring your own — Anthropic, OpenAI, Azure,
-  AWS Bedrock, Google Vertex, Ollama on-prem, vLLM cluster.
+  AWS Bedrock, Google Vertex, Ollama Cloud, or a self-hosted model server
+  behind an operator-written engine.
 * **Not a multi-agent orchestrator at runtime.** AWP is the spec for
   declarative DAGs; the walker executes them sequentially with
   optional fan-out. Map-reduce-style parallel research over 50

@@ -15,7 +15,7 @@ hints) — and they could disagree.
 | 4 | **Loop / recurring** (`scheduler.py` cron+reminders; `/loop`-style self-paced iteration inside a turn) | time-based recurrence, monitoring, retry-until-green | scheduler; LOOP directive → model iterates | per-fire = normal turn |
 | 5 | **Goal system** (`goal.py`, `<session_goal>` block, `/goal`) | persistent multi-session objectives | `/goal` (bridges); GOAL directive | no |
 | 6 | **L25 Compute** (deterministic data processing, DSI datasources) | statistics, charts, CSV/dataset transforms, ML | COMPUTE directive → `compute_run`; console compute routes | **yes** — compute units |
-| 7 | **Normal delegation** (`corvin_delegate` MCP: `delegate_claude_code/codex/opencode/hermes/copilot`) | one bounded call to a *named* engine | model-chosen tool; DELEGATE directive | no (deliberate, LIC-DELEGATE-MCP-COMPUTE-01) |
+| 7 | **Normal delegation** (`corvin_delegate` MCP: `delegate_claude_code/codex/opencode/copilot`; `delegate_hermes` removed by ADR-2087) | one bounded call to a *named* engine | model-chosen tool; DELEGATE directive | no (deliberate, LIC-DELEGATE-MCP-COMPUTE-01) |
 | 8 | **Background tasks** (`/task`·`/bg` bridges; console TaskManager) | long-running detached jobs with completion notify | explicit user command / CCC `/create task` | task-count quotas |
 | 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `corvin_operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | **off unless selected** — runs only while the operator has picked `worker_engine: tde` in Settings → Worker Engine | ADR-0114 delegated branch (auto, `_worker_engine_target`, `tde` mode only); console `/use-engine tiered_delegation <task>` (also `tde` mode only); `SendIntegration` for embedders | **yes** — shared agentic-compute pool (ADR-0216), charged at the `TieredDelegationEngine.execute` chokepoint |
 
@@ -186,7 +186,7 @@ First match wins:
     LOOP·GOAL·COMPUTE at ANY real signal (≥0.50 render floor, review F1:
     "stündlich"/"täglich" weigh 0.60-0.65 and must still not burn quota)
     DELEGATE only when a real ENGINE is NAMED (review F2: bare "delegiere" /
-    "mit Hermes" the parcel carrier must not steer off the fan-out)
+    a vague carrier phrase must not steer off the fan-out)
 3.  FAN-OUT shape                → delegated branch (console) / Workflow tool
     (multi-source/multi-perspective/per-item with substantive shape).
     WITHIN the delegated branch the worker-engine setting decides: big-data
@@ -245,7 +245,7 @@ a capability the surface lacks.
 | L25 Compute | ✓ (routes + MCP) | via MCP | via MCP | ✓ |
 | `delegate_*` | ✓ (MCP merged into turn) | ✓ | ✓ | ✓ |
 | Background `/task` | CCC `/create task` | ✓ `/task`·`/bg` | ✓ | — |
-| Worker personas (hermes-/copilot-worker) | n/a | WORKFLOW+DELEGATE directives suppressed (ADR-0160 M4a) | n/a | n/a |
+| Worker personas (copilot-worker) | n/a | WORKFLOW+DELEGATE directives suppressed (ADR-0160 M4a) | n/a | n/a |
 
 ## 5. Metering map (why the ladder ordering is also a cost policy)
 
@@ -296,9 +296,9 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
   the one the operator selected.
 - `_tde_available()` requires BOTH the TDE module set (source tree or the
   wheel-vendored `_vendor/corvin_operator/orchestration`, wired via
-  `_operator_bootstrap._OPERATOR_SUBTREES`) AND a resolvable `claude` CLI — a
-  Hermes-only / no-API-key install reports TDE unavailable and delegates via
-  ACS (which pins a local worker model) rather than failing every turn.
+  `_operator_bootstrap._OPERATOR_SUBTREES`) AND a resolvable `claude` CLI — an
+  install without the `claude` CLI reports TDE unavailable and lets the ACS
+  branch handle delegation rather than failing every turn.
 - Big-data detection (`_is_big_data_task()`, bounded/non-backtracking — a
   scan-capped multi-regex + Python clause-proximity test, NOT one mega-regex)
   ties volumes to a DATA noun in either

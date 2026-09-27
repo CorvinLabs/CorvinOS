@@ -365,7 +365,7 @@ def test_round3_rules() -> None:
         t = turn()
         adapter._TURN_TASK.cur = t
         try:
-            adapter._turn_engine_started("hermes")
+            adapter._turn_engine_started("opencode")
         finally:
             adapter._TURN_TASK.cur = None
         assert task_sources._turn_stage(tmp / "u" / "tasks" / f"{t.task_id}.events.jsonl") == "engine running"

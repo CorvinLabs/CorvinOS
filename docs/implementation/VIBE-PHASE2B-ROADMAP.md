@@ -36,10 +36,10 @@ Phase 2b adds the **real integrations** that make them production-ready.
 # core/gateway/routes/voice_stream_routes.py
 # Replace mock STT with real Whisper
 
-from openai import OpenAI  # or: from ollama import Ollama
+from openai import OpenAI
 
 async def transcribe_audio_chunk(audio_bytes: bytes) -> Dict[str, Any]:
-    """Real STT via OpenAI Whisper (or local Ollama fallback)."""
+    """Real STT via OpenAI Whisper."""
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
     
     result = client.audio.transcriptions.create(
@@ -296,7 +296,7 @@ class ConfidenceScorer:
 
 | Risk | Mitigation |
 |---|---|
-| Whisper API rate limits | Cache results, implement backoff, fallback to local Ollama |
+| Whisper API rate limits | Cache results, implement backoff (no local-Ollama fallback — removed by ADR-2087) |
 | TTS latency high | Use local piper instead of cloud API; stream chunks asap |
 | Hub not ready | Wait for Hub team; Phase 2b can proceed with mock Hub until then |
 | WebSocket timeout during TTS | Keep-alive pings; buffer audio on client |

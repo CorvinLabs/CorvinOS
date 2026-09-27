@@ -760,20 +760,21 @@ except Exception:  # noqa: BLE001
     except Exception:  # noqa: BLE001
         _CodexCliEngine = None  # type: ignore[assignment]
 
-# HermesEngine — fourth backend (Layer 22, ADR-0066 M1). Drives Ollama
-# HTTP streaming API (localhost:11434/api/chat) via stdlib urllib — no
-# subprocess, no new runtime dependency. Loaded lazily so the adapter
-# stays importable on hosts without Ollama. The engine-selection branch
-# checks for None; Ollama itself being absent causes graceful per-request
-# error events (not adapter-startup failures).
+# ADR-2087 — Hermes and every local-Ollama engine were removed. A stored
+# `hermes` / `local` / `ollama` … engine id (tenant default_engine, per-chat pin,
+# persona pin, CORVIN_OS_ENGINE) is mapped to claude_code on read, never
+# rejected. engine_registry is the single source of the mapping.
 try:
-    from agents.hermes_engine import HermesEngine as _HermesEngine  # type: ignore
+    from engine_registry import (  # type: ignore
+        is_legacy_engine_id as _is_legacy_engine_id,
+        normalize_legacy_engine_id as _normalize_legacy_engine_id,
+    )
 except Exception:  # noqa: BLE001
-    try:
-        sys.path.insert(0, str(ROOT))
-        from agents.hermes_engine import HermesEngine as _HermesEngine  # type: ignore
-    except Exception:  # noqa: BLE001
-        _HermesEngine = None  # type: ignore[assignment]
+    sys.path.insert(0, str(ROOT))
+    from engine_registry import (  # type: ignore
+        is_legacy_engine_id as _is_legacy_engine_id,
+        normalize_legacy_engine_id as _normalize_legacy_engine_id,
+    )
 
 # Worker-only engines (ADR-0071): delegation/worker backends that must never
 # drive an OS turn because they lack /btw, hooks, the Skill tool, and stream-json.
@@ -959,7 +960,7 @@ _running_engines: dict[str, "ClaudeCodeEngine"] = {}  # type: ignore[name-define
 _running_engines_guard = threading.Lock()
 
 # ADR-0069 M4 — /btw buffered-mode queues (one list per chat_key).
-# Engines with mid_stream_inject="buffered" (e.g. HermesEngine) cannot
+# Engines with mid_stream_inject="buffered" cannot
 # receive live injections; text is appended here and prepended to the
 # next spawn prompt via drain_btw_buffer().
 _btw_buffers: dict[str, list[str]] = {}
@@ -971,14 +972,13 @@ _btw_feedback: dict[str, str] = {}
 _btw_feedback_guard = threading.Lock()
 
 # Engine-agnostic "an OS turn is actively streaming for this chat" refcount.
-# Registered by EVERY OS-engine dispatch (Claude, Hermes, OpenCode, Codex) in
+# Registered by EVERY OS-engine dispatch (Claude, OpenCode, Codex) in
 # call_claude_streaming and released in a finally, so /btw can distinguish a
 # genuinely-running task from an idle chat EVEN when the running engine cannot
-# accept a live mid-stream injection (Hermes/OpenCode/Codex have
+# accept a live mid-stream injection (OpenCode/Codex have
 # mid_stream_inject=False and register neither `_running_engines` nor
 # `_running_stdins`). Without this, /btw reported the misleading "No task is
-# running right now" on every non-Claude Discord turn — most commonly the
-# stripped-PATH → Hermes auto-downgrade (ADR-0159 M1). A refcount (not a bool)
+# running right now" on every non-Claude turn. A refcount (not a bool)
 # keeps the marker correct if a chat ever nests dispatches. Read on the /btw
 # side-channel thread, written on the main-turn thread — the guard makes that
 # cross-thread hand-off safe.
@@ -1419,7 +1419,7 @@ def inject_btw(chat_key: str, text: str) -> bool:
 
 # chat_keys whose running turn the operator stopped (/cancel, /stop). Set by
 # _cancel_chat from the command's thread, consumed by the turn's own wrapper:
-# a subprocess-less engine (hermes/opencode/codex) that is cancelled usually
+# a subprocess-less engine (opencode/codex) that is cancelled usually
 # ends with no error and an empty reply, indistinguishable from a silent
 # failure without this.
 _TURN_CANCEL_REQUESTS: set[str] = set()
@@ -1447,15 +1447,13 @@ def _cancel_chat_impl(chat_key: str) -> int:
     """SIGTERM every running claude subprocess for a chat (escalating to
     SIGKILL), AND cancel() any registered subprocess-less engine.
 
-    WA-10: Hermes/OpenCode/Codex drive Ollama-HTTP / CLI-JSON streams with
-    no Popen at all (see the `_running_subprocs` docstring above), so
-    before this fix `/stop` had literally no way to reach them — it only
-    ever looked at `_running_subprocs`, which those three engines never
-    populate. `/stop` during a Hermes/OpenCode/Codex turn silently did
-    nothing and told the user "No task was running", even though one very
-    much was (most common on Discord via the stripped-PATH → Hermes
-    auto-downgrade, ADR-0159 M1 — see `_active_turns` above, which was
-    already fixed for `/btw` but not for this). Every engine reachable via
+    WA-10: OpenCode/Codex drive CLI-JSON streams with no Popen at all
+    (see the `_running_subprocs` docstring above), so before this fix
+    `/stop` had literally no way to reach them — it only ever looked at
+    `_running_subprocs`, which those engines never populate. `/stop` during
+    such a turn silently did nothing and told the user "No task was
+    running", even though one very much was (see `_active_turns` above,
+    which was already fixed for `/btw` but not for this). Every engine reachable via
     `_running_engines` has `.cancel()` (ClaudeCodeEngine included, for
     `/btw` injection); calling it here too is a safe no-op for the Claude
     path since its subprocess is already being killed below.
@@ -1494,7 +1492,7 @@ def _cancel_chat_impl(chat_key: str) -> int:
             log(f"cancel_chat: engine.cancel() failed for chat={chat_key}: {e}")
 
     if not procs:
-        # No subprocess to kill (Hermes/OpenCode/Codex) — engine.cancel()
+        # No subprocess to kill (OpenCode/Codex) — engine.cancel()
         # above IS the stop signal.
         return 1 if engine_cancelled else 0
 
@@ -2070,48 +2068,6 @@ def _persona_has_namespace_gate(persona_name: str | None) -> bool:
 # _compliance_cache / _compliance_cache_lock removed in ADR-0158 M1;
 # mtime-keyed guard cache now lives in spawn_gates.py.
 
-# ── ADR-0126 — Claude Code Local Backend config cache ────────────────────────
-# Mtime-keyed per-tenant cache.  Invalidated when tenant.corvin.yaml changes.
-_cc_local_cfg_cache: dict[str, dict] = {}
-_cc_local_cfg_cache_lock = threading.Lock()
-
-_CC_LOCAL_URL_RE = re.compile(
-    r"^https?://[a-zA-Z0-9._:\[\]-]+(:\d+)?(/.*)?$"
-)
-_CC_LOCAL_MODEL_RE = re.compile(r"^[a-zA-Z0-9._:/\[\]-]{1,128}$")
-
-
-def _read_cc_local_cfg(tenant_id: str) -> dict | None:
-    """Return ``spec.claude_code_local`` from tenant.corvin.yaml (mtime-cached).
-
-    Returns None when the key is absent, disabled, or the file is unreadable.
-    Never raises — operational errors fail-open.
-    """
-    cfg_path = _tenant_yaml_path(tenant_id)
-    try:
-        mtime = cfg_path.stat().st_mtime if cfg_path.is_file() else 0.0
-    except OSError:
-        mtime = 0.0
-    with _cc_local_cfg_cache_lock:
-        cached = _cc_local_cfg_cache.get(tenant_id)
-        if cached and cached.get("mtime") == mtime:
-            return cached.get("cfg")
-    # Load outside the lock to avoid blocking other tenants during I/O.
-    cfg = None
-    try:
-        import yaml as _yaml  # type: ignore  # noqa: PLC0415
-        from pathlib import Path as _Path
-        raw = _yaml.safe_load(_Path(cfg_path).read_text(encoding="utf-8")) if cfg_path.is_file() else {}
-        raw_cfg = (raw or {}).get("spec", {}).get("claude_code_local")
-        if isinstance(raw_cfg, dict) and raw_cfg.get("enabled"):
-            cfg = raw_cfg
-    except Exception:  # noqa: BLE001
-        cfg = None
-    with _cc_local_cfg_cache_lock:
-        _cc_local_cfg_cache[tenant_id] = {"mtime": mtime, "cfg": cfg}
-    return cfg
-
-
 def _tenant_yaml_path(tenant_id: str):
     """Locate `<tenant>/global/tenant.corvin.yaml`. Returns None when
     the layout is the legacy single-tenant one without the yaml file."""
@@ -2132,7 +2088,6 @@ def _check_compliance_or_fail(
     channel: str,
     chat_key: str,
     tenant_id: str | None = None,
-    cc_local_mode: bool = False,
 ) -> str | None:
     """ADR-0042 / Layer 34 — pre-spawn data-classification gate.
 
@@ -2172,7 +2127,6 @@ def _check_compliance_or_fail(
             engine_name, tid,
             prompt=prompt, persona=persona,
             channel=channel, chat_key=chat_key,
-            cc_local_mode=cc_local_mode,
         )
     except Exception as e:  # noqa: BLE001
         log(f"compliance gate: spawn_gates.check_l34 failed ({e!r}), fail-open")
@@ -2238,7 +2192,6 @@ from house_rules import (  # type: ignore  # noqa: E402
     _HOUSE_RULES_RETRY_BACKOFF_MAX_S,
     _HOUSE_RULES_CACHE_TTL_S,
     _HOUSE_RULES_CACHE_MAX,
-    _HOUSE_RULES_HERMES_TIMEOUT_S,
     _HOUSE_RULES_DEGRADE_WINDOW_S,
     _HOUSE_RULES_DEGRADE_THRESHOLD,
     _house_rules_verdict_cache,
@@ -2250,7 +2203,6 @@ from house_rules import (  # type: ignore  # noqa: E402
     _house_rules_parse_verdict,
     _house_rules_classify_chunk_once,
     _house_rules_classify_chunk,
-    _house_rules_classify_hermes,
     _house_rules_classify_with_chain,
     _house_rules_track_degradation,
     _house_rules_classifier,
@@ -3503,7 +3455,7 @@ def _resolve_spawn_inputs(
     # Fail-open: any failure leaves _ato_plan as None; callers handle None.
     _ato_plan = None
     # Valid engine identifiers — anything else is treated as non-CC (no delegation).
-    _ATO_VALID_ENGINES = frozenset({"claude_code", "hermes", "opencode", "codex", "copilot"})
+    _ATO_VALID_ENGINES = frozenset({"claude_code", "opencode", "codex", "copilot"})
     # Valid L34 data-classification strings.
     _ATO_VALID_DCS = frozenset({"PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET"})
     if prompt and prompt.strip():
@@ -4475,48 +4427,31 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         env["CORVIN_ACS_WORKER_MODEL"] = acs_wm
     else:
         env.pop("CORVIN_ACS_WORKER_MODEL", None)
-    # ADR-0126 M1 — Claude Code Local Backend (Ollama redirect).
-    # When claude_code_local is enabled for this tenant, inject the Anthropic
-    # API redirect env vars so claude sends inference to the local Ollama server.
-    # Always strip stale values first so a disabled config cannot leak in.
-    for _cc_local_var in (
+    # Always strip stale provider-redirect values first so a previous
+    # redirect cannot leak in. (CORVIN_CC_LOCAL_MODE / CORVIN_CC_PROVIDER are
+    # leftovers of the ADR-0126 Ollama redirect, removed by ADR-2087 —
+    # stripped so a stale parent env cannot resurrect it.)
+    for _stale_var in (
         "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "ANTHROPIC_DEFAULT_OPUS_MODEL", "CORVIN_CC_LOCAL_MODE", "CORVIN_CC_PROVIDER",
     ):
-        env.pop(_cc_local_var, None)
+        env.pop(_stale_var, None)
     if engine_id == "claude_code":
         _tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
-        _cc_cfg = _read_cc_local_cfg(_tid)
-        if _cc_cfg:
-            env["ANTHROPIC_BASE_URL"] = _cc_cfg["base_url"]
-            env["ANTHROPIC_API_KEY"] = "local"
-            env["ANTHROPIC_AUTH_TOKEN"] = "local"
-            # Only inject model tier vars when non-empty; an empty string would
-            # be interpreted as a model name rather than "use Ollama default".
-            for _tier_var, _tier_key in (
-                ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet_model"),
-                ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "haiku_model"),
-                ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus_model"),
-            ):
-                _tier_val = (_cc_cfg.get(_tier_key) or "").strip()
-                if _tier_val:
-                    env[_tier_var] = _tier_val
-            env["CORVIN_CC_LOCAL_MODE"] = "1"
-        else:
-            # ADR-0181 M3 — provider-based routing for Claude Code. When a
-            # provider is assigned to claude_code for this tenant (and it is not
-            # native anthropic), redirect Claude Code to it via ANTHROPIC_BASE_URL
-            # + the vault-injected key. resolve_claude_code_provider_env is the
-            # single source of truth for this redirect — acs_runtime.py's
-            # manager/worker spawns call the exact same function, so the two
-            # spawn paths can never disagree about where claude_code egresses
-            # (adversarial review, 2026-07-14: they used to, silently).
-            try:
-                from engine_models import resolve_claude_code_provider_env  # type: ignore
-                env.update(resolve_claude_code_provider_env(_tid))
-            except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
-                pass
+        # ADR-0181 M3 — provider-based routing for Claude Code. When a
+        # provider is assigned to claude_code for this tenant (and it is not
+        # native anthropic), redirect Claude Code to it via ANTHROPIC_BASE_URL
+        # + the vault-injected key. resolve_claude_code_provider_env is the
+        # single source of truth for this redirect — acs_runtime.py's
+        # manager/worker spawns call the exact same function, so the two
+        # spawn paths can never disagree about where claude_code egresses
+        # (adversarial review, 2026-07-14: they used to, silently).
+        try:
+            from engine_models import resolve_claude_code_provider_env  # type: ignore
+            env.update(resolve_claude_code_provider_env(_tid))
+        except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
+            pass
     return env
 
 
@@ -4734,8 +4669,8 @@ def _build_context_bar(channel: str, chat_key: str, profile: dict | None) -> str
     parts: list[str] = []
 
     # Agentic compute (ACS-X primitive active for this turn).
-    # READ-AND-CLEAR: engine paths that skip _resolve_spawn_inputs (Hermes,
-    # OpenCode, error-page replies) reach this bar too — popping guarantees a
+    # READ-AND-CLEAR: engine paths that skip _resolve_spawn_inputs
+    # (OpenCode, error-page replies) reach this bar too — popping guarantees a
     # classification is displayed at most once, for the turn that set it
     # (round-3 refutation: priming alone left those paths stale).
     _acs_last = _ACS_X_LAST.pop((str(channel or ""), str(chat_key or "")), None)
@@ -5107,19 +5042,8 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
                            sender=sender, workload_hint=workload_hint)
     env["VOICE_HOOK_RECURSION"] = "1"
-    # ADR-0126 M2 — when claude_code_local mode sets ANTHROPIC_API_KEY='local',
-    # remove it from the subprocess env so the claude CLI can authenticate via
-    # claude.ai Connectors instead of treating 'local' as a sentinel value.
-    # Keep ANTHROPIC_BASE_URL intact for the Ollama redirect fallback path.
-    if env.get("ANTHROPIC_API_KEY") == "local":
-        env.pop("ANTHROPIC_API_KEY", None)
-    if env.get("ANTHROPIC_AUTH_TOKEN") == "local":
-        env.pop("ANTHROPIC_AUTH_TOKEN", None)
-    # Also strip BASE_URL sentinel when local mode was active, so claude CLI
-    # can fall through to claude.ai login if Ollama is unreachable.
-    if env.get("CORVIN_CC_LOCAL_MODE") == "1":
-        env.pop("ANTHROPIC_BASE_URL", None)
-        env.pop("CORVIN_CC_LOCAL_MODE", None)
+    # (ADR-2087 removed the ADR-0126 claude_code_local Ollama redirect and its
+    # 'local' credential sentinel; _build_spawn_env strips any stale value.)
     # Always remove real API credentials from subprocess env to prevent leaks
     # — claude CLI must authenticate via claude.ai Connectors instead.
     # EXCEPTION (ADR-0181 M3): when a non-anthropic provider is assigned to
@@ -5460,7 +5384,6 @@ def _call_claude_streaming_via_engine(
     compliance_msg = _check_compliance_or_fail(
         engine, prompt=prompt, persona=persona,
         channel=channel, chat_key=chat_key,
-        cc_local_mode=env.get("CORVIN_CC_LOCAL_MODE") == "1",
     )
     if compliance_msg is not None:
         _turn_refused("l34_compliance")
@@ -6212,7 +6135,7 @@ def _call_claude_streaming_via_engine(
                     "Your session was reset, so the next message starts fresh.",
                 )
             # error_text is arbitrary provider/transport text — never assume
-            # it's speakable (same bug class as the Hermes fallback above).
+            # it's speakable.
             error_msg = f"Claude API call failed: {error_text[:200]}"
             if "429" in error_text:
                 error_msg += "\n⚠️ Rate limit exceeded — please wait a moment and try again."
@@ -6445,7 +6368,7 @@ def _emit_os_turn_event(
     except Exception:  # noqa: BLE001
         pass
     # ADR-0171 — dual-emit the engine span for the helper-based OS paths
-    # (codex_cli / opencode / hermes). The claude path emits its span explicitly
+    # (codex_cli / opencode). The claude path emits its span explicitly
     # (it bypasses this helper). engine_id comes from the `engine` detail.
     if event_type == "os_turn.started":
         _emit_os_engine_span("start", turn_id=turn_id, chat_key=chat_key,
@@ -6516,7 +6439,7 @@ def _call_codex_streaming_via_engine(
         if isinstance(ap, str) and ap.strip():
             system_parts.append(ap.strip())
     # ADR-0069 M4 — drain queued /btw notes for this engine. Engines without
-    # live mid_stream_inject (Hermes/OpenCode/Codex) buffer /btw text via
+    # live mid_stream_inject (OpenCode/Codex) buffer /btw text via
     # inject_btw's fallback; it MUST be drained here or the note rots forever.
     # Previously drain_btw_buffer() ran ONLY on the Claude path, so the buffered
     # mode designed for these very engines never actually delivered. Prepend the
@@ -6735,6 +6658,32 @@ def _call_codex_streaming_via_engine(
     return final_text
 
 
+CLAUDE_CLI_MISSING_MESSAGE = (
+    "[adapter] Claude Code CLI not found or not logged in — run `corvin setup` "
+    "(install Claude Code and log in), or set CORVIN_CLAUDE_BIN to the claude "
+    "binary. The local Hermes/Ollama fallback was removed (ADR-2087)."
+)
+
+
+def _claude_cli_missing() -> bool:
+    """True when the claude CLI cannot be resolved on this host.
+
+    Probes through the SAME hardened resolver every helper spawn uses
+    (CORVIN_CLAUDE_BIN → PATH → known install locations), NOT a bare
+    ``which("claude")``: the adapter runs under systemd / bridge.sh with a
+    stripped PATH that lacks ~/.local/bin, and a bare which() returned None
+    even when claude was installed (the ADR-0159 M1 false negative).
+    Never raises — a probe failure reads as "present" so a resolver bug can
+    not lock the operator out; the spawn then reports its own error.
+    """
+    try:
+        import shutil as _sh
+        _bin = _resolve_helper_claude_bin()
+        return not (_sh.which(_bin) or os.path.isfile(os.path.expanduser(_bin)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _call_opencode_streaming_via_engine(
     prompt: str, channel: str, chat_key: str,
     profile: dict | None,
@@ -6817,7 +6766,7 @@ def _call_opencode_streaming_via_engine(
         if isinstance(ap, str) and ap.strip():
             system_parts.append(ap.strip())
     # ADR-0069 M4 — drain queued /btw notes for this engine. Engines without
-    # live mid_stream_inject (Hermes/OpenCode/Codex) buffer /btw text via
+    # live mid_stream_inject (OpenCode/Codex) buffer /btw text via
     # inject_btw's fallback; it MUST be drained here or the note rots forever.
     # Previously drain_btw_buffer() ran ONLY on the Claude path, so the buffered
     # mode designed for these very engines never actually delivered. Prepend the
@@ -7062,8 +7011,8 @@ def _run_pre_dispatch_gates(
     Returns None when all gates pass; returns a user-facing error string on deny.
     Fail-open on operational errors (gate module missing, manifest unreadable).
 
-    Called by _call_hermes_streaming_via_engine and
-    _call_opencode_streaming_via_engine before engine.spawn().
+    Called by _call_opencode_streaming_via_engine (and the other non-Claude
+    OS-turn paths) before engine.spawn().
     """
     # ADR-0141 Tier 3 — mandatory security-layer presence gate (first, cheapest).
     cap_msg = _check_capabilities_or_fail(channel=channel, chat_key=chat_key)
@@ -7118,9 +7067,6 @@ def _run_pre_dispatch_gates(
         return compliance_msg
 
     # L35 — network-egress gate
-    # Note: HermesEngine connects only to localhost (loopback). The L35
-    # gate's loopback unconditional-permit rule makes this a near-no-op for
-    # Hermes, but it still runs to produce the GDPR Art. 30 process record.
     egress_msg = _check_egress_or_fail(engine, channel=channel, chat_key=chat_key,
                                        tenant_id=tenant_id)
     if egress_msg is not None:
@@ -7144,326 +7090,11 @@ def _run_pre_dispatch_gates(
     return None
 
 
-def _call_hermes_streaming_via_engine(
-    prompt: str, channel: str, chat_key: str,
-    profile: dict | None,
-    on_status, status_mode: str,
-    workdir: "Path", env: dict,
-) -> str:
-    """Layer 22 — HermesEngine streaming path for the `hermes-worker`
-    persona (opt-in via `profile.default_engine == "hermes"`).
-
-    HermesEngine drives Ollama's HTTP streaming API (POST /api/chat)
-    via stdlib urllib — no subprocess, no new runtime dependency.
-    Simpler than the Claude and OpenCode paths because:
-      - No subprocess lifecycle (_proc, stdin, _register_subproc)
-      - System prompt passes directly to engine.spawn(system=...)
-      - cancel() closes the HTTP response (no SIGTERM needed)
-
-    What this path does NOT do:
-      - No engine.inject() — /btw returns the "kein Task läuft" fallback
-        (HermesEngine.capabilities["mid_stream_inject"] is False).
-      - No hooks (path-gate is Claude-Code-specific).
-      - No session pinning (Ollama HTTP has no session-resume).
-      - ADR-0115 M2: os_turn.started / os_turn.tool_called / os_turn.completed
-        all emitted for full per-turn traceability (EU AI Act Art. 12/13).
-        Tool-call events are emitted via _emit_os_turn_event for each FCB
-        tool round (tool_name + seq counter, metadata-only per GDPR Art. 5).
-
-    ADR-0066 M1 / ADR-0067 M2.1+M2.2 / ADR-0115 M2.
-    """
-    assert _HermesEngine is not None
-    if profile is None:
-        profile = {}
-
-    # ADR-0067 M2.1 — L30.1b / L34 / L35 compliance gates
-    _gate_engine = _HermesEngine()
-    _gate_denial = _run_pre_dispatch_gates(
-        _gate_engine,
-        prompt=prompt,
-        persona=(profile.get("name") or profile.get("persona")),
-        channel=channel,
-        chat_key=chat_key,
-    )
-    if _gate_denial is not None:
-        _turn_refused("gate_denied")
-        return _gate_denial
-
-    # ADR-0133 CLAG M3 — chain integrity gate before Hermes engine spawn (L22).
-    clag_msg = _check_clag_spawn_or_fail(channel=channel, chat_key=chat_key)
-    if clag_msg is not None:
-        _turn_refused("chain_integrity")
-        return clag_msg
-
-    # ADR-0067 M2.2 — turn lifecycle audit event
-    _audit_event("hermes.turn_start",
-                 channel=channel, chat_key=str(chat_key),
-                 details={"engine_id": "hermes",
-                          "persona": profile.get("name", "")})
-
-    # ADR-0123 Tier 1.5: persona os_model pin falls back when no explicit /model set
-    model: str | None = profile.get("model") or profile.get("_persona_os_model") or None
-    system_parts: list[str] = []
-    if (ap := profile.get("append_system")):
-        if isinstance(ap, str) and ap.strip():
-            system_parts.append(ap.strip())
-    # ADR-0069 M4 — drain queued /btw notes for this engine. Engines without
-    # live mid_stream_inject (Hermes/OpenCode/Codex) buffer /btw text via
-    # inject_btw's fallback; it MUST be drained here or the note rots forever.
-    # Previously drain_btw_buffer() ran ONLY on the Claude path, so the buffered
-    # mode designed for these very engines never actually delivered. Prepend the
-    # note to the system prompt so THIS turn receives it.
-    if chat_key:
-        _btw_buffered = drain_btw_buffer(str(chat_key))
-        if _btw_buffered:
-            system_parts.append(_btw_buffered)
-    system_prompt = "\n\n".join(system_parts) if system_parts else None
-
-    _env_idle = os.environ.get("ADAPTER_STREAM_IDLE_TIMEOUT")
-    if _env_idle is not None:
-        try:
-            stream_idle_to = float(_env_idle)
-        except ValueError:
-            stream_idle_to = 300.0
-    else:
-        _ch_idle = (_load_channel_settings(channel) or {}).get(
-            "stream_idle_timeout_seconds"
-        )
-        if _ch_idle is not None:
-            try:
-                stream_idle_to = float(_ch_idle)
-            except (ValueError, TypeError):
-                stream_idle_to = 300.0
-        else:
-            stream_idle_to = 300.0
-    # See call_claude_streaming: a tool_call in flight makes the stream
-    # legitimately silent; apply the wider tool backstop meanwhile.
-    try:
-        tool_idle_to = float(
-            os.environ.get("ADAPTER_TOOL_IDLE_TIMEOUT", "1800")
-        )
-    except ValueError:
-        tool_idle_to = 1800.0
-
-    # ADR-0115 M2 — turn-level traceability state (EU AI Act Art. 12/13)
-    _h_turn_id = "ot_" + secrets.token_hex(6)
-    _h_turn_started = False
-    _h_start_t = time.time()
-    _h_persona = profile.get("persona") or profile.get("name", "")
-
-    engine = _HermesEngine()
-    # WA-10: register so /stop can reach engine.cancel() — Hermes has no
-    # Popen for _running_subprocs to track (see docstring above).
-    _register_engine(chat_key, engine)
-    ev_q: "queue.Queue" = queue.Queue()
-
-    def _stream_thread() -> None:
-        try:
-            for ev in engine.spawn(
-                prompt,
-                system=system_prompt,
-                model=model,
-                working_dir=workdir,
-                env=env,
-                timeout=float("inf"),  # adapter owns the idle watchdog
-            ):
-                ev_q.put(("event", ev))
-        except Exception as e:  # noqa: BLE001
-            ev_q.put(("error", str(e)))
-        finally:
-            ev_q.put(("eof", None))
-
-    thread = threading.Thread(
-        target=_stream_thread, daemon=True,
-        name=f"hermes-stream-{chat_key}",
-    )
-    # ADR-0115 M2 — os_turn.started: emit before HTTP request dispatches (audit-first)
-    _emit_os_turn_event("os_turn.started", _h_turn_id, chat_key, _h_persona,
-                        engine="hermes")
-    _h_turn_started = True
-    _turn_engine_started("hermes")
-    thread.start()
-
-    accumulated: list[str] = []
-    error_text: str | None = None
-    timed_out = False
-    last_event = time.time()
-    last_event_type = ""
-    _h_tools_called = 0
-
-    try:
-        while True:
-            try:
-                kind, payload = ev_q.get(timeout=1.0)
-            except queue.Empty:
-                in_tool = last_event_type == "tool_call"
-                idle_limit = tool_idle_to if in_tool else stream_idle_to
-                if idle_limit > 0 and time.time() - last_event > idle_limit:
-                    log(f"hermes stream idle > {idle_limit}s "
-                        f"({'awaiting tool result' if in_tool else 'awaiting tokens'}) "
-                        f"— cancel")
-                    timed_out = True
-                    try:
-                        engine.cancel()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    break
-                continue
-
-            last_event = time.time()
-            if kind == "event":
-                ev = payload
-                last_event_type = ev.type
-                if ev.type == "text_delta" and ev.text:
-                    accumulated.append(ev.text)
-                elif ev.type == "tool_call":
-                    # ADR-0115 M2 — emit os_turn.tool_called for every FCB tool round.
-                    # tool_name from ev.text (set by FCB) or ev.raw["name"] fallback.
-                    # Metadata-only: name + seq counter, never tool inputs (GDPR Art. 5).
-                    _h_tools_called += 1
-                    _h_tool_name = ev.text or ""
-                    if not _h_tool_name and isinstance(ev.raw, dict):
-                        _h_tool_name = ev.raw.get("name", "")
-                    _emit_os_turn_event(
-                        "os_turn.tool_called", _h_turn_id, chat_key, _h_persona,
-                        engine="hermes",
-                        tool_name=_h_tool_name,
-                        seq=_h_tools_called,
-                    )
-                elif ev.type == "turn_completed":
-                    if ev.text and not accumulated:
-                        accumulated.append(ev.text)
-                    break
-                elif ev.type == "error":
-                    error_text = ev.error or "hermes error"
-                    break
-            elif kind == "error":
-                error_text = str(payload)
-                break
-            elif kind == "eof":
-                break
-
-        thread.join(timeout=5)
-        final_text = "".join(accumulated).strip()
-
-        # A turn that produced no usable output must NEVER return a silent empty
-        # string — that is the "no engine reachable" UX gap (ADR-0159 M1): a fresh
-        # install with no claude CLI auto-selects hermes, but if Ollama is also
-        # absent the engine never streams, the watchdog fires (timed_out=True with
-        # error_text still empty), and the old code fell through to the success
-        # branch and returned "". A brand-new user then sees a silent empty reply
-        # after ~10s. Treat timed_out as a first-class surface-a-message condition
-        # independent of error_text, mirroring ADR-0159's "degradation is not
-        # silent" principle.
-        if timed_out:
-            _turn_refused("timeout")          # also when a partial reply is delivered
-        if (error_text or timed_out) and not final_text:
-            if _cancel_requested(chat_key):
-                _turn_refused("cancelled", cancelled=True)
-            elif not timed_out:
-                _turn_refused("engine_error")
-            if error_text:
-                log(f"hermes streaming error: {error_text[:200]}")
-            else:
-                log("hermes produced no output before the idle watchdog fired "
-                    "(Ollama unreachable or model not pulled?)")
-            # ADR-0067 M2.2 — error audit event
-            _audit_event(
-                "hermes.stream_timeout" if timed_out else "hermes.turn_error",
-                channel=channel, chat_key=str(chat_key),
-                details={"engine_id": "hermes",
-                         "error_class": "TimeoutError" if timed_out else "StreamError"},
-            )
-            if timed_out:
-                # Distinguish "never produced any event" (Ollama almost certainly
-                # not running) from "started then stalled mid-stream".
-                if not last_event_type:
-                    _audit_event("hermes.ollama_unavailable",
-                                 channel=channel, chat_key=str(chat_key),
-                                 details={"engine_id": "hermes", "error_class": "Unreachable"})
-                    # Bug report 2026-07-12: this string used to be spoken
-                    # VERBATIM (backticks, flags, env-var names and all) —
-                    # a naive TTS reading of CLI syntax sounds like "reading
-                    # out the command line" instead of a sentence. The
-                    # visible text stays technical/actionable (an operator
-                    # debugging this wants the exact commands); the voice-tag
-                    # override below gives TTS a natural spoken alternative
-                    # instead — extract_voice_override() strips that tag from
-                    # what's shown and uses its content as the spoken text
-                    # (same mechanism the model itself uses to author a
-                    # distinct spoken reply).
-                    return with_voice_override(
-                        "⚠ No engine reachable: the claude CLI is not installed and "
-                        "Hermes/Ollama did not respond (engine spawn failed — no stream "
-                        "events). Start `ollama serve` and pull a model, or install the "
-                        "claude CLI / set CORVIN_OS_ENGINE.",
-                        "I can't reach any AI engine right now — neither Claude Code "
-                        "nor the local Hermes model are responding. Please check your "
-                        "engine settings.",
-                    )
-                return with_voice_override(
-                    "⏱️ Request cancelled — Hermes/Ollama did not deliver stream events for too long.",
-                    "The request was cancelled because Hermes took too long to respond.",
-                )
-            if "ollama" in error_text.lower() or "unavailable" in error_text.lower():
-                _audit_event("hermes.ollama_unavailable",
-                             channel=channel, chat_key=str(chat_key),
-                             details={"engine_id": "hermes", "error_class": "URLError"})
-                return with_voice_override(
-                    "Hermes/Ollama is unreachable. "
-                    "Please start `ollama serve` or check CORVIN_OLLAMA_BASE_URL.",
-                    "Hermes is currently unreachable. Please check whether Ollama is running.",
-                )
-            # error_text is arbitrary provider/transport text (stack fragments,
-            # URLs, raw JSON) — never assume it's speakable. A generic natural
-            # sentence for TTS; the technical detail stays in the visible text.
-            return with_voice_override(
-                f"Hermes API call failed: {error_text[:200]}",
-                "The call to the Hermes model failed.",
-            )
-
-        # ADR-0067 M2.2 — success audit event
-        _audit_event("hermes.turn_end",
-                     channel=channel, chat_key=str(chat_key),
-                     details={"engine_id": "hermes"})
-
-        try:
-            _budget_account_turn(chat_key, "hermes", prompt, final_text)
-        except Exception as _exc:  # noqa: BLE001
-            log(f"budget account_turn (hermes) failed: {_exc}")
-
-        # ADR-0067 M2.5 — Prometheus metrics (best-effort)
-        try:
-            from engine_metrics import record_hermes_turn  # type: ignore
-            _outcome_h = "timeout" if timed_out else ("error" if error_text else "success")
-            record_hermes_turn(
-                outcome=_outcome_h,
-                persona=(profile or {}).get("name", ""),
-                duration_s=0.0,
-            )
-        except Exception:  # noqa: BLE001
-            pass
-
-        return final_text
-    finally:
-        _unregister_engine(chat_key)
-        # ADR-0115 M2 — os_turn.completed: always paired with started (EU AI Act Art. 12/13)
-        if _h_turn_started:
-            _emit_os_turn_event(
-                "os_turn.completed", _h_turn_id, chat_key, _h_persona,
-                engine="hermes",
-                duration_ms=int((time.time() - _h_start_t) * 1000),
-                timed_out=timed_out,
-                tools_called=_h_tools_called,
-                error_type=("engine_error" if error_text else ""),
-            )
-
-
 # ── Turn task (ADR-0080 M1, ADR-2081 P2) ─────────────────────────────────────
 # Every bridge turn gets its task record the moment it is picked up — before
 # context assembly, which alone took 60–80 s per turn on 2026-09-27 — and for
 # EVERY engine, not only claude_code (the task used to be created deep inside
-# _call_claude_streaming_via_engine, so hermes/opencode/codex turns had none).
+# _call_claude_streaming_via_engine, so opencode/codex turns had none).
 # The record is closed exactly once, by the wrapper, because a retry recurses
 # through call_claude_streaming and the first attempt's `finally` runs AFTER
 # the successful retry: an engine path that closed the task itself turned a
@@ -7790,32 +7421,11 @@ def _call_claude_streaming_impl(
                            sender=sender, workload_hint=workload_hint)
     env["VOICE_HOOK_RECURSION"] = "1"
 
-    # Bridge 404 fix (2026-08-30): Sanitize local-mode sentinels, matching call_claude() logic.
-    # When claude_code_local mode sets ANTHROPIC_API_KEY='local', remove it so claude CLI
-    # authenticates via connectors instead of treating 'local' as a sentinel.
-    # Also strip BASE_URL sentinel when local mode was active, so claude CLI can fall through
-    # to claude.ai login if Ollama is unreachable (same as call_claude K1-006).
-    if env.get("ANTHROPIC_API_KEY") == "local":
-        env.pop("ANTHROPIC_API_KEY", None)
-    if env.get("ANTHROPIC_AUTH_TOKEN") == "local":
-        env.pop("ANTHROPIC_AUTH_TOKEN", None)
-    if env.get("CORVIN_CC_LOCAL_MODE") == "1":
-        env.pop("ANTHROPIC_BASE_URL", None)
-        env.pop("CORVIN_CC_LOCAL_MODE", None)
     # Provider mode: keep BASE_URL + credential for proxy auth (ADR-0181 M3).
     if not env.get("CORVIN_CC_PROVIDER"):
         env.pop("ANTHROPIC_API_KEY", None)
         env.pop("ANTHROPIC_AUTH_TOKEN", None)
         env.pop("ANTHROPIC_API_BASE", None)
-
-    # Ollama/Hermes env-stripping (ADR-XXXX): filter subprocess env to safe vars only.
-    # When hermes_bootstrap subprocess starts `ollama serve`, it must not inherit
-    # CLAUDE_* or other bridge-specific vars that can corrupt Ollama config → 404 errors.
-    # Whitelist: only Ollama-safe and system vars that Ollama/subprocess actually need.
-    _OLLAMA_ENV_WHITELIST = {"OLLAMA_HOST", "OLLAMA_NUM_PARALLEL", "PATH", "HOME", "USER", "TMPDIR"}
-    _env_for_ollama = {k: v for k, v in env.items() if k in _OLLAMA_ENV_WHITELIST}
-    # Store filtered env in a special key for hermes_bootstrap to use
-    env["_OLLAMA_SUBPROCESS_ENV"] = json.dumps(_env_for_ollama)
 
     has_session = any(workdir.glob(".claude*")) or (workdir / ".session_started").exists()
 
@@ -7949,59 +7559,32 @@ def _call_claude_streaming_impl(
                 _spec_engine = (_ty.get("spec") or {}).get("default_engine")
                 if _spec_engine and isinstance(_spec_engine, str):
                     profile = dict(profile or {})
-                    profile["default_engine"] = _spec_engine
-                    _hermes_model = (_ty.get("spec") or {}).get("hermes_model")
-                    if _hermes_model and "model" not in profile:
-                        profile["model"] = _hermes_model
+                    # ADR-2087: a stored `hermes` / local-Ollama engine maps to
+                    # claude_code on read (spec.hermes_model is ignored).
+                    profile["default_engine"] = (
+                        _normalize_legacy_engine_id(_spec_engine) or _spec_engine
+                    )
         except Exception:  # noqa: BLE001 — tenant YAML optional, fail-open
             pass
 
-    # ADR-0159 M1 — Auto-detect primary OS engine when nothing was set by policy,
-    # persona pin, or per-chat /engine command.
-    # Ladder: CORVIN_OS_ENGINE env var → claude CLI present → claude_code
-    #                                  → else              → hermes
+    # ADR-0159 M1 — primary OS engine when nothing was set by policy, persona
+    # pin, or per-chat /engine command: CORVIN_OS_ENGINE env var → claude_code.
+    # ADR-2087 removed the Hermes auto-fallback: a host without a usable claude
+    # CLI stays on claude_code and the turn surfaces a clear "claude CLI not
+    # found — run setup" error instead of silently switching to local Ollama.
     # This is only a fallback: an existing default_engine in profile is respected.
     if not (profile and profile.get("default_engine")):
         _env_engine = os.environ.get("CORVIN_OS_ENGINE", "").strip()
         if _env_engine:
             profile = dict(profile or {})
-            profile["default_engine"] = _env_engine
-        else:
-            import shutil as _shutil_eng_detect
-            # ADR-0159 M1 fix — probe the claude CLI through the SAME hardened
-            # resolver the WorkerEngine and every helper spawn already use
-            # (CORVIN_CLAUDE_BIN → PATH → known install locations), NOT a bare
-            # which("claude"). The adapter runs under systemd / bridge.sh with a
-            # stripped PATH that lacks ~/.local/bin (where Claude Code installs
-            # the CLI); a bare which() then returns None EVEN WHEN claude is
-            # installed, silently downgrading the OS-turn to hermes → Ollama
-            # timeout ("hermes connect error: timed out") although claude was the
-            # intended engine. This is the identical false-negative commit
-            # 79de989 fixed for the fail-closed L44 helper path; that fix missed
-            # this auto-detect probe. Only fall to hermes when claude is GENUINELY
-            # absent (resolver returns the bare name and nothing on disk matches).
-            _claude_bin = _resolve_helper_claude_bin()
-            _claude_present = bool(
-                _shutil_eng_detect.which(_claude_bin)
-                or os.path.isfile(os.path.expanduser(_claude_bin))
+            profile["default_engine"] = (
+                _normalize_legacy_engine_id(_env_engine) or _env_engine
             )
-            if not _claude_present:
-                # claude CLI genuinely unavailable — auto-select hermes so a
-                # fresh install without Anthropic credentials still boots.
-                profile = dict(profile or {})
-                profile["default_engine"] = "hermes"
-                _log_adapter = None
-                try:
-                    import logging as _lg_eng
-                    _log_adapter = _lg_eng.getLogger("corvin.adapter")
-                except Exception:  # noqa: BLE001
-                    pass
-                if _log_adapter is not None:
-                    _log_adapter.info(
-                        "[engine-auto-detect] claude CLI not found — "
-                        "defaulting to hermes (ADR-0159 M1). "
-                        "Install claude CLI or set CORVIN_OS_ENGINE to override."
-                    )
+    elif profile and _is_legacy_engine_id(profile.get("default_engine")):
+        # A per-chat / persona / policy pin naming a removed engine (ADR-2087).
+        profile = dict(profile)
+        profile["default_engine"] = _normalize_legacy_engine_id(
+            profile.get("default_engine"))
 
     # Persist the resolved OS engine for anonymous instance-count attribution.
     # The activity ping (ADR-0180) fires from the out-of-process corvin-serve
@@ -8023,7 +7606,7 @@ def _call_claude_streaming_impl(
 
     # ADR-0150 LIC-BRIDGE-ENGINE-CHATTURN-01: charge chat_turns_per_day ONCE here,
     # at the engine-AGNOSTIC dispatch point, so EVERY bridge OS-turn (claude_code,
-    # codex_cli, opencode, hermes) is metered — not just the claude path. (R8 placed
+    # codex_cli, opencode) is metered — not just the claude path. (R8 placed
     # the charge inside _call_claude_streaming_via_engine, which the non-claude
     # branches below return before ever reaching.) Fail-CLOSED; deny = refusal
     # string (all four branches return a response string). Dual-env test bypass.
@@ -8054,7 +7637,9 @@ def _call_claude_streaming_impl(
     # ── ADR-0165 M5 — ATO delegation routing (ACTUAL, not advisory) ──────────
     # Guard: CORVIN_ATO_M5_ENABLED=1, engine not already set by policy/persona,
     # prompt present, ato_classify importable.
-    # Priority:  CONFIDENTIAL/SECRET → delegate_hermes (L34 locality gate)
+    # Priority:  CONFIDENTIAL/SECRET → l34_block refusal (L34 locality gate —
+    #            no bundled local engine since ADR-2087; never falls through
+    #            to a cloud engine)
     #            one_shot + short     → delegate_copilot (zero-cost turn)
     # Does NOT override engine pinned by policy gate or persona engine_lock.
     _m5_attempted = False  # local flag — covers profile=None where dict-key cannot be set
@@ -8077,58 +7662,34 @@ def _call_claude_streaming_impl(
             _m5_plan = _ato_m5_cls(
                 prompt, data_classification=_m5_dc, engine_id="claude_code"
             )
-            if _m5_plan.delegation_target == "delegate_hermes":
-                if _HermesEngine is not None:
-                    # L34: CONFIDENTIAL/SECRET → route to local Hermes worker.
-                    # Audit-first: write routing decision BEFORE mutating profile
-                    # (the profile mutation is the irreversible in-process action;
-                    # without this ordering, a dropped audit leaves the L34 routing
-                    # decision unrecorded in the hash chain).
-                    try:
-                        _audit_event(
-                            "task_orchestrator.delegation_routed",
-                            channel=channel, chat_key=str(chat_key),
-                            details={
-                                "task_type": _m5_plan.task_type,
-                                "delegation_target": "delegate_hermes",
-                                "data_classification": _m5_dc,
-                                "confidence": str(round(_m5_plan.confidence, 3)),
-                                "engine_id": "claude_code",
-                            },
-                        )
-                    except Exception:  # noqa: BLE001 — audit best-effort
-                        pass
-                    # Override profile so the Hermes guard below picks it up.
-                    profile = dict(profile or {})
-                    profile["default_engine"] = "hermes"
-                    profile["_ato_m5_routed"] = True
-                else:
-                    # L34 HARD BLOCK: CONFIDENTIAL/SECRET requires local Hermes, but
-                    # Hermes (Ollama) is not available.  Fail-closed — do NOT fall through
-                    # to a cloud engine.  Operator must install Ollama before enabling
-                    # CORVIN_ATO_M5_ENABLED with CONFIDENTIAL data.
-                    try:
-                        _audit_event(
-                            "task_orchestrator.delegation_routed",
-                            channel=channel, chat_key=str(chat_key),
-                            details={
-                                "task_type": _m5_plan.task_type,
-                                "delegation_target": "delegate_hermes",
-                                "data_classification": _m5_dc,
-                                "confidence": str(round(_m5_plan.confidence, 3)),
-                                "engine_id": "claude_code",
-                            },
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-                    _turn_refused("l34_block", _retry_count)
-                    return (
-                        "[ATO M5 — L34 Compliance Block]\n"
-                        f"Data classification '{_m5_dc}' requires local Hermes engine "
-                        f"(Ollama), but Hermes is not available on this host.\n\n"
-                        f"The request cannot be processed via a cloud engine.\n"
-                        f"Fix: install and start Ollama, then restart the adapter."
+            if (_m5_plan.delegation_target == "l34_block"
+                    or _m5_dc in ("CONFIDENTIAL", "SECRET")):
+                # L34 HARD BLOCK: CONFIDENTIAL/SECRET data needs a local engine,
+                # and ADR-2087 removed the bundled one (Hermes). Fail-closed —
+                # do NOT fall through to a cloud engine. Audit-first.
+                try:
+                    _audit_event(
+                        "task_orchestrator.delegation_routed",
+                        channel=channel, chat_key=str(chat_key),
+                        details={
+                            "task_type": _m5_plan.task_type,
+                            "delegation_target": "l34_block",
+                            "data_classification": _m5_dc,
+                            "confidence": str(round(_m5_plan.confidence, 3)),
+                            "engine_id": "claude_code",
+                        },
                     )
+                except Exception:  # noqa: BLE001
+                    pass
+                _turn_refused("l34_block", _retry_count)
+                return (
+                    "[ATO M5 — L34 Compliance Block]\n"
+                    f"Data classification '{_m5_dc}' requires a local engine, "
+                    f"and none is available on this host.\n\n"
+                    f"The request cannot be processed via a cloud engine.\n"
+                    f"Fix: set CORVIN_DATA_CLASSIFICATION=PUBLIC or INTERNAL if "
+                    f"the data allows it, or configure a user-defined local engine."
+                )
             elif _m5_plan.delegation_target == "delegate_copilot":
                 # Short one_shot → CopilotCliEngine (ATO M5 authorised, bypass
                 # worker-only OS-turn guard).  Falls through to default engine
@@ -8213,8 +7774,7 @@ def _call_claude_streaming_impl(
 
     # ── ADR-0165 M7 — ATO compute bypass (ACTUAL, not advisory) ─────────────
     # Guard: CORVIN_ATO_M7_ENABLED=1, engine not set by policy/persona, and
-    # M5 has NOT already routed (returning a blueprint after M5 set
-    # hermes-routing for CONFIDENTIAL data would void the L34 locality gate).
+    # M5 has NOT already routed.
     if (
         os.environ.get("CORVIN_ATO_M7_ENABLED", "") == "1"
         and not _engine_from_policy
@@ -8282,7 +7842,7 @@ def _call_claude_streaming_impl(
     # Mark this chat as having a live OS turn for the entire dispatch, across
     # EVERY engine branch below, so a concurrent /btw on the side-channel thread
     # can tell a running task from an idle chat even when the chosen engine
-    # cannot accept a live mid-stream note (Hermes/OpenCode/Codex). Released in
+    # cannot accept a live mid-stream note (OpenCode/Codex). Released in
     # the finally so an engine exception, a gate-refusal string, or a normal
     # return all clear the marker. `inject_btw` (live delivery) is orthogonal —
     # this only powers the "is a task running?" question for the /btw ACK.
@@ -8316,23 +7876,6 @@ def _call_claude_streaming_impl(
             and _OpenCodeEngine is not None
         ):
             return _call_opencode_streaming_via_engine(
-                prompt, channel, chat_key, profile,
-                on_status, status_mode,
-                workdir, env,
-            )
-
-        # Layer 22 — HermesEngine pre-dispatch (ADR-0066 M1). A persona /
-        # chat_profile that pins `default_engine: "hermes"` (the bundled
-        # `hermes-worker` persona) routes through a dedicated streaming
-        # function. HermesEngine drives Ollama HTTP — no subprocess, no live
-        # /btw, no hooks, no path-gate, no session-pinning. Falls back
-        # gracefully if Ollama is unreachable.
-        if (
-            profile
-            and profile.get("default_engine") == "hermes"
-            and _HermesEngine is not None
-        ):
-            return _call_hermes_streaming_via_engine(
                 prompt, channel, chat_key, profile,
                 on_status, status_mode,
                 workdir, env,
@@ -8373,6 +7916,16 @@ def _call_claude_streaming_impl(
             return with_voice_override(
                 "[adapter] ClaudeCodeEngine not available — check claude CLI installation.",
                 "I can't find the Claude Code command line. Please check your installation.",
+            )
+        # ADR-2087: there is no local fallback engine any more. A host without a
+        # usable claude CLI gets a clear, actionable refusal instead of a spawn
+        # error deep inside the engine (the fake-CLI test hook needs no binary).
+        if os.environ.get("ADAPTER_FAKE_CLAUDE") != "1" and _claude_cli_missing():
+            _turn_refused("engine_unavailable", _retry_count)
+            return with_voice_override(
+                CLAUDE_CLI_MISSING_MESSAGE,
+                "Claude Code is not installed or not set up on this machine. "
+                "Please run the Corvin setup.",
             )
         return _call_claude_streaming_via_engine(
             prompt, channel, chat_key, mode, add_dir, profile,
@@ -8630,9 +8183,9 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
             input=text, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             # Parent cap for the annex ladder (VOICE-F7/F8): summarize.py runs
-            # its annex CLI (40s) then Hermes (35s) = 75s inside this 90s cap, so
-            # the Hermes fallback always gets a full turn. Do NOT lower below the
-            # child sum — see summarize.py::_ANNEX_* budgets.
+            # its annex CLI budget inside this 90s cap (the local-Ollama annex
+            # fallback was removed by ADR-2087). Do NOT lower below the child
+            # budget — see summarize.py::_ANNEX_* budgets.
             env=env, timeout=90, check=True,
         )
         result = out.stdout.strip()
@@ -8665,8 +8218,8 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
              "--lang", lang, "--metapher-mode"],
             input=text, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            # Parent cap for the annex ladder (VOICE-F7/F8): annex CLI 40s +
-            # Hermes 35s = 75s inside this 90s cap. See summarize.py::_ANNEX_*.
+            # Parent cap for the annex ladder (VOICE-F7/F8): the annex CLI
+            # budget fits inside this 90s cap. See summarize.py::_ANNEX_*.
             env=env, timeout=90, check=True,
         )
         result = out.stdout.strip()
@@ -9323,7 +8876,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
     # around a truncated fragment of the original answer — i.e. neither a
     # summary nor the profile language. It stays as the LAST-RESORT generator
     # for an install that has no summarize.py at all; the LLM path has its own
-    # bounded degrade ladder (CLI → Hermes → capped structural fallback) for
+    # bounded degrade ladder (CLI → capped structural fallback) for
     # the timeout case this preference was originally meant to avoid.
     summarizer = SCRIPTS_DIR / "summarize.py"
     summarizer_fallback = SCRIPTS_DIR / "summarize_smart.py"
@@ -9454,9 +9007,9 @@ def build_voice_summary(text: str, max_chars: int = 400,
             input=summarizer_input, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             # Parent cap for the main summary ladder (VOICE-F7/F8): summarize.py
-            # runs its CLI backend (90s) then the Hermes fallback (45s) = 135s
-            # inside this 150s cap, so a hung/slow CLI can't starve Hermes of a
-            # turn. Do NOT lower below the child sum — see summarize.py::
+            # runs its CLI backend inside this 150s cap (the local-Ollama
+            # fallback was removed by ADR-2087). Do NOT lower below the child
+            # budget — see summarize.py::
             # _SUMMARY_* budgets. VOICE-F8 raised this from 120s: at 120s the
             # child CLI budget had to be 45s, below its measured ~50s median,
             # so every summary degraded to near-verbatim (23/23 in the field).
@@ -9515,7 +9068,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
         # CalledProcessError/TimeoutExpired carry captured stderr (OSError does
         # not — the subprocess never started) — surface it instead of just the
         # exception type, so "CLI exited non-zero" is distinguishable from "CLI
-        # timed out because Ollama was cold" from the logs alone.
+        # timed out" from the logs alone.
         # PII floor: argparse and most CLI errors echo the OFFENDING ARGV back
         # on stderr — and argv carries `--task <the user's question>`. Logging
         # the raw tail therefore wrote the user's prompt in clear text into
@@ -10580,7 +10133,6 @@ _ENGINE_SHORT: dict[str, str] = {
     "claude_code": "Claude Code",
     "codex_cli":   "Codex CLI",
     "opencode":    "OpenCode",
-    "hermes":      "Hermes (local)",
     "copilot":     "Copilot",
 }
 
@@ -11401,8 +10953,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 return
         delivered = inject_btw(chat_key, btw_text) if btw_text else False
         # Robustness: /btw only injects LIVE on engines with mid_stream_inject
-        # (ClaudeCode). On Hermes/OpenCode/Codex — reached on Discord most often
-        # via the stripped-PATH → Hermes auto-downgrade (ADR-0159 M1) — inject
+        # (ClaudeCode). On OpenCode/Codex inject
         # returns False even though a task IS running, which used to surface the
         # misleading "No task is running right now" and DROP the note. When a
         # turn is genuinely active we instead queue the note into the /btw buffer
@@ -12584,7 +12135,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # L34 gate: the compliance subprocess uses claude -p (us_cloud locality).
     # Skip it when the tenant's data-classification policy would block a
     # us_cloud engine for the current channel/chat (e.g. CONFIDENTIAL zone
-    # restricted to hermes-local only).
+    # restricted to local engines only).
     if _ulo_metadata_mod is not None and _ulo_compliance_mod is not None and answer and chat_key:
         _ulo_l34_ok = True
         try:
@@ -13084,26 +12635,7 @@ def main() -> int:
     log(f"adapter started, polling {INBOX} every {POLL_INTERVAL}s "
         f"(MAX_PARALLEL={MAX_PARALLEL}, per-chat sequential)")
 
-    # Voice-summary model prewarm (2026-07-24). The voice summary falls back to
-    # a bounded no-LLM readout only when BOTH backends fail; the realistic way
-    # that happens for an active user is a COLD local model on the very first
-    # voice note after boot (a cold qwen3:8b load overruns the 60 s summary
-    # timeout). House-rules keeps the same model warm on every task afterwards,
-    # so we only need to cover the boot gap: fire one fire-and-forget prewarm in
-    # a daemon thread. Fail-soft — no Ollama (Claude-CLI-only / cloud install) →
-    # it prints "prewarm-skipped" and exits 0, nothing downstream is affected.
-    # Opt out with CORVIN_VOICE_PREWARM=0.
-    if os.environ.get("CORVIN_VOICE_PREWARM", "1").strip().lower() not in ("0", "false", "no"):
-        def _prewarm_voice_model() -> None:
-            try:
-                subprocess.run(
-                    [sys.executable, str(SCRIPTS_DIR / "summarize.py"), "--prewarm"],
-                    capture_output=True, text=True, timeout=150,
-                )
-            except Exception:  # noqa: BLE001 — best-effort; never affects boot
-                pass
-        threading.Thread(target=_prewarm_voice_model, name="voice-prewarm",
-                         daemon=True).start()
+    # (ADR-2087 removed the local-Ollama voice-summary prewarm and CORVIN_VOICE_PREWARM.)
 
     # Boot snapshot — useful when grepping /var/log for "why is this run
     # different". Covers logger config, env flags, parallelism budget,
@@ -13226,46 +12758,12 @@ def main() -> int:
             pass
 
     # L44 house-rules classifier health check — runs once at boot so operators
-    # learn about a broken classifier before users hit it in production. A fresh
-    # install with a missing Ollama model or unauthenticated cloud CLI would
-    # otherwise block every request with a confusing "safety-check" message.
+    # learn about a broken classifier before users hit it in production.
+    # ADR-2087: the only classifier backend is the cloud CLI helper — the
+    # local-Ollama probe (CORVIN_HERMES_URL / CORVIN_HERMES_MODEL) is gone.
     try:
-        import house_rules as _hr_boot  # type: ignore
-        hermes_url_boot = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
-        # Quick probe: does Ollama respond at all?
-        _ollama_ok = False
-        try:
-            import urllib.request as _ur_boot
-            with _ur_boot.urlopen(f"{hermes_url_boot}/api/tags", timeout=3.0) as _r:
-                import json as _json_boot
-                _tags = _json_boot.loads(_r.read())
-                _models = [m.get("name", "") for m in _tags.get("models", [])]
-                _ollama_ok = bool(_models)
-                if not _ollama_ok:
-                    log(
-                        "house-rules: WARNING — Ollama is reachable but has NO models "
-                        "pulled. The L44 classifier will fail-closed and block every "
-                        "request. Fix: ollama pull qwen3:1.7b  (or any supported model)"
-                    )
-                else:
-                    _configured = (
-                        os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
-                    )
-                    if _configured not in _models:
-                        log(
-                            f"house-rules: WARNING — configured classifier model "
-                            f"{_configured!r} not found in Ollama (available: {_models}). "
-                            f"Auto-discover will pick {_models[0]!r} as fallback. "
-                            f"Set CORVIN_HERMES_MODEL={_models[0]} to suppress this."
-                        )
-                    else:
-                        log(f"house-rules: classifier model {_configured!r} confirmed in Ollama")
-        except Exception as _oe:
-            log(
-                f"house-rules: WARNING — Ollama not reachable at {hermes_url_boot} "
-                f"({_oe}). L44 will fall back to cloud Haiku. If cloud is also "
-                f"unavailable, every request will be blocked. Check: is Ollama running?"
-            )
+        from house_rules import house_rules_boot_health_check as _hr_boot_check  # type: ignore
+        _hr_boot_check(log_fn=log)
     except Exception as e:  # noqa: BLE001
         log(f"house-rules: boot health-check skipped ({e})")
 

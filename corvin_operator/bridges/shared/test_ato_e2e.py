@@ -485,42 +485,42 @@ CASES: list[Case] = [
          "Summarise the patient records in this dataset.",
          "one_shot",
          data_classification="CONFIDENTIAL",
-         expected_delegation="delegate_hermes",
-         note="M5: CONFIDENTIAL → Hermes even for one_shot task"),
+         expected_delegation="l34_block",
+         note="M5: CONFIDENTIAL → L34 refusal even for one_shot task (ADR-2087)"),
 
     Case("m5_02_secret_question",
          "What is the current API key rotation policy?",
          "one_shot",
          data_classification="SECRET",
-         expected_delegation="delegate_hermes",
-         note="M5: SECRET → Hermes"),
+         expected_delegation="l34_block",
+         note="M5: SECRET → L34 refusal"),
 
     Case("m5_03_confidential_iterative",
          "Fix the failing test that processes patient data.",
          "iterative_fix",
          data_classification="CONFIDENTIAL",
-         expected_delegation="delegate_hermes",
+         expected_delegation="l34_block",
          note="M5: CONFIDENTIAL wins over task type for delegation"),
 
-    Case("m5_04_internal_no_hermes",
+    Case("m5_04_internal_no_l34_block",
          "Fix the broken authentication test.",
          "iterative_fix",
          data_classification="INTERNAL",
          expected_delegation=None,
-         note="M5: INTERNAL → no Hermes delegation (not local-only)"),
+         note="M5: INTERNAL → no L34 refusal (not local-only)"),
 
     Case("m5_05_public_copilot",
          "List the git tags.",
          "one_shot",
          data_classification="PUBLIC",
          expected_delegation="delegate_copilot",
-         note="M5: PUBLIC + one_shot + short → Copilot (not Hermes)"),
+         note="M5: PUBLIC + one_shot + short → Copilot (not an L34 refusal)"),
 
     Case("m5_06_secret_compute",
          "Berechne Statistiken für den verschlüsselten Datensatz.",
          "compute",
          data_classification="SECRET",
-         expected_delegation="delegate_hermes",
+         expected_delegation="l34_block",
          note="M5: SECRET overrides even compute task type for delegation"),
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -642,14 +642,14 @@ class TestATOClassifyModule(unittest.TestCase):
             "Process the patient data.",
             data_classification="CONFIDENTIAL",
         )
-        self.assertEqual(plan.delegation_target, "delegate_hermes")
+        self.assertEqual(plan.delegation_target, "l34_block")
 
     def test_delegation_secret(self):
         plan = _classify_module(
             "Analyse the API keys.",
             data_classification="SECRET",
         )
-        self.assertEqual(plan.delegation_target, "delegate_hermes")
+        self.assertEqual(plan.delegation_target, "l34_block")
 
     def test_no_delegation_internal(self):
         plan = _classify_module("Fix the failing test.", data_classification="INTERNAL")
@@ -683,10 +683,10 @@ class TestATOClassifyModule(unittest.TestCase):
         self.assertIsNone(plan.delegation_target)
 
     def test_non_cc_engine_no_delegation(self):
-        # Non-CC engines (Hermes, OpenCode) must NOT trigger M5 delegation
+        # Non-CC engines (OpenCode, Codex) must NOT trigger M5 delegation
         plan = _classify_module(
             "What is 2 + 2?",
-            engine_id="hermes",  # already a worker — no re-delegation
+            engine_id="opencode",  # already a worker — no re-delegation
         )
         self.assertIsNone(plan.delegation_target)
 
@@ -858,11 +858,11 @@ class TestATOParitySubprocessVsModule(unittest.TestCase):
         self.assertEqual(self._module_type(task), "one_shot")
 
     def test_parity_non_cc_engine_no_delegation(self):
-        """Non-CC engine (hermes) must produce delegation_target=None in subprocess (ADR-0029)."""
+        """Non-CC engine (opencode) must produce delegation_target=None in subprocess (ADR-0029)."""
         import tempfile  # noqa: PLC0415
         result = subprocess.run(
             [sys.executable, str(_INTAKE_TOOL)],
-            input=json.dumps({"task": "What is the token limit?", "engine_id": "hermes"}),
+            input=json.dumps({"task": "What is the token limit?", "engine_id": "opencode"}),
             capture_output=True, text=True, timeout=10, env=dict(os.environ),
         )
         self.assertEqual(result.returncode, 0, result.stderr[:200])
@@ -933,32 +933,32 @@ class TestATOM5DelegationRouting(unittest.TestCase):
     def _plan(self, task: str, dc: str = "INTERNAL", engine: str = "claude_code"):
         return _classify_module(task, data_classification=dc, engine_id=engine)
 
-    # ── CONFIDENTIAL/SECRET → delegate_hermes ────────────────────────────────
+    # ── CONFIDENTIAL/SECRET → l34_block ─────────────────────────────────────
 
-    def test_confidential_oneshot_delegates_hermes(self):
+    def test_confidential_oneshot_is_l34_block(self):
         p = self._plan("Summarise the patient records.", dc="CONFIDENTIAL")
-        self.assertEqual(p.delegation_target, "delegate_hermes")
+        self.assertEqual(p.delegation_target, "l34_block")
 
-    def test_secret_oneshot_delegates_hermes(self):
+    def test_secret_oneshot_is_l34_block(self):
         p = self._plan("What is the API key rotation policy?", dc="SECRET")
-        self.assertEqual(p.delegation_target, "delegate_hermes")
+        self.assertEqual(p.delegation_target, "l34_block")
 
-    def test_confidential_iterative_delegates_hermes(self):
+    def test_confidential_iterative_is_l34_block(self):
         p = self._plan("Fix the broken patient-data pipeline.", dc="CONFIDENTIAL")
-        self.assertEqual(p.delegation_target, "delegate_hermes")
+        self.assertEqual(p.delegation_target, "l34_block")
 
-    def test_confidential_compute_delegates_hermes(self):
+    def test_confidential_compute_is_l34_block(self):
         p = self._plan("Run Bayesian search on the patient dataset.", dc="CONFIDENTIAL")
-        # Even compute tasks route to Hermes when data is CONFIDENTIAL
-        self.assertEqual(p.delegation_target, "delegate_hermes")
+        # Even compute tasks are refused when data is CONFIDENTIAL (never cloud)
+        self.assertEqual(p.delegation_target, "l34_block")
 
-    def test_confidential_exploration_delegates_hermes(self):
+    def test_confidential_exploration_is_l34_block(self):
         p = self._plan("Decide the architecture for the patient data store.", dc="CONFIDENTIAL")
-        self.assertEqual(p.delegation_target, "delegate_hermes")
+        self.assertEqual(p.delegation_target, "l34_block")
 
-    def test_confidential_multi_agent_delegates_hermes(self):
+    def test_confidential_multi_agent_is_l34_block(self):
         p = self._plan("Sweep all patient files in the codebase.", dc="CONFIDENTIAL")
-        self.assertEqual(p.delegation_target, "delegate_hermes")
+        self.assertEqual(p.delegation_target, "l34_block")
 
     # ── PUBLIC/INTERNAL one_shot → delegate_copilot ──────────────────────────
 
@@ -979,10 +979,10 @@ class TestATOM5DelegationRouting(unittest.TestCase):
 
     # ── No delegation for non-CC engines ─────────────────────────────────────
 
-    def test_no_delegation_for_hermes_engine(self):
-        p = self._plan("What is 2+2?", dc="CONFIDENTIAL", engine="hermes")
+    def test_no_delegation_for_worker_engine_short_task(self):
+        p = self._plan("What is 2+2?", dc="CONFIDENTIAL", engine="opencode")
         self.assertIsNone(p.delegation_target,
-                          "Hermes workers must not re-delegate (ADR-0029)")
+                          "Worker engines must not re-delegate (ADR-0029)")
 
     def test_no_delegation_for_opencode_engine(self):
         p = self._plan("Summarise the patient records.", dc="CONFIDENTIAL", engine="opencode")

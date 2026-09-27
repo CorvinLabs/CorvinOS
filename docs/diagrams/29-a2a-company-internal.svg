@@ -54,7 +54,7 @@
   <line x1="348" y1="336" x2="572" y2="336" stroke="#3b82f6" stroke-width="0.8"/>
   <text x="460" y="352" text-anchor="middle" font-size="10" fill="#93c5fd">persona: orchestrator</text>
   <text x="460" y="368" text-anchor="middle" font-size="10" fill="#93c5fd">spawn_worker: true</text>
-  <text x="460" y="384" text-anchor="middle" font-size="9" fill="#bfdbfe">delegate_claude_code · delegate_hermes</text>
+  <text x="460" y="384" text-anchor="middle" font-size="9" fill="#bfdbfe">delegate_claude_code</text>
   <text x="460" y="396" text-anchor="middle" font-size="9" fill="#bfdbfe">L34 data classification · L35 egress gate</text>
 
   <!-- ══════════════════════════════════════════════════════════════════
@@ -126,9 +126,9 @@
   <text x="752" y="454" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Compute Cluster</text>
   <text x="752" y="471" text-anchor="middle" font-size="10" font-weight="600" fill="#14532d">acme-compute.internal : 8000</text>
   <text x="752" y="485" text-anchor="middle" font-size="9" fill="#475569">spawn_worker: true · L25 enabled</text>
-  <text x="752" y="499" text-anchor="middle" font-size="9" fill="#475569">HermesEngine (local · egress: none)</text>
+  <text x="752" y="499" text-anchor="middle" font-size="9" fill="#475569">tenant-declared local engine</text>
   <text x="752" y="513" text-anchor="middle" font-size="8" fill="#475569">GPU jobs · batch · deterministic</text>
-  <text x="752" y="525" text-anchor="middle" font-size="8" fill="#94a3b8">locality=local · CONFIDENTIAL-capable</text>
+  <text x="752" y="525" text-anchor="middle" font-size="8" fill="#94a3b8">via engine_compliance override</text>
 
   <!-- ── GPU sub-nodes from Compute Cluster ────────────────────────── -->
 
@@ -140,12 +140,12 @@
   <!-- GPU Node 1 -->
   <rect x="940" y="474" width="124" height="30" rx="6" fill="#bbf7d0" stroke="#16a34a" stroke-width="1.5"/>
   <text x="1002" y="487" text-anchor="middle" font-size="9" font-weight="700" fill="#14532d">GPU Node 1</text>
-  <text x="1002" y="499" text-anchor="middle" font-size="8" fill="#475569">A100 · Ollama</text>
+  <text x="1002" y="499" text-anchor="middle" font-size="8" fill="#475569">A100 · self-hosted</text>
 
   <!-- GPU Node 2 -->
   <rect x="940" y="522" width="124" height="30" rx="6" fill="#bbf7d0" stroke="#16a34a" stroke-width="1.5"/>
   <text x="1002" y="535" text-anchor="middle" font-size="9" font-weight="700" fill="#14532d">GPU Node 2</text>
-  <text x="1002" y="547" text-anchor="middle" font-size="8" fill="#475569">A100 · Ollama</text>
+  <text x="1002" y="547" text-anchor="middle" font-size="8" fill="#475569">A100 · self-hosted</text>
 
   <!-- Batch Queue -->
   <rect x="940" y="558" width="124" height="30" rx="6" fill="#d1fae5" stroke="#16a34a" stroke-width="1.5" stroke-dasharray="4 2"/>

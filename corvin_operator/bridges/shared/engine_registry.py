@@ -1,7 +1,7 @@
 """engine_registry.py — Phase 4 (ADR-0001 / ADR-0003) Multi-Engine Resolver.
 
 Maps a stable ``engine_id`` (``claude_code``, ``codex_cli``, future
-``gemini_cli``, ``ollama``, ``vllm``, ``anthropic_sdk`` ...) to a concrete
+``gemini_cli``, ``vllm``, ``anthropic_sdk`` ...) to a concrete
 ``WorkerEngine`` instance from ``bridges/shared/agents/``. Builds factories
 that AWP-workers can call when they need an LLM step — the
 ``worker_engine_factory`` injected into ``state`` by the adapter is exactly
@@ -106,37 +106,10 @@ def _build_opencode() -> Any | None:
             return None
 
 
-def _build_hermes() -> Any | None:
-    """Lazy-import HermesEngine from bridges/shared/agents/.
-
-    Absent from the table until 2026-07-27, although ``agents/hermes_engine.py``
-    has shipped for far longer and every OTHER surface names ``hermes`` as a
-    selectable engine — ``routes/engine.py``'s ``valid_worker_engines``, the
-    Settings → Engines page, ``chat_runtime._DIRECT_OS_ENGINES``, and the Hermes
-    fallback that a fresh install lands on when Claude Code is unauthenticated.
-    The console's /settings/engine/capabilities route asks ``get_engine(eid)``
-    for each of the five it advertises, so hermes reported ``capabilities: {}``
-    and ``command_manifest: null`` while the engine object itself has ten
-    capabilities. The chat path never noticed because it constructs
-    ``HermesEngine`` directly rather than through this registry.
-    """
-    try:
-        from .agents.hermes_engine import HermesEngine  # type: ignore
-        return HermesEngine()
-    except ImportError:
-        try:
-            mod = importlib.import_module("agents.hermes_engine")
-            cls = getattr(mod, "HermesEngine", None)
-            return cls() if cls is not None else None
-        except ImportError as e:
-            logger.debug("engine_registry: hermes unavailable: %s", e)
-            return None
-
-
 def _build_copilot() -> Any | None:
     """Lazy-import CopilotCliEngine from bridges/shared/agents/.
 
-    Same gap and same symptom as ``_build_hermes`` — advertised in
+    Absent from the table until 2026-07-27 although advertised in
     ``valid_worker_engines`` and in the capability matrix's structural-gap table,
     buildable by nothing.
     """
@@ -163,13 +136,58 @@ _ENGINE_BUILDERS: dict[str, Callable[[], Any | None]] = {
     "claude_code": _build_claude_code,
     "codex_cli":   _build_codex_cli,
     "opencode":    _build_opencode,
-    "hermes":      _build_hermes,
     "copilot":     _build_copilot,
     # Future: "gemini_cli", "vllm", "anthropic_sdk", "azure_openai"
 }
 
 # Default engine — the conservative, battle-tested path.
 DEFAULT_ENGINE_ID = "claude_code"
+
+
+# ADR-2087: Hermes and every local-Ollama engine were removed. Stored config on
+# existing installs (``default_engine``, ``worker_engine``, per-chat pins,
+# ``/engine`` arguments) is MAPPED on read, never rejected — rejecting would
+# turn a leftover config value into a chat that cannot start.
+_LEGACY_ENGINE_IDS: frozenset[str] = frozenset({
+    "hermes",
+    "local",
+    "local-hermes",
+    "ollama",
+    "opencode_ollama",
+    "claude_code_local",
+    "hermes_engine",
+})
+_legacy_warned: set[str] = set()
+
+
+def is_legacy_engine_id(engine_id: str | None) -> bool:
+    """True when ``engine_id`` names an engine removed by ADR-2087."""
+    if not isinstance(engine_id, str):
+        return False
+    v = engine_id.strip().lower()
+    return v in _LEGACY_ENGINE_IDS or v.startswith("hermes-")
+
+
+def normalize_legacy_engine_id(engine_id: str | None) -> str | None:
+    """Map a removed (ADR-2087) engine id to ``claude_code``.
+
+    ``hermes``, ``hermes-*``, ``local``, ``local-hermes``, ``ollama``,
+    ``opencode_ollama``, ``claude_code_local`` and ``hermes_engine``
+    (case-insensitive, whitespace-stripped) resolve to ``claude_code``. Every
+    other value — including ``None`` — is returned unchanged. The first mapping
+    of each legacy value per process logs a WARNING carrying
+    ``engine.legacy_mapped`` (plain logging, not the audit chain).
+    """
+    if not is_legacy_engine_id(engine_id):
+        return engine_id
+    key = engine_id.strip().lower()  # type: ignore[union-attr]
+    if key not in _legacy_warned:
+        _legacy_warned.add(key)
+        logger.warning(
+            "engine.legacy_mapped: engine_id=%r was removed (ADR-2087) — "
+            "using %r", key, DEFAULT_ENGINE_ID,
+        )
+    return DEFAULT_ENGINE_ID
 
 
 # ----- public API ---------------------------------------------------------
@@ -249,7 +267,14 @@ def _engine_allowed_by_license(engine_id: str) -> bool:
 
 def get_engine(engine_id: str) -> Any | None:
     """One-shot engine instantiation. Returns None on unknown id, license deny,
-    or builder failure. Never raises."""
+    or builder failure. Never raises.
+
+    A removed (ADR-2087) id such as ``hermes`` is deliberately NOT mapped here:
+    callers use ``get_engine`` to check an allow-list (engine_policy zones),
+    and silently turning a local-only entry into ``claude_code`` would widen
+    that allow-list to a cloud engine. It returns None (fail-closed); callers
+    reading a stored *preference* map it with ``normalize_legacy_engine_id``.
+    """
     builder = _ENGINE_BUILDERS.get(engine_id)
     if builder is None:
         logger.debug("engine_registry: unknown engine_id %r", engine_id)
@@ -298,6 +323,7 @@ def resolve_engine_id(profile: dict | None,
     candidates.append(("default", DEFAULT_ENGINE_ID))
 
     for source, engine_id in candidates:
+        engine_id = normalize_legacy_engine_id(engine_id) or engine_id
         if engine_id in _ENGINE_BUILDERS:
             return engine_id
         logger.warning(
@@ -330,7 +356,7 @@ def make_factory(default_engine_id: str | None = None,
     Returns a callable even if the default engine is unavailable —
     the closure still maps unknown ids to None gracefully.
     """
-    default_id = default_engine_id or DEFAULT_ENGINE_ID
+    default_id = normalize_legacy_engine_id(default_engine_id) or DEFAULT_ENGINE_ID
 
     def factory(engine_id: str | None = None) -> Any | None:
         eid = engine_id or default_id

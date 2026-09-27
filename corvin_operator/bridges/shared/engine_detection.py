@@ -16,8 +16,6 @@ import logging
 import os
 import shutil
 import subprocess
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -39,7 +37,6 @@ CREDENTIAL_SOURCES = (
     "config_file", "vault", "none", "discovered",
 )
 _PROBE_TIMEOUT = 5.0
-_OLLAMA_TIMEOUT = 2.0
 
 # Claude credential search paths (same as installer/core.py — MUST stay in sync).
 #
@@ -86,7 +83,7 @@ class EngineProbeResult:
     # One of CREDENTIAL_SOURCES, or None when binary is not installed.
     credential_source: Optional[str]
     version: Optional[str]
-    # Non-empty only for hermes — list of pulled Ollama model names.
+    # Always empty since ADR-2087 removed Hermes (kept for payload shape).
     models: List[str] = field(default_factory=list)
     # Human-readable single-line status for the console UI.
     detail: Optional[str] = None
@@ -380,63 +377,6 @@ def probe_copilot() -> EngineProbeResult:
     )
 
 
-def probe_hermes() -> EngineProbeResult:
-    """Probe Ollama/Hermes — no auth needed; check binary, running state, and models."""
-    engine_id = "hermes"
-
-    # Try to locate ollama binary with platform variations
-    binary = _find_binary("ollama")
-    if not binary:
-        _log.debug(f"hermes probe: ollama binary not found in PATH or common directories")
-
-    # Probe Ollama API (may be running via Docker even without binary in PATH).
-    base_url = (
-        os.environ.get("CORVIN_OLLAMA_BASE_URL")
-        or os.environ.get("OLLAMA_HOST")
-        or "http://localhost:11434"
-    ).rstrip("/")
-
-    models: list[str] = []
-    running = False
-    try:
-        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=_OLLAMA_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-        models = [m["name"] for m in (data.get("models") or [])]
-        running = True
-    except (urllib.error.URLError, OSError, Exception):  # noqa: BLE001
-        pass
-
-    if not binary and not running:
-        return EngineProbeResult(
-            engine_id=engine_id, installed=False, authenticated=False,
-            credential_source=None, version=None, models=[],
-            detail="Ollama not installed",
-        )
-
-    version: Optional[str] = None
-    if binary:
-        rc, stdout, _ = _run([binary, "--version"])
-        version = stdout.split("\n")[0] if rc == 0 and stdout else None
-
-    if running and models:
-        return EngineProbeResult(
-            engine_id=engine_id, installed=True, authenticated=True,
-            credential_source="config_file", version=version, models=models,
-            detail=f"Ollama running — {len(models)} model{'s' if len(models) != 1 else ''} available",
-        )
-    if running:
-        return EngineProbeResult(
-            engine_id=engine_id, installed=True, authenticated=False,
-            credential_source="none", version=version, models=[],
-            detail="Ollama running but no models — run: ollama pull qwen3:1.7b",
-        )
-    return EngineProbeResult(
-        engine_id=engine_id, installed=True, authenticated=False,
-        credential_source="none", version=version, models=[],
-        detail="Ollama installed but not running — run: ollama serve",
-    )
-
-
 def probe_opencode() -> EngineProbeResult:
     engine_id = "opencode"
 
@@ -463,27 +403,10 @@ def probe_opencode() -> EngineProbeResult:
                 detail=f"Provider key from {env_var}",
             )
 
-    # OpenCode can also delegate to a local Ollama instance.
-    # Respect the same CORVIN_OLLAMA_BASE_URL / OLLAMA_HOST env as probe_hermes.
-    ollama_base = (
-        os.environ.get("CORVIN_OLLAMA_BASE_URL")
-        or os.environ.get("OLLAMA_HOST")
-        or "http://localhost:11434"
-    ).rstrip("/")
-    try:
-        with urllib.request.urlopen(f"{ollama_base}/api/tags", timeout=1.5):
-            return EngineProbeResult(
-                engine_id=engine_id, installed=True, authenticated=True,
-                credential_source="config_file", version=version,
-                detail="Using local Ollama as provider",
-            )
-    except Exception:  # noqa: BLE001
-        pass
-
     return EngineProbeResult(
         engine_id=engine_id, installed=True, authenticated=False,
         credential_source="none", version=version,
-        detail="Installed — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or run Ollama",
+        detail="Installed — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
     )
 
 
@@ -519,7 +442,6 @@ def probe_codex_cli() -> EngineProbeResult:
 # Ordered probe list — determines display order in the console UI.
 _PROBES = [
     probe_claude_code,
-    probe_hermes,
     probe_opencode,
     probe_codex_cli,
     probe_copilot,
@@ -528,20 +450,20 @@ _PROBES = [
 
 _DETECT_TIMEOUT = 10.0  # Global wall-clock cap for all probes combined.
 
-# IDs of the 5 registered engines — excluded from auto-discovery to avoid duplicates.
-_REGISTERED_IDS = frozenset({"claude_code", "hermes", "opencode", "codex_cli", "copilot"})
+# IDs of the 4 registered engines — excluded from auto-discovery to avoid duplicates.
+_REGISTERED_IDS = frozenset({"claude_code", "opencode", "codex_cli", "copilot"})
 
 # Canonical engine priority for recommended_engine() — earlier = preferred.
 # Matches _PROBES submission order; kept separate so it's explicit and
 # survives concurrent collect (which produces non-deterministic completion order).
-_ENGINE_PRIORITY: list[str] = ["claude_code", "hermes", "opencode", "codex_cli", "copilot"]
+_ENGINE_PRIORITY: list[str] = ["claude_code", "opencode", "codex_cli", "copilot"]
 
 # Lookup: engine_id → display position (used to sort detect_all() output).
 _PROBE_RANK: dict[str, int] = {eid: i for i, eid in enumerate(_ENGINE_PRIORITY)}
 
 
 def _discover_extra_engines() -> list[EngineProbeResult]:
-    """Scan PATH for AI tools not in the registered 5 engines.
+    """Scan PATH for AI tools not in the registered 4 engines.
 
     Returns lightweight probes for any discovered binary. These are always
     installed=True (we only return them when found) and authenticated=False
@@ -574,16 +496,12 @@ def _discover_extra_engines() -> list[EngineProbeResult]:
 def detect_all() -> list[EngineProbeResult]:
     """Run all engine probes concurrently + auto-discover unlisted tools.
 
-    Registered probes (5 engines) run with a 10s global cap. Probes that exceed
+    Registered probes (4 engines) run with a 10s global cap. Probes that exceed
     _DETECT_TIMEOUT are silently dropped (not retried). Auto-discovery runs separately
     with a 3s per-binary cap. If an engine times out, it will NOT appear in results
     (even if installed) — the calling code cannot distinguish timeout from not-installed.
 
-    TIMEOUT ISSUE: If Hermes hangs (known issue: "hermes connect error: timed out"),
-    the entire detect_all() call may appear to hang. Callers should handle timeouts
-    at the API level with their own timeout wrapper (e.g., concurrent.futures.wait).
-
-    Registered probes (5 engines) run with a 10 s global cap. Auto-discovery
+    Registered probes (4 engines) run with a 10 s global cap. Auto-discovery
     runs as a single future alongside them (sequential PATH scan, 3 s per binary
     cap, worst case 30 s). Installed=False probes from registered engines are kept
     so callers can distinguish "not installed" from "installed but not

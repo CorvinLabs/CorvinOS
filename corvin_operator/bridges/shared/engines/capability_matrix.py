@@ -13,12 +13,12 @@ New State (M8 refactor):
   - No breaking changes: bool fallback remains (truthy check works)
 
 Semantic Capability Strings (from M1–M6):
-  - mid_stream_inject: "stdin_json" (CC) | "buffered" (Codex/OpenCode/Hermes) | None (Copilot)
+  - mid_stream_inject: "stdin_json" (CC) | "buffered" (Codex/OpenCode) | None (Copilot)
   - hooks: "native" (CC) | "teb_brokered" (others)
-  - skills: "append_system_prompt" (CC/Codex/OpenCode) | "system_message" (Hermes) | "prompt_prefix" (Copilot)
+  - skills: "append_system_prompt" (CC/Codex/OpenCode) | "system_message" (unused since ADR-2087) | "prompt_prefix" (Copilot)
   - session_pinning: "native" (CC) | "checkpoint" (others) | None
-  - mcp: "native" (CC/Codex/OpenCode) | "fcb_emulated" (Copilot, M5) | None (Hermes/Ollama)
-  - system_prompt: "flag" (CC) | "message_role" (Hermes) | "text_prefix" (Codex/OpenCode/Copilot)
+  - mcp: "native" (CC/Codex/OpenCode) | "fcb_emulated" (Copilot, M5) | None
+  - system_prompt: "flag" (CC) | "message_role" (unused since ADR-2087) | "text_prefix" (Codex/OpenCode/Copilot)
   - multi_turn: "native" (CC) | "sequential_wrapper" (Copilot, M7) | None (others)
 
 Architecture:
@@ -94,7 +94,7 @@ class CapabilityString:
 class EngineCapabilityMatrix:
     """Per-engine capability snapshot (frozen in M6, used in M8+)."""
 
-    engine_id: str  # "claude_code", "hermes", etc.
+    engine_id: str  # "claude_code", "opencode", etc.
     tenant_id: str = "_default"
 
     # All capabilities from M5+M6 (frozen strings)
@@ -237,15 +237,6 @@ CANONICAL_CAPABILITY_MATRIX = {
         "session_pinning": "checkpoint",
         "mcp": "native",
         "system_prompt": "text_prefix",
-        "multi_turn": None,
-    },
-    "hermes": {
-        "mid_stream_inject": "buffered",
-        "hooks": "teb_brokered",
-        "skills": "system_message",
-        "session_pinning": "checkpoint",
-        "mcp": None,  # Ollama doesn't have MCP
-        "system_prompt": "message_role",
         "multi_turn": None,
     },
     "copilot": {

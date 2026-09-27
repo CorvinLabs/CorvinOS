@@ -518,26 +518,15 @@ def test_engine_path_btw_routes_through_engine() -> None:
 
 
 def test_engine_path_no_engine_reachable_surfaces_clear_notice() -> None:
-    """ADR-0159 M1 auto-detect + "degradation is not silent".
+    """ADR-2087: no claude CLI → a clear "run setup" notice, never a fallback.
 
-    Historical context: this test originally drove the legacy claude-direct
-    path with a missing 'claude' binary and asserted a FileNotFoundError-style
-    message ('not found' / 'No such file'). ADR-0159 M1 changed the dispatch:
-    when the claude CLI is absent from PATH, the adapter auto-detects and
-    defaults the OS engine to ``hermes`` (local Ollama) so a fresh install with
-    no Anthropic credentials still boots. That is the *intended* behaviour and
-    the old assertion no longer describes the real path.
-
-    The genuine UX gap that ADR-0159 M1 exposed: if BOTH the claude CLI AND
-    Ollama are absent (the true brand-new-user state), hermes never streams,
-    the idle watchdog fires, and the hermes path used to fall through to its
-    success branch and return ``""`` — a silent empty reply after ~10s. ADR-0159
-    itself states the degraded path "is not silent". This test now asserts the
-    fixed invariant: when no engine is reachable at all, the user gets a CLEAR,
-    NON-EMPTY notice (never a silent empty string, never the misleading
-    'engine spawn timed out before producing a process').
+    Before ADR-2087 the ADR-0159 M1 auto-detect switched a host without the
+    claude CLI to the local Hermes/Ollama engine. That engine is gone. The OS
+    turn now stays on claude_code and the user gets a CLEAR, NON-EMPTY,
+    actionable notice (never a silent empty string, never the misleading
+    'engine spawn timed out before producing a process', never Hermes/Ollama).
     """
-    _section("engine path — no engine reachable → clear non-empty notice")
+    _section("engine path — no claude CLI → clear setup notice")
     work = Path(tempfile.mkdtemp(prefix="engine-path-noengine-"))
     empty_dir = work / "bin"
     empty_dir.mkdir()
@@ -547,32 +536,22 @@ def test_engine_path_no_engine_reachable_surfaces_clear_notice() -> None:
             "PATH", "CLAUDE_BIN", "CORVIN_CLAUDE_BIN", "CORVIN_HOME",
             "CORVIN_CLAUDE_BIN_FALLBACKS",
             "CORVIN_USE_ENGINE_LAYER", "ADAPTER_STREAM_IDLE_TIMEOUT",
-            "ADAPTER_ROUTING_MODE", "CORVIN_OS_ENGINE", "CORVIN_OLLAMA_BASE_URL",
+            "ADAPTER_ROUTING_MODE", "CORVIN_OS_ENGINE",
         )
     }
     try:
-        # Empty PATH so shutil.which("claude") is None → ADR-0159 M1 auto-detect
-        # routes the OS turn to hermes.
         os.environ["PATH"] = str(empty_dir)
         os.environ.pop("CLAUDE_BIN", None)
-        os.environ.pop("CORVIN_OS_ENGINE", None)  # let auto-detect run
-        # Pin CORVIN_CLAUDE_BIN to a non-existent absolute path. The hardened
-        # resolver the auto-detect now uses also probes the built-in fallback
-        # locations (~/.local/bin/claude, /usr/local/bin/claude, …); on a dev/CI
-        # box where claude IS installed there, an empty PATH alone no longer
-        # simulates "claude absent". An absolute non-existent pin is honoured
-        # as-is by the resolver and deterministically reports absent regardless
-        # of what is installed on the host → the OS turn falls to hermes.
+        os.environ.pop("CORVIN_OS_ENGINE", None)
+        # Absolute non-existent pin: the hardened resolver honours it as-is, so
+        # "claude absent" is deterministic even on a box where claude IS
+        # installed in a known fallback location.
         os.environ["CORVIN_CLAUDE_BIN"] = str(empty_dir / "claude_NOT_INSTALLED")
         os.environ["CORVIN_CLAUDE_BIN_FALLBACKS"] = str(empty_dir / "claude_NOT_INSTALLED")
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
         os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
         os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "5"
         os.environ["ADAPTER_ROUTING_MODE"] = "off"
-        # Point Ollama at a closed loopback port so hermes is deterministically
-        # unreachable (connection refused) without depending on whether a real
-        # Ollama happens to be running on the dev/CI box.
-        os.environ["CORVIN_OLLAMA_BASE_URL"] = "http://127.0.0.1:1"
 
         adapter = _fresh_adapter()
         result = adapter.call_claude_streaming(
@@ -581,24 +560,20 @@ def test_engine_path_no_engine_reachable_surfaces_clear_notice() -> None:
             chat_key="noengine-chat",
             profile={"permission_mode": "bypassPermissions"},
         )
-        # 1. Auto-detect must NOT end with a silent empty reply.
         assert result.strip(), (
-            f"no-engine-reachable returned a SILENT empty string (UX regression): {result!r}"
+            f"no-claude-CLI returned a SILENT empty string (UX regression): {result!r}"
         )
-        # 2. Must NOT be the misleading internal spawn-timeout message.
         assert "engine spawn timed out before producing a process" not in result, (
             f"adapter returned misleading internal timeout message: {result!r}"
         )
-        # 3. Must clearly point at the engine/Ollama problem so a brand-new user
-        #    knows what to do. Either deterministic outcome is acceptable:
-        #      - connection refused → "Hermes/Ollama is unreachable" / "unavailable"
-        #      - idle watchdog (no events) → "No engine reachable" / "engine spawn failed"
         lowered = result.lower()
-        assert any(
-            tok in lowered
-            for tok in ("ollama", "hermes", "engine spawn failed", "no engine reachable")
-        ), f"result does not clearly name the engine/Ollama problem: {result!r}"
-        print(f"PASS: no engine reachable surfaced a clear notice: {result!r}")
+        assert "claude" in lowered and "setup" in lowered, (
+            f"result does not point the user at claude CLI setup: {result!r}"
+        )
+        assert "ollama serve" not in lowered, (
+            f"result still tells the user to start Ollama: {result!r}"
+        )
+        print(f"PASS: no claude CLI surfaced a clear setup notice: {result!r}")
     finally:
         for k, v in saved.items():
             if v is None:
@@ -609,21 +584,20 @@ def test_engine_path_no_engine_reachable_surfaces_clear_notice() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Stripped PATH + off-PATH claude → auto-detect MUST pick claude_code
-#    (regression for the "hermes connect error: timed out" Discord bug)
+# 6. Stripped PATH + off-PATH claude → the CLI probe MUST find claude
 # ---------------------------------------------------------------------------
 
 
 def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
-    """Regression: a stripped PATH must NOT silently downgrade to hermes when
-    the claude CLI is installed off-PATH.
+    """Regression: a stripped PATH must NOT report claude as missing when the
+    claude CLI is installed off-PATH.
 
     Root cause (fixed): the ADR-0159 M1 auto-detect probed a bare
     ``shutil.which("claude")``. The adapter runs under systemd / bridge.sh with
     a stripped PATH that lacks ``~/.local/bin`` (where Claude Code installs the
     CLI), so ``which()`` returned ``None`` EVEN WHEN claude was installed. The
-    OS turn was then silently routed to hermes → Ollama timeout
-    ("hermes connect error: timed out") although claude was the intended engine.
+    OS turn was then silently routed away from claude (to the local engine that
+    ADR-2087 later removed) although claude was the intended engine.
     The fix probes through the same hardened resolver
     (``helper_model.resolve_claude_bin``: ``CORVIN_CLAUDE_BIN`` → PATH → known
     install locations) the WorkerEngine and every helper spawn already use —
@@ -632,12 +606,12 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
 
     Hermetic proof: a working fake ``claude`` is placed at an OFF-PATH location
     and registered via ``CORVIN_CLAUDE_BIN_FALLBACKS`` (production: the built-in
-    ``~/.local/bin/claude``). With hermes pointed at a dead loopback port, ANY
-    regression that re-introduces the bare ``which()`` probe falls to hermes and
-    fails this test loudly.
+    ``~/.local/bin/claude``). ANY regression that re-introduces the bare
+    ``which()`` probe reports claude missing (ADR-2087 setup notice) and fails
+    this test loudly.
     """
     _section(
-        "engine autodetect — off-PATH claude resolves to claude_code, not hermes"
+        "engine autodetect — off-PATH claude resolves to claude_code"
     )
     work = Path(tempfile.mkdtemp(prefix="engine-autodetect-offpath-"))
     empty_dir = work / "bin"        # on PATH, but contains NO claude
@@ -659,7 +633,7 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
             "PATH", "CLAUDE_BIN", "CORVIN_CLAUDE_BIN", "CORVIN_HOME",
             "CORVIN_CLAUDE_BIN_FALLBACKS", "CORVIN_USE_ENGINE_LAYER",
             "ADAPTER_STREAM_IDLE_TIMEOUT", "ADAPTER_ROUTING_MODE",
-            "CORVIN_OS_ENGINE", "CORVIN_OLLAMA_BASE_URL",
+            "CORVIN_OS_ENGINE",
         )
     }
     try:
@@ -674,10 +648,6 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
         os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
         os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "10"
-        # Dead loopback port: if the fix regresses and the OS turn falls to
-        # hermes, the call surfaces an Ollama/hermes error and the asserts below
-        # fail — no accidental pass via a real Ollama on the dev/CI box.
-        os.environ["CORVIN_OLLAMA_BASE_URL"] = "http://127.0.0.1:1"
 
         adapter = _fresh_adapter()
         result = adapter.call_claude_streaming(
@@ -687,15 +657,10 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
             profile={"permission_mode": "bypassPermissions"},
         )
         # The fake claude echoes "final: <prompt>" — proof the OS turn ran on
-        # claude_code, not hermes.
+        # claude_code and the CLI probe found the off-PATH binary.
         assert result == "final: " + _guarded("ping-autodetect"), (
-            "stripped-PATH auto-detect did not resolve to claude_code "
-            f"(got {result!r}); a hermes downgrade would surface an "
-            "Ollama/hermes error instead"
-        )
-        lowered = result.lower()
-        assert "hermes" not in lowered and "ollama" not in lowered, (
-            f"auto-detect leaked a hermes/Ollama path: {result!r}"
+            "stripped-PATH probe did not find the off-PATH claude "
+            f"(got {result!r})"
         )
         print(f"PASS: off-PATH claude resolved to claude_code: {result!r}")
     finally:

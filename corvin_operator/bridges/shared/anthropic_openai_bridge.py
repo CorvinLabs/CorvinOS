@@ -3,7 +3,7 @@ API <-> OpenAI Chat Completions API (ADR-0181 M3 follow-up, 2026-07-14).
 
 Claude Code (the ``claude`` CLI) only ever speaks the Anthropic Messages API
 (``POST /v1/messages``, streaming via Anthropic's own SSE event sequence).
-OpenRouter and Ollama's OpenAI-compatible endpoints speak OpenAI's Chat
+OpenRouter and Ollama Cloud's OpenAI-compatible endpoints speak OpenAI's Chat
 Completions API instead — different request/response shape, different
 streaming protocol, different tool-call representation. Pointing
 ``ANTHROPIC_BASE_URL`` straight at either would fail immediately (wrong
@@ -431,15 +431,11 @@ class ProxyTarget:
         self.api_key = api_key
         self.model = model
         self.request_timeout = request_timeout
-        # qwen3-style thinking models emit a separate "reasoning" field
-        # (correctly ignored by our own response translation either way) but
-        # still spend real latency generating it — same issue already fixed
-        # for Hermes/summarize.py's calls to Ollama's NATIVE /api/generate
-        # (see summarize.py's own "think": False, "Verified: qwen3:8b dropped
-        # from >60s timeout to ~10s"). Ollama's OpenAI-compat endpoint accepts
-        # the same non-standard "think" field; harmless to omit for providers
-        # that don't recognise it (OpenRouter — most OpenAI-compatible
-        # servers ignore unknown top-level fields).
+        # Opt-in: send the non-standard ``"think": false`` field so thinking
+        # models skip generating a separate "reasoning" field (which our
+        # response translation ignores anyway). No bundled caller sets it
+        # since ADR-2087 removed the local-Ollama provider; most
+        # OpenAI-compatible servers ignore unknown top-level fields.
         self.disable_reasoning = disable_reasoning
 
 
@@ -631,7 +627,7 @@ def shutdown_all() -> None:
 
 def chat_completions_url_for(base_url: str, model_source: str) -> str:
     """The OpenAI-compatible chat-completions endpoint for a given provider
-    base_url. Ollama exposes its OpenAI-compat surface under ``/v1/``; other
+    base_url. Ollama (Cloud) exposes its OpenAI-compat surface under ``/v1/``; other
     OpenAI-format providers (OpenRouter) already ship an ``/api/v1``-style
     base_url that the endpoint hangs directly off of."""
     base = base_url.rstrip("/")

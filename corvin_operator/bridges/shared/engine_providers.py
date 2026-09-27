@@ -3,7 +3,7 @@
 Given a provider spec (from ``engine_models``), fetch the model IDs the provider
 actually offers right now:
   * ``anthropic``  → GET {base_url}/v1/models              (paginated, cached)
-  * ``ollama``     → GET {base_url}/api/tags               (local + cloud)
+  * ``ollama``     → GET {base_url}/api/tags               (Ollama Cloud)
   * ``openrouter`` → GET {base_url}/models                 (public catalogue)
   * ``openai``     → GET {base_url}/models                 (requires an API key)
   * ``static``     → no live list (use the curated registry entries)

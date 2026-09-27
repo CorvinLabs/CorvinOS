@@ -62,23 +62,6 @@ def test_opencode_prepends_checkpoint():
     assert "Next step?" in result
 
 
-def test_hermes_prepends_checkpoint():
-    """Hermes prepends checkpoint summary."""
-    checkpoint = {
-        "turn_id": "t_3",
-        "system_prompt_summary": "Local model",
-        "last_message_summary": "Query",
-        "tool_results_digest": "[]",
-        "conversation_length_tokens": 200,
-    }
-    user_input = "Continue."
-    result = create_continuation_prompt("hermes_engine", checkpoint, user_input)
-
-    assert "Prior Context" in result
-    assert "Local model" in result
-    assert "Continue." in result
-
-
 def test_copilot_raises_not_implemented():
     """Copilot raises NotImplementedError (single-turn limitation)."""
     checkpoint = {

@@ -14,7 +14,7 @@ secret shape (emails, home paths, IPs, tokens, long ids) rather than sending it.
 
 | Channel | What is sent | Turn off |
 |---|---|---|
-| **Anonymous instance ping** | A random installation id (`uuid4`) + an HMAC token, once per 24 h, plus a few coarse, allow-listed labels: CorvinOS version, platform (`linux`/`win32`/`darwin`), Python minor version, and the active OS engine (`claude_code`/`hermes`/`opencode`/`codex_cli`/`copilot`, else `unknown`). Lets us count how many instances exist and on what. | `spec.telemetry.ping_enabled: false` |
+| **Anonymous instance ping** | A random installation id (`uuid4`) + an HMAC token, once per 24 h, plus a few coarse, allow-listed labels: CorvinOS version, platform (`linux`/`win32`/`darwin`), Python minor version, and the active OS engine (`claude_code`/`opencode`/`codex_cli`/`copilot`, else `unknown` — a stale stored `hermes` value reports `unknown`). Lets us count how many instances exist and on what. | `spec.telemetry.ping_enabled: false` |
 | **Error diagnostics** | Scrubbed, content-free crash signatures: error type (e.g. `ValueError`), the repo file + function where it happened, allow-listed stack-frame namespaces. Never prompts or user data. | env `CORVIN_TELEMETRY_OPTIN=false` **or** `spec.telemetry.error_traces: false` |
 | **Self-healing traces** | Anonymised self-healing events (which repair ran, on which code layer, success/failure). No prompts, no message content. | `spec.telemetry.healing_traces: false` |
 

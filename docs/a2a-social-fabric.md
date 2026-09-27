@@ -117,7 +117,7 @@ acme-main.internal:8000  (HQ orchestrator)
     ├── acme-eng:8000       Engineering team   — spawn_worker: true
     ├── acme-legal:8000     Legal & Compliance — spawn_worker: false (observer)
     ├── acme-mktg:8000      Marketing          — spawn_worker: true
-    └── acme-compute:8000   GPU cluster        — spawn_worker: true, Hermes engine
+    └── acme-compute:8000   GPU cluster        — spawn_worker: true, on-prem engine
             ├── gpu-node-1 (A100)
             ├── gpu-node-2 (A100)
             └── batch-queue
@@ -144,9 +144,12 @@ full resource isolation:
 spec:
   compute:
     enabled: true
-  default_engine: "hermes-balanced"  # local Ollama, zero cloud egress
   data_classification:
     default: CONFIDENTIAL            # never leaves the datacenter
+    engine_compliance:               # declare the self-hosted engine local
+      - engine_id: my_onprem_engine  # operator-defined engine on the GPU nodes
+        locality: local
+        network_egress: local
 ```
 
 The GPU nodes connect back to `acme-compute` as sub-origins. A task arriving at
@@ -272,4 +275,4 @@ all of the above, including token generation, import, and connection management.
   (L38), including security hardening and compliance details
 - [`docs/audit-and-compliance.md`](audit-and-compliance.md) — audit chain and EU AI Act compliance
 - [`docs/data-and-compute.md`](data-and-compute.md) — L25 Compute Worker and datacenter integration
-- [`docs/engine-layer.md`](engine-layer.md) — local Hermes engine (zero-egress compute)
+- [`docs/engine-layer.md`](engine-layer.md) — engine layer (the bundled local Hermes engine was removed in ADR-2087; zero-egress compute needs an operator-declared engine)

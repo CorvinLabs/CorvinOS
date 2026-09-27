@@ -2,7 +2,7 @@
 
 The TEB intercepts every MCP tool call and runs Corvin hook logic
 (path-gate, audit, artifact registration) before and after execution.
-This gives non-ClaudeCode engines (Codex, OpenCode, Hermes) the same
+This gives non-ClaudeCode engines (Codex, OpenCode) the same
 tool-execution guarantees that ClaudeCode's native hook system provides.
 
 M1 (this file): data structures + broker protocol.

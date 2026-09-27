@@ -81,7 +81,7 @@
         font-size="11" fill="#c9d1d9">OpenCode</text>
   <text x="270" y="162" text-anchor="middle"
         font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
-        font-size="11" fill="#c9d1d9">Ollama</text>
+        font-size="11" fill="#c9d1d9">Copilot CLI</text>
   <text x="270" y="180" text-anchor="middle"
         font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
         font-size="11" fill="#8b949e">…</text>

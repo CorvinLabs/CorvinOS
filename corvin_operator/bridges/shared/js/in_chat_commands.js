@@ -341,7 +341,7 @@ LDD (loss-driven development) layer toggles:
 
 Delegation, workflows & objectives:
   /engine [name]        owner: pin which worker CLI runs delegated work
-                       (claude | codex | opencode | hermes | copilot — see
+                       (claude | codex | opencode | copilot — see
                        /engine aliases); omit to show. NOT the native/acs/tde
                        delegation mode: that is one operator setting
                        (Settings → AI Engines) and has no chat command.
@@ -2863,9 +2863,11 @@ function dialecticReply(ctx, sub, rest) {
 //   /engine                  → show current preference
 //   /engine claude           → claude_code
 //   /engine codex            → codex_cli
-//   /engine opencode         → opencode + local Ollama
+//   /engine opencode         → opencode (its own configured default model)
 //   /engine cloud            → opencode + ollama-cloud
 //   /engine off              → clear; orchestrator decides freely
+//   /engine hermes           → claude_code + notice (Hermes removed, ADR-2087;
+//                              the Python CLI maps every legacy id)
 function engineReply(ctx, tail) {
   if (ctx && ctx.isOwner === false) {
     return {
@@ -2890,7 +2892,7 @@ function engineReply(ctx, tail) {
       'options:',
       '  /engine claude     — claude_code (default fallback)',
       '  /engine codex      — codex_cli',
-      '  /engine opencode   — opencode + local Ollama',
+      '  /engine opencode   — opencode (its own configured default model)',
       '  /engine cloud      — opencode + ollama-cloud',
       '  /engine off        — clear; orchestrator decides freely',
       '',

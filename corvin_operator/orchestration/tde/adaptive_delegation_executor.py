@@ -75,7 +75,7 @@ def _accepts_proc_holder(fn: Callable) -> bool:
     """Whether ``fn`` (an injected step executor) declares a ``proc_holder``
     kwarg or a catch-all ``**kwargs`` — used to decide whether it's safe to
     pass one without breaking arbitrary embedder-supplied executors (test
-    fixtures, Hermes's genuinely-local executor) that only accept
+    fixtures, an embedder's own executor) that only accept
     ``(step, statement)``."""
     try:
         params = inspect.signature(fn).parameters
@@ -540,7 +540,7 @@ class AdaptiveDelegationExecutor:
 
         ``proc_holder``, when given AND the injected ``executor_fn`` accepts
         one (checked via signature — arbitrary embedder-supplied executors,
-        e.g. Hermes's genuinely-local one, are not required to), is
+        e.g. an embedder's own one, are not required to), is
         forwarded so a parallel-batch cancellation can kill this step's
         subprocess (see ``tde_engine.default_local_step_executor``).
         """
@@ -648,7 +648,7 @@ class AdaptiveDelegationExecutor:
                 # ADR-0222 F4: cross-model exploration. Run ONE rotating CANDIDATE
                 # model on this same step and log a measured (action, candidate)
                 # entry judged against the SAME strong reference yardstick — so the
-                # loss log accrues genuine MULTI-ARM evidence (haiku vs qwen vs
+                # loss log accrues genuine MULTI-ARM evidence (haiku vs gpt vs
                 # sonnet on `action`) instead of only the worker's arm. Gated on a
                 # strong reference being in play (F1 on) so candidates are scored
                 # against a real yardstick, not Haiku. One candidate per shadow

@@ -160,11 +160,9 @@ def test_engine_capabilities_declare_teb_hooks():
     # Check that capability keys are correct
     from agents.codex_cli import CodexCliEngine
     from agents.opencode_cli import OpenCodeEngine
-    from agents.hermes_engine import HermesEngine
 
     assert CodexCliEngine.capabilities.get("hooks") == "teb_brokered"
     assert OpenCodeEngine.capabilities.get("hooks") == "teb_brokered"
-    assert HermesEngine.capabilities.get("hooks") == "teb_brokered"
 
 
 if __name__ == "__main__":

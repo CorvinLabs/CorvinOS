@@ -75,7 +75,7 @@ sh ./install.sh --preset advanced
 
 ### CI/Automation (Minimal Preset, No Interactive UI)
 ```bash
-sh ./install.sh --no-hermes --preset minimal --autostart
+sh ./install.sh --preset minimal --autostart
 ```
 
 ## Feature Tier Progression

@@ -1,6 +1,6 @@
 """Tests for CopilotCliEngine (L22 WorkerEngine wrapping GitHub Copilot CLI).
 
-Structure mirrors test_hermes_engine.py:
+Structure mirrors the other engine test modules:
   - Fast unit tests (always run): protocol conformance, capabilities,
     AST lint for anthropic import, error handling, output parsing.
   - Live tests (skip when CORVIN_AGENTS_SKIP_LIVE=1 OR copilot binary absent):

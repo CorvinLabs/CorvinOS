@@ -72,7 +72,7 @@ the stdlib `operator` module, which is essentially always already cached in `sys
 `import operator.bridges.shared.profile` is not actually importable from the installer's
 process in practice. `_seed_profile_display_language` therefore tries `corvin_console.profile`
 first (a new force-include wheel shim added in `pyproject.toml`, mirroring the existing
-`hermes_bootstrap.py`/`engine_detection.py` shims) and falls back to putting
+`engine_detection.py` shim) and falls back to putting
 `corvin_operator/bridges/shared/` on `sys.path` and importing the bare `profile` module — the same
 pattern `lang_cli.py` and `adapter.py` already use. Best-effort: wrapped in `try/except
 Exception: pass`, voice setup never fails because of it. Tests:
@@ -93,7 +93,10 @@ and `GET /setup/status` are unchanged and still read by
 and bridge setup remain fully available in Settings → Engines / Settings →
 Bridges, which already used the same shared endpoints independently of this
 wizard. The section below is kept as a historical design record — its
-described UI no longer exists.
+described UI no longer exists. Its references to Hermes, Ollama and
+`ensure_hermes_ready()` are historical as well: the Hermes engine and all local
+Ollama inference were removed by ADR-2087, and the L44 boot health check no
+longer probes Ollama.
 
 ### Current state (verified in code)
 

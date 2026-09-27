@@ -82,8 +82,8 @@ _VAULT_SIGNALS = re.compile(
 
 _ENGINE_SIGNALS = re.compile(
     # "agent" alone is too broad (matches in every Corvin conversation).
-    # Require compound forms: worker-engine, hermes, or explicit layer ref.
-    r"\b(engine|worker[\s_-]engine|hermes|L22|workerengine|agent[\s_-]engine|switch[\s_-](?:engine|model))\b",
+    # Require compound forms: worker-engine or explicit layer ref.
+    r"\b(engine|worker[\s_-]engine|L22|workerengine|agent[\s_-]engine|switch[\s_-](?:engine|model))\b",
     re.I,
 )
 

@@ -209,7 +209,6 @@ Default tenant: `_default`
 |----------|---------|---------|
 | `CORVIN_HOME` | Override Corvin home | `/custom/path` |
 | `CORVIN_TENANT_ID` | Select tenant | `production` |
-| `CORVIN_INSTALLED_VIA_OLLAMA` | Ollama detection | `1` |
 
 ## Troubleshooting
 

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1380 880" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
   <title>EAOS Architecture — Engine-Agnostic OS Shell (ADR-0069)</title>
-  <desc>ADR-0069 EAOS full architecture. Top: five engines. Middle: ECI layer (EngineCommandManifest,
+  <desc>ADR-0069 EAOS full architecture. Top: four engines. Middle: ECI layer (EngineCommandManifest,
   CommandDispatcher, SkillCompiler). Bottom: Adapter routes to Forge MCP Server where Tool Execution
   Broker enforces L10 path-gate, L16 audit, and L33 artifact registration for every tool call,
-  regardless of engine. Hermes reaches MCP tools via the Function-Call Bridge (FCB).
+  regardless of engine. The Function-Call Bridge (FCB) is a pure MCP ↔ OpenAI-format translation module; since ADR-2087 removed HermesEngine no bundled engine calls it.
   CopilotCliEngine (ADR-0071) is worker-only, /btw=None, locality=us_cloud.</desc>
 
   <defs>
@@ -27,7 +27,7 @@
   <text x="690" y="46" text-anchor="middle" font-size="11" fill="#64748b">ADR-0069 · All engines share L10 path-gate · L16 audit · L33 artifacts via Tool Execution Broker</text>
 
   <!-- ═══════════════════════════════════════════════════════════════════
-       ROW 1 — Five engines
+       ROW 1 — Four engines
   ════════════════════════════════════════════════════════════════════ -->
 
   <!-- ClaudeCode -->
@@ -40,6 +40,7 @@
   <text x="36" y="152" font-size="9" font-family="'Courier New', monospace" fill="#1e3a8a">MCP    → native</text>
   <text x="36" y="166" font-size="9" font-family="'Courier New', monospace" fill="#1e3a8a">plan   → ✓  compact → ✓</text>
 
+  <g transform="translate(97,0)">
   <!-- Codex -->
   <rect x="280" y="65" width="230" height="115" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
   <text x="395" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="#4c1d95">CodexCliEngine</text>
@@ -49,7 +50,9 @@
   <text x="296" y="138" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">hooks  → TEB (ADR-0069)</text>
   <text x="296" y="152" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">MCP    → native</text>
   <text x="296" y="166" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">plan   → ✗  compact → ✗</text>
+  </g>
 
+  <g transform="translate(194,0)">
   <!-- OpenCode -->
   <rect x="540" y="65" width="230" height="115" rx="10" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
   <text x="655" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="#064e3b">OpenCodeEngine</text>
@@ -59,16 +62,7 @@
   <text x="556" y="138" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">hooks  → TEB (ADR-0069)</text>
   <text x="556" y="152" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">MCP    → native</text>
   <text x="556" y="166" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">/e:model → _override_model</text>
-
-  <!-- Hermes -->
-  <rect x="800" y="65" width="280" height="115" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
-  <text x="940" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="#7c2d12">HermesEngine</text>
-  <text x="940" y="102" text-anchor="middle" font-size="9" fill="#c2410c">Ollama HTTP  ·  L34 CONFIDENTIAL</text>
-  <line x1="816" y1="110" x2="1064" y2="110" stroke="#ea580c" stroke-width="0.8"/>
-  <text x="816" y="124" font-size="9" font-family="'Courier New', monospace" fill="#7c2d12">/btw   → buffered → next turn</text>
-  <text x="816" y="138" font-size="9" font-family="'Courier New', monospace" fill="#7c2d12">hooks  → TEB (ADR-0069)</text>
-  <text x="816" y="152" font-size="9" font-family="'Courier New', monospace" fill="#7c2d12">MCP    → FCB-bridged</text>
-  <text x="816" y="166" font-size="9" font-family="'Courier New', monospace" fill="#7c2d12">/e:model /e:temp /e:ctx</text>
+  </g>
 
   <!-- CopilotCli -->
   <rect x="1090" y="65" width="270" height="115" rx="10" fill="#fce7f3" stroke="#db2777" stroke-width="2"/>
@@ -86,9 +80,8 @@
 
   <!-- Arrows engine → ECI -->
   <line x1="135" y1="180" x2="135" y2="210" stroke="#475569" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="395" y1="180" x2="395" y2="210" stroke="#475569" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="655" y1="180" x2="655" y2="210" stroke="#475569" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="940" y1="180" x2="940" y2="210" stroke="#475569" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="492" y1="180" x2="492" y2="210" stroke="#475569" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="849" y1="180" x2="849" y2="210" stroke="#475569" stroke-width="1.2" marker-end="url(#arr)"/>
   <line x1="1225" y1="180" x2="1225" y2="210" stroke="#475569" stroke-width="1.2" marker-end="url(#arr)"/>
 
   <!-- ECI outer wrapper -->
@@ -178,11 +171,11 @@
   <rect x="736" y="517" width="328" height="118" rx="10" fill="#d97706"/>
   <text x="900" y="538" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Function-Call Bridge (FCB)</text>
   <text x="900" y="553" text-anchor="middle" font-size="10" fill="#fef3c7">teb/fcb.py  —  ADR-0069 M2</text>
-  <text x="900" y="572" text-anchor="middle" font-size="9" fill="#fff">mcp_tools_to_openai_list()  → Hermes tools= param</text>
+  <text x="900" y="572" text-anchor="middle" font-size="9" fill="#fff">mcp_tools_to_openai_list()  → OpenAI tools= param</text>
   <text x="900" y="586" text-anchor="middle" font-size="9" fill="#fff">openai_call_to_mcp_call() + mcp_result_to_openai_msg()</text>
-  <text x="900" y="600" text-anchor="middle" font-size="9" fill="#fef3c7">HermesEngine tool-use loop (max 8 rounds):</text>
-  <text x="900" y="614" text-anchor="middle" font-size="9" fill="#fef3c7">model→tool_call → FCB → TEB → result → messages</text>
-  <text x="900" y="628" text-anchor="middle" font-size="9" fill="#fef3c7">re-POST to Ollama until done=true, no tool_calls</text>
+  <text x="900" y="600" text-anchor="middle" font-size="9" fill="#fef3c7">pure translation (no network I/O, no subprocess)</text>
+  <text x="900" y="614" text-anchor="middle" font-size="9" fill="#fef3c7">for OpenAI-format engines: tool_call → FCB → TEB</text>
+  <text x="900" y="628" text-anchor="middle" font-size="9" fill="#fef3c7">no bundled engine calls it today</text>
 
   <!-- ═══════════════════════════════════════════════════════════════════
        ROW 5 — Corvin Layers guaranteed
@@ -205,7 +198,7 @@
   <rect x="990" y="680" width="370" height="65" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
   <text x="1175" y="700" text-anchor="middle" font-size="11" font-weight="700" fill="#713f12">L34 + L35 — Data Class. &amp; Egress</text>
   <text x="1175" y="714" text-anchor="middle" font-size="10" fill="#92400e">pre-spawn gates · engine compliance matrix</text>
-  <text x="1175" y="728" text-anchor="middle" font-size="9" fill="#78350f">Hermes: locality=local, network_egress=none</text>
+  <text x="1175" y="728" text-anchor="middle" font-size="9" fill="#78350f">bundled engines: cloud · opencode_http: local</text>
 
   <!-- ═══════════════════════════════════════════════════════════════════
        Footer
@@ -225,11 +218,10 @@
       <stop offset="0%" stop-color="#2563eb"/>
       <stop offset="20%" stop-color="#7c3aed"/>
       <stop offset="40%" stop-color="#059669"/>
-      <stop offset="60%" stop-color="#ea580c"/>
       <stop offset="80%" stop-color="#dc2626"/>
       <stop offset="100%" stop-color="#db2777"/>
     </linearGradient>
   </defs>
   <rect x="490" y="845" width="400" height="6" rx="3" fill="url(#grad)" opacity="0.6"/>
-  <text x="690" y="862" text-anchor="middle" font-size="9" fill="#94a3b8">CC · Codex · OpenCode · Hermes · TEB · Copilot</text>
+  <text x="690" y="862" text-anchor="middle" font-size="9" fill="#94a3b8">CC · Codex · OpenCode · TEB · Copilot</text>
 </svg>

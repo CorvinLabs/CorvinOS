@@ -110,41 +110,11 @@ def test_extract_claudecode_denied_call(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# extract_hermes_trace
+# ADR-2087 — the Hermes extractor is gone
 # ---------------------------------------------------------------------------
 
-def test_extract_hermes_basic(tmp_path: Path) -> None:
-    response = json.dumps({
-        "result": "done",
-        "tool_calls": [
-            {"name": "search", "duration_ms": 100, "exit_code": 0},
-            {"name": "summarize", "duration_ms": 200, "exit_code": 0},
-        ],
-    })
-    count = wt.extract_hermes_trace(response, "w1", "r1", "spn1", tmp_path / "run")
-    assert count == 2
-    events = wt.read_trace(wt.trace_path(tmp_path / "run", "w1"))
-    assert [e["tool_name"] for e in events] == ["search", "summarize"]
-    assert events[0]["duration_ms"] == 100
-
-
-def test_extract_hermes_no_tool_calls(tmp_path: Path) -> None:
-    count = wt.extract_hermes_trace(
-        json.dumps({"result": "plain text answer"}), "w1", "r1", "s1", tmp_path / "run"
-    )
-    assert count == 0
-
-
-def test_extract_hermes_plain_text(tmp_path: Path) -> None:
-    count = wt.extract_hermes_trace("just plain text", "w1", "r1", "s1", tmp_path)
-    assert count == 0
-
-
-def test_extract_hermes_empty_tool_calls(tmp_path: Path) -> None:
-    count = wt.extract_hermes_trace(
-        json.dumps({"tool_calls": []}), "w1", "r1", "s1", tmp_path / "run"
-    )
-    assert count == 0
+def test_extract_hermes_trace_removed() -> None:
+    assert not hasattr(wt, "extract_hermes_trace")
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ Covers three confirmed findings:
 
   M9 — acs_runtime labelled claude_code worker locality as "eu_cloud" in the
         GDPR Art. 30 audit trail, but api.anthropic.com is US jurisdiction
-        (us_cloud). Only genuine local/hermes must stay "local".
+        (us_cloud). Only a genuinely local engine may be "local".
 """
 from __future__ import annotations
 
@@ -213,8 +213,39 @@ def test_m9_engine_locality_claude_is_us_cloud():
     assert _rt._engine_locality("claude_code") == "us_cloud"
 
 
-def test_m9_engine_locality_hermes_is_local():
-    assert _rt._engine_locality("hermes") == "local"
+def test_m9_engine_locality_removed_hermes_is_not_local():
+    # ADR-2087: Hermes was removed; the id no longer claims local locality.
+    assert _rt._engine_locality("hermes") == "us_cloud"
+
+
+def test_adr2087_worker_engine_is_always_claude_code(monkeypatch):
+    # A local family:tag model name no longer routes to a local engine.
+    monkeypatch.delenv("CORVIN_ACS_WORKER_ENGINE", raising=False)
+    monkeypatch.setattr(_rt, "_corvin_home", lambda: __import__("pathlib").Path("/nonexistent-adr2087"))
+    for model in ("qwen3:8b", "llama3:70b", "hermes", "hermes-fast", "claude-sonnet-5"):
+        eid, m = _rt._resolve_worker_engine(model, "_default")
+        assert eid == "claude_code"
+        assert m == model
+
+
+def test_adr2087_legacy_forced_engine_maps_to_claude_code(monkeypatch):
+    monkeypatch.setenv("CORVIN_ACS_WORKER_ENGINE", "hermes")
+    assert _rt._resolve_worker_engine("qwen3:8b", "_default")[0] == "claude_code"
+
+
+def test_adr2087_legacy_tenant_worker_engine_maps_to_claude_code(monkeypatch, tmp_path):
+    monkeypatch.delenv("CORVIN_ACS_WORKER_ENGINE", raising=False)
+    cfg = tmp_path / "tenants" / "t1" / "global"
+    cfg.mkdir(parents=True)
+    (cfg / "tenant.corvin.yaml").write_text(
+        "spec:\n  default_worker_engine: hermes\n", encoding="utf-8")
+    monkeypatch.setattr(_rt, "_corvin_home", lambda: tmp_path)
+    assert _rt._resolve_worker_engine("qwen3:8b", "t1") == ("claude_code", "qwen3:8b")
+
+
+def test_adr2087_ollama_helpers_removed():
+    for name in ("_OLLAMA_ALIASES", "_ollama_chat", "_ollama_base_url"):
+        assert not hasattr(_rt, name), name
 
 
 def test_m9_engine_locality_unknown_defaults_us_cloud():

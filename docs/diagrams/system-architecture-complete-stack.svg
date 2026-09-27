@@ -34,14 +34,14 @@
 
   <!-- Layer 4: Persona & Capability -->
   <rect x="50" y="500" width="1100" height="100" fill="#4299e1" opacity="0.1" stroke="#4299e1" stroke-width="2" rx="5"/>
-  <text x="70" y="525" font-size="14" font-weight="bold" fill="#2d3748">PERSONA & CAPABILITY FOUNDATION (ADR-0302, 0294, 0296)</text>
+  <text x="70" y="525" font-size="14" font-weight="bold" fill="#2d3748">PERSONA &amp; CAPABILITY FOUNDATION (ADR-0302, 0294, 0296)</text>
   <text x="70" y="550" font-size="11" fill="#4a5568">• Multi-Persona Support (assistant, admin, user, guest)</text>
   <text x="70" y="570" font-size="11" fill="#4a5568">• Explicit Capability Declarations • Role-Based Access Control (RBAC) • Bridge Adapter Layer</text>
   <text x="70" y="590" font-size="11" fill="#4a5568">• Session Isolation • Persona-specific Preferences</text>
 
   <!-- Layer 5: Security & Compliance -->
   <rect x="50" y="620" width="1100" height="120" fill="#ed8936" opacity="0.1" stroke="#ed8936" stroke-width="2" rx="5"/>
-  <text x="70" y="645" font-size="14" font-weight="bold" fill="#2d3748">SECURITY & COMPLIANCE LAYERS (L4-L44)</text>
+  <text x="70" y="645" font-size="14" font-weight="bold" fill="#2d3748">SECURITY &amp; COMPLIANCE LAYERS (L4-L44)</text>
   <text x="70" y="670" font-size="11" fill="#4a5568">• Audit Trail (hash-chained, GDPR Art. 30, 32) • Bot Disclosure (EU AI Act Art. 50) • Consent Gates (GDPR Art. 6, 7)</text>
   <text x="70" y="690" font-size="11" fill="#4a5568">• Path-Gate Enforcement (L10) • Data Classification (L34, 4-level) • Erasure Orchestrator (L36, GDPR Art. 17)</text>
   <text x="70" y="710" font-size="11" fill="#4a5568">• House-Rules Gate (L44) • Voice Audit (L23, metadata only) • Network Egress Lockdown (L35)</text>
@@ -49,26 +49,26 @@
 
   <!-- Layer 6: Engine & Delegation -->
   <rect x="50" y="760" width="1100" height="100" fill="#9f7aea" opacity="0.1" stroke="#9f7aea" stroke-width="2" rx="5"/>
-  <text x="70" y="785" font-size="14" font-weight="bold" fill="#2d3748">ENGINE ABSTRACTION & DELEGATION (L22-L30)</text>
+  <text x="70" y="785" font-size="14" font-weight="bold" fill="#2d3748">ENGINE ABSTRACTION &amp; DELEGATION (L22-L30)</text>
   <text x="70" y="810" font-size="11" fill="#4a5568">• Worker Engine Protocol (unified interface) • ClaudeCodeEngine (native execution)</text>
-  <text x="70" y="830" font-size="11" fill="#4a5568">• HermesEngine (concurrent execution) • TDE (Tiered Delegation Engine)</text>
+  <text x="70" y="830" font-size="11" fill="#4a5568">• Codex / OpenCode / Copilot engines • TDE (Tiered Delegation Engine)</text>
   <text x="70" y="850" font-size="11" fill="#4a5568">• Delegation Routing (native/ACS/TDE) • Model Selector (Haiku/Sonnet/Opus)</text>
 
   <!-- Layer 7: Data & Storage -->
   <rect x="50" y="880" width="1100" height="100" fill="#e53e3e" opacity="0.1" stroke="#e53e3e" stroke-width="2" rx="5"/>
-  <text x="70" y="905" font-size="14" font-weight="bold" fill="#2d3748">DATA & STORAGE LAYERS (L24-L25, L32-L33, L37)</text>
+  <text x="70" y="905" font-size="14" font-weight="bold" fill="#2d3748">DATA &amp; STORAGE LAYERS (L24-L25, L32-L33, L37)</text>
   <text x="70" y="930" font-size="11" fill="#4a5568">• Large-Data Snapshots (L24) • Compute Worker Management (L25, ACS)</text>
   <text x="70" y="950" font-size="11" fill="#4a5568">• Session Artifact Memory (L33) • Anonymisation Pipeline (L32)</text>
   <text x="70" y="970" font-size="11" fill="#4a5568">• Audit-at-Rest Encryption (L37) • Retention + TSA Timestamping</text>
 
   <!-- Layer 8: Voice & Speech -->
   <rect x="50" y="1000" width="1100" height="80" fill="#38b6ff" opacity="0.1" stroke="#38b6ff" stroke-width="2" rx="5"/>
-  <text x="70" y="1025" font-size="14" font-weight="bold" fill="#2d3748">VOICE & SPEECH LAYER (L23)</text>
+  <text x="70" y="1025" font-size="14" font-weight="bold" fill="#2d3748">VOICE &amp; SPEECH LAYER (L23)</text>
   <text x="70" y="1050" font-size="11" fill="#4a5568">• Speech-to-Text (Whisper/edge-tts) • Metadata-only Audit • Voice Preferences • TTS (OpenAI/Piper)</text>
 
   <!-- Layer 9: Database -->
   <rect x="50" y="1100" width="1100" height="80" fill="#38a169" opacity="0.1" stroke="#38a169" stroke-width="2" rx="5"/>
-  <text x="70" y="1125" font-size="14" font-weight="bold" fill="#2d3748">DATABASE & PERSISTENCE</text>
+  <text x="70" y="1125" font-size="14" font-weight="bold" fill="#2d3748">DATABASE &amp; PERSISTENCE</text>
   <text x="70" y="1150" font-size="11" fill="#4a5568">• SQLite (local sessions) • JSON Audit Logs (hash-chained) • Learning Database (~.corvin/learning/)</text>
   <text x="70" y="1170" font-size="11" fill="#4a5568">• Checkpoint Storage • Configuration Files (YAML) • Plugin Registry</text>
 
@@ -77,7 +77,7 @@
   <g font-size="10" fill="#4a5568">
     <text x="70" y="1255">Phase 0-7: Foundation + Major Refactoring (pre-2026-08)</text>
     <text x="70" y="1275">Phase 8: Plugin System v2 Activation (Aug 2026)</text>
-    <text x="70" y="1295">Phase 9: Persona & Capability Foundation (Aug 2026)</text>
+    <text x="70" y="1295">Phase 9: Persona &amp; Capability Foundation (Aug 2026)</text>
     <text x="70" y="1315">Phase 10-12: K-Level Hardening (Aug 2026) • CorvinOS Brain v0.2 (Aug 16, 2026 — 1 day)</text>
   </g>
 

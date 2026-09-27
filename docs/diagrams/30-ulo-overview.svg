@@ -150,7 +150,7 @@
   <text x="562" y="260" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
         font-size="13" font-weight="bold" fill="#a78bfa">LLM</text>
   <text x="562" y="276" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
-        font-size="9" fill="#8b949e">Claude · Hermes</text>
+        font-size="9" fill="#8b949e">Claude Code</text>
   <text x="562" y="289" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
         font-size="9" fill="#8b949e">Codex · OpenCode</text>
   <text x="562" y="303" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"

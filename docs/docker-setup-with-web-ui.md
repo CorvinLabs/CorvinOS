@@ -81,7 +81,6 @@ The UI lets you add API keys for multiple engines:
 - ✅ **OpenAI / Codex** (OPENAI_API_KEY) — [Get key](https://platform.openai.com/api-keys)
 - ✅ **Google Gemini** (GEMINI_API_KEY) — [Get key](https://aistudio.google.com/app/apikey)
 - ✅ **OpenRouter** (OPENROUTER_API_KEY) — [Get key](https://openrouter.ai/keys)
-- ✅ **Ollama** (OLLAMA_BASE_URL) — Local LLM server
 - ✅ **Claude Code** (OAuth) — Auto-detected if logged in
 
 **How to add a key:**

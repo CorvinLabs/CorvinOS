@@ -52,7 +52,7 @@ class ProviderSpec:
     id: str
     label: str
     base_url: str = ""
-    model_source: str = "static"     # static | ollama | openrouter | bedrock | vertex | foundry
+    model_source: str = "static"     # static | ollama (Ollama Cloud API) | openrouter | bedrock | vertex | foundry
     credential_env: str = ""
     kind: str = "cloud"              # local | cloud
     proxy_base_url: str = ""         # Anthropic-compatible endpoint for CC→provider routing
@@ -154,8 +154,7 @@ class EngineModelSpec:
     worker_models: list[EngineModelEntry] = field(default_factory=list)
     supported_providers: list[EngineProviderSupport] = field(default_factory=list)
     #: Set when this engine's picker is topped up from the live catalogue.
-    #: ``None`` = curated list only (Hermes, whose models are whatever Ollama has
-    #: pulled locally, has no cloud catalogue to merge).
+    #: ``None`` = curated list only (no live catalogue to merge).
     live_models: Optional[LiveModelSource] = None
 
     def default_os_model(self) -> str | None:
@@ -544,7 +543,7 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
     The endpoint MUST speak the Anthropic Messages API: an operator-configured
     ``proxy_base_url`` (e.g. an externally-run LiteLLM) is honored first if
     set; otherwise, for a provider whose own API is OpenAI-format
-    (ollama_local/ollama_cloud/openrouter — never anthropic-native), the
+    (ollama_cloud/openrouter — never anthropic-native), the
     built-in local translating proxy (anthropic_openai_bridge) is started on
     demand and used instead — no external proxy deployment required.
     """
@@ -592,26 +591,26 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
                 ProxyTarget, chat_completions_url_for, ensure_proxy)
             model = (
                 get_tenant_engine_model(tenant_id, "claude_code", "os_model")
-                or ("qwen3:8b" if ps.model_source == "ollama" else "")
+                or ""
             )
             if not model:
-                # "auto" is not a valid OpenRouter model id (the real slug is
-                # "openrouter/auto") — starting the proxy anyway would make
+                # No safe default exists for these providers ("auto" is not a
+                # valid OpenRouter model id; the local ``qwen3:8b`` fallback
+                # went with ADR-2087) — starting the proxy anyway would make
                 # every turn fail with an opaque upstream 400 instead of a
                 # clear error. Leave base unset so CC falls through to its
                 # existing routing instead.
                 import logging
                 logging.getLogger(__name__).warning(
                     "[provider] %s: no model selected for claude_code and no "
-                    "safe default exists for OpenRouter — pick a model on the "
-                    "Engines page.", prov,
+                    "safe default exists for this provider — pick a model on "
+                    "the Engines page.", prov,
                 )
             else:
                 base = ensure_proxy(ProxyTarget(
                     chat_completions_url=chat_completions_url_for(
                         ps.base_url, ps.model_source),
                     api_key=key, model=model,
-                    disable_reasoning=(ps.model_source == "ollama"),
                 ))
         except Exception:  # noqa: BLE001 — never break the spawn
             import logging
@@ -757,7 +756,7 @@ def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
 # "full" tier is used for CODE workloads (capable, slow)
 _MODEL_TIER_MAPPING: dict[str, dict[str, str]] = {
     # Keys MUST be real registry engine ids (see load_registry()). Earlier
-    # revisions carried phantom entries ("gemini", "codex", "ollama_local")
+    # revisions carried phantom entries ("gemini", "codex", a local-Ollama id)
     # with retired/nonexistent model ids that _model_is_valid waved through
     # because the engines were unknown to the registry — pruned 2026-07-18.
     # New engines register here only together with a registry entry.

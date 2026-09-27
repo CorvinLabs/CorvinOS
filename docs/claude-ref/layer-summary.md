@@ -22,7 +22,7 @@ layer don't compromise others (defense-in-depth).
 | **L19** | Disclosure (one-time AI-nature card) | EU AI Act Art. 50 compliance | [layer-users.md § L19](layer-users.md#layer-19--bot-disclosure-card--join-self-service) |
 | **L20** | Quota (per-bundle rate-limit) | owner=unlimited, admin=500/day, member=100 | [layer-users.md § L20](layer-users.md#layer-20--quota--audit-view-delegated-budget-visibility) |
 | **L21** | Proposals (stack of instructions) | `/propose` → `/go [steering]`, atomic consume | [layer-users.md § L21](layer-users.md#layer-21--curated-proposal-stack-multi-user-input-owner-go) |
-| **L22** | WorkerEngine protocol | 5 engines: ClaudeCode, Hermes, Copilot, Codex, OpenCode | [layer-engines.md § L22](layer-engines.md#layer-22--workerengine-protocol-awp-integration-phase-1--2) |
+| **L22** | WorkerEngine protocol | 4 engines: ClaudeCode, Copilot, Codex, OpenCode (Hermes removed, ADR-2087) | [layer-engines.md § L22](layer-engines.md#layer-22--workerengine-protocol-awp-integration-phase-1--2) |
 | **L23** | Speech-to-Text | Metadata-only audit (never transcript text) | [layer-23-stt.md](layer-23-stt.md) |
 | **L24** | Large-Data Snapshot | `data_register`/`data_snapshot`/`data_unregister` MCP | [layer-data.md § L24](layer-data.md#layer-24--large-data-snapshot-layer-adr-0012-pii-aware-data-locality) |
 | **L25** | Compute Worker | Out-of-LLM-loop optimization driver | [layer-data.md § L25](layer-data.md#layer-25--compute-worker-opt-in-iterative-big-data-adr-0013) |

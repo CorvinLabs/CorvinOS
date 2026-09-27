@@ -30,18 +30,18 @@ def _no_bypass_and_restore(monkeypatch):
 def test_forbidden_engine_blocked_on_acs_path():
     _v._set_active_license({"tier": "pro", "limits": {"engines_allowed": ["claude_code"]}})
     with pytest.raises(RuntimeError) as ei:
-        A._assert_engine_licensed("hermes")
+        A._assert_engine_licensed("codex_cli")
     assert "engine-not-allowed-by-license" in str(ei.value)
 
 
 def test_allowed_engine_passes_on_acs_path():
-    _v._set_active_license({"tier": "pro", "limits": {"engines_allowed": ["hermes"]}})
-    A._assert_engine_licensed("hermes")  # must not raise
+    _v._set_active_license({"tier": "pro", "limits": {"engines_allowed": ["codex_cli"]}})
+    A._assert_engine_licensed("codex_cli")  # must not raise
 
 
 def test_no_limit_allows_any_engine():
     _v._set_active_license(None)  # free tier: engines_allowed = None → no-op
-    A._assert_engine_licensed("hermes")  # must not raise
+    A._assert_engine_licensed("codex_cli")  # must not raise
 
 
 def test_dual_env_bypass_requires_both(monkeypatch):
@@ -49,4 +49,4 @@ def test_dual_env_bypass_requires_both(monkeypatch):
     _v._set_active_license({"tier": "pro", "limits": {"engines_allowed": ["claude_code"]}})
     monkeypatch.setenv("CORVIN_AGENTS_SKIP_LIVE", "1")  # only one of the two
     with pytest.raises(RuntimeError):
-        A._assert_engine_licensed("hermes")
+        A._assert_engine_licensed("codex_cli")

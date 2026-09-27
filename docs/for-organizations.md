@@ -220,13 +220,10 @@ Four engines ship today:
   skills_tool, MCP, all 4 permission modes).
 - `codex_cli.py` — MCP + stream-json, no skills_tool, no hooks, no
   mid-stream inject.
-- `opencode_cli.py` — provider-agnostic (Claude/OpenAI/Google/Ollama);
+- `opencode_cli.py` — provider-agnostic (Claude/OpenAI/Google and other hosted providers);
   mcp + stream-json only.
-- `hermes_engine.py` — **fully local via Ollama HTTP** (L22 / L34);
-  zero network egress, no cloud API key, L34 CONFIDENTIAL-capable. The
-  only engine that qualifies for CONFIDENTIAL tasks under the EU_PRODUCTION
-  preset without a compliance-zone exception. Capabilities: stream-json
-  only — no mid-stream inject, no hooks, no MCP (M3 roadmap).
+- (`hermes_engine.py`, the local Ollama engine, was removed in ADR-2087 —
+  no bundled engine is zero-egress any more.)
 
 Capabilities are declared per engine and the adapter degrades gracefully
 when a feature is missing (never crashes).
@@ -302,7 +299,8 @@ release; covered in §7 (business plan).
 
 Possible today with two changes:
 1. Engine swap — replace the Anthropic-bound `claude_code.py` with a
-   `WorkerEngine` implementation calling a local vLLM / Ollama server.
+   `WorkerEngine` implementation calling a self-hosted model server (e.g. vLLM),
+   declared local in the tenant's `engine_compliance`.
 2. Bridge channel restriction — keep e-mail (IMAP via internal mail
    server) and a custom in-house chat adapter; drop the public
    messengers.

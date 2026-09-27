@@ -1,4 +1,4 @@
-"""E2E test: Buffered /btw across Codex/OpenCode/Hermes (ADR-0087 M2)."""
+"""E2E test: Buffered /btw across Codex/OpenCode (ADR-0087 M2)."""
 
 import tempfile
 from pathlib import Path

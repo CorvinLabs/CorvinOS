@@ -36,7 +36,7 @@ A Skill is a **hybrid program** that combines:
 Input: Task + user_id + context
 → Python: Load tenant config
 → LLM (if uncertain): "Which engine best fits this task?"
-→ Python: Select engine (Claude/Opus/Hermes based on cost/quality tradeoff)
+→ Python: Select engine (Claude model tier or worker engine, based on cost/quality tradeoff)
 → Audit: skill_executed event (input, output, latency, confidence)
 → Feedback: Operator says "was that correct?" → update router weights
 ```
@@ -154,7 +154,7 @@ corvin audit trace skill os.router --task=<id>  # Skill decision chain
 - **MCP Tools** — Claude API integration
 
 ### Layer 2: L5 Routing (Skills-Driven)
-- **os.delegation_router** — Which engine? (Claude/Opus/Hermes based on task type)
+- **os.delegation_router** — Which engine? (Claude model tier or worker engine, based on task type)
 - **os.context_adapter** — User/task pattern learning
 - **Learning loop** — Feedback → router config tuning
 

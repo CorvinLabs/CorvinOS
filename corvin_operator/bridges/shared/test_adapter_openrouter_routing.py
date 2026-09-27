@@ -1,5 +1,5 @@
 """test_adapter_openrouter_routing.py — ADR-0181 M3 provider-based routing
-branch of adapter._build_spawn_env, specifically the OpenRouter/Ollama
+branch of adapter._build_spawn_env, specifically the OpenRouter
 "no model selected" edge case (adversarial review, 2026-07-14).
 
 Regression: when a provider's model_source is "openrouter" and no os_model
@@ -9,14 +9,8 @@ OpenRouter model id (the real slug is "openrouter/auto") -- causing every
 subsequent turn to fail with an opaque upstream 400 instead of failing fast
 with the already-detected clear error.
 
-All tests here monkeypatch ``adapter._read_cc_local_cfg`` to always return
-None. Without it, these tests are NOT hermetic: on any host with a real
-``claude_code_local`` (ADR-0126) redirect enabled in ``~/.corvin`` (a
-genuinely common local-dev setup for this project), ``_build_spawn_env``
-takes the ``if _cc_cfg:`` branch before ever reaching the provider-routing
-code under test, and both tests fail against ambient machine state instead
-of exercising the intended branch (found during adversarial review,
-2026-07-14 — reproduced live on a dev machine with local mode configured).
+(The ADR-0126 claude_code_local Ollama redirect these tests once had to
+neutralise was removed by ADR-2087.)
 """
 from __future__ import annotations
 
@@ -42,7 +36,6 @@ def _provider_spec(**overrides):
 
 
 def test_openrouter_no_model_selected_does_not_start_proxy_with_auto(monkeypatch):
-    monkeypatch.setattr(adapter, "_read_cc_local_cfg", lambda tid: None)
     monkeypatch.setattr(engine_models, "get_tenant_engine_provider",
                          lambda tid, engine_id: "openrouter")
     monkeypatch.setattr(engine_models, "get_tenant_engine_model",
@@ -71,7 +64,6 @@ def test_openrouter_no_model_selected_does_not_start_proxy_with_auto(monkeypatch
 
 
 def test_openrouter_with_model_selected_starts_proxy_with_real_model(monkeypatch):
-    monkeypatch.setattr(adapter, "_read_cc_local_cfg", lambda tid: None)
     monkeypatch.setattr(engine_models, "get_tenant_engine_provider",
                          lambda tid, engine_id: "openrouter")
     monkeypatch.setattr(engine_models, "get_tenant_engine_model",

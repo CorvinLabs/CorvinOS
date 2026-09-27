@@ -21,8 +21,11 @@ Design contract:
   override the per-engine default via env vars
   (``CORVIN_DELEGATE_<ENGINE>_ZONE``) — useful for Anthropic's EU
   endpoint, OpenAI's regional rollout, etc.
-* Local execution (``ollama/...`` model on OpenCode) maps to zone
-  ``"local"`` which is universally compatible.
+* An operator may declare an engine ``"local"`` via
+  ``CORVIN_DELEGATE_<ENGINE>_ZONE=local`` (e.g. OpenCode pointed at a
+  user-defined provider on the operator's own host); ``"local"`` is
+  universally compatible. No bundled engine is local since ADR-2087
+  removed Hermes / local Ollama.
 
 The policy enforcement landing site is ``run_delegate`` in
 ``delegation.py``: the gate fires AFTER caller-side validation and
@@ -202,20 +205,12 @@ def _validate_engine_list(value: Any, field_name: str, path: Path) -> list[str]:
 _DEFAULT_ENGINE_ZONES: dict[str, str] = {
     "claude_code": "us",   # Anthropic API — default endpoint is US
     "codex_cli":   "us",   # OpenAI API — default endpoint is US
-    "opencode":    "us",   # provider-agnostic; cloud default is US,
-                           # local/cloud distinction handled by model
-                           # prefix detection below.
-    # hermes and copilot were previously ABSENT here, so
-    # resolve_engine_zone() fell through to "unknown" for both — and
-    # is_zone_compatible() denies "unknown" whenever a tenant has any zone
-    # constraint set. hermes is the fully-local, zero-egress engine this
-    # project explicitly recommends for CONFIDENTIAL-classified data (see
-    # mcp_server.py's own marketing text) — treating it as an unrecognised/
-    # foreign zone silently blocked it for any tenant with a residency
-    # policy, unless the operator remembered CORVIN_DELEGATE_HERMES_ZONE=
-    # local manually (adversarial review finding). copilot is genuinely
-    # cloud (GitHub Copilot API), given its own explicit default here.
-    "hermes":      "local",
+    "opencode":    "us",   # provider-agnostic; cloud default is US.
+    # copilot is genuinely cloud (GitHub Copilot API). An engine absent
+    # from this table resolves to "unknown", which is_zone_compatible()
+    # denies whenever the tenant has a zone constraint (fail-closed).
+    # ADR-2087 removed the former "hermes": "local" entry — a legacy
+    # ``hermes`` id is now "unknown" here (never implicitly local).
     "copilot":     "us",
 }
 
@@ -223,10 +218,11 @@ _DEFAULT_ENGINE_ZONES: dict[str, str] = {
 def resolve_engine_zone(engine_id: str, model: str | None = None) -> str:
     """Map ``(engine_id, model)`` to a compliance zone string.
 
-    For OpenCode the model prefix takes precedence over the env
-    default — ``ollama/...`` and ``local/...`` always map to ``local``
-    regardless of operator config (data physically does not leave the
-    machine). ``ollama-cloud/...`` maps to the cloud default.
+    For OpenCode every model prefix resolves to the operator default
+    (env override, else ``"us"``). ADR-2087 removed the former
+    ``ollama/...`` / ``local/...`` → ``"local"`` mapping: a model-name
+    prefix chosen by the caller must not by itself exempt a call from
+    the tenant's residency constraint.
 
     Returns ``"unknown"`` for unrecognised engines so the gate
     fail-closes when a tenant zone is set.
@@ -244,14 +240,9 @@ def resolve_engine_zone(engine_id: str, model: str | None = None) -> str:
         operator_default = _DEFAULT_ENGINE_ZONES.get(engine_id)
 
     # OpenCode's provider routing is determined by the model prefix.
-    if engine_id == "opencode" and model:
-        m = model.strip().lower()
-        if m.startswith("ollama/") or m.startswith("local/"):
-            return "local"
-        if m.startswith("ollama-cloud/"):
-            return operator_default or "us"
-        # other providers (anthropic/, openai/, openrouter/, ...)
-        # fall through to operator default
+    if engine_id == "opencode":
+        # All providers (anthropic/, openai/, openrouter/, ollama-cloud/,
+        # ...) resolve to the operator default.
         return operator_default or "us"
 
     if operator_default:

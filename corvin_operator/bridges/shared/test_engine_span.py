@@ -31,14 +31,14 @@ def test_new_span_id_shape():
 
 
 def test_start_details_fields_survive_floor():
-    d = ES.start_details(span_id="spn_1", role="worker", engine_id="hermes",
-                         model_id="qwen3:8b", parent_span_id="spn_0",
+    d = ES.start_details(span_id="spn_1", role="worker", engine_id="opencode",
+                         model_id="gpt-5-mini", parent_span_id="spn_0",
                          run_id="acs-1", turn_id="t1")
     filtered, dropped = _filter(d, ES.ENGINE_SPAN_START)
     for f in ("span_id", "role", "engine_id", "model_id", "parent_span_id",
               "run_id", "turn_id", "started_at"):
         assert f in filtered, f"span field {f!r} was dropped by the audit floor"
-    assert filtered["engine_id"] == "hermes" and filtered["role"] == "worker"
+    assert filtered["engine_id"] == "opencode" and filtered["role"] == "worker"
 
 
 def test_end_details_fields_survive_floor():

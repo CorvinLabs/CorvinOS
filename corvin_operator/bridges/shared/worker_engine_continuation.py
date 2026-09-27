@@ -4,7 +4,7 @@ Given a checkpoint, format the next prompt/system-prompt for each engine.
 Enables seamless context transfer across engine boundaries.
 
 Claude Code: uses native --resume if available (checkpoint is fallback)
-Codex/OpenCode/Hermes: prepend checkpoint summary to system prompt
+Codex/OpenCode: prepend checkpoint summary to system prompt
 Copilot: single-turn limitation (error message)
 """
 
@@ -38,11 +38,6 @@ def create_continuation_prompt(
 
     elif engine_id in ("codex_cli", "opencode_cli"):
         # Codex and OpenCode: prepend checkpoint summary
-        summary = _checkpoint_summary(checkpoint)
-        return f"{summary}\n\n{new_user_input}"
-
-    elif engine_id == "hermes_engine":
-        # Hermes: prepend checkpoint summary (same as Codex for now; M2 will add sidecar)
         summary = _checkpoint_summary(checkpoint)
         return f"{summary}\n\n{new_user_input}"
 

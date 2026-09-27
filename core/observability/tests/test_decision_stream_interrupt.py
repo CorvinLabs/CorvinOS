@@ -165,6 +165,15 @@ class TestInterruptController:
         assert cmd is not None
         assert cmd.new_engine == "local_llama2"
 
+    def test_issue_redirect_to_removed_hermes_is_refused(self):
+        """ADR-2087: hermes is no longer a redirect target."""
+        controller = InterruptController()
+        controller.task_states["task-1"] = TaskState.RUNNING
+        assert controller.issue_redirect(
+            command_id="cmd-1", task_id="task-1", operator_id="op-1",
+            new_engine="hermes",
+        ) is None
+
     def test_issue_cancel(self):
         """Cancel a task."""
         controller = InterruptController()

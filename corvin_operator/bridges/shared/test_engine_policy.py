@@ -35,7 +35,7 @@ def main() -> int:
 
     p = ep.EnginePolicy.from_dict({
         "default_engine": "claude_code",
-        "fallback_chain": ["claude_code", "vllm_eu_west", "ollama_local"],
+        "fallback_chain": ["claude_code", "vllm_eu_west", "vllm_eu_central"],
         "compliance_zones": {
             "personal_data": {
                 "allow_engines": ["azure_openai_eu", "vllm_eu_west"],

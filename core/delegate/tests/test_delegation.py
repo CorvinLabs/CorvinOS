@@ -292,12 +292,12 @@ class HappyPathTests(unittest.TestCase):
         run_delegate(
             engine="opencode",
             prompt="hi",
-            model="ollama/qwen3:8b",
+            model="anthropic/claude-sonnet-5",
             working_dir="/tmp",
             engine_factory=_make_factory(fake),
             audit=False,
         )
-        self.assertEqual(fake.spawn_kwargs.get("model"), "ollama/qwen3:8b")
+        self.assertEqual(fake.spawn_kwargs.get("model"), "anthropic/claude-sonnet-5")
         self.assertEqual(fake.spawn_kwargs.get("working_dir"), Path("/tmp"))
 
     def test_env_extra_pass_through(self):
@@ -338,11 +338,33 @@ class FailureTests(unittest.TestCase):
 
 
 class AvailableEnginesTests(unittest.TestCase):
-    def test_five_engines(self):
+    def test_four_engines(self):
+        # ADR-2087: hermes (local Ollama) was removed.
         self.assertEqual(
             set(AVAILABLE_ENGINES),
-            {"claude_code", "codex_cli", "opencode", "hermes", "copilot"},
+            {"claude_code", "codex_cli", "opencode", "copilot"},
         )
+
+    def test_legacy_hermes_engine_is_mapped_to_claude_code(self):
+        # ADR-2087: a stored/legacy engine id is mapped on read, never rejected.
+        seen: list[str] = []
+
+        def factory(eid):
+            seen.append(eid)
+            return _FakeEngine()
+
+        for legacy in ("hermes", "HERMES-fast", "ollama", "claude_code_local"):
+            result = run_delegate(engine=legacy, prompt="hi",
+                                  engine_factory=factory, audit=False)
+            self.assertTrue(result.ok, legacy)
+            self.assertEqual(result.engine, "claude_code")
+        self.assertEqual(seen, ["claude_code"] * 4)
+
+    def test_unknown_engine_still_rejected(self):
+        with self.assertRaises(DelegateError):
+            run_delegate(engine="not_an_engine", prompt="hi",
+                         engine_factory=_make_factory(_FakeEngine()),
+                         audit=False)
 
 
 class AuditPayloadTests(unittest.TestCase):
@@ -932,12 +954,12 @@ class EnvAllowlistTests(unittest.TestCase):
         self.assertIn("OPENAI_API_KEY", allow)
 
     def test_opencode_scopes_env_to_the_targeted_provider_only(self):
-        """Adversarial review finding: a fully-local "ollama/..." delegation
-        must NOT also receive ANTHROPIC_API_KEY/OPENAI_API_KEY it has no
+        """Adversarial review finding: an "ollama/..." (Ollama Cloud key)
+        delegation must NOT also receive ANTHROPIC_API_KEY/OPENAI_API_KEY it has no
         legitimate need for — a curious or injected worker with shell/file
         tools has a plausible path to read+exfiltrate credentials outside
         its assigned task's scope."""
-        allow = _env_allowlist_for("opencode", model="ollama/qwen3:8b")
+        allow = _env_allowlist_for("opencode", model="ollama/gpt-oss:120b")
         self.assertIn("OLLAMA_API_KEY", allow)
         self.assertNotIn("ANTHROPIC_API_KEY", allow)
         self.assertNotIn("OPENAI_API_KEY", allow)
@@ -955,7 +977,7 @@ class EnvAllowlistTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", allow)
 
     def test_opencode_scoping_does_not_affect_other_engines(self):
-        allow = _env_allowlist_for("claude_code", model="ollama/qwen3:8b")
+        allow = _env_allowlist_for("claude_code", model="ollama/gpt-oss:120b")
         self.assertIn("ANTHROPIC_API_KEY", allow)
 
     def test_scrubbed_environ_strips_unlisted(self):

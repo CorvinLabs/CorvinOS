@@ -182,7 +182,7 @@ boot_layer: "core"
 dependencies: []
 required_checks: ["audit", "consent", "house-rules"]
 config:
-  router_weights: [0.34, 0.22, 0.44]  # Claude / Opus / Hermes
+  router_weights: [0.34, 0.22, 0.44]  # Haiku / Sonnet / Opus
   lvm_uncertainty_threshold: 0.70
 ```
 

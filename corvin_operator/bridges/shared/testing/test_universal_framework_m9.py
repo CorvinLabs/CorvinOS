@@ -3,7 +3,7 @@ ADR-0087 M9 Tests — Universal Testing Framework
 
 Tier-1: Test case structure, tier classification validation
 Tier-2: Runner logic, coverage calculations
-Tier-3: Full framework end-to-end (all 5 engines)
+Tier-3: Full framework end-to-end (all 4 engines)
 """
 
 import sys
@@ -34,7 +34,7 @@ class TestTestCaseTier1:
             name="test_system_prompt",
             tier=TestTier.TIER_2,
             description="Test system prompt injection",
-            engine_ids=["claude_code", "hermes"],
+            engine_ids=["claude_code", "codex"],
             input_data={"prompt": "Hello"},
             expected_output={"contains_system": True},
         )
@@ -48,7 +48,7 @@ class TestTestCaseTier1:
         """
         Given: TestCase without engine_ids
         When: instantiated
-        Then: defaults to all 5 engines
+        Then: defaults to all 4 engines
         """
         tc = TestCase(
             name="test",
@@ -56,8 +56,9 @@ class TestTestCaseTier1:
             description="Test",
         )
 
-        assert len(tc.engine_ids) == 5
-        assert set(tc.engine_ids) == {"claude_code", "codex", "opencode", "hermes", "copilot"}
+        assert len(tc.engine_ids) == 4
+        assert set(tc.engine_ids) == {"claude_code", "codex", "opencode", "copilot"}
+        assert "hermes" not in tc.engine_ids  # removed (ADR-2087)
 
     def test_tier_classification_valid(self):
         """
@@ -200,26 +201,26 @@ class TestCoverageReporterTier2:
 
     def test_coverage_by_engine(self):
         """
-        Given: test results across all 5 engines
+        Given: test results across all 4 engines
         When: generate_summary() called
-        Then: engine_coverage for all 5 engines present
+        Then: engine_coverage for all 4 engines present
         """
         results = [
             TestResult("test", engine, TestTier.TIER_1, "pass")
-            for engine in ["claude_code", "codex", "opencode", "hermes", "copilot"]
+            for engine in ["claude_code", "codex", "opencode", "copilot"]
         ]
 
         reporter = CoverageReporter(results)
         summary = reporter.generate_summary()
 
         assert "engine_coverage" in summary
-        assert len(summary["engine_coverage"]) == 5
+        assert len(summary["engine_coverage"]) == 4
         assert "claude_code" in summary["engine_coverage"]
         assert "copilot" in summary["engine_coverage"]
 
 
 # ============================================================================
-# TIER-3: Full Framework E2E (All 5 Engines)
+# TIER-3: Full Framework E2E (All 4 Engines)
 # ============================================================================
 
 class TestUniversalFrameworkE2E:
@@ -227,12 +228,12 @@ class TestUniversalFrameworkE2E:
 
     def test_e2e_testmatrix_all_engines(self, tmp_path):
         """
-        Tier-3: Run test across all 5 engines.
-        Given: TestMatrix with all 5 engine runners
+        Tier-3: Run test across all 4 engines.
+        Given: TestMatrix with all 4 engine runners
         When: run_test() called
-        Then: returns results for all 5 engines
+        Then: returns results for all 4 engines
         """
-        # Create mock runners for all 5 engines
+        # Create mock runners for all 4 engines
         class MockRunner(EngineTestRunner):
             def validate_tier_1(self, test_case):
                 # All engines pass Tier-1
@@ -240,7 +241,7 @@ class TestUniversalFrameworkE2E:
 
         runners = {
             engine_id: MockRunner(engine_id)
-            for engine_id in ["claude_code", "codex", "opencode", "hermes", "copilot"]
+            for engine_id in ["claude_code", "codex", "opencode", "copilot"]
         }
 
         # Create test case
@@ -256,7 +257,7 @@ class TestUniversalFrameworkE2E:
         results = matrix.run_test(test_case)
 
         # Verify results
-        assert len(results) == 5
+        assert len(results) == 4
         assert all(r.engine_id in runners for r in results)
         assert all(r.status == "pass" for r in results)
 
@@ -270,7 +271,7 @@ class TestUniversalFrameworkE2E:
         # Create mock runners
         class MockRunner(EngineTestRunner):
             def validate_tier_1(self, test_case):
-                return self.engine_id != "hermes"  # hermes fails
+                return self.engine_id != "opencode"  # opencode fails
 
             def validate_tier_2(self, test_case):
                 return self.engine_id != "codex"  # codex fails
@@ -280,7 +281,7 @@ class TestUniversalFrameworkE2E:
 
         runners = {
             engine_id: MockRunner(engine_id)
-            for engine_id in ["claude_code", "codex", "opencode", "hermes", "copilot"]
+            for engine_id in ["claude_code", "codex", "opencode", "copilot"]
         }
 
         # Test across all tiers
@@ -316,21 +317,21 @@ class TestUniversalFrameworkE2E:
         summary = reporter.generate_summary()
 
         # Verify coverage
-        assert summary["total_tests"] == 15  # 5 engines × 3 tiers
-        assert summary["passed"] == 13  # (5-1) + (5-1) + 5 = 4 + 4 + 5 = 13
-        assert summary["failed"] == 2  # hermes tier_1 + codex tier_2
+        assert summary["total_tests"] == 12  # 4 engines × 3 tiers
+        assert summary["passed"] == 10  # (4-1) + (4-1) + 4 = 3 + 3 + 4 = 10
+        assert summary["failed"] == 2  # opencode tier_1 + codex tier_2
 
         # Verify tier breakdown
-        assert summary["tier_coverage"]["tier_1"]["passed"] == 4  # hermes fails
-        assert summary["tier_coverage"]["tier_1"]["pct"] == 80.0
-        assert summary["tier_coverage"]["tier_2"]["passed"] == 4  # codex fails
-        assert summary["tier_coverage"]["tier_2"]["pct"] == 80.0
-        assert summary["tier_coverage"]["tier_3"]["passed"] == 5  # all pass
+        assert summary["tier_coverage"]["tier_1"]["passed"] == 3  # opencode fails
+        assert summary["tier_coverage"]["tier_1"]["pct"] == 75.0
+        assert summary["tier_coverage"]["tier_2"]["passed"] == 3  # codex fails
+        assert summary["tier_coverage"]["tier_2"]["pct"] == 75.0
+        assert summary["tier_coverage"]["tier_3"]["passed"] == 4  # all pass
         assert summary["tier_coverage"]["tier_3"]["pct"] == 100.0
 
         # Verify engine breakdown
         assert summary["engine_coverage"]["claude_code"]["passed"] == 3
-        assert summary["engine_coverage"]["hermes"]["passed"] == 2  # fails tier_1
+        assert summary["engine_coverage"]["opencode"]["passed"] == 2  # fails tier_1
         assert summary["engine_coverage"]["codex"]["passed"] == 2  # fails tier_2
 
         # Export and verify JSON
@@ -341,5 +342,5 @@ class TestUniversalFrameworkE2E:
         with open(output_file) as f:
             exported = json.load(f)
 
-        assert exported["summary"]["total_tests"] == 15
-        assert len(exported["results"]) == 15
+        assert exported["summary"]["total_tests"] == 12
+        assert len(exported["results"]) == 12

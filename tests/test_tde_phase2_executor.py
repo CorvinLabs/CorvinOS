@@ -452,7 +452,7 @@ class TestF4CrossModelExploration:
             return {"output": "candidate"}
 
         ex._reference_executor_fn = ref_exec
-        ex._explore_executor_fns = [("qwen3", cand_exec)]
+        ex._explore_executor_fns = [("claude-sonnet-5", cand_exec)]
         ex._explore_rotor = 0
 
         await ex._record_outcome(step=ex.plan.steps[0], statement={"x": 1},
@@ -461,7 +461,7 @@ class TestF4CrossModelExploration:
         # The candidate arm ran and produced its own MEASURED entry.
         assert seen["cand"] == 1
         arms = {e.model_id for e in tracker.history if e.measured}
-        assert "qwen3" in arms                     # candidate arm logged
+        assert "claude-sonnet-5" in arms                     # candidate arm logged
         assert "claude-haiku-4-5" in arms          # worker arm still logged
 
     @pytest.mark.asyncio
@@ -479,13 +479,13 @@ class TestF4CrossModelExploration:
             return {"output": "candidate"}
 
         ex._reference_executor_fn = None            # F1 OFF
-        ex._explore_executor_fns = [("qwen3", cand_exec)]
+        ex._explore_executor_fns = [("claude-sonnet-5", cand_exec)]
         ex._explore_rotor = 0
         await ex._record_outcome(step=ex.plan.steps[0], statement={"x": 1},
                                  step_result=self._delegated(), step_executor_fn=worker_exec,
                                  force_measure=True)
         assert seen["cand"] == 0
-        assert not any(e.model_id == "qwen3" for e in tracker.history)
+        assert not any(e.model_id == "claude-sonnet-5" for e in tracker.history)
 
     @pytest.mark.asyncio
     async def test_candidate_equal_to_worker_arm_is_skipped(self):

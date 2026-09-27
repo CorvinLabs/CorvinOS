@@ -466,7 +466,7 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
     # the persona default carries through.
     # default_engine is the per-persona / per-chat engine_id picked by
     # the Phase-4 engine_registry (claude_code | codex_cli | future
-    # gemini_cli / ollama / vllm). Adapter resolves it via
+    # gemini_cli / vllm). Adapter resolves it via
     # engine_registry.resolve_engine_id and hands the factory to AWP.
     for k in ("permission_mode", "model",
               "inject_skills", "inject_ungraded", "max_injected_skills",
@@ -676,21 +676,18 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str) -> dict:
 
 _DELEGATE_BRIEF = (
     "**Delegation (Layer 29):**\n"
-    "- You are the OS process. Five worker engines are reachable as MCP "
+    "- You are the OS process. Four worker engines are reachable as MCP "
     "tools: `mcp__corvin_delegate__delegate_claude_code`, "
     "`mcp__corvin_delegate__delegate_codex`, "
     "`mcp__corvin_delegate__delegate_opencode`, "
-    "`mcp__corvin_delegate__delegate_hermes`, "
     "`mcp__corvin_delegate__delegate_copilot`.\n"
     "- Delegate when (a) clean-context reasoning is needed, (b) pure "
-    "code-gen suited to Codex, (c) privacy-sensitive / local-first work "
-    "suited to OpenCode + Ollama, (d) zero-egress / CONFIDENTIAL tasks "
-    "suited to Hermes (fully local via Ollama — no cloud API needed), or "
-    "(e) GitHub Copilot is available and the task is shell/git/gh command "
+    "code-gen suited to Codex, (c) a task that needs a specific provider "
+    "suited to OpenCode (pick it via the 'model' field), or "
+    "(d) GitHub Copilot is available and the task is shell/git/gh command "
     "generation (zero incremental cost for Copilot Business/Enterprise).\n"
-    "- Hermes model aliases: hermes-fast (7B), hermes-balanced (13B), "
-    "hermes-capable (Hermes-3 8B), hermes-large (70B). Pass via 'model' "
-    "field. Falls back gracefully if Ollama is not running.\n"
+    "- There is no local / zero-egress worker engine: do NOT delegate "
+    "CONFIDENTIAL or SECRET data to any worker.\n"
     "- Copilot task types via 'model' field: 'shell' (shell commands only), "
     "'git' (git commands only), 'gh' (gh CLI commands only), or omit for "
     "general chat. Requires GitHub Copilot subscription + `copilot` binary.\n"
@@ -806,7 +803,6 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
         "mcp__corvin_delegate__delegate_claude_code",
         "mcp__corvin_delegate__delegate_codex",
         "mcp__corvin_delegate__delegate_opencode",
-        "mcp__corvin_delegate__delegate_hermes",
         "mcp__corvin_delegate__delegate_copilot",
     ):
         if t not in allowed:

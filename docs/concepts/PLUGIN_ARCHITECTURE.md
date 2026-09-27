@@ -372,7 +372,7 @@ User Flow:
 ### 3. **Engine** (L22 Integration)
 - Entrypoint: `BaseEngine` subclass
 - Capabilities: registers as a new execution engine
-- Examples: `hermes-custom`, `specialist-model-selector`
+- Examples: `onprem-engine`, `specialist-model-selector`
 - Sandbox: Required + strict signing
 
 ### 4. **Gate** (L34 Integration)

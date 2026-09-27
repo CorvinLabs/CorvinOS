@@ -120,10 +120,10 @@ _PROVIDER_TIMEOUT_S = 75.0
 # Bug report 2026-07-14: repeated EXACT _TOTAL_TIMEOUT_S hits (not the friendly
 # per-provider messages) traced to a wrong budget assumption below. check_l44's
 # real worst case chains a cloud classifier spawn (3 attempts x 20s + backoff
-# ~= 63s, house_rules.py's _HOUSE_RULES_RETRIES/_HOUSE_RULES_ADJ_TIMEOUT_S) THEN
-# falls back to the local Hermes/Ollama classifier (30s,
-# _HOUSE_RULES_HERMES_TIMEOUT_S) — up to ~93s, not the "~35s" this module used
-# to assume. check_l44() itself takes no timeout parameter (it's shared by the
+# ~= 63s, house_rules.py's _HOUSE_RULES_RETRIES/_HOUSE_RULES_ADJ_TIMEOUT_S) —
+# not the "~35s" this module used to assume. (Until ADR-2087 a further ~30s local
+# classifier fallback followed; that backend is gone, the bound keeps its
+# margin.) check_l44() itself takes no timeout parameter (it's shared by the
 # bridge adapter and ACS runtime, whose call sites have no analogous total
 # budget to protect), so it is wrapped in its own _run_bounded call here rather
 # than changing its shared retry/timeout constants for every caller.
@@ -421,9 +421,9 @@ def _generate_image_impl(prompt: str) -> list:
         lambda: check_l44(prompt, tid, persona="assistant", engine_id="imagegen_mcp"),
         min(_L44_TIMEOUT_S, _remaining(deadline)), "imagegen-l44")
     if _l44_timed:
-        # The full L44 gate (cloud classifier ~63s + Hermes fallback ~30s) ran past
-        # our bound — typically a box with no fast/reachable classifier (FREE tier,
-        # claude not logged in, no local Ollama). It used to hard-refuse here with
+        # The full L44 gate (cloud classifier ~63s worst case) ran past our
+        # bound — typically a box with no fast/reachable classifier (FREE tier,
+        # claude not logged in). It used to hard-refuse here with
         # "couldn't be safety-checked in time", so EVERY image — even a benign
         # "queen bee" — was blocked and the model just retried into the same wall.
         # Fall back to the SAME deterministic Tier-0 floor check_l44 itself uses on

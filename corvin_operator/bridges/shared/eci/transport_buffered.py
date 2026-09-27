@@ -1,6 +1,6 @@
 """ADR-0087 M2: Buffered mid-stream injection transport for stateless engines.
 
-When `/btw "text"` is called on Codex/OpenCode/Hermes, queue it here.
+When `/btw "text"` is called on Codex/OpenCode, queue it here.
 On next spawn, prepend queued text to user message.
 
 Storage: <session_dir>/btw_queue.jsonl (append-only, one injection per line)

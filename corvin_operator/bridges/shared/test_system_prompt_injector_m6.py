@@ -1,7 +1,7 @@
 """
 ADR-0087 M6 Tests — Unified System-Prompt Slot
 
-Tier-1: Format detection (all 5 engines, edge cases, NFKC normalization)
+Tier-1: Format detection (all 4 engines, edge cases, NFKC normalization)
 Tier-2: Unit injection (mock spawns, double-injection guard)
 Tier-3: E2E with real engine spawns (verify prompt applied)
 
@@ -36,18 +36,6 @@ class TestSystemAlreadyInjectedDetectionTier1:
         injector = SystemPromptInjector()
         transport = {"command": ["claude", "-p"]}
         assert injector._system_already_injected(transport, "claude_code") is False
-
-    def test_detect_hermes_system_role(self):
-        """Hermes: system role at [0]"""
-        injector = SystemPromptInjector()
-        transport = {"messages": [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]}
-        assert injector._system_already_injected(transport, "hermes") is True
-
-    def test_detect_hermes_no_system_role(self):
-        """Hermes: no system role"""
-        injector = SystemPromptInjector()
-        transport = {"messages": [{"role": "user", "content": "..."}]}
-        assert injector._system_already_injected(transport, "hermes") is False
 
     def test_detect_codex_system_block(self):
         """Codex: <SYSTEM> block present"""
@@ -131,14 +119,6 @@ class TestInjectSystemPromptTier2:
         finally:
             path.unlink(missing_ok=True)
 
-    def test_inject_hermes_message_role_format(self):
-        """Hermes: system role prepended"""
-        injector = SystemPromptInjector()
-        transport = {"messages": [{"role": "user", "content": "Hello"}]}
-        result = injector.inject_system_prompt("You are helpful", transport, "hermes")
-        assert result["messages"][0]["role"] == "system"
-        assert result["messages"][0]["content"] == "You are helpful"
-
     def test_inject_codex_text_prefix_format(self):
         """Codex: <SYSTEM> block prepended"""
         injector = SystemPromptInjector()
@@ -200,10 +180,14 @@ class TestCapabilityStringsTier2:
         injector = SystemPromptInjector()
         assert injector.capability_for_engine("claude_code") == "flag"
 
-    def test_capability_hermes_message_role(self):
-        """hermes → "message_role" """
+    def test_hermes_removed_is_unknown(self):
+        """ADR-2087: hermes is no longer an engine → ValueError"""
         injector = SystemPromptInjector()
-        assert injector.capability_for_engine("hermes") == "message_role"
+        with pytest.raises(ValueError, match="Unknown engine_id"):
+            injector.capability_for_engine("hermes")
+        with pytest.raises(ValueError, match="Unknown engine_id"):
+            injector.inject_system_prompt(
+                "p", {"messages": [{"role": "user", "content": "x"}]}, "hermes")
 
     def test_capability_codex_text_prefix(self):
         """codex → "text_prefix" """
@@ -255,7 +239,7 @@ class TestModuleLevelFunctionsTier2:
 # Note: Tier-3 tests will be added in Iteration 5 (M6 E2E phase)
 
 class TestSystemPromptInjectionE2E:
-    """End-to-end injection on all 5 engines (with realistic mocks)."""
+    """End-to-end injection on all 4 engines (with realistic mocks)."""
 
     def test_e2e_claude_code_injection(self):
         """
@@ -283,31 +267,6 @@ class TestSystemPromptInjectionE2E:
         # Original args preserved
         assert "claude" in result["command"]
         assert "-p" in result["command"]
-
-    def test_e2e_hermes_injection(self):
-        """
-        Tier-3: Hermes (Ollama) system prompt injection.
-        Given: Hermes messages list, system_prompt="You are helpful"
-        When: inject_system_prompt() called
-        Then: system role message prepended, conversation preserved
-        """
-        injector = SystemPromptInjector()
-        transport = {
-            "messages": [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi there"},
-            ]
-        }
-        system_prompt = "You are helpful"
-
-        result = injector.inject_system_prompt(system_prompt, transport, "hermes")
-
-        # Verify system role at [0]
-        assert result["messages"][0]["role"] == "system"
-        assert result["messages"][0]["content"] == system_prompt
-        # Original messages preserved after system
-        assert result["messages"][1]["role"] == "user"
-        assert result["messages"][2]["role"] == "assistant"
 
     def test_e2e_codex_injection(self):
         """
@@ -365,8 +324,8 @@ class TestSystemPromptInjectionE2E:
 
     def test_e2e_all_five_engines_idempotent(self):
         """
-        Tier-3: All 5 engines remain idempotent after injection.
-        Given: Already-injected transports for all 5 engines
+        Tier-3: All 4 engines remain idempotent after injection.
+        Given: Already-injected transports for all 4 engines
         When: inject_system_prompt() called again with new prompt
         Then: All return unchanged (idempotent guard works)
         """
@@ -375,7 +334,6 @@ class TestSystemPromptInjectionE2E:
         # Test each engine's idempotency
         test_cases = [
             ("claude_code", {"command": ["claude", "--append-system-prompt", "old"]}),
-            ("hermes", {"messages": [{"role": "system", "content": "old"}]}),
             ("codex", "<SYSTEM>old</SYSTEM>\n\ntext"),
             ("opencode", "<SYSTEM>old</SYSTEM>\n\ntext"),
             ("copilot", "[SYSTEM]\nold\n[/SYSTEM]\n\ntext"),
@@ -408,7 +366,6 @@ class TestSystemPromptInjectionE2E:
         # Expected matrix (frozen for M8)
         capability_matrix = {
             "claude_code": "flag",
-            "hermes": "message_role",
             "codex": "text_prefix",
             "opencode": "text_prefix",
             "copilot": "text_prefix",
@@ -420,10 +377,10 @@ class TestSystemPromptInjectionE2E:
 
     def test_e2e_full_workflow_all_engines(self):
         """
-        Tier-3: Full workflow for all 5 engines (detect + inject + capability).
+        Tier-3: Full workflow for all 4 engines (detect + inject + capability).
         Given: Empty transports, then system prompts
         When: Full injection workflow executed
-        Then: All 5 engines get correct format, idempotency holds, capabilities match
+        Then: All 4 engines get correct format, idempotency holds, capabilities match
         """
         injector = SystemPromptInjector()
         system_prompt = "You are a helpful assistant"
@@ -431,7 +388,6 @@ class TestSystemPromptInjectionE2E:
         # Prepare transport for each engine
         transports = {
             "claude_code": {"command": ["claude", "-p"]},
-            "hermes": {"messages": [{"role": "user", "content": "Hello"}]},
             "codex": "User: Help",
             "opencode": "User: Help",
             "copilot": "User: Help",
@@ -462,4 +418,4 @@ class TestSystemPromptInjectionE2E:
         # Step 5: Verify capability strings
         for engine_id in transports.keys():
             capability = injector.capability_for_engine(engine_id)
-            assert capability in ["flag", "message_role", "text_prefix"]
+            assert capability in ["flag", "text_prefix"]

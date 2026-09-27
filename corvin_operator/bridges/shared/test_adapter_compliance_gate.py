@@ -131,12 +131,13 @@ spec:
 
     def test_allows_local_engine_for_internal(self):
         with _Sandbox(yaml_content=self.YAML):
-            engine = _FakeEngine(name="opencode_ollama")
+            engine = _FakeEngine(name="opencode_http")
             msg = adapter._check_compliance_or_fail(
                 engine, prompt="def hello(): pass",
                 persona="coder", channel="discord", chat_key="dm:42",
             )
-            # opencode_ollama is locality=local in DEFAULT_ENGINE_COMPLIANCE
+            # opencode_http is locality=local in DEFAULT_ENGINE_COMPLIANCE
+            # (opencode_ollama was removed by ADR-2087)
             self.assertIsNone(msg)
 
 
@@ -233,7 +234,7 @@ class TestMalformedYamlFallsBackToDefaults(unittest.TestCase):
 
     def test_invalid_yaml_allows_local_engine(self):
         with _Sandbox(yaml_content="not yaml { [ broken"):
-            engine = _FakeEngine(name="opencode_ollama")
+            engine = _FakeEngine(name="opencode_http")
             msg = adapter._check_compliance_or_fail(
                 engine, prompt="x", persona=None,
                 channel="ch", chat_key="ck",

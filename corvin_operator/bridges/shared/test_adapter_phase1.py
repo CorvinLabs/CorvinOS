@@ -407,15 +407,16 @@ def test_streaming_recursion_counter() -> None:
     # which would both inflate the count and fail-closed (escalate) before the
     # engine retry path runs. Gate coverage lives in test_house_rules.py.
     adapter._house_rules_classifier = lambda task, rules, auth, **_kw: ("", 1.0, "test-benign")
+    adapter._claude_cli_missing = lambda: False  # Popen is mocked below
 
     tmp = Path(tempfile.mkdtemp(prefix="recursion-"))
     try:
         # This test mocks adapter.subprocess.Popen and counts calls to verify
         # the ClaudeCode retry-bounding logic. Without a real `claude` CLI on
-        # PATH (any CI runner), ADR-0159 engine auto-detect silently falls
-        # back to hermes instead — a different code path that never touches
-        # subprocess.Popen the same way, so the mock sees 0 calls instead of
-        # the expected 2. Pin the engine so auto-detect is bypassed.
+        # PATH (any CI runner), the ADR-2087 claude-CLI presence check
+        # refuses the turn before subprocess.Popen is reached, so the mock
+        # would see 0 calls instead of the expected 2. Pin the engine and
+        # the CLI probe so the retry path under test is what runs.
         os.environ["CORVIN_OS_ENGINE"] = "claude_code"
         # _session_dir braucht XDG_CACHE_HOME, otherwise fasst es ~/.cache an.
         os.environ["XDG_CACHE_HOME"] = str(tmp)

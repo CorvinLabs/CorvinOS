@@ -167,7 +167,7 @@ _ACTIVE_WORKFLOW_LOCK = threading.Lock()
 # Node types whose executor NEVER calls engine.spawn() (see
 # corvin_workflows/node_types.py). A workflow built only from these runs with
 # NO LLM engine — so it must not require the `claude` CLI on PATH. This is the
-# Hermes-only / no-Claude fresh-install path (and CI, which ships no CLI): a
+# no-Claude fresh-install path (and CI, which ships no CLI): a
 # pure code/compute/merge workflow has to execute regardless. Any node type
 # NOT in this set is treated as engine-requiring and fails fast up front with a
 # clean engine_unavailable envelope rather than an opaque mid-run node failure.
@@ -197,8 +197,8 @@ class _LazyClaudeEngine:
     """Constructs the real ClaudeCliEngine on the FIRST spawn(). A workflow
     resume whose remaining nodes never reach an agent — or an unknown-run
     lookup that fails before any spawn — then needs no `claude` CLI on PATH.
-    Deferring construction here is what keeps `workflow_resume` on a Hermes-only
-    / no-Claude install (and in CI) from masking a clean 'no paused run found'
+    Deferring construction here is what keeps `workflow_resume` on a
+    no-Claude install (and in CI) from masking a clean 'no paused run found'
     behind an engine_unavailable envelope."""
 
     name = "claude"
@@ -1012,7 +1012,7 @@ class OrchestrationServer:
 
         # Construct the LLM engine ONLY when a node actually needs it. A pure
         # code/compute/merge workflow must run without the `claude` CLI on PATH
-        # (Hermes-only / no-Claude fresh install, and CI). An engine-requiring
+        # (no-Claude fresh install, and CI). An engine-requiring
         # workflow with no CLI fails fast here with a clean engine_unavailable
         # envelope instead of an opaque mid-run node failure.
         needs_engine = any(

@@ -101,14 +101,26 @@ console.log('\n[/engine cloud — opencode + cloud model]');
      'cloud alias persists cloud model');
 }
 
-// ── 6: /engine opencode — local Ollama model ─────────────────────────
-console.log('\n[/engine opencode — local Ollama]');
+// ── 6: /engine opencode — no model pin (ADR-2087) ───────────────────
+console.log('\n[/engine opencode — own default model]');
 {
   const r = engineReply(CTX(''), 'opencode');
   const reply = (r && r.reply) || '';
   ok(/opencode/.test(reply), 'opencode alias works');
-  ok(/ollama\/qwen3:8b/.test(reply),
-     'opencode pins local ollama model by default');
+  ok(!/ollama\/|qwen3:8b/.test(reply),
+     'opencode pins no local Ollama model', JSON.stringify(reply));
+}
+
+// ── 6b: /engine hermes — legacy id maps to claude_code with notice ──
+console.log('\n[/engine hermes — legacy → claude_code]');
+{
+  const r = engineReply(CTX(''), 'hermes');
+  const reply = (r && r.reply) || '';
+  ok(!/⚠️/.test(reply), '/engine hermes is not an error', JSON.stringify(reply));
+  ok(/claude_code/.test(reply), 'hermes maps to claude_code');
+  ok(/removed/i.test(reply), 'reply carries the removal notice');
+  ok(/claude_code/.test(engineReply(CTX(''), '').reply || ''),
+     'show after /engine hermes reflects claude_code');
 }
 
 // ── 7: /engine off — clear ───────────────────────────────────────────

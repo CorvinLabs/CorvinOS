@@ -2,7 +2,7 @@
 
 Reads a parsed ``DAG`` (from ``awp_dag_parser``), walks each node in
 topological order, and executes the work via the **engine layer**
-(``ClaudeCodeEngine`` / ``CodexCliEngine`` / future Gemini / Ollama —
+(``ClaudeCodeEngine`` / ``CodexCliEngine`` / other registered engines —
 through ``engine_registry.get_engine``). Every step's output is
 validated against R17 (``awp_validator.validate_node_output``) before
 landing in the shared state dict. Budget breaches abort the walk with

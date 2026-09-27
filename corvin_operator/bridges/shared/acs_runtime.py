@@ -98,6 +98,13 @@ try:
 except Exception:  # noqa: BLE001
     _espan = None  # type: ignore
 
+# ADR-2087 — stored legacy engine ids (hermes, local, ...) map to claude_code.
+try:
+    from engine_registry import normalize_legacy_engine_id as _normalize_legacy_engine_id  # type: ignore
+except Exception:  # noqa: BLE001 — pragma: no cover
+    def _normalize_legacy_engine_id(engine_id):  # type: ignore[no-redef]
+        return engine_id
+
 # ADR-0172 M1 — worker-trace observability. Best-effort import; absent module
 # must never block a spawn. Sets trace_available=False on all spans.
 try:
@@ -124,7 +131,7 @@ _DEFAULT_BUDGET_TIMEOUT = 86400  # 24 h when not configured (was 600)
 _DEFAULT_WORKER_TURNS = 5000     # per-worker turn cap when not configured (was 20)
 # Hard cap on a CONFIGURED per-worker timeout_seconds — matches the Settings
 # validation max (routes/settings.py::_BUDGET_KEYS). Until 2026-07-17 workers
-# were hard-clamped to 1800 (claude) / 3600 (hermes) regardless of the budget,
+# were hard-clamped to 1800/3600 seconds (per engine) regardless of the budget,
 # which silently made every raised "Worker timeout" setting a no-op — the UI
 # promised a knob the runtime threw away. The overall delegation stays bounded
 # by max_wall_time (BudgetEnvelope), so honoring the knob does not reopen the
@@ -1064,23 +1071,11 @@ def _parse_manager_decision(text: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# ADR-0127 — engine selection (Hermes/Ollama ↔ Claude Code) + datasource
-# binding for ACS workers. ACS historically hard-coded `claude -p`; these
-# helpers let a worker/manager run on a local Ollama model (zero egress,
-# zero token cost) and let workers reason over LIVE data fetched from a
-# registered DSI v1 connection.
+# ADR-0127 — engine selection + datasource binding for ACS workers. ADR-2087
+# removed the local-Ollama (Hermes) engine: every ACS worker/manager runs on
+# Claude Code. Workers still reason over LIVE data fetched from a registered
+# DSI v1 connection.
 # ---------------------------------------------------------------------------
-
-# Ollama model aliases — kept local so acs_runtime has no hard import of
-# the L22 HermesEngine (mirrors the helper_model pattern).
-_OLLAMA_ALIASES = {
-    "hermes": "qwen3:8b",
-    "hermes-fast": "qwen3:1.7b",
-    "hermes-balanced": "qwen3:8b",
-    "hermes-capable": "qwen3:8b",
-    "hermes-large": "qwen3:8b",
-}
-
 
 def _engine_locality(engine_id: str) -> str:
     """Compliance locality ("local" | "eu_cloud" | "us_cloud") for a resolved
@@ -1093,7 +1088,7 @@ def _engine_locality(engine_id: str) -> str:
     Canonical source is data_classification.DEFAULT_ENGINE_COMPLIANCE (the L34
     compliance registry / SSOT). Fallback for an unknown cloud engine is the
     conservative/safe direction ``us_cloud`` — never under-claim US processing as
-    EU. ``hermes`` maps to ``local``.
+    EU.
     """
     try:
         from data_classification import DEFAULT_ENGINE_COMPLIANCE  # type: ignore
@@ -1102,21 +1097,21 @@ def _engine_locality(engine_id: str) -> str:
             return prof.locality
     except Exception:  # noqa: BLE001 — never let audit locality resolution crash a run
         pass
-    return "local" if engine_id == "hermes" else "us_cloud"
+    return "us_cloud"
 
 
 def _resolve_worker_engine(model: str, tenant_id: str | None = None) -> tuple[str, str]:
     """Map a worker/manager model string to (engine_id, resolved_model).
 
-    engine_id ∈ {"hermes", "claude_code"}. Anything that names a local
-    Ollama model (a ``hermes*`` alias, an explicit ``family:tag`` like
-    ``qwen3:8b``, or a known local family) routes to Hermes; everything
-    else stays Claude Code.
+    engine_id is always ``"claude_code"`` since ADR-2087 removed the local
+    Ollama (Hermes) engine. A model name shaped like a local ``family:tag``
+    no longer routes anywhere else — it is passed through to Claude Code
+    unchanged. Stored legacy engine ids (``hermes``, ``local``, ...) are
+    mapped via ``engine_registry.normalize_legacy_engine_id``.
 
-    Resolution order:
+    Resolution order (kept for the invalid-value warning + future engines):
     1. CORVIN_ACS_WORKER_ENGINE env var (per-spawn override from adapter)
     2. tenant.corvin.yaml::spec.default_worker_engine (console-configurable global)
-    3. Model-name heuristics (hermes alias / local family / cloud prefix)
     """
     forced = (os.environ.get("CORVIN_ACS_WORKER_ENGINE") or "").strip().lower()
     if not forced:
@@ -1135,13 +1130,14 @@ def _resolve_worker_engine(model: str, tenant_id: str | None = None) -> tuple[st
             if _cfg.is_file():
                 _raw = yaml.safe_load(_cfg.read_text("utf-8")) or {}
                 _val = ((_raw.get("spec") or {}).get("default_worker_engine") or "").strip().lower()
-                if _val and _val not in ("hermes", "claude_code", "claude"):
+                _val = (_normalize_legacy_engine_id(_val) or "") if _val else _val
+                if _val and _val not in ("claude_code", "claude"):
                     # Invalid console/YAML value — log and ignore (fall through to
                     # heuristics) instead of silently dropping it (acs_runtime #2).
                     log.warning(
                         "_resolve_worker_engine: ignoring invalid "
                         "spec.default_worker_engine=%r (tenant=%s) — expected "
-                        "hermes|claude_code", _val, _tid,
+                        "claude_code", _val, _tid,
                     )
                     _val = ""
                 if _val:
@@ -1149,58 +1145,12 @@ def _resolve_worker_engine(model: str, tenant_id: str | None = None) -> tuple[st
         except Exception as _exc:  # noqa: BLE001
             log.warning("_resolve_worker_engine: tenant.corvin.yaml read failed "
                         "(tenant=%s): %s", _tid, _exc)
+    forced = _normalize_legacy_engine_id(forced) or forced
     m = (model or "").strip()
-    low = m.lower()
-    if forced == "hermes" or low in _OLLAMA_ALIASES:
-        return "hermes", _OLLAMA_ALIASES.get(low, _OLLAMA_ALIASES["hermes"])
-    if forced == "claude_code" or forced == "claude":
-        return "claude_code", m
-    # Cloud model ids (Bedrock/Vertex style) can contain ':' — never route
-    # those to Ollama. Exclude known cloud prefixes before the colon check.
-    if low.startswith(("claude", "anthropic", "us.anthropic", "eu.anthropic",
-                       "gpt", "o1", "o3", "gemini", "sonnet", "opus", "haiku",
-                       "fable")):
-        return "claude_code", m
-    local_family = low.split(":")[0]
-    if ":" in low or local_family in ("qwen3", "qwen", "llama", "llama3",
-                                      "mistral", "gemma", "phi", "minimax",
-                                      "deepseek", "phi3", "mixtral"):
-        return "hermes", m
+    if forced and forced not in ("claude_code", "claude"):
+        log.warning("_resolve_worker_engine: ignoring unknown worker engine %r",
+                    forced)
     return "claude_code", m
-
-
-def _ollama_base_url() -> str:
-    return (os.environ.get("CORVIN_HERMES_BASE_URL")
-            or os.environ.get("OLLAMA_BASE_URL")
-            or "http://localhost:11434").rstrip("/")
-
-
-def _ollama_chat(prompt: str, system: str, model: str, timeout: int) -> str:
-    """Single non-streaming Ollama /api/chat call → assistant text.
-
-    Self-contained (urllib, stdlib) so ACS does not couple to the L22
-    streaming engine. Raises on transport/HTTP error so the caller's
-    engine-error path records it.
-    """
-    import urllib.request
-    body = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-        "stream": False,
-        "options": {"temperature": 0.2},
-    }).encode()
-    req = urllib.request.Request(
-        f"{_ollama_base_url()}/api/chat",
-        data=body, headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = json.loads(resp.read().decode())
-    msg = (payload.get("message") or {}).get("content") or ""
-    # qwen3 emits <think>…</think> reasoning — strip it for clean output.
-    return re.sub(r"<think>.*?</think>", "", str(msg), flags=re.S).strip()
 
 
 _DS_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
@@ -1213,8 +1163,8 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
     For each declared connection: validate the name (no traversal), read the
     manifest, build standard driver env (PG*/MYSQL*), and — for postgresql —
     run a small LIVE query so workers reason over REAL rows regardless of
-    engine (a Hermes worker has no Bash; the snapshot is its data path). A
-    ClaudeCode worker additionally gets the env to run its own live queries.
+    engine. A ClaudeCode worker additionally gets the env to run its own live
+    queries.
     Fail-closed on a declared-but-unresolvable name.
 
     ADR-0127 review (G3/G4): emits a metadata-only ``acs.datasource_snapshot``
@@ -1470,7 +1420,7 @@ def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
     os.environ.get instead of provider_keys.resolve_by_env_var, missing a key
     an operator just saved through Settings -> API Keys until the daemon
     restarted, and (b) never started the translating proxy for
-    ollama/openrouter providers, pointing ANTHROPIC_BASE_URL straight at their
+    ollama_cloud/openrouter providers, pointing ANTHROPIC_BASE_URL straight at their
     OpenAI-format base_url — which claude_code cannot speak — breaking every
     ACS-delegated turn for exactly those providers (adversarial review,
     2026-07-14).
@@ -1600,9 +1550,8 @@ def _call_manager_sync(
 ) -> tuple[str, int]:
     """Call the manager engine for a decision. Returns (stdout, tokens_estimate).
 
-    Routes to Ollama when ``model`` resolves to Hermes (ADR-0127), else the
-    claude CLI. The manager must emit a single JSON decision — small local
-    models may be less reliable here than Claude.
+    Always the claude CLI (ADR-2087 removed the local-Ollama route). The
+    manager must emit a single JSON decision.
 
     ``proc_holder`` (same class the worker call site uses) lets an awaiting
     caller kill the actual subprocess if the enclosing asyncio Task is
@@ -1613,11 +1562,8 @@ def _call_manager_sync(
     running for up to _MANAGER_TIMEOUT more seconds — the same bug class
     already fixed for _call_worker_sync (adversarial review finding).
     """
-    engine_id, resolved = _resolve_worker_engine(model, tenant_id)
+    engine_id, _ = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)
-    if engine_id == "hermes":
-        out = _ollama_chat(prompt, _MANAGER_SYSTEM, resolved, timeout=_MANAGER_TIMEOUT)
-        return out, max(len(prompt.split()) + len(out.split()), 100)
     binary = _claude_binary()
     if not (shutil.which(binary) or os.path.isfile(binary)):
         raise RuntimeError(
@@ -1627,9 +1573,7 @@ def _call_manager_sync(
     # R4: the payload travels on STDIN, which the CLI expands exactly like a
     # positional prompt (`/pwn` at byte 0, `@<path>` anywhere). It carries the
     # user's task verbatim, so it goes through the ONE shared neutraliser.
-    # Applied AFTER the hermes branch: Ollama has no client-side expansion and
-    # must keep the unmodified prompt. Reply contract unaffected — the JSON
-    # envelope is parsed from stdout.
+    # Reply contract unaffected — the JSON envelope is parsed from stdout.
     prompt = _guard_prompt_head(prompt)
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
@@ -1787,17 +1731,10 @@ def _call_worker_sync(
     M3: uses --output-format json to extract actual model_id from API response;
     falls back to configured model with attested=False on parse failure.
 
-    ADR-0127: routes to a local Ollama model when ``model`` resolves to
-    Hermes (zero token, locality=local) — otherwise the claude CLI.
+    Always the claude CLI (ADR-2087 removed the local-Ollama route).
     """
-    engine_id, resolved = _resolve_worker_engine(model, tenant_id)
+    engine_id, _ = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)  # ADR-0150 LIC-ENG-USE-02 (fail-closed)
-    if engine_id == "hermes":
-        timeout = _effective_worker_timeout(budget)
-        out = _ollama_chat(prompt, system, resolved, timeout=timeout)
-        attestation = {"engine_id": "hermes", "model_id": resolved,
-                       "attested": True, "locality": "local"}
-        return out, max(len(prompt.split()) + len(out.split()), 50), attestation
 
     binary = _claude_binary()
     if not (shutil.which(binary) or os.path.isfile(binary)):
@@ -1808,9 +1745,7 @@ def _call_worker_sync(
     # R4: the payload travels on STDIN, which the CLI expands exactly like a
     # positional prompt (`/pwn` at byte 0, `@<path>` anywhere). It carries the
     # user's task verbatim, so it goes through the ONE shared neutraliser.
-    # Applied AFTER the hermes branch: Ollama has no client-side expansion and
-    # must keep the unmodified prompt. Reply contract unaffected — the JSON
-    # envelope is parsed from stdout.
+    # Reply contract unaffected — the JSON envelope is parsed from stdout.
     prompt = _guard_prompt_head(prompt)
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
@@ -2149,7 +2084,7 @@ async def _dispatch_workers(
             worker_budget = _worker_budget_for_spawn(ctx.budget, budget_alloc,
                                                      root=ctx.root_budget)
 
-            # ADR-0127 — resolve the canonical engine id (hermes|claude_code)
+            # ADR-0127 — resolve the canonical engine id (claude_code)
             # for this worker; pass THAT to the L34 gate (not the raw model
             # string) and reflect it in audit + attestation.
             _engine_id, _ = _resolve_worker_engine(worker_model, ctx.tenant_id)
@@ -2251,7 +2186,7 @@ async def _dispatch_workers(
             try:
                 # ADR-0109 M6: worker context for path_gate WDAT events.
                 # ADR-0127: datasource connection env so a ClaudeCode worker
-                # (which has Bash) can run live queries; harmless for Hermes.
+                # (which has Bash) can run live queries.
                 _worker_env = {
                     "CORVIN_ACS_WORKER_ID": wid,
                     "CORVIN_ACS_RUN_ID": ctx.run_id,
@@ -2372,14 +2307,9 @@ async def _dispatch_workers(
             _trace_count = 0
             if _wtrace is not None:
                 try:
-                    _att_engine = attestation.get("engine_id", _engine_id)
-                    if _att_engine == "hermes":
-                        _trace_count = _wtrace.extract_hermes_trace(
-                            text, wid, ctx.run_id, _worker_span_id, ctx.run_dir)
-                    else:
-                        _trace_count = _wtrace.extract_claudecode_trace(
-                            _audit_path(ctx.tenant_id),
-                            ctx.run_id, wid, _worker_span_id, ctx.run_dir)
+                    _trace_count = _wtrace.extract_claudecode_trace(
+                        _audit_path(ctx.tenant_id),
+                        ctx.run_id, wid, _worker_span_id, ctx.run_dir)
                 except Exception:  # noqa: BLE001 — trace is additive, never block
                     pass
             # `max_tool_calls` was permanently dead configuration: nothing

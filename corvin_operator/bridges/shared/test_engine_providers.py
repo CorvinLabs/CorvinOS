@@ -16,11 +16,12 @@ import engine_providers as EP  # type: ignore
 
 def test_providers_registry_loaded():
     prov = EM.providers_as_dict(force_reload=True)
-    # ADR-0759 added the three native platform providers alongside the five
-    # api_key ones. Asserted as an exact set on purpose: a provider silently
+    # ADR-0759 added the three native platform providers alongside the api_key
+    # ones; ADR-2087 removed the local-Ollama provider (``ollama_local``).
+    # Asserted as an exact set on purpose: a provider silently
     # vanishing from the registry is exactly the failure this file exists for.
     assert set(prov) == {
-        "anthropic", "openai", "ollama_local", "ollama_cloud", "openrouter",
+        "anthropic", "openai", "ollama_cloud", "openrouter",
         "bedrock", "vertex", "foundry",
     }
     assert {p["auth_mode"] for p in prov.values()} == {"api_key", "platform"}
@@ -33,7 +34,9 @@ def test_providers_registry_loaded():
         assert prov[pid]["credential_env"] == ""
         assert prov[pid]["platform_env"]["enable_var"].startswith("CLAUDE_CODE_USE_")
     assert prov["openrouter"]["kind"] == "cloud"
-    assert prov["ollama_local"]["kind"] == "local"
+    assert prov["ollama_cloud"]["kind"] == "cloud"
+    # ADR-2087: no bundled provider runs local inference any more.
+    assert not any(v["kind"] == "local" for v in prov.values())
     # credential_env is a NAME, never a secret value
     assert prov["openrouter"]["credential_env"] == "OPENROUTER_API_KEY"
 
@@ -42,11 +45,11 @@ def test_supported_providers_per_engine():
     reg = EM.registry_as_dict(force_reload=True)
     cc = {p["provider"]: p for p in reg["claude_code"]["supported_providers"]}
     assert cc["anthropic"]["native"] is True
-    assert cc["ollama_local"]["native"] is False   # via built-in translating proxy
+    assert "ollama_local" not in cc                  # ADR-2087
     assert cc["ollama_cloud"]["native"] is False   # via built-in translating proxy
     assert cc["openrouter"]["native"] is False      # via built-in translating proxy
     oc = [p["provider"] for p in reg["opencode"]["supported_providers"]]
-    assert set(oc) == {"anthropic", "openai", "ollama_local", "ollama_cloud", "openrouter"}
+    assert set(oc) == {"anthropic", "openai", "ollama_cloud", "openrouter"}
     assert reg["copilot"]["supported_providers"] == []
 
 
@@ -59,10 +62,10 @@ def test_fetch_static_provider_has_no_live_list():
 
 def test_fetch_ollama(monkeypatch):
     monkeypatch.setattr(EP, "_get_json",
-                        lambda url, **k: {"models": [{"name": "qwen3:8b"}, {"name": "llama3"}]})
-    r = EP.fetch_models("ollama_local", base_url="http://x:11434", model_source="ollama")
+                        lambda url, **k: {"models": [{"name": "gpt-oss:120b"}, {"name": "llama3"}]})
+    r = EP.fetch_models("ollama_cloud", base_url="https://ollama.com", model_source="ollama")
     assert r["reachable"] and r["count"] == 2
-    assert [m["id"] for m in r["models"]] == ["qwen3:8b", "llama3"]
+    assert [m["id"] for m in r["models"]] == ["gpt-oss:120b", "llama3"]
 
 
 def test_fetch_openrouter(monkeypatch):
@@ -132,7 +135,7 @@ def test_bad_reload_does_not_wipe_good_cache(tmp_path):
     importlib.reload(EM)
     EM.load_registry(force_reload=True)
     good = len(EM.load_providers())
-    assert good == 8
+    assert good == 7  # ADR-2087 removed ollama_local
     orig = EM._REGISTRY_FILE
     try:
         EM._REGISTRY_FILE = tmp_path / "missing.yaml"
@@ -148,7 +151,7 @@ def test_fetch_skips_nondict_items_without_discarding_list(monkeypatch):
     """Review LOW: one malformed item must not throw away the whole list."""
     monkeypatch.setattr(EP, "_get_json",
                         lambda url, **k: {"models": [{"name": "ok"}, "garbage", {"noname": 1}]})
-    r = EP.fetch_models("ollama_local", base_url="http://x:11434", model_source="ollama")
+    r = EP.fetch_models("ollama_cloud", base_url="https://ollama.com", model_source="ollama")
     assert r["reachable"] and [m["id"] for m in r["models"]] == ["ok"]
 
 
@@ -156,10 +159,10 @@ def test_fetch_skips_nondict_items_without_discarding_list(monkeypatch):
 
 def test_resolve_engine_egress_host_from_provider(monkeypatch):
     """A per-tenant provider assignment resolves the egress host to the provider
-    (the L35 fix: hermes→ollama_cloud must resolve to ollama.com, not localhost)."""
+    (the L35 fix: an engine→ollama_cloud must resolve to ollama.com, not localhost)."""
     monkeypatch.setattr(EM, "_load_tenant_spec",
-                        lambda tid: {"engine_models": {"hermes": {"provider": "ollama_cloud"}}})
-    host = EM.resolve_engine_egress_host("_default", "hermes")
+                        lambda tid: {"engine_models": {"opencode": {"provider": "ollama_cloud"}}})
+    host = EM.resolve_engine_egress_host("_default", "opencode")
     assert host == "ollama.com"
 
 

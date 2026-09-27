@@ -342,20 +342,24 @@ class TestM1AutoDetectEngine(unittest.TestCase):
     def _auto_detect(self, claude_on_path: bool,
                      env_engine: str = "") -> str | None:
         """Mirror of the ADR-0159 M1 auto-detect block in adapter.py."""
-        import shutil
         profile: dict = {}
         _env_engine = env_engine.strip()
         if _env_engine:
             profile["default_engine"] = _env_engine
-        else:
-            if shutil.which("claude") is None:
-                profile["default_engine"] = "hermes"
+        # ADR-2087: there is no local fallback engine any more — a missing
+        # claude CLI no longer auto-selects "hermes"; the engine stays unset
+        # (claude_code fallback at the bottom of adapter).
         return profile.get("default_engine")
 
-    def test_hermes_when_claude_absent(self):
+    def test_no_hermes_fallback_when_claude_absent(self):
         with patch("shutil.which", return_value=None):
             result = self._auto_detect(claude_on_path=False)
-        self.assertEqual(result, "hermes")
+        self.assertIsNone(result)
+
+    def test_adapter_has_no_hermes_auto_detect(self):
+        src = (Path(__file__).resolve().parent / "adapter.py").read_text(
+            encoding="utf-8")
+        self.assertNotIn('["default_engine"] = "hermes"', src)
 
     def test_none_when_claude_present(self):
         # When claude is on PATH, auto-detect leaves engine unset
@@ -370,7 +374,7 @@ class TestM1AutoDetectEngine(unittest.TestCase):
                                        env_engine="opencode")
         self.assertEqual(result, "opencode")
 
-    def test_env_override_prevents_hermes(self):
+    def test_env_override_claude_code(self):
         with patch("shutil.which", return_value=None):
             result = self._auto_detect(claude_on_path=False,
                                        env_engine="claude_code")

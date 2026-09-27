@@ -5,7 +5,7 @@ Public API:
     result = run_delegate(
         engine="codex_cli" | "opencode" | "claude_code",
         prompt="...",
-        model=None,                 # optional, engine-specific (e.g. "ollama/qwen3:8b")
+        model=None,                 # optional, engine-specific (e.g. "anthropic/claude-sonnet-5")
         budget_s=60,                # int, clamped to [BUDGET_MIN_S, BUDGET_MAX_S]
         working_dir=None,           # optional path; engine cwd
         env_extra=None,             # optional dict[str, str]; merged into spawn env
@@ -122,7 +122,22 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # millisecond — the original "cost" rationale does not hold at this size.
 _INJECTION_SCAN_HEAD_CHARS = OUTPUT_CAP_MAX_CHARS
 
-AVAILABLE_ENGINES: tuple[str, ...] = ("claude_code", "codex_cli", "opencode", "hermes", "copilot")
+# ADR-2087: ``hermes`` (local Ollama) was removed. A legacy id passed in is
+# mapped to ``claude_code`` by ``_normalize_legacy_engine_id`` below.
+AVAILABLE_ENGINES: tuple[str, ...] = ("claude_code", "codex_cli", "opencode", "copilot")
+
+
+def _normalize_legacy_engine_id(engine_id: Any) -> Any:
+    """ADR-2087: map a removed engine id (``hermes``, ``ollama`` ...) to
+    ``claude_code``. SSOT is ``engine_registry.normalize_legacy_engine_id``
+    in ``corvin_operator/bridges/shared``; this wrapper only puts that
+    directory on ``sys.path`` first. Non-string values pass through unchanged
+    so the caller-side validation below still rejects them."""
+    if not isinstance(engine_id, str):
+        return engine_id
+    _ensure_agents_on_path()
+    from engine_registry import normalize_legacy_engine_id  # type: ignore
+    return normalize_legacy_engine_id(engine_id)
 
 
 class DelegateError(Exception):
@@ -191,9 +206,6 @@ def _default_engine_factory(engine_id: str):
     if engine_id == "opencode":
         from agents.opencode_cli import OpenCodeEngine  # type: ignore
         return OpenCodeEngine()
-    if engine_id == "hermes":
-        from agents.hermes_engine import HermesEngine  # type: ignore
-        return HermesEngine()
     if engine_id == "copilot":
         from agents.copilot_cli import CopilotCliEngine  # type: ignore
         return CopilotCliEngine()
@@ -264,10 +276,6 @@ def _safe_spawn_kwargs(engine_id: str, allow_write: bool) -> dict[str, Any]:
             # (adversarial review finding). "acceptEdits" is the
             # permission_mode _SANDBOX_MAP key that maps to workspace-write.
             return {"permission_mode": "acceptEdits"}
-        return {}
-    if engine_id == "hermes":
-        # HermesEngine drives Ollama HTTP — no subprocess permission modes
-        # and no filesystem writes. allow_write is a no-op for this engine.
         return {}
     if engine_id == "copilot":
         # CopilotCliEngine spawns `copilot -p` — no filesystem permission
@@ -358,15 +366,11 @@ _ENGINE_ENV_ADDITIONS: dict[str, frozenset[str]] = {
     "claude_code": frozenset({"ANTHROPIC_API_KEY"}),
     "codex_cli":   frozenset({"OPENAI_API_KEY"}),
     # OpenCode is provider-agnostic. The three keys cover the
-    # common providers (Ollama Cloud, Anthropic, OpenAI). Custom
+    # common providers (Ollama Cloud — a hosted API, Anthropic, OpenAI). Custom
     # providers (e.g. OpenRouter) pass their key via env_extra.
     "opencode":    frozenset({
         "OLLAMA_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
     }),
-    # HermesEngine resolves base_url and model at __init__ time (before
-    # env scrubbing kicks in), so no API key or runtime env vars are
-    # needed during spawn(). Ollama runs on localhost — no auth required.
-    "hermes":      frozenset(),
     # CopilotCliEngine reads auth from ~/.copilot/config.json. GH_TOKEN /
     # GITHUB_TOKEN / GH_HOST / GH_ENTERPRISE_TOKEN are honoured as env
     # fallbacks — injected via L16 vault→bwrap, never as CLI args.
@@ -391,12 +395,12 @@ def _env_allowlist_for(engine_id: str, model: str | None = None) -> frozenset[st
     """Compose the env-var allowlist for a given engine.
 
     ``model`` narrows the OpenCode allowlist to only the API key its
-    ``"provider/model"`` string actually implies (e.g. ``"ollama/qwen3:8b"``
-    -> only ``OLLAMA_API_KEY``) instead of unconditionally handing every
+    ``"provider/model"`` string actually implies (e.g. ``"openai/gpt-5"``
+    -> only ``OPENAI_API_KEY``) instead of unconditionally handing every
     OpenCode delegation ALL THREE providers' keys regardless of which one
-    the task actually targets (adversarial review finding) — a fully-local
-    ``"ollama/..."`` call has no legitimate need for
-    ``ANTHROPIC_API_KEY``/``OPENAI_API_KEY``, and a curious or
+    the task actually targets (adversarial review finding) — an
+    ``"openai/..."`` call has no legitimate need for
+    ``ANTHROPIC_API_KEY``/``OLLAMA_API_KEY``, and a curious or
     successfully-injected worker with shell/file tools has a plausible path
     to read and exfiltrate credentials it was never supposed to need for
     its assigned task. A missing/unrecognised model falls back to the full
@@ -654,6 +658,7 @@ def run_delegate(
       key). ``env_extra`` always adds on top. Set True to inherit
       the parent process's full env (legacy v0.1 behaviour).
     """
+    engine = _normalize_legacy_engine_id(engine)
     if engine not in AVAILABLE_ENGINES:
         raise DelegateError(
             f"unknown engine: {engine!r}; expected one of {AVAILABLE_ENGINES}"

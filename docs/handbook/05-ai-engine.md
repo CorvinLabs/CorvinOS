@@ -24,14 +24,13 @@ For live per-session switching and the full capability matrix, see [Engine Contr
 
 ### Architecture overview table
 
-This table shows all five engines and their key properties:
+This table shows the bundled engines and their key properties:
 
 | Engine | Type | Key characteristic |
 |---|---|---|
 | **Claude Code** | OS + Worker | Full capabilities: hooks, /btw live inject, plan mode, MCP tools, skills |
 | **Codex CLI** | Worker only | OpenAI Codex via CLI — MCP + stream_json, no /btw |
-| **OpenCode** | Worker only | Provider-agnostic: Claude, OpenAI, or local Ollama |
-| **Hermes (Ollama)** | Worker only | Fully local, zero cloud egress — qualifies for CONFIDENTIAL data |
+| **OpenCode** | Worker only | Provider-agnostic: Claude, OpenAI, or other hosted providers; `opencode_http` targets a self-hosted OpenCode server |
 | **GitHub Copilot** | Worker only | GitHub Copilot CLI (`copilot -p`) — zero cost for Business/Enterprise licences |
 
 **OS engine** = handles the main conversation turn (the orchestrator).
@@ -58,15 +57,9 @@ When delegation is enabled (orchestrator persona), these cards show each worker 
 
 ## Typical actions
 
-### Switch to fully local AI (no cloud)
+### Local AI (no cloud) — removed
 
-Select **Hermes (Ollama)** as the OS engine. This routes all AI turns through a locally-running Ollama instance. No data leaves your machine. Prerequisites: Ollama running at `http://localhost:11434` with at least one model pulled.
-
-```bash
-ollama pull llama3
-```
-
-Then click **Save** in the engine settings.
+The local Hermes (Ollama) engine was removed in ADR-2087; CorvinOS no longer runs inference on a local Ollama server. A stored `hermes` engine choice is read as Claude Code. To keep data off the cloud, declare your own engine on an endpoint your egress policy admits (tenant `engine_compliance`), or use a self-hosted OpenCode server (`opencode_http`).
 
 ### Configure the default Claude model
 
@@ -74,7 +67,7 @@ In the Claude Code section, open the model dropdown and select your preferred ti
 
 ### Enable worker engine delegation
 
-Navigate to [Personas](09-personas.md), select the **Orchestrator** persona, and ensure `delegate_enabled: true` is set. The OS turn (Claude Code) then spawns worker tasks via `delegate_codex`, `delegate_hermes`, etc.
+Navigate to [Personas](09-personas.md), select the **Orchestrator** persona, and ensure `delegate_enabled: true` is set. The OS turn (Claude Code) then spawns worker tasks via the `delegate_*` MCP tools (e.g. `delegate_codex`).
 
 ---
 

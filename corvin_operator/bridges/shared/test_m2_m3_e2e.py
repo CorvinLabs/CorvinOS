@@ -44,33 +44,6 @@ def test_m2_buffered_with_m3_skills_codex():
         assert "User's question" in full_prompt
 
 
-def test_m2_buffered_with_m3_skills_hermes():
-    """M2 + M3 E2E: Hermes with buffered /btw and compiled skills."""
-    if not HAS_DEPS:
-        return
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        session_dir = Path(tmpdir)
-
-        # M3: Compile skills for Hermes
-        skills_block = "<auto_skill name=\"analyze\">analysis framework</auto_skill>"
-        compiled = SkillCompiler.compile(skills_block, "hermes_engine")
-        assert compiled is not None
-
-        # Verify capability for Hermes is system_message
-        cap = SkillCompiler.capability_for_engine("hermes_engine")
-        assert cap == SkillCompiler.CAPABILITY_SYSTEM_MESSAGE
-
-        # M2: Queue multiple /btw injections
-        enqueue_injection(session_dir, "first thought")
-        enqueue_injection(session_dir, "second thought")
-
-        # Dequeue returns all as one block
-        buffered = dequeue_all_injections(session_dir)
-        assert "first thought" in buffered
-        assert "second thought" in buffered
-
-
 def test_m2_m3_copilot_fallback():
     """M2 + M3 E2E: Copilot with text fallback (single-turn)."""
     if not HAS_DEPS:

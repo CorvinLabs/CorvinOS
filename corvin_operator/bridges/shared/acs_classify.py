@@ -125,10 +125,9 @@ _RAW_SIGNALS: Final[list[tuple[str, str, float]]] = [
     # ── DELEGATE ─────────────────────────────────────────────────────────────
     (r"\bdelegiere?\b",                                                     PRIMITIVE_DELEGATE, 0.85),
     (r"\b(delegiere?\s+(an|to)|(pass|hand)\s+this\s+(to|off))\b",          PRIMITIVE_DELEGATE, 0.95),
-    (r"\b(frag\s+(hermes|copilot|codex|opencode))\b",                      PRIMITIVE_DELEGATE, 0.95),
-    (r"\b(ask\s+(hermes|copilot|codex|opencode)|use\s+(hermes|copilot)\s+for)\b",
+    (r"\b(frag\s+(copilot|codex|opencode))\b",                             PRIMITIVE_DELEGATE, 0.95),
+    (r"\b(ask\s+(copilot|codex|opencode)|use\s+copilot\s+for)\b",
                                                                            PRIMITIVE_DELEGATE, 0.95),
-    (r"\b(via\s+hermes|with\s+hermes|mit\s+hermes|hermes-\w+)\b",          PRIMITIVE_DELEGATE, 0.90),
 ]
 
 # Compile once at import.
@@ -150,7 +149,7 @@ Primitives:
   LOOP      — recurring / time-based iteration, monitoring, or retry-until-green
   WORKFLOW  — codebase-wide parallel multi-agent sweep, comprehensive audit, or parallel review
   COMPUTE   — deterministic data processing: statistics, charts, CSV/dataset transforms
-  DELEGATE  — explicit delegation to a named engine or persona (hermes, copilot, codex, opencode)
+  DELEGATE  — explicit delegation to a named engine or persona (copilot, codex, opencode)
   DIRECT    — everything else (default; single-turn, straightforward request)
 
 Task:
@@ -330,7 +329,6 @@ _SEVERITY_GATE: Final[str] = (
 # ADR-0160 M4a: worker personas whose engine cannot execute WORKFLOW or DELEGATE.
 # Suppression is a rendering decision only — classify() still returns the true primitive.
 _WORKER_PERSONAS: Final[frozenset[str]] = frozenset({
-    "hermes-worker",
     "copilot-worker",
 })
 
@@ -351,7 +349,7 @@ def render_directive_block(
     Args:
         bp: Classification result from classify().
         persona: Active persona name (ADR-0160 M4a). When a worker persona
-            (hermes-worker, copilot-worker) is active and the primitive is
+            (copilot-worker) is active and the primitive is
             WORKFLOW or DELEGATE, returns "" — the engine cannot execute these
             primitives. The caller should emit acs_x.persona_suppressed.
         convergence_override: Per-tenant convergence strings keyed by primitive

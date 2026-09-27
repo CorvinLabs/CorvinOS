@@ -98,7 +98,7 @@
   <rect x="20" y="540" width="920" height="46" class="fall"/>
   <text x="35" y="562" class="lbl" font-weight="bold">Refused by design:</text>
   <text x="140" y="562" class="sub">no second usage counter (it would be a second truth against a legally load-bearing one, ADR-0232/0233) · no model or provider array in engine-config.tsx</text>
-  <text x="140" y="578" class="sub">(a constant is wrong on any Bedrock host) · ollama/llama3 stays unresolved — a coin flip is not data · an empty tier shows its own count, never the 0.5 prior</text>
+  <text x="140" y="578" class="sub">(a constant is wrong on any Bedrock host) · an unregistered model id stays unresolved — a coin flip is not data · an empty tier shows its own count, never the 0.5 prior</text>
   <path class="arrd" d="M240 522 V540"/>
   <path class="arrd" d="M720 522 V540"/>
 </svg>

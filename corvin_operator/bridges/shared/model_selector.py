@@ -851,7 +851,7 @@ def classify_os_model(
 
     1. **Per-verdict confidence** — see ``_MIN_CONFIDENCE_BY_COMPLEXITY``.
     2. **Registry membership**, via :func:`resolve_registry_id`. The
-       classifier's provider rules can name Ollama/OpenRouter ids the
+       classifier's provider rules can name OpenRouter/Ollama-Cloud ids the
        claude_code OS engine cannot run at all, so an unregistered answer is
        refused rather than passed to the CLI.
     3. **Prompt-cache guard** — a DOWN-tier move is refused once the turn's

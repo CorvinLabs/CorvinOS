@@ -17,7 +17,7 @@ Before this fix:
 
 This file covers the key-storage half end-to-end. It does NOT cover (and
 this fix does NOT build) the Anthropic-Messages<->OpenAI-format translating
-proxy that OpenRouter/raw-Ollama would still need for Claude Code to
+proxy that OpenRouter/Ollama Cloud would still need for Claude Code to
 actually authenticate a real request — see ADR-0181's own "HONEST REMAINING
 REQUIREMENT" note; that's a separate, larger piece of work.
 """
@@ -206,7 +206,7 @@ def test_build_spawn_env_resolves_provider_credential_via_resolve_by_env_var(mon
 
 def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configured():
     """The actual feature ask: with NO operator-configured proxy_base_url, an
-    OpenAI-format provider (ollama_local/ollama_cloud/openrouter) must get the
+    OpenAI-format provider (ollama_cloud/openrouter) must get the
     built-in translating proxy auto-started and used — not base_url directly
     (which doesn't speak the Anthropic Messages API at all) and not a no-op."""
     import http.server
@@ -214,19 +214,14 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
     import threading
     import urllib.request
 
-    class _FakeOllama(http.server.BaseHTTPRequestHandler):
+    class _FakeOpenRouter(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
 
         def do_POST(self):
             length = int(self.headers.get("Content-Length", "0"))
             body = _json.loads(self.rfile.read(length) or b"{}")
-            assert body["model"] == "qwen3:8b"
-            # qwen3-style reasoning must be disabled for ollama targets — a
-            # real, live-verified issue: without this, the model can spend
-            # the entire visible response budget on a separate "reasoning"
-            # field before ever answering.
-            assert body.get("think") is False
+            assert body["model"] == "anthropic/claude-sonnet-5"
             resp = {"choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
             payload = _json.dumps(resp).encode("utf-8")
@@ -236,7 +231,7 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
             self.end_headers()
             self.wfile.write(payload)
 
-    fake = http.server.HTTPServer(("127.0.0.1", 0), _FakeOllama)
+    fake = http.server.HTTPServer(("127.0.0.1", 0), _FakeOpenRouter)
     fake_thread = threading.Thread(target=fake.serve_forever, daemon=True)
     fake_thread.start()
     fake_base = f"http://127.0.0.1:{fake.server_address[1]}"
@@ -252,17 +247,19 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
             except Exception as e:  # noqa: BLE001
                 pytest.skip(f"adapter/bridge import unavailable: {e}")
 
-            class _FakeOllamaLocalSpec:
+            # ADR-2087: was an ollama_local spec; the local provider is gone,
+            # the auto-proxy path is exercised through openrouter instead.
+            class _FakeOpenRouterSpec:
                 proxy_base_url = ""  # no operator override — must auto-start
                 base_url = fake_base
-                model_source = "ollama"
-                credential_env = ""  # ollama_local needs no key
+                model_source = "openrouter"
+                credential_env = ""
 
             import engine_models  # type: ignore  # noqa: PLC0415
             with (
-                mock.patch.object(engine_models, "get_tenant_engine_provider", return_value="ollama_local"),
-                mock.patch.object(engine_models, "get_tenant_engine_model", return_value=""),
-                mock.patch.object(engine_models, "load_providers", return_value={"ollama_local": _FakeOllamaLocalSpec()}),
+                mock.patch.object(engine_models, "get_tenant_engine_provider", return_value="openrouter"),
+                mock.patch.object(engine_models, "get_tenant_engine_model", return_value="anthropic/claude-sonnet-5"),
+                mock.patch.object(engine_models, "load_providers", return_value={"openrouter": _FakeOpenRouterSpec()}),
             ):
                 env = adapter._build_spawn_env(
                     bridge="discord", chat_key="chat-auto-proxy-test",
@@ -274,7 +271,7 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
             assert base_url.startswith("http://127.0.0.1:"), (
                 f"expected a local auto-started proxy URL, got {base_url!r}"
             )
-            assert base_url != fake_base, "must NOT be the raw Ollama base_url (wrong API format)"
+            assert base_url != fake_base, "must NOT be the raw provider base_url (wrong API format)"
 
             # Prove the returned base URL is a genuinely working Anthropic-format
             # endpoint by sending it a real Anthropic-shaped request.

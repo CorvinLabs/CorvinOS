@@ -96,7 +96,7 @@ def _tde_reference_model() -> str:
 
 def _tde_explore_models() -> list[str]:
     """ADR-0222 F4: candidate WORKER arms to explore, comma-separated in
-    CORVIN_TDE_EXPLORE_MODELS (e.g. 'claude-haiku-4-5,qwen3'). Default empty =
+    CORVIN_TDE_EXPLORE_MODELS (e.g. 'claude-haiku-4-5,claude-sonnet-5'). Default empty =
     OFF (no exploration). Each shadow measurement runs ONE rotating candidate on
     the step and logs a measured (action, candidate) loss entry, so the log
     accrues real multi-arm evidence instead of only the worker's arm. Only takes
@@ -119,7 +119,8 @@ async def default_local_step_executor(
     CONTEXT/SANITIZATION boundary (what a delegated worker may see), not a
     network boundary. It becomes a true network boundary once delegation
     targets remote A2A instances (Phase 3). Embedders that need a hard
-    boundary inject a genuinely local ``local_step_executor`` (e.g. Hermes).
+    boundary inject their own ``local_step_executor`` (the bundled local
+    Hermes engine was removed by ADR-2087).
 
     ``proc_holder`` (a ``tde.worker_ipc.ProcHolder``), when given, is
     populated with the live subprocess so a cancelling caller — a parallel

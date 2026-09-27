@@ -3,14 +3,14 @@ ADR-0087 M9: Universal Testing Framework
 
 Goal: Unified Tier-1/2/3 test runner across all 5 WorkerEngines.
 
-Problem: Each engine (CC, Codex, OpenCode, Hermes, Copilot) requires different
+Problem: Each engine (CC, Codex, OpenCode, Copilot) requires different
 test setups and validation. M9 provides a single framework abstraction.
 
 Architecture:
   - EngineTestRunner: Base class for all engine tests
   - TierValidator: Validate test tier coverage (Tier-1 syntax, Tier-2 unit, Tier-3 E2E)
   - TestCase: Dataclass describing a single test
-  - TestMatrix: Run same test across all 5 engines + compare results
+  - TestMatrix: Run same test across all 4 engines + compare results
   - CoverageReporter: Generate tier coverage report
 
 Constraints:
@@ -18,16 +18,16 @@ Constraints:
   - No breaking changes to M1–M8 APIs
   - Tier-1: syntax/structure validation only (no spawning)
   - Tier-2: unit tests (mocked spawning)
-  - Tier-3: E2E tests (real spawning, all 5 engines)
+  - Tier-3: E2E tests (real spawning, all 4 engines)
 
 Compliance (from CLAUDE.md):
   - L10/L16/L33: No changes (framework does not mutate state)
   - ADR-0007: All test results scoped to tenant_id
 
 Test Coverage Standard (from M1–M4):
-  - Tier-1: All 5 engines pass syntax validation
-  - Tier-2: All 5 engines pass unit tests
-  - Tier-3: All 5 engines pass E2E tests (real behavior)
+  - Tier-1: All 4 engines pass syntax validation
+  - Tier-2: All 4 engines pass unit tests
+  - Tier-3: All 4 engines pass E2E tests (real behavior)
 """
 
 from typing import Optional, Dict, Any, List, Callable
@@ -54,7 +54,7 @@ class TestCase:
     tier: TestTier
     description: str
     engine_ids: List[str] = field(default_factory=lambda: [
-        "claude_code", "codex", "opencode", "hermes", "copilot"
+        "claude_code", "codex", "opencode", "copilot"
     ])  # Run on all engines by default
     input_data: Dict[str, Any] = field(default_factory=dict)
     expected_output: Dict[str, Any] = field(default_factory=dict)
@@ -81,7 +81,6 @@ class EngineTestRunner:
       - ClaudeCodeTestRunner
       - CodexTestRunner
       - OpenCodeTestRunner
-      - HermesTestRunner
       - CopilotTestRunner
     """
 
@@ -90,7 +89,7 @@ class EngineTestRunner:
         Initialize runner for an engine.
 
         Args:
-            engine_id: Engine identifier ("claude_code", "hermes", etc.)
+            engine_id: Engine identifier ("claude_code", "codex", etc.)
             tenant_id: Tenant ID (ADR-0007)
         """
         self.engine_id = engine_id
@@ -194,7 +193,7 @@ class TierValidator:
                 "missing_engines": {tier: [engine_ids]},
             }
         """
-        all_engines = {"claude_code", "codex", "opencode", "hermes", "copilot"}
+        all_engines = {"claude_code", "codex", "opencode", "copilot"}
         coverage = {}
 
         for tier in [TestTier.TIER_1, TestTier.TIER_2, TestTier.TIER_3]:
@@ -218,10 +217,10 @@ class TierValidator:
 
 class TestMatrix:
     """
-    Run same test across all 5 engines and compare results.
+    Run same test across all 4 engines and compare results.
 
     Example:
-        matrix = TestMatrix([runner_cc, runner_codex, runner_hermes, ...])
+        matrix = TestMatrix([runner_cc, runner_codex, runner_opencode, ...])
         results = matrix.run_test(test_case)
         comparison = matrix.compare_results(results)
     """
@@ -388,7 +387,7 @@ class CoverageReporter:
             }
 
         engine_coverage = {}
-        all_engines = {"claude_code", "codex", "opencode", "hermes", "copilot"}
+        all_engines = {"claude_code", "codex", "opencode", "copilot"}
         for engine_id in all_engines:
             engine_results = [r for r in self.test_results if r.engine_id == engine_id]
             engine_passed = len([r for r in engine_results if r.status == "pass"])

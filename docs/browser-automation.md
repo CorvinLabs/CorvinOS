@@ -16,7 +16,7 @@ Browser-page UI, which apply regardless of which caller drives them.
 - **Perception — Set-of-Marks.** Each `observe` returns a numbered list of the
   interactive elements on the page (`[0] textbox: Email`, `[1] button: Sign in`,
   …). The agent acts by index (`click(1)`), not by pixel — robust to layout
-  changes and usable by any engine (Claude or the local Hermes).
+  changes and usable by any engine.
 - **Action.** A Playwright-managed browser runs per session (isolated profile,
   sandboxed). **Engine selection is Chrome-primary, Chromium-fallback:** a
   launched session tries your real **Google Chrome** first (best real-site

@@ -81,11 +81,10 @@ arbitrary filesystem or network), audits every action to a tamper-evident chain,
 enforces data classification at every spawn boundary, and runs sandboxed tool
 code in `bwrap` so a misbehaving tool cannot reach adjacent state.
 
-The AI engine — whether Claude Code, a local Ollama model, GitHub Copilot CLI,
+The AI engine — whether Claude Code, OpenCode, GitHub Copilot CLI,
 or an external provider — is a process. CorvinOS is the kernel layer it runs
-under. Five WorkerEngine implementations ship today: `ClaudeCodeEngine`
-(default, full hooks + skills), `CodexCliEngine`, `OpenCodeEngine`,
-`HermesEngine` (local Ollama, zero egress, CONFIDENTIAL-capable), and
+under. Four WorkerEngine implementations ship today: `ClaudeCodeEngine`
+(default, full hooks + skills), `CodexCliEngine`, `OpenCodeEngine`, and
 `CopilotCliEngine` (GitHub Copilot CLI, worker-only). Every engine receives
 the same L10 path-gate, L16 audit, and L33 artifact-registration guarantees
 via the Tool Execution Broker — engine choice does not weaken the runtime
@@ -99,7 +98,7 @@ contract.
 
 Being precise about CorvinOS requires saying what it is not.
 
-- **Not a fork of any AI engine.** Claude Code, Ollama, OpenCode, and Copilot
+- **Not a fork of any AI engine.** Claude Code, Codex CLI, OpenCode, and Copilot
   CLI run unmodified. CorvinOS plugs into them via their official extension
   mechanisms — MCP servers, plugin hooks, subprocess protocols.
 - **Not a multi-agent orchestrator in the traditional sense.** Each conversation

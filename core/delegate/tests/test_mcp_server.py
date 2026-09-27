@@ -89,9 +89,11 @@ class HandshakeTests(unittest.TestCase):
         names = {t["name"] for t in tools}
         self.assertEqual(names, {
             "delegate_claude_code", "delegate_codex", "delegate_opencode",
-            "delegate_hermes", "delegate_copilot",
+            "delegate_copilot",
         })
-        # schema is the same shape across all five
+        # ADR-2087: the local-Ollama delegate_hermes tool is gone.
+        self.assertNotIn("delegate_hermes", names)
+        # schema is the same shape across all four
         for t in tools:
             schema = t["inputSchema"]
             self.assertEqual(schema["type"], "object")
@@ -151,7 +153,7 @@ class ToolsCallTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
              "params": {
                  "name": "delegate_opencode",
-                 "arguments": {"prompt": "hi", "model": "ollama/qwen3:8b"},
+                 "arguments": {"prompt": "hi", "model": "anthropic/claude-sonnet-5"},
              }},
             {"jsonrpc": "2.0", "id": 3, "method": "shutdown"},
         ])
@@ -168,7 +170,7 @@ class ToolsCallTests(unittest.TestCase):
         env = result["structuredContent"]
         self.assertTrue(env["ok"])
         self.assertEqual(env["engine"], "opencode")
-        self.assertEqual(env["model"], "ollama/qwen3:8b")
+        self.assertEqual(env["model"], "anthropic/claude-sonnet-5")
         self.assertEqual(env["final_text"], "delegated payload")
         self.assertGreaterEqual(env["duration_ms"], 0)
 

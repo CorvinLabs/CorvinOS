@@ -1,23 +1,16 @@
 """Function-Call Bridge (FCB) — ADR-0069 M2.
 
 Translates between MCP tool definitions/calls and the OpenAI-compatible
-function-calling format used by engines like Hermes (via Ollama) and
-Gemini API.  This allows non-MCP engines to call Forge tools.
+function-calling format used by OpenAI-compatible engines and the Gemini
+API.  This allows non-MCP engines to call Forge tools.  (The local Ollama
+stream parser went with Hermes, ADR-2087.)
 
 Translation surface
 -------------------
   mcp_tool_to_openai(spec)         MCP ToolSpec → OpenAI function definition
   openai_tools_to_mcp_list(defs)   OpenAI definitions → MCP schema list
-  openai_call_to_mcp_call(call)    Ollama/OpenAI tool_call → {name, args}
+  openai_call_to_mcp_call(call)    OpenAI-compatible tool_call → {name, args}
   mcp_result_to_openai_msg(r)      MCP result → OpenAI tool message dict
-
-Ollama tool-calling wire format (API /api/chat with tools=[...]):
-  Request:
-    {"model": "...", "messages": [...], "tools": [<openai-format>], "stream": true}
-  Response line when model wants a tool:
-    {"message": {"role":"assistant","tool_calls":[{"function":{"name":"...","arguments":{...}}}]}, "done": false}
-  Tool-result message to send back:
-    {"role": "tool", "content": "<result string>"}
 
 Design constraints:
   - MUST NOT import anthropic (CI AST lint enforces)
@@ -63,9 +56,9 @@ def mcp_tools_to_openai_list(tool_specs: list[dict[str, Any]]) -> list[dict[str,
 
 
 def openai_call_to_mcp_call(tool_call: dict[str, Any]) -> dict[str, Any]:
-    """Extract {name, arguments} from an OpenAI/Ollama tool_call entry.
+    """Extract {name, arguments} from an OpenAI-compatible tool_call entry.
 
-    Ollama tool_call shape:
+    tool_call shape:
         {"function": {"name": "...", "arguments": {...}}}
 
     Returns:
@@ -74,7 +67,7 @@ def openai_call_to_mcp_call(tool_call: dict[str, Any]) -> dict[str, Any]:
     fn = tool_call.get("function") or {}
     name = fn.get("name", "")
     arguments = fn.get("arguments") or {}
-    # Ollama may return arguments as a JSON string in some versions
+    # Some engines return arguments as a JSON string, others as an object
     if isinstance(arguments, str):
         try:
             arguments = json.loads(arguments)
@@ -96,7 +89,7 @@ def mcp_result_to_openai_message(result: Any, tool_call_id: str = "") -> dict[st
 
     Args:
         result:       Return value from TEB / run_tool (any JSON-serialisable value)
-        tool_call_id: Ollama does not require IDs but OpenAI does; pass "" if absent
+        tool_call_id: OpenAI requires IDs; pass "" if the engine supplies none
     """
     if result is None:
         content = "(no output)"
@@ -113,19 +106,3 @@ def mcp_result_to_openai_message(result: Any, tool_call_id: str = "") -> dict[st
         msg["tool_call_id"] = tool_call_id
     return msg
 
-
-def extract_tool_calls_from_ollama_chunk(chunk: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract tool_calls list from an Ollama NDJSON response chunk.
-
-    Ollama emits tool calls as:
-        {"message": {"role": "assistant", "tool_calls": [...]}, "done": false}
-
-    Returns the list of tool_calls (may be empty if this chunk has none).
-    """
-    message = chunk.get("message") or {}
-    return message.get("tool_calls") or []
-
-
-def is_tool_call_chunk(chunk: dict[str, Any]) -> bool:
-    """Return True if this Ollama chunk contains a tool call request."""
-    return bool(extract_tool_calls_from_ollama_chunk(chunk))

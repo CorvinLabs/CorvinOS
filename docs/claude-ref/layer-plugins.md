@@ -662,7 +662,7 @@ falls silent for too long. Three integration sites enforce this:
   skills from the abandoned conversation.
 - `/stop` / `/cancel` — same pop, after `_cancel_chat()` SIGTERMs the
   running claude subprocess (WA-10: or calls `.cancel()` on a registered
-  subprocess-less engine — Hermes/OpenCode/Codex have no Popen to kill).
+  subprocess-less engine — OpenCode/Codex have no Popen to kill).
   The user is moving on; a follow-up "danke" must not retroactively grade
   the cancelled turn's skills.
 - Periodic sweep — `_cleanup_last_turn_skills()` runs alongside

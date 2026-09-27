@@ -72,7 +72,7 @@ variant, the bundle stays.
 | `research` | ✓ | Playwright MCP, WebSearch, WebFetch | forge tools (with shared network) + skills | Web research + browser automation; notes under `~/cowork/research/` |
 | `inbox` | ✗ | Gmail MCP + Calendar MCP | forge tools + skills | Email triage, calendar suggestions |
 | `homeassistant` | ✗ | HASS MCP (opt-in) | None by default — opt-in via `forge_enabled` / `skill_forge_enabled` | Smart-home control |
-| `orchestrator` | ✓ | five delegate MCP tools | forge tools + skills | Routes sub-tasks to worker engines (Codex, OpenCode, Hermes, Copilot CLI) |
+| `orchestrator` | ✓ | four delegate MCP tools | forge tools + skills | Routes sub-tasks to worker engines (Claude Code, Codex, OpenCode, Copilot CLI) |
 | `forge` | ✓ | `mcp__forge__*` + `mcp__skill_forge__*`, no Bash/Edit/Write | Native (the persona itself is the generator). Historic name `skill-forge` resolves here via alias | Focused runtime-generation specialist for explicit "let's build something" sessions |
 
 `research` loads Playwright on first call via `npx -y @playwright/mcp` (one-time

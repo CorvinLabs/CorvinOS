@@ -15,7 +15,7 @@ class DecisionEvent:
     event_id: str
     timestamp: datetime
     task_id: str
-    engine_choice: str  # "claude", "local_llama2", "hermes"
+    engine_choice: str  # "claude", "local_llama2"
     confidence: float  # [0.0..1.0]
     cost_estimate_usd: float
     latency_estimate_ms: float

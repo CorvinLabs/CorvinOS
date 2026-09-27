@@ -2,7 +2,7 @@
 
 Routes PreToolUse hook events through TEB for all engines.
 Enables unified L10 (path-gate) + L16 (audit) enforcement across
-all 5 engines (Claude Code, Codex, OpenCode, Hermes, Copilot).
+all engines (Claude Code, Codex, OpenCode, Copilot).
 
 Hook emission is synchronous and audit-first: emit audit event BEFORE
 tool execution (L16 invariant). Denial blocks execution (fail-closed).

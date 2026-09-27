@@ -129,7 +129,7 @@ def test_os_paths_pair_span_on_disconnect():
     combined = src.count("except (asyncio.CancelledError, GeneratorExit)")
     assert combined >= 3, (
         f"expected >=3 GeneratorExit-catching OS cancellation handlers "
-        f"(claude/delegation/hermes), found {combined} — an orphan-span path remains"
+        f"(claude/delegation/…), found {combined} — an orphan-span path remains"
     )
 
 

@@ -97,7 +97,7 @@ class TestAssertLimitList(unittest.TestCase):
     def test_free_tier_all_engines_allowed(self):
         # FREE_TIER["engines_allowed"] = None → no restriction on free tier
         _v.assert_limit("engines_allowed", "claude")
-        _v.assert_limit("engines_allowed", "hermes")
+        _v.assert_limit("engines_allowed", "opencode")
         _v.assert_limit("engines_allowed", "any_engine")
 
     def test_free_tier_all_bridges_allowed(self):
@@ -110,7 +110,7 @@ class TestAssertLimitList(unittest.TestCase):
         # Per-customer SesT override can still restrict engines to a list
         _v._set_active_license({
             "tier": "pro",
-            "limits": {"engines_allowed": ["claude", "hermes"]},
+            "limits": {"engines_allowed": ["claude", "opencode"]},
         })
         _v.assert_limit("engines_allowed", "claude")     # in list → ok
         with self.assertRaises(LicenseLimitError) as ctx:
@@ -193,7 +193,7 @@ class TestValidatorWithMockClaims(unittest.TestCase):
             "tier": "professional",
             "limits": {
                 "a2a_peers_max": 10,
-                "engines_allowed": ["claude", "hermes", "codex", "opencode"],
+                "engines_allowed": ["claude", "copilot", "codex", "opencode"],
                 "workflows_concurrent": 15,
                 "audit_export": True,
             },

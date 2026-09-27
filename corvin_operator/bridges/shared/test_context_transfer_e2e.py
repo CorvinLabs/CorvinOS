@@ -99,15 +99,6 @@ def test_checkpoint_per_engine():
         assert "Prior Context" in prompt_codex
         assert "memory leak" in prompt_codex
 
-        # Hermes: prepends checkpoint
-        prompt_hermes = worker_engine_continuation.create_continuation_prompt(
-            "hermes_engine",
-            checkpoint_data,
-            "What next?",
-        )
-        assert "Prior Context" in prompt_hermes
-        assert "debugging" in prompt_hermes
-
         # Copilot: raises error
         with pytest.raises(NotImplementedError):
             worker_engine_continuation.create_continuation_prompt(

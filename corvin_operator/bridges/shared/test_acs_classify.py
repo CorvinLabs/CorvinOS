@@ -111,17 +111,16 @@ class TestHeuristicDelegate(unittest.TestCase):
         self.assertEqual(bp.primitive, ac.PRIMITIVE_DELEGATE, msg=f"text={text!r}")
         self.assertGreaterEqual(bp.confidence, ac.HEURISTIC_THRESHOLD)
 
-    def test_ask_hermes(self):
-        self._check("Ask Hermes to summarize this text locally.")
+    def test_ask_copilot(self):
+        self._check("Ask Copilot to summarize this text.")
 
     def test_de_delegiere(self):
-        self._check("Delegiere diese Aufgabe an Hermes.")
+        self._check("Delegiere diese Aufgabe an Codex.")
 
-    def test_via_hermes(self):
-        self._check("Bitte verarbeite via Hermes, ohne Cloud-Egress.")
-
-    def test_hermes_fast(self):
-        self._check("Use hermes-fast for this translation.")
+    def test_hermes_no_longer_a_delegate_signal(self):
+        # ADR-2087: Hermes was removed; naming it is not a delegation signal.
+        bp = ac.heuristic_classify("Use hermes-fast for this translation.")
+        self.assertNotEqual(bp.primitive, ac.PRIMITIVE_DELEGATE)
 
 
 class TestHeuristicDirect(unittest.TestCase):
@@ -378,16 +377,6 @@ class TestPersonaAwareness(unittest.TestCase):
     def _bp(self, primitive: str) -> ac.ACSBlueprint:
         return ac.ACSBlueprint(primitive=primitive, confidence=0.90, path="heuristic")
 
-    def test_hermes_worker_suppresses_workflow(self):
-        block = ac.render_directive_block(self._bp(ac.PRIMITIVE_WORKFLOW),
-                                          persona="hermes-worker")
-        self.assertEqual(block, "", "hermes-worker must not receive WORKFLOW directive")
-
-    def test_hermes_worker_suppresses_delegate(self):
-        block = ac.render_directive_block(self._bp(ac.PRIMITIVE_DELEGATE),
-                                          persona="hermes-worker")
-        self.assertEqual(block, "", "hermes-worker must not receive DELEGATE directive")
-
     def test_copilot_worker_suppresses_workflow(self):
         block = ac.render_directive_block(self._bp(ac.PRIMITIVE_WORKFLOW),
                                           persona="copilot-worker")
@@ -398,17 +387,17 @@ class TestPersonaAwareness(unittest.TestCase):
                                           persona="copilot-worker")
         self.assertEqual(block, "", "copilot-worker must not receive DELEGATE directive")
 
-    def test_hermes_worker_allows_loop(self):
-        """LOOP is not suppressed — hermes-worker can run iterative tasks."""
+    def test_copilot_worker_allows_loop(self):
+        """LOOP is not suppressed — copilot-worker can run iterative tasks."""
         block = ac.render_directive_block(self._bp(ac.PRIMITIVE_LOOP),
-                                          persona="hermes-worker")
+                                          persona="copilot-worker")
         self.assertIn("<acs_directive", block)
         self.assertIn("LOOP", block)
 
-    def test_hermes_worker_allows_compute(self):
-        """COMPUTE is not suppressed — hermes-worker can run local data tasks."""
+    def test_copilot_worker_allows_compute(self):
+        """COMPUTE is not suppressed — copilot-worker can run data tasks."""
         block = ac.render_directive_block(self._bp(ac.PRIMITIVE_COMPUTE),
-                                          persona="hermes-worker")
+                                          persona="copilot-worker")
         self.assertIn("<acs_directive", block)
 
     def test_assistant_persona_allows_workflow(self):

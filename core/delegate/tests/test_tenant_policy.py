@@ -4,7 +4,7 @@ Covers:
   - load_policy: missing file → None, present JSON file → parsed,
     malformed → PolicyMalformed
   - resolve_engine_zone: per-engine defaults, OpenCode model-prefix
-    detection (ollama/local → "local"), env override
+    (every prefix → operator default since ADR-2087), env override
   - is_zone_compatible: full decision matrix
   - run_delegate integration:
       * no policy file → no enforcement
@@ -13,7 +13,7 @@ Covers:
       * engine in forbid_engines → fail
       * tenant zone matches engine zone → ok
       * tenant zone mismatch → fail with zone_policy_denied audit
-      * ollama/qwen → "local" → always ok regardless of tenant zone
+      * ollama/... no longer implies "local" (ADR-2087) → zone-checked
       * malformed policy file → fail-loud with audit
 
 Real disk for policy + audit-chain writes; fake engines for spawn.
@@ -56,16 +56,18 @@ class ResolveEngineZoneTests(unittest.TestCase):
     def test_opencode_no_model_default_us(self):
         self.assertEqual(tp.resolve_engine_zone("opencode"), "us")
 
-    def test_opencode_ollama_local(self):
+    def test_opencode_ollama_prefix_is_no_longer_local(self):
+        # ADR-2087: a caller-chosen model prefix must not exempt a call
+        # from the tenant's residency constraint.
         self.assertEqual(
-            tp.resolve_engine_zone("opencode", "ollama/qwen3:8b"),
-            "local",
+            tp.resolve_engine_zone("opencode", "ollama/some-model"),
+            "us",
         )
 
-    def test_opencode_local_prefix(self):
+    def test_opencode_local_prefix_is_no_longer_local(self):
         self.assertEqual(
             tp.resolve_engine_zone("opencode", "local/llama3"),
-            "local",
+            "us",
         )
 
     def test_opencode_ollama_cloud_us(self):
@@ -74,17 +76,21 @@ class ResolveEngineZoneTests(unittest.TestCase):
             "us",
         )
 
-    def test_hermes_resolves_to_local_not_unknown(self):
-        # Adversarial review finding: hermes was previously absent from
-        # _DEFAULT_ENGINE_ZONES, so it fell through to "unknown" — and
-        # is_zone_compatible() denies "unknown" whenever a tenant has ANY
-        # zone constraint set, silently blocking the one engine this
-        # project explicitly recommends for CONFIDENTIAL/local-only data.
-        self.assertEqual(tp.resolve_engine_zone("hermes"), "local")
+    def test_removed_hermes_is_unknown_and_fail_closed(self):
+        # ADR-2087: hermes was removed; its id must never resolve to
+        # "local" (which would pass every tenant zone constraint).
+        self.assertEqual(tp.resolve_engine_zone("hermes"), "unknown")
+        ok, _ = tp.is_zone_compatible("eu-west",
+                                      tp.resolve_engine_zone("hermes"))
+        self.assertFalse(ok)
 
-    def test_hermes_is_zone_compatible_with_a_local_only_tenant(self):
-        ok, _ = tp.is_zone_compatible("local", tp.resolve_engine_zone("hermes"))
-        self.assertTrue(ok)
+    def test_operator_can_still_declare_an_engine_local(self):
+        os.environ["CORVIN_DELEGATE_OPENCODE_ZONE"] = "local"
+        try:
+            self.assertEqual(
+                tp.resolve_engine_zone("opencode", "custom/model"), "local")
+        finally:
+            os.environ.pop("CORVIN_DELEGATE_OPENCODE_ZONE", None)
 
     def test_copilot_resolves_to_us_not_unknown(self):
         self.assertEqual(tp.resolve_engine_zone("copilot"), "us")
@@ -102,14 +108,14 @@ class ResolveEngineZoneTests(unittest.TestCase):
         finally:
             os.environ.pop("CORVIN_DELEGATE_CLAUDE_CODE_ZONE", None)
 
-    def test_env_override_does_not_override_local_for_ollama(self):
-        # Operator's cloud-default applies to non-local models, but
-        # ollama/* is structurally local regardless.
+    def test_env_override_applies_to_every_opencode_prefix(self):
+        # ADR-2087: ollama/* is no longer structurally local; the
+        # operator's zone applies to it like to any other provider.
         os.environ["CORVIN_DELEGATE_OPENCODE_ZONE"] = "eu"
         try:
             self.assertEqual(
                 tp.resolve_engine_zone("opencode", "ollama/q"),
-                "local",
+                "eu",
             )
             self.assertEqual(
                 tp.resolve_engine_zone("opencode", "anthropic/claude-3"),
@@ -376,17 +382,17 @@ class PolicyEnforcementTests(unittest.TestCase):
         self.assertEqual(details["tenant_zone"], "eu-west")
         self.assertEqual(details["engine_zone"], "us")
 
-    def test_ollama_local_always_passes_zone_check(self):
-        # Even when tenant pinned to eu-west, ollama/* is local and OK.
+    def test_ollama_prefix_no_longer_bypasses_zone_check(self):
+        # ADR-2087: ollama/* used to count as local and skip the zone gate.
         self._write_policy(zone="eu-west")
         result = run_delegate(
             engine="opencode",
             prompt="hi",
-            model="ollama/qwen3:8b",
+            model="ollama/some-model",
             engine_factory=_factory(_FakeEngine()),
             audit=False,
         )
-        self.assertTrue(result.ok)
+        self.assertFalse(result.ok)
 
     def test_opencode_cloud_with_eu_tenant_denied(self):
         self._write_policy(zone="eu-west")

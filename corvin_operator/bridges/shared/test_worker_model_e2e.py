@@ -67,8 +67,8 @@ class TestWorkerModelE2E:
                         "claude_code": {
                             "worker_model": "claude-opus-5"
                         },
-                        "hermes": {
-                            "worker_model": "hermes-capable"
+                        "codex_cli": {
+                            "worker_model": "gpt-5-codex"
                         }
                     }
                 }
@@ -162,7 +162,7 @@ class TestWorkerModelE2E:
             env = _build_spawn_env(
                 bridge="console",
                 chat_key="test-chat",
-                profile={"default_engine": "hermes"},  # Not in engine_models
+                profile={"default_engine": "codex_cli"},  # Not in engine_models
                 tenant_id="_default",
             )
 

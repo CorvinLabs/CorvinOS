@@ -717,7 +717,7 @@ class RunDispatcher:
         _gw_engine_id = engine_name or getattr(engine, "name", "claude_code")
         # ── Why every gate below is awaited via asyncio.to_thread ──────────────
         # These gates are SYNCHRONOUS and one of them is expensive: L44 adjudicates
-        # the prompt with an LLM (house_rules_adjudicator → qwen3:8b / Haiku).
+        # the prompt with an LLM (house_rules_adjudicator → the cloud classifier).
         # Called directly inside this `async def`, that blocks the event loop, and
         # the gateway shares its uvicorn process with the console — so a single
         # in-flight run made the WHOLE process unresponsive. Measured 2026-07-26:

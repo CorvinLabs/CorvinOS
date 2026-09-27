@@ -474,11 +474,11 @@ def test_process_one_btw_running_non_claude_queues() -> None:
             # policy otherwise dropped these discord test messages as private.
             "ADAPTER_BRIDGES_DIR": str(inbox.parent),
         })
-        # Simulate a Hermes/OpenCode/Codex turn: a task IS running (marker set)
+        # Simulate an OpenCode/Codex turn: a task IS running (marker set)
         # but NO stdin / engine is registered, so inject_btw cannot deliver live.
         # Before the fix this surfaced the misleading "No task is running" ACK
         # and dropped the note. Now it must QUEUE the note and say so.
-        chat_key = "chat-hermes"
+        chat_key = "chat-opencode"
         adapter._mark_turn_active(chat_key)
 
         # Sandbox channel with no on-disk settings.json so the Layer 16 inbox
@@ -511,7 +511,7 @@ def test_process_one_btw_running_non_claude_queues() -> None:
         assert "[btw:" in drained
         print(f"PASS: queued ack + drainable buffer — {ack['text']!r}")
     finally:
-        adapter._mark_turn_done("chat-hermes")
+        adapter._mark_turn_done("chat-opencode")
         shutil.rmtree(inbox.parent, ignore_errors=True)
 
 

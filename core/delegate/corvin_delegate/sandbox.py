@@ -16,8 +16,8 @@ runs inside a fresh bwrap-jail with:
 
 Network: ``--share-net`` by default (cloud engines need outbound
 HTTPS). A future `local_only=True` mode could `--unshare-net` for
-local-Ollama runs but that needs slirp4netns or loopback bind to
-work — out of scope for v1.
+a user-defined engine on a loopback endpoint, but that needs
+slirp4netns or a loopback bind to work — out of scope for v1.
 
 Three modes (mirror of Layer 29.3a output-judge structure):
 

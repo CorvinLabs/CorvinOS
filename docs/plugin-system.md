@@ -309,7 +309,7 @@ Only add an MCP server you trust at the same level as the adapter itself. Treat
 | Personas & auto-routing | [Personas & Routing](personas-and-routing.md) |
 | Forge in depth | [Forge](forge.md) |
 | SkillForge & runtime generation | [Runtime Generation](runtime-generation.md) |
-| Engine layer (Claude / Codex / OpenCode / Hermes) | [Engine Layer](engine-layer.md) |
+| Engine layer (Claude / Codex / OpenCode / Copilot) | [Engine Layer](engine-layer.md) |
 | Memory & conversation recall | [Memory Model](memory-model.md) |
 | Data & Compute | [Data & Compute](data-and-compute.md) |
 | EU AI Act + GDPR compliance | [Audit & Compliance](audit-and-compliance.md) |

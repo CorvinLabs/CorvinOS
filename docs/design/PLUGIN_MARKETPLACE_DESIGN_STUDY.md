@@ -866,7 +866,7 @@ tier_c:
 ### 3. **Engine** — Execution backend
 - **UX:** Selectable in Settings → Engine
 - **Sandbox:** Strict + signing required
-- **Example:** `hermes-custom-router`, `o1-specialist`
+- **Example:** `onprem-engine-router`, `o1-specialist`
 
 ### 4. **Gate** — Flow control / compliance
 - **UX:** Toggleable in Settings → Data Safety

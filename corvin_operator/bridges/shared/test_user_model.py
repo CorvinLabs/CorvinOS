@@ -97,7 +97,7 @@ def case_save_load_round_trip() -> None:
             communication_style="concise, asks for trade-offs",
             preferences=["German chat", "voice-note replies"],
             recurring_topics=["Corvin layers", "compliance"],
-            goals=["close Hermes memory gap"],
+            goals=["close worker memory gap"],
             patterns=["finishes ideas before iterating"],
             do_not_assume=["technical novice"],
         )

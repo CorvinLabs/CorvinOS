@@ -29,8 +29,8 @@ def test_simple_text_request_translates():
         "system": "You are helpful.",
         "messages": [{"role": "user", "content": "Hello there"}],
     }
-    out = bridge.anthropic_request_to_openai(body, model="qwen3:8b")
-    assert out["model"] == "qwen3:8b"
+    out = bridge.anthropic_request_to_openai(body, model="gpt-oss:120b")
+    assert out["model"] == "gpt-oss:120b"
     assert out["max_tokens"] == 100
     assert out["messages"][0] == {"role": "system", "content": "You are helpful."}
     assert out["messages"][1] == {"role": "user", "content": "Hello there"}
@@ -238,8 +238,8 @@ def test_finalize_alone_emits_message_start():
 # ─── chat_completions_url_for ───────────────────────────────────────────────
 
 def test_ollama_url_uses_v1_prefix():
-    assert bridge.chat_completions_url_for("http://localhost:11434", "ollama") == \
-        "http://localhost:11434/v1/chat/completions"
+    assert bridge.chat_completions_url_for("https://ollama.com", "ollama") == \
+        "https://ollama.com/v1/chat/completions"
 
 
 def test_openrouter_url_appends_directly():
@@ -256,7 +256,7 @@ class _FakeUpstreamNonStreaming(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
-        assert body["model"] == "qwen3:8b"
+        assert body["model"] == "gpt-oss:120b"
         resp = {
             "id": "chatcmpl-fake",
             "choices": [{"message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
@@ -282,7 +282,7 @@ def test_proxy_end_to_end_non_streaming():
     try:
         target = bridge.ProxyTarget(
             chat_completions_url=f"{upstream_url}/chat/completions",
-            api_key="test-key", model="qwen3:8b",
+            api_key="test-key", model="gpt-oss:120b",
         )
         base = bridge.ensure_proxy(target)
 
@@ -331,7 +331,7 @@ def test_proxy_end_to_end_streaming():
     try:
         target = bridge.ProxyTarget(
             chat_completions_url=f"{upstream_url}/chat/completions",
-            api_key="test-key", model="qwen3:8b",
+            api_key="test-key", model="gpt-oss:120b",
         )
         base = bridge.ensure_proxy(target)
 
@@ -374,16 +374,14 @@ class _FakeOllamaCapturingThink(BaseHTTPRequestHandler):
 
 
 def test_disable_reasoning_sends_think_false_for_ollama():
-    """qwen3-style thinking models otherwise spend real latency generating a
-    separate 'reasoning' field even when the visible answer is what's wanted
-    (verified live against a real running Ollama during development) — the
-    same class of issue already fixed for Hermes/summarize.py's calls."""
+    """The opt-in disable_reasoning flag sends ``"think": false`` so thinking
+    models skip generating a separate 'reasoning' field."""
     _FakeOllamaCapturingThink.captured = {}
     upstream, u_thread, upstream_url = _start_fake_upstream(_FakeOllamaCapturingThink)
     try:
         target = bridge.ProxyTarget(
             chat_completions_url=f"{upstream_url}/chat/completions",
-            api_key="", model="qwen3:8b", disable_reasoning=True,
+            api_key="", model="gpt-oss:120b", disable_reasoning=True,
         )
         base = bridge.ensure_proxy(target)
         req_body = json.dumps({
@@ -454,7 +452,7 @@ def test_streaming_upstream_stall_closes_gracefully_instead_of_hanging():
     try:
         target = bridge.ProxyTarget(
             chat_completions_url=f"{upstream_url}/chat/completions",
-            api_key="test-key", model="qwen3:8b", request_timeout=0.3,
+            api_key="test-key", model="gpt-oss:120b", request_timeout=0.3,
         )
         base = bridge.ensure_proxy(target)
 

@@ -40,7 +40,7 @@ source of truth shared with Tier 1.
   does NOT rely on import side-effects).
 - `assert_capabilities_present()` runs before **every** engine spawn:
   - claude path → after the CLAG gate in `_call_claude_streaming_via_engine`
-  - codex/opencode/hermes → first gate in `_run_pre_dispatch_gates`
+  - codex/opencode/copilot → first gate in `_run_pre_dispatch_gates`
   - Fail-closed: a missing capability OR an unimportable registry blocks the spawn
     and emits `security.capability_missing` (CRITICAL).
 

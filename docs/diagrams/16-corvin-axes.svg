@@ -31,14 +31,13 @@
   <!-- Axis 4 — Engine -->
   <rect x="40" y="200" width="920" height="76" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
   <text x="58" y="222" font-size="12" font-weight="700" fill="#1e3a8a">4 · ENGINE — the LLM execution layer</text>
-  <text x="58" y="240" font-size="10.5" fill="#1e3a8a">WorkerEngine Protocol. Adapter routes per-call. Default is Claude Code; Hermes (local Ollama), Copilot CLI (worker-only), OpenCode opt-in per persona.</text>
+  <text x="58" y="240" font-size="10.5" fill="#1e3a8a">WorkerEngine Protocol. Adapter routes per-call. Default is Claude Code; Codex CLI, Copilot CLI (worker-only), OpenCode opt-in per persona.</text>
   <g font-size="10.5" fill="#0f172a">
     <rect x="58"  y="252" width="148" height="18" rx="4" fill="#eff6ff" stroke="#2563eb"/><text x="132" y="265" text-anchor="middle">Claude Code (default)</text>
     <rect x="214" y="252" width="96"  height="18" rx="4" fill="#eff6ff" stroke="#2563eb"/><text x="262" y="265" text-anchor="middle">Codex CLI</text>
     <rect x="318" y="252" width="152" height="18" rx="4" fill="#eff6ff" stroke="#2563eb"/><text x="394" y="265" text-anchor="middle">OpenCode (local/cloud)</text>
-    <rect x="478" y="252" width="152" height="18" rx="4" fill="#eff6ff" stroke="#2563eb"/><text x="554" y="265" text-anchor="middle">Hermes (Ollama local)</text>
-    <rect x="638" y="252" width="164" height="18" rx="4" fill="#eff6ff" stroke="#2563eb"/><text x="720" y="265" text-anchor="middle">Copilot CLI (worker-only)</text>
-    <rect x="810" y="252" width="100" height="18" rx="4" fill="#eff6ff" stroke="#2563eb" stroke-dasharray="3,2"/><text x="860" y="265" text-anchor="middle">future engines</text>
+    <rect x="478" y="252" width="164" height="18" rx="4" fill="#eff6ff" stroke="#2563eb"/><text x="560" y="265" text-anchor="middle">Copilot CLI (worker-only)</text>
+    <rect x="650" y="252" width="100" height="18" rx="4" fill="#eff6ff" stroke="#2563eb" stroke-dasharray="3,2"/><text x="700" y="265" text-anchor="middle">future engines</text>
   </g>
 
   <!-- Axis 3 — Persona -->

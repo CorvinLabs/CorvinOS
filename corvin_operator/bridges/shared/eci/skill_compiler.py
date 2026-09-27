@@ -6,7 +6,6 @@ appropriate for the target engine.
 Per-engine formats (M3)
 -----------------------
 claude_code  : <auto_skill> blocks (--append-system-prompt flag)
-hermes       : <auto_skill> blocks (prepended to system role in JSON)
 codex_cli    : <auto_skill> blocks (prepended as <SYSTEM> block)
 opencode_cli : <auto_skill> blocks (prepended as <SYSTEM> block)
 copilot_cli  : simplified text prefix (single-turn fallback)
@@ -29,7 +28,6 @@ class SkillCompiler:
 
     # Capability string values for skills injection (M3)
     CAPABILITY_APPEND_SYSTEM_PROMPT = "append_system_prompt"  # Claude Code
-    CAPABILITY_SYSTEM_MESSAGE = "system_message"              # Hermes (JSON role)
     CAPABILITY_PROMPT_PREFIX = "prompt_prefix"                # Copilot fallback
 
     @staticmethod
@@ -43,7 +41,7 @@ class SkillCompiler:
 
         Args:
             skills_block: Raw <auto_skill> block from collect_active_skills
-            engine_id: Target engine ID (claude_code, hermes_engine, codex_cli, etc.)
+            engine_id: Target engine ID (claude_code, codex_cli, opencode_cli, etc.)
 
         Returns:
             Formatted skills block (or None if empty)
@@ -87,8 +85,6 @@ class SkillCompiler:
         """
         if engine_id == "claude_code":
             return SkillCompiler.CAPABILITY_APPEND_SYSTEM_PROMPT
-        elif engine_id == "hermes_engine":
-            return SkillCompiler.CAPABILITY_SYSTEM_MESSAGE
         elif engine_id == "copilot_cli":
             return SkillCompiler.CAPABILITY_PROMPT_PREFIX
         else:

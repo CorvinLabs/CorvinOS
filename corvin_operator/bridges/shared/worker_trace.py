@@ -105,59 +105,6 @@ def extract_claudecode_trace(
 
 
 # ---------------------------------------------------------------------------
-# Hermes extraction (post-run, from response JSON)
-# ---------------------------------------------------------------------------
-
-def extract_hermes_trace(
-    raw_response: str,
-    worker_id: str,
-    run_id: str,
-    span_id: str,
-    run_dir: Path,
-) -> int:
-    """Extract tool_calls from a Hermes/Ollama response JSON (if present).
-
-    Hermes may include a ``tool_calls`` array in its JSON response:
-      [{"name": "Read", "duration_ms": 42, "exit_code": 0}, ...]
-
-    Older or text-only Hermes responses omit the field — those return 0.
-    Returns the number of tool calls written (0 → no trace file created).
-    """
-    try:
-        resp: Any = json.loads(raw_response.strip() or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return 0
-
-    raw_calls = resp.get("tool_calls") if isinstance(resp, dict) else None
-    if not isinstance(raw_calls, list) or not raw_calls:
-        return 0
-
-    events: list[dict[str, Any]] = []
-    for tc in raw_calls:
-        if not isinstance(tc, dict):
-            continue
-        tool_name = str(tc.get("name") or tc.get("tool") or "")
-        if not tool_name:
-            continue
-        events.append({
-            "ts":          time.time(),
-            "seq":         len(events) + 1,
-            "event":       "tool.called",
-            "worker_id":   worker_id,
-            "run_id":      run_id,
-            "span_id":     span_id,
-            "tool_name":   tool_name,
-            "duration_ms": int(tc.get("duration_ms") or 0),
-            "exit_code":   int(tc.get("exit_code") or 0),
-        })
-
-    if not events:
-        return 0
-    _write_trace(trace_path(run_dir, worker_id), events)
-    return len(events)
-
-
-# ---------------------------------------------------------------------------
 # Reader (used by console endpoints)
 # ---------------------------------------------------------------------------
 

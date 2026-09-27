@@ -18,7 +18,7 @@ Engines to Audit:
   - Claude Code (baseline, native L10/L16/L19/L23/L34/L35/L36/L37/L38)
   - Codex (via TEB: L10/L16/L33)
   - Copilot (via TEB: L10/L16/L33)
-  - Hermes (via TEB: L10/L16/L33)
+  - OpenCode (via TEB: L10/L16/L33)
 
 Compliance Gate: FAIL-CLOSED (any violation = reject operation)
 """
@@ -427,9 +427,10 @@ class ComplianceAuditor:
                 sys.path.insert(0, str(_shared_dir))
             from egress_gate import EgressGate
 
-            # Check EU_PRODUCTION presets
+            # Check EU_PRODUCTION presets. The local-Ollama preset was removed
+            # by ADR-2087; the HTTP preset is the shipped EU_PRODUCTION one.
             import os
-            eu_preset_file = str(_REPO_ROOT / "corvin_operator" / "bundle" / "config-templates" / "tenant.corvin.eu-production-ollama.yaml")
+            eu_preset_file = str(_REPO_ROOT / "corvin_operator" / "bundle" / "config-templates" / "tenant.corvin.eu-production-http.yaml")
             if not os.path.exists(eu_preset_file):
                 return ComplianceCheck(
                     layer=ComplianceLayer.L35_EGRESS,
@@ -674,7 +675,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(_REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
     auditor = ComplianceAuditor()
-    engines = ["claude_code", "codex", "copilot", "hermes"]
+    engines = ["claude_code", "codex", "copilot", "opencode"]
     results = auditor.run_full_audit(engines)
 
     # Export JSON

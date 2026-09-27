@@ -150,7 +150,8 @@ class InterruptController:
         if state not in [TaskState.RUNNING, TaskState.PAUSED]:
             return None
 
-        if new_engine not in ["claude", "local_llama2", "hermes"]:
+        # "hermes" was removed (ADR-2087): a redirect to it is refused.
+        if new_engine not in ["claude", "local_llama2"]:
             return None
 
         command = InterruptCommand(

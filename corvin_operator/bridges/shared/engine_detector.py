@@ -8,12 +8,9 @@ MUST NOT import anthropic (CI AST lint enforces).
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
-import urllib.error
-import urllib.request
 from dataclasses import asdict, dataclass, field
 
 # ── EngineProbe dataclass ──────────────────────────────────────────────────
@@ -21,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 
 @dataclass
 class EngineProbe:
-    engine_id: str          # "claude_code" | "codex" | "opencode" | "hermes" | "copilot"
+    engine_id: str          # "claude_code" | "codex" | "opencode" | "copilot"
     found: bool
     version: str            # empty string when not found
     detail: str             # human-readable note
@@ -37,8 +34,7 @@ class EngineProbe:
 _ENGINE_LOCALITY: dict[str, str] = {
     "claude_code": "us_cloud",
     "codex":       "us_cloud",
-    "opencode":    "eu_cloud",  # provider-agnostic; local-capable via Ollama
-    "hermes":      "local",
+    "opencode":    "eu_cloud",  # provider-agnostic
     "copilot":     "us_cloud",
 }
 
@@ -47,12 +43,8 @@ _ENGINE_CAPABILITIES: dict[str, list[str]] = {
     "claude_code": ["os_turn", "worker", "mid_stream_inject", "hooks", "skills"],
     "codex":       ["worker"],
     "opencode":    ["os_turn", "worker"],
-    "hermes":      ["os_turn", "worker"],
     "copilot":     ["worker"],
 }
-
-_OLLAMA_PROBE_TIMEOUT = 2.0
-
 
 # ── Individual probes ──────────────────────────────────────────────────────
 
@@ -97,24 +89,6 @@ def _probe_executable(name: str, *, timeout: float = 8.0) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
-def _probe_ollama() -> tuple[bool, str]:
-    """Probe Ollama HTTP API. Returns (reachable, detail)."""
-    base = (
-        os.environ.get("CORVIN_OLLAMA_BASE_URL")
-        or os.environ.get("OLLAMA_HOST")
-        or "http://localhost:11434"
-    ).rstrip("/")
-    try:
-        with urllib.request.urlopen(f"{base}/api/tags", timeout=_OLLAMA_PROBE_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-        count = len(data.get("models") or [])
-        return True, f"ollama running, {count} model(s) available"
-    except urllib.error.URLError:
-        return False, "ollama not reachable at localhost:11434"
-    except Exception as e:  # noqa: BLE001
-        return False, f"ollama probe error: {type(e).__name__}"
-
-
 # ── Public API ─────────────────────────────────────────────────────────────
 
 def detect_all() -> list[EngineProbe]:
@@ -155,17 +129,6 @@ def detect_all() -> list[EngineProbe]:
         detail=detail,
         locality=_ENGINE_LOCALITY["opencode"],
         capabilities=list(_ENGINE_CAPABILITIES["opencode"]),
-    ))
-
-    # HermesEngine — Ollama HTTP API (no dedicated binary; probed via API)
-    found, detail = _probe_ollama()
-    probes.append(EngineProbe(
-        engine_id="hermes",
-        found=found,
-        version="",  # version not exposed by /api/tags
-        detail=detail,
-        locality=_ENGINE_LOCALITY["hermes"],
-        capabilities=list(_ENGINE_CAPABILITIES["hermes"]),
     ))
 
     # CopilotCliEngine — `copilot` binary (ADR-0071)

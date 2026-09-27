@@ -257,7 +257,7 @@ mechanics.
 | **Adapter** | `skill_inject.collect_active_skills()` and `personal_tools.format_inject_block()` are auto-prepended to the system prompt every turn. |
 | **Audit** | All forge / skill-forge events feed the unified hash chain — same `voice-audit verify` covers them. |
 | **Compliance** | Vault + path-gate are the structural answer to GDPR Art. 32 (security of processing). |
-| **Engine layer** | Skills land via `--append-system-prompt`; OpenCode and HermesEngine fall back to a `<SYSTEM>` block prefix in the user prompt (neither has a system-prompt flag). Hermes M3 roadmap: skills via prompt-inject block. |
+| **Engine layer** | Skills land via `--append-system-prompt`; OpenCode falls back to a `<SYSTEM>` block prefix in the user prompt (it has no system-prompt flag). |
 
 ## Concrete commands
 

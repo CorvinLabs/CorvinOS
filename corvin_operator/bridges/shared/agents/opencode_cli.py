@@ -6,10 +6,10 @@ non-interactive subprocess. Opt-in via CORVIN_ENGINE=opencode (or the
 adapter's engine_factory injection point) — default stays Claude Code.
 
 OpenCode is provider-agnostic: the `--model provider/model` flag
-selects the backing LLM. The intended local-first path uses Ollama
-through opencode's openai-compatible provider config (see
-`~/.config/opencode/opencode.json` with a `provider.ollama` block
-pointing at `http://localhost:11434/v1`).
+selects the backing LLM. When no model is given, no `--model` flag is
+passed and opencode uses the default from its own config
+(`~/.config/opencode/opencode.json`). The former local-Ollama default
+(`ollama/qwen3:8b`) was removed by ADR-2087.
 
 Event shape emitted by `opencode run --format json`:
 

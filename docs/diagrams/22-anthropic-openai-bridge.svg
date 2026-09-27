@@ -2,7 +2,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 340" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
   <title>ADR-0181 M3 — local translating proxy for provider-based Claude Code routing</title>
   <desc>Placeholder diagram (docs/claude-ref/testing-and-docs.md "Creating New Diagrams" convention).
-  Claude Code only speaks the Anthropic Messages API. When a tenant assigns OpenRouter or Ollama to
+  Claude Code only speaks the Anthropic Messages API. When a tenant assigns OpenRouter or Ollama Cloud (hosted) to
   the claude_code engine, adapter.py::_build_spawn_env starts a local ThreadingHTTPServer
   (corvin_operator/bridges/shared/anthropic_openai_bridge.py, ensure_proxy()) on 127.0.0.1 that translates
   POST /v1/messages (Anthropic, incl. SSE streaming) to POST /chat/completions (OpenAI-compatible)
@@ -44,7 +44,7 @@
   <line x1="570" y1="155" x2="680" y2="155" stroke="#475569" stroke-width="2" marker-end="url(#ar)"/>
 
   <rect x="680" y="120" width="180" height="70" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="2"/>
-  <text x="770" y="150" text-anchor="middle" fill="#e2e8f0" font-size="14">OpenRouter / Ollama</text>
+  <text x="770" y="150" text-anchor="middle" fill="#e2e8f0" font-size="14">OpenRouter / Ollama Cloud</text>
   <text x="770" y="170" text-anchor="middle" fill="#94a3b8" font-size="11">OpenAI Chat Completions</text>
 
   <text x="450" y="250" text-anchor="middle" fill="#64748b" font-size="12">

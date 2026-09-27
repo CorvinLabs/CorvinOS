@@ -3,18 +3,11 @@
 Layered like test_engines_e2e.py: protocol contract, capability parity
 with the other engines, golden-snapshot argv composition, event
 normalisation, fake-binary smoke, plus an opt-in live test against the
-real opencode CLI talking to a local Ollama daemon.
+real opencode CLI talking to a hosted provider (Ollama Cloud).
 
-The live test is gated behind CORVIN_OPENCODE_LIVE=1 because it
-requires:
-
-  - `opencode` on PATH (or ~/.opencode/bin/opencode)
-  - `ollama serve` reachable on http://localhost:11434
-  - at least one ollama model pulled (e.g. `qwen3:1.7b`)
-  - `~/.config/opencode/opencode.json` declaring an `ollama` provider
-
-It runs by default in run-all-tests.sh when all three are present;
-operators without Ollama see a clear skip line.
+The local-Ollama live test was removed with ADR-2087 (no local
+inference). The cloud live test is gated behind
+CORVIN_OPENCODE_LIVE_CLOUD=1 + OLLAMA_API_KEY + `opencode` on PATH.
 
 Run:
 
@@ -48,59 +41,6 @@ def _opencode_in_path() -> bool:
     if shutil.which("opencode"):
         return True
     return (Path.home() / ".opencode" / "bin" / "opencode").exists()
-
-
-def _ollama_reachable() -> bool:
-    import socket
-    s = socket.socket()
-    s.settimeout(0.5)
-    try:
-        s.connect(("127.0.0.1", 11434))
-        return True
-    except OSError:
-        return False
-    finally:
-        try:
-            s.close()
-        except Exception:
-            pass
-
-
-def _ollama_first_model() -> str | None:
-    import json as _json
-    import urllib.request
-    try:
-        with urllib.request.urlopen(
-            "http://127.0.0.1:11434/api/tags", timeout=1
-        ) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
-    models = data.get("models") or []
-    if not models:
-        return None
-    # Prefer the smallest by reported size for fast tests.
-    models = sorted(models, key=lambda m: m.get("size") or 0)
-    return f"ollama/{models[0].get('name')}"
-
-
-def _opencode_has_ollama_provider() -> bool:
-    cfg = Path.home() / ".config" / "opencode" / "opencode.json"
-    if not cfg.exists():
-        return False
-    try:
-        data = json.loads(cfg.read_text())
-    except Exception:
-        return False
-    return bool((data.get("provider") or {}).get("ollama"))
-
-
-LIVE = (
-    os.environ.get("CORVIN_OPENCODE_LIVE") == "1"
-    and _opencode_in_path()
-    and _ollama_reachable()
-    and _opencode_has_ollama_provider()
-)
 
 
 # ---------------------------------------------------------------------------
@@ -188,13 +128,13 @@ class BuildArgsTests(unittest.TestCase):
         argv = OpenCodeEngine._build_args(
             binary="opencode",
             prompt="say hi",
-            model="ollama/qwen3:8b",
+            model="anthropic/claude-sonnet-5",
             working_dir=Path("/tmp/sandbox"),
         )
         self.assertEqual(argv, [
             "opencode", "run", "--format", "json",
             "--dangerously-skip-permissions",
-            "--model", "ollama/qwen3:8b",
+            "--model", "anthropic/claude-sonnet-5",
             "--dir", "/tmp/sandbox",
         ])
 
@@ -297,7 +237,7 @@ class BuildArgsTests(unittest.TestCase):
         # gate: the flag MUST always appear.
         for kwargs in (
             {},
-            {"model": "ollama/qwen3:1.7b"},
+            {"model": "anthropic/claude-haiku-4-5"},
             {"continue_session": True},
             {"permission_mode": "plan"},
         ):
@@ -523,31 +463,6 @@ class FakeOpencodeStreamTests(unittest.TestCase):
             argv = OpenCodeEngine._build_args(binary=str(bin_path),
                                               prompt="what is the codeword")
             self.assertNotIn("what is the codeword", argv)
-
-
-# ---------------------------------------------------------------------------
-# Live E2E (opt-in via CORVIN_OPENCODE_LIVE=1, gated on Ollama present)
-# ---------------------------------------------------------------------------
-
-
-@unittest.skipUnless(LIVE, "CORVIN_OPENCODE_LIVE=1 and ollama+opencode required")
-class OpenCodeLiveE2E(unittest.TestCase):
-
-    def test_pingok_via_local_ollama(self) -> None:
-        model = _ollama_first_model()
-        self.assertIsNotNone(model, "no ollama model pulled")
-        engine = OpenCodeEngine()
-        result = collect(engine.spawn(
-            PROMPT_PINGOK,
-            model=model,
-            timeout=180.0,  # local LLM can be slow on CPU
-        ))
-        self.assertIsNone(
-            result.error,
-            f"opencode/{model} failed: {result.error}",
-        )
-        self.assertIn("PINGOK", result.final_text.upper(),
-                      f"expected PINGOK in output, got: {result.final_text!r}")
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ in-process-trusted pipeline. The structural corrections (full detail: CONCEPT-00
   `--dangerously-skip-permissions` path makes `mcp_config` the load-bearing sub-point.
   A2A/ACS-remote strip bindings by construction (ADR-0279).
 - **LLM egress compliance (P-C).** The synthesis call is egress → same L34/L35 as a
-  spawn; `egress=none` (Hermes/EU) ⇒ deterministic fallback. Own fallback internal.
+  spawn; `egress=none` (e.g. an egress-denied EU tenant) ⇒ deterministic fallback. Own fallback internal.
 - **Forge safety + no in-process API (P-D).** Same-turn = template impls only;
   LLM-authored impls behind a default-off sub-flag + AST allowlist check. First
   extract an in-process build API from `forge/runner.py` (don't shell the MCP server).

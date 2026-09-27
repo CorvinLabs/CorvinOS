@@ -46,7 +46,7 @@ send(task)
 ## Surfaces
 
 - **Web console:** per-turn engine badge (`engine` stream event → `Engine: …` on the
-  assistant bubble; ACS/TDE/Hermes/Claude Code). Explicit TDE turn via
+  assistant bubble; ACS/TDE/Claude Code). Explicit TDE turn via
   `/use-engine tiered_delegation <task>` (chat_runtime `_stream_tde_turn`,
   pre-spawn gates classify it as delegation, ADR-0213 transcript sync applies).
 - **Bridges (Discord/Telegram/WhatsApp):** context bar shows `[⚙ ACS: <primitive>]`
@@ -194,8 +194,8 @@ package (repo-relative `sys.path` insert + bare import of the leaf module).
   task in a batch (delegated: threaded through `WorkerIPCInterface.send_delegation`'s
   new `proc_holder` kwarg; local: threaded through the injected
   `step_executor_fn` when it declares a `proc_holder` parameter, detected via
-  signature inspection so arbitrary embedder-supplied executors — e.g.
-  Hermes's genuinely-local one — aren't required to accept it). A
+  signature inspection so arbitrary embedder-supplied executors aren't
+  required to accept it). A
   `CancelledError` raised out of `asyncio.gather()` (the whole `execute()`
   coroutine being cancelled) kills every holder in that batch before
   re-raising. Same pattern as the InitialAnalysis one-shot fix

@@ -26,7 +26,7 @@ Used for routing and delegation; never updated during task execution.
 ```python
 @dataclass
 class ExecutionContext:
-    engine: str           # "claude-code", "hermes", etc.
+    engine: str           # "claude-code", "codex_cli", etc.
     model: str            # "opus", "sonnet", "haiku"
     delegation_path: str  # routing hint
 ```

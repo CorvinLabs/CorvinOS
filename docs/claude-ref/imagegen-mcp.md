@@ -63,7 +63,7 @@ Seeding is marker-based (`<catalog_dir>/builtin-seeded.json`):
 - Every prompt passes the **L44 house-rules gate** (`check_l44`) BEFORE any
   provider sees it. Without a reachable classifier backend, L44 degrades to
   its deterministic Tier-0 regex floor (see Layer 44) — zero-config installs
-  without Ollama still generate images.
+  without a logged-in `claude` CLI still generate images.
 - One-time **per-tenant disclosure** (`imagegen_disclosure.py`) marks its
   store BEFORE the prompt first leaves the machine and returns the notice as
   a real MCP text content block ahead of the image. English text (repo

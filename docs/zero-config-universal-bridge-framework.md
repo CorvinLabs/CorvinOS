@@ -412,7 +412,7 @@ After full implementation:
 3. **Whitelist in Console:** Should Console also allow editing whitelist/permissions?
    - Yes: Future enhancement (Bridges tab → Edit Whitelist)
 
-4. **Service Discovery (Signal, local Ollama):** Auto-detect localhost services?
+4. **Service Discovery (Signal):** Auto-detect localhost services?
    - Yes: Scan common ports (8080, 8888, etc.)
    - With opt-out: "Connect to remote service [IP:port]"
 

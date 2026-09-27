@@ -80,10 +80,24 @@ class AliasResolutionTests(unittest.TestCase):
         self.assertEqual(spec["engine"], "codex_cli")
         self.assertIsNone(spec["model"])
 
-    def test_opencode_alias_pins_local_ollama_model(self):
+    def test_opencode_alias_pins_no_model(self):
+        # ADR-2087: no local-Ollama default — OpenCode uses its own default.
         spec = engine_switch.resolve_alias("opencode")
         self.assertEqual(spec["engine"], "opencode")
-        self.assertEqual(spec["model"], "ollama/qwen3:8b")
+        self.assertIsNone(spec["model"])
+
+    def test_removed_engines_map_to_claude_code(self):
+        # ADR-2087: /engine hermes (and friends) switch to claude_code
+        # instead of erroring out.
+        for token in ("hermes", "Hermes", " hermes-fast ", "hermes-large",
+                      "local", "local-hermes", "ollama", "opencode_ollama",
+                      "claude_code_local"):
+            spec = engine_switch.resolve_alias(token)
+            self.assertEqual(spec, {"engine": "claude_code", "model": None},
+                             token)
+            self.assertTrue(engine_switch.is_legacy_alias(token), token)
+        self.assertFalse(engine_switch.is_legacy_alias("claude"))
+        self.assertFalse(engine_switch.is_legacy_alias("cloud"))
 
     def test_cloud_alias_pins_ollama_cloud_model(self):
         spec = engine_switch.resolve_alias("cloud")
@@ -109,7 +123,7 @@ class AliasResolutionTests(unittest.TestCase):
 
     def test_supported_aliases_curated_short_list(self):
         aliases = engine_switch.supported_aliases()
-        self.assertEqual(set(aliases), {"claude", "codex", "opencode", "cloud", "hermes", "hermes-fast"})
+        self.assertEqual(set(aliases), {"claude", "codex", "opencode", "cloud", "copilot"})
 
 
 # ── 2. Set / current / clear round-trip ──────────────────────────────
@@ -190,7 +204,7 @@ class PerChatIsolationTests(unittest.TestCase):
         with _Sandbox():
             engine_switch.set_preference(
                 "discord", "chat-A", engine="opencode",
-                model="ollama/qwen3:8b", uid="u",
+                model="openrouter/deepseek-chat", uid="u",
             )
             engine_switch.set_preference(
                 "discord", "chat-B", engine="codex_cli", uid="u",
@@ -256,7 +270,7 @@ class HotReloadTests(unittest.TestCase):
             # External tool overwrites the file directly.
             path.write_text(json.dumps({
                 "engine": "opencode",
-                "model": "ollama/qwen3:8b",
+                "model": "openrouter/deepseek-chat",
                 "set_at": 0.0,
                 "set_by_uid": "external",
                 "channel": "discord",
@@ -313,7 +327,7 @@ class AuditContractTests(unittest.TestCase):
         with _Sandbox() as sb:
             engine_switch.set_preference(
                 "discord", "chat-1", engine="opencode",
-                model="ollama/qwen3:8b", uid="user-42",
+                model="openrouter/deepseek-chat", uid="user-42",
             )
             chain = self._chain_path(sb)
             self.assertTrue(chain.exists(), "audit chain should exist")
@@ -322,7 +336,7 @@ class AuditContractTests(unittest.TestCase):
                 rec.get("event_type") == "engine.pref_switched"
                 and rec.get("details", {}).get("action") == "set"
                 and rec.get("details", {}).get("engine") == "opencode"
-                and rec.get("details", {}).get("model") == "ollama/qwen3:8b"
+                and rec.get("details", {}).get("model") == "openrouter/deepseek-chat"
                 for rec in lines
             ), f"set event not found: {lines}")
 
@@ -387,12 +401,12 @@ class EnvOverlayTests(unittest.TestCase):
         with _Sandbox():
             engine_switch.set_preference(
                 "discord", "chat-1", engine="opencode",
-                model="ollama/qwen3:8b", uid="u",
+                model="openrouter/deepseek-chat", uid="u",
             )
             overlay = engine_switch.env_overlay("discord", "chat-1")
             self.assertEqual(overlay, {
                 "CORVIN_DELEGATE_PREF_ENGINE": "opencode",
-                "CORVIN_DELEGATE_PREF_MODEL": "ollama/qwen3:8b",
+                "CORVIN_DELEGATE_PREF_MODEL": "openrouter/deepseek-chat",
             })
 
 
@@ -493,6 +507,30 @@ class CLITests(unittest.TestCase):
             r = self._run("set", "discord", "chat-1", "gemini", sb_home=sb.home)
             self.assertEqual(r.returncode, 2)
             self.assertIn("unknown engine alias", r.stdout)
+
+    def test_set_hermes_switches_to_claude_code_with_notice(self):
+        # ADR-2087: `/engine hermes` must not error — it pins claude_code
+        # and tells the operator Hermes was removed.
+        with _Sandbox() as sb:
+            r = self._run("set", "discord", "chat-1", "hermes", sb_home=sb.home)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("removed", r.stdout)
+            self.assertIn("engine=claude_code", r.stdout)
+            r2 = self._run("show", "discord", "chat-1", sb_home=sb.home)
+            self.assertIn("engine=claude_code", r2.stdout)
+
+    def test_stored_legacy_pref_maps_to_claude_code_on_read(self):
+        with _Sandbox() as sb:
+            path = sb.home / "global" / "engine_pref" / "discord__chat_9.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"engine": "hermes",
+                                        "model": "hermes-fast"}))
+            self.assertEqual(engine_switch.current("discord", "chat-9"),
+                             {"engine": "claude_code", "model": ""})
+            # set_preference with a legacy id maps too (never raises).
+            out = engine_switch.set_preference(
+                "discord", "chat-9", engine="hermes", model="qwen", uid="u")
+            self.assertEqual(out, {"engine": "claude_code", "model": ""})
 
     def test_clear_roundtrip(self):
         with _Sandbox() as sb:

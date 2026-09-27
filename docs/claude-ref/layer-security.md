@@ -386,8 +386,8 @@ debugging. The event type is `console.execution_context`.
 
 **Metadata only** — no PII, no prompt text, no user content. Per GDPR Art. 5
 data minimisation, the audit chain captures only:
-- `engine_id`: Which engine executed the turn (claude_code | acs | tde | hermes)
-- `model_source`: Model provider (claude | ollama | openrouter | hermes)
+- `engine_id`: Which engine executed the turn (claude_code | acs | tde; `hermes` is a historical, parse-only value since ADR-2087)
+- `model_source`: Model provider (claude | openrouter; `ollama`/`hermes` are historical, parse-only values since ADR-2087)
 - `model_name`: Normalized model name (stripped of timestamps)
 - `delegation_mode`: How the turn was routed (native | acs | tde | fallback)
 - `acs_run_id`, `tde_router_decision`: Delegation correlation IDs (optional)
@@ -1135,7 +1135,7 @@ the items below through the real router: `core/console/tests/test_console_harden
   `POST /custom-provider/test-api` and `/create` refuse non-public targets — private LAN ranges,
   link-local + every cloud-IMDS shape, reserved, blocked hostnames — fail-closed, redirects never
   followed. **Decision: loopback (127/8, ::1, `localhost`) is allowed** because the panel's main
-  use case is a same-host model/RAG server (Ollama :11434, LM Studio, vLLM) and the console is the
+  use case is a same-host model/RAG server (LM Studio, vLLM, or any operator-run OpenAI-compatible server) and the console is the
   operator's own machine. Residual (documented in the module): DNS rebinding after the pre-fetch
   resolve — httpx does not pin the connect IP the way `datasources_http`'s urllib opener does.
 - **Frontend XSS**: the setup-guide step renderer (`SetupGate.tsx`, `bridges.tsx`) no longer

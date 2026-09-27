@@ -88,7 +88,7 @@ def test_clear_checkpoints():
 
         save_checkpoint(
             session_dir,
-            engine_id="hermes_engine",
+            engine_id="opencode",
             turn_id="t_1",
             system_prompt_summary="test",
             last_message_summary="msg",

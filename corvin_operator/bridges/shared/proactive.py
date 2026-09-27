@@ -433,8 +433,9 @@ def _house_rules_allows(text: str, *, channel: str, chat_key: str,
     cannot run denies (the gate module itself fails to a deny-all policy).
 
     F-A19 (2026-09-07): wires the SAME Tier-1 semantic classifier the inbound
-    path uses (``house_rules._house_rules_classifier``: Hermes local → cloud
-    Haiku → fail-closed) and the tenant overlay. Without it the gate ran in
+    path uses (``house_rules._house_rules_classifier``: cloud Haiku, or the
+    deterministic floor for egress-denied tenants — ADR-2087 ``floor_only`` —
+    fail-closed either way) and the tenant overlay. Without it the gate ran in
     Tier-0 (regex-only) degraded mode for every proactive message."""
     try:
         import house_rules  # type: ignore

@@ -12,16 +12,21 @@ subprocesses through a unified contract. AWP-integration roadmap
 
 **Module**: `bridges/shared/agents/`
 
+> `hermes_engine.py` (the local-Ollama `HermesEngine`, ADR-0066/0067) and its
+> tests were removed by ADR-2087. A stored `hermes` / `hermes-*` / `local` /
+> `ollama` / `opencode_ollama` / `claude_code_local` engine id is mapped to
+> `claude_code` on read by `engine_registry.normalize_legacy_engine_id` (one
+> WARNING log line `engine.legacy_mapped` per value per process — plain logging,
+> not an audit event).
+
 | File | Purpose |
 |---|---|
 | `__init__.py` | `WorkerEngine` Protocol + `StreamEvent` + `SpawnResult` + `collect()` helper + `parse_jsonl_line()` tolerant JSONL parser |
 | `claude_code.py` | Spawns `claude -p --output-format stream-json --verbose`. Capabilities: mid-stream-inject, hooks, skills_tool, mcp, all 4 permission_modes. Owns argv composition (`_build_args`), stdin pipe lifecycle, `inject()` for `/btw`, and `ADAPTER_FAKE_CLAUDE` fixture support. **Prompt placement (F-E1, 2026-09-07):** the bridge feeds the prompt over stdin (`prompt_via_stdin=True`); when a caller asks for a positional prompt instead, `_build_args` emits it LAST behind a literal `--` end-of-options sentinel — options first, because the CLI silently ignores options placed after `--`. A prompt beginning with `-` (`--add-dir /`, `--mcp-config …`, `--version`) can therefore never be parsed as a flag. |
 | `codex_cli.py` | Spawns `codex exec --json --skip-git-repo-check --ephemeral`. Capabilities: mcp + stream_json only — no skills_tool, no hooks, no mid-stream-inject |
-| `opencode_cli.py` | Spawns `opencode run --format json` (anomalyco/opencode, provider-agnostic — Claude/OpenAI/Google/Ollama via the `--model provider/model` flag). Capabilities: mcp + stream_json only — no skills_tool, no hooks, no mid-stream-inject. Opt-in via `OPENCODE_BIN` or adapter `engine_factory`; default backend stays Claude Code. The intended local-first path uses Ollama through opencode's openai-compatible provider config (`~/.config/opencode/opencode.json::provider.ollama` pointing at `http://localhost:11434/v1`). |
-| `hermes_engine.py` | Drives Ollama HTTP streaming API (`POST /api/chat`) via stdlib `urllib` — no subprocess, no new dependency. Capabilities: stream_json=True; mcp=FCB-bridged (tool-use loop via `teb/fcb.py`), hooks=TEB (L10 path-gate via Forge MCP server), mid-stream-inject=buffered (ECI). L34: locality=local, network_egress=none — qualifies for CONFIDENTIAL tasks. ADR-0066 M1, ADR-0069. |
+| `opencode_cli.py` | Spawns `opencode run --format json` (anomalyco/opencode, provider-agnostic — the backing LLM is chosen by the `--model provider/model` flag). Capabilities: mcp + stream_json only — no skills_tool, no hooks, no mid-stream-inject. Opt-in via `OPENCODE_BIN` or adapter `engine_factory`; default backend stays Claude Code. With no model given, no `--model` flag is passed and opencode uses the default from its own `~/.config/opencode/opencode.json` (the former local-Ollama default `ollama/qwen3:8b` was removed by ADR-2087). |
 | `test_engines_e2e.py` | 36-case per-subtask E2E: BuildArgs golden snapshots (12) + FakeClaudeStream (2) + capability/protocol/normalisation (19) + 3 live (real `claude` + real `codex` + parity) |
-| `test_opencode_cli.py` | 30-case per-subtask E2E for OpenCodeEngine: protocol + capability-key-parity with Claude/Codex (4) + BuildArgs golden snapshots (12) + event normalisation incl. nested-error extraction (8) + fake-binary smoke (3) + opt-in live test against real `opencode` talking to a local Ollama daemon (1, gated on `CORVIN_OPENCODE_LIVE=1` AND `ollama` reachable AND `~/.config/opencode/opencode.json` declaring an `ollama` provider) |
-| `test_hermes_engine.py` | 21-case test suite: 12 protocol-contract unit tests (always run) + 7 live tests against local Ollama (gated on Ollama reachable AND model pulled). Live model via `CORVIN_HERMES_TEST_MODEL` (default `qwen3:1.7b`). |
+| `test_opencode_cli.py` | 30-case per-subtask E2E for OpenCodeEngine: protocol + capability-key-parity with Claude/Codex (4) + BuildArgs golden snapshots (12) + event normalisation incl. nested-error extraction (8) + fake-binary smoke (3) + opt-in live test against a real `opencode` binary via Ollama Cloud (`OpenCodeLiveE2ECloud`, gated on `CORVIN_OPENCODE_LIVE_CLOUD=1` AND `OLLAMA_API_KEY`; the local-Ollama live test was removed by ADR-2087) |
 
 ### Web-chat OS-turn spawn (separate from the engine layer)
 
@@ -66,37 +71,38 @@ other engine. It adds four cross-cutting subsystems:
 ### Tool Execution Broker (TEB) — `teb/broker.py`
 
 Sits inside the Forge MCP server. Every tool call from any engine (Codex,
-OpenCode, Hermes) flows through TEB before execution. TEB enforces:
+OpenCode) flows through TEB before execution. TEB enforces:
 - **L10 path-gate**: the same `path_gate.py` PreToolUse hook that ClaudeCode
   runners get — fail-closed, every block emits `path_gate.denied`.
 - **L16 audit chain**: every tool invocation writes to the hash chain.
 - **L33 artifact registration**: writes/edits under `artifacts/` are
   auto-registered with PII-redacted description (same Haiku-4.5 path as CC).
 
-Before EAOS: Codex, OpenCode, Hermes had none of these guarantees.
+Before EAOS: Codex and OpenCode had none of these guarantees.
 After EAOS: all engines share them, mediated by TEB.
 
 ### Engine Command Interface (ECI) — `eci/manifest.py`
 
 Every engine now declares an `EngineCommandManifest`:
-- **`btw_transport`**: `stdin_json` (ClaudeCode) · `buffered` (Hermes) · `None`
-  (Codex/OpenCode — explicit error rather than silent drop).
+- **`btw_transport`**: `stdin_json` (ClaudeCode) · `None`
+  (Codex/OpenCode — explicit error rather than silent drop). The `buffered`
+  transport served only the removed Hermes engine (ADR-2087).
 - **`native_commands`**: engine-specific `/e:<cmd>` sub-namespace. The adapter's
   dispatcher routes `/e:<cmd>` to `engine.handle_command(cmd, args)`.
 
 ### Function-Call Bridge (FCB) — `teb/fcb.py`
 
 Translates between MCP tool-call format and OpenAI function-calling format.
-`HermesEngine` now runs a tool-use loop: Hermes emits OpenAI-format
-`tool_calls`, FCB translates to MCP calls, TEB executes them, FCB translates
-the results back. Capability key `mcp` is now `True` for Hermes.
+It is a pure data transformation (no network, no subprocess) for
+OpenAI-compatible engines. Its first consumer, the Hermes tool-use loop, and the
+Ollama NDJSON chunk helpers were removed by ADR-2087.
 
 ### SkillCompiler — `eci/skill_compiler.py`
 
 Engine-agnostic skill injection. Compiles active `SKILL.md` files into the
 correct injection format per engine:
 - ClaudeCode: `--append-system-prompt` flag (unchanged)
-- Hermes/OpenCode: structured `<SYSTEM>` block prepended to user message
+- OpenCode: structured `<SYSTEM>` block prepended to user message
 - Codex: `<SYSTEM>` block (same fallback as OpenCode)
 
 ### Console — `/app/engine-control`
@@ -123,8 +129,8 @@ model — one orchestration harness, swappable model providers:
 **The provider list is never hard-coded.** It is whatever
 `GET /settings/engine/providers` returns. A prior revision shipped a static
 `MODEL_PROVIDERS` array whose Ollama entry used the id `ollama` while the
-registry calls it `ollama_local`, so every model fetch for it answered
-`unknown provider 'ollama'`. Do not re-introduce a static mirror of the registry.
+registry called it `ollama_local` (since removed, ADR-2087), so every model fetch
+for it answered `unknown provider 'ollama'`. Do not re-introduce a static mirror of the registry.
 The same rule now binds `/app/engine-config`, where a static mirror had in fact
 been re-introduced — see [the Engine Configuration real-data pass](#engine-configuration-panel-every-list-and-every-percentage-is-real-2026-09-15)
 below, which removes it and adds the model list to what must be fetched rather
@@ -138,7 +144,7 @@ pair that does not exist. Claude Code supports `anthropic` natively, plus
 `bedrock`, `vertex` and `foundry` natively as `auth_mode: platform` providers
 (ADR-0759 — the 2026-09-15 real-data pass registered `bedrock`, the ADR-0730
 rename sweep then deleted it, and ADR-0759 restored it and added the other two),
-plus `ollama_local`, `ollama_cloud` and `openrouter` **via the built-in
+plus `ollama_cloud` and `openrouter` **via the built-in
 `anthropic_openai_bridge` translating proxy** — and NOT `openai`. So the assign
 button is disabled for any provider absent from that list, and the routing chain
 lists only drivable ones. This is the pre-ADR-0607 per-engine whitelist still in
@@ -235,13 +241,13 @@ thin wrapper that returns `events[0] if events else None`.
 
 ### Normalised stream events
 
-| Event | Claude Code source | Codex CLI source | OpenCode source | Hermes source |
-|---|---|---|---|---|
-| `session_started` | `system.init` | `thread.started` | first `step_start` (carries `sessionID`); subsequent `step_start` dropped | emitted on successful HTTP connect to Ollama; `raw["model"]` carries resolved model name |
-| `text_delta` | `assistant.message.content[].text` | `item.completed` (agent_message) | `text` with `part.text` non-empty (arrives whole, not per-token — same as Codex) | NDJSON chunk with non-empty `message.content` |
-| `tool_call` | `assistant.message.content[].tool_use` | _(not yet emitted)_ | `tool_use` (terminal state `completed` or `error` only — opencode does not stream tool-call starts on the JSON channel) | FCB tool-use loop (ADR-0069 M2): each pending `tool_calls` entry in the Ollama response yields one `tool_call` event with `text=tool_name` and `raw={"name": ..., "args": ...}` before the next HTTP round-trip |
-| `turn_completed` | `result` (subtype=success) | `turn.completed` | synthesised on stdout EOF (opencode's `session.status idle` is internal-only on the JSON channel) | NDJSON line with `done=true`; `usage` carries `prompt_eval_count` / `eval_count` |
-| `error` | `result` (is_error=true) | `turn.failed` or stderr fallback | `error` (drills the nested `{name, data: {message}}` envelope) | `URLError` (Ollama unreachable), `HTTPError` (Ollama returned non-200), or Ollama `{"error": "..."}` in stream |
+| Event | Claude Code source | Codex CLI source | OpenCode source |
+|---|---|---|---|
+| `session_started` | `system.init` | `thread.started` | first `step_start` (carries `sessionID`); subsequent `step_start` dropped |
+| `text_delta` | `assistant.message.content[].text` | `item.completed` (agent_message) | `text` with `part.text` non-empty (arrives whole, not per-token — same as Codex) |
+| `tool_call` | `assistant.message.content[].tool_use` | _(not yet emitted)_ | `tool_use` (terminal state `completed` or `error` only — opencode does not stream tool-call starts on the JSON channel) |
+| `turn_completed` | `result` (subtype=success) | `turn.completed` | synthesised on stdout EOF (opencode's `session.status idle` is internal-only on the JSON channel) |
+| `error` | `result` (is_error=true) | `turn.failed` or stderr fallback | `error` (drills the nested `{name, data: {message}}` envelope) |
 
 Adapter consumers gate features via `engine.capabilities` — a missing
 capability is **degraded mode**, never a crash. Capability keys are
@@ -269,7 +275,7 @@ types via `_emit_os_turn_event()` for full per-turn traceability:
 _emit_os_turn_event(event_type, turn_id, chat_key, persona, **details)
 # e.g.:
 _emit_os_turn_event("os_turn.tool_called", turn_id, chat_key, persona,
-                    engine="hermes", tool_name="web_search", seq=1)
+                    engine="opencode", tool_name="web_search", seq=1)
 ```
 
 The helper is best-effort (never raises) and writes to the forge audit chain
@@ -301,28 +307,30 @@ binaries:
    `engine.inject` to assert the write went through the engine
    (not the legacy stdin fallback) and verifies the second reply
    wins as `final_text`.
-5. **No engine reachable → clear notice** — with neither claude nor
-   Ollama reachable (claude pinned to a non-existent path, Ollama on a
-   dead loopback port), the turn surfaces a clear non-empty notice,
-   never a silent `""` (ADR-0159 "degradation is not silent").
+5. **No claude CLI → clear setup notice** — with no `claude` binary
+   resolvable, the turn stays on `claude_code` and surfaces a clear,
+   non-empty, actionable "run setup" notice, never a silent `""` and
+   never an engine switch (ADR-0159 "degradation is not silent";
+   ADR-2087 removed the Hermes fallback).
 6. **Off-PATH claude resolves to claude_code** — regression for the
-   stripped-PATH → hermes downgrade bug: a working fake `claude`
-   installed **off** `PATH` (registered via the resolver's
-   known-location list) must auto-detect to `claude_code`, never fall
-   to hermes. Hermes is pinned to a dead port so any regression fails
-   loudly.
+   stripped-PATH false-negative: a working fake `claude` installed
+   **off** `PATH` (registered via the resolver's known-location list)
+   must resolve through `helper_model.resolve_claude_bin`, not a bare
+   `shutil.which`.
 
 Wired into `run-all-tests.sh`. Both `bash run-all-tests.sh` and
 `CORVIN_USE_ENGINE_LAYER=0 bash run-all-tests.sh` are 77/77 green —
 the dual-mode parity contract from ADR-0002 holds.
 
-### OpenCodeEngine — third backend (provider-agnostic + local-first via subprocess)
+### OpenCodeEngine — third backend (provider-agnostic, via subprocess)
 
 OpenCode (anomalyco/opencode) is the third `WorkerEngine`
 implementation. Unlike Claude Code and Codex CLI it is **provider-
-agnostic**: a single CLI talks to Claude / OpenAI / Google or to a
-local model through Ollama via opencode's openai-compatible provider
-config. The engine is **opt-in**; default backend stays Claude Code.
+agnostic**: a single CLI talks to whichever provider its own
+`opencode.json` declares (Claude / OpenAI / Google / an OpenAI-compatible
+endpoint). The engine is **opt-in**; default backend stays Claude Code.
+CorvinOS no longer ships or documents a local-Ollama setup for it
+(ADR-2087; the `opencode_ollama` engine id maps to `claude_code`).
 
 **CLI invocation contract:**
 
@@ -333,35 +341,14 @@ opencode run --format json [--dangerously-skip-permissions]
              [-f FILE]* [MESSAGE]
 ```
 
-**Local-first / Ollama setup** (one-time operator step, not the
-plugin's responsibility):
+Pick the model per spawn with `engine.spawn(prompt, model="provider/model")`;
+with no model, opencode's own configured default is used.
 
-1. `ollama serve` reachable on `http://localhost:11434` and at least
-   one model pulled (`ollama pull qwen3:1.7b` or similar).
-2. `~/.config/opencode/opencode.json` declares the provider:
-
-   ```json
-   {
-     "$schema": "https://opencode.ai/config.json",
-     "provider": {
-       "ollama": {
-         "npm": "@ai-sdk/openai-compatible",
-         "name": "Ollama (local)",
-         "options": { "baseURL": "http://localhost:11434/v1" },
-         "models": { "qwen3:8b": {}, "qwen3:1.7b": {} }
-       }
-     }
-   }
-   ```
-
-3. Pick the model per spawn: `engine.spawn(prompt, model="ollama/qwen3:1.7b")`.
-
-**Cloud-backed alternative** (Ollama Cloud, no daemon-sign-in needed):
+**Ollama Cloud provider** (hosted API, not local inference):
 
 The hosted side of `ollama.com` exposes an OpenAI-compatible endpoint
-at `https://ollama.com/v1` with bearer-token auth. A second provider
-entry in the same `opencode.json` reaches it without touching the
-local daemon:
+at `https://ollama.com/v1` with bearer-token auth. A provider entry in
+`opencode.json` reaches it:
 
 ```json
 "ollama-cloud": {
@@ -375,20 +362,16 @@ local daemon:
 ```
 
 opencode's `{env:VAR}` substitution keeps the key out of the config
-file. Wall-clock is roughly an order of magnitude better than a local
-CPU-bound run (≈ 20 s cold / 5 s warm on `minimax-m2.7` vs ≈ 80 s on
-local `qwen3:1.7b`). Test class `OpenCodeLiveE2ECloud` exercises the
+file (≈ 20 s cold / 5 s warm on `minimax-m2.7`). Test class `OpenCodeLiveE2ECloud` exercises the
 path; gated on `CORVIN_OPENCODE_LIVE_CLOUD=1` AND a non-empty
-`OLLAMA_API_KEY` in the env. Note that `ollama run <model>:cloud`
-from the CLI is a SEPARATE flow that requires interactive `ollama
-signin` — the HTTP-compat endpoint is independent of that and is the
-right entry point for any provider-agnostic engine adapter.
+`OLLAMA_API_KEY` in the env.
 
 **Per-chat engine pin via `default_engine`:**
 
 The adapter's `call_claude_streaming()` reads `profile.default_engine` BEFORE the
 Claude-Code-Engine dispatch and routes through the corresponding engine when the
-value is `"opencode"`, `"hermes"`, `"codex"`, or `"copilot"`. Everything else
+value is `"opencode"`, `"codex"`, or `"copilot"`. A legacy `"hermes"` (or other
+ADR-2087-removed id) is mapped to `claude_code` first. Everything else
 (every other persona, the implicit default, any chat without a profile) stays on
 Claude Code unchanged.
 
@@ -453,9 +436,9 @@ is the supported indirection.
   dropped.
 - 3 fake-binary smoke cases (shell-script emitting canned JSON
   events): happy path, error-only path, missing binary.
-- 1 opt-in live case (`CORVIN_OPENCODE_LIVE=1`) — drives the real
-  `opencode` binary against the smallest pulled Ollama model and
-  asserts the PINGOK round-trip.
+- 1 opt-in live case — `OpenCodeLiveE2ECloud` (`CORVIN_OPENCODE_LIVE_CLOUD=1`
+  + `OLLAMA_API_KEY`) drives the real `opencode` binary and asserts the PINGOK
+  round-trip through Ollama Cloud.
 
 The fake-binary helper writes its shebang at byte offset 0 of the
 file. Don't wrap it in `textwrap.dedent` with f-string substitutions
@@ -569,7 +552,11 @@ right shape.
   with the correct locality/network_egress values. An unknown engine
   fails the L34 gate closed when a compliance config exists.
 
-### ADR-0067 M2.1–M2.5 — HermesEngine production parity (2026-05-29)
+### ADR-0067 M2.1–M2.5 — non-Claude OS-turn parity (2026-05-29; Hermes removed by ADR-2087)
+
+ADR-0067 was written for `HermesEngine`; ADR-2087 removed that engine and every
+local-Ollama path. What survives applies to the remaining non-Claude engines
+(OpenCode, Codex, Copilot).
 
 **M2.1 — Compliance gates at OS-turn**
 
@@ -579,29 +566,22 @@ runs three gates in order before `engine.spawn()`:
 2. L34 data-classification — `_check_compliance_or_fail()`
 3. L35 network-egress — `_check_egress_or_fail()`
 
-Trust manifest: `corvin_operator/bridges/shared/agents/trust/hermes.yaml`
-(tier=low, binary_sha256=null, valid 6 months, operator-overridable).
-
-`DEFAULT_ENGINE_COMPLIANCE` in `data_classification.py` now includes:
-```python
-"hermes": EngineCompliance(
-    engine_id="hermes",
-    locality="local",
-    network_egress="none",  # Ollama localhost only
-)
-```
+Trust manifests live in `corvin_operator/bridges/shared/agents/trust/`
+(`claude_code`, `codex_cli`, `copilot`, `opencode`; `hermes.yaml` was deleted
+with the engine). `DEFAULT_ENGINE_COMPLIANCE` no longer lists `hermes`,
+`opencode_ollama` or `claude_code_local` — L34 refuses them as
+`unknown_engine` (see [layer-34-data-classification.md](layer-34-data-classification.md)).
 
 **M2.2 — Per-turn audit events**
 
-New event types in `security_events.py::EVENT_SEVERITY`:
-- `hermes.turn_start` / `hermes.turn_end` / `hermes.turn_error`
-- `hermes.stream_timeout` / `hermes.ollama_unavailable`
+Event types in `security_events.py::EVENT_SEVERITY`:
 - `opencode.turn_start` / `opencode.turn_end` / `opencode.turn_error`
 - `opencode.stream_timeout`
 - `console.engine_setting_updated`
 
-Emitted from `_call_hermes_streaming_via_engine` and
-`_call_opencode_streaming_via_engine` in `adapter.py`.
+Emitted from `_call_opencode_streaming_via_engine` in `adapter.py`. The
+`hermes.*` entries stay in `EVENT_SEVERITY` only so records already on the hash
+chain keep their severity; nothing emits them any more (ADR-2087).
 
 **ADR-0159 M1 — primary-engine auto-detect + "degradation is not silent"**
 
@@ -610,19 +590,24 @@ When no engine was pinned by policy, persona, per-chat `/engine`, or
 dispatch (`adapter.py`, just before the chat-turn quota charge):
 
 ```
-CORVIN_OS_ENGINE env var      →  use it verbatim
-else claude CLI resolvable    →  claude_code
-else                          →  hermes  (logs [engine-auto-detect] … ADR-0159 M1)
+CORVIN_OS_ENGINE env var      →  use it (legacy ids mapped to claude_code)
+else                          →  claude_code
 ```
+
+There is no automatic fallback engine any more (ADR-2087 removed the
+`→ hermes` branch). When the `claude` CLI cannot be resolved the turn stays on
+`claude_code` and returns `adapter.CLAUDE_CLI_MISSING_MESSAGE` — "Claude Code
+CLI not found or not logged in — run `corvin setup` … or set
+CORVIN_CLAUDE_BIN …".
 
 "claude CLI resolvable" is probed through the **hardened resolver**
 `helper_model.resolve_claude_bin` (`CORVIN_CLAUDE_BIN` → `PATH` → known install
 locations such as `~/.local/bin/claude`), **not** a bare `shutil.which("claude")`.
 This is load-bearing: the adapter runs under systemd / `bridge.sh` with a
 stripped `PATH` that lacks `~/.local/bin` (where Claude Code installs the CLI),
-so a bare `which()` returns `None` **even when claude is installed** — silently
-downgrading the OS turn to hermes → Ollama timeout (*"hermes connect error:
-timed out"*) although claude was the intended engine. This is the identical
+so a bare `which()` returns `None` **even when claude is installed** — which,
+before ADR-2087, silently downgraded the OS turn to the local engine although
+claude was the intended engine. This is the identical
 false-negative commit 79de989 fixed for the fail-closed L44 helper path; that
 fix had missed this auto-detect probe (now closed, with the
 `test_engine_autodetect_offpath_claude_resolves_to_claude_code` regression).
@@ -653,38 +638,27 @@ npm-installed `claude` finds the `node` next to it for its shebang. Because this
 happens at runtime, it also fixes installs whose service unit was written
 before this change, with no reinstall.
 
-This lets a fresh install with no Anthropic credentials still boot, defaulting
-to local Ollama. The path must **never end with a silent empty reply** (ADR-0159
-"the degraded path is not silent"). `_call_hermes_streaming_via_engine` therefore
-treats `timed_out` as a first-class surface-a-message condition independent of
-`error_text`: a turn that produced no usable output returns a clear notice, never
-`""`. The two deterministic no-output outcomes are:
-
-- **Ollama reachable but no stream events before the idle watchdog**
-  (`timed_out=True`, `last_event_type==""`) → emits `hermes.stream_timeout` +
-  `hermes.ollama_unavailable` and returns *"No engine reachable: the claude CLI
-  is not installed and Hermes/Ollama did not respond (engine spawn failed …)"*.
-- **Ollama connection refused / HTTP error** (`error_text` set, contains
-  `ollama`/`unavailable`) → emits `hermes.ollama_unavailable` and returns
-  *"Hermes/Ollama is unreachable. Please start `ollama serve` …"*.
-
-A clean stream that genuinely yields empty text (real model returned "") still
-returns `""` — that is a success, not a degradation. Regression guard:
+The path must **never end with a silent empty reply** (ADR-0159 "the degraded
+path is not silent"): a turn without a usable `claude` CLI returns the clear
+setup notice above, never `""`. Regression guard:
 `test_adapter_engine_path.py::test_engine_path_no_engine_reachable_surfaces_clear_notice`.
 
-**M2.3 — `/engine hermes` switcher**
+**M2.3 — `/engine` switcher**
 
-`engine_switch.py` now accepts `hermes` and model aliases
-(`hermes-fast`, `hermes-balanced`, `hermes-capable`, `hermes-large`,
-`local-hermes`) as valid delegation worker preferences. Sets
-`CORVIN_DELEGATE_PREF_ENGINE=hermes` in the orchestrator env.
+`engine_switch.py` accepts `claude`, `codex`, `opencode`, `cloud` (opencode +
+`ollama-cloud/qwen3-coder-next`) and `off`. `/engine hermes` and the other
+ADR-2087-removed ids (`local`, `ollama`, `hermes-*` …) are not an error: they
+pin `claude_code` and print a short notice that Hermes was removed.
 
 **M2.4 — Console engine selector**
 
 `core/console/corvin_console/routes/engine.py`:
 - `GET  /v1/console/settings/engine` — reads `tenant.corvin.yaml::spec.default_engine`
-- `PUT  /v1/console/settings/engine` — writes `spec.default_engine` + `spec.hermes_model`
-- `GET  /v1/console/settings/engine/health` — probes Ollama; returns `base_url_hash` (16-hex prefix only)
+- `PUT  /v1/console/settings/engine` — writes `spec.default_engine` (always
+  `claude_code`; a legacy value in the file is rewritten) and, when given, the
+  provider/model under `spec.engine_models`. `spec.hermes_model` is ignored.
+- `GET  /v1/console/settings/engine/health` — returns a static
+  `{healthy: true, message: "Claude Code is ready"}` (no probe)
 - `GET  /v1/console/settings/engine/catalog` — `{engines, models}`; `models` is the
   static, hand-curated `_CLAUDE_MODELS` list (`claude-opus-5` / `claude-sonnet-5`
   default / `claude-haiku-4-5-20251001`). Commit 243690e8 removed the auto-refresh
@@ -700,42 +674,21 @@ returns `""` — that is a success, not a degradation. Regression guard:
 Adapter dispatch resolution order (new): `per-chat profile.default_engine`
 → `tenant.corvin.yaml::spec.default_engine` → `ClaudeCodeEngine` fallback.
 
-**Console web-chat engine routing (round-6 fix).** The owner-console web-chat
-(`chat_runtime.stream_turn` — the default landing page and primary UX) now
-drives the OS turn through the Layer-22 WorkerEngine layer when the tenant
-selected `spec.default_engine = hermes`: `HermesEngine` streams from local
-Ollama over HTTP (no subprocess, no Anthropic API key). Before this fix the
-web-chat only drove `claude_code` and a hermes tenant got a "switch to Claude
-Code" dead-end on every turn — the README/SetupGate "zero-egress / NO-API-KEY
-Hermes" onboarding produced a console that could not answer. The two
-console-drivable OS engines are now `claude_code` (direct `claude -p`
-subprocess, byte-for-byte unchanged) and `hermes` (WorkerEngine → Ollama). The
-blocking `HermesEngine.spawn` generator runs in a worker thread, drained off the
-asyncio loop via `asyncio.to_thread` (mirrors `_call_hermes_streaming_via_engine`).
-The four fail-closed pre-spawn gates (L44/LIP/L34/L35 via
-`_spawn_gates.check_console_spawn_or_refusal`) run for BOTH engines; the hermes
-path is classified with `engine_id=hermes` (locality=local / egress=none).
-Other engines (opencode/codex/copilot) still surface the honest "not drivable
-by the web-chat" message. Live E2E:
-`core/console/tests/test_chat_hermes_engine_e2e.py` (gated on Ollama reachable).
-
-**Engine substitution is audited (F-E2, 2026-09-07).** The console resolves the
-OS engine per turn in `chat_runtime._resolve_os_engine(tenant_id)` →
-`(configured, effective, reason)`; `_effective_os_engine()` swaps a
-`claude_code`-configured tenant onto `hermes` when the claude binary is missing
-(`claude-binary-missing`) or unauthenticated (`claude-not-authenticated`). Every
-such swap writes `os_turn.engine_substituted {configured, effective, reason}` on
-the tenant's console audit chain (`corvin_console.audit.system_event`, positive
-allow-list registered via `forge.security_events.register_event_allowlist`). The
-pre-turn WebSocket guard (`get_engine_unavailable_message`) resolves with
-`audit=False`, so one turn produces exactly one record. Regression:
-`core/console/tests/test_os_engine_substitution_audit.py`.
+**Console web-chat engine routing.** The owner-console web-chat
+(`chat_runtime.stream_turn`) drives exactly one OS engine directly:
+`claude_code` (`_DIRECT_OS_ENGINES = {"claude_code"}`). The round-6
+`HermesEngine` web-chat path and the F-E2 automatic `claude_code` → `hermes`
+substitution were removed by ADR-2087: a stored `spec.default_engine` naming a
+removed engine is mapped to `claude_code` on read, and when the `claude` binary
+is missing or unauthenticated the turn stays on `claude_code` and
+`_engine_unavailable_message` returns an actionable error pointing at Setup.
+Other engines (opencode/codex/copilot) still surface the honest "not drivable by
+the web-chat" message. `os_turn.engine_substituted` is no longer emitted; its
+`EVENT_SEVERITY` entry and allow-list stay for historical records.
 
 **M2.5 — Prometheus metrics**
 
 `corvin_operator/bridges/shared/engine_metrics.py` — lazy `prometheus_client`:
-- `corvin_bridge_hermes_turns_total{outcome, persona}`
-- `corvin_bridge_hermes_turn_duration_seconds{outcome}`
 - `corvin_bridge_opencode_turns_total{outcome, persona}`
 - `corvin_bridge_opencode_turn_duration_seconds{outcome}`
 
@@ -819,15 +772,14 @@ then wraps the worker's `final_text` in its own reply formatting.
 
 ### MCP surface
 
-Five tools on the `corvin_delegate` MCP server, one per supported
-engine. Tool names map to engine_ids:
+Four tools on the `corvin_delegate` MCP server, one per supported
+engine (`delegate_hermes` was removed by ADR-2087). Tool names map to engine_ids:
 
 | Tool | Engine | Use case |
 |---|---|---|
 | `mcp__corvin_delegate__delegate_claude_code` | ClaudeCodeEngine | clean-context Claude reasoning pass (no pollution of OS history) |
 | `mcp__corvin_delegate__delegate_codex` | CodexCliEngine (`codex exec --json`) | isolated code-gen runs |
-| `mcp__corvin_delegate__delegate_opencode` | OpenCodeEngine (`opencode run --format json`) | provider-agnostic; pick Ollama (`model=ollama/qwen3:8b`) for local-first / Ollama Cloud (`model=ollama-cloud/qwen3-coder-next`) for cheap-but-cloud |
-| `mcp__corvin_delegate__delegate_hermes` | HermesEngine (Ollama HTTP) | zero-egress local inference — CONFIDENTIAL-capable (L34); no cloud API key; use when data must not leave the host or for cost-zero batch tasks |
+| `mcp__corvin_delegate__delegate_opencode` | OpenCodeEngine (`opencode run --format json`) | provider-agnostic; the model comes from opencode's own config, or e.g. Ollama Cloud (`model=ollama-cloud/qwen3-coder-next`) for cheap-but-cloud |
 | `mcp__corvin_delegate__delegate_copilot` | CopilotCliEngine (`copilot -p`) | GitHub Copilot CLI — zero incremental cost for Copilot Business/Enterprise; `model` field sets task type: `shell`, `git`, `gh` (prompt-prefix steering), or omit for general chat; requires `copilot` binary + subscription; ADR-0071 |
 
 Each tool takes `prompt` (required), and optional `model`, `budget_s`
@@ -845,7 +797,7 @@ the worker subprocess' cwd). Returns a structured envelope:
 | `core/delegate/corvin_delegate/delegation.py` | `run_delegate(...)` core — wraps the Layer-22 `WorkerEngine.spawn`/`collect()` API into a single sync call. Caller-side validation (engine, prompt size, model length, budget clamp, absolute working_dir, env-extra shape) raises `DelegateError`; engine-side failures (timeout, missing binary, non-zero exit) land on `DelegateResult.error` with `ok=False` |
 | `core/delegate/corvin_delegate/audit.py` | Three metadata-only emitters with per-event allow-list + global `_FORBIDDEN_FIELDS` set — `delegate.invoked` / `delegate.completed` / `delegate.failed` land in the unified hash chain via `forge.security_events.write_event` |
 | `core/delegate/corvin_delegate/mcp_server.py` | stdio JSON-RPC 2.0 MCP server (mirror of forge / skill-forge transport). Four `delegate_*` tools with identical input schemas |
-| `corvin_operator/cowork/lib/resolver.py::_inject_delegate_capability` | Resolver hook — every persona with `delegate_enabled: true` inherits the five tools + the routing brief in `append_system` + the `corvin_delegate` MCP server in `mcp_servers` |
+| `corvin_operator/cowork/lib/resolver.py::_inject_delegate_capability` | Resolver hook — every persona with `delegate_enabled: true` inherits the four tools + the routing brief in `append_system` + the `corvin_delegate` MCP server in `mcp_servers` |
 | `corvin_operator/cowork/personas/orchestrator.json` | Bundle persona — opts into `delegate_enabled: true` plus forge + skill-forge + recall + outcome-grading. The OS-mode default |
 | `corvin_operator/forge/forge/security_events.py::EVENT_SEVERITY` | `delegate.invoked` / `delegate.completed` / `delegate.failed` registered for the unified `voice-audit verify` to cover |
 
@@ -856,10 +808,10 @@ worker-turn (executes). The orchestrator persona's `append_system`
 spells out the heuristic — delegate only when (a) clean context is
 needed and the OS history shouldn't be polluted, (b) the task is
 pure code-gen and Codex structurally fits, (c) the task is
-privacy- or cost-sensitive and OpenCode + Ollama is the right
-backend, or (d) the task carries CONFIDENTIAL data that must not
-leave the host (`delegate_hermes` — zero egress, L34 qualified).
-Otherwise the OS answers directly.
+cost-sensitive and OpenCode on a cheaper provider is the right
+backend. There is no bundled zero-egress worker any more (ADR-2087):
+CONFIDENTIAL/SECRET work is refused by L34 unless the tenant declared
+its own admissible engine. Otherwise the OS answers directly.
 
 ### Audit chain (three events, metadata only)
 
@@ -954,9 +906,9 @@ test entries, all green standalone).
 - **Don't add a generic `delegate(engine=..., prompt=...)` MCP tool
   alongside the four engine-specific ones.** Engine selection at
   call site (tool name) is structurally clearer than a free-form
-  string parameter. An LLM consulting `mcp__corvin_delegate__delegate_hermes`
-  knows it's picking Hermes; an LLM staring at a generic
-  `delegate(engine="hermes", ...)` may pick the engine_id wrong.
+  string parameter. An LLM consulting `mcp__corvin_delegate__delegate_codex`
+  knows it's picking Codex; an LLM staring at a generic
+  `delegate(engine="codex_cli", ...)` may pick the engine_id wrong.
   The four-tool surface is the contract.
 
 ### References
@@ -1542,7 +1494,7 @@ SDK-billed calls.
 
 The OS-turn (`adapter._call_claude_streaming_via_engine`) and the
 delegated worker engines (Claude Code / Codex CLI / OpenCode /
-HermesEngine via Layer 29's MCP surface) all stay on the user's default model
+Copilot via Layer 29's MCP surface) all stay on the user's default model
 (Opus / Sonnet). The cost-split touches helper subprocesses only —
 the real reasoning + code-execution turns keep the model the user
 picked. This separation is intentional: Haiku is great at
@@ -1931,9 +1883,8 @@ The run lands in the session workdir, passes the existing ACS gate chain
 and budget envelope (`spec.web_chat.budget` may override `max_loops`,
 `max_depth`, `max_total_workers`, `max_wall_time`), and worker progress is
 streamed into the chat WebSocket. OS = management, workers = execution.
-Worker model: inherits the tenant's user model (ADR-0112); when the OS
-engine is Hermes/Ollama, `chat_runtime` pins `worker_model` to the same
-local model so workers stay fully local and no Anthropic API key is needed.
+Worker model: inherits the tenant's user model (ADR-0112). (The pin that kept
+workers on a local Hermes/Ollama model went with that engine, ADR-2087.)
 
 **Budget defaults sit AT the ceilings (2026-07-20, maintainer decision —
 supersedes the 2026-07-16 "generous-but-below-ceiling" raise).** A task must
@@ -1976,7 +1927,7 @@ Each spawn is additionally deadlined against the envelope's remaining
 `max_wall_time`, because `BudgetEnvelope.check()` only runs between manager
 loops. Before this, workers read both knobs from the manager allocation —
 which never carries them — so the Settings values silently never arrived and
-the runtime hard-clamped to 1800 s (claude) / 3600 s (hermes).
+the runtime hard-clamped to 1800 s / 3600 s per engine.
 
 **Reaching a budget is a bounded stop, not a failure.** ACS already returns
 `status="budget_exhausted"` with `budget_breach` naming the limit; the console
@@ -2167,7 +2118,7 @@ delegate-*-flags explicitly per the deny-by-default rule.
 | File | Cases | Coverage |
 |---|---|---|
 | `core/delegate/tests/test_skill_context.py` | 26 | Bool-coerce, asymmetric resolve, env-floor reads, body-escape hardening (no `</delegated_skill>` escape), retag swap, count-skills, persona-default deny |
-| `core/delegate/tests/test_mcp_config_builder.py` | 29 | Spec builder, Claude/Codex/OpenCode/Hermes materialisers, file modes 0o600/0o700, TOML escape, dispatcher routing, env-floor wins-over-arg |
+| `core/delegate/tests/test_mcp_config_builder.py` | 29 | Spec builder, Claude/Codex/OpenCode materialisers, file modes 0o600/0o700, TOML escape, dispatcher routing, env-floor wins-over-arg |
 | `core/delegate/tests/test_delegation.py` (Layer-30 cases) | 16 | Skill block prepended to prompt, env-floor=0 beats arg=true, Codex gets `CODEX_HOME`, Claude gets `mcp_config_path`, no-cap → no MCP, audit fires metadata-only, allow-list rejects skill-body / MCP-command / env smuggling |
 
 All 141 tests in the delegate plugin (Layer 29 + 29.1 + 29.2 +
@@ -2237,8 +2188,9 @@ All 141 tests in the delegate plugin (Layer 29 + 29.1 + 29.2 +
 > "Creating New Diagrams" convention in testing-and-docs.md — refine with a
 > real flow illustration as a follow-up).
 
-ADR-0181 lets a tenant assign a non-Anthropic provider (`ollama_local`,
-`ollama_cloud`, `openrouter`) to the `claude_code` engine. Claude Code (the
+ADR-0181 lets a tenant assign a non-Anthropic provider (`ollama_cloud`,
+`openrouter`; the `ollama_local` provider was removed by ADR-2087) to the
+`claude_code` engine. Claude Code (the
 `claude` CLI) only ever speaks the Anthropic Messages API
 (`POST /v1/messages`, Anthropic's own SSE event sequence) — pointing
 `ANTHROPIC_BASE_URL` straight at an OpenAI-compatible endpoint fails
@@ -2265,10 +2217,10 @@ operator deployment:
     Not implemented: vision/image content blocks, prompt caching
     directives, extended thinking blocks — none load-bearing for Claude
     Code's own coding-agent loop against a text + tool-use backend.
-  - `ProxyTarget.disable_reasoning` sends `"think": false` to Ollama's
-    OpenAI-compat endpoint for qwen3-style thinking models (harmless no-op
-    on servers that ignore the field) — same latency fix already applied to
-    Hermes/`summarize.py`'s native-API calls.
+  - `ProxyTarget.disable_reasoning` sends `"think": false` upstream
+    (harmless no-op on servers that ignore the field). Its only production
+    caller was the local-Ollama provider (ADR-2087); no caller sets it today,
+    the flag stays in the proxy and its tests.
 - **`corvin_operator/bridges/shared/engine_models.py::resolve_claude_code_provider_env(tenant_id)`**
   is the **single source of truth** for the whole redirect, called by both
   `adapter.py::_build_spawn_env` (OS-turn path) and
@@ -2277,9 +2229,10 @@ operator deployment:
   `ProviderSpec.proxy_base_url` (external proxy) first, else — for
   `model_source in ("ollama", "openrouter")` — the built-in bridge above,
   else the provider's raw `base_url` (assumed already Anthropic-compatible).
-  When no model is configured for `claude_code` and the provider is
-  `openrouter` (no safe default exists, unlike `ollama`'s `qwen3:8b`
-  fallback), the proxy is **not** started — `"auto"` is not a valid
+  When no model is configured for `claude_code` (no safe default exists for
+  `ollama_cloud` or `openrouter`; the local `qwen3:8b` fallback went with
+  ADR-2087), the proxy is **not** started and a warning asks the operator to
+  pick a model on the Engines page — `"auto"` is not a valid
   OpenRouter model id (the real slug is `"openrouter/auto"`), so starting it
   anyway would make every turn fail with an opaque upstream 400 instead of
   falling through to Claude Code's existing routing.
@@ -2304,7 +2257,7 @@ operator deployment:
 
 **BYOK key types** (`corvin_operator/bridges/shared/provider_keys.py::CANONICAL_ENV_VAR`):
 `openrouter_api_key` → `OPENROUTER_API_KEY`, `ollama_api_key` →
-`OLLAMA_API_KEY` (Ollama Cloud's bearer token; local Ollama needs none).
+`OLLAMA_API_KEY` (Ollama Cloud's bearer token).
 Names MUST match the `credential_env` fields in
 `corvin_operator/bundle/config-templates/engine_model_registry.yaml`'s
 `openrouter`/`ollama_cloud` provider entries exactly, or a saved key
@@ -2333,10 +2286,9 @@ one place that reads.
   `acs_runtime._apply_provider_redirect` goes through the exact same
   `resolve_claude_code_provider_env` the OS-turn path uses (live credential
   resolution + proxy auto-start), so the two spawn paths can't silently
-  re-drift apart. All tests in this file monkeypatch
-  `adapter._read_cc_local_cfg` to return `None` — without it they are not
-  hermetic against a host with a real ADR-0126 `claude_code_local` redirect
-  configured in `~/.corvin`.
+  re-drift apart. (The `adapter._read_cc_local_cfg` monkeypatch these tests
+  needed for the ADR-0126 `claude_code_local` redirect went with that redirect,
+  ADR-2087.)
 
 ### What you, as Claude Code, must NOT do (ADR-0181 M3)
 
@@ -2565,10 +2517,12 @@ Provider attribution is RESOLVED, never guessed, and every row carries a
 | `unresolved` | nothing claims this id; `provider` stays `"unknown"` | none |
 
 An id nothing matches stays `unknown` rather than being pattern-matched into a
-plausible-looking provider, and the panel says so in words. `ollama/llama3`
-resolves to nothing ON PURPOSE: `ollama_local` and `ollama_cloud` both carry that
-family name, so the prefix is genuinely ambiguous and picking one would be a
-coin flip presented as a measurement. `_engine_config_provider` refuses the same
+plausible-looking provider, and the panel says so in words. A family prefix
+such as `ollama/llama3` resolves only when exactly ONE registered provider id
+carries that family name — today that is `ollama_cloud` (while `ollama_local`
+was also registered, before ADR-2087, the prefix was ambiguous and resolved to
+nothing ON PURPOSE: picking one would be a coin flip presented as a
+measurement). `_engine_config_provider` refuses the same
 way when two of a row's engines disagree.
 
 **The `id_prefix` branch was dead when written.** It compared the prefix against
@@ -2581,7 +2535,8 @@ Real numbers observed on the maintainer host: 5 spans, one model
 (`claude-sonnet-5`, 100%, `registry`), 1,143,763 tokens across
 input/output/cache-read/cache-write. A synthetic-chain probe under a temp
 `CORVIN_HOME` (the real chain untouched) confirmed the multi-provider path:
-`qwen3:8b` → `ollama_local` (`tenant_config`) 50%, `openai/gpt-5` → `openai`
+`qwen3:8b` → `ollama_local` (`tenant_config`, a provider since removed by
+ADR-2087) 50%, `openai/gpt-5` → `openai`
 (`id_prefix`) 33.3%, and a delegated worker span counted separately from its
 parent OS turn.
 
@@ -2873,7 +2828,8 @@ present-but-rejected key (401) does NOT set it and stays visible.
 was `extra="forbid"` and required an AWP envelope (`apiVersion`/`kind`/
 `metadata`); `routes/engine.py::_save_tenant_yaml` writes a bare `spec:` mapping
 carrying `engine_models`, `default_worker_engine`, `web_chat`, `learning`,
-`claude_code_local`, `context_engineering`, `features_whitelist`. Result: 12
+`claude_code_local` (no longer written since ADR-2087), `context_engineering`,
+`features_whitelist`. Result: 12
 validation errors, `TenantConfigMalformed`, and **100 % of
 `POST /v1/tenants/{tid}/runs` terminal-`failed` before an engine was spawned.**
 

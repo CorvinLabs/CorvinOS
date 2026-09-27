@@ -897,8 +897,8 @@ def spawn_a2a_worker(
         "OPENAI_API_KEY": "",
         "OPENAI_APIKEY": "",
         "ANTHROPIC_API_KEY": "",
-        "ANTHROPIC_AUTH_TOKEN": "",    # cleared: adapter sets this for claude_code_local
-        "ANTHROPIC_BASE_URL": "",      # cleared: prevents SSRF redirect to internal Ollama
+        "ANTHROPIC_AUTH_TOKEN": "",    # cleared: never inherit an OS-turn auth token
+        "ANTHROPIC_BASE_URL": "",      # cleared: prevents SSRF redirect to an internal endpoint
         "CORVIN_STT_OPENAI_KEY": "",
         "GMAIL_APP_PASSWORD": "",
         "GMAIL_USER": "",              # PII: email address from service.env

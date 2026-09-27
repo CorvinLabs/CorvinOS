@@ -3,7 +3,7 @@ ADR-0087 M8 Tests — Universal Engine Capability Matrix Refactor
 
 Tier-1: Enum validation, matrix construction
 Tier-2: Backward compat (bool checks), capability queries
-Tier-3: Full matrix consistency across all 5 engines
+Tier-3: Full matrix consistency across all 4 engines
 """
 
 import pytest
@@ -163,7 +163,7 @@ class TestEngineCapabilityMatrixTier2:
         Then: returns False
         """
         matrix = EngineCapabilityMatrix(
-            engine_id="hermes",
+            engine_id="custom_engine",
             mcp=None,
         )
 
@@ -191,7 +191,7 @@ class TestEngineCapabilityMatrixTier2:
         Then: returns None
         """
         matrix = EngineCapabilityMatrix(
-            engine_id="hermes",
+            engine_id="custom_engine",
             mcp=None,
         )
 
@@ -212,7 +212,7 @@ class TestCapabilityMatcherTier2:
             "claude_code": EngineCapabilityMatrix("claude_code", hooks="native"),
             "codex": EngineCapabilityMatrix("codex", hooks="teb_brokered"),
             "opencode": EngineCapabilityMatrix("opencode", hooks="teb_brokered"),
-            "hermes": EngineCapabilityMatrix("hermes", hooks="teb_brokered"),
+            "custom_engine": EngineCapabilityMatrix("custom_engine", hooks="teb_brokered"),
             "copilot": EngineCapabilityMatrix("copilot", hooks="teb_brokered"),
         }
 
@@ -225,43 +225,43 @@ class TestCapabilityMatcherTier2:
         """
         Given: 5 engine matrices
         When: engines_supporting("mid_stream_inject", "buffered") called
-        Then: returns ["codex", "opencode", "hermes"]
+        Then: returns ["codex", "opencode", "custom_engine"]
         """
         matrices = {
             "claude_code": EngineCapabilityMatrix("claude_code", mid_stream_inject="stdin_json"),
             "codex": EngineCapabilityMatrix("codex", mid_stream_inject="buffered"),
             "opencode": EngineCapabilityMatrix("opencode", mid_stream_inject="buffered"),
-            "hermes": EngineCapabilityMatrix("hermes", mid_stream_inject="buffered"),
+            "custom_engine": EngineCapabilityMatrix("custom_engine", mid_stream_inject="buffered"),
             "copilot": EngineCapabilityMatrix("copilot", mid_stream_inject=None),
         }
 
         matcher = CapabilityMatcher(matrices)
         result = matcher.engines_supporting("mid_stream_inject", "buffered")
 
-        assert set(result) == {"codex", "opencode", "hermes"}
+        assert set(result) == {"codex", "opencode", "custom_engine"}
 
     def test_engines_supporting_none_capability(self):
         """
         Given: 5 engine matrices
         When: engines_supporting("multi_turn", None) called
-        Then: returns ["codex", "opencode", "hermes"]
+        Then: returns ["codex", "opencode", "custom_engine"]
         """
         matrices = {
             "claude_code": EngineCapabilityMatrix("claude_code", multi_turn="native"),
             "codex": EngineCapabilityMatrix("codex", multi_turn=None),
             "opencode": EngineCapabilityMatrix("opencode", multi_turn=None),
-            "hermes": EngineCapabilityMatrix("hermes", multi_turn=None),
+            "custom_engine": EngineCapabilityMatrix("custom_engine", multi_turn=None),
             "copilot": EngineCapabilityMatrix("copilot", multi_turn="sequential_wrapper"),
         }
 
         matcher = CapabilityMatcher(matrices)
         result = matcher.engines_supporting("multi_turn", None)
 
-        assert set(result) == {"codex", "opencode", "hermes"}
+        assert set(result) == {"codex", "opencode", "custom_engine"}
 
 
 # ============================================================================
-# TIER-3: Full Matrix Consistency (All 5 Engines)
+# TIER-3: Full Matrix Consistency (All 4 Engines)
 # ============================================================================
 
 class TestCapabilityMatrixE2E:
@@ -282,9 +282,16 @@ class TestCapabilityMatrixE2E:
             # Should not raise
             assert matrix.validate_all() is True
 
+    def test_removed_hermes_engine_absent_from_matrix(self):
+        """ADR-2087: Hermes (local Ollama) is gone from the canonical matrix."""
+        assert "hermes" not in CANONICAL_CAPABILITY_MATRIX
+        assert set(CANONICAL_CAPABILITY_MATRIX) == {
+            "claude_code", "codex", "opencode", "copilot",
+        }
+
     def test_e2e_all_engines_can_parse_system_prompt(self):
         """
-        Tier-3: All 5 engines have system_prompt capability.
+        Tier-3: All 4 engines have system_prompt capability.
         Given: CANONICAL_CAPABILITY_MATRIX
         When: system_prompt capability queried on all engines
         Then: all return non-None value (flag/message_role/text_prefix)
@@ -325,13 +332,6 @@ class TestCapabilityMatrixE2E:
                 "hooks": "teb_brokered",
                 "skills": "prompt_prefix",
                 "system_prompt": "text_prefix",
-            },
-            "hermes": {
-                "mid_stream_inject": "buffered",
-                "hooks": "teb_brokered",
-                "skills": "system_message",
-                "system_prompt": "message_role",
-                "mcp": None,
             },
             "copilot": {
                 "mid_stream_inject": None,

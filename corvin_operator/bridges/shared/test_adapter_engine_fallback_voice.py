@@ -8,7 +8,7 @@ ALL_CAPS env-var names read aloud sound like "just reading the command
 line" instead of a sentence. Root cause: every engine's streaming-fallback
 function (call_claude, _call_claude_streaming_via_engine,
 _call_codex_streaming_via_engine, _call_opencode_streaming_via_engine,
-_call_hermes_streaming_via_engine, call_claude_streaming's ClaudeCodeEngine
+call_claude_streaming's ClaudeCodeEngine
 guard) returned single hardcoded strings used as BOTH the visible chat text
 and (via extract_voice_override + the short-text fast path in
 build_voice_summary) the spoken text, with no natural-language adaptation.
@@ -101,10 +101,10 @@ def _section_source_sweep(adapter) -> None:
         ("_call_claude_streaming_via_engine", adapter._call_claude_streaming_via_engine, 4),
         ("_call_codex_streaming_via_engine", adapter._call_codex_streaming_via_engine, 2),
         ("_call_opencode_streaming_via_engine", adapter._call_opencode_streaming_via_engine, 2),
-        ("_call_hermes_streaming_via_engine", adapter._call_hermes_streaming_via_engine, 4),
         # call_claude_streaming is the turn-task wrapper (ADR-2081); the body
-        # carrying the fallback text is _call_claude_streaming_impl.
-        ("_call_claude_streaming_impl", adapter._call_claude_streaming_impl, 1),
+        # carrying the fallback text is _call_claude_streaming_impl. Two
+        # overrides: ClaudeCodeEngine unavailable + claude CLI missing (ADR-2087).
+        ("_call_claude_streaming_impl", adapter._call_claude_streaming_impl, 2),
     ]
 
     for name, fn, expected in targets:

@@ -91,8 +91,8 @@ def _load_preset(name: str) -> dict[str, Any]:
 class TestNoEgressToAnthropic(unittest.TestCase):
     """Test #1: EU_PRODUCTION preset blocks api.anthropic.com via L35."""
 
-    def test_ollama_preset_forbids_anthropic(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+    def test_http_preset_forbids_anthropic(self):
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         gate = EgressGate.from_tenant_config(cfg)
 
         self.assertTrue(gate.policy.enabled, "preset must enable L35")
@@ -101,7 +101,7 @@ class TestNoEgressToAnthropic(unittest.TestCase):
         self.assertIn("api.openai.com", gate.policy.forbidden_hosts)
 
     def test_anthropic_call_raises_egress_denied(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         gate = EgressGate.from_tenant_config(cfg)
         with self.assertRaises(EgressDenied) as cm:
             gate.validate_or_raise("api.anthropic.com",
@@ -111,9 +111,9 @@ class TestNoEgressToAnthropic(unittest.TestCase):
 
     def test_unlisted_host_also_blocked(self):
         """default_action: deny means even unknown hosts fail closed."""
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         gate = EgressGate.from_tenant_config(cfg)
-        d = gate.validate("example.com", engine_id="opencode_ollama")
+        d = gate.validate("example.com", engine_id="opencode_http")
         self.assertFalse(d.allowed)
         self.assertEqual(d.matched_rule, "default_deny")
 
@@ -129,7 +129,7 @@ class TestClassificationFailsClosed(unittest.TestCase):
     """Test #2: SECRET classification fails closed against external engines."""
 
     def test_secret_against_external_engine_blocked(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         guard = DataFlowGuard.from_tenant_config(cfg)
         with self.assertRaises(DataFlowDenied) as cm:
             guard.validate_or_raise(
@@ -143,7 +143,7 @@ class TestClassificationFailsClosed(unittest.TestCase):
         self.assertFalse(decision.allowed)
 
     def test_confidential_blocked_against_us_cloud_under_preset(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         guard = DataFlowGuard.from_tenant_config(cfg)
         # Preset tightens INTERNAL → [local] too.
         d = guard.validate(
@@ -153,7 +153,7 @@ class TestClassificationFailsClosed(unittest.TestCase):
         self.assertFalse(d.allowed)
 
     def test_internal_blocked_against_us_cloud_under_preset(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         guard = DataFlowGuard.from_tenant_config(cfg)
         d = guard.validate(
             classification=DataClassification.INTERNAL,
@@ -164,7 +164,7 @@ class TestClassificationFailsClosed(unittest.TestCase):
     def test_public_blocked_against_us_cloud_under_preset(self):
         """The preset tightens EVERY row to [local] — even PUBLIC.
         This is the "tight EU_PRODUCTION" stance."""
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         guard = DataFlowGuard.from_tenant_config(cfg)
         d = guard.validate(
             classification=DataClassification.PUBLIC,
@@ -173,11 +173,11 @@ class TestClassificationFailsClosed(unittest.TestCase):
         self.assertFalse(d.allowed)
 
     def test_internal_allowed_against_local_engine(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         guard = DataFlowGuard.from_tenant_config(cfg)
         d = guard.validate(
             classification=DataClassification.INTERNAL,
-            engine_id="opencode_ollama",
+            engine_id="opencode_http",
         )
         self.assertTrue(d.allowed)
 
@@ -192,13 +192,13 @@ class TestThreeLayerDefence(unittest.TestCase):
     """
 
     def test_combined_property_passes_for_allowed_engine(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
 
         # Layer 1: ADR-0007 identity gate
         residency = cfg["spec"]["data_residency"]
         allowed_engines = residency["allowed_engines"]
         forbidden_engines = residency["forbid_engines"]
-        engine_id = "opencode_ollama"
+        engine_id = "opencode_http"
         self.assertIn(engine_id, allowed_engines)
         self.assertNotIn(engine_id, forbidden_engines)
 
@@ -216,7 +216,7 @@ class TestThreeLayerDefence(unittest.TestCase):
         self.assertTrue(d35.allowed)
 
     def test_combined_property_fails_for_claude_engine(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
 
         # Layer 1: identity — claude_code is in forbid_engines
         residency = cfg["spec"]["data_residency"]
@@ -242,7 +242,7 @@ class TestThreeLayerDefence(unittest.TestCase):
         """If an operator accidentally adds claude_code to allowed_engines,
         L34 + L35 must still refuse. This is the "defence in depth"
         regression gate."""
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
+        cfg = _load_preset("tenant.corvin.eu-production-http.yaml")
         # Tamper with identity layer (simulate misconfig)
         cfg["spec"]["data_residency"]["allowed_engines"].append("claude_code")
 
@@ -472,14 +472,9 @@ class TestAuditChainSurvivesRotation(unittest.TestCase):
 class TestPresetsLoadCleanly(unittest.TestCase):
     """Lift gate: both shipped EU_PRODUCTION presets parse without error."""
 
-    def test_ollama_preset_loads(self):
-        cfg = _load_preset("tenant.corvin.eu-production-ollama.yaml")
-        self.assertEqual(cfg["spec"]["data_residency"]["zone"], "EU")
-        # All three layers construct without errors
-        DataFlowGuard.from_tenant_config(cfg)
-        EgressGate.from_tenant_config(cfg)
-        from audit_sealer import policy_from_tenant_config
-        policy_from_tenant_config(cfg)
+    def test_ollama_preset_removed(self):
+        # ADR-2087: the local-Ollama EU preset is no longer shipped.
+        self.assertFalse((_PRESETS_DIR / "tenant.corvin.eu-production-ollama.yaml").exists())
 
     def test_http_preset_loads(self):
         cfg = _load_preset("tenant.corvin.eu-production-http.yaml")

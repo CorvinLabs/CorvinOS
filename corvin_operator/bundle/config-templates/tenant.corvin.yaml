@@ -36,7 +36,7 @@ spec:
   # SECRET (literal API keys / private keys / passwords) is the only row kept
   # local-only by default; it fires rarely and stops credentials from egressing.
   # To enforce EU/local data residency, TIGHTEN the matrix below (see the
-  # tenant.corvin.eu-production-ollama.yaml preset). The matrix and
+  # tenant.corvin.eu-production-http.yaml preset). The matrix and
   # engine_compliance entries override entry-by-entry — leave commented out
   # to keep the permissive module defaults.
   data_classification:
@@ -47,14 +47,10 @@ spec:
     #   CONFIDENTIAL: [local]
     #   SECRET:       [local]
     engine_compliance: []
-    # - engine_id: opencode_ollama
-    #   locality: local
-    #   network_egress: local
-    #   notes: "qwen3:8b via local Ollama"
-    # - engine_id: opencode
-    #   locality: local
-    #   network_egress: local
-    #   notes: "pinned to --provider ollama in this tenant"
+    # - engine_id: my_custom_engine
+    #   locality: eu_cloud
+    #   network_egress: eu_cloud
+    #   notes: "user-defined engine on an EU-hosted endpoint"
 
   # ── Primary OS engine (ADR-0159 M1) ─────────────────────────────────────────
   # Controls which engine handles the OS turn (the main conversation).
@@ -62,8 +58,8 @@ spec:
   # Set explicitly (optional, always claude_code):
   #   default_engine: claude_code  # Anthropic Claude (requires API key + claude CLI)
   #
-  # Note: Hermes (local Ollama) and LocalEngine removed in v2.0.
-  # Old configs with hermes auto-correct to claude_code on boot.
+  # Note: Hermes and all local Ollama inference were removed (ADR-2087).
+  # A stored hermes / local-Ollama engine id is mapped to claude_code on read.
 
   # ── Sandbox tier (ADR-0159 M2) ───────────────────────────────────────────────
   # Controls Forge tool isolation.  Auto-detected at boot (bwrap → docker → none).

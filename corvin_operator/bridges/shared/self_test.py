@@ -408,49 +408,6 @@ def _check_engines(*, quick: bool) -> list[CheckResult]:
     return out
 
 
-def _check_hermes_ollama() -> list[CheckResult]:
-    """Layer 22 / ADR-0066 — HermesEngine: probe local Ollama availability.
-
-    WARNING when Ollama is not reachable (it is an optional engine —
-    adapter starts normally without it; HermesEngine delegations fail
-    gracefully with a ``hermes.ollama_unavailable`` audit event).
-    INFO when reachable; reports the count of pulled models.
-
-    Privacy: only model count lands in detail — never model names or
-    any user-visible content. Base URL probe is a loopback GET with
-    a 2 s socket timeout.
-    """
-    import urllib.error
-    import urllib.request
-
-    base_url = (
-        os.environ.get("CORVIN_OLLAMA_BASE_URL")
-        or os.environ.get("OLLAMA_HOST")
-        or "http://localhost:11434"
-    ).rstrip("/")
-
-    try:
-        import json
-        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2) as resp:
-            data = json.loads(resp.read())
-        model_count = len(data.get("models") or [])
-        return [CheckResult(
-            "engine.hermes_ollama", INFO, True,
-            f"ollama reachable, {model_count} model(s) pulled",
-        )]
-    except urllib.error.URLError:
-        return [CheckResult(
-            "engine.hermes_ollama", WARNING, False,
-            f"ollama not reachable at {base_url} (HermesEngine optional — "
-            "adapter starts normally; delegate_hermes calls will fail gracefully)",
-        )]
-    except Exception as e:  # noqa: BLE001
-        return [CheckResult(
-            "engine.hermes_ollama", WARNING, False,
-            f"ollama probe error: {type(e).__name__}",
-        )]
-
-
 def _check_copilot_cli() -> list[CheckResult]:
     """Layer 22 / ADR-0071 — CopilotCliEngine: probe `copilot` binary availability.
 
@@ -1493,6 +1450,9 @@ def _check_compliance_manifest() -> list[CheckResult]:
     )
 
     # M4 (ADR-0057): eu_production deployments must pin spec.compliance_manifest.min_version
+    # ``eu_production_ollama`` is a LEGACY value (its local-Ollama preset was
+    # removed by ADR-2087). A tenant that still carries it keeps the strict EU
+    # posture — dropping it here would silently relax the check (fail-open).
     _EU_PROFILES = frozenset({"eu_production", "eu_production_ollama"})
     if _deployment_profile in _EU_PROFILES and not tenant_compliance_cfg.get("min_version"):
         out.append(CheckResult(
@@ -1541,7 +1501,8 @@ def _check_compliance_manifest() -> list[CheckResult]:
 def _check_operator_declaration() -> list[CheckResult]:
     """ADR-0057 / Component 3: verify operator Art. 28-30 declaration.
 
-    CRITICAL when deployment_profile is eu_production / eu_production_ollama
+    CRITICAL when deployment_profile is eu_production (or the legacy
+    eu_production_ollama value, still treated as EU production)
     AND spec.operator_declaration is missing or dpia_completed is false.
     INFO / skipped for all other profiles.
     """
@@ -1842,7 +1803,6 @@ def run_self_test(*, quick: bool = False) -> SelfTestResult:
         checks.extend(_check_nbac_genesis())
         checks.extend(_check_vault())
         checks.extend(_check_engines(quick=quick))
-        checks.extend(_check_hermes_ollama())
         checks.extend(_check_copilot_cli())
         checks.extend(_check_mcp_servers(quick=quick))
         checks.extend(_check_artifacts(quick=quick))

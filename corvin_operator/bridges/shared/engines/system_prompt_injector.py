@@ -1,7 +1,7 @@
 """
 ADR-0087 M6: Unified System-Prompt Slot
 
-Goal: All 5 engines accept a unified `system_prompt: str | None` parameter.
+Goal: All 4 engines accept a unified `system_prompt: str | None` parameter.
 Transport varies per engine; logic is abstracted.
 
 Unified Contract:
@@ -13,14 +13,12 @@ Unified Contract:
 
 Per-Engine Transport:
   - Claude Code: --append-system-prompt flag (Anthropic SDK)
-  - Hermes: JSON system role message ({"role": "system", "content": "…"})
   - Codex: <SYSTEM>...</SYSTEM> block prefix (text-based)
   - OpenCode: <SYSTEM>...</SYSTEM> block prefix (text-based)
   - Copilot: [SYSTEM]...[/SYSTEM] marker (text-based)
 
 Capability Strings (frozen for M8 matrix):
   - claude_code: system_prompt="flag" (--append-system-prompt)
-  - hermes: system_prompt="message_role" (JSON system role)
   - codex: system_prompt="text_prefix" (<SYSTEM> block)
   - opencode: system_prompt="text_prefix" (<SYSTEM> block)
   - copilot: system_prompt="text_prefix" ([SYSTEM] marker)
@@ -78,8 +76,8 @@ class SystemPromptInjector:
 
         Args:
             system_prompt: System prompt text, or None (skip injection)
-            transport: Engine-specific transport (dict for Claude/Hermes, str for Codex/OpenCode/Copilot)
-            engine_id: Engine ID ("claude_code", "hermes", "codex", "opencode", "copilot")
+            transport: Engine-specific transport (dict for Claude, str for Codex/OpenCode/Copilot)
+            engine_id: Engine ID ("claude_code", "codex", "opencode", "copilot")
 
         Returns:
             Modified transport with system prompt injected (or original if no change)
@@ -106,7 +104,7 @@ class SystemPromptInjector:
             return transport
 
         # Validate engine_id
-        if engine_id not in ["claude_code", "hermes", "codex", "opencode", "copilot"]:
+        if engine_id not in ["claude_code", "codex", "opencode", "copilot"]:
             raise ValueError(f"Unknown engine_id: {engine_id}")
 
         # Normalize prompt
@@ -124,8 +122,6 @@ class SystemPromptInjector:
         # Inject per engine format
         if engine_id == "claude_code":
             return self._inject_claude_code(system_prompt, transport)
-        elif engine_id == "hermes":
-            return self._inject_hermes(system_prompt, transport)
         elif engine_id in ["codex", "opencode"]:
             return self._inject_codex_like(system_prompt, transport, engine_id)
         elif engine_id == "copilot":
@@ -141,7 +137,6 @@ class SystemPromptInjector:
 
         Per-Engine Detection Logic:
             - claude_code: Check for --append-system-prompt flag in argv
-            - hermes: Check for {"role": "system"} message in messages list
             - codex/opencode: Check for <SYSTEM>...</SYSTEM> block in prompt string
             - copilot: Check for [SYSTEM]...[/SYSTEM] marker in prompt string
 
@@ -161,14 +156,6 @@ class SystemPromptInjector:
                         "--append-system-prompt" in cmd
                         or "--append-system-prompt-file" in cmd
                     )
-                return False
-
-            elif engine_id == "hermes":
-                # Check for system role in messages list
-                if isinstance(transport, dict) and "messages" in transport:
-                    messages = transport["messages"]
-                    if isinstance(messages, list) and messages:
-                        return messages[0].get("role") == "system"
                 return False
 
             elif engine_id in ["codex", "opencode"]:
@@ -265,43 +252,6 @@ class SystemPromptInjector:
         except OSError:
             return None
 
-    def _inject_hermes(self, system_prompt: str, transport: Dict) -> Dict:
-        """
-        Inject into Hermes transport: add system role message.
-
-        Transport format (dict with "messages" list):
-            {"messages": [{"role": "user", "content": "…"}, ...]}
-
-        Returns: Modified dict with system role prepended
-
-        Logic:
-            - If system role already at [0] → skip (idempotent)
-            - Otherwise → prepend {"role": "system", "content": system_prompt}
-
-        Raises:
-            ValueError: If messages invalid or system_prompt too large
-        """
-        if not isinstance(transport, dict):
-            raise ValueError("Hermes transport must be a dict")
-
-        if "messages" not in transport:
-            raise ValueError("Hermes transport missing 'messages' key")
-
-        if len(system_prompt.encode()) > 8 * 1024:
-            raise ValueError("System prompt too large for Hermes (max 8 KB)")
-
-        result = transport.copy()
-        messages = result.get("messages", [])
-
-        if not isinstance(messages, list):
-            raise ValueError("messages must be a list")
-
-        # Prepend system message
-        system_message = {"role": "system", "content": system_prompt}
-        result["messages"] = [system_message] + messages
-
-        return result
-
     def _inject_codex_like(self, system_prompt: str, transport: str, engine_id: str) -> str:
         """
         Inject into Codex/OpenCode transport: prepend <SYSTEM>...</SYSTEM> block.
@@ -363,11 +313,10 @@ class SystemPromptInjector:
         """
         Return capability string for engine (for M8 capability matrix).
 
-        Returns: "flag" | "message_role" | "text_prefix"
+        Returns: "flag" | "text_prefix"
 
         Mapping:
             - claude_code → "flag" (--append-system-prompt)
-            - hermes → "message_role" (JSON system role)
             - codex → "text_prefix" (<SYSTEM> block)
             - opencode → "text_prefix" (<SYSTEM> block)
             - copilot → "text_prefix" ([SYSTEM] marker)
@@ -377,7 +326,6 @@ class SystemPromptInjector:
         """
         capabilities = {
             "claude_code": "flag",
-            "hermes": "message_role",
             "codex": "text_prefix",
             "opencode": "text_prefix",
             "copilot": "text_prefix",

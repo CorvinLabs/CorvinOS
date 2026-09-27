@@ -90,7 +90,7 @@ CorvinOS Project Root
 │  │  ├─ engine_control/             (Tier-1, execution layer)
 │  │  │  ├─ __init__.py
 │  │  │  ├─ plugin.py
-│  │  │  ├─ engine_registry.py       ← Native/Hermes/TDE/ACS
+│  │  │  ├─ engine_registry.py       ← Native/TDE/ACS
 │  │  │  ├─ provider_model.py        ← ADR-0181
 │  │  │  ├─ routing_policy.py
 │  │  │  └─ test/

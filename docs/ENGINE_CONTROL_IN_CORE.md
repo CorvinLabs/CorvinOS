@@ -2,6 +2,7 @@
 ## Model Selection, Provider Routing, Engine-to-Request Binding
 
 **Date:** 2026-07-26  
+**Note (2026-09-27):** the Hermes engine was removed by ADR-2087; it no longer appears in the registry sketch below.  
 **Decision:** Engine control (L22 engine layer, ADR-0181 provider model) belongs in Tier-1 Core.
 
 ---
@@ -9,7 +10,7 @@
 ## What is Engine Control?
 
 **Core decisions made per request:**
-1. Which engine does this go to? (Claude? Hermes? Custom?)
+1. Which engine does this go to? (Claude? Custom?)
 2. Which model in that engine? (Haiku, Sonnet, Opus?)
 3. What routing policy applies? (TDE? Native? ACS?)
 4. What cost/token budget? (Per-user? Per-tenant? Per-request?)
@@ -34,7 +35,7 @@
 
 ### Solution: Engine Control is Tier-1
 - **Required:** Every request needs engine selection
-- **Strategic:** Hermes vs Claude selection, cost optimization, quality vs speed tradeoffs
+- **Strategic:** engine selection, cost optimization, quality vs speed tradeoffs
 - **IP:** Custom provider routing, per-user model selection
 - **Not replaceable:** But extensible via hooks
 
@@ -52,7 +53,6 @@ class EngineRegistry:
     def __init__(self):
         self.engines = {
             "native": ClaudeEngine(),         # Tier-1, default
-            "hermes": HermesEngine(),         # Tier-1, fallback
             "tde": TDERouter(),               # Tier-1, smart
             "acs": ACSManager(),              # Tier-1, parallel
         }
@@ -84,7 +84,6 @@ class ProviderModelRegistry:
             ("claude", "haiku"): ClaudeHaikuExecutor(),
             ("claude", "sonnet"): ClaudeSonnetExecutor(),
             ("claude", "opus"): ClaudeOpusExecutor(),
-            ("hermes", "base"): HermesBaseExecutor(),
         }
     
     def get_executor(self, provider: str, model: str) -> Executor:
@@ -247,7 +246,7 @@ policy.disable_model_selection()
 # → No such method (would break every request)
 
 # ❌ Can't bypass routing policy
-request.force_engine = "hermes"
+request.force_engine = "tde"
 execute(request)
 # → Ignored; RoutingPolicy.select() always runs
 
@@ -293,7 +292,7 @@ corvinctl engine disable selection
 corvinctl engine force-direct-mode alice@company.com
 # Error: RoutingPolicy is immutable
 
-# ❌ Remove native/hermes engines
+# ❌ Remove tier-1 engines
 corvinctl engine uninstall native
 # Error: Cannot remove tier-1 engines
 ```
@@ -319,7 +318,6 @@ Status: ✅ All engines healthy
 │
 └─ Engines
    ├─ native (Claude) ✅ healthy, 100% available
-   ├─ hermes (Fallback) ✅ healthy, 95% available
    ├─ tde (Smart Routing) ✅ healthy, 1,234 delegations/min
    └─ acs (Parallel) ✅ healthy, 50 active workers
 

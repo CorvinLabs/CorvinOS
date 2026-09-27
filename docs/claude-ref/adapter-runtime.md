@@ -67,7 +67,9 @@ language. Two long-standing behaviours that broke this were removed:
   the fallback for a profile with no pin.
 
 **Degraded fallback is bounded, never full text.** When *no* LLM backend is
-reachable (no Claude auth AND Hermes down/cold), `summarize.py` cannot summarise.
+reachable (no Claude auth, or a local-only tenant — `CORVIN_TTS_LOCAL_ONLY` or an
+egress policy that denies `api.anthropic.com`, ADR-2087), `summarize.py` cannot
+summarise.
 It used to return `naive_truncate` = the whole answer whitespace-collapsed —
 which is exactly a verbatim readout. It now hard-caps that to `max_chars` via
 `_cap_to_budget` (whole sentences up to the budget, at least one, hard-cut only a
@@ -112,7 +114,7 @@ are English. That is the documented reason it was demoted to last-resort on
 **Budgets must fit the backend, not just the parent cap (VOICE-F8, 2026-07-25).**
 The degraded path is only rare if the CLI backend actually gets a usable budget.
 VOICE-F7 fixed a cap overflow by *shrinking* the child budgets (CLI 90 s → 45 s)
-so CLI + Hermes fit inside a 120 s parent cap. Measured `claude -p` latency for a
+so CLI + the (since removed) local Hermes stage fit inside a 120 s parent cap. Measured `claude -p` latency for a
 real summary call (10.5 KB system prompt, haiku) is 23 s / 27 s / 75 s / >180 s
 across five runs — median ≈ 50 s. The 45 s budget therefore lost most of the
 time, and **23 of 23 field summaries in ~27 h degraded to near-verbatim** — the
@@ -120,24 +122,20 @@ exact behaviour this section says was removed. The fit-the-cap guard test stayed
 green throughout, because summing under the cap is necessary but not sufficient.
 
 Current budgets are derived bottom-up from that measurement, and the parent caps
-were raised to fit them: main ladder CLI 90 s + Hermes 45 s = 135 s inside a
-150 s cap (`adapter.py::build_voice_summary`, `routes/voice.py::
-_TTS_SUMMARIZE_TIMEOUT_S`); annex ladder CLI 40 s + Hermes 35 s = 75 s inside
-90 s. `summarize.py::_MEASURED_CLI_P50_S` records the measurement and
+were raised to fit them: main summary CLI 90 s inside a 150 s cap
+(`adapter.py::build_voice_summary`, `routes/voice.py::_TTS_SUMMARIZE_TIMEOUT_S`);
+annex CLI 40 s inside 90 s. (The Hermes stage that used to share these caps was
+removed by ADR-2087; the ladder is now `cli` → `structural`.) `summarize.py::_MEASURED_CLI_P50_S` records the measurement and
 `test_summarize.py::test_cli_budget_covers_measured_latency` fails if a budget
 drops to or below it. When touching these numbers, **re-measure first** — a
 budget under the median silently disables a backend without failing anything.
 
-**Keeping the backend warm.** Beyond the budgets, the bounded degraded path
-should only fire for an active user on a COLD local model at the first voice
-note after boot (a cold qwen3:8b load overruns the summary timeout). Two things prevent
-that: (1) the L44 house-rules classifier runs on *every* task with `keep_alive`
-30m and uses the *same* model the summary resolves to (`_resolve_default_model`),
-so steady-state it is always resident; (2) the adapter fires a fire-and-forget
-`summarize.py --prewarm` in a daemon thread at boot (`CORVIN_VOICE_PREWARM=0` to
-opt out) to cover the boot gap before the first task. Both are fail-soft: a
-Claude-CLI-only or cloud install has no Ollama, so prewarm is a no-op and the
-CLI backend serves the summary.
+**No local model to keep warm (ADR-2087).** The summary ladder is `cli` →
+`structural`; the local Hermes/Ollama stage, its boot-time `summarize.py
+--prewarm` and `CORVIN_VOICE_PREWARM` were removed. `--prewarm` is still accepted
+and prints `prewarm-skipped`. A local-only tenant goes straight to the bounded
+structural fallback — the `cli` backend has no egress check of its own, so it is
+never spawned there.
 
 The console `/voice/segment` "Read the full answer aloud" button is a deliberate
 exception — it reads the raw answer verbatim by design and is a separate,
@@ -270,8 +268,8 @@ Fix: the loop tracks `last_event_type`. When the most recent event was a
 `0` disables the tool backstop) instead of `ADAPTER_STREAM_IDLE_TIMEOUT`. This
 keeps the short hang-detection for the "awaiting tokens" state while letting a
 healthy long-running tool/delegation finish, with a finite backstop against a
-genuinely stuck tool. Applied identically across the Claude, OpenCode, and
-Hermes engine paths. The cancellation message/log distinguishes
+genuinely stuck tool. Applied identically across the Claude and OpenCode
+engine paths (the Hermes path was removed by ADR-2087). The cancellation message/log distinguishes
 `awaiting tokens` from `awaiting tool result`.
 
 E2E coverage: `test_adapter_stream_idle.py` —
@@ -410,7 +408,7 @@ All of it is structural — no flag, no env kill-switch.
 
 | Finding | Mechanism | Where | Contract |
 |---|---|---|---|
-| **R2-E1** | **Prompt-head sentinel** | `agents/claude_code.py::guard_prompt_head` (single shared helper) — called at EVERY `claude -p` spawn site: `adapter.py` `_build_claude_args` + `_call_claude_streaming_via_engine`, `corvin_console/task_worker_pool.py::_worker_stdin_payload`, `corvin_console/chat_runtime.py` (turn stdin + ADR-0213 context-sync note), `corvin_console/routes/assistant.py` (added R3-C1), `../orchestration/tde/worker_ipc.py` (added R3), `../voice/scripts/summarize.py::_run_claude_print` | The CLI expands a user message whose **first byte is `/`** into a slash command / skill on EVERY transport — positional-after-`--` and the stdin `stream-json` user message alike. Proven: a chat instruction `/pwn` executed `.claude/commands/pwn.md` from the persona workdir under `bypassPermissions`; `/cost` returned the operator's subscription usage with `num_turns == 0` (the CLI answered, the model never ran). Every site now prepends ONE fixed, non-slash sentinel line (`User input:\n`), **unconditionally** — independent of whether a CEL brief / observer block / volatile prefix happens to be present, because those are conditional and this must not be. The user's text follows verbatim, so `/pwn` reaches the model as literal text. Fail-closed: `_worker_stdin_payload` raises rather than build an unguarded payload, and `summarize.py` raises `OSError` (degrading to the Hermes / no-LLM ladder) if the helper is not importable. The guard is idempotent. |
+| **R2-E1** | **Prompt-head sentinel** | `agents/claude_code.py::guard_prompt_head` (single shared helper) — called at EVERY `claude -p` spawn site: `adapter.py` `_build_claude_args` + `_call_claude_streaming_via_engine`, `corvin_console/task_worker_pool.py::_worker_stdin_payload`, `corvin_console/chat_runtime.py` (turn stdin + ADR-0213 context-sync note), `corvin_console/routes/assistant.py` (added R3-C1), `../orchestration/tde/worker_ipc.py` (added R3), `../voice/scripts/summarize.py::_run_claude_print` | The CLI expands a user message whose **first byte is `/`** into a slash command / skill on EVERY transport — positional-after-`--` and the stdin `stream-json` user message alike. Proven: a chat instruction `/pwn` executed `.claude/commands/pwn.md` from the persona workdir under `bypassPermissions`; `/cost` returned the operator's subscription usage with `num_turns == 0` (the CLI answered, the model never ran). Every site now prepends ONE fixed, non-slash sentinel line (`User input:\n`), **unconditionally** — independent of whether a CEL brief / observer block / volatile prefix happens to be present, because those are conditional and this must not be. The user's text follows verbatim, so `/pwn` reaches the model as literal text. Fail-closed: `_worker_stdin_payload` raises rather than build an unguarded payload, and `summarize.py` raises `OSError` (degrading to the no-LLM structural fallback) if the helper is not importable. The guard is idempotent. |
 | **R2-E2** | **Legacy `call_claude()` prompt off argv** | `adapter.py::call_claude` → `_build_claude_args(..., prompt_via_stdin=True, spawn_prompt_out=…)` | The legacy image/document fallback (reached from the engine-streaming `except` branch) still built argv WITH the prompt — world-readable via `/proc/<pid>/cmdline` for the process lifetime, plus the ~128 KiB E2BIG ceiling. The prompt now travels on **stdin** (`communicate(input=…)`, plain text — no `--input-format`, so the whole of stdin is the user message). `spawn_prompt_out` hands the caller the exact sentinel-guarded text the builder produced, so the two can never drift. |
 | **R2-B4** | **Total dispatcher peeks** | `adapter.py::_peek_envelope` (used by `_route_key` + `_peek_side_channel`) | The peeks caught only `(OSError, JSONDecodeError)`. A non-object envelope (`AttributeError` on `.get`) or non-UTF-8 bytes (`UnicodeDecodeError`) raised out of `submit_inbox_item` **before the future was attached**: the whole poll tick died and the msg_id stayed pinned in `_in_flight` for `IN_FLIGHT_TTL` (3600 s), so the message could never be retried. `_peek_envelope` returns `None` for anything that is not a JSON object in valid UTF-8; the runner then quarantines it through the normal poison path. |
 
@@ -610,12 +608,12 @@ is user-managed state and genuinely lives there.
 
 Every bridge turn's task record is opened by the `call_claude_streaming`
 wrapper — before context assembly (60–80 s per turn, measured 2026-09-27) and
-for EVERY engine (claude_code, hermes, opencode, codex; previously only the
+for EVERY engine (claude_code, opencode, codex; previously only the
 claude_code path created one). It is `running` from pickup
 (`task.started` with `stage: preparing` plus `owner_pid`/`owner_start` — the
 owning adapter or bg-worker process); every engine path logs
 `task.engine_started` when it runs (claude/codex/opencode with the process
-`pid`, hermes without — it has no subprocess), which the console reads as
+`pid`), which the console reads as
 "engine running". The wrapper closes it exactly once. Engine paths and gates
 only *report* an attempt's outcome (`_TurnTask.report`, keyed by attempt;
 `_turn_refused(reason)` before every refusal/gate/engine-error `return`): a

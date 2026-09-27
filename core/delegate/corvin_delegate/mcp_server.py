@@ -54,7 +54,6 @@ _TOOL_NAME_TO_ENGINE: dict[str, str] = {
     "delegate_claude_code": "claude_code",
     "delegate_codex":       "codex_cli",
     "delegate_opencode":    "opencode",
-    "delegate_hermes":      "hermes",
     "delegate_copilot":     "copilot",
 }
 _TOOL_NAMES: tuple[str, ...] = tuple(_TOOL_NAME_TO_ENGINE.keys())
@@ -86,7 +85,7 @@ _INPUT_SCHEMA_BASE: dict[str, Any] = {
             "type": "string",
             "description": (
                 "Optional engine-specific model id (e.g. "
-                "'ollama/qwen3:8b' for opencode, 'gpt-5-codex' for codex)."
+                "'anthropic/claude-sonnet-5' for opencode, 'gpt-5-codex' for codex)."
             ),
         },
         "budget_s": {
@@ -287,19 +286,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
         "delegate_opencode": (
             "Delegate a sub-task to the open-source OpenCode CLI "
             "(anomalyco/opencode). Provider-agnostic — use the 'model' "
-            "field to pick Ollama (local-first / privacy) or any "
-            "OpenAI-compatible cloud. The worker has no bridge / skill / "
+            "field to pick any configured provider (e.g. Anthropic, "
+            "OpenAI-compatible clouds, Ollama Cloud). The worker has no bridge / skill / "
             "audit access; it is pure prompt-in / text-out."
-        ),
-        "delegate_hermes": (
-            "Delegate a sub-task to a local NousResearch Hermes model via "
-            "Ollama (localhost:11434). Fully local — zero network egress, "
-            "no cloud API key required. Qualifies for CONFIDENTIAL task "
-            "classes under the L34 data-classification matrix. Use when "
-            "data must not leave the host or for cost-zero inference. "
-            "Override the model via the 'model' field (Ollama tag or "
-            "alias: hermes-fast/hermes-balanced/hermes-capable/hermes-large). "
-            "Requires Ollama to be running; fails gracefully if absent."
         ),
         "delegate_copilot": (
             "Delegate a sub-task to GitHub Copilot (github/copilot-cli). "

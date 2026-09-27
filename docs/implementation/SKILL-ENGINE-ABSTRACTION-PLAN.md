@@ -2,7 +2,7 @@
 
 **Status:** Phase A (k=3 in LDD loop)  
 **Estimated:** 6 weeks, 1200 LoC, 40+ tests  
-**Phases:** A (RPC API), B (Hermes), C (Copilot/OpenCode)  
+**Phases:** A (RPC API), ~~B (Hermes)~~ removed by ADR-2087, C (Copilot/OpenCode)  
 **Dependencies:** ADR-0598, ADR-0599, ADR-0600, ADR-0601, ADR-0602  
 
 ---
@@ -107,7 +107,7 @@ class SkillInvocationRouter:
         """
         Dispatch to correct handler by engine.
         For Phase A: all engines → same handler (service).
-        For Phase B/C: Hermes/Copilot-specific logic (if needed).
+        For Phase C: Copilot/OpenCode-specific logic (if needed).
         """
         return await self.service.invoke_skill(request)
 ```
@@ -217,87 +217,13 @@ class SkillSystemIntegration:
 
 ---
 
-## Phase B: Hermes Engine Integration (Weeks 3–4)
+## Phase B: Hermes Engine Integration — REMOVED (ADR-2087)
 
-### Goal
-Wire Hermes daemon to call `SkillInvocationService`. Async feedback loop. Session persistence.
-
-### Deliverables
-
-| File | LoC | Purpose | Dependencies |
-|------|-----|---------|--------------|
-| `core/engine/hermes_integration.py` | 300 | Hermes Skill wiring | Phase A service |
-| `core/engine/hermes_feedback_emitter.py` | 150 | Async feedback channel | Phase A service |
-| `operator/hermes_daemon/skill_boot.py` | 100 | Session persistence | Phase A |
-| **Tests** | 200 | 15+ integration tests | all above |
-| **Total** | **750** | | |
-
-### New/Modified Files
-
-#### 1. `core/engine/hermes_integration.py` (~300 LoC)
-
-```python
-class HermesSkillIntegration:
-    def __init__(self, service: SkillInvocationService):
-        self.service = service
-        self.event_emitter = LearningEventEmitter()
-    
-    async def intake_task(self, task: Task) -> None:
-        """Route task via os.delegation_router Skill."""
-        request = SkillInvocationRequest(...)
-        response = await self.service.invoke_skill(request)
-        task.routing_decision = response.output
-    
-    async def adapt_context(self, task: Task) -> None:
-        """Adapt context via os.context_adapter Skill."""
-        # Similar: route through service
-    
-    async def emit_outcome(self, task: Task, outcome: TaskOutcome) -> None:
-        """Emit feedback for Skill-grading (non-blocking)."""
-        await self.event_emitter.emit_async(...)
-```
-
-#### 2. `core/engine/hermes_feedback_emitter.py` (~150 LoC)
-
-```python
-class HermesFeedbackEmitter:
-    """Emit LearningEvents from Hermes task outcomes."""
-    
-    async def emit_async(self, feedback: LearningEvent) -> None:
-        """Fire-and-forget event emission."""
-        # Queue to EventEmitter (ADR-0314)
-        # Skill-grader picks it up async
-        # Never blocks Hermes
-```
-
-#### 3. `operator/hermes_daemon/skill_boot.py` (~100 LoC)
-
-```python
-async def boot_skill_state(tenant_id: str) -> Dict[str, Any]:
-    """Load Skill state from disk on daemon restart."""
-    # Load ~/.corvin/tenants/<tenant>/skills/*/grading_stats.json
-    # Pass to Skill registry
-    # Hermes resumes with prior learning state
-```
-
-### Tests (200 LoC, 15+)
-
-#### Integration
-- `test_hermes_skill_routing.py` — Hermes routes via Skill, audit logged
-- `test_hermes_skill_context.py` — Hermes adapts context via Skill
-- `test_hermes_feedback_loop.py` — Outcome emitted, Skill grader sees it
-- `test_hermes_session_persistence.py` — Daemon restarts, Skill state intact
-
-#### Adversarial
-- `test_hermes_skill_timeout.py` — Skill timeout → Hermes fallback (no hang)
-- `test_hermes_feedback_missing.py` — Missing feedback → Hermes continues (graceful)
-
-### Verification Gate (Phase B)
-
-- ✅ Hermes routes 100 tasks via Skill
-- ✅ Feedback emitted for each task
-- ✅ Skill scores include Hermes runs
-- ✅ Daemon restart preserves Skill state
+Phase B wired the Hermes daemon (local Ollama) to `SkillInvocationService`.
+ADR-2087 removed Hermes and all local Ollama inference and supersedes ADR-0599,
+so this phase is dropped. Nothing under `core/engine/hermes_*` or
+`operator/hermes_daemon/` is to be built. The multi-engine goals continue in
+Phase C (Copilot / OpenCode) and Phase D.
 
 ---
 
@@ -356,12 +282,12 @@ from core.engine.skill_invocation_service import SkillInvocationService
 
 - ✅ `gh corvin skill invoke` works
 - ✅ OpenCode Python import works
-- ✅ A/B test: same Skill v1.2 across Claude Code, Hermes, Copilot, OpenCode
+- ✅ A/B test: same Skill v1.2 across Claude Code, Copilot, OpenCode
 - ✅ Audit events all chained (all engines)
 
 ---
 
-## Phase D: Multi-Engine Feedback + Audit Unification (Concurrent with B/C)
+## Phase D: Multi-Engine Feedback + Audit Unification (Concurrent with C)
 
 ### Files
 
@@ -376,7 +302,7 @@ from core.engine.skill_invocation_service import SkillInvocationService
 ### Timeline
 
 - **Weeks 1–2 (Phase A):** RPC API, Claude Code wiring
-- **Weeks 3–4 (Phase B + D):** Hermes + feedback ingestion + unified audit (parallel)
+- **Weeks 3–4 (Phase D):** feedback ingestion + unified audit (Phase B removed, ADR-2087)
 - **Weeks 5–6 (Phase C + D):** Copilot/OpenCode + final feedback/audit wiring
 
 ---
@@ -403,7 +329,6 @@ from core.engine.skill_invocation_service import SkillInvocationService
 - Real Skill-invocation-service
 - Real audit-backend (in-memory for tests)
 - Real Claude Code wiring
-- Hermes daemon boot (Phase B+)
 - A/B test across engines (Phase C+)
 
 ### Tier 5 (Adversarial) — Attack vectors, <10s per test
@@ -426,12 +351,10 @@ Week 2  Phase A-3: Claude Code wiring
         Phase A-4: Audit integration
         Tier 3–4 green ✓
         
-Week 3  Phase B-1: Hermes daemon wiring
-        Phase D-1: Feedback ingestion
+Week 3  Phase D-1: Feedback ingestion
         Tier 3 green ✓
 
-Week 4  Phase B-2: Session persistence
-        Phase D-2: Unified audit
+Week 4  Phase D-2: Unified audit
         Tier 4–5 green ✓
 
 Week 5  Phase C-1: Copilot CLI
@@ -459,7 +382,6 @@ Week 6  Phase C-3: A/B test
 - ✅ Single, unified audit chain (all systems)
 - ✅ Multi-engine feedback integration working
 - ✅ A/B test support proven (same Skill across engines)
-- ✅ Session persistence for Hermes (state survives restart)
 
 ### Docs
 - ✅ docs-as-definition-of-done (API reference, examples, CLI help)
@@ -478,7 +400,6 @@ Week 6  Phase C-3: A/B test
 | Risk | Mitigation | Owner |
 |------|-----------|-------|
 | Phase A overruns | Pre-implement Phase A models in parallel | shumway |
-| Hermes timeout cascade | Explicit phase timeouts + fallback heuristics | shumway |
 | Audit-backend bottleneck | Async queue + batching + date partitioning | shumway |
 | Tenant isolation breach | Per-request validation + adversarial tests | shumway |
 | Copilot feedback missing (Phase C) | Document as Phase C+1 (deferred); A/B test still works without feedback | shumway |

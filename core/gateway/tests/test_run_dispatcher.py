@@ -378,12 +378,12 @@ class GatewayComputeQuotaTests(unittest.TestCase):
 
         The pool is spent by charging the counter DIRECTLY, not by driving `limit` real
         dispatches. Every dispatch runs the L44 house-rules gate, which adjudicates the
-        prompt with an LLM against the one local Ollama — driving 10 of them made this
+        prompt with an LLM (then a local Ollama, removed by ADR-2087) — driving 10 made this
         single test issue 10 LLM calls and saturated that shared resource for the whole
         run-all-tests.sh suite (measured: unrelated gateway, completion-E2E and Node
         E2E suites started timing out, 3 failures -> 9). What this test is actually
         about is the GATE WIRING: that _run_one consults the meter and refuses. One
-        dispatch proves that; ten only prove Ollama is busy.
+        dispatch proves that; ten only prove the classifier is busy.
         """
         import sys as _s
         _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator"))

@@ -15,7 +15,7 @@ def test_compile_returns_none_for_empty_block():
         return
 
     assert SkillCompiler.compile(None, "claude_code") is None
-    assert SkillCompiler.compile("", "hermes_engine") is None
+    assert SkillCompiler.compile("", "opencode_cli") is None
     assert SkillCompiler.compile("   ", "codex_cli") is None
 
 
@@ -26,16 +26,6 @@ def test_claude_code_uses_markdown_format():
 
     skills_block = "<auto_skill name=\"test\">content</auto_skill>"
     result = SkillCompiler.compile(skills_block, "claude_code")
-    assert result == skills_block
-
-
-def test_hermes_uses_markdown_format():
-    """Hermes receives standard markdown format (prepended to system role)."""
-    if not HAS_DEPS:
-        return
-
-    skills_block = "<auto_skill name=\"debug\">debug-content</auto_skill>"
-    result = SkillCompiler.compile(skills_block, "hermes_engine")
     assert result == skills_block
 
 
@@ -86,15 +76,6 @@ def test_capability_for_claude_code():
     assert cap == SkillCompiler.CAPABILITY_APPEND_SYSTEM_PROMPT
 
 
-def test_capability_for_hermes():
-    """Hermes uses system_message capability."""
-    if not HAS_DEPS:
-        return
-
-    cap = SkillCompiler.capability_for_engine("hermes_engine")
-    assert cap == SkillCompiler.CAPABILITY_SYSTEM_MESSAGE
-
-
 def test_capability_for_copilot():
     """Copilot uses prompt_prefix capability."""
     if not HAS_DEPS:
@@ -118,7 +99,7 @@ def test_should_inject_via_system_prompt_all_engines():
     if not HAS_DEPS:
         return
 
-    for engine in ["claude_code", "hermes_engine", "codex_cli", "opencode_cli", "copilot_cli"]:
+    for engine in ["claude_code", "codex_cli", "opencode_cli", "copilot_cli"]:
         assert SkillCompiler.should_inject_via_system_prompt(engine) is True
 
 

@@ -413,7 +413,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await app.state.dispatcher.recover_pending()
     except Exception:
         pass
-    # L44 house-rules classifier health check — surfaces missing Ollama models
+    # L44 house-rules classifier health check — surfaces an unusable classifier
     # at startup so operators know BEFORE users hit fail-closed blocks.
     try:
         import sys as _sys, os as _os

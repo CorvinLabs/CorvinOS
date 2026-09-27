@@ -11,11 +11,13 @@ Slash-command flow (in_chat_commands.js, owner-only):
 * ``/engine``                  — show current preference + supported engines
 * ``/engine claude``           — pin claude_code as worker default
 * ``/engine codex``            — pin codex_cli
-* ``/engine opencode``         — pin opencode (default model: ollama/qwen3:8b)
+* ``/engine opencode``         — pin opencode (its own configured default model)
 * ``/engine cloud``            — pin opencode + ollama-cloud/qwen3-coder-next
-* ``/engine hermes``           — pin hermes (fully-local via Ollama, zero egress, CONFIDENTIAL-capable)
-* ``/engine hermes-fast``      — pin hermes + hermes-fast model alias (qwen3:1.7b)
 * ``/engine off``              — clear the override; orchestrator decides freely
+
+``/engine hermes`` (and the other engines removed by ADR-2087 — ``local``,
+``ollama``, ``hermes-*`` …) is not an error: it pins ``claude_code`` and the
+CLI prints a short notice that Hermes was removed.
 
 Storage
 -------
@@ -104,22 +106,13 @@ ENGINE_ALIASES: dict[str, dict[str, str | None]] = {
     "codex":         {"engine": "codex_cli",   "model": None},
     "codex_cli":     {"engine": "codex_cli",   "model": None},
     "codex-cli":     {"engine": "codex_cli",   "model": None},
-    # opencode (local Ollama default)
-    "opencode":      {"engine": "opencode",    "model": "ollama/qwen3:8b"},
-    "ollama":        {"engine": "opencode",    "model": "ollama/qwen3:8b"},
-    "local":         {"engine": "opencode",    "model": "ollama/qwen3:8b"},
+    # opencode — no model pin: OpenCode uses its own configured default
+    # (ADR-2087 removed the local-Ollama default ``ollama/qwen3:8b``).
+    "opencode":      {"engine": "opencode",    "model": None},
     # opencode (cloud-backed via ollama-cloud provider config)
     "cloud":         {"engine": "opencode",    "model": "ollama-cloud/qwen3-coder-next"},
     "ollama-cloud":  {"engine": "opencode",    "model": "ollama-cloud/qwen3-coder-next"},
     "opencode-cloud": {"engine": "opencode",   "model": "ollama-cloud/qwen3-coder-next"},
-    # hermes — fully-local Ollama HTTP, zero egress, CONFIDENTIAL-capable (ADR-0066/0067)
-    # /engine hermes → orchestrator delegates via delegate_hermes
-    "hermes":           {"engine": "hermes",   "model": None},
-    "hermes-fast":      {"engine": "hermes",   "model": "hermes-fast"},
-    "hermes-balanced":  {"engine": "hermes",   "model": "hermes-balanced"},
-    "hermes-capable":   {"engine": "hermes",   "model": "hermes-capable"},
-    "hermes-large":     {"engine": "hermes",   "model": "hermes-large"},
-    "local-hermes":     {"engine": "hermes",   "model": None},
     # copilot — GitHub Copilot CLI (ADR-0071). Zero incremental cost for
     # GitHub Copilot Business/Enterprise licensees. Requires `copilot` binary
     # and authentication via `copilot auth login` or GH_TOKEN env.
@@ -131,7 +124,25 @@ ENGINE_ALIASES: dict[str, dict[str, str | None]] = {
     "gh-copilot":       {"engine": "copilot",  "model": None},
 }
 
-VALID_ENGINES: tuple[str, ...] = ("claude_code", "codex_cli", "opencode", "hermes", "copilot")
+VALID_ENGINES: tuple[str, ...] = ("claude_code", "codex_cli", "opencode", "copilot")
+
+# Shown when ``/engine`` names an engine removed by ADR-2087.
+LEGACY_ENGINE_NOTICE = (
+    "Hermes / local Ollama engines were removed — using Claude Code instead."
+)
+
+
+def _legacy_helpers():
+    """Import the shared ADR-2087 legacy-id helpers (engine_registry is SSOT)."""
+    try:
+        from engine_registry import (  # type: ignore
+            is_legacy_engine_id, normalize_legacy_engine_id,
+        )
+    except ImportError:  # pragma: no cover — package-relative import path
+        from .engine_registry import (  # type: ignore
+            is_legacy_engine_id, normalize_legacy_engine_id,
+        )
+    return is_legacy_engine_id, normalize_legacy_engine_id
 
 # Engine-id charset: lowercase alnum + underscore. Mirror of the
 # bundle ``ENGINE_ALIASES`` values; the validator rejects anything else
@@ -319,6 +330,10 @@ def resolve_alias(token: str) -> dict[str, str | None] | None:
     if not token:
         return None
     key = token.strip().lower()
+    is_legacy, _norm = _legacy_helpers()
+    if is_legacy(key):
+        # ADR-2087: map, never reject — the removed engine becomes claude_code.
+        return {"engine": _norm(key), "model": None}
     spec = ENGINE_ALIASES.get(key)
     if spec is None:
         return None
@@ -332,7 +347,15 @@ def supported_aliases() -> list[str]:
     # Curated short-list; the full ENGINE_ALIASES table has back-compat
     # spellings (claude_code / claude-code) the user shouldn't have to
     # type. The /engine help block shows these.
-    return ["claude", "codex", "opencode", "cloud", "hermes", "hermes-fast"]
+    return ["claude", "codex", "opencode", "cloud", "copilot"]
+
+
+def is_legacy_alias(token: str) -> bool:
+    """True when ``token`` names an engine removed by ADR-2087."""
+    if not token:
+        return False
+    is_legacy, _ = _legacy_helpers()
+    return is_legacy(token)
 
 
 # ── Public API ───────────────────────────────────────────────────────
@@ -356,6 +379,11 @@ def current(channel: str, chat_key: str, *,
         return None
     engine = data.get("engine")
     model = data.get("model")
+    is_legacy, _norm = _legacy_helpers()
+    if isinstance(engine, str) and is_legacy(engine):
+        # ADR-2087: a stored Hermes / local-Ollama pin maps to claude_code on
+        # read; its model (a local Ollama tag) is meaningless there — dropped.
+        engine, model = _norm(engine), ""
     if not isinstance(engine, str) or not _ENGINE_ID_RE.match(engine):
         return None
     if engine not in VALID_ENGINES:
@@ -379,6 +407,10 @@ def set_preference(channel: str, chat_key: str, *,
     command edge surfaces immediately rather than silently writing a
     malformed file the next ``current()`` would just ignore.
     """
+    if isinstance(engine, str):
+        is_legacy, _norm = _legacy_helpers()
+        if is_legacy(engine):
+            engine, model = _norm(engine) or engine, None
     if not isinstance(engine, str) or engine not in VALID_ENGINES:
         raise ValueError(
             f"engine={engine!r} not in {VALID_ENGINES}"
@@ -454,8 +486,9 @@ Usage:
 Aliases:
   claude   → claude_code (no model override)
   codex    → codex_cli (no model override)
-  opencode → opencode + ollama/qwen3:8b
+  opencode → opencode (its own configured default model)
   cloud    → opencode + ollama-cloud/qwen3-coder-next
+  copilot  → copilot (no model override)
 """
 
 
@@ -471,6 +504,11 @@ def _fmt_pref(pref: dict[str, str] | None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    import logging
+    # The CLI prints LEGACY_ENGINE_NOTICE itself; without this the registry's
+    # engine.legacy_mapped warning reaches stderr, which the JS caller joins
+    # into the chat reply.
+    logging.getLogger("engine_registry").setLevel(logging.ERROR)
     argv = list(argv if argv is not None else os.sys.argv[1:])
     p = argparse.ArgumentParser(prog="engine_switch.py", add_help=False)
     p.add_argument("subcommand", nargs="?", default="show")
@@ -525,6 +563,8 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"error: {e}")
             return 2
+        if is_legacy_alias(alias):
+            print(LEGACY_ENGINE_NOTICE)
         print(f"set: engine={stored['engine']}  model={stored['model'] or '(none)'}")
         return 0
 

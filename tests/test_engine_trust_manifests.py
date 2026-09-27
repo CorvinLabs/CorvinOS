@@ -7,8 +7,8 @@ manifests parse, but it is a self-running script (``main()`` under
 ``__main__``) with no module-level ``test_*`` functions, so ``pytest``
 collects ZERO tests from it — it only runs via
 ``operator/bridges/run-all-tests.sh``.  It also hard-codes three engine ids
-(``claude_code``, ``codex_cli``, ``opencode``), so ``hermes`` and ``copilot``
-were never covered at all.
+(``claude_code``, ``codex_cli``, ``opencode``), so ``copilot`` (and the
+since-removed ``hermes``, ADR-2087) were never covered at all.
 
 Both gaps were load-bearing on 2026-09-15: commit fa16e74b added five fields
 to ``agents/trust/claude_code.yaml`` (``name``, ``schema_version``,
@@ -68,7 +68,7 @@ def test_bundled_manifest_yields_a_reason_free_verdict(engine_id: str):
 
     ``manifest-missing`` / ``manifest-malformed`` mean the file on disk could
     not be used at all.  Every other outcome (including a deliberate
-    ``trust-tier-too-low`` for a low-tier engine such as hermes, or an
+    ``trust-tier-too-low`` for a low-tier engine, or an
     ``manifest-expired`` once valid_until passes) is a real policy decision
     and NOT this test's business — asserting ``passed`` would either pin the
     tenant's min_tier or fail the day a manifest legitimately expires.
