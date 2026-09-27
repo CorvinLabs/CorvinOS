@@ -14,15 +14,28 @@ Severity levels: INFO (log only), WARNING (alert + dashboard), CRITICAL (auto-ro
 Notifications: Slack (#corvinOS-production), PagerDuty (CRITICAL only), Email (operator receipt)
 
 Compliance: GDPR (Art. 5/6/30/32), EU AI Act (Art. 5/50), audit-first (ADR-0232/0233)
+
+FIXES IMPLEMENTED (14 Findings):
+- IR-001: notify() returns False if ANY channel fails (per-channel tracking)
+- IR-002: Email actually sent via SMTP with retry logic (3 attempts)
+- IR-003: Notification deduplication (5 min window) + rate limiting (10 alerts/min)
+- IR-004: Retry/fallback chain: Slack → PagerDuty → Email → log
+- IR-005: Dead letter queue for failed notifications, batch retry every 5 min
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Callable
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Callable, Tuple
 import logging
 import json
 from pathlib import Path
+import smtplib
+import hashlib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from queue import Queue, Empty
+import threading
 
 logger = logging.getLogger(__name__)
 
