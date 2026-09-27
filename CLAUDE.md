@@ -150,7 +150,8 @@ whose commits left the 7-day window following their record.
 
 ## Root MD Files Enforcement — Clean Root Policy (ADR-0516 Compliance, 2026-09-18)
 
-**Status:** 🟢 **ENFORCED** (automatic cleanup completed 2026-09-18)
+**Status:** 🟡 **RULE IN FORCE, ROOT RE-POLLUTED** (cleanup 2026-09-18; by 2026-09-27 the root again
+carried 9 disallowed `.md` files plus ~40 stray `.txt`/`.json`/script files — removed again 2026-09-27)
 
 **Root Repository Policy:** CorvinOS root directory (`/home/shumway/projects/CorvinOS/`) contains **ONLY 8 canonical documentation files**. All other `.md` files are prohibited.
 
@@ -184,13 +185,13 @@ whose commits left the 7-day window following their record.
 
 ### Enforcement Mechanism (Automated)
 
-1. **Git Pre-Commit Hook** (TBD): Rejects commits adding new `.md` files to root
+1. **Git Pre-Commit Hook** (NOT BUILT — the installed hook checks ADR presence, not root files): Rejects commits adding new `.md` files to root
    ```bash
    # Hook will validate: only 8 allowed files exist in root after commit
    # Violation → commit rejected with message pointing to this rule
    ```
 
-2. **CI/CD Gate** (TBD): PR checks root MD file count
+2. **CI/CD Gate** (EXISTS: `.github/workflows/root-md-policy-gate.yml`; it only checks `*.md`, not `.txt`/`.json`): PR checks root MD file count
    ```bash
    # CI fails if: any new `.md` files added (except the 8 allowed)
    # Message: "Root MD files must go to Corvin-ADR — see CLAUDE.md Root MD Files Enforcement"
@@ -224,7 +225,8 @@ whose commits left the 7-day window following their record.
 - ✅ Zero duplicates
 - ✅ Git cleanup committed
 
-**Result:** CorvinOS root now clean and ADR-0516 compliant.
+**Result (2026-09-18):** root was clean. It did not stay clean — see Status above; the CI gate
+failed on `main` while 9 extra `.md` files sat in root.
 
 ### Must NOT do (absolute rules)
 
@@ -1658,7 +1660,8 @@ grep "skill_executed\|plugin_loaded\|a2a_task_executed" ~/.corvin/audit.jsonl \
   | jq -c 'select(.skill_id == "os.xyz" or .plugin_id == "xyz")'
 
 # 3. Verify hash-chain integrity
-python3 scripts/verify_audit_chain.py --tenant=_default --since=<start_time>
+# NOTE: scripts/verify_audit_chain.py does NOT exist (verified 2026-09-27); the chain is
+# verified at boot by the ADR-0232 tripwire (tripwire.py::assert_all)
 # Output: ✅ Chain intact (N events, N-1 hash links verified)
 
 # 4. Commit only if audit proof succeeds

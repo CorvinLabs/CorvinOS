@@ -240,6 +240,15 @@ _DECISION_SCALAR_KEYS: tuple[str, ...] = (
 )
 _DECISION_MAX_STR = 64
 
+#: Output keys whose value is a routing VERDICT token (``native``/``acs``/``tde``,
+#: ``allow``/``deny`` …). ``os.delegation_router`` names its advice ``decision``
+#: (manifest output_schema, 2026-09-27 refactor) — without this entry the chain
+#: record kept ``bundled_engine`` but silently dropped the Skill's own advice,
+#: so shadow agreement was unprovable from the audit trail. Copied only as a
+#: single identifier-shaped token, never as free text.
+_DECISION_TOKEN_KEYS: tuple[str, ...] = ("decision",)
+_DECISION_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
 
 def decision_summary(output: Any) -> Optional[Dict[str, Any]]:
     """Allowlisted, content-free projection of a Skill output for the audit chain.
@@ -263,6 +272,10 @@ def decision_summary(output: Any) -> Optional[Dict[str, Any]]:
         if isinstance(value, bool) or isinstance(value, (int, float)):
             summary[key] = value
         elif isinstance(value, str) and 0 < len(value) <= _DECISION_MAX_STR:
+            summary[key] = value
+    for key in _DECISION_TOKEN_KEYS:
+        value = output.get(key)
+        if isinstance(value, str) and _DECISION_TOKEN_RE.match(value):
             summary[key] = value
     flags = output.get("flags")
     if isinstance(flags, dict):

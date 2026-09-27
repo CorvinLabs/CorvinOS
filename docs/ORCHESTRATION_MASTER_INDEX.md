@@ -84,7 +84,7 @@
 
 **Orchestrator launches Wave 2:**
 1. Activate Stream A (T06 Retroactive ADRs)
-2. Assign T03 decision gate (Phase-3a–c: verdrahten or löschen)
+2. Assign T03 decision gate (Phase-3a–c: wire or delete)
 3. Brief T10/T17 owners (learning + flag migration start)
 
 ---

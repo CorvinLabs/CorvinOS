@@ -371,12 +371,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Initialize config manager for fail-closed config validation
     # Best-effort: if config system unavailable, uses DEFAULT_SAFE_CONFIG
     try:
-        from core.config import CentralizedConfigManager
         import logging as _config_logger
-        import forge.paths as _cfg_paths
 
-        audit_log_path = _cfg_paths.tenant_audit_chain(tenant_id="_default")
-        config_mgr = CentralizedConfigManager.create_with_audit(audit_log_path)
+        # NOT create_with_audit(tenant_audit_chain(...)): that binds an
+        # AuditChainWriter — a second, incompatible hash scheme — to THE
+        # canonical tenant chain, and its first record made the forge
+        # verifier (and so the ADR-0232 boot tripwire) read the chain as
+        # tampered. Config events go through the one forge writer instead.
+        from corvin_gateway.config_audit import build_config_manager
+
+        config_mgr = build_config_manager()
         app.state.config_manager = config_mgr
         _config_logger.getLogger("corvin.config").info(
             "Configuration manager initialized (fail-closed validation enabled)"

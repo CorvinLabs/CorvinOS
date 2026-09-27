@@ -242,9 +242,16 @@ describe("DiscoveryPanel", () => {
   });
 
   it("handles API errors gracefully", async () => {
-    vi.mocked(a2aApi.listDiscoveryPeers).mockRejectedValueOnce(
-      new Error("Failed to fetch peers"),
-    );
+    // Initial call + 2 retries: the panel's query sets `retry: 2`, which
+    // overrides the wrapper's `retry: false`, so a ONE-shot rejection was
+    // retried into the default mock and the error state never rendered.
+    // Three Once-rejections (not a persistent one) so nothing leaks into the
+    // next test — vi.clearAllMocks() does not reset implementations.
+    for (let i = 0; i < 3; i++) {
+      vi.mocked(a2aApi.listDiscoveryPeers).mockRejectedValueOnce(
+        new Error("Failed to fetch peers"),
+      );
+    }
 
     render(
       <TestWrapper>
@@ -253,13 +260,14 @@ describe("DiscoveryPanel", () => {
     );
 
     // Wait for error message
-    await screen.findByText("Failed to Load Peers");
+    // Two retries at react-query's default back-off (1 s, 2 s) precede the error.
+    await screen.findByText("Failed to Load Peers", undefined, { timeout: 8000 });
     expect(screen.getByText("Failed to fetch peers")).toBeInTheDocument();
 
     // Retry button should be visible
     const retryButton = screen.getByText("Retry");
     expect(retryButton).toBeInTheDocument();
-  });
+  }, 15000);
 
   it("has proper ARIA labels for accessibility", async () => {
     const mockPeers = [

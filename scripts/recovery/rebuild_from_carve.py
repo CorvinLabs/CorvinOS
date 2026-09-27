@@ -41,13 +41,34 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
+from forge import paths as fpaths  # noqa: E402
 from forge import security_events as se  # noqa: E402
 
 TENANT = "_default"
 
 
 def corvin_home() -> Path:
-    return Path(os.environ.get("CORVIN_HOME") or REPO / ".corvin")
+    # The ONE runtime-root resolver (CORVIN_HOME, else the repo's .corvin, else
+    # ~/.corvin) — never a private copy of that rule.
+    return fpaths.corvin_home()
+
+
+def local_instance_id(home: Path) -> str:
+    """This instance's id, from where instance_identity keeps it
+    (``<home>/global/instance_id.json``, or CORVIN_INSTANCE_ID_PATH). A bare
+    ``<home>/instance_id`` text file is honoured only as a legacy fallback."""
+    env = os.environ.get("CORVIN_INSTANCE_ID_PATH")
+    for p in ([Path(env).expanduser()] if env else []) + [home / "global" / "instance_id.json"]:
+        try:
+            iid = json.loads(p.read_text(encoding="utf-8")).get("instance_id")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(iid, str) and iid:
+            return iid
+    try:
+        return (home / "instance_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def lost_identity() -> dict:
@@ -93,7 +114,10 @@ def main(argv: list[str] | None = None) -> int:
         print("anchor key unavailable — cannot authenticate anything; abort")
         return 2
     home = corvin_home()
-    iid = args.instance_id or (home / "instance_id").read_text().strip()
+    iid = args.instance_id or local_instance_id(home)
+    if not iid:
+        print("instance id unknown (no global/instance_id.json) — pass --instance-id; abort")
+        return 2
     ids = lost_identity()
     lost_geneses = {r.get("genesis") for r in ids.values() if r.get("genesis")}
     print(f"lost chain genesis: {sorted(lost_geneses)}  instance: {iid[:8]}")
@@ -176,8 +200,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    forge_dir = home / "tenants" / TENANT / "global" / "forge"
-    rec_dir = forge_dir / "recovered"
+    # THE tenant chain (CLAUDE.md: never compose an audit-chain path by hand).
+    canonical = fpaths.tenant_audit_chain(TENANT)
+    rec_dir = canonical.parent / se.CHAIN_HISTORY_SUBDIR
     rec_dir.mkdir(parents=True, exist_ok=True)
     out = rec_dir / f"audit.carved-{stamp}.jsonl"
     with out.open("x", encoding="utf-8") as fh:
@@ -195,10 +220,10 @@ def main(argv: list[str] | None = None) -> int:
                 "separated by gaps where the original blocks were overwritten before the carve.",
     }
     (rec_dir / f"audit.carved-{stamp}.manifest.json").write_text(json.dumps(manifest, indent=2))
-    seam = se.record_chain_supersession(forge_dir / "audit.jsonl", out, reason="chain_loss_carve")
+    seam = se.record_chain_supersession(canonical, out, reason="chain_loss_carve")
     print(f"wrote {out} ({n_kept} records); seam {'written' if seam else 'NOT written'}")
 
-    ev_dir = home / "tenants" / TENANT / "learning" / "events"
+    ev_dir = fpaths.tenant_home(TENANT) / "learning" / "events"
     ev_dir.mkdir(parents=True, exist_ok=True)
     by_day: dict[str, list[dict]] = collections.defaultdict(list)
     for rec in learn_ok.values():

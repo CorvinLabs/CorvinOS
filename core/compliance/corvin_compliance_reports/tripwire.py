@@ -593,16 +593,49 @@ def core_audit_owns_the_trail() -> TripwireResult:
 
 
 def _shared_module(name: str):
-    """Import a module from ``corvin_operator/bridges/shared`` (the gates live there)."""
-    try:
-        return __import__(name)
-    except ImportError:
-        pass
+    """Import a module from ``corvin_operator/bridges/shared`` (the gates live there).
+
+    A bare ``__import__(name)`` resolves whatever ``name`` is first on sys.path.
+    ``corvin-webui.service`` (and the editable-install .pth) put ``core/compliance``
+    BEFORE ``bridges/shared``, and ``core/compliance/consent.py`` is the FastAPI
+    decorator module — no ``is_granted`` — so the L18 probe inspected the wrong
+    module and refused the boot ("consent.is_granted is missing"). The gate is
+    therefore loaded from its own file; an already-imported copy is reused only
+    when it IS that file.
+    """
+    import importlib.util  # noqa: PLC0415
+
     repo_root = Path(__file__).resolve().parents[3]
     shared = repo_root / "corvin_operator" / "bridges" / "shared"
-    if shared.is_dir() and str(shared) not in sys.path:
+    target = shared / f"{name}.py"
+    loaded = sys.modules.get(name)
+    if loaded is not None:
+        try:
+            if Path(getattr(loaded, "__file__", "") or "").resolve() == target.resolve():
+                return loaded
+        except OSError:
+            pass
+    if not target.is_file():
+        raise ImportError(f"{name}: not found in {shared}")
+    # Siblings the gate imports by bare name must resolve from bridges/shared.
+    if str(shared) not in sys.path:
         sys.path.append(str(shared))
-    return __import__(name)
+    if loaded is not None:
+        # ``name`` is taken by a different module (the shadow); load the gate
+        # privately rather than clobbering what the rest of the process imported.
+        spec = importlib.util.spec_from_file_location(f"_tripwire_shared_{name}", target)
+    else:
+        spec = importlib.util.spec_from_file_location(name, target)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"{name}: cannot load {target}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
 
 
 def consent_gate_denies_by_default() -> TripwireResult:

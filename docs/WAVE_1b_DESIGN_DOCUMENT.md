@@ -1,4 +1,7 @@
 # Wave 1b: Design Phase for Streams B, C, D
+
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** Test files named for T12/T16 (`tests/skills/test_l10_reachability_e2e.py`, `tests/console/test_marketplace_single_path.py`) and `services/agent_hub_store.py` do not exist.
+
 **Status:** DESIGN COMPLETE (Ready for Implementation Gate)  
 **Date:** 2026-09-26  
 **Scope:** T09, T04, T12, T16 — Design-First Validation before Wave 1c Implementation

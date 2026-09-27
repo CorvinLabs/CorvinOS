@@ -24,13 +24,10 @@ import { Loader2 } from 'lucide-react';
 import { MaturityDashboard } from './components/MaturityDashboard';
 import { MonitoringTab } from './tabs/MonitoringTab';
 import { LearningLoopsTab } from './tabs/LearningLoopsTab';
-import { LicensingAuditTab } from './tabs/LicensingAuditTab';
-import { ModelSelectionTab } from './tabs/ModelSelectionTab';
-import { LearningLoopIntegrationTab } from './tabs/LearningLoopIntegrationTab';
 
-type TabType = 'maturity' | 'loops' | 'metrics' | 'licensing' | 'models' | 'learning-integration';
+type TabType = 'maturity' | 'loops' | 'metrics';
 
-const TAB_IDS: readonly TabType[] = ['maturity', 'loops', 'metrics', 'licensing', 'models', 'learning-integration'] as const;
+const TAB_IDS: readonly TabType[] = ['maturity', 'loops', 'metrics'] as const;
 const DEFAULT_TAB: TabType = 'maturity';
 const isTabId = (v: string | null): v is TabType =>
   v !== null && (TAB_IDS as readonly string[]).includes(v);
@@ -87,11 +84,8 @@ export function VibeDashboard() {
         <div className="flex gap-4 px-6 py-4">
           {[
             { id: 'maturity' as TabType, label: 'Maturity Metrics' },
-            { id: 'licensing' as TabType, label: 'Licensing Audit' },
-            { id: 'metrics' as TabType, label: 'System Metrics' },
             { id: 'loops' as TabType, label: 'Learning Loops' },
-            { id: 'models' as TabType, label: 'Model Selection' },
-            { id: 'learning-integration' as TabType, label: 'Learning Events' },
+            { id: 'metrics' as TabType, label: 'System Metrics' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -112,11 +106,8 @@ export function VibeDashboard() {
       <div className="min-h-screen">
         <Suspense fallback={<LoadingFallback />}>
           {activeTab === 'maturity' && <MaturityDashboard />}
-          {activeTab === 'licensing' && <LicensingAuditTab />}
-          {activeTab === 'metrics' && <MonitoringTab />}
           {activeTab === 'loops' && <LearningLoopsTab />}
-          {activeTab === 'models' && <ModelSelectionTab />}
-          {activeTab === 'learning-integration' && <LearningLoopIntegrationTab />}
+          {activeTab === 'metrics' && <MonitoringTab />}
         </Suspense>
       </div>
 

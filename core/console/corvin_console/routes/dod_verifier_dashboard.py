@@ -50,8 +50,12 @@ except ImportError:
     from core.learning.event_store import EventStore
     from core.skills.os_skills.audit_integration import emit_skill_executed_event
 
+from core.learning.learning_events import EventType, LearningEvent
+
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
+
+_DOD_SKILL_ID = "os.definition_of_done_verifier"
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +125,9 @@ def get_verifier(tenant_id: str) -> DoD_VerifierSkillWrapper:
 def get_event_store(tenant_id: str) -> EventStore:
     """Get or initialize event store for tenant."""
     if tenant_id not in _event_stores:
-        _event_stores[tenant_id] = EventStore(tenant_home=_tenant_home(tenant_id))
+        _event_stores[tenant_id] = EventStore(
+            tenant_home=_tenant_home(tenant_id), tenant_id=tenant_id,
+        )
     return _event_stores[tenant_id]
 
 
@@ -190,17 +196,22 @@ async def run_dod_verification(
         except Exception as e:
             logger.warning(f"Failed to emit DoD audit event: {e}")
 
-        # Log to learning event store (non-blocking, supplemental)
+        # Log to learning event store (non-blocking, supplemental). The store
+        # takes a LearningEvent: the dict passed here before raised
+        # AttributeError on every call, so no verification was ever recorded
+        # and /history could never return one.
         try:
             event_store = get_event_store(tenant_id)
-            event_store.write_event({
-                "event_type": "dod_verification_executed",
-                "task_id": result.task_id,
-                "score": result.score,
-                "passed": result.passed,
-                "timestamp": result.timestamp,
-                "tenant_id": tenant_id,
-            })
+            event_store.write_event(LearningEvent.create(
+                EventType.OUTCOME, _DOD_SKILL_ID, tenant_id,
+                signal={
+                    "kind": "dod_verification",
+                    "task_id": result.task_id,
+                    "score": float(result.score),
+                    "passed": bool(result.passed),
+                },
+                lom=f"{__name__}:run_dod_verification",
+            ))
         except Exception as e:
             logger.warning(f"Failed to log DoD event to learning store: {e}")
 
@@ -221,9 +232,9 @@ async def run_dod_verification(
         logger.error(f"DoD verification audit failed: {e}")
         raise HTTPException(status_code=500, detail="Verification audit failed. Task cannot be marked done.")
 
-    except Exception as e:
-        logger.exception(f"DoD verification failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)[:100]}")
+    except Exception:
+        logger.exception("DoD verification failed")
+        raise HTTPException(status_code=500, detail="Verification failed")
 
 
 @router.post("/feedback")
@@ -256,32 +267,32 @@ async def submit_dod_feedback(
     if not payload.get("task_id"):
         raise HTTPException(status_code=400, detail="task_id required")
 
+    feedback = str(payload.get("feedback", ""))
+    if feedback not in {"accurate", "inaccurate", "not_applicable"}:
+        raise HTTPException(status_code=400, detail="feedback must be accurate|inaccurate|not_applicable")
+
     try:
         event_store = get_event_store(tenant_id)
+        # A LearningEvent (the dict passed before made every call a 500). The
+        # free-text ``note`` is deliberately NOT persisted — only the verdict.
+        event = LearningEvent.create(
+            EventType.FEEDBACK, _DOD_SKILL_ID, tenant_id,
+            signal={
+                "kind": "dod_feedback",
+                "task_id": str(payload["task_id"])[:200],
+                "check_name": str(payload.get("check_name") or "")[:100],
+                "feedback": feedback,
+            },
+            lom=f"{__name__}:submit_dod_feedback",
+        )
+        event_store.write_event(event)
+    except Exception:
+        logger.exception("DoD feedback submission failed")
+        raise HTTPException(status_code=500, detail="Feedback failed")
 
-        feedback_event = {
-            "event_type": "dod_feedback_received",
-            "task_id": payload["task_id"],
-            "check_name": payload.get("check_name"),
-            "feedback": payload.get("feedback", ""),
-            "note": payload.get("note", ""),
-            "timestamp": datetime.utcnow().isoformat(),
-            "tenant_id": tenant_id,
-        }
-
-        event_store.write_event(feedback_event)
-
-        # TODO: wire to learning_optimizer to adjust weights
-        # For now, return mock adjustment
-        return {
-            "accepted": True,
-            "feedback_id": f"feedback_{payload['task_id']}_{int(datetime.utcnow().timestamp())}",
-            "weight_adjustment": 0.0,  # Will be computed by learning optimizer
-        }
-
-    except Exception as e:
-        logger.exception(f"Feedback submission failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Feedback failed: {str(e)[:100]}")
+    # No optimizer consumes DoD feedback yet: say so instead of reporting a
+    # "weight_adjustment".
+    return {"accepted": True, "feedback_id": event.event_id}
 
 
 @router.get("/history/{task_id}")
@@ -310,22 +321,22 @@ async def get_dod_history(
 
     try:
         event_store = get_event_store(tenant_id)
-
-        # Query for all dod_verification_executed events for this task
+        # query_events takes the tenant and has no generic ``filters``: the call
+        # made here before raised TypeError on every request.
         events = event_store.query_events(
-            event_type="dod_verification_executed",
-            filters={"task_id": task_id},
-            limit=limit,
+            tenant_id, event_type=EventType.OUTCOME, skill_id=_DOD_SKILL_ID,
         )
+    except Exception:
+        logger.exception("DoD history fetch failed")
+        raise HTTPException(status_code=500, detail="History fetch failed")
 
-        return {
-            "task_id": task_id,
-            "verifications": events,
-        }
-
-    except Exception as e:
-        logger.exception(f"History fetch failed: {e}")
-        raise HTTPException(status_code=500, detail=f"History fetch failed: {str(e)[:100]}")
+    verifications = [
+        {"timestamp": e.timestamp, **{k: v for k, v in (e.signal or {}).items() if k != "kind"}}
+        for e in events
+        if (e.signal or {}).get("kind") == "dod_verification"
+        and (e.signal or {}).get("task_id") == task_id
+    ][-limit:]
+    return {"task_id": task_id, "verifications": verifications}
 
 
 @router.websocket("/stream")

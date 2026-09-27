@@ -184,6 +184,9 @@ class DriftDetectionService:
         plugin_sync_enabled: bool = True,
     ):
         self.deployment_manager = deployment_manager or DeploymentStateManager()
+        # NOTE: the process-wide service is built by get_drift_service(), which
+        # passes the shared get_deployment_manager() singleton — the one the
+        # gateway/console boot registers into.
         self.slack_alerter = slack_alerter or SlackAlerter()
         self.pagerduty_alerter = pagerduty_alerter or PagerDutyAlerter()
         self.monitoring_events: List[MonitoringEvent] = []
@@ -334,13 +337,16 @@ class DriftDetectionService:
         # Audit trail: log all alerts
         self._audit_alert(severity, message, instance_id, drift_type)
 
-        # Slack: All severities
-        self.slack_alerter.send_alert(
-            AlertSeverity[severity.name],
-            message,
-            instance_id,
-            drift_type,
-        )
+        # Slack: CRITICAL and HIGH only. MEDIUM is "log + metrics" and LOW is
+        # "metrics only" (the severity contract above and ALERT_RULES); posting
+        # them paged a channel for CONFIG_VALIDATION_FAILED-class noise.
+        if severity.name in ("CRITICAL", "HIGH"):
+            self.slack_alerter.send_alert(
+                AlertSeverity[severity.name],
+                message,
+                instance_id,
+                drift_type,
+            )
 
         # PagerDuty: CRITICAL only
         if severity == DriftSeverity.CRITICAL:
@@ -399,5 +405,11 @@ def get_drift_service() -> DriftDetectionService:
     """Get or create singleton drift detection service"""
     global _drift_service
     if _drift_service is None:
-        _drift_service = DriftDetectionService()
+        # Poll the SAME manager the boot registration writes to. A private
+        # DeploymentStateManager() here never had an instance registered, so the
+        # monitoring loop logged "No instances registered; skipping monitoring"
+        # every 30 s for the life of the process and never checked anything.
+        from core.deployment.state_sync import get_deployment_manager
+
+        _drift_service = DriftDetectionService(deployment_manager=get_deployment_manager())
     return _drift_service

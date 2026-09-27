@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { getCurrentCsrf } from '@/lib/csrf-fetch';
 
 interface SkillInfo {
   skill_id: string;
@@ -109,6 +110,10 @@ export function SkillManager() {
       });
 
       xhr.open('POST', '/v1/console/skills-manager/skills/install');
+      // XHR bypasses the window.fetch CSRF wrapper (lib/csrf-fetch.ts), so the
+      // token must be attached here or a CSRF-guarded install answers 403.
+      const csrf = getCurrentCsrf();
+      if (csrf) xhr.setRequestHeader('X-CSRF-Token', csrf);
       xhr.send(formData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload error');
@@ -233,7 +238,7 @@ export function SkillManager() {
                       onClick={() => {
                         if (confirm(`Uninstall ${skill.skill_id}@${skill.version}?`)) {
                           fetch(
-                            `/v1/console/skills-manager/skills/uninstall/${skill.skill_id}/${skill.version}`,
+                            `/v1/console/skills-manager/skills/uninstall/${encodeURIComponent(skill.skill_id)}/${encodeURIComponent(skill.version)}`,
                             { method: 'DELETE' }
                           )
                             .then(r => r.json())

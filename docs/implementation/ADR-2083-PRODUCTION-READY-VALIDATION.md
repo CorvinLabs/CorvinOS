@@ -1,5 +1,8 @@
 # ADR-2083 Production-Ready Validation
 
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** Not ready for merge as claimed: `autonomy_detector` has no bridge caller (only `loop_executor_bridge_aware` / `workflow_background_runner`, themselves called only by `scripts/adr2083_staging_validation.py`), and `tests/e2e/test_bridge_autonomy_e2e.py` is 19/22 (`assert 'non_interactive' == 'background'`).
+
+
 **ADR:** ADR-2083 Non-Interactive Bridge Autonomy Design  
 **Date:** 2026-09-27  
 **Validator:** Claude Haiku 4.5  

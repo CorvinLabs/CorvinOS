@@ -5884,9 +5884,13 @@ def _call_claude_streaming_via_engine(
                 engine.cancel()
             except Exception:  # noqa: BLE001
                 pass
+            # This function has no `sender` parameter — the turn's sender
+            # travels in the engine env (as for the retries below). A bare
+            # `sender` here raised NameError: the fallback never answered.
             return call_claude(
                 prompt, channel=channel, chat_key=chat_key,
-                mode=mode, add_dir=add_dir, profile=profile, sender=sender,
+                mode=mode, add_dir=add_dir, profile=profile,
+                sender=(env or {}).get("CORVIN_ORIGIN_SENDER", ""),
             )
 
         if not has_session:

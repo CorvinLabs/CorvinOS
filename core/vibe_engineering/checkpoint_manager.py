@@ -356,6 +356,8 @@ class CheckpointManager:
         # data corruption for the same task (fine-grained locking for performance)
         self._task_locks: Dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()  # Protects the _task_locks dict itself
+        # ADR-0892: checkpoint_id -> open descriptor holding the file lock
+        self._held_locks: Dict[str, int] = {}
 
         logger.info(
             f"CheckpointManager initialized at {self.checkpoint_dir} (tenant={self.tenant_id})"
@@ -914,75 +916,98 @@ class CheckpointManager:
             except Exception as e:
                 logger.error(f"Failed to delete {metadata.file_path}: {e}")
 
+    def _lock_path(self, checkpoint_id: str) -> Path:
+        """Lock file for ``checkpoint_id``; rejects ids that could leave ``checkpoint_dir``."""
+        if (
+            not isinstance(checkpoint_id, str)
+            or not checkpoint_id
+            or "/" in checkpoint_id
+            or "\\" in checkpoint_id
+            or "\x00" in checkpoint_id
+            or checkpoint_id in (".", "..")
+        ):
+            raise ValueError(f"Invalid checkpoint_id for lock: {checkpoint_id!r}")
+        return self.checkpoint_dir / f".lock.{checkpoint_id}"
+
     def acquire_lock(self, checkpoint_id: str, timeout_s: float = 10.0) -> bool:
         """
         Acquire a file-level lock on a checkpoint (ADR-0892/0893).
 
         Implements fail-closed locking: lock must be acquired within timeout_s,
-        or a RuntimeError is raised. No fallback to "continue without lock."
+        or ``CheckpointKeyUnavailable`` is raised. No fallback to "continue
+        without lock."
 
         Args:
-            checkpoint_id: Checkpoint identifier
+            checkpoint_id: Checkpoint identifier (no path separators)
             timeout_s: Timeout in seconds (default 10s per ADR-0893)
 
         Returns:
             True if lock acquired
 
         Raises:
-            RuntimeError: If lock cannot be acquired within timeout_s
-            CheckpointKeyUnavailable: If lock file cannot be created/opened
+            ValueError: If checkpoint_id could escape checkpoint_dir
+            CheckpointKeyUnavailable: If the lock cannot be acquired within
+                timeout_s, or the lock file cannot be created/opened
 
         Implementation note:
-            Uses platform-specific file locking:
-            - POSIX (Linux, macOS): fcntl.flock for exclusive locks
-            - Windows: msvcrt.locking or threading.Lock fallback
-            Lock is held in memory until release_lock() is called.
+            The open descriptor is kept in ``self._held_locks`` until
+            ``release_lock()`` unlocks and closes it. The lock file itself is
+            never unlinked: unlinking a lock file another process has already
+            opened lets a third process lock a fresh inode while the second
+            still waits on the old one, which breaks mutual exclusion.
+            - POSIX (Linux, macOS): fcntl.flock(LOCK_EX | LOCK_NB)
+            - Windows: msvcrt.locking(LK_NBLCK) on the first byte
         """
         import time
         import sys
 
-        # Platform-specific imports
-        if sys.platform == 'win32':
+        lock_file = self._lock_path(checkpoint_id)
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+        held = self._held_locks
+        if checkpoint_id in held:
+            raise CheckpointKeyUnavailable(
+                f"Lock for {checkpoint_id} is already held by this manager"
+            )
+
+        if sys.platform == "win32":
             import msvcrt
+
+            def _try_lock(fd: int) -> None:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
 
-        lock_file = self.checkpoint_dir / f".lock.{checkpoint_id}"
-        lock_file.parent.mkdir(parents=True, exist_ok=True)
+            def _try_lock(fd: int) -> None:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-        start_time = time.time()
+        start_time = time.monotonic()
         lock_fd = None
 
         try:
             # Open or create lock file (mode 0o600, fail-closed)
-            lock_fd = os.open(
-                str(lock_file),
-                os.O_CREAT | os.O_WRONLY,
-                0o600
-            )
+            lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR, 0o600)
 
-            # Try to acquire exclusive lock with timeout
             while True:
                 try:
-                    # fcntl.flock: LOCK_EX = exclusive, LOCK_NB = non-blocking
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    # Lock acquired successfully
+                    _try_lock(lock_fd)
+                    held[checkpoint_id] = lock_fd
                     return True
-                except (IOError, OSError):
-                    # Lock held by another process, retry
-                    elapsed = time.time() - start_time
+                except OSError:
+                    # Lock held elsewhere, retry until the deadline
+                    elapsed = time.monotonic() - start_time
                     if elapsed > timeout_s:
                         raise RuntimeError(
                             f"Lock acquisition timeout after {elapsed:.1f}s "
                             f"(limit {timeout_s}s) for checkpoint {checkpoint_id}"
                         )
-                    time.sleep(0.01)  # Backoff to reduce CPU spin
+                    time.sleep(0.01)
 
         except Exception as exc:
             if lock_fd is not None:
                 try:
                     os.close(lock_fd)
-                except:
+                except OSError:
                     pass
             raise CheckpointKeyUnavailable(
                 f"Failed to acquire lock for {checkpoint_id}: {exc}"
@@ -992,29 +1017,34 @@ class CheckpointManager:
         """
         Release a file-level lock on a checkpoint (ADR-0892/0893).
 
-        This method is idempotent: if lock was not held, it silently succeeds.
+        Idempotent: if this manager does not hold the lock, it is a no-op.
+        Unlocks and closes the descriptor recorded by ``acquire_lock()``; the
+        lock file stays on disk (see ``acquire_lock`` for why it is never
+        unlinked).
 
         Args:
             checkpoint_id: Checkpoint identifier (must match prior acquire_lock call)
-
-        Implementation note:
-            In the current implementation, locks are process-scoped and released
-            when the file descriptor is closed. This method is a no-op placeholder
-            for the public API (real cleanup happens on process exit or explicit close).
         """
-        import fcntl
+        import sys
 
-        lock_file = self.checkpoint_dir / f".lock.{checkpoint_id}"
-
-        # In the current implementation, locks are released when the file
-        # descriptor is closed (handled automatically on process exit).
-        # For explicit release, we could maintain a dict of open lock FDs
-        # and close them here, but for now this is a no-op (idempotent).
-
+        held = self._held_locks
+        lock_fd = held.pop(checkpoint_id, None)
+        if lock_fd is None:
+            return
         try:
-            # Attempt to clean up lock file (best-effort, don't fail if missing)
-            if lock_file.exists():
-                lock_file.unlink(missing_ok=True)
-                logger.debug(f"Released lock file: {lock_file}")
-        except Exception as e:
-            logger.warning(f"Failed to clean up lock file {lock_file}: {e}")
+            if sys.platform == "win32":
+                import msvcrt
+
+                os.lseek(lock_fd, 0, os.SEEK_SET)
+                msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError as e:
+            logger.warning(f"Failed to unlock checkpoint lock {checkpoint_id}: {e}")
+        finally:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass

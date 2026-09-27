@@ -448,7 +448,20 @@ if [ "$ROLLBACK" != 1 ] || [ "$REBUILD_ONLY" = 1 ]; then
 fi
 step "Rolling back"
 RB=1
-if [ -n "$PREV_REV" ] && [ -d "$SRC/.git" ]; then
+if [ -n "$PREV_REV" ] && [ -d "$SRC/.git" ] && [ "$KIND" = checkout ]; then
+    # A developer checkout — since 1830a8842 this is also the tree the console
+    # serves — can hold uncommitted work at this point: fetch_checkout leaves a
+    # non-$BRANCH checkout untouched, and re-applies (then drops) the autostash
+    # on $BRANCH. `reset --hard` would destroy that work with no copy left.
+    # Move HEAD back only if the update moved it, and with --keep, which
+    # refuses instead of overwriting a locally modified file.
+    if [ "$(_git rev-parse HEAD 2>/dev/null)" != "$PREV_REV" ]; then
+        _git reset -q --keep "$PREV_REV" >>"$LOG" 2>&1 || {
+            echo "  local changes overlap the update — code left at $(_git rev-parse --short HEAD 2>/dev/null)" >>"$LOG"
+            RB=0
+        }
+    fi
+elif [ -n "$PREV_REV" ] && [ -d "$SRC/.git" ]; then
     _git reset -q --hard "$PREV_REV" >>"$LOG" 2>&1 || RB=0
 elif [ -d "$SRC.prev" ]; then
     for _k in .corvin core/console/corvin_console/web-next/node_modules; do

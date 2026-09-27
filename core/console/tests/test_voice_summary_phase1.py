@@ -1,179 +1,104 @@
 """
-Voice Summary Phase 1 Tests
-Tests: Start/Stop Recording, Summary Retrieval, Health Check, Graceful Fallback
+Voice Summary Phase 1 Tests — through the real console router with a real session.
+
+What must hold:
+
+* every voice-summary route answers 401 without a console session, and every
+  mutation 403 without the CSRF token (they used to be fully unauthenticated);
+* voice state is scoped to the SESSION's tenant — a body ``tenant_id`` is
+  ignored, and tenant B cannot read tenant A's transcript by guessing the sid;
+* no fabricated summary: no summariser is wired, so ``summary`` is None rather
+  than the strategy prompt glued to the transcript;
+* start/stop reach the tenant's audit chain as metadata only — the transcript
+  never lands in the chain.
 """
+from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient
-from core.console.corvin_console.app import app
+import sys
+import tempfile
+import unittest
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_admin_route import _audit_events, _sandbox  # noqa: E402
 
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
-class TestVoiceSummaryPhase1:
-    """Phase 1: Simple Voice Recording + Summary"""
-
-    def test_voice_health_check(self, client):
-        """Test: Voice Summary health check (STT availability)"""
-        response = client.get("/v1/console/chat/voice/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert "status" in data
-        assert "stt_available" in data
-        assert data["stt_available"] is True  # Phase 1: Mock availability
-
-    def test_start_voice_recording(self, client):
-        """Test: Start voice recording (Opt-In)"""
-        session_id = "test-session-001"
-        response = client.post(
-            f"/v1/console/chat/{session_id}/voice/start",
-            json={"tenant_id": "_default"}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "recording_started"
-        assert data["session_id"] == session_id
-        assert data["stt_available"] is True
-
-    def test_stop_voice_recording(self, client):
-        """Test: Stop recording and generate summary"""
-        session_id = "test-session-002"
-
-        # Start recording
-        client.post(
-            f"/v1/console/chat/{session_id}/voice/start",
-            json={"tenant_id": "_default"}
-        )
-
-        # Stop recording
-        transcript = "User asked: how do I route requests? Agent answered: use os-router."
-        response = client.post(
-            f"/v1/console/chat/{session_id}/voice/stop",
-            json={"tenant_id": "_default", "transcript": transcript}
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "recording_stopped"
-        assert data["session_id"] == session_id
-        assert len(data["transcript"]) > 0
-        assert data["summary"] is not None
-
-    def test_get_voice_summary_not_started(self, client):
-        """Test: Get summary for session that never recorded"""
-        session_id = "never-recorded-001"
-        response = client.get(f"/v1/console/chat/{session_id}/voice/summary")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["session_id"] == session_id
-        assert data["status"] == "not_started"
-
-    def test_get_voice_summary_recording(self, client):
-        """Test: Get summary for active recording session"""
-        session_id = "test-session-003"
-
-        # Start recording
-        client.post(
-            f"/v1/console/chat/{session_id}/voice/start",
-            json={"tenant_id": "_default"}
-        )
-
-        # Fetch current state
-        response = client.get(f"/v1/console/chat/{session_id}/voice/summary")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "recording"
-        assert data["started_at"] is not None
-
-    def test_get_voice_summary_stopped(self, client):
-        """Test: Get summary for completed session"""
-        session_id = "test-session-004"
-
-        # Start and stop
-        client.post(
-            f"/v1/console/chat/{session_id}/voice/start",
-            json={"tenant_id": "_default"}
-        )
-
-        transcript = "Test conversation"
-        client.post(
-            f"/v1/console/chat/{session_id}/voice/stop",
-            json={"tenant_id": "_default", "transcript": transcript}
-        )
-
-        # Fetch final state
-        response = client.get(f"/v1/console/chat/{session_id}/voice/summary")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "stopped"
-        assert data["transcript"] == transcript
-        assert data["summary"] is not None
-        assert data["stopped_at"] is not None
-
-    def test_stop_nonexistent_session(self, client):
-        """Test: Error when stopping recording that doesn't exist"""
-        response = client.post(
-            "/v1/console/chat/nonexistent-session/voice/stop",
-            json={"tenant_id": "_default", "transcript": ""}
-        )
-        assert response.status_code == 404
-
-    def test_session_isolation(self, client):
-        """Test: Multiple sessions don't interfere"""
-        session1 = "session-001"
-        session2 = "session-002"
-
-        # Start both
-        client.post(f"/v1/console/chat/{session1}/voice/start", json={"tenant_id": "_default"})
-        client.post(f"/v1/console/chat/{session2}/voice/start", json={"tenant_id": "_default"})
-
-        # Stop only session 1
-        client.post(
-            f"/v1/console/chat/{session1}/voice/stop",
-            json={"tenant_id": "_default", "transcript": "Session 1"}
-        )
-
-        # Verify states
-        s1 = client.get(f"/v1/console/chat/{session1}/voice/summary").json()
-        s2 = client.get(f"/v1/console/chat/{session2}/voice/summary").json()
-
-        assert s1["status"] == "stopped"
-        assert s2["status"] == "recording"
-
-    def test_tenant_scoping(self, client):
-        """Test: Audit events include tenant_id"""
-        session_id = "test-tenant-scope"
-        tenant_id = "tenant-custom-001"
-
-        response = client.post(
-            f"/v1/console/chat/{session_id}/voice/start",
-            json={"tenant_id": tenant_id}
-        )
-
-        assert response.status_code == 200
-        # In Phase 2: verify audit event has correct tenant_id
+BASE = "/v1/console/chat"
 
 
-class TestGracefulDegradation:
-    """Phase 1: Chat works even when STT is unavailable"""
+def _stt_on() -> None:
+    import corvin_console.routes.voice_summary as vs
+    vs._get_stt_available = lambda: True
+    vs._voice_sessions.clear()
 
-    def test_stt_unavailable_fallback(self, client):
-        """Test: Chat continues even if STT unavailable"""
-        # Phase 2: Mock STT unavailability
-        # For now: verify health endpoint shows STT status
-        response = client.get("/v1/console/chat/voice/health")
-        data = response.json()
 
-        # If stt_available=False, chat should still work
-        # (This is enforced in React component: Button disabled but doesn't block chat)
-        assert "stt_available" in data
+class VoiceSummaryAuthTest(unittest.TestCase):
+    def test_routes_require_a_session(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, _csrf, _home, _):
+            client.cookies.clear()
+            self.assertEqual(client.get(f"{BASE}/voice/health").status_code, 401)
+            self.assertEqual(client.get(f"{BASE}/s1/voice/summary").status_code, 401)
+            self.assertEqual(client.get(f"{BASE}/s1/task/status").status_code, 401)
+            for path in ("/s1/voice/start", "/s1/voice/stop", "/s1/voice/feedback", "/s1/task/register"):
+                self.assertEqual(client.post(BASE + path, json={}).status_code, 401, path)
+
+    def test_mutation_requires_csrf(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, _csrf, _home, _):
+            _stt_on()
+            r = client.post(f"{BASE}/s1/voice/start", json={})
+            self.assertEqual(r.status_code, 403, r.text)
+
+
+class VoiceSummaryFlowTest(unittest.TestCase):
+    def test_start_stop_summary_is_not_fabricated(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _):
+            _stt_on()
+            h = {"X-CSRF-Token": csrf}
+            self.assertEqual(client.get(f"{BASE}/never/voice/summary").json()["status"], "not_started")
+
+            r = client.post(f"{BASE}/s2/voice/start", headers=h, json={})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(client.get(f"{BASE}/s2/voice/summary").json()["status"], "recording")
+
+            transcript = "User asked: how do I route requests? Agent answered: use os-router."
+            r = client.post(f"{BASE}/s2/voice/stop", headers=h, json={"transcript": transcript})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertIsNone(r.json()["summary"])
+
+            data = client.get(f"{BASE}/s2/voice/summary").json()
+            self.assertEqual(data["status"], "stopped")
+            self.assertEqual(data["transcript"], transcript)
+            self.assertIsNone(data["summary"])
+
+            blob = repr(_audit_events(home))
+            self.assertIn("voice.recording_started", blob)
+            self.assertIn("voice.recording_stopped", blob)
+            self.assertNotIn("route requests", blob)
+
+    def test_stop_nonexistent_session(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, _home, _):
+            _stt_on()
+            r = client.post(f"{BASE}/nope/voice/stop", headers={"X-CSRF-Token": csrf},
+                            json={"transcript": ""})
+            self.assertEqual(r.status_code, 404)
+
+    def test_tenant_isolation(self):
+        with _sandbox(Path(tempfile.mkdtemp()), tenants=("_default", "tenant-b")) as (
+            client, csrf, _home, clients,
+        ):
+            _stt_on()
+            h = {"X-CSRF-Token": csrf}
+            client.post(f"{BASE}/shared/voice/start", headers=h, json={})
+            client.post(f"{BASE}/shared/voice/stop", headers=h,
+                        json={"transcript": "tenant A secret", "tenant_id": "tenant-b"})
+            client_b, csrf_b = clients["tenant-b"]
+            seen = client_b.get(f"{BASE}/shared/voice/summary").json()
+            self.assertEqual(seen["status"], "not_started")
+            self.assertNotIn("secret", repr(seen))
+            # B cannot stop / annotate A's recording either.
+            r = client_b.post(f"{BASE}/shared/voice/feedback", headers={"X-CSRF-Token": csrf_b},
+                              json={"score": 1.0})
+            self.assertEqual(r.status_code, 404)
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    unittest.main()

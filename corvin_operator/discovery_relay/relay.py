@@ -18,12 +18,15 @@ import base64
 # Audit event emission (optional for tests, required for production)
 try:
     from corvin_operator.forge.forge.security_events import write_event
+    from corvin_operator.forge.forge.paths import tenant_audit_chain
 except ImportError:
     write_event = None  # Mock if not available
+    tenant_audit_chain = None
 from .catalog import CatalogBackend, InMemoryCatalogBackend, DiscoveredInstance
 from .security import (
     validate_hmac, compute_hmac, decrypt_payload, encrypt_payload,
-    AuthenticationError, scrub_for_audit
+    AuthenticationError, scrub_for_audit,
+    register_signing_payload, heartbeat_signing_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,8 +111,7 @@ class DiscoveryRelay:
                         # Emit audit event (if available)
                         if write_event:
                             try:
-                                from pathlib import Path
-                                audit_path = Path.home() / ".corvin" / "tenants" / self.tenant_id / "global" / "audit.jsonl"
+                                audit_path = tenant_audit_chain(self.tenant_id)
                                 write_event(
                                     audit_path,
                                     event_type="discovery.housekeeping_complete",
@@ -152,9 +154,9 @@ class DiscoveryRelay:
             logger.warning(f"Unknown org_id: {org_id}")
             raise HTTPException(status_code=403, detail="Unknown organization")
 
-        # Validate HMAC signature
-        # Signature is computed over the JSON payload (excluding auth header itself)
-        payload_for_sig = b'{"instance_id":"' + req.instance_id.encode() + b'"}'
+        # Validate HMAC signature over org_id + EVERY stored field, domain-separated
+        # from the heartbeat message (see security.register_signing_payload).
+        payload_for_sig = register_signing_payload(org_id, req.model_dump())
         if not validate_hmac(payload_for_sig, auth_signature, org_key):
             logger.warning(f"Invalid HMAC signature for org_id={org_id}")
             raise HTTPException(status_code=401, detail="Invalid signature")
@@ -188,16 +190,15 @@ class DiscoveryRelay:
         # Emit audit event (if available)
         if write_event:
             try:
-                from pathlib import Path
-                audit_path = Path.home() / ".corvin" / "tenants" / self.tenant_id / "global" / "audit.jsonl"
+                audit_path = tenant_audit_chain(self.tenant_id)
                 write_event(
                     audit_path,
                     event_type="discovery.instance_registered",
+                    # Identifiers + a number only: the endpoint URL and the kid
+                    # stay out of the chain (_EVENT_ALLOWLIST pins these fields).
                     details=scrub_for_audit({
                         "org_id": org_id,
                         "instance_id": req.instance_id,
-                        "endpoint": req.endpoint,
-                        "kid": req.kid,
                         "latency_ms": req.latency_ms,
                     })
                 )
@@ -228,8 +229,7 @@ class DiscoveryRelay:
         # Emit audit event (if available)
         if write_event:
             try:
-                from pathlib import Path
-                audit_path = Path.home() / ".corvin" / "tenants" / self.tenant_id / "global" / "audit.jsonl"
+                audit_path = tenant_audit_chain(self.tenant_id)
                 write_event(
                     audit_path,
                     event_type="discovery.catalog_queried",
@@ -247,7 +247,7 @@ class DiscoveryRelay:
         if not org_key:
             raise HTTPException(status_code=403, detail="Unknown organization")
 
-        payload_for_sig = b'{"instance_id":"' + req.instance_id.encode() + b'"}'
+        payload_for_sig = heartbeat_signing_payload(org_id, req.instance_id)
         if not validate_hmac(payload_for_sig, auth_signature, org_key):
             raise HTTPException(status_code=401, detail="Invalid signature")
 
@@ -259,8 +259,7 @@ class DiscoveryRelay:
         # Emit audit event (if available)
         if write_event:
             try:
-                from pathlib import Path
-                audit_path = Path.home() / ".corvin" / "tenants" / self.tenant_id / "global" / "audit.jsonl"
+                audit_path = tenant_audit_chain(self.tenant_id)
                 write_event(
                     audit_path,
                     event_type="discovery.instance_heartbeat",

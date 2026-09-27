@@ -85,7 +85,10 @@ docs: []
             r'^ADR_GATE_',
             r'^ADR_LDD_',
             r'^DOC-',
-            r'^[0-9]+-[a-z]+-[a-z]+\.md$',  # Legacy format without ADR- prefix
+            # NOT legacy `NNNN-slug.md` names: those are real ADRs (e.g.
+            # 0030-plugin-system.md) and the ADR Gate still names that shape as
+            # the destination. A `^[0-9]+-[a-z]+-[a-z]+\.md$` pattern here
+            # moved 21 live ADRs out of decisions/ on one run.
         ]
         return any(re.match(pattern, file_name) for pattern in non_adr_patterns)
 
@@ -141,7 +144,10 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Show what would change')
     args = parser.parse_args()
 
-    remediator = ADRRemediator(dry_run=args.dry_run)
+    # Dry-run unless --fix is given explicitly. `dry_run=args.dry_run` made a
+    # bare invocation (no flags) rewrite and unlink files in the canonical ADR
+    # repo, and --fix did nothing at all.
+    remediator = ADRRemediator(dry_run=not args.fix or args.dry_run)
     remediator.run()
 
 

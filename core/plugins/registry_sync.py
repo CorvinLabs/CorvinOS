@@ -207,7 +207,7 @@ class PluginRegistrySynchronizer:
             # Convert verification result to drift
             drift = PluginDrift(
                 plugin_id=plugin_entry.plugin_id,
-                drift_type=self._severity_to_drift_type(verification.severity),
+                drift_type=self._drift_type_of(verification),
                 expected_version=verification.expected_version,
                 actual_version=verification.actual_version,
                 severity=verification.severity.name,
@@ -302,6 +302,23 @@ class PluginRegistrySynchronizer:
         manifest = self.manifest_manager.load_manifest()
         return {p.plugin_id: p.version for p in manifest.plugins}
 
+    def _drift_type_of(self, verification) -> str:
+        """Classify a failed verification by WHAT failed, not by its severity.
+
+        A missing plugin and a hash mismatch are both CRITICAL, so mapping
+        severity -> type reported every missing plugin as CHECKSUM_MISMATCH:
+        the drift monitor paged "tampering" for an absent plugin, and
+        remediate() refused to install it ("manual review required").
+        """
+        reason = (verification.reason or "").lower()
+        if "missing" in reason or "not found" in reason:
+            return "MISSING"
+        if "version mismatch" in reason:
+            return "VERSION_MISMATCH"
+        if "hash mismatch" in reason:
+            return "CHECKSUM_MISMATCH"
+        return self._severity_to_drift_type(verification.severity)
+
     def _severity_to_drift_type(self, severity: VerificationSeverity) -> str:
         """Map verification severity to drift type"""
         severity_map = {
@@ -332,21 +349,50 @@ class PluginRegistrySynchronizer:
             logger.warning(f"Failed to read version from {plugin_path}: {e}")
             return None
 
-    def _audit_remediation_attempt(self, plugin_id: str, action: str, success: bool, message: str):
-        """Log remediation attempt to audit trail"""
-        try:
-            from core.compliance.security_events import write_event
+    #: Event name + content-free field allowlist for remediation records.
+    REMEDIATION_EVENT = "plugin.remediation_attempted"
+    _REMEDIATION_FIELDS = frozenset({"plugin_id", "action", "success", "instance_id", "tenant_id"})
 
+    def _audit_remediation_attempt(self, plugin_id: str, action: str, success: bool, message: str) -> bool:
+        """Chain one remediation attempt on the tenant's canonical audit chain.
+
+        Previously this imported ``core.compliance.security_events`` — a module
+        that does not exist — and called ``write_event(event_type, details)``
+        with the path argument missing, so every remediation (including the
+        refused CHECKSUM_MISMATCH "tampering" case) went unaudited behind a
+        warning. The chain path now comes from ``core.paths.tenant_audit_chain``
+        and only structural fields are recorded; ``message`` is free text
+        (installer output) and is deliberately not written.
+
+        Returns True when the record was chained, False (logged at ERROR)
+        otherwise — remediation itself is never aborted by an audit failure.
+        """
+        del message  # free text: never chained
+        tenant_id = os.getenv("CORVIN_TENANT_ID") or "_default"
+        try:
+            try:
+                import corvin_core._bootstrap  # noqa: F401 — puts forge on sys.path in a checkout
+            except Exception:  # noqa: BLE001
+                pass
+            from forge.security_events import register_event_allowlist, write_event  # type: ignore[import-not-found]
+            from core.paths import tenant_audit_chain
+
+            register_event_allowlist(self.REMEDIATION_EVENT, self._REMEDIATION_FIELDS)
+            path = tenant_audit_chain(tenant_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
             write_event(
-                "plugin_remediation_attempted",
-                {
-                    "instance_id": self.instance_id,
-                    "plugin_id": plugin_id,
-                    "action": action,
-                    "success": success,
-                    "message": message,
-                    "timestamp": datetime.utcnow().isoformat(),
+                path,
+                self.REMEDIATION_EVENT,
+                tool="plugins.registry_sync",
+                details={
+                    "plugin_id": str(plugin_id)[:128],
+                    "action": str(action)[:32],
+                    "success": bool(success),
+                    "instance_id": str(self.instance_id)[:128],
+                    "tenant_id": tenant_id,
                 },
             )
-        except Exception as e:
-            logger.warning(f"Failed to audit remediation: {e}")
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Remediation audit NOT chained for {plugin_id}: {type(e).__name__}")
+            return False

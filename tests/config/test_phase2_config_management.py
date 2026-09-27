@@ -12,6 +12,7 @@ Tests for centralized config manager:
 ADR-0408: Configuration Management Phase 2
 """
 
+import copy
 import json
 import pytest
 import tempfile
@@ -24,6 +25,13 @@ from core.config.centralized_manager import (
     DEFAULT_SAFE_CONFIG,
 )
 from core.compliance.audit_chain_writer import AuditChainWriter
+
+
+@pytest.fixture(autouse=True)
+def _isolated_corvin_home(tmp_path, monkeypatch):
+    """Never read or write the operator's live ~/.corvin/config (these tests
+    used to leave _default.json / tenant-x.json there)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
 
 
 @pytest.fixture
@@ -97,49 +105,49 @@ class TestSchemaValidation:
 
     def test_invalid_telemetry_interval_too_low(self, manager_no_audit):
         """Test validation rejects telemetry interval < 5."""
-        config = DEFAULT_SAFE_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         config["telemetry"]["push_interval_seconds"] = 3
         errors = manager_no_audit.validate_config(config)
         assert any("push_interval_seconds" in e for e in errors)
 
     def test_invalid_telemetry_interval_too_high(self, manager_no_audit):
         """Test validation rejects telemetry interval > 300."""
-        config = DEFAULT_SAFE_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         config["telemetry"]["push_interval_seconds"] = 500
         errors = manager_no_audit.validate_config(config)
         assert any("push_interval_seconds" in e for e in errors)
 
     def test_invalid_database_schema_version_too_low(self, manager_no_audit):
         """Test validation rejects schema version < 4."""
-        config = DEFAULT_SAFE_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         config["database"]["schema_version"] = 3
         errors = manager_no_audit.validate_config(config)
         assert any("schema_version" in e for e in errors)
 
     def test_invalid_database_schema_version_too_high(self, manager_no_audit):
         """Test validation rejects schema version > 6."""
-        config = DEFAULT_SAFE_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         config["database"]["schema_version"] = 7
         errors = manager_no_audit.validate_config(config)
         assert any("schema_version" in e for e in errors)
 
     def test_invalid_plugins_not_list(self, manager_no_audit):
         """Test validation rejects plugins if not a list."""
-        config = DEFAULT_SAFE_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         config["plugins"]["enabled_plugins"] = "not-a-list"
         errors = manager_no_audit.validate_config(config)
         assert any("enabled_plugins" in e for e in errors)
 
     def test_valid_edge_case_empty_plugins(self, manager_no_audit):
         """Test empty plugins list is valid."""
-        config = DEFAULT_SAFE_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         config["plugins"]["enabled_plugins"] = []
         errors = manager_no_audit.validate_config(config)
         assert len(errors) == 0
 
     def test_valid_edge_case_boundary_intervals(self, manager_no_audit):
         """Test boundary values for telemetry interval."""
-        config = DEFAULT_SAFE_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
 
         # Test minimum
         config["telemetry"]["push_interval_seconds"] = 5
@@ -194,7 +202,7 @@ class TestConfigOverrides:
 
     def test_invalid_config_rejected(self, manager_with_audit):
         """Test invalid config is rejected."""
-        invalid_config = DEFAULT_SAFE_CONFIG.copy()
+        invalid_config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         invalid_config["telemetry"]["push_interval_seconds"] = 1000  # Invalid
 
         result = manager_with_audit.set_config(
@@ -307,7 +315,7 @@ class TestAuditIntegration:
 
     def test_audit_event_on_validation_failure(self, manager_with_audit):
         """Test audit event logged on validation failure."""
-        invalid_config = DEFAULT_SAFE_CONFIG.copy()
+        invalid_config = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         invalid_config["telemetry"]["push_interval_seconds"] = 1000  # Invalid
 
         result = manager_with_audit.set_config(
@@ -349,7 +357,7 @@ class TestFailClosedBehavior:
 
     def test_invalid_config_not_accepted(self, manager_with_audit):
         """Test invalid config is never accepted."""
-        invalid = DEFAULT_SAFE_CONFIG.copy()
+        invalid = copy.deepcopy(DEFAULT_SAFE_CONFIG)
         invalid["database"]["schema_version"] = 99
 
         result = manager_with_audit.set_config(
@@ -493,3 +501,21 @@ class TestTenantIsolation:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestReviewRegressions:
+    """2026-09-27 adversarial review."""
+
+    def test_returned_default_is_a_private_copy(self, manager_no_audit):
+        cfg = manager_no_audit.get_config(tenant_id="_default")
+        cfg["database"]["schema_version"] = 99
+        assert DEFAULT_SAFE_CONFIG["database"]["schema_version"] == 4
+        assert manager_no_audit.get_config(tenant_id="_default")["database"]["schema_version"] == 4
+
+    def test_canonical_store_honours_corvin_home(self, manager_no_audit, sample_valid_config, tmp_path):
+        manager_no_audit._write_canonical("_default", sample_valid_config)
+        assert (tmp_path / "corvin_home" / "config" / "_default.json").exists()
+
+    def test_tenant_id_cannot_escape_the_store(self, manager_no_audit, sample_valid_config):
+        with pytest.raises(ValueError):
+            manager_no_audit._write_canonical("../escape", sample_valid_config)

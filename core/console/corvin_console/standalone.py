@@ -411,8 +411,10 @@ def create_app() -> FastAPI:
             from core.deployment.state_sync import get_deployment_manager
 
             manager = get_deployment_manager()
-            instance_id = os.environ.get("INSTANCE_ID", "console-local")
-            tenant_id = os.environ.get("TENANT_ID", "_default")
+            # CORVIN_* only (project identity hard cut): a bare TENANT_ID /
+            # INSTANCE_ID is not a Corvin variable.
+            instance_id = os.environ.get("CORVIN_INSTANCE_ID", "console-local")
+            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
 
             manager.register_instance(instance_id=instance_id, tenant_id=tenant_id)
             log.info(

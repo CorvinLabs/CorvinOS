@@ -21,6 +21,7 @@ import os
 from uuid import uuid4
 import threading
 import hashlib
+import copy
 from jsonschema import validate, ValidationError
 
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
@@ -75,6 +76,30 @@ DEFAULT_SAFE_CONFIG = {
         "consent_required": True,
     },
 }
+
+
+def _safe_default() -> Dict[str, Any]:
+    """A private copy of DEFAULT_SAFE_CONFIG.
+
+    get_config() used to return the module-level dict itself, so any caller
+    that edited the result (``cfg["database"]["schema_version"] = 7``) silently
+    rewrote the fail-closed fallback for every tenant in the process.
+    """
+    return copy.deepcopy(DEFAULT_SAFE_CONFIG)
+
+
+def _config_file(tenant_id: str) -> Path:
+    """<corvin_home>/config/<tenant_id>.json — CORVIN_HOME-aware, tenant validated.
+
+    Previously ``Path.home() / ".corvin"`` with the raw tenant_id: it ignored
+    CORVIN_HOME (so tests and non-default installs wrote into the operator's
+    live ~/.corvin) and a tenant_id such as ``../x`` escaped the directory.
+    """
+    from core.paths.tenant import corvin_home
+    from core.tenants import validate_tenant_id
+
+    validate_tenant_id(tenant_id)
+    return corvin_home() / "config" / f"{tenant_id}.json"
 
 
 class CentralizedConfigManager:
@@ -171,7 +196,7 @@ class CentralizedConfigManager:
                 # Step 1: Fetch canonical config
                 canonical = self._fetch_canonical(tenant_id)
                 if canonical is None:
-                    return DEFAULT_SAFE_CONFIG
+                    return _safe_default()
 
                 # Step 2: Validate
                 errors = self.validate_config(canonical)
@@ -182,7 +207,7 @@ class CentralizedConfigManager:
                         details={"reason": f"validation_errors: {errors}"},
                         severity="warning",
                     )
-                    return DEFAULT_SAFE_CONFIG
+                    return _safe_default()
 
                 # Step 3: Apply overrides
                 config = canonical.copy()
@@ -201,7 +226,7 @@ class CentralizedConfigManager:
                     details={"exception": str(e)},
                     severity="critical",
                 )
-                return DEFAULT_SAFE_CONFIG
+                return _safe_default()
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
         """Validate config against schema.
@@ -461,8 +486,7 @@ class CentralizedConfigManager:
     def _fetch_canonical(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Fetch canonical config from central store (file-based for dev)."""
         try:
-            config_dir = Path.home() / ".corvin" / "config"
-            config_file = config_dir / f"{tenant_id}.json"
+            config_file = _config_file(tenant_id)
 
             if config_file.exists():
                 with open(config_file, "r") as f:
@@ -475,10 +499,8 @@ class CentralizedConfigManager:
 
     def _write_canonical(self, tenant_id: str, config: Dict[str, Any]) -> None:
         """Write canonical config to central store (file-based for dev)."""
-        config_dir = Path.home() / ".corvin" / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-
-        config_file = config_dir / f"{tenant_id}.json"
+        config_file = _config_file(tenant_id)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(config_file, "w") as f:
             json.dump(config, f, indent=2)

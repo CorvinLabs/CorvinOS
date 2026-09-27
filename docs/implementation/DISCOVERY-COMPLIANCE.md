@@ -1,5 +1,8 @@
 # Discovery System Compliance Audit — GDPR + EU AI Act
 
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** "Approved for production / no additional work required" is false: the audit leg relies on `security_events.emit_discovery_event`, which does not exist, and `core/discovery` has no production caller.
+
+
 **Date:** 2026-09-24  
 **Scope:** A2A (App-to-App) relay system, connectivity manager, ingress handler  
 **Standards:** GDPR (Art. 5, 6, 30, 32), EU AI Act (Art. 5, 50), RFC 8174 (MUST/SHOULD)  

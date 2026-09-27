@@ -194,7 +194,7 @@ def resolve_worker_engine_dual_write(
     )
 
     # Log both to audit trail (ADR-0722 decision attribution)
-    _emit_dual_routing_audit(real_decision, shadow_decision, decision_reason)
+    _emit_dual_routing_audit(real_decision, shadow_decision, decision_reason, skill_engine=skill_engine)
 
     # Step 6: Emit decision metric (agreement rate + confidence distribution)
     _emit_decision_metrics(
@@ -334,9 +334,14 @@ def _fetch_skill_decision(
             tenant_id=tenant_id,
         )
 
-        # Validate output has required fields
-        if result and "decision" in result and "confidence" in result:
-            return result
+        # registry.execute() returns a SkillExecutionResult, not the Skill's
+        # dict: the decision is its ``output``, and only on status "success".
+        # Testing ``"decision" in result`` on the wrapper raised TypeError, so
+        # every Phase 2a turn fell back to confidence 0.0 and the Skill was
+        # never consulted.
+        output = getattr(result, "output", None) if getattr(result, "status", None) == "success" else None
+        if isinstance(output, dict) and "decision" in output and "confidence" in output:
+            return output
 
         _log.warning("Skill result missing required fields: %s", result)
         return {
@@ -390,8 +395,11 @@ def _load_confidence_threshold(tenant_id: str) -> float:
             load_skill_config,
         )
 
-        learned_config, _ = load_skill_config("os.delegation_router", tenant_id)
-        if learned_config and hasattr(learned_config, "confidence_threshold"):
+        learned_config, learned_version = load_skill_config("os.delegation_router", tenant_id)
+        # load_skill_config() returns the SkillConfig() defaults (0.70) with
+        # version None when nothing was learned; only a learned version may
+        # override this gate's own default.
+        if learned_version is not None and hasattr(learned_config, "confidence_threshold"):
             threshold = learned_config.confidence_threshold
             if 0.0 <= threshold <= 1.0:
                 _log.debug(
@@ -407,59 +415,96 @@ def _load_confidence_threshold(tenant_id: str) -> float:
     return DEFAULT_THRESHOLD
 
 
+#: Positive field allowlists for the Phase 2a routing events. The core writer
+#: is default-deny on keys; an event with no registered set loses its fields.
+_DUAL_WRITE_AUDIT_ALLOWLISTS: dict[str, frozenset] = {
+    "l5_routing_dual_write": frozenset({
+        "request_id", "decision_source", "used_engine", "skill_engine",
+        "bundled_engine", "skill_confidence", "threshold", "task_type",
+        "agreement", "tenant_id",
+    }),
+    "l5_routing_rollback_active": frozenset({
+        "request_id", "used_engine", "task_type", "reason_code", "tenant_id",
+    }),
+    "l5_routing_metrics": frozenset({
+        "request_id", "agreement", "threshold_met", "skill_confidence",
+        "threshold", "task_type", "used_engine", "tenant_id",
+    }),
+}
+
+
+def _audit(event_type: str, details: dict, tenant_id: str) -> None:
+    """Append one Phase 2a routing event to the tenant's hash-chained audit log.
+
+    These events used to import ``core.security.audit_logger`` — a module that
+    does not exist — and swallow the ImportError at debug level, so every
+    Phase 2a routing decision (including turns where the Skill's answer
+    replaced the bundled engine) went unaudited. Same writer as the Skill
+    registry's ``CoreAuditBackend``: ``audit.audit_event`` resolves the tenant
+    chain via ``tenant_audit_chain()``.
+    """
+    try:
+        from audit import audit_event  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        _log.error("core audit writer unavailable — %s NOT chained", event_type)
+        return
+    try:
+        from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        register_event_allowlist(event_type, _DUAL_WRITE_AUDIT_ALLOWLISTS[event_type])
+    except ImportError:
+        pass
+    try:
+        audit_event(event_type, details=details, tenant_id=tenant_id)
+    except Exception as exc:  # noqa: BLE001 — routing already decided; never raise
+        _log.error("audit emit failed for %s (%s)", event_type, type(exc).__name__)
+
+
 def _emit_dual_routing_audit(
     real_decision: RoutingDecision,
     shadow_decision: RoutingDecision,
     decision_reason: str = "",
+    skill_engine: str | None = None,
 ) -> None:
     """Emit dual-write decision to audit trail (ADR-0722 decision attribution).
 
     Logs both the real (Skill-driven) and shadow (bundled) decisions for
     agreement tracking and learning feedback integration.
     """
-    try:
-        from core.security.audit_logger import audit_event  # noqa: PLC0415
-
-        audit_event(
-            "l5_routing_dual_write",
-            {
-                "request_id": real_decision.request_id,
-                "decision_source": real_decision.decision_source,
-                "used_engine": real_decision.engine,
-                "skill_engine": real_decision.engine
-                if real_decision.decision_source == "skill"
-                else shadow_decision.engine,
-                "bundled_engine": shadow_decision.engine,
-                "skill_confidence": real_decision.confidence,
-                "decision_reason": decision_reason,
-                "task_type": real_decision.task_type,
-                "agreement": real_decision.engine == shadow_decision.engine,
-                "tenant_id": real_decision.tenant_id,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        _log.debug("Failed to emit audit event: %s", exc)
+    # ``decision_reason`` is free text and stays out of the chain; the
+    # source + confidence (+ threshold on the metrics event) carry the same fact.
+    _audit(
+        "l5_routing_dual_write",
+        {
+            "request_id": real_decision.request_id,
+            "decision_source": real_decision.decision_source,
+            "used_engine": real_decision.engine,
+            "skill_engine": skill_engine if skill_engine is not None else real_decision.engine,
+            "bundled_engine": shadow_decision.engine,
+            "skill_confidence": real_decision.confidence,
+            "task_type": real_decision.task_type,
+            "agreement": real_decision.engine == shadow_decision.engine,
+            "tenant_id": real_decision.tenant_id,
+        },
+        real_decision.tenant_id,
+    )
 
 
 def _emit_rollback_decision_audit(
     request_id: str, bundled_engine: str, task_type: str, tenant_id: str
 ) -> None:
     """Emit audit event when routing uses bundled rule due to active rollback."""
-    try:
-        from core.security.audit_logger import audit_event  # noqa: PLC0415
-
-        audit_event(
-            "l5_routing_rollback_active",
-            {
-                "request_id": request_id,
-                "used_engine": bundled_engine,
-                "task_type": task_type,
-                "reason": "Rollback active, using bundled routing",
-                "tenant_id": tenant_id,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        _log.debug("Failed to emit rollback audit event: %s", exc)
+    _audit(
+        "l5_routing_rollback_active",
+        {
+            "request_id": request_id,
+            "used_engine": bundled_engine,
+            "task_type": task_type,
+            "reason_code": "rollback_active",
+            "tenant_id": tenant_id,
+        },
+        tenant_id,
+    )
 
 
 def _emit_decision_metrics(
@@ -477,27 +522,22 @@ def _emit_decision_metrics(
 
     These metrics feed into the console dashboard for Phase 2a monitoring.
     """
-    try:
-        agreement = 1.0 if skill_engine == bundled_engine else 0.0
-        threshold_met = 1.0 if skill_confidence >= threshold else 0.0
-
-        from core.security.audit_logger import audit_event  # noqa: PLC0415
-
-        audit_event(
-            "l5_routing_metrics",
-            {
-                "request_id": request_id,
-                "agreement": agreement,  # 1.0 if skill == bundled, else 0.0
-                "threshold_met": threshold_met,  # 1.0 if confidence >= threshold
-                "skill_confidence": skill_confidence,
-                "threshold": threshold,
-                "task_type": task_type,
-                "used_engine": used_engine,
-                "tenant_id": tenant_id,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        _log.debug("Failed to emit metrics: %s", exc)
+    agreement = 1.0 if skill_engine == bundled_engine else 0.0
+    threshold_met = 1.0 if skill_confidence >= threshold else 0.0
+    _audit(
+        "l5_routing_metrics",
+        {
+            "request_id": request_id,
+            "agreement": agreement,  # 1.0 if skill == bundled, else 0.0
+            "threshold_met": threshold_met,  # 1.0 if confidence >= threshold
+            "skill_confidence": skill_confidence,
+            "threshold": threshold,
+            "task_type": task_type,
+            "used_engine": used_engine,
+            "tenant_id": tenant_id,
+        },
+        tenant_id,
+    )
 
 
 def get_monitoring_dashboard() -> dict:

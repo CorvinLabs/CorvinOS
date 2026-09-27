@@ -33,8 +33,11 @@ test_daemon() {
   rm -f "$sandbox/settings.json"
   echo '{}' > "$sandbox/settings.json"
   # Symlink shared/ + shared/js/ so the require('../shared/js/...') still works.
-  # Use -f so re-running after a failed test (which skips cleanup) doesn't error.
-  ln -sf "$BRIDGES_DIR/shared" "$TMPDIR/shared"
+  # -f so re-running after a failed test (which skips cleanup) doesn't error;
+  # -n so an existing $TMPDIR/shared link is REPLACED, not dereferenced — plain
+  # -sf followed the old link and planted a shared/shared self-symlink inside
+  # the checked-in bridges/shared/ tree after every failed daemon case.
+  ln -sfn "$BRIDGES_DIR/shared" "$TMPDIR/shared"
 
   local logfile="$TMPDIR/$channel.log"
   # Run with fake port so we don't collide with a live daemon.

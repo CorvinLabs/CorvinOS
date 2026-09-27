@@ -2,18 +2,36 @@
 
 HTTP endpoints for Skill learning observability:
   - GET /v1/console/skills/{skill_id}/learning — full learning stats
-  - POST /v1/console/skills/{skill_id}/feedback — submit feedback
   - GET /v1/console/skills/{skill_id}/feedback/history — feedback timeline
   - GET /v1/console/skills/{skill_id}/optimization/proposals — tuning suggestions
+
+No per-skill learning store is wired behind these routes yet. They used to
+answer every skill id with the same hard-coded numbers (156 executions, 85 %
+accuracy, ten invented feedback items, one invented tuning proposal) — sample
+data presented as measurements on a production surface. They now say "not
+available on this build" (404 for the metrics, empty lists for the rest)
+until a real source exists. Every route needs a console session; the tenant is
+the session's, never a query parameter.
 """
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from .. import auth as session_auth
+from ..deps import require_session_csrf_on_mutation
+
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/skills", tags=["learning"])
+router = APIRouter(
+    prefix="/skills", tags=["learning"],
+    dependencies=[Depends(require_session_csrf_on_mutation)],
+)
+Session = Annotated[session_auth.SessionRecord, Depends(require_session_csrf_on_mutation)]
+
+_UNAVAILABLE = "skill learning metrics are not available on this build"
 
 
 class SkillLearningMetrics(BaseModel):
@@ -42,6 +60,8 @@ class FeedbackHistory(BaseModel):
     skill_id: str
     total_feedback_items: int
     recent: list[FeedbackItem]
+    available: bool = False
+    reason: str = _UNAVAILABLE
 
 
 class OptimizationProposal(BaseModel):
@@ -60,75 +80,32 @@ class OptimizationProposal(BaseModel):
 class OptimizationProposalList(BaseModel):
     skill_id: str
     proposals: list[OptimizationProposal]
+    available: bool = False
+    reason: str = _UNAVAILABLE
 
 
 @router.get("/{skill_id}/learning")
-async def get_skill_learning_metrics(
-    skill_id: str,
-    tenant_id: str = Query("_default"),
-) -> SkillLearningMetrics:
-    """Get full learning stats for a Skill."""
-    return SkillLearningMetrics(
-        skill_id=skill_id,
-        version="2.0.0",
-        total_executions=156,
-        correct_outcomes=132,
-        accuracy=0.85,
-        avg_latency_ms=42.5,
-        error_rate=0.05,
-        avg_cost_usd=0.0012,
-        confidence_score=0.87,
-        last_updated="2026-09-25T12:00:00Z",
-    )
+async def get_skill_learning_metrics(skill_id: str, rec: Session) -> SkillLearningMetrics:
+    """Full learning stats for a Skill — no source is wired yet."""
+    raise HTTPException(status_code=404, detail=_UNAVAILABLE)
 
 
 @router.get("/{skill_id}/feedback/history")
 async def get_feedback_history(
     skill_id: str,
+    rec: Session,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    tenant_id: str = Query("_default"),
 ) -> FeedbackHistory:
-    """Get recent feedback for a Skill."""
-    recent_feedback = [
-        FeedbackItem(
-            execution_id=f"exec-{i}",
-            outcome_correct=i % 3 != 0,
-            rating=5 if i % 3 != 0 else 3,
-            notes="Good routing" if i % 3 != 0 else "Incorrect",
-            timestamp=f"2026-09-25T{12-i//60:02d}:00:00Z",
-            latency_ms=40.0 + i * 0.5,
-        )
-        for i in range(min(limit, 10))
-    ]
-    
-    return FeedbackHistory(
-        skill_id=skill_id,
-        total_feedback_items=len(recent_feedback),
-        recent=recent_feedback,
-    )
+    """Recent feedback for a Skill — empty until a source is wired."""
+    return FeedbackHistory(skill_id=skill_id, total_feedback_items=0, recent=[])
 
 
 @router.get("/{skill_id}/optimization/proposals")
 async def get_optimization_proposals(
     skill_id: str,
+    rec: Session,
     status: str = Query("pending"),
-    tenant_id: str = Query("_default"),
 ) -> OptimizationProposalList:
-    """Get Skill parameter tuning proposals."""
-    proposals = [
-        OptimizationProposal(
-            proposal_id="prop-001",
-            skill_id=skill_id,
-            parameter_name="confidence_threshold",
-            old_value="0.70",
-            new_value="0.65",
-            rationale="Reduce false negatives by 3%",
-            expected_improvement_pct=3.2,
-            confidence=0.82,
-            created_at="2026-09-25T10:00:00Z",
-            status="pending",
-        )
-    ]
-    
-    return OptimizationProposalList(skill_id=skill_id, proposals=proposals)
+    """Parameter tuning proposals for a Skill — empty until a source is wired."""
+    return OptimizationProposalList(skill_id=skill_id, proposals=[])

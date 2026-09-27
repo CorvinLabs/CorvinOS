@@ -235,6 +235,9 @@ const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { to: "/app/agent-hub",  label: "Agent Hub",     icon: Globe2 },
+      // aab29c8e3 registered the Discovery panel in PANELS only, so its route
+      // (backed by the mounted routes/a2a_discovery.py) was linked from nowhere.
+      { to: "/app/discovery",  label: "Discovery",     icon: Globe2 },
       { to: "/app/connectors", label: "Connectors",    icon: Plug },
     ],
   },

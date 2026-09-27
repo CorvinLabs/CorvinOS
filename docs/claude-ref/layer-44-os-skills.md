@@ -471,7 +471,7 @@ Every OS-Skill must prove it is **called end-to-end** (not just unit-tested):
 
 ```bash
 # 1. Run the skill in production
-pytest tests/e2e/test_delegation_router_e2e.py -v
+pytest tests/e2e/test_os_skills_l5_l10_wiring.py tests/skills/test_delegation_router_wiring_e2e.py -v
 
 # 2. Verify skill was called (check audit trail)
 grep "skill_executed.*delegation_router" ~/.corvin/audit.jsonl | tail -1

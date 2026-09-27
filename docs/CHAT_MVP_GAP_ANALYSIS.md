@@ -1,13 +1,13 @@
 # Chat MVP Gap-Analyse: Agent Hub Integration
 **Status:** 2026-09-26  
-**Ziel:** Dokumentiere, was zum Chat MVP noch fehlt — Soll vs. Ist Vergleich  
+**Goal:** Document what the Chat MVP still lacks — target vs. actual comparison  
 **Kritische ADRs:** ADR-2065 (Chat MVP, PROPOSED), ADR-2063 (A2A Feed, ACCEPTED), ADR-0133 (CLAG, ACCEPTED)
 
 ---
 
 ## 📊 EXECUTIVE SUMMARY
 
-| Aspekt | Status | Blocker | Priorität |
+| Aspect | Status | Blocker | Priority |
 |--------|--------|---------|-----------|
 | **ADR-2065 (Collab Chat Architecture)** | ⏳ PROPOSED, NOT STARTED | Design Review pending | 🔴 CRITICAL |
 | **SQLite Schema (ChatMessage, Threads)** | ❌ MISSING | Need DB init | 🔴 CRITICAL |
@@ -20,7 +20,7 @@
 | **React UI (collab-chat component)** | ❌ MISSING | Pages/components not started | 🟡 HIGH |
 | **E2E Tests** | ❌ MISSING | Need full flow tests | 🟡 MEDIUM |
 
-**Fazit:** ADR-2065 ist **architekturiert aber komplett nicht implementiert**. Foundation (A2A, Chat Runtime) ist vorhanden, aber Collab Layer fehlt vollständig.
+**Conclusion:** ADR-2065 is **designed but not implemented at all**. The foundation (A2A, chat runtime) exists; the collab layer is missing entirely.
 
 ---
 
@@ -28,18 +28,18 @@
 
 ### 1. **ADR-2065 Status & Design Readiness**
 
-#### ✅ **Was erfüllt ist:**
+#### ✅ **What is in place:**
 - Architecture design complete (8 decision points dokumentiert)
 - Audit events defined (`collab.thread_created`, etc. — 6 events)
 - Paths identified (`core/console/corvin_console/collab/`, `routes/collab.py`, React components)
 - Alternatives considered (JSONL vs SQLite decided → SQLite)
 - Failure modes & rollback documented
 
-#### ❌ **Was fehlt — IMPLEMENTATION:**
+#### ❌ **What is missing — IMPLEMENTATION:**
 
-| Component | Soll (ADR-2065) | Ist (Code) | Gap |
+| Component | Target (ADR-2065) | Actual (code) | Gap |
 |-----------|-----------------|-----------|-----|
-| **collab/ Verzeichnis** | ✅ Planned | ❌ Does not exist | Need to create |
+| **collab/ directory** | ✅ Planned | ❌ Does not exist | Need to create |
 | **ChatMessage Table (SQLite)** | author_kind, text, tenant_id, etc. | ❌ Schema not defined | Write schema + init |
 | **Threads Table** | thread_id, created_by, updated_at | ❌ Not in code | Write schema |
 | **Connection_requests Table** | For A2A peer pairing | ❌ Not in code | Write schema |
@@ -95,7 +95,7 @@
 
 #### ❌ **What's Missing — Collab-Specific Wiring:**
 
-| Mechanism | Soll | Ist | Gap |
+| Mechanism | Target | Actual | Gap |
 |-----------|------|-----|-----|
 | **CLAG in /collab/send** | `clag.gate("L38.collab_send")` before `RemoteTriggerSender` | ❌ Route not written | Wire CLAG gate in send path |
 | **Friendship Token in /collab/import** | Verify token, activate, record consent | ❌ Route not written | Implement import endpoint |

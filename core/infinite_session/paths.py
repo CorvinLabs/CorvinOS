@@ -88,9 +88,17 @@ _SNAPSHOT_EVENT_FIELDS = frozenset({
     "task_id", "phase_id", "snapshot_id", "snapshot_type", "content_hash",
     "prev_snapshot_hash", "seq", "size_bytes", "audit_ref",
 })
+# Session hand-off (session_bridge_producer). Session ids are fingerprinted
+# (sha256 prefix) — a console sid must never reach the chain verbatim.
+_BRIDGE_EVENT_FIELDS = frozenset({
+    "task_id", "content_hash", "prev_snapshot_hash", "bridge_hash",
+    "source_session_fp", "dest_session_fp", "audit_ref",
+})
 AUDIT_EVENT_ALLOWLISTS: dict[str, frozenset[str]] = {
     "infinite_session.snapshot_created": _SNAPSHOT_EVENT_FIELDS,
     "infinite_session.snapshot_archived": _SNAPSHOT_EVENT_FIELDS,
+    "infinite_session.bridge_created": _BRIDGE_EVENT_FIELDS,
+    "infinite_session.context_restored": frozenset({"task_id", "content_hash", "audit_ref"}),
 }
 _allowlists_registered = False
 

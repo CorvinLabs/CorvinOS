@@ -21,14 +21,14 @@ from ..deps import require_session
 
 router = APIRouter(dependencies=[Depends(require_session)])
 
-# Same file SkillInstaller.__init__ defaults to (core/skills/skill_installer.py).
-_REGISTRY_PATH = Path.home() / ".corvin" / "skills_installed" / "skills_registry.json"
-
-
 def get_marketplace_index() -> SkillMarketplaceIndex:
     """A fresh read per request: the registry changes whenever a skill is
-    installed or removed, and a process-lifetime copy went stale on the first."""
-    return SkillMarketplaceIndex(_REGISTRY_PATH)
+    installed or removed, and a process-lifetime copy went stale on the first.
+
+    Same file the Skill Manager writes (``skill_manager.installed_skills_root``),
+    resolved through ``corvin_home()`` so ``CORVIN_HOME`` is honoured."""
+    from .skill_manager import installed_skills_root
+    return SkillMarketplaceIndex(installed_skills_root() / "skills_registry.json")
 
 
 def _card(m: Any) -> dict[str, Any]:

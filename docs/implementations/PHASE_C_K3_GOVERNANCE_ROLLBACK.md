@@ -1,5 +1,8 @@
 # Phase C k=3: Governance + Rollback Implementation Summary
 
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** Not complete: `core/task_tracking/routes.py` (approve/rollback) is imported by nothing, the console `routes/task_tracking.py` has no approve/rollback endpoint, the 4 named frontend files do not exist, and `test_phase_c_k3_governance_rollback.py` is 3/8 in the review env.
+
+
 **Status:** COMPLETE (k=1 Dialectical Reasoning → k=2 E2E Planning → k=3 Red/Green ✅)  
 **Date:** 2026-09-27  
 **Commits:** 

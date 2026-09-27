@@ -1,5 +1,8 @@
 # ADR-2083 Staged Rollout Playbook
 
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** The scripts this playbook runs do not exist: `scripts/adr2083_canary_monitor.sh`, `scripts/adr2083_staging_validator.sh`, `scripts/verify_audit_chain.py`.
+
+
 **Project:** Non-Interactive Bridge Autonomy Design (ADR-2083)  
 **Timeline:** 4 phases over 10 days (Staging 48h → Canary 24h → GA 48h → Monitor 7d)  
 **Owner:** CorvinOS Release Team  

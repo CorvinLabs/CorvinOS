@@ -3,7 +3,7 @@
 **Canonical Reference:** [ADR-0721](../../corvin_decisions/decisions/ADR-0721-dod-verifier-skill-architecture.md), [ADR-0722](../../corvin_decisions/decisions/ADR-0722-dod-loss-signal-learning-integration.md), [ADR-0723](../../corvin_decisions/decisions/ADR-0723-dod-implementation-plan.md)
 
 **Last Updated:** 2026-09-26  
-**Status:** Production-Ready (Wave 3 sign-off)
+**Status:** Implemented; unit/adversarial tests green, no HTTP-level E2E yet (see Testing)
 
 ---
 
@@ -457,30 +457,22 @@ Evidence: Score diverged by X% on re-run
 
 ## Testing
 
-### Unit Tests
+### Tests that exist (verified 2026-09-27: 80 passed)
 ```bash
-# Test individual checks (no filesystem access)
 pytest tests/skills/test_dod_reachability.py -v
 pytest tests/skills/test_dod_audit_trail.py -v
-pytest tests/skills/test_dod_test_evidence.py -v
-pytest tests/skills/test_dod_docs_sync.py -v
-pytest tests/skills/test_dod_reproducibility.py -v
-
-# Test scoring logic
-pytest tests/skills/test_dod_scoring.py -v
+pytest tests/skills/test_dod_verifier_phase1.py -v
+pytest tests/skills/test_dod_verifier_phase2.py -v
+pytest tests/skills/test_dod_verifier_phase3_adversarial.py -v
 ```
 
-### E2E Tests
-```bash
-# Real verification on CorvinOS codebase
-pytest tests/e2e/test_dod_verifier_e2e.py -v
-
-# Console API integration
-pytest tests/e2e/test_dod_verifier_api_e2e.py -v
-
-# Audit trail wiring
-pytest tests/e2e/test_audit_trail_wired_e2e.py -v
-```
+Not written yet (earlier revisions of this page listed them as if they existed):
+per-check files for test-evidence / docs-sync / reproducibility / scoring, and
+the E2E files `tests/e2e/test_dod_verifier_e2e.py`,
+`tests/e2e/test_dod_verifier_api_e2e.py`, `tests/e2e/test_audit_trail_wired_e2e.py`.
+The console routes (`routes/dod_verifier_dashboard.py`: `POST /verify`,
+`POST /feedback`, `GET /history/{task_id}`) are mounted in `app.py` but have no
+HTTP-level E2E test.
 
 ### Running All DoD Tests
 ```bash
@@ -547,4 +539,4 @@ A: No, but hash-chained (ADR-0232). Encryption at-rest is handled by L37 (separa
 
 ---
 
-**Last Updated:** 2026-09-26 · **Status:** Production-Ready
+**Last Updated:** 2026-09-27 · **Status:** Implemented, E2E coverage incomplete

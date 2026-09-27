@@ -50,6 +50,36 @@ def validate_hmac(payload: bytes, signature: str, org_key: bytes) -> bool:
         return False
 
 
+#: Fields of a registration that the HMAC binds. Every field the relay stores
+#: or trusts MUST be here: signing only ``instance_id`` let one observed
+#: signature re-register that instance with an attacker-chosen ``endpoint``.
+_REGISTER_SIGNED_FIELDS = (
+    "instance_id", "endpoint", "tier_enc", "tier_enc_nonce", "kid", "latency_ms",
+)
+
+
+def register_signing_payload(org_id: str, req: Dict) -> bytes:
+    """Canonical bytes a registration signature covers.
+
+    Domain-separated (``discovery.register.v1``) from the heartbeat message, so
+    a heartbeat signature seen on the wire is never a valid registration
+    signature, and bound to ``org_id`` and every stored field.
+    """
+    body = {k: req.get(k) for k in _REGISTER_SIGNED_FIELDS}
+    return json.dumps(
+        {"op": "discovery.register.v1", "org_id": org_id, **body},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def heartbeat_signing_payload(org_id: str, instance_id: str) -> bytes:
+    """Canonical bytes a heartbeat signature covers (see register_signing_payload)."""
+    return json.dumps(
+        {"op": "discovery.heartbeat.v1", "org_id": org_id, "instance_id": instance_id},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def compute_hmac(payload: bytes, org_key: bytes) -> str:
     """
     Compute HMAC-SHA256 signature for a payload.

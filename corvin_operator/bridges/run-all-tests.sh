@@ -231,7 +231,7 @@ run "Python: tenant migration→state-store roundtrip (ADR-0007 Phase 1.3+1.4)" 
 # failed for a reason that does not exist in production. Mirror the unit's PYTHONPATH
 # here so the harness tests the app the way it actually runs.
 _REPO_ABS="$(cd ../.. && pwd)"
-GW_PYTHONPATH="${_REPO_ABS}/operator/bridges/shared:${_REPO_ABS}/operator/forge:${_REPO_ABS}/core/console:${_REPO_ABS}/core/gateway:${_REPO_ABS}/core/license:${_REPO_ABS}/core/compliance:${_REPO_ABS}/operator/skill-forge"
+GW_PYTHONPATH="${_REPO_ABS}/corvin_operator/bridges/shared:${_REPO_ABS}/corvin_operator/forge:${_REPO_ABS}/core/console:${_REPO_ABS}/core/gateway:${_REPO_ABS}/core/license:${_REPO_ABS}/core/compliance:${_REPO_ABS}/corvin_operator/skill-forge"
 export GW_PYTHONPATH
 
 # Gateway suites: the guard below asks whether the venv WORKS, not whether it

@@ -22,9 +22,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from core.paths import tenant_home
+from core.paths import corvin_home
 from core.task_tracking import store
 from core.task_tracking.audit import emit_task_audit_event
+
+
+def _default_registry_path() -> Path:
+    """Legacy registry location under the active ``CORVIN_HOME``."""
+    return Path(corvin_home()) / "task_registry.json"
+
+
+def _registry_tasks(registry_data: Any) -> list[dict[str, Any]]:
+    """Normalise the legacy ``tasks`` field to a list of dicts with ``task_id``.
+
+    ``scripts/task_completion_registry.py`` writes ``tasks`` as a MAPPING
+    ``{task_id: {...}}``; iterating that yielded the id strings, so every entry
+    crashed on ``str.get``. A list of dicts is accepted as well.
+    """
+    raw = registry_data.get("tasks", []) if isinstance(registry_data, dict) else []
+    if isinstance(raw, dict):
+        out = []
+        for tid, entry in raw.items():
+            rec = dict(entry) if isinstance(entry, dict) else {}
+            rec.setdefault("task_id", tid)
+            out.append(rec)
+        return out
+    return [t for t in raw if isinstance(t, dict)] if isinstance(raw, list) else []
 
 
 async def migrate_task_registry_to_db(
@@ -36,14 +59,15 @@ async def migrate_task_registry_to_db(
 
     Args:
       tenant_id: tenant to migrate
-      registry_path: path to task_registry.json (default: ~/.corvin/task_registry.json)
+      registry_path: path to task_registry.json (default:
+        ``corvin_home()/task_registry.json`` — honours ``CORVIN_HOME``)
       dry_run: if True, validate but don't persist
 
     Returns:
       Migration report: {migrated_count, skipped_count, errors}
     """
     if registry_path is None:
-        registry_path = Path.home() / ".corvin" / "task_registry.json"
+        registry_path = _default_registry_path()
 
     # Step 1: Load legacy registry
     try:
@@ -54,7 +78,7 @@ async def migrate_task_registry_to_db(
     except json.JSONDecodeError as e:
         return {"error": f"Invalid JSON: {e}", "migrated": 0}
 
-    tasks = registry_data.get("tasks", [])
+    tasks = _registry_tasks(registry_data)
     report = {
         "total_tasks": len(tasks),
         "migrated_count": 0,
@@ -71,8 +95,10 @@ async def migrate_task_registry_to_db(
     # Step 3: Migrate each task
     with store.connect(tenant_id) as conn:
         for task in tasks:
+            task_id = str(task.get("task_id", "")) if isinstance(task, dict) else ""
             try:
-                task_id = task.get("task_id", "")
+                if not task_id:
+                    raise ValueError("registry entry without task_id")
                 title = task.get("title", f"Unnamed-{task_id}")
                 status = task.get("status", "UNKNOWN").lower()
 
@@ -93,10 +119,35 @@ async def migrate_task_registry_to_db(
                 now = datetime.now(timezone.utc).isoformat()
 
                 if not dry_run:
-                    # Insert into tasks.db
+                    # Never overwrite an item that already exists (INSERT OR
+                    # REPLACE deleted and re-created it, dropping every field
+                    # the legacy registry does not carry).
+                    exists = conn.execute(
+                        "SELECT 1 FROM items WHERE tenant_id=? AND id=?",
+                        (tenant_id, task_id),
+                    ).fetchone()
+                    if exists:
+                        report["skipped_count"] += 1
+                        continue
+
+                    # Audit FIRST (ADR-0232): no chain record -> no row. The
+                    # OSError is caught below and the task is skipped.
+                    await emit_task_audit_event(
+                        event_type="task_migrated",
+                        task_id=task_id,
+                        tenant_id=tenant_id,
+                        actor="migration-phase-c-k2",
+                        action="migrate",
+                        delta={
+                            "from": "task_registry.json",
+                            "status": new_status,
+                            "kind": kind,
+                        },
+                    )
+
                     conn.execute(
                         """
-                        INSERT OR REPLACE INTO items (
+                        INSERT INTO items (
                             id, tenant_id, kind, title, description, status,
                             created_at, created_by, updated_at, version, labels
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -116,24 +167,6 @@ async def migrate_task_registry_to_db(
                         ),
                     )
 
-                    # Emit audit event
-                    try:
-                        await emit_task_audit_event(
-                            event_type="task_migrated",
-                            task_id=task_id,
-                            tenant_id=tenant_id,
-                            actor="migration-phase-c-k2",
-                            action="migrate",
-                            delta={
-                                "from": "task_registry.json",
-                                "status": new_status,
-                                "kind": kind,
-                            },
-                        )
-                    except Exception as audit_err:
-                        # Non-blocking: audit failure should not stop migration
-                        report["errors"].append(f"Audit fail for {task_id}: {audit_err}")
-
                 report["migrated_count"] += 1
 
             except Exception as e:
@@ -152,7 +185,7 @@ async def verify_migration_complete(tenant_id: str = "_default") -> dict[str, An
     Returns:
       Verification report: {registry_readable, registry_writable, db_task_count, audit_events_count}
     """
-    registry_path = Path.home() / ".corvin" / "task_registry.json"
+    registry_path = _default_registry_path()
 
     # Check registry permissions
     registry_stat = registry_path.stat()

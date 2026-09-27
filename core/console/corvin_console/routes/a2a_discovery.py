@@ -9,6 +9,7 @@ Routes:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from .. import audit as console_audit
 from ..deps import require_session
+
+# ``corvin_console.audit`` has no audit_info / audit_warning / audit_error: every
+# call to them raised AttributeError, so GET /discovery/peers answered 500 on
+# every request (the except branch re-raised from its own audit_error call).
+# Listing peers is a read; it is logged, not chained.
+log = logging.getLogger(__name__)
 
 # ── path helpers ──────────────────────────────────────────────────────
 
@@ -81,16 +87,15 @@ def _load_peer_from_origin(origin_file: Path) -> PeerInfo | None:
         return PeerInfo(
             peer_id=data.get("peer_id", origin_file.stem),
             name=data.get("name", origin_file.stem),
-            status="online",  # TODO: implement liveness check
+            # No liveness probe exists: "online" here was invented.
+            status="unknown",
             endpoint=data.get("endpoint"),
             region=data.get("region"),
             last_seen=data.get("last_seen"),
             instance_id=data.get("instance_id"),
         )
-    except Exception as e:
-        console_audit.audit_warning(
-            f"Failed to load peer metadata from {origin_file}: {e}"
-        )
+    except Exception:
+        log.warning("failed to load peer metadata from %s", origin_file.name, exc_info=True)
         return None
 
 
@@ -108,8 +113,8 @@ def _discover_peers() -> list[PeerInfo]:
             peer = _load_peer_from_origin(origin_file)
             if peer:
                 peers.append(peer)
-    except Exception as e:
-        console_audit.audit_warning(f"Failed to discover peers: {e}")
+    except Exception:
+        log.warning("failed to discover peers", exc_info=True)
         return []
 
     # Sort by peer_id for deterministic ordering
@@ -131,27 +136,13 @@ async def list_peers(
     Returns:
         PeerListResponse: List of peer metadata
 
-    Audit:
-        Logs a `discovery.peers_listed` event with peer count.
     """
     try:
         peers = _discover_peers()
-
-        console_audit.audit_info(
-            "discovery.peers_listed",
-            extra={
-                "peer_count": len(peers),
-                "peer_ids": [p.peer_id for p in peers],
-            },
-        )
-
-        return PeerListResponse(peers=peers, total=len(peers))
-    except Exception as e:
-        console_audit.audit_error(
-            "discovery.list_peers_failed",
-            extra={"error": str(e)},
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        log.exception("discovery.list_peers_failed")
+        raise HTTPException(status_code=500, detail="peer discovery failed")
+    return PeerListResponse(peers=peers, total=len(peers))
 
 
 @router.get("/peers/{peer_id}", response_model=PeerInfo)
@@ -170,8 +161,6 @@ async def get_peer(
     Raises:
         HTTPException: 404 if peer not found
 
-    Audit:
-        Logs a `discovery.peer_detail_viewed` event.
     """
     try:
         origins_dir = _origins_dir()
@@ -181,17 +170,9 @@ async def get_peer(
         if not peer:
             raise HTTPException(status_code=404, detail="Peer not found")
 
-        console_audit.audit_info(
-            "discovery.peer_detail_viewed",
-            extra={"peer_id": peer_id},
-        )
-
         return peer
     except HTTPException:
         raise
-    except Exception as e:
-        console_audit.audit_error(
-            "discovery.get_peer_failed",
-            extra={"peer_id": peer_id, "error": str(e)},
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        log.exception("discovery.get_peer_failed")
+        raise HTTPException(status_code=500, detail="peer lookup failed")

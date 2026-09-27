@@ -180,7 +180,15 @@ def _scrub_pii_from_value(
 
 
 class AuditChainWriter:
-    """Write audit events to the core audit chain with hash-chain linking.
+    """Standalone hash-chained JSONL writer for an EXPLICIT path (tests/tools).
+
+    NOT the core audit chain: there is exactly ONE chain per tenant,
+    ``tenant_audit_chain(tid)``, written through ``forge.security_events``.
+    Production emitters in this module (:func:`emit_task_audit_event`,
+    :func:`emit_approval_decision_event`) go through
+    ``core.task_tracking.service._chain`` and never through this class — a
+    task-tracking-only chain file is invisible to the boot tripwire,
+    ``audit_query`` and every compliance report.
 
     Coordinates with task_tracking.store to:
     1. Write the primary record to the core audit chain (source of truth)
@@ -270,6 +278,66 @@ class AuditChainWriter:
             os.fsync(f.fileno())  # Force OS to sync to disk
 
 
+#: Legacy Phase-C event names -> the registered ``task_item.*`` chain types
+#: (EVENT_SEVERITY + ``_EVENT_ALLOWLIST`` in forge.security_events).
+_TASK_EVENT_ALIASES = {
+    "task_created": "task_item.created",
+    "task_updated": "task_item.updated",
+    "task_completed": "task_item.updated",
+    "task_deleted": "task_item.deleted",
+    "task_restored": "task_item.restored",
+    "task_migrated": "task_item.imported",
+}
+
+APPROVAL_EVENT_TYPE = "task_item.approval_decided"
+
+#: Content-free detail keys of the approval record (ids, codes, counts only).
+_APPROVAL_ALLOWLIST = frozenset({
+    "item_id", "decision", "actor_kind", "validator_ids", "validator_count",
+    "validators_failed", "tenant_id",
+})
+
+
+def _chain_event_type(event_type: str) -> str:
+    et = _TASK_EVENT_ALIASES.get(event_type, event_type)
+    if not isinstance(et, str) or not et.startswith("task_item."):
+        raise ValueError(f"unsupported task audit event type: {event_type!r}")
+    return et
+
+
+def _actor_kind(actor: str) -> str:
+    """Same reduction as ``service._actor_details``: never the raw actor string."""
+    return str(actor or "system").split(":", 1)[0][:64]
+
+
+def _write_task_chain(tenant_id: str, event_type: str, details: dict[str, Any]) -> str:
+    """Append one record to ``tenant_audit_chain(tenant_id)`` — fail-closed.
+
+    Routed through ``service._chain`` so this module shares the ONE chain
+    writer (and its test seam ``service.chain_writer``) with the rest of
+    task tracking. Raises ``OSError`` when the record did not commit.
+    """
+    from core.task_tracking import service  # noqa: PLC0415
+
+    try:
+        h = service._chain(tenant_id, event_type, details)
+    except service.AuditUnavailable as exc:
+        raise OSError(f"Audit chain write failed (fail-closed): {exc}") from exc
+    if not h:
+        raise OSError(f"Audit chain write failed (fail-closed): no hash for {event_type}")
+    return h
+
+
+def _register_approval_allowlist() -> None:
+    """Register the approval record's detail keys with the core writer, so
+    the record is not scrubbed down to nothing by the default-deny floor."""
+    try:
+        from forge import security_events  # noqa: PLC0415
+    except ImportError:
+        return  # the chain write itself fails closed below
+    security_events.register_event_allowlist(APPROVAL_EVENT_TYPE, _APPROVAL_ALLOWLIST)
+
+
 async def emit_task_audit_event(
     event_type: str,
     task_id: str,
@@ -327,16 +395,19 @@ async def emit_task_audit_event(
         chain_hash="",  # Computed by writer
     )
 
-    # Step 3: Write to core audit chain (fail-closed if this fails)
-    from core.paths import tenant_home
-
-    chain_path = Path(tenant_home(tenant_id)) / "global" / "audit" / "task_tracking.jsonl"
-    writer = AuditChainWriter(chain_path)
-
-    try:
-        chain_hash = writer.write_event(event)
-    except OSError as e:
-        raise OSError(f"Failed to write task audit event: {e}") from e
+    # Step 3: Write to THE tenant audit chain (tenant_audit_chain(), via the
+    # task-tracking service's chain writer). Content-free: only the item id and
+    # the NAMES of the changed fields reach the chain; the scrubbed values stay
+    # in the tenant's local store. Fail-closed: AuditUnavailable -> OSError.
+    chain_hash = _write_task_chain(
+        tenant_id,
+        _chain_event_type(event_type),
+        {
+            "item_id": task_id,
+            "fields": ",".join(sorted(str(k) for k in scrubbed_delta))[:512],
+            "actor_kind": _actor_kind(actor),
+        },
+    )
 
     # Step 4: Store reference in task_tracking.events (non-blocking)
     if store:
@@ -493,7 +564,7 @@ async def emit_approval_decision_event(
     rationale_scrubbed = rationale
     if rationale:
         detector = PIIDetector()
-        if detector.has_pii(rationale):
+        if detector.has_pii(rationale, tenant_id=tenant_id):
             rationale_scrubbed = "[REDACTED: PII detected in rationale]"
 
     # Step 2: Build approval delta (validator context + decision)
@@ -517,29 +588,29 @@ async def emit_approval_decision_event(
         timestamp=now,
     )
 
-    # Step 4: Write to core audit chain (source of truth)
-    # This is audit-FIRST: if chain write fails, approval is NOT recorded
-    # and caller must retry or error out (fail-closed, ADR-0232)
-    from core.audit.chain import write_entry  # noqa: PLC0415
-
-    try:
-        entry = await write_entry(
-            event_type=event.event_type,
-            tenant_id=tenant_id,
-            details={
-                "task_id": task_id,
-                "decision": decision,
-                "actor": actor,
-                "validators_applied": validator_ids_applied or [],
-                "validation_results": validation_results or {},
-            },
-        )
-        chain_hash = entry.get("hash") if isinstance(entry, dict) else str(entry)
-    except Exception as e:  # noqa: BLE001
-        # Fail-closed: no approval without audit chain record
-        raise OSError(f"Audit chain write failed for approval: {e}") from e
+    # Step 4: Write to THE tenant audit chain (audit-FIRST, fail-closed,
+    # ADR-0232): if the record does not commit, OSError propagates and the
+    # approval is NOT recorded. Content-free: validator ids and counts, the
+    # actor's kind — never the rationale text or the raw actor string.
+    _register_approval_allowlist()
+    ids = [str(v) for v in (validator_ids_applied or [])]
+    results = validation_results or {}
+    chain_hash = _write_task_chain(
+        tenant_id,
+        APPROVAL_EVENT_TYPE,
+        {
+            "item_id": task_id,
+            "decision": str(decision)[:32],
+            "actor_kind": _actor_kind(actor),
+            "validator_ids": ",".join(ids)[:512],
+            "validator_count": len(ids),
+            "validators_failed": sum(1 for ok in results.values() if not ok),
+        },
+    )
 
     # Step 5: Store reference in task_tracking DB (non-canonical)
+    import uuid  # noqa: PLC0415
+
     if store:
         try:
             with store.connect(tenant_id) as conn:
@@ -547,7 +618,7 @@ async def emit_approval_decision_event(
                     "INSERT INTO events(event_id, tenant_id, item_id, event_type, ts, actor, delta, chain_hash) "
                     "VALUES (?,?,?,?,?,?,?,?)",
                     (
-                        f"e_{task_id}_{decision}",
+                        f"e_{uuid.uuid4().hex}",
                         tenant_id,
                         task_id,
                         event.event_type,

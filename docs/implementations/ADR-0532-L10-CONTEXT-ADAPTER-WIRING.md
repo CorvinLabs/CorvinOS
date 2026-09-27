@@ -1,5 +1,8 @@
 # ADR-0532 Phase 1: os.context_adapter Skill Wiring into L10
 
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** The pipeline call site is real (`l10_adapter` in `DEFAULT_PIPELINE`), but the test counts are not: 7 tests (not 14) in the wiring file; `test_os_skills_l5_l10_wiring.py` has 20 tests (not 40+), 14/20 pass; `test_os_context_adapter_l10_production.py` is 12/14 (`KeyError: 'engine'`).
+
+
 **Status:** ✅ **COMPLETE** (2026-09-27)  
 **Scope:** Full integration of ContextAdapterSkill into L10 (context engineering pipeline)  
 **Related ADRs:** ADR-0532 (Phase 1), ADR-0555 (3-tier hybrid context), ADR-0613 (shadow mode)  

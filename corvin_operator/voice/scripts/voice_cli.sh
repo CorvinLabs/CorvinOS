@@ -47,7 +47,7 @@ case "$cmd" in
     voice_mode="$(voice_cfg .voice_mode auto)"
     max_chars="$(voice_cfg .summarize_max_chars 4096)"
     player="$(voice_audio_player)"
-    tts_py="$(voice_resolve_python)"
+    voice_python_init; tts_py="$VOICE_PY_BIN"
     openai_sdk="no"; "$tts_py" -c "import openai" 2>/dev/null && openai_sdk="yes"
     anthropic_sdk="no"; "$tts_py" -c "import anthropic" 2>/dev/null && anthropic_sdk="yes"
     cat <<EOF

@@ -88,7 +88,7 @@ try_openai_tts() {
 
   err_output=$(mktemp "${TMPDIR:-/tmp}/corvin.XXXXXX.err")
   trap 'rm -f "$err_output"' RETURN
-  _py="$(voice_resolve_python)"
+  voice_python_init; _py="$VOICE_PY_BIN"
 
   if OPENAI_TTS_TEXT="$text" \
      OPENAI_TTS_VOICE="$voice" \
@@ -127,7 +127,7 @@ PY
 
 try_edge_tts() {
   local text="$1" lang="$2" player="$3"
-  local _py; _py="$(voice_resolve_python)"
+  voice_python_init; local _py="$VOICE_PY_BIN"
 
   if ! "$_py" -c "import edge_tts" 2>/dev/null; then
     voice_log "speak: edge-tts package not installed"

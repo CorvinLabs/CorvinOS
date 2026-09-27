@@ -41,7 +41,7 @@ class StagingManager:
 
     def __init__(self, tenant_id: str) -> None:
         """Initialize staging manager for a tenant."""
-        from forge.tenant import validate_tenant_id
+        from forge.tenants import validate_tenant_id
 
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id

@@ -17,7 +17,8 @@ class KeyManagementConfig:
 
         Priority:
         1. CORVIN_SNAPSHOT_KEY env var (if set and != "default-key")
-        2. ~/.corvin/keys/snapshot.key file (if exists and != "default-key")
+        2. <corvin_home>/keys/snapshot.key file (if exists and != "default-key";
+           ``corvin_home`` honours ``CORVIN_HOME``)
         3. Raise ValueError (fail-closed: no hardcoded fallback)
 
         Returns:
@@ -32,7 +33,9 @@ class KeyManagementConfig:
             return key
 
         # Check keyfile second
-        keyfile = Path.home() / ".corvin" / "keys" / "snapshot.key"
+        from core.paths.tenant import corvin_home  # noqa: PLC0415
+
+        keyfile = Path(corvin_home()) / "keys" / "snapshot.key"
         if keyfile.exists():
             try:
                 key = keyfile.read_text().strip()
@@ -47,5 +50,5 @@ class KeyManagementConfig:
         raise ValueError(
             "CORVIN_SNAPSHOT_KEY not set and no key file found — "
             "cannot verify snapshots. Set CORVIN_SNAPSHOT_KEY env var or "
-            "create ~/.corvin/keys/snapshot.key with a production key."
+            "create <CORVIN_HOME>/keys/snapshot.key with a production key."
         )

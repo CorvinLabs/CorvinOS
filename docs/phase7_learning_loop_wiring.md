@@ -1,5 +1,8 @@
 # Phase 7: Learning Loop Architecture Wiring
 
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** "Architecture Wiring Complete" is false: `core/skills/skill_config_store.py` does not exist, and `test_phase7_k1_learning_loop_wiring.py` is 1/3 (threshold unchanged by feedback; genesis-hash mismatch).
+
+
 **Status:** k=1 (Architecture complete, tests skeleton)  
 **Date:** 2026-09-26  
 **Based on ADRs:** 0537 (Skills 2.0), 0690 (OS-Skills Phase 2), 0696 (SkillLearningBridge), 0688 (Master Plan), 0689 (TBD)

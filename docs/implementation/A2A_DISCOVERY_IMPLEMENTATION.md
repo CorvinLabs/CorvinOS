@@ -1,5 +1,8 @@
 # A2A Discovery Coordinator — Implementation & Compliance Baseline
 
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** Not "32 tests, all passing": k1 22/25, k2 5/17, k3 14/14. `discovery_coordinator.py` calls `security_events.emit_discovery_event`, which does not exist (AttributeError at runtime), and `core/discovery` has zero production importers.
+
+
 **Status:** 🟢 **k=1-3 COMPLETE** (k=4-5: Polish & Documentation)  
 **ADR:** [ADR-2059: A2A zero-config connectivity](../../corvin_decisions/decisions/ADR-2059-a2a-zero-config-connectivity.md)  
 **Date:** 2026-09-24  

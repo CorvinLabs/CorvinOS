@@ -28,6 +28,17 @@
   // APP build made `npm run build` — and therefore `uv build` — fail outright
   // (2026-07-22). They are excluded here rather than by adding @types/jest,
   // because nothing in this project actually runs them yet.
-  "exclude": ["src/**/__tests__/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
+  // src/panels/skills_observability.tsx (e2c6d4a5c) imports three modules that
+  // were never written (@/hooks/useAuth, @/hooks/useSkillsMetrics,
+  // @/components/filters/TimeRangeSelector). Nothing imports the panel and its
+  // backend router is mounted nowhere, so it is unreachable — but as part of
+  // `include` it failed `tsc -b` and therefore every `npm run build` and
+  // console deploy. Excluded until it is either wired for real or removed.
+  "exclude": [
+    "src/**/__tests__/**",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/panels/skills_observability.tsx"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

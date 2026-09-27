@@ -84,9 +84,13 @@ class CanonicalManifestManager:
         try:
             if not os.path.exists(self.manifest_url):
                 logger.warning(f"Manifest not found: {self.manifest_url}, returning empty manifest")
-                return CanonicalManifest(
+                # Cache the empty manifest too: get_plugin()/add_plugin() read
+                # self.current_manifest after calling this, and a None there
+                # crashed the first add_plugin() on a fresh install.
+                self.current_manifest = CanonicalManifest(
                     timestamp=datetime.utcnow().isoformat(),
                 )
+                return self.current_manifest
 
             with open(self.manifest_url, "r") as f:
                 manifest_dict = json.load(f)
@@ -118,9 +122,10 @@ class CanonicalManifestManager:
         except Exception as e:
             logger.error(f"❌ Failed to load manifest: {e}", exc_info=True)
             # Fail-closed: return empty manifest
-            return CanonicalManifest(
+            self.current_manifest = CanonicalManifest(
                 timestamp=datetime.utcnow().isoformat(),
             )
+            return self.current_manifest
 
     def write_manifest(self, manifest: CanonicalManifest) -> bool:
         """

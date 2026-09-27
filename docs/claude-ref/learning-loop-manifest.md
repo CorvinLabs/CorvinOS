@@ -1,6 +1,18 @@
 # Learning Loop Manifest — ADR-0906 Feature 1 Documentation
 
-**Status:** Feature 1 (Static Discovery) IMPLEMENTED, Phase 1 Iteration 1 ✅
+**Status:** Manifest schema + parser implemented; plugin scan, health and Console route NOT live (see below)
+
+> **Verified 2026-09-27 — the Phase 1 "complete / all gates passed" claims below are NOT true.**
+> `core/console/corvin_console/routes/learning_loops.py` defines a **Flask** `Blueprint`
+> that the FastAPI console never registers (`git grep learning_loops core/console/corvin_console/app.py`
+> → no hit), so `GET /v1/console/learning/loops` does not exist and the
+> `learning-loops-dashboard.tsx` page fetches a 404. When the audit query returns
+> `unknown`, `_enrich_loop_with_health_data` substitutes hard-coded values
+> (`event_count_7d: 42`, `health_score: 0.85`, `status: active`) — fabricated data.
+> `tests/integration/test_learning_loop_manifest_e2e.py`: 4 failed / 12 passed
+> (`NameError: datetime`, `'str' object has no attribute 'value'`, missing `last_event_ts`).
+> The table below records what the iterations *set out* to ship, not what is live.
+
 
 ## Overview
 
@@ -189,10 +201,10 @@ Plugins currently **do NOT emit events** for learning loops. Phase 1 computes he
 | Iteration | Scope | Status | Date |
 |-----------|-------|--------|------|
 | **k=1** | Static manifest discovery (test fixture) | ✅ COMPLETE | 2026-09-25 |
-| **k=2** | Real plugin scanning + health enrichment | ✅ COMPLETE | 2026-09-25 |
-| **k=3** | Audit chain health computation | ✅ COMPLETE | 2026-09-25 |
-| **k=4** | KG MCP indexing (ADR-0907) | ✅ COMPLETE | 2026-09-25 |
-| **k=5** | Final: Docs sync + Console routing | ✅ COMPLETE | 2026-09-25 |
+| **k=2** | Real plugin scanning + health enrichment | ⚠️ code exists, tests failing | 2026-09-25 |
+| **k=3** | Audit chain health computation | ⚠️ code exists, tests failing; synthetic fallback | 2026-09-25 |
+| **k=4** | KG MCP indexing (ADR-0907) | ⚠️ module exists, no production caller | 2026-09-25 |
+| **k=5** | Final: Docs sync + Console routing | ❌ route not mounted (Flask blueprint in FastAPI app) | 2026-09-25 |
 
 ### k=2: Real Plugin Discovery (2026-09-25)
 
@@ -241,7 +253,7 @@ Plugins currently **do NOT emit events** for learning loops. Phase 1 computes he
 - All 5 iterations (k=1–k=5) shipped in single session
 - Total: 690 LoC added across 6 new files + comprehensive tests
 - Full E2E: manifest parsing → plugin discovery → audit health → KG indexing → Console API
-- Zero blockers, all gates passed
+- Gates NOT passed: route unmounted, 4/16 tests failing (verified 2026-09-27)
 
 **Total Metrics (k=1–k=5):**
 - Lines of code: 690+ (implementation) + 300+ (tests)

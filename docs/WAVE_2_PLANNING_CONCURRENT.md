@@ -131,21 +131,21 @@
 
 ---
 
-## Stream D: T03 Phase-3a–c Verdrahten oder Löschen (2 days)
+## Stream D: T03 Phase-3a–c Wire or Delete (2 days)
 
 ### Dialektische Entscheidung (Wave 2, Day 1, 0.5 days)
 
 **Problem:** Phase 3a–c code exists (voice_session_store, ml_feedback_pipeline, performance_monitor) but has zero production callers.
 
-**Decision Gate:** Verdrahten oder löschen?
+**Decision Gate:** Wire or delete?
 
-**Option A: Verdrahten** (keep code, wire into production)
+**Option A: Wire** (keep code, wire into production)
 - Effort: ~3–4 additional days
 - Payoff: Voice persistence + ML feedback working end-to-end
 - Risk: May break existing voice sessions if not careful
 - Timeline: Extends Wave 3 + Wave 4
 
-**Option B: Löschen** (remove dead code)
+**Option B: Delete** (remove dead code)
 - Effort: 1 day (grep callers, delete, test)
 - Payoff: Cleaner codebase, lower maintenance
 - Risk: Architectural plans for k=6 may depend on this code
@@ -158,22 +158,22 @@
    - Verify no dependencies from Wave 3+ (grep ADR references)
    - Get sign-off on decision
 
-2. **If Verdrahten:**
+2. **If Wire:**
    - Create ADR-0923: Phase 3a–c Reactivation (voice persistence + ML feedback)
    - Wire voice_session_store into console session lifecycle
    - Wire ml_feedback_pipeline into Learning loop (k=6+)
    - E2E test: real voice session persists + ML model trains on feedback
 
-3. **If Löschen:**
+3. **If Delete:**
    - Grep for all references to the 3 modules
    - Delete with git rm (preserve in git history)
    - Update CLAUDE.md: note phase 3a–c deferred
    - Commit: `refactor(phase3): T03 Defer voice persistence + ML feedback [decision-doc-link]`
 
 **Wave 2 Deliverable:**
-- [ ] Decision documented (verdrahten or löschen)
-- [ ] If verdrahten: ADR-0923 + implementation started (1–2 days)
-- [ ] If löschen: Code removed + tests updated (1 day)
+- [ ] Decision documented (wire or delete)
+- [ ] If wire: ADR-0923 + implementation started (1–2 days)
+- [ ] If delete: Code removed + tests updated (1 day)
 
 **Estimated Effort:** 2 days (0.5 days decision + 1.5 days execution)
 
@@ -186,7 +186,7 @@
 | **R1:** T06 retroactive ADRs become too detailed (scope creep) | MEDIUM | HIGH | Time-box each ADR to 3 hours; use ADR template | T06 owner |
 | **R2:** T10 plugin events conflict with existing plugin lifecycle | MEDIUM | MEDIUM | Review ADR-0233 plugin contract; test with real plugin | T10 owner |
 | **R3:** T17 feature flags have hidden dependencies (break on removal) | HIGH | HIGH | Grep exhaustively before deletion; integration test each flag | T17 owner |
-| **R4:** T03 phase-3a–c code has security implications (sessions, model data) | LOW | CRITICAL | If verdrahten: security review required; if löschen: archive code for audit | T03 owner |
+| **R4:** T03 phase-3a–c code has security implications (sessions, model data) | LOW | CRITICAL | If wire: security review required; if delete: archive code for audit | T03 owner |
 | **R5:** Wave 1 Streams B/C/D run over schedule (delay T06 start) | MEDIUM | MEDIUM | Start T06 as soon as T05 done; don't wait for full Wave 1 EOD | Orchestrator |
 | **R6:** Learning k=6 design conflicts with existing k=1-5 schema | LOW | HIGH | Validate schema alignment with ADR-0314 BEFORE coding | T10 owner |
 
@@ -209,17 +209,17 @@
   🔄 T06 continuation or complete
   🔄 T10 (plugin events wiring started)
   🔄 T17 (flag inventory + first batch migration)
-  🔄 T03 (execution: verdrahten OR delete)
+  🔄 T03 (execution: wire OR delete)
 
 2026-09-29 (Wave 2 Day 3):
   ✅ T06 COMPLETE (retroactive ADRs + commit refs updated)
   🔄 T10 (plugin events emitting, confidence scoring logic)
   🔄 T17 (50% of flags migrated)
-  ✅ T03 COMPLETE (if löschen; if verdrahten → extends to Wave 3)
+  ✅ T03 COMPLETE (if delete; if wire → extends to Wave 3)
 
 Wave 2 EOD (2026-09-29):
   ✅ T06 done
-  ✅ T03 done (or defer verdrahten to Wave 3)
+  ✅ T03 done (or defer wire to Wave 3)
   🔄 T10, T17 continue into Wave 3 (5-day tasks)
 ```
 

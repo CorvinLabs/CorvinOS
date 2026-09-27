@@ -1266,7 +1266,7 @@ def load_license_from_env(*, force: bool = False) -> None:
         from chain_dna import derive_seed_paid as _dna_derive_paid  # type: ignore[import]
         from security_events import set_chain_dna_seed as _dna_seed_set, write_event as _dna_write  # type: ignore[import]
         from instance_identity import get_instance_id as _get_iid  # type: ignore[import]
-        from paths import corvin_home as _dna_corvin_home  # type: ignore[import]
+        from paths import tenant_audit_chain as _dna_audit_chain  # type: ignore[import]
         _dna_seed = _dna_derive_paid(token, _get_iid())
         _dna_seed_set(_dna_seed)
         # Flush stale CIT cache so the next gate() call from any static
@@ -1281,9 +1281,10 @@ def load_license_from_env(*, force: bool = False) -> None:
         except Exception:  # noqa: BLE001
             pass  # clag not installed — nothing to clear
         # C4: use snapshot instead of live env read (ADR-0138 M1)
-        _audit_p = _AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None else (
-            _dna_corvin_home() / "global" / "forge" / "audit.jsonl"
-        )
+        # THE tenant chain (CLAUDE.md / ADR-0650) — never a hand-composed path:
+        # ``<corvin_home>/global/forge/audit.jsonl`` is a NON-canonical legacy
+        # location (paths.legacy_audit_chains()["host_global_forge"]).
+        _audit_p = _AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None else _dna_audit_chain()
         _dna_write(
             _audit_p,
             "license.chain_dna_seeded",
@@ -1546,7 +1547,7 @@ def _reload_from_disk_locked() -> None:
             from chain_dna import derive_seed_paid as _rld_derive  # type: ignore[import]
             from security_events import set_chain_dna_seed as _rld_seed_set, write_event as _rld_write  # type: ignore[import]
             from instance_identity import get_instance_id as _rld_get_iid  # type: ignore[import]
-            from paths import corvin_home as _rld_corvin_home  # type: ignore[import]
+            from paths import tenant_audit_chain as _rld_audit_chain  # type: ignore[import]
             _rld_seed = _rld_derive(token, _rld_get_iid())
             _rld_seed_set(_rld_seed)
             try:
@@ -1557,9 +1558,8 @@ def _reload_from_disk_locked() -> None:
             _rld_state = (str(validated.get("tier", "")), _rld_seed)
             global _LAST_SEEDED_STATE
             if _rld_state != _LAST_SEEDED_STATE:
-                _rld_audit_p = _AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None else (
-                    _rld_corvin_home() / "global" / "forge" / "audit.jsonl"
-                )
+                _rld_audit_p = (_AUDIT_PATH_SNAPSHOT if _AUDIT_PATH_SNAPSHOT is not None
+                                else _rld_audit_chain())
                 _rld_write(
                     _rld_audit_p,
                     "license.chain_dna_seeded",

@@ -85,6 +85,22 @@ class ReloadAuditDedupTests(unittest.TestCase):
         self._reload(TOKEN_B)
         self.assertEqual(self._count("license.chain_dna_seeded"), 2)
 
+    def test_without_redirect_the_record_lands_in_the_tenant_chain(self) -> None:
+        # No VOICE_AUDIT_PATH: the record must go to THE tenant chain
+        # (tenant_audit_chain), never to the legacy host path
+        # <corvin_home>/global/forge/audit.jsonl the code used to compose by hand.
+        V._AUDIT_PATH_SNAPSHOT = None
+        home = self.tmp / "home"
+        with mock.patch.dict(os.environ, {"CORVIN_TENANT_ID": "_default"}):
+            os.environ.pop("VOICE_AUDIT_PATH", None)
+            self._reload(TOKEN_A)
+        canonical = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        legacy = home / "global" / "forge" / "audit.jsonl"
+        self.chain = legacy
+        self.assertEqual(self._count("license.chain_dna_seeded"), 0)
+        self.chain = canonical
+        self.assertEqual(self._count("license.chain_dna_seeded"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

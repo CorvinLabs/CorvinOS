@@ -31,39 +31,49 @@ voice_log() {
 #   4. self-heal: run core/console/bootstrap.sh once, then re-check #3
 #   5. bare `python3` from PATH (last resort — TTS degrades to edge-tts/piper)
 #
-# Cached in VOICE_PY_BIN after the first call so repeated probes (status,
-# detect_engine, the actual synth call) don't each re-run every check.
+# Cached in VOICE_PY_BIN by voice_python_init, which MUST run in the caller's
+# own shell (`voice_python_init; py="$VOICE_PY_BIN"`): a `$(voice_resolve_python)`
+# command substitution is a subshell, so its cache assignment is lost and every
+# call re-ran every probe — including the bootstrap below, three times per
+# `speak`. The bootstrap is attempted at most once per process tree
+# (_VOICE_BOOTSTRAP_TRIED is exported) and never under CORVIN_TTS_LOCAL_ONLY=1,
+# where it would reach PyPI from a deployment that forbids cloud egress.
 _VOICE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _voice_py_has_openai() {
   [[ -n "$1" && -x "$1" ]] && "$1" -c "import openai" >/dev/null 2>&1
 }
 voice_resolve_python() {
-  if [[ -n "${VOICE_PY_BIN:-}" ]]; then printf '%s' "$VOICE_PY_BIN"; return; fi
+  voice_python_init
+  printf '%s' "$VOICE_PY_BIN"
+}
+voice_python_init() {
+  if [[ -n "${VOICE_PY_BIN:-}" ]]; then return; fi
   if [[ -n "${PY_BIN:-}" && -x "$PY_BIN" ]]; then
-    VOICE_PY_BIN="$PY_BIN"; printf '%s' "$VOICE_PY_BIN"; return
+    VOICE_PY_BIN="$PY_BIN"; return
   fi
   local repo_root candidate
   repo_root="$(cd "$_VOICE_LIB_DIR/../../.." 2>/dev/null && pwd || true)"
   if [[ -n "$repo_root" ]]; then
     candidate="$repo_root/.venv/bin/python3"
     if _voice_py_has_openai "$candidate"; then
-      VOICE_PY_BIN="$candidate"; printf '%s' "$VOICE_PY_BIN"; return
+      VOICE_PY_BIN="$candidate"; return
     fi
     candidate="$repo_root/core/console/.venv/bin/python"
     if _voice_py_has_openai "$candidate"; then
-      VOICE_PY_BIN="$candidate"; printf '%s' "$VOICE_PY_BIN"; return
+      VOICE_PY_BIN="$candidate"; return
     fi
     local bootstrap="$repo_root/core/console/bootstrap.sh"
-    if [[ -z "${CORVIN_SKIP_VOICE_BOOTSTRAP:-}" && -f "$bootstrap" ]]; then
+    if [[ -z "${CORVIN_SKIP_VOICE_BOOTSTRAP:-}" && -z "${_VOICE_BOOTSTRAP_TRIED:-}" \
+          && "${CORVIN_TTS_LOCAL_ONLY:-0}" != "1" && -f "$bootstrap" ]]; then
+      export _VOICE_BOOTSTRAP_TRIED=1
       voice_log "resolve_python: no python with 'openai' importable — bootstrapping core/console/.venv"
       bash "$bootstrap" >>"$VOICE_LOG_FILE" 2>&1 || true
       if _voice_py_has_openai "$candidate"; then
-        VOICE_PY_BIN="$candidate"; printf '%s' "$VOICE_PY_BIN"; return
+        VOICE_PY_BIN="$candidate"; return
       fi
     fi
   fi
   VOICE_PY_BIN="$(command -v python3 2>/dev/null || echo python3)"
-  printf '%s' "$VOICE_PY_BIN"
 }
 
 voice_ensure_config() {
@@ -367,7 +377,7 @@ voice_detect_engine() {
     return
   fi
   voice_load_openai_key || true
-  local _py; _py="$(voice_resolve_python)"
+  voice_python_init; local _py="$VOICE_PY_BIN"
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     if [[ -z "$_py" ]] || ! command -v "$_py" >/dev/null 2>&1; then
       voice_log "detect_engine: openai key found but no usable python — falling through"

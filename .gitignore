@@ -10,6 +10,9 @@ backtests/
 .env.local
 *.local.env
 .env.tmp
+.env.*
+!.env.example
+!.env*.template
 venv
 *.bak
 

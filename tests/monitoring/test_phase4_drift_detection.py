@@ -463,3 +463,18 @@ class TestCustomAlertHandlers:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestProcessSingletonWiring:
+    """Regression (2026-09-27 review): the boot hook registers into
+    get_deployment_manager(); the monitor must poll that same manager."""
+
+    def test_drift_service_polls_the_boot_registered_manager(self, monkeypatch):
+        import core.deployment.state_sync as state_sync
+        import core.monitoring.drift_detector as drift_detector
+
+        monkeypatch.setattr(state_sync, "_deployment_state_manager", None)
+        monkeypatch.setattr(drift_detector, "_drift_service", None)
+        manager = state_sync.get_deployment_manager()
+        service = drift_detector.get_drift_service()
+        assert service.deployment_manager is manager

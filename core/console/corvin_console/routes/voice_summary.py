@@ -12,11 +12,15 @@ Architecture (ADR-0596):
 @phase Phase 2a: Type-Aware Summary Detection
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Annotated, Optional, Dict, Any, List, Tuple
 import logging
+
+from corvin_console import audit as console_audit
+from corvin_console import auth as session_auth
+from corvin_console.deps import require_session_csrf_on_mutation
 
 from core.console.corvin_console.services.type_detector import (
     detect_message_type,
@@ -36,7 +40,15 @@ from core.console.corvin_console.services.voice_feedback_loop import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat", tags=["voice-summary"])
+# Every route needs a live console session, every mutation the CSRF token.
+# The tenant is the session's — a body-supplied ``tenant_id`` is ignored (it
+# used to scope nothing, and any unauthenticated caller could read or overwrite
+# any session's transcript by guessing its sid).
+router = APIRouter(
+    prefix="/chat", tags=["voice-summary"],
+    dependencies=[Depends(require_session_csrf_on_mutation)],
+)
+Session = Annotated[session_auth.SessionRecord, Depends(require_session_csrf_on_mutation)]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Models
@@ -82,7 +94,17 @@ class VoiceSummaryResponse(BaseModel):
 # In-Memory Session Storage (Phase 1: Mock, Phase 2: Persistent)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_voice_sessions: Dict[str, Dict[str, Any]] = {}
+_voice_sessions: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def _key(rec: session_auth.SessionRecord, sid: str) -> Tuple[str, str]:
+    """Voice state is keyed by (tenant, sid): a sid alone crossed tenants."""
+    return (rec.tenant_id, sid)
+
+
+def _scoped(rec: session_auth.SessionRecord, sid: str) -> str:
+    """Tenant-qualified id for the shared feedback / collision stores."""
+    return f"{rec.tenant_id}:{sid}"
 
 
 def _get_stt_available() -> bool:
@@ -93,18 +115,17 @@ def _get_stt_available() -> bool:
     return is_stt_available()
 
 
-def _record_audit_event(event_type: str, data: Dict[str, Any], tenant_id: str) -> None:
+def _record_audit_event(event_type: str, rec: session_auth.SessionRecord, sid: str) -> None:
+    """Record the action in the tenant's audit chain — metadata only.
+
+    This used to be a ``logger.info("AUDIT: ...")`` line carrying the first
+    100 transcript characters and the free-text feedback comment: user content
+    in a log file, and no record in the chain at all.
     """
-    Log audit event (GDPR Art. 30/32 compliance).
-    Audit logs: Events ONLY, never raw audio.
-    """
-    event = {
-        "event_type": f"voice.{event_type}",
-        "tenant_id": tenant_id,
-        "timestamp": datetime.utcnow().isoformat(),
-        **data,
-    }
-    logger.info(f"AUDIT: {event}")
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action=f"voice.{event_type}", target_kind="voice_session", target_id=sid[:128],
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -113,7 +134,7 @@ def _record_audit_event(event_type: str, data: Dict[str, Any], tenant_id: str) -
 
 
 @router.post("/{sid}/voice/start", response_model=Dict[str, Any])
-async def start_voice_recording(sid: str, req: VoiceStartRequest):
+async def start_voice_recording(sid: str, req: VoiceStartRequest, rec: Session):
     """
     Start Voice Recording for a chat session.
 
@@ -132,7 +153,7 @@ async def start_voice_recording(sid: str, req: VoiceStartRequest):
             },
         )
 
-    _voice_sessions[sid] = {
+    _voice_sessions[_key(rec, sid)] = {
         "status": "recording",
         "started_at": datetime.utcnow().isoformat(),
         "transcript": "",
@@ -140,11 +161,7 @@ async def start_voice_recording(sid: str, req: VoiceStartRequest):
         "events": [],
     }
 
-    _record_audit_event(
-        "recording_started",
-        {"session_id": sid, "stt_available": True},
-        req.tenant_id,
-    )
+    _record_audit_event("recording_started", rec, sid)
 
     return {
         "status": "recording_started",
@@ -155,7 +172,7 @@ async def start_voice_recording(sid: str, req: VoiceStartRequest):
 
 
 @router.post("/{sid}/voice/stop", response_model=Dict[str, Any])
-async def stop_voice_recording(sid: str, req: VoiceStopRequest):
+async def stop_voice_recording(sid: str, req: VoiceStopRequest, rec: Session):
     """
     Stop Voice Recording and trigger Type-Aware Summary Generation (Phase 2a).
 
@@ -163,10 +180,10 @@ async def stop_voice_recording(sid: str, req: VoiceStopRequest):
     Phase 2b: Persists to database
     Phase 2c: Learns from user feedback
     """
-    if sid not in _voice_sessions:
-        raise HTTPException(status_code=404, detail=f"No recording session for {sid}")
+    if _key(rec, sid) not in _voice_sessions:
+        raise HTTPException(status_code=404, detail="No recording session")
 
-    session = _voice_sessions[sid]
+    session = _voice_sessions[_key(rec, sid)]
     session["status"] = "stopped"
     session["transcript"] = req.transcript
     session["stopped_at"] = datetime.utcnow().isoformat()
@@ -217,33 +234,15 @@ async def stop_voice_recording(sid: str, req: VoiceStopRequest):
     # Phase 2: Summary Generation (strategy-dependent)
     # ──────────────────────────────────────────────────────────
 
-    # Phase 2a: Simple strategy selection
-    # Phase 2b: Implement strategy-specific LLM prompts
-    summary_prompt = {
-        "simple": "Summarize this conversation concisely.",
-        "syntax_aware": "Summarize this code discussion, highlighting function signatures and key logic.",
-        "visual_aware": "Describe the key visual elements and composition discussed.",
-        "temporal_aware": "Create a timeline summary of the key moments and transitions.",
-        "entity_aware": "Extract and relate key entities and concepts discussed.",
-    }.get(dominant_strategy, "Summarize this conversation.")
-
-    # Phase 2: TODO - Call real LLM (currently mock)
-    summary = f"[{dominant_strategy}] {summary_prompt}: {req.transcript[:100]}..." if req.transcript else "No transcript"
+    # No summariser is wired yet. The route used to return a fabricated
+    # "summary" (the strategy prompt glued to the first 100 transcript
+    # characters) as if it were generated; the honest answer is None.
+    summary = None
     session["summary"] = summary
     session["summary_strategy"] = dominant_strategy
     session["content_types"] = content_types
 
-    _record_audit_event(
-        "recording_stopped",
-        {
-            "session_id": sid,
-            "transcript_length": len(req.transcript),
-            "dominant_type": dominant_type.value,
-            "summary_strategy": dominant_strategy,
-            "summary": summary,
-        },
-        req.tenant_id,
-    )
+    _record_audit_event("recording_stopped", rec, sid)
 
     return {
         "status": "recording_stopped",
@@ -256,17 +255,17 @@ async def stop_voice_recording(sid: str, req: VoiceStopRequest):
 
 
 @router.get("/{sid}/voice/summary", response_model=VoiceSummaryResponse)
-async def get_voice_summary(sid: str):
+async def get_voice_summary(sid: str, rec: Session):
     """
     Retrieve Voice Summary for a session (Phase 2a: with type-aware data).
     """
-    if sid not in _voice_sessions:
+    if _key(rec, sid) not in _voice_sessions:
         return VoiceSummaryResponse(
             session_id=sid,
             status="not_started",
         )
 
-    session = _voice_sessions.get(sid, {})
+    session = _voice_sessions.get(_key(rec, sid), {})
 
     # Convert content_types to response format
     content_types = None
@@ -321,16 +320,16 @@ class TaskRegistrationRequest(BaseModel):
 
 
 @router.post("/{sid}/voice/feedback")
-async def record_summary_feedback(sid: str, req: FeedbackRequest):
+async def record_summary_feedback(sid: str, req: FeedbackRequest, rec: Session):
     """
     Record user feedback on summary quality (Phase 2c Learning Loop).
     Used to improve summary strategies via learning.
     """
-    if sid not in _voice_sessions:
-        raise HTTPException(status_code=404, detail=f"Session {sid} not found")
+    if _key(rec, sid) not in _voice_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     feedback = SummaryFeedback(
-        session_id=sid,
+        session_id=_scoped(rec, sid),
         feedback_type=FeedbackType.QUALITY_RATING,
         score=req.score,
         comment=req.comment,
@@ -340,18 +339,10 @@ async def record_summary_feedback(sid: str, req: FeedbackRequest):
     feedback_store.record_feedback(feedback)
 
     # Update session with feedback
-    _voice_sessions[sid]["feedback_score"] = req.score
-    _voice_sessions[sid]["feedback_provided_at"] = datetime.utcnow().isoformat()
+    _voice_sessions[_key(rec, sid)]["feedback_score"] = req.score
+    _voice_sessions[_key(rec, sid)]["feedback_provided_at"] = datetime.utcnow().isoformat()
 
-    _record_audit_event(
-        "feedback_provided",
-        {
-            "session_id": sid,
-            "score": req.score,
-            "comment": req.comment,
-        },
-        req.tenant_id,
-    )
+    _record_audit_event("feedback_provided", rec, sid)
 
     return {
         "status": "feedback_recorded",
@@ -361,7 +352,7 @@ async def record_summary_feedback(sid: str, req: FeedbackRequest):
 
 
 @router.post("/{sid}/task/register")
-async def register_task(sid: str, req: TaskRegistrationRequest):
+async def register_task(sid: str, req: TaskRegistrationRequest, rec: Session):
     """
     Register a task to detect collisions (Phase 2c).
     Prevents user and agent from working on same task.
@@ -369,7 +360,7 @@ async def register_task(sid: str, req: TaskRegistrationRequest):
     collision_detector = get_collision_detector()
 
     if req.initiated_by == "user":
-        collision_detector.register_user_task(sid, req.task_id)
+        collision_detector.register_user_task(_scoped(rec, sid), req.task_id)
         return {
             "status": "task_registered",
             "session_id": sid,
@@ -378,7 +369,7 @@ async def register_task(sid: str, req: TaskRegistrationRequest):
         }
 
     elif req.initiated_by == "agent":
-        success = collision_detector.register_agent_task(sid, req.task_id)
+        success = collision_detector.register_agent_task(_scoped(rec, sid), req.task_id)
         if not success:
             raise HTTPException(
                 status_code=409,
@@ -395,18 +386,19 @@ async def register_task(sid: str, req: TaskRegistrationRequest):
 
 
 @router.get("/{sid}/task/status")
-async def get_task_status(sid: str):
+async def get_task_status(sid: str, rec: Session):
     """
     Get task status for a session (Phase 2c).
     Returns user tasks vs agent tasks to detect conflicts.
     """
     collision_detector = get_collision_detector()
+    key = _scoped(rec, sid)
 
     return {
         "session_id": sid,
-        "user_tasks": list(collision_detector.get_user_tasks(sid)),
-        "agent_tasks": list(collision_detector.get_agent_tasks(sid)),
+        "user_tasks": list(collision_detector.get_user_tasks(key)),
+        "agent_tasks": list(collision_detector.get_agent_tasks(key)),
         "collision_risk": len(
-            collision_detector.get_user_tasks(sid) & collision_detector.get_agent_tasks(sid)
+            collision_detector.get_user_tasks(key) & collision_detector.get_agent_tasks(key)
         ) > 0,
     }

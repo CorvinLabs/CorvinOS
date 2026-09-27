@@ -6,10 +6,24 @@ ADR-0407, ADR-0516 compliance: Detect code divergence between instances
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 from datetime import datetime
+
+# The source tree this module was imported from — the code that is actually
+# running. Until 2026-09-27 every git/hash call hard-wired
+# /home/shumway/projects/CorvinOS, so on any other install registration failed
+# ("Cannot get git SHA") and on this host it described a tree that is not
+# necessarily the one being served.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Directories that are not the product's code: virtualenvs, caches, VCS and
+# frontend dependencies. core/console/.venv alone held ~7 600 .py files and made
+# a boot-time snapshot take ~7.6 s inside the async lifespan.
+_SKIP_DIRS = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"})
 
 
 @dataclass
@@ -38,8 +52,9 @@ class ManifestManager:
         try:
             return subprocess.check_output(
                 ["git", "rev-parse", "HEAD"],
-                cwd="/home/shumway/projects/CorvinOS",
-                text=True
+                cwd=str(REPO_ROOT),
+                text=True,
+                stderr=subprocess.DEVNULL,
             ).strip()
         except Exception as e:
             raise RuntimeError(f"Cannot get git SHA: {e}")
@@ -50,10 +65,11 @@ class ManifestManager:
         try:
             return subprocess.check_output(
                 ["git", "describe", "--tags", "--always"],
-                cwd="/home/shumway/projects/CorvinOS",
-                text=True
+                cwd=str(REPO_ROOT),
+                text=True,
+                stderr=subprocess.DEVNULL,
             ).strip()
-        except:
+        except Exception:
             return "0.unknown"
 
     @staticmethod
@@ -67,19 +83,28 @@ class ManifestManager:
 
         hasher = hashlib.sha256()
 
+        # Deterministic across hosts: files are visited in sorted order and
+        # hashed under their path RELATIVE to the repo root. The previous
+        # `find <abs path> -exec sha256sum` fed absolute paths and
+        # filesystem-order output into the digest, so two instances with
+        # byte-identical code at different locations (or on different
+        # filesystems) always reported MANIFEST_HASH_MISMATCH.
+        root = REPO_ROOT
         for path in paths:
-            try:
-                full_path = f"/home/shumway/projects/CorvinOS/{path}"
-                # Hash all .py files in directory
-                result = subprocess.check_output(
-                    ["find", full_path, "-name", "*.py", "-type", "f", "-exec", "sha256sum", "{}", "+"],
-                    text=True,
-                    stderr=subprocess.DEVNULL
-                )
-                hasher.update(result.encode())
-            except Exception:
-                # Path may not exist — skip
-                pass
+            base = root / path
+            if not base.is_dir():
+                continue  # Path may not exist — skip
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
+                for name in sorted(filenames):
+                    if not name.endswith(".py"):
+                        continue
+                    fp = Path(dirpath) / name
+                    try:
+                        digest = hashlib.sha256(fp.read_bytes()).hexdigest()
+                    except OSError:
+                        continue
+                    hasher.update(f"{digest}  {fp.relative_to(root).as_posix()}\n".encode())
 
         return hasher.hexdigest()
 

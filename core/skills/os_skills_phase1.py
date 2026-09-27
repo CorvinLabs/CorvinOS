@@ -576,10 +576,13 @@ class ContextAdapterSkill(Skill):
             priority_hint=priority_hint,
             user_context=user_context,
         )
-        # Attach engine from routing decision
+        # Attach engine from routing decision. os.delegation_router names its
+        # verdict ``decision`` (manifest output_schema); reading the old
+        # ``engine`` key raised KeyError on every L10 turn, so the adapter
+        # failed and served only the minimal base context.
         base_tier = HybridContextTier(
             tier_name=base_tier.tier_name,
-            engine=routing_decision["engine"],
+            engine=str(routing_decision.get("decision") or routing_decision.get("engine") or "unknown"),
             priority=base_tier.priority,
             context_fields=base_tier.context_fields,
             metadata=base_tier.metadata,

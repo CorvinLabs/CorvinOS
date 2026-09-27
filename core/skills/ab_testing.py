@@ -170,26 +170,27 @@ class MetricsCollector:
             self.metrics.observations_control.append(latency_ms)
             self.metrics.sample_size_control += 1
             self.metrics.latency_ms_control = statistics.mean(self.metrics.observations_control)
-            self.metrics.cost_per_token_control += cost_per_token
-            self.metrics.quality_score_control += quality_score
+            n = self.metrics.sample_size_control
+            self.metrics.cost_per_token_control += (cost_per_token - self.metrics.cost_per_token_control) / n
+            self.metrics.quality_score_control += (quality_score - self.metrics.quality_score_control) / n
         else:
             self.metrics.observations_variant.append(latency_ms)
             self.metrics.sample_size_variant += 1
             self.metrics.latency_ms_variant = statistics.mean(self.metrics.observations_variant)
-            self.metrics.cost_per_token_variant += cost_per_token
-            self.metrics.quality_score_variant += quality_score
+            n = self.metrics.sample_size_variant
+            self.metrics.cost_per_token_variant += (cost_per_token - self.metrics.cost_per_token_variant) / n
+            self.metrics.quality_score_variant += (quality_score - self.metrics.quality_score_variant) / n
 
     def get_metrics(self) -> ExperimentMetrics:
-        """Get current aggregated metrics."""
-        # Normalize cost and quality by sample size
-        if self.metrics.sample_size_control > 0:
-            self.metrics.cost_per_token_control /= self.metrics.sample_size_control
-            self.metrics.quality_score_control /= self.metrics.sample_size_control
+        """Get current aggregated metrics.
 
-        if self.metrics.sample_size_variant > 0:
-            self.metrics.cost_per_token_variant /= self.metrics.sample_size_variant
-            self.metrics.quality_score_variant /= self.metrics.sample_size_variant
-
+        cost/quality are kept as running means by ``record_execution``. They
+        used to be accumulated as sums and divided here — but the framework
+        feeds the already-divided value back in on the next record, so each
+        call computed (mean + x) / n and the mean decayed toward 0 with sample
+        size. The 90% control cohort therefore always read as far lower
+        quality than the 10% variant, whatever the real scores were.
+        """
         return self.metrics
 
 

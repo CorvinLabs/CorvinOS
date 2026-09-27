@@ -641,3 +641,53 @@ class TestPhase3Integration:
         assert count == 1
 
         # Verify audit was attempted (may fail if security_events not available, which is OK for this test)
+
+
+class TestPhase3RegressionsAdversarialReview:
+    """Regressions found in the 2026-09-27 adversarial review."""
+
+    def setup_method(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.manifest_path = os.path.join(self.test_dir, "manifest.json")
+        self.plugins_dir = os.path.join(self.test_dir, "plugins")
+
+    def teardown_method(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _sync(self, plugin_id="p_missing"):
+        mm = CanonicalManifestManager(manifest_url=self.manifest_path)
+        assert mm.add_plugin(PluginEntry(plugin_id=plugin_id, version="1.0.0", checksum="x"))
+        return PluginRegistrySynchronizer(
+            instance_id="inst-1",
+            manifest_manager=mm,
+            hash_verifier=PluginHashVerifier(plugins_dir=self.plugins_dir, manifest_manager=mm),
+            installer=PluginInstaller(plugins_dir=self.plugins_dir),
+        )
+
+    def test_add_plugin_on_fresh_manifest_does_not_crash(self):
+        # load_manifest() did not cache the empty manifest -> None.plugins
+        mm = CanonicalManifestManager(manifest_url=self.manifest_path)
+        assert mm.get_plugin("nope") is None
+        assert mm.add_plugin(PluginEntry(plugin_id="a", version="1", checksum="c"))
+
+    def test_missing_plugin_is_reported_as_missing_not_tampering(self):
+        drifts = self._sync().detect_plugin_drift()
+        assert [d.drift_type for d in drifts] == ["MISSING"]
+
+    def test_remediation_attempt_is_chained_on_tenant_audit_chain(self, monkeypatch):
+        home = os.path.join(self.test_dir, "corvin_home")
+        monkeypatch.setenv("CORVIN_HOME", home)
+        monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+        from core.paths import tenant_audit_chain
+
+        sync = self._sync()
+        assert sync._audit_remediation_attempt("p_missing", "INSTALL", True, "free text x@y.z")
+        chain = tenant_audit_chain("_default")
+        assert str(chain).startswith(home)
+        recs = [json.loads(l) for l in open(chain) if l.strip()]
+        rec = [r for r in recs if r.get("event_type") == "plugin.remediation_attempted"][-1]
+        details = rec.get("details", {})
+        assert details["plugin_id"] == "p_missing"
+        assert details["action"] == "INSTALL"
+        assert details["success"] is True
+        assert "message" not in details and "x@y.z" not in json.dumps(rec)

@@ -22,6 +22,12 @@ export function setCurrentCsrf(token: string | null | undefined): void {
   currentCsrf = token || null;
 }
 
+/** The token the fetch wrapper attaches — for the few callers that must use
+ *  XMLHttpRequest (upload progress), which the wrapper cannot see. */
+export function getCurrentCsrf(): string | null {
+  return currentCsrf;
+}
+
 export function shouldAttachCsrf(url: string, method: string, origin: string): boolean {
   if (!MUTATING.has(method.toUpperCase())) return false;
   let parsed: URL;

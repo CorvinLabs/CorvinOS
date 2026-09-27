@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List
@@ -49,7 +49,9 @@ class SessionContextSnapshot:
     current_branch: str = "main"
 
     # Task structure
-    phase_name: str                           # e.g., "Phase 6c: Visualization"
+    # Defaulted: a non-default field after ``current_branch`` made the whole
+    # module fail to import (TypeError at class creation).
+    phase_name: str = ""                      # e.g., "Phase 6c: Visualization"
     active_subtasks: List[str] = field(default_factory=list)  # ["task1", "task2"]
     current_file_being_edited: Optional[str] = None
 
@@ -165,14 +167,10 @@ class SessionBridgeProducer:
         """Initialize producer.
 
         Args:
-            event_store_path: Path to event store (default: ~/.corvin/tenants/_default/global/forge/audit.jsonl)
+            event_store_path: Optional explicit chain file (tests/ops). Default
+                ``None`` writes THE tenant chain, ``tenant_audit_chain(tid)``.
         """
-        if event_store_path is None:
-            event_store_path = (
-                Path.home()
-                / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-            )
-        self.event_store_path = event_store_path
+        self.event_store_path = Path(event_store_path) if event_store_path else None
 
     def create_snapshot(
         self,
@@ -204,32 +202,6 @@ class SessionBridgeProducer:
             SessionContextSnapshot ready for serialization and bridge event emission.
         """
 
-        # FIX #1: Compute hash BEFORE creating frozen dataclass (not after)
-        # Dataclass is frozen=True, so cannot mutate fields after creation
-        temp_dict = {
-            "tenant_id": tenant_id,
-            "task_id": task_id,
-            "session_id": session_id,
-            "last_message_hash": last_message_hash,
-            "conversation_turn_count": conversation_turn_count,
-            "worktree_path": worktree_path,
-            "base_commit": base_commit,
-            "phase_name": phase_name,
-            "active_subtasks": active_subtasks or [],
-            "current_file_being_edited": current_file_being_edited,
-            "plan_id": plan_id,
-            "plan_current_step": plan_current_step,
-            "plan_total_steps": plan_total_steps,
-            "open_tool_calls": open_tool_calls or {},
-            "last_artifact_id": last_artifact_id,
-            "prev_snapshot_hash": prev_snapshot.content_hash if prev_snapshot else None,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-
-        # Compute hash from dict before creating frozen dataclass
-        payload = json.dumps(temp_dict, sort_keys=True)
-        content_hash = hashlib.sha256(payload.encode()).hexdigest()
-
         snapshot = SessionContextSnapshot(
             tenant_id=tenant_id,
             task_id=task_id,
@@ -248,8 +220,12 @@ class SessionBridgeProducer:
             last_artifact_id=last_artifact_id,
             prev_snapshot_hash=prev_snapshot.content_hash if prev_snapshot else None,
             timestamp=datetime.utcnow().isoformat(),
-            content_hash=content_hash,  # ← Set immutably here
         )
+        # The hash is computed over the FINAL field values with the same
+        # function a verifier uses. The previous version hashed a separate dict
+        # with its own utcnow() timestamp and a different field set, so
+        # ``content_hash`` never equalled ``compute_content_hash()``.
+        snapshot = replace(snapshot, content_hash=snapshot.compute_content_hash())
 
         logger.info(
             f"Snapshot created for task={task_id}, session={session_id}, "
@@ -292,8 +268,9 @@ class SessionBridgeProducer:
             prev_hash=prev_event_hash,
         )
 
-        # Compute this event's hash
-        bridge_event.hash = bridge_event.compute_hash()
+        # Compute this event's hash (the dataclass is frozen: assigning the
+        # attribute raised FrozenInstanceError on every call)
+        bridge_event = replace(bridge_event, hash=bridge_event.compute_hash())
 
         # FIX #3: Persist snapshot to disk BEFORE audit event
         try:
@@ -323,13 +300,13 @@ class SessionBridgeProducer:
         """FIX #3: Persist snapshot to disk for next session recovery.
 
         Stores snapshot at tenant-scoped location:
-        ~/.corvin/tenants/{tenant_id}/infinite_session/snapshots/{task_id}/latest.json
+        <corvin_home>/tenants/{tenant_id}/infinite_session/snapshots/{task_id}/latest.json
         """
-        snapshot_dir = (
-            Path.home()
-            / ".corvin" / "tenants" / snapshot.tenant_id
-            / "infinite_session" / "snapshots" / snapshot.task_id
-        )
+        from core.infinite_session.paths import safe_child, tenant_root  # noqa: PLC0415
+
+        # <corvin_home>/tenants/<tid>/infinite_session/snapshots/<task_id> —
+        # honours CORVIN_HOME, validates tenant_id and task_id (no traversal).
+        snapshot_dir = safe_child(tenant_root(snapshot.tenant_id) / "snapshots", snapshot.task_id)
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
         snapshot_file = snapshot_dir / "latest.json"
@@ -344,40 +321,49 @@ class SessionBridgeProducer:
         logger.info(f"Snapshot persisted: {snapshot_file}")
 
     def _write_audit_event(self, event: SessionBridgeEvent) -> None:
-        """Write bridge event to audit trail (append-only).
+        """Write the bridge record to THE tenant audit chain (fail-closed).
 
-        This is the low-level audit trail write. In production, this would go through
-        the central audit backend (ADR-0232), not directly to a file.
+        Goes through ``core.infinite_session.paths.core_audit`` →
+        ``tenant_audit_chain(tenant_id)``, the one hash chain the boot tripwire
+        verifies. The previous version appended its own JSON line to a
+        hand-composed ``Path.home()/.corvin/.../forge/audit.jsonl`` — outside
+        the core writer's hash linking, so the next chain verification would
+        fail — and ignored both ``CORVIN_HOME`` and ``event_store_path``.
 
-        For now, we write to the EventStore file for verification.
-
-        FIX #5: Tenant-scoped audit path isolation.
+        An explicit ``event_store_path`` (tests/ops) redirects the record to
+        that file, still written by the core chain writer.
+        Content-free: session ids are fingerprinted, never written verbatim.
         """
+        from core.infinite_session import paths as _paths  # noqa: PLC0415
 
-        # FIX #5: Use tenant-scoped path for audit trail
-        event_store_path = (
-            Path.home()
-            / ".corvin" / "tenants" / event.tenant_id
-            / "global" / "forge" / "audit.jsonl"
-        )
-        event_store_path.parent.mkdir(parents=True, exist_ok=True)
+        def _fp(value: Optional[str]) -> str:
+            return hashlib.sha256(value.encode()).hexdigest()[:16] if value else ""
 
-        # Serialize event
-        event_dict = {
-            "event_type": event.event_type,
-            "tenant_id": event.tenant_id,
-            "timestamp": event.timestamp,
-            "source_session_id": event.source_session_id,
-            "dest_session_id": event.dest_session_id,
+        details = {
             "task_id": event.task_id,
-            "snapshot_hash": event.snapshot_hash,
-            "hash": event.hash,
-            "prev_hash": event.prev_hash,
+            "content_hash": event.snapshot_hash,
+            "prev_snapshot_hash": event.snapshot.prev_snapshot_hash if event.snapshot else None,
+            "bridge_hash": event.hash,
+            "source_session_fp": _fp(event.source_session_id),
+            "dest_session_fp": _fp(event.dest_session_id),
         }
+        details = {k: v for k, v in details.items() if v not in (None, "")}
 
-        # Append to audit trail (append-only, one JSON per line)
-        with open(event_store_path, "a") as f:
-            f.write(json.dumps(event_dict) + "\n")
+        if self.event_store_path is None:
+            _paths.core_audit(
+                "infinite_session.bridge_created", tenant_id=event.tenant_id, details=details
+            )
+            return
+
+        _paths.validate_tenant_id(event.tenant_id)
+        _paths._register_allowlists()
+        from forge import security_events  # noqa: PLC0415  # type: ignore[import-not-found]
+
+        security_events.write_event(
+            Path(self.event_store_path),
+            "infinite_session.bridge_created",
+            details={**details, "tenant_id": event.tenant_id},
+        )
 
 
 class SnapshotError(Exception):

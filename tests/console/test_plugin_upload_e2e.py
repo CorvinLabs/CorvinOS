@@ -1,355 +1,157 @@
-"""Plugin Upload E2E Tests — Layer 1-4 Distribution (K=3)
+"""Plugin upload (ADR-2085) + Skill Manager (ADR-0681) through the real console router.
 
-6 real HTTP tests using TestClient (not mocks).
-All use sandboxed temp CORVIN_HOME + actual filesystem I/O.
+The previous version of this file never collected (``pytest_plugins = ["conftest"]``
+in a non-root conftest, and fixtures ``client`` / ``admin_session`` that exist
+nowhere), so the upload routes shipped with no proof at all — and with an
+import (``corvin_console.audit.emit_audit``) that did not exist, which made
+``corvin_console.app`` fail to import and took the WHOLE console down.
 
-Tests:
-  1. Valid ZIP → staging + audit
-  2. Invalid ZIP → 400 error
-  3. Missing manifest → 400 error
-  4. Approve → install + audit
-  5. Concurrent uploads → no race
-  6. Disk full → graceful error
+What must hold now (real HTTP through ``_sandbox``, a real session + CSRF):
+
+* upload / approve / reject need a session (401) and the CSRF token (403);
+* the routes are served at ``/v1/console/plugin-uploads`` (not the doubled
+  ``/v1/console/v1/skills/...``);
+* a client file name like ``../../x.zip`` never becomes a path outside the
+  tenant's staging directory;
+* an invalid package (path-traversal entry) is refused with 400 and never staged,
+  so it can never be approved;
+* approve of an unknown id is a 404, not a 500;
+* audit records land in the tenant chain;
+* Skill Manager install/uninstall need a session + CSRF (they had NO auth: a
+  multipart POST from any web page could install a skill).
 """
 from __future__ import annotations
 
 import io
 import json
+import sys
 import tempfile
+import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
 
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+_CONSOLE_TESTS = Path(__file__).resolve().parents[2] / "core" / "console" / "tests"
+sys.path.insert(0, str(_CONSOLE_TESTS))
+from test_admin_route import _audit_events, _sandbox  # noqa: E402
 
-# Assume fixtures provide app + session record
-pytest_plugins = ["conftest"]
+BASE = "/v1/console/plugin-uploads"
 
 
-def create_valid_skill_zip() -> bytes:
-    """Create valid skill ZIP with manifest.json."""
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        manifest = {
-            "name": "test-skill",
-            "version": "1.0.0",
-            "author": "test@example.com",
-            "description": "Test skill package",
-        }
-        zf.writestr("manifest.json", json.dumps(manifest))
-        zf.writestr("src/main.py", "print('hello')")
-    buffer.seek(0)
-    return buffer.getvalue()
+def _zip(entries: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
 
 
-def create_invalid_zip() -> bytes:
-    """Create invalid/corrupt ZIP."""
-    return b"PK\x03\x04invalid corrupt data here not a real zip"
+def _valid_zip(name: str = "test-skill") -> bytes:
+    return _zip({
+        "manifest.json": json.dumps({"name": name, "version": "1.0.0", "author": "t"}),
+        "src/main.py": "print('hello')",
+    })
 
 
-def create_zip_without_manifest() -> bytes:
-    """Create ZIP but no manifest.json."""
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("src/main.py", "print('hello')")
-    buffer.seek(0)
-    return buffer.getvalue()
+class PluginUploadTest(unittest.TestCase):
+    def test_auth_and_csrf_required(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, _csrf, _home, _):
+            files = {"file": ("a.zip", _valid_zip(), "application/zip")}
+            self.assertEqual(client.post(BASE, files=files).status_code, 403)
+            client.cookies.clear()
+            self.assertEqual(client.post(BASE, files=files).status_code, 401)
+            self.assertEqual(client.get(BASE).status_code, 401)
+            self.assertEqual(client.post(f"{BASE}/0123456789abcdef/approve").status_code, 401)
 
+    def test_doubled_prefix_is_gone(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, _home, _):
+            r = client.post("/v1/console/v1/skills/upload", headers={"X-CSRF-Token": csrf},
+                            files={"file": ("a.zip", _valid_zip(), "application/zip")})
+            self.assertEqual(r.status_code, 404)
 
-class TestPluginUploadE2E:
-    """Real HTTP E2E tests for plugin upload flow."""
+    def test_upload_list_approve_and_audit(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _):
+            h = {"X-CSRF-Token": csrf}
+            r = client.post(BASE, headers=h,
+                            files={"file": ("../../../evil.zip", _valid_zip(), "application/zip")})
+            self.assertEqual(r.status_code, 200, r.text)
+            upload_id = r.json()["upload_id"]
+            self.assertNotIn("/", r.json()["file_name"])
+            # Nothing was written outside the staging dir.
+            tenant_global = home / "tenants" / "_default" / "global"
+            self.assertEqual([p for p in home.parent.rglob("*evil*") if "plugin_staging" not in p.parts], [])
+            staged = list((tenant_global / "plugin_staging").iterdir())
+            self.assertTrue(any(p.name == f"{upload_id}.zip" for p in staged), staged)
 
-    def test_upload_valid_zip_creates_staging(
-        self,
-        client: TestClient,
-        admin_session: dict,
-        corvin_home: Path,
-    ) -> None:
-        """Valid ZIP → staging dir + audit event."""
-        zip_data = create_valid_skill_zip()
-        files = {"file": ("test.zip", zip_data, "application/zip")}
+            listed = client.get(BASE).json()
+            self.assertEqual(listed["count"], 1)
+            self.assertEqual(client.get(f"{BASE}/{upload_id}/manifest").json()["manifest"]["name"],
+                             "test-skill")
 
-        response = client.post(
-            "/v1/skills/upload",
-            files=files,
-            headers=admin_session,
-        )
+            r = client.post(f"{BASE}/{upload_id}/approve", headers=h)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertNotIn("installed_path", r.json())
+            self.assertTrue((tenant_global / "plugins_installed" / f"{upload_id}.zip").exists())
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "upload_id" in data
-        assert data["status"] == "pending_approval"
-        assert len(data["validation_errors"]) == 0
+            self.assertIn("plugin.upload_staged", repr(_audit_events(home)))
+            self.assertIn("plugin.upload_approved", repr(_audit_events(home)))
 
-        # Verify staging directory exists
-        staging_dir = corvin_home / "tenants/_default/global/plugin_staging"
-        assert staging_dir.exists()
+    def test_invalid_package_is_refused_not_staged(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _):
+            bad = _zip({
+                "manifest.json": json.dumps({"name": "x", "version": "1", "author": "a"}),
+                "../escape.py": "boom",
+            })
+            r = client.post(BASE, headers={"X-CSRF-Token": csrf},
+                            files={"file": ("bad.zip", bad, "application/zip")})
+            self.assertEqual(r.status_code, 400, r.text)
+            self.assertEqual(client.get(BASE).json()["count"], 0)
+            staging = home / "tenants" / "_default" / "global" / "plugin_staging"
+            self.assertEqual([p.name for p in staging.iterdir()], [])
 
-        # Verify metadata file exists
-        upload_id = data["upload_id"]
-        meta_path = staging_dir / f"{upload_id}.meta"
-        assert meta_path.exists()
+    def test_unknown_or_malformed_id(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, _home, _):
+            h = {"X-CSRF-Token": csrf}
+            self.assertEqual(client.post(f"{BASE}/0123456789abcdef/approve", headers=h).status_code, 404)
+            self.assertEqual(client.post(f"{BASE}/0123456789abcdef/reject", headers=h).status_code, 404)
+            self.assertEqual(client.get(f"{BASE}/not-an-id/manifest").status_code, 400)
 
-        # Verify audit event (read actual file)
-        audit_path = corvin_home / "tenants/_default/global/forge/audit.jsonl"
-        if audit_path.exists():
-            lines = audit_path.read_text().strip().split("\n")
-            last_event = json.loads(lines[-1])
-            assert last_event.get("event_type") == "plugin.upload_staged"
-            assert last_event.get("upload_id") == upload_id
-
-    def test_upload_invalid_zip_rejects(
-        self,
-        client: TestClient,
-        admin_session: dict,
-    ) -> None:
-        """Invalid ZIP → 400 error."""
-        zip_data = create_invalid_zip()
-        files = {"file": ("bad.zip", zip_data, "application/zip")}
-
-        response = client.post(
-            "/v1/skills/upload",
-            files=files,
-            headers=admin_session,
-        )
-
-        assert response.status_code == 400
-        assert "corrupt" in response.json().get("detail", "").lower()
-
-    def test_upload_missing_manifest_rejects(
-        self,
-        client: TestClient,
-        admin_session: dict,
-    ) -> None:
-        """ZIP without manifest.json → 400 error."""
-        zip_data = create_zip_without_manifest()
-        files = {"file": ("no_manifest.zip", zip_data, "application/zip")}
-
-        response = client.post(
-            "/v1/skills/upload",
-            files=files,
-            headers=admin_session,
-        )
-
-        assert response.status_code == 400
-        data = response.json()
-        assert "manifest.json" in data.get("detail", "").lower()
-
-    def test_approve_moves_file_and_triggers_install(
-        self,
-        client: TestClient,
-        admin_session: dict,
-        corvin_home: Path,
-    ) -> None:
-        """Upload + Approve → staging deleted, installed dir populated, audit logged."""
-        zip_data = create_valid_skill_zip()
-        files = {"file": ("test.zip", zip_data, "application/zip")}
-
-        # Upload
-        response = client.post(
-            "/v1/skills/upload",
-            files=files,
-            headers=admin_session,
-        )
-        assert response.status_code == 200
-        upload_id = response.json()["upload_id"]
-
-        staging_dir = corvin_home / "tenants/_default/global/plugin_staging"
-        assert (staging_dir / f"{upload_id}.zip").exists()
-
-        # Approve
-        response = client.post(
-            f"/v1/skills/uploads/{upload_id}/approve",
-            headers=admin_session,
-        )
-        assert response.status_code == 200
-
-        # Verify moved to installed
-        installed_dir = corvin_home / "tenants/_default/global/plugins_installed"
-        assert (installed_dir / f"{upload_id}.zip").exists()
-        assert not (staging_dir / f"{upload_id}.zip").exists()
-
-        # Verify audit event
-        audit_path = corvin_home / "tenants/_default/global/forge/audit.jsonl"
-        if audit_path.exists():
-            lines = audit_path.read_text().strip().split("\n")
-            last_event = json.loads(lines[-1])
-            assert last_event.get("event_type") == "plugin.upload_approved"
-
-    def test_concurrent_uploads_no_race(
-        self,
-        client: TestClient,
-        admin_session: dict,
-    ) -> None:
-        """5 parallel uploads → all succeed, no collision."""
-        import concurrent.futures
-
-        def upload_once(thread_id: int) -> dict:
-            """Create a unique ZIP per thread to avoid hash collisions."""
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                manifest = {
-                    "name": f"test-skill-{thread_id}",
-                    "version": "1.0.0",
-                    "author": f"test{thread_id}@example.com",
-                    "description": f"Test skill {thread_id}",
-                }
-                zf.writestr("manifest.json", json.dumps(manifest))
-                zf.writestr("src/main.py", f"# thread {thread_id}\nprint('hello')")
-            buffer.seek(0)
-
-            files = {"file": (f"concurrent-{thread_id}.zip", buffer.getvalue(), "application/zip")}
-            response = client.post(
-                "/v1/skills/upload",
-                files=files,
-                headers=admin_session,
-            )
-            return response.json() if response.status_code == 200 else None
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            results = list(executor.map(upload_once, range(5)))
-
-        # All should succeed
-        assert all(r is not None for r in results), f"Some uploads failed: {results}"
-
-        # All upload_ids should be unique
-        upload_ids = [r["upload_id"] for r in results]
-        assert len(upload_ids) == 5, f"Expected 5 uploads, got {len(upload_ids)}"
-        assert len(set(upload_ids)) == 5, f"Upload IDs are not unique: {upload_ids}"
-
-    def test_disk_full_graceful_error(
-        self,
-        client: TestClient,
-        admin_session: dict,
-    ) -> None:
-        """Mock ENOSPC during upload → 500 error, no partial files, audit error."""
-        zip_data = create_valid_skill_zip()
-        files = {"file": ("test.zip", zip_data, "application/zip")}
-
-        # Mock ENOSPC on file write
-        with patch(
-            "pathlib.Path.write_bytes",
-            side_effect=OSError("[Errno 28] No space left on device"),
+    def test_tenant_isolation(self):
+        with _sandbox(Path(tempfile.mkdtemp()), tenants=("_default", "tenant-b")) as (
+            client, csrf, _home, clients,
         ):
-            response = client.post(
-                "/v1/skills/upload",
-                files=files,
-                headers=admin_session,
-            )
+            r = client.post(BASE, headers={"X-CSRF-Token": csrf},
+                            files={"file": ("a.zip", _valid_zip(), "application/zip")})
+            upload_id = r.json()["upload_id"]
+            client_b, csrf_b = clients["tenant-b"]
+            self.assertEqual(client_b.get(BASE).json()["count"], 0)
+            r = client_b.post(f"{BASE}/{upload_id}/approve", headers={"X-CSRF-Token": csrf_b})
+            self.assertEqual(r.status_code, 404)
 
-        assert response.status_code == 500
-        assert "failed" in response.json().get("detail", "").lower()
 
-    def test_upload_non_admin_forbidden(
-        self,
-        client: TestClient,
-        admin_session: dict,
-    ) -> None:
-        """Non-admin user → 403 Forbidden."""
-        # Create non-admin session: copy admin session but mark as non-admin
-        # (depends on conftest fixture providing a way to create non-admin sessions)
-        user_session = {}
-        if "X-Corvin-Admin" in admin_session:
-            user_session = dict(admin_session)
-            user_session["X-Corvin-Admin"] = "false"
-        else:
-            # Fallback: just use empty headers if admin marker is different
-            # This tests the case where auth exists but admin flag is missing/false
-            user_session = {"Authorization": "Bearer user_token"}
+class SkillManagerAuthTest(unittest.TestCase):
+    def test_install_and_uninstall_require_session_and_csrf(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _):
+            base = "/v1/console/skills-manager/skills"
+            files = {"file": ("s.zip", _valid_zip(), "application/zip")}
+            form = {"skill_id": "demo", "version": "1.0.0"}
+            self.assertEqual(client.post(f"{base}/install", files=files, data=form).status_code, 403)
+            self.assertEqual(client.delete(f"{base}/uninstall/demo/1.0.0").status_code, 403)
 
-        zip_data = create_valid_skill_zip()
-        files = {"file": ("test.zip", zip_data, "application/zip")}
+            r = client.post(f"{base}/install", files=files, data=form, headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            # Installed under CORVIN_HOME, never the operator's ~/.corvin.
+            self.assertTrue((home / "skills_installed" / "demo" / "1.0.0").is_dir())
+            self.assertEqual(client.get(f"{base}/installed").json()["total"], 1)
+            self.assertNotIn("registry_path", client.get(f"{base}/health").json())
 
-        response = client.post(
-            "/v1/skills/upload",
-            files=files,
-            headers=user_session,
-        )
+            r = client.delete(f"{base}/uninstall/demo/1.0.0", headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertIn("skill.uninstall", repr(_audit_events(home)))
 
-        # Should fail with 403 (forbidden) or 401 (unauthorized) if auth is missing
-        assert response.status_code in [401, 403]
-        detail = response.json().get("detail", "").lower()
-        assert "admin" in detail or "auth" in detail
+            client.cookies.clear()
+            self.assertEqual(client.get(f"{base}/installed").status_code, 401)
+            self.assertEqual(client.post(f"{base}/install", files=files, data=form).status_code, 401)
 
-    def test_cross_tenant_isolation(
-        self,
-        client: TestClient,
-        admin_session: dict,
-    ) -> None:
-        """Upload in primary tenant → verify it's not accessible via non-tenant headers.
 
-        Tests that tenant_id is properly scoped by attempting to access with
-        modified tenant context. Works whether or not X-Corvin-Tenant header exists.
-        """
-        # Upload in primary tenant
-        zip_data = create_valid_skill_zip()
-        files = {"file": ("test.zip", zip_data, "application/zip")}
-
-        response = client.post(
-            "/v1/skills/upload",
-            files=files,
-            headers=admin_session,
-        )
-        assert response.status_code == 200
-        upload_id = response.json()["upload_id"]
-
-        # Verify upload is in list with correct headers
-        response = client.get(
-            "/v1/skills/uploads",
-            headers=admin_session,
-        )
-        assert response.status_code == 200
-        upload_ids = [u["upload_id"] for u in response.json()["uploads"]]
-        assert upload_id in upload_ids, f"Upload {upload_id} not found in tenant"
-
-        # Attempt to access with tampered headers (always present X-Corvin-Tenant header)
-        tampered_headers = dict(admin_session)
-        # Always add/override X-Corvin-Tenant to test cross-tenant isolation
-        # Use a value unlikely to match the actual tenant
-        tampered_headers["X-Corvin-Tenant"] = "isolated_evil_tenant_xyz"
-
-        response = client.get(
-            "/v1/skills/uploads",
-            headers=tampered_headers,
-        )
-        # Should either 403 (forbidden) or return empty list (no uploads in evil tenant)
-        assert response.status_code in [200, 403], f"Unexpected status: {response.status_code}"
-
-        if response.status_code == 200:
-            evil_upload_ids = [u["upload_id"] for u in response.json()["uploads"]]
-            assert upload_id not in evil_upload_ids, (
-                f"CROSS-TENANT LEAK: Upload {upload_id} from primary tenant "
-                f"is visible in evil_tenant context"
-            )
-
-    def test_upload_with_path_traversal_rejected(
-        self,
-        client: TestClient,
-        admin_session: dict,
-    ) -> None:
-        """ZIP with ../ in entry name → 400 Bad Request."""
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            manifest = {
-                "name": "evil",
-                "version": "1.0.0",
-                "author": "attacker",
-                "description": "Malicious plugin",
-            }
-            zf.writestr("manifest.json", json.dumps(manifest))
-            # Add file with path traversal attempt
-            zf.writestr("../../../dangerous.py", "print('rce')")
-        buffer.seek(0)
-
-        files = {"file": ("evil.zip", buffer.getvalue(), "application/zip")}
-        response = client.post(
-            "/v1/skills/upload",
-            files=files,
-            headers=admin_session,
-        )
-
-        assert response.status_code == 400
-        detail = response.json().get("detail", "").lower()
-        assert "path" in detail or "disallowed" in detail, f"Expected path error, got: {detail}"
+if __name__ == "__main__":
+    unittest.main()

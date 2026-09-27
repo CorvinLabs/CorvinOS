@@ -745,7 +745,7 @@ cmd_console() {
   # build's [tool.hatch.build.targets.wheel.sources] remap of that same directory
   # to top-level plugin_builder/. Without this the plugin_builder_enabled flag
   # could be ON with nothing importable behind it (2026-07-29).
-  local pypath="$repo_root/core/console:$repo_root/core/gateway:$repo_root/core/license:$repo_root/core/compliance:$repo_root/operator/forge:$repo_root/operator/skill-forge:$repo_root/operator/bridges/shared:$repo_root/core/plugins"
+  local pypath="$repo_root/core/console:$repo_root/core/gateway:$repo_root/core/license:$repo_root/core/compliance:$repo_root/corvin_operator/forge:$repo_root/corvin_operator/skill-forge:$repo_root/corvin_operator/bridges/shared:$repo_root/core/plugins"
 
   local env_file="$HOME/.config/corvin-voice/service.env"
   if [[ -f "$env_file" ]]; then

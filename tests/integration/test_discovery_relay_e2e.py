@@ -14,11 +14,12 @@ import os
 import json
 import asyncio
 from datetime import datetime, timezone
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from corvin_operator.discovery_relay.relay import create_relay_app, DiscoveryRelay
 from corvin_operator.discovery_relay.security import (
-    compute_hmac, encrypt_payload, decrypt_payload
+    compute_hmac, encrypt_payload, decrypt_payload,
+    register_signing_payload, heartbeat_signing_payload,
 )
 
 
@@ -43,7 +44,7 @@ async def test_register_instance(relay_app_fixture):
     """Test instance registration with encryption and HMAC."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Prepare payload
         instance_id = "test_app_001"
         endpoint = "https://test-app.example.com:443"
@@ -63,7 +64,7 @@ async def test_register_instance(relay_app_fixture):
         }
 
         # Compute HMAC for auth
-        payload_for_sig = b'{"instance_id":"' + instance_id.encode() + b'"}'
+        payload_for_sig = register_signing_payload("test_org", register_req)
         auth_sig = compute_hmac(payload_for_sig, org_key)
 
         # POST /discovery/{org_id}/register
@@ -84,7 +85,7 @@ async def test_query_catalog(relay_app_fixture):
     """Test querying the catalog."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Register an instance first
         instance_id = "test_app_001"
         endpoint = "https://test-app.example.com:443"
@@ -100,7 +101,7 @@ async def test_query_catalog(relay_app_fixture):
             "latency_ms": 42,
         }
 
-        payload_for_sig = b'{"instance_id":"' + instance_id.encode() + b'"}'
+        payload_for_sig = register_signing_payload("test_org", register_req)
         auth_sig = compute_hmac(payload_for_sig, org_key)
 
         await client.post(
@@ -126,7 +127,7 @@ async def test_heartbeat(relay_app_fixture):
     """Test instance heartbeat."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Register an instance
         instance_id = "test_app_001"
         tier_payload = {"tier": "pro", "kid": "kid_v1"}
@@ -141,7 +142,7 @@ async def test_heartbeat(relay_app_fixture):
             "latency_ms": 42,
         }
 
-        payload_for_sig = b'{"instance_id":"' + instance_id.encode() + b'"}'
+        payload_for_sig = register_signing_payload("test_org", register_req)
         auth_sig = compute_hmac(payload_for_sig, org_key)
 
         await client.post(
@@ -157,10 +158,11 @@ async def test_heartbeat(relay_app_fixture):
         # Send heartbeat
         await asyncio.sleep(0.1)  # Ensure time passes
         hb_req = {"instance_id": instance_id, "latency_ms": 50}
+        hb_sig = compute_hmac(heartbeat_signing_payload("test_org", instance_id), org_key)
         response = await client.post(
             "/discovery/test_org/heartbeat",
             json=hb_req,
-            headers={"Authorization": f"Bearer {auth_sig}"},
+            headers={"Authorization": f"Bearer {hb_sig}"},
         )
 
         assert response.status_code == 200
@@ -178,7 +180,7 @@ async def test_invalid_hmac_rejected(relay_app_fixture):
     """Test that invalid HMAC signature is rejected."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Try to register with invalid HMAC
         instance_id = "test_app_001"
         tier_payload = {"tier": "pro", "kid": "kid_v1"}
@@ -211,7 +213,7 @@ async def test_decryption_failure_rejected(relay_app_fixture):
     """Test that decryption failure is rejected."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Try to register with corrupted encryption
         instance_id = "test_app_001"
 
@@ -224,7 +226,7 @@ async def test_decryption_failure_rejected(relay_app_fixture):
             "latency_ms": 42,
         }
 
-        payload_for_sig = b'{"instance_id":"' + instance_id.encode() + b'"}'
+        payload_for_sig = register_signing_payload("test_org", register_req)
         auth_sig = compute_hmac(payload_for_sig, org_key)
 
         response = await client.post(
@@ -242,7 +244,7 @@ async def test_unknown_org_rejected(relay_app_fixture):
     """Test that unknown org is rejected."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         register_req = {
             "instance_id": "test_app_001",
             "endpoint": "https://test-app.example.com:443",
@@ -267,7 +269,7 @@ async def test_health_check(relay_app_fixture):
     """Test health check endpoint."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/health")
         assert response.status_code == 200
         data = response.json()
@@ -282,7 +284,7 @@ async def test_multiple_instances_per_org(relay_app_fixture):
     """Test multiple instances registered under one org."""
     app, relay, org_key = relay_app_fixture
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Register 3 instances
         for i in range(3):
             instance_id = f"test_app_{i:03d}"
@@ -298,7 +300,7 @@ async def test_multiple_instances_per_org(relay_app_fixture):
                 "latency_ms": 10 * i,  # Different latencies
             }
 
-            payload_for_sig = b'{"instance_id":"' + instance_id.encode() + b'"}'
+            payload_for_sig = register_signing_payload("test_org", register_req)
             auth_sig = compute_hmac(payload_for_sig, org_key)
 
             response = await client.post(
@@ -325,7 +327,7 @@ async def test_multiple_orgs_isolation(relay_app_fixture):
     org2_key = os.urandom(32)
     relay.set_org_key("org2", org2_key)
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Register instance in org1
         tier_payload = {"tier": "pro", "kid": "kid_v1"}
         tier_enc, tier_nonce = encrypt_payload(tier_payload, org_key)
@@ -339,7 +341,7 @@ async def test_multiple_orgs_isolation(relay_app_fixture):
             "latency_ms": 42,
         }
 
-        payload_for_sig = b'{"instance_id":"app_org1"}'
+        payload_for_sig = register_signing_payload("test_org", register_req)
         auth_sig = compute_hmac(payload_for_sig, org_key)
 
         await client.post(
@@ -359,7 +361,7 @@ async def test_multiple_orgs_isolation(relay_app_fixture):
             "latency_ms": 42,
         }
 
-        payload_for_sig2 = b'{"instance_id":"app_org2"}'
+        payload_for_sig2 = register_signing_payload("org2", register_req2)
         auth_sig2 = compute_hmac(payload_for_sig2, org2_key)
 
         await client.post(

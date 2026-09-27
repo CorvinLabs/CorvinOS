@@ -231,19 +231,14 @@ class SessionRecoveryManager:
             event_store_path: Path to audit.jsonl
             snapshot_dir: Path to snapshots/ directory
         """
-        if event_store_path is None:
-            event_store_path = (
-                Path.home()
-                / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-            )
-        if snapshot_dir is None:
-            snapshot_dir = (
-                Path.home()
-                / ".corvin" / "tenants" / "_default" / "infinite_session" / "snapshots"
-            )
-
-        self.event_store_path = event_store_path
-        self.snapshot_dir = snapshot_dir
+        # None = THE tenant audit chain / the per-tenant snapshot root that
+        # SessionBridgeProducer writes (<corvin_home>/tenants/<tid>/
+        # infinite_session/snapshots/<task_id>). Both used to default to a
+        # hand-composed Path.home()/.corvin/tenants/_default/... — ignoring
+        # CORVIN_HOME and the caller's tenant, and appending unchained JSON
+        # lines to the tenant's hash-chained audit.jsonl.
+        self.event_store_path = Path(event_store_path) if event_store_path else None
+        self.snapshot_dir = Path(snapshot_dir) if snapshot_dir else None
         self.verifier = SnapshotVerifier()
         self.restorer = ContextVarRestorer()
 
@@ -340,9 +335,15 @@ class SessionRecoveryManager:
             (snapshot_dict, signature) or None if not found
         """
 
-        snapshot_file = (
-            self.snapshot_dir / tenant_id / task_id / "latest.json"
-        )
+        from core.infinite_session.paths import safe_child, tenant_root  # noqa: PLC0415
+
+        # Validates tenant_id and task_id: both are path components.
+        if self.snapshot_dir is None:
+            task_dir = safe_child(tenant_root(tenant_id) / "snapshots", task_id)
+        else:
+            tenant_root(tenant_id)  # validate_tenant_id, fail-closed
+            task_dir = safe_child(self.snapshot_dir, tenant_id, task_id)
+        snapshot_file = task_dir / "latest.json"
 
         if not snapshot_file.exists():
             return None
@@ -365,19 +366,30 @@ class SessionRecoveryManager:
     ) -> None:
         """Emit audit event (GDPR Art. 30 records processing)."""
 
-        event = {
-            "event_type": "session_context_restored",
-            "task_id": task_id,
-            "tenant_id": tenant_id,
-            "snapshot_hash": snapshot_hash,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
+        from core.infinite_session import paths as _paths  # noqa: PLC0415
 
-        # Append to audit trail (fail-closed: log error but don't raise)
+        details = {"task_id": task_id}
+        if snapshot_hash:
+            details["content_hash"] = snapshot_hash
+        # Written by the core chain writer (hash-linked), never by hand.
+        # Not raising here is unchanged behaviour: the context is already
+        # restored when this runs.
         try:
-            with open(self.event_store_path, "a") as f:
-                f.write(json.dumps(event) + "\n")
-        except Exception as e:
+            if self.event_store_path is None:
+                _paths.core_audit(
+                    "infinite_session.context_restored", tenant_id=tenant_id, details=details
+                )
+            else:
+                _paths.validate_tenant_id(tenant_id)
+                _paths._register_allowlists()
+                from forge import security_events  # noqa: PLC0415  # type: ignore[import-not-found]
+
+                security_events.write_event(
+                    self.event_store_path,
+                    "infinite_session.context_restored",
+                    details={**details, "tenant_id": tenant_id},
+                )
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to emit context_restored event: {e}")
 
 

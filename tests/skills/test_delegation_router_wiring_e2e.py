@@ -102,11 +102,14 @@ class TestDelegationRouterPhase1Shadow:
     """Phase 1: Shadow mode (advisory, bundled engine stands)."""
 
     @pytest.fixture
-    def tmp_corvin_home(self, tmp_path):
+    def tmp_corvin_home(self, tmp_path, monkeypatch):
         """Temporary CORVIN_HOME with audit chain."""
         home = tmp_path / "corvin-home"
         (home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
         chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        # tests/conftest.py parks VOICE_AUDIT_PATH at the legacy
+        # <home>/global/forge path; point it at the tenant chain this suite reads.
+        monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
         yield home, chain
         # Cleanup
 
@@ -148,7 +151,7 @@ class TestDelegationRouterPhase1Shadow:
         from core.skills.skill_registry_phase1 import get_registry
 
         boot_skills("_default", wire_learning=False)
-        registry = get_registry("_default")
+        registry = get_registry()
 
         # Execute with valid input
         result = registry.execute(
@@ -161,12 +164,12 @@ class TestDelegationRouterPhase1Shadow:
                 "tenant_id": "_default",
             },
             timeout_ms=5000,
-            lom="test:test_input_schema_validated",
+            lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
             tenant_id="_default",
         )
-        assert result.get("status") == "success"
-        assert "decision" in result
-        assert result["decision"] in ("native", "acs", "tde")
+        assert result.status == "success"
+        assert "decision" in result.output
+        assert result.output["decision"] in ("native", "acs", "tde")
 
     def test_output_integrated_into_routing_decision(self, tmp_corvin_home, monkeypatch):
         """Skill output (decision + confidence) is available to delegation_policy."""
@@ -236,7 +239,7 @@ class TestDelegationRouterPhase1Shadow:
         from core.skills.skill_registry_phase1 import get_registry
 
         boot_skills("_default", wire_learning=False)
-        registry = get_registry("_default")
+        registry = get_registry()
 
         # Execute with very short timeout (should timeout)
         result = registry.execute(
@@ -249,12 +252,12 @@ class TestDelegationRouterPhase1Shadow:
                 "tenant_id": "_default",
             },
             timeout_ms=1,  # 1ms — will timeout
-            lom="test:test_timeout_fallback",
+            lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
             tenant_id="_default",
         )
 
         # Expect timeout status
-        assert result.get("status") in ("timeout", "error", "success")
+        assert result.status in ("timeout", "error", "success")
         # Note: Actual timeout behavior depends on implementation; may still succeed
         # on fast machines. This test verifies the timeout_ms parameter is respected.
 
@@ -286,17 +289,26 @@ class TestDelegationRouterPhase1Shadow:
         assert rec.lom != ""
         assert rec.lom_hash != ""
         assert rec.tenant_id == "_default"
+        # Both sides of the shadow comparison must reach the chain: the bundled
+        # engine AND the Skill's own advice (``decision``). The advice was
+        # silently dropped by the audit projection after the output key moved
+        # from ``engine`` to ``decision``.
+        assert rec.decision.get("bundled_engine") == "native"
+        assert rec.decision.get("decision") in ("native", "acs", "tde")
 
 
 class TestDelegationRouterLearningLoop:
     """Learning feedback integration (ADR-0314)."""
 
     @pytest.fixture
-    def tmp_corvin_home(self, tmp_path):
+    def tmp_corvin_home(self, tmp_path, monkeypatch):
         """Temporary CORVIN_HOME with learning store."""
         home = tmp_path / "corvin-home"
         (home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
         chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        # tests/conftest.py parks VOICE_AUDIT_PATH at the legacy
+        # <home>/global/forge path; point it at the tenant chain this suite reads.
+        monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
         yield home, chain
 
     def test_feedback_signals_captured_latency_cost_quality(self, tmp_corvin_home, monkeypatch):
@@ -308,7 +320,7 @@ class TestDelegationRouterLearningLoop:
         from core.skills.skill_registry_phase1 import get_registry
 
         boot_skills("_default", wire_learning=True)
-        registry = get_registry("_default")
+        registry = get_registry()
 
         # Execute Skill
         result = registry.execute(
@@ -321,11 +333,11 @@ class TestDelegationRouterLearningLoop:
                 "tenant_id": "_default",
             },
             timeout_ms=5000,
-            lom="test:learning_loop",
+            lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
             tenant_id="_default",
         )
 
-        assert result.get("status") == "success"
+        assert result.status == "success"
         # Learning records should be emitted (verified via learning emitter backend)
 
     def test_confidence_threshold_escalation_in_learned_config(self, tmp_corvin_home, monkeypatch):
@@ -337,7 +349,7 @@ class TestDelegationRouterLearningLoop:
         from core.skills.skill_registry_phase1 import get_registry
 
         boot_skills("_default", wire_learning=False)
-        registry = get_registry("_default")
+        registry = get_registry()
 
         # Mock learned config with high threshold (forces escalation)
         with patch("core.skills.os_skills.skill_adapter.load_skill_config") as mock_load:
@@ -356,13 +368,13 @@ class TestDelegationRouterLearningLoop:
                     "tenant_id": "_default",
                 },
                 timeout_ms=5000,
-                lom="test:escalation",
+                lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
                 tenant_id="_default",
             )
 
-            assert result.get("status") == "success"
-            # Engine should be escalated because 0.90 < 0.99
-            # (Verification depends on implementation details)
+            assert result.status == "success"
+            # Escalated one tier because 0.90 < 0.99
+            assert result.output["decision"] == "acs"
 
 
 class TestDelegationRouterFallback:
@@ -403,7 +415,7 @@ class TestDelegationRouterFallback:
         from core.skills.skill_registry_phase1 import get_registry
 
         boot_skills("_default", wire_learning=False)
-        registry = get_registry("_default")
+        registry = get_registry()
 
         # Inject an error into the skill
         with patch("core.skills.os_skills.delegation_router.DelegationRouterSkill.execute") as mock_exec:
@@ -419,23 +431,26 @@ class TestDelegationRouterFallback:
                     "tenant_id": "_default",
                 },
                 timeout_ms=5000,
-                lom="test:error_fallback",
+                lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
                 tenant_id="_default",
             )
 
             # Should return error status + fallback decision
-            assert result.get("status") in ("error", "success")
+            assert result.status in ("error", "success")
 
 
 class TestDelegationRouterAuditCompliance:
     """GDPR Art. 30/32, EU AI Act Art. 50 compliance."""
 
     @pytest.fixture
-    def tmp_corvin_home(self, tmp_path):
+    def tmp_corvin_home(self, tmp_path, monkeypatch):
         """Temporary CORVIN_HOME with audit chain."""
         home = tmp_path / "corvin-home"
         (home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
         chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        # tests/conftest.py parks VOICE_AUDIT_PATH at the legacy
+        # <home>/global/forge path; point it at the tenant chain this suite reads.
+        monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
         yield home, chain
 
     def test_audit_chain_integrity_lom_hashing(self, tmp_corvin_home, monkeypatch):
@@ -542,7 +557,7 @@ class TestDelegationRouterForceDelegate:
         from core.skills.skill_registry_phase1 import get_registry
 
         boot_skills("_default", wire_learning=False)
-        registry = get_registry("_default")
+        registry = get_registry()
 
         result = registry.execute(
             "os.delegation_router",
@@ -554,13 +569,12 @@ class TestDelegationRouterForceDelegate:
                 "tenant_id": "_default",
             },
             timeout_ms=5000,
-            lom="test:force_delegate",
+            lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
             tenant_id="_default",
         )
 
-        # Should escalate to ACS due to force_delegate
-        # (Verification depends on implementation)
-        assert result.get("status") == "success"
+        assert result.status == "success"
+        assert result.output["decision"] == "acs"
 
     def test_big_data_flag_routes_to_acs(self, tmp_corvin_home, monkeypatch):
         """is_big_data=True → acs (fan-out efficiency)."""
@@ -571,7 +585,7 @@ class TestDelegationRouterForceDelegate:
         from core.skills.skill_registry_phase1 import get_registry
 
         boot_skills("_default", wire_learning=False)
-        registry = get_registry("_default")
+        registry = get_registry()
 
         result = registry.execute(
             "os.delegation_router",
@@ -583,11 +597,12 @@ class TestDelegationRouterForceDelegate:
                 "tenant_id": "_default",
             },
             timeout_ms=5000,
-            lom="test:big_data",
+            lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
             tenant_id="_default",
         )
 
-        assert result.get("status") == "success"
+        assert result.status == "success"
+        assert result.output["decision"] == "acs"
 
 
 if __name__ == "__main__":

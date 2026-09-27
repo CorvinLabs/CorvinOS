@@ -137,38 +137,50 @@ def _register_learning_audit_allowlists(security_events) -> None:
     _allowlists_registered_for.add(id(security_events))
 
 
-def _tail_contains(path: Path, needle: str, window: int = 4096) -> bool:
-    """CRITICAL-1 FIX: Verify audit_ref is in a valid JSON record on the FINAL line only.
+def _tail_contains(path: Path, needle: str, window: int = 65536) -> bool:
+    """True if a parsed chain record in the last ``window`` bytes carries ``needle``
+    as its ``audit_ref``.
 
-    VULNERABLE (old): Searched in 65KB rolling window — attacker could inject junk
-    with the same hash string and cause false positives.
-
-    FIXED: Read last 4KB and parse ONLY the final JSON line. Verify the needle
-    matches the 'audit_ref' field in that record (not substring search in junk).
+    The core writer nests caller details under ``details`` — the record shape is
+    ``{"event_type": ..., "details": {"audit_ref": ...}, "hash": ...}`` — so the
+    ref is looked up at ``details.audit_ref`` (a top-level ``audit_ref`` is also
+    accepted). Only whole, JSON-parsable lines are considered and the match is
+    exact on that field, never a substring search over raw bytes. The window
+    covers several records, not just the last line, because a concurrent writer
+    in another thread/process may append after ours before we read back — a
+    final-line-only check turned such a race into a false "did not commit".
     """
     try:
         size = path.stat().st_size
     except OSError:
         return False
 
+    import json
+
+    start = max(0, size - window)
     with open(path, "rb") as fh:
-        fh.seek(max(0, size - window))
+        fh.seek(start)
         tail_data = fh.read().decode("utf-8", errors="ignore")
 
-    # Split into lines and get the final line
-    lines = tail_data.strip().split("\n")
-    if not lines:
-        return False
-
-    # Parse the final line as JSON and verify the needle is in the audit_ref field
-    try:
-        import json
-        final_record = json.loads(lines[-1])
-        # Check if audit_ref matches EXACTLY in the record's audit_ref field
-        # (not substring search in junk data)
-        return final_record.get("audit_ref") == needle
-    except (json.JSONDecodeError, KeyError, ValueError):
-        return False
+    lines = tail_data.split("\n")
+    if start > 0 and lines:
+        lines = lines[1:]  # first line may be cut mid-record by the seek
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        details = record.get("details")
+        if isinstance(details, dict) and details.get("audit_ref") == needle:
+            return True
+        if record.get("audit_ref") == needle:
+            return True
+    return False
 
 
 def core_audit_event(

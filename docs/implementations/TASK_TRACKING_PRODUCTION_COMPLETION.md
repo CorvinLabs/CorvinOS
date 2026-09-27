@@ -1,6 +1,9 @@
 # Task-Tracking Stack — Production Completion Plan (2026-09-27)
 
-**Status:** 🟡 **READY FOR PRODUCTION** — Implementation complete, testing + deployment needed  
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** Not production-ready: governance/rollback routes are unmounted (see PHASE_C_K3_GOVERNANCE_ROLLBACK.md), and `test_routes.py` / `test_store.py` do not exist. `tests/task_tracking/test_service.py` (14/14) is real.
+
+
+**Status:** 🟡 **NOT production-ready** — governance/rollback unwired, tests missing (see note above)  
 **Target:** All components operational, tested, monitored  
 **Timeline:** 2–3 hours (2 FTE)
 

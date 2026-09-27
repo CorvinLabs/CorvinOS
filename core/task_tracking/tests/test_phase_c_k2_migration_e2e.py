@@ -19,6 +19,26 @@ from core.task_tracking import store, migration
 from core.task_tracking.audit import emit_task_audit_event
 
 
+def _write_registry(read_only: bool) -> Path:
+    """A legacy registry (real shape: ``tasks`` is a mapping) under CORVIN_HOME."""
+    import json
+    import os
+
+    from core.paths import corvin_home
+
+    p = Path(corvin_home()) / "task_registry.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.exists():
+        os.chmod(p, 0o644)
+    p.write_text(json.dumps({"tasks": {
+        "adr_0001": {"title": "ADR one", "status": "ACCEPTED"},
+        "task_a": {"title": "A", "status": "in_progress"},
+    }}))
+    if read_only:
+        os.chmod(p, 0o444)
+    return p
+
+
 class TestPhaseC_K2_MigrationE2E:
     """E2E tests for Phase C k=2 structural migration."""
 
@@ -43,6 +63,7 @@ class TestPhaseC_K2_MigrationE2E:
             actor="e2e_test",
             action="create",
             delta={"title": task_title, "status": "open"},
+            store=store,
         )
 
         assert event_id is not None, "Audit event should be created"
@@ -75,6 +96,7 @@ class TestPhaseC_K2_MigrationE2E:
             actor="e2e_test",
             action="create",
             delta={"title": "Lifecycle Task", "status": "open"},
+            store=store,
         )
 
         # Step 2: Update task status
@@ -85,6 +107,7 @@ class TestPhaseC_K2_MigrationE2E:
             actor="e2e_test",
             action="status",
             delta={"status": {"from": "open", "to": "in_progress"}},
+            store=store,
         )
 
         # Step 3: Complete task
@@ -95,6 +118,7 @@ class TestPhaseC_K2_MigrationE2E:
             actor="e2e_test",
             action="complete",
             delta={"status": "complete", "completed_at": datetime.now(timezone.utc).isoformat()},
+            store=store,
         )
 
         # Verify: All events are in audit trail
@@ -113,6 +137,7 @@ class TestPhaseC_K2_MigrationE2E:
     async def test_migration_legacy_to_db(self):
         """E2E: Migrate tasks from legacy registry to DB."""
         tenant_id = "_default"
+        _write_registry(read_only=False)
 
         # Run migration (dry_run first to verify logic)
         report_dry = await migration.migrate_task_registry_to_db(
@@ -138,30 +163,16 @@ class TestPhaseC_K2_MigrationE2E:
 
     @pytest.mark.asyncio
     async def test_registry_read_only(self):
-        """E2E: task_registry.json is read-only, no writes happen."""
-        registry_path = Path.home() / ".corvin" / "task_registry.json"
+        """E2E: a read-only task_registry.json is reported as not writable.
 
-        # Check permissions
-        stat = registry_path.stat()
-        is_writable = bool(stat.st_mode & 0o200)
-
-        assert not is_writable, "task_registry.json should be read-only (444 perms)"
-
-        # Verify: Try to write to it (should fail)
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write('{"test": "data"}')
-            temp_path = Path(f.name)
-
-        try:
-            with open(registry_path, "w") as f:
-                f.write("{}")
-            assert False, "Should not be able to write to read-only file"
-        except PermissionError:
-            pass  # Expected
-
-        temp_path.unlink()
+        Hermetic: the registry lives under the test's CORVIN_HOME. The previous
+        version opened the operator's live ``~/.corvin/task_registry.json`` with
+        mode "w" — which truncates it whenever it happens to be writable.
+        """
+        registry_path = _write_registry(read_only=True)
+        verification = await migration.verify_migration_complete("_default")
+        assert verification["registry_path"] == str(registry_path)
+        assert not verification["registry_writable"]
 
     @pytest.mark.asyncio
     async def test_chain_hash_linkage(self):
@@ -177,6 +188,7 @@ class TestPhaseC_K2_MigrationE2E:
             actor="e2e_test",
             action="create",
             delta={"title": "Chain Hash Test"},
+            store=store,
         )
 
         # Verify: chain_hash is set
@@ -194,6 +206,7 @@ class TestPhaseC_K2_MigrationE2E:
     async def test_migration_verification(self):
         """E2E: Verify migration is complete."""
         tenant_id = "_default"
+        _write_registry(read_only=True)
 
         verification = await migration.verify_migration_complete(tenant_id)
 

@@ -1,6 +1,9 @@
 # CorvinOS — Final Project Status Report (2026-09-27)
 
-**Status:** ✅ **PRODUCTION READY** | 🎉 **ALL MAJOR PHASES COMPLETE** | 📦 **READY TO SHIP**
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** "PRODUCTION READY / ALL MAJOR PHASES COMPLETE / all tests passing" is false: the phase documents it summarises have failing or missing tests (see the banners on PHASE3_COMPLETION_REPORT, A2A_DISCOVERY_IMPLEMENTATION, PHASE_C_K3_GOVERNANCE_ROLLBACK, PHASE_2_COMPLETION_VERIFIED), and CLAUDE.md records ADR-0516/ADR-2040 as PROPOSED with the audit registry out of sync.
+
+
+**Status:** 🟡 **NOT production-ready** — see verification note above
 
 ---
 
@@ -212,4 +215,4 @@ These are design-complete features for Phase D+ (4–6 weeks):
 - [x] Final status report written
 - [x] Ready for release tag
 
-**Status: ✅ DONE — Project is production-ready and ready to ship**
+**Status: NOT production-ready (see verification note at top)**

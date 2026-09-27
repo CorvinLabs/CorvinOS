@@ -896,6 +896,25 @@ EVENT_SEVERITY: dict[str, str] = {
     "blender.render_complete":          "INFO",
     "blender.render_validation_failed": "WARNING",
     "blender.render_error":             "ERROR",
+    # Discovery relay (corvin_operator/discovery_relay/relay.py, ADR-2061).
+    # Identifiers + numbers only. NEVER: endpoint URL, kid, tier_enc, org key.
+    "discovery.instance_registered":    "INFO",
+    "discovery.instance_heartbeat":     "INFO",
+    "discovery.catalog_queried":        "INFO",
+    "discovery.housekeeping_complete":  "INFO",
+    # Plugin execution outcome (core/plugins/corvin_plugins/registry.py, ADR-0923).
+    "plugin.executed":                  "INFO",
+    "plugin.remediation_attempted":     "INFO",    # registry_sync remediation (ADR-2067)
+    # Centralized config manager (core/config, via corvin_gateway.config_audit).
+    "config.fetch_failed":              "WARNING",
+    "config.fetch_error":               "CRITICAL",
+    "config.set_rejected":              "WARNING",
+    "config.set_success":               "INFO",
+    "config.set_error":                 "CRITICAL",
+    "config.drift_detected":            "WARNING",
+    # A2A pairing (corvin_a2a.py) — allowlisted below, severity was missing.
+    "a2a.friendship.imported":          "INFO",
+    "a2a.relay.enabled_for_pairing":    "INFO",
     # Video Producer worker milestones (ADR-0695 EventType extensions), emitted
     # via core.learning.event_store.EventStore.write_event -> _audit_chain_first
     # as "learning.<EventType.value>" -- content-free (never the `signal` dict).
@@ -3330,6 +3349,38 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "blender.render_error": frozenset({
         "error_class", "tenant_id",
+    }),
+    # Discovery relay (ADR-2061) — without these the vocabulary floor dropped
+    # org_id / instance_id / every count. NEVER: endpoint URL, kid, tier_enc.
+    "discovery.instance_registered": frozenset({
+        "org_id", "instance_id", "latency_ms", "tenant_id",
+    }),
+    "discovery.instance_heartbeat": frozenset({
+        "org_id", "instance_id", "latency_ms", "tenant_id",
+    }),
+    "discovery.catalog_queried": frozenset({"org_id", "count", "tenant_id"}),
+    "discovery.housekeeping_complete": frozenset({
+        "retired_count", "deleted_count", "tenant_id",
+    }),
+    # Licence DNA seam (validator.py boot + reload). The seed itself travels as
+    # the record's top-level chain_dna; a ``seed_prefix`` detail (64 bits of the
+    # secret-derived seed) is deliberately NOT admitted.
+    "license.chain_dna_seeded": frozenset({"tier", "tenant_id"}),
+    # Plugin drift remediation (core/plugins/registry_sync.py). Never the message.
+    "plugin.remediation_attempted": frozenset({
+        "plugin_id", "action", "success", "instance_id", "tenant_id",
+    }),
+    # Config manager events: ids + a reason code only. NEVER old_config /
+    # new_config / expected / actual / exception text (content).
+    "config.fetch_failed": frozenset({"tenant_id", "instance_id", "reason", "is_override", "key"}),
+    "config.fetch_error": frozenset({"tenant_id", "instance_id", "reason", "is_override", "key"}),
+    "config.set_rejected": frozenset({"tenant_id", "instance_id", "reason", "is_override", "key"}),
+    "config.set_success": frozenset({"tenant_id", "instance_id", "reason", "is_override", "key"}),
+    "config.set_error": frozenset({"tenant_id", "instance_id", "reason", "is_override", "key"}),
+    "config.drift_detected": frozenset({"tenant_id", "instance_id", "reason", "is_override", "key"}),
+    # Plugin execution outcome (ADR-0923). error_type is the exception CLASS name.
+    "plugin.executed": frozenset({
+        "plugin_id", "latency_ms", "success", "error_type", "tenant_id",
     }),
     # learning.<EventType.value> audit-chain records for video_producer worker
     # milestones -- these carry ONLY the content-free details built by

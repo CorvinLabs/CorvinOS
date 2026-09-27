@@ -2,7 +2,17 @@
 
 from pathlib import Path
 from typing import Dict, List, Tuple
-import json, zipfile, hashlib, shutil
+import json, re, zipfile, hashlib, shutil
+
+# skill_id / version become path components under install_root. They arrive
+# from callers that take them straight off an HTTP form, so anything that is
+# not a single, plain path segment ("../..", "a/b", ".", "") is refused before
+# a path is built from it.
+_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+
+
+def _is_safe_segment(value) -> bool:
+    return isinstance(value, str) and bool(_SEGMENT_RE.match(value)) and ".." not in value
 
 
 class InstallationError(Exception):
@@ -35,6 +45,8 @@ class SkillInstaller:
             skill_id, version = metadata.get("skill_id"), metadata.get("version")
             if not skill_id or not version:
                 return False, "Missing skill_id or version"
+            if not _is_safe_segment(skill_id) or not _is_safe_segment(version):
+                return False, "Invalid skill_id or version"
             
             registry = self._load_registry()
             if skill_id in registry and any(s["version"] == version for s in registry[skill_id]):
@@ -44,7 +56,7 @@ class SkillInstaller:
             if unmet:
                 return False, f"Unmet dependencies: {', '.join(unmet)}"
             
-            target_dir = self.install_root / skill_id / version
+            target_dir = self._target_dir(skill_id, version)
             self._atomic_unzip(zip_path, target_dir)
             
             if skill_id not in registry:
@@ -58,6 +70,39 @@ class SkillInstaller:
         except Exception as e:
             return False, f"Error: {str(e)}"
     
+    def uninstall_skill(self, skill_id: str, version: str) -> Tuple[bool, str]:
+        """Remove one installed version (files + registry entry)."""
+        try:
+            if not _is_safe_segment(skill_id) or not _is_safe_segment(version):
+                return False, "Invalid skill_id or version"
+            registry = self._load_registry()
+            versions = registry.get(skill_id) or []
+            remaining = [s for s in versions if s.get("version") != version]
+            if len(remaining) == len(versions):
+                return False, f"{skill_id}@{version} not installed"
+            target_dir = self._target_dir(skill_id, version)
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            if remaining:
+                registry[skill_id] = remaining
+            else:
+                registry.pop(skill_id, None)
+                skill_dir = target_dir.parent
+                if skill_dir.exists() and not any(skill_dir.iterdir()):
+                    skill_dir.rmdir()
+            self._write_registry(registry)
+            return True, f"{skill_id}@{version} uninstalled"
+        except Exception as e:
+            return False, f"Error: {str(e)}"
+
+    def _target_dir(self, skill_id: str, version: str) -> Path:
+        """Install dir for one version; refuses anything outside install_root."""
+        root = self.install_root.resolve()
+        target = (root / skill_id / version).resolve()
+        if target.parent.parent != root:
+            raise InstallationError(f"Install path escapes install root: {skill_id}@{version}")
+        return target
+
     def _verify_checksum(self, zip_path: Path, expected_hash: str) -> bool:
         """Verify ZIP file hash (fixes C3: Hash Comparison)."""
         if not zip_path.exists():
@@ -88,7 +133,11 @@ class SkillInstaller:
     def _atomic_unzip(self, zip_path: Path, target_dir: Path) -> None:
         """Extract ZIP atomically (fixes C1: Path Traversal + C2: ZIP Bomb)."""
         temp_dir = target_dir.parent / f".{target_dir.name}_tmp"
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        # A crash mid-extract leaves this dir behind; extracting into it would
+        # merge the stale files into the new install.
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True)
         try:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 # FIX C1: Validate all ZIP entries (path traversal)
