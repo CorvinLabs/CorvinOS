@@ -1,0 +1,579 @@
+---
+# Phase 3 Production Rollout Configuration
+# 12-week staged deployment: Shadow → Canary → Skill-Primary
+# ADRs: 0206 (canary), 0867 (watchdog), 0205 (learning), 0186 (presence), 0369 (edge cases)
+
+metadata:
+  phase: 3
+  duration_weeks: 12
+  start_date: "2026-10-01"
+  end_date: "2026-12-20"
+  version: "2.0.0"
+  compliance:
+    - GDPR (Art. 5/6/7/30/32)
+    - EU AI Act (Art. 5/50)
+    - Audit-First (ADR-0232/0233)
+    - Tenant Isolation (ADR-0007)
+
+# ============================================================================
+# PHASE 1: SHADOW MODE (Days 1–14)
+# ============================================================================
+# Zero production risk. Skill runs in advisory mode; bundled engine stands.
+# Collect baseline metrics for all skills (L5, L10, L22, L44).
+phase_1_shadow:
+  name: "Shadow Mode — 100% Advisory"
+  duration_days: 14
+  start_week: 1
+  end_week: 2
+
+  # Skills activated in shadow (advisory, no routing impact)
+  skills_advisory:
+    - name: os.delegation_router
+      layer: L5
+      mode: ADVISORY  # Bundled engine always executes; router logged for comparison
+      confidence_gate: null  # No gate in shadow
+      latency_budget_ms: 50
+      error_budget: 1%
+
+    - name: os.context_adapter
+      layer: L10
+      mode: ADVISORY
+      confidence_gate: null
+      latency_budget_ms: 30
+      error_budget: 1%
+
+    - name: os.workflow_optimizer
+      layer: L22
+      mode: ADVISORY
+      confidence_gate: null
+      latency_budget_ms: 100
+      error_budget: 2%
+
+    - name: os.security_orchestrator
+      layer: L44
+      mode: ADVISORY
+      confidence_gate: null
+      latency_budget_ms: 20
+      error_budget: 0.5%
+
+  # Metrics collection: baseline for all skills
+  metrics:
+    baseline_correctness: "Skill output == bundled engine output"
+    latency_p50: null  # Populated from observations
+    latency_p99: null
+    error_rate: null
+    confidence_mean: 0.5  # Shadow starts at neutral confidence
+    feedback_rate: null  # Feedback events/second
+
+  # Success criteria (must pass to proceed to Phase 2a)
+  success_criteria:
+    - "≥14 days running without audit chain breaks"
+    - "≥1,000 feedback events collected per skill"
+    - "Correctness agreement ≥98% (bundled == skill in 9.8+ out of 10 runs)"
+    - "Latency p99 within 2× of bundled engine"
+    - "Zero tenant isolation violations detected"
+    - "Confidence converged to stable value (σ < 0.05 over last 7 days)"
+
+  # Rollback trigger (automatic if ANY hit)
+  rollback_triggers:
+    - correctness_drop: ">10%"  # Very loose in shadow (advisory only)
+    - latency_increase: ">50%"  # Very loose in shadow
+    - audit_chain_break: "any"  # Immediate, always
+    - memory_leak: "detected"
+    - unhandled_exception_rate: ">0.1%"
+
+# ============================================================================
+# PHASE 2a: CANARY ROLLOUT (Days 15–63, Weeks 3–9)
+# ============================================================================
+# Skill runs in parallel (dual-write), agreement rate tracked.
+# Traffic escalation: 1% → 10% → 50% → 100% weekly gates.
+phase_2a_canary:
+  name: "Canary Deployment — Dual-Write"
+  duration_days: 49
+  start_week: 3
+  end_week: 9
+
+  escalation_schedule:
+    # Week 3 (Days 15–21): 1% traffic to skill-primary
+    week_3:
+      traffic_percentage: 1
+      duration_days: 7
+      weekly_gate: true
+      gate_criteria:
+        - "Agreement rate ≥99%"
+        - "Latency p99 within 10% of baseline"
+        - "Zero critical audit violations"
+        - "Confidence ≥0.70"
+      gate_decision_rule: "PASS if ≥3 of 4 criteria met AND no rollback triggers"
+      rollback_if_fail: true
+
+    # Week 4 (Days 22–28): 10% traffic to skill-primary
+    week_4:
+      traffic_percentage: 10
+      duration_days: 7
+      weekly_gate: true
+      gate_criteria:
+        - "Agreement rate ≥98%"
+        - "Latency p99 within 15% of baseline"
+        - "Correctness δ ≤ 2%"
+        - "Confidence ≥0.75"
+      gate_decision_rule: "PASS if ≥3 of 4 criteria met AND no rollback triggers"
+      rollback_if_fail: true
+
+    # Week 5 (Days 29–35): 50% traffic to skill-primary
+    week_5:
+      traffic_percentage: 50
+      duration_days: 7
+      weekly_gate: true
+      gate_criteria:
+        - "Agreement rate ≥97%"
+        - "Latency p99 within 20% of baseline"
+        - "Correctness δ ≤ 2%"
+        - "Confidence ≥0.80"
+      gate_decision_rule: "PASS if ≥3 of 4 criteria met AND no rollback triggers"
+      rollback_if_fail: true
+
+    # Week 6–9 (Days 36–63): Adaptive acceleration
+    week_6_9:
+      base_traffic_percentage: 100  # Target 100%, but gated by weekly decision
+      duration_weeks: 4
+      weekly_gate: true
+      acceleration_rule: |
+        IF confidence reaches 0.90+ by Day 28 (end of Week 4):
+          ACCELERATE: proceed to 100% immediately (Week 5 instead of Week 8)
+          rationale: Confidence convergence signal strong, risk << benefit
+        ELSE IF confidence 0.80–0.89:
+          MAINTAIN: Follow baseline 50% → 100% escalation (Week 6–7)
+        ELSE IF confidence < 0.80:
+          HALT: Hold at current traffic, extend shadow phase by 1–2 weeks
+          re-evaluate_on: Day 50
+
+  # Dual-write mode: skill runs parallel, agreement logged
+  dual_write_mode:
+    skill_execution: "parallel to bundled engine"
+    bundled_engine_control: "always executes, return sent to user"
+    skill_output: "logged for comparison, audit trail immutable"
+    agreement_tracking: "byte-exact match on primary outputs"
+    audit_event: "routing_decision_dual_write (bundled + skill decision both logged)"
+
+  # Metrics tracking per skill per week
+  metrics_per_skill:
+    os.delegation_router:
+      agreement_rate: "router classification == bundled routing decision"
+      latency_contribution: "milliseconds added to turn latency"
+      confidence_delta: "feedback → confidence update per turn"
+      learning_rate: "how fast confidence converges"
+
+    os.context_adapter:
+      agreement_rate: "adapted context == original context (structural, not semantic)"
+      latency_contribution: "milliseconds to contextualize"
+      confidence_delta: "positive feedback (context improved downstream) per turn"
+      learning_rate: "feedback rate for this skill"
+
+    os.workflow_optimizer:
+      agreement_rate: "optimized workflow == baseline workflow"
+      latency_contribution: "milliseconds to plan/optimize"
+      confidence_delta: "outcome feedback (workflow succeeded/failed)"
+      learning_rate: "optimization rate per day"
+
+    os.security_orchestrator:
+      agreement_rate: "security check pass/fail alignment"
+      latency_contribution: "milliseconds for security evaluation"
+      correctness_critical: "any false-negative is critical failure"
+      learning_rate: "adapt security thresholds based on threat data"
+
+  # Rollback triggers (automatic, fail-closed)
+  rollback_triggers:
+    correctness_drop: ">2%"  # Skill agrees with bundled <98% of time
+    latency_increase: ">20%"  # Skill adds >20% to turn latency (p99)
+    confidence_regression: ">10% drop unexpectedly"  # Confidence drops, suggests degradation
+    audit_chain_break: "any"  # Immutable audit trail violation
+    tenant_isolation_violation: "any"  # Cross-tenant data leakage
+    security_check_failure: "any"  # Critical security check failed
+    memory_exhaustion: "detected"
+    unhandled_exception_rate: ">0.01%"
+
+  rollback_execution:
+    delay_before_execute: 0  # Immediate rollback, no delay
+    notification_channels:
+      - slack: "#corvinOS-deployments"
+      - email: "ops@corvin.io"
+      - pagerduty: "P1 incident"
+    audit_event: "rollback_initiated (immediate, reasons logged)"
+    duration_to_restore: "seconds" # Instant skill disable
+    success_validation: "latency returns to baseline within 1 minute"
+
+# ============================================================================
+# PHASE 2b: CONFIDENCE-GATED SKILL-PRIMARY (Days 64–84, Weeks 10–12)
+# ============================================================================
+# Skill becomes primary decision-maker for L5 (routing).
+# Other layers (L10, L22, L44) activate based on per-skill confidence.
+phase_2b_skill_primary:
+  name: "Skill-Primary — Confidence-Gated Activation"
+  duration_days: 21
+  start_week: 10
+  end_week: 12
+
+  # Per-skill activation gates (confidence thresholds)
+  skill_activation_gates:
+    os.delegation_router:
+      layer: L5
+      activation_confidence_threshold: 0.85  # Must reach 85% confidence to go primary
+      fallback_strategy: "bundled engine"  # If skill fails, use bundled
+      latency_budget_ms: 50
+      max_error_rate: 0.5%
+      production_ready_criteria:
+        - "Confidence ≥0.85"
+        - "Correctness agreement ≥98% for 7+ days"
+        - "Zero audit violations in last 100k turns"
+        - "Latency stable (σ < 10ms over 7 days)"
+        - "Operator approval (manual gate)"
+
+    os.context_adapter:
+      layer: L10
+      activation_confidence_threshold: 0.80
+      fallback_strategy: "original context (no adaptation)"
+      latency_budget_ms: 30
+      max_error_rate: 1%
+      production_ready_criteria:
+        - "Confidence ≥0.80"
+        - "Semantic correctness ≥97% (human-judged sample)"
+        - "Zero tenant isolation in last 50k turns"
+        - "Learning loop producing consistent δ (confidence +0.05/day)"
+        - "Operator approval"
+
+    os.workflow_optimizer:
+      layer: L22
+      activation_confidence_threshold: 0.80
+      fallback_strategy: "baseline workflow"
+      latency_budget_ms: 100
+      max_error_rate: 2%
+      production_ready_criteria:
+        - "Confidence ≥0.80"
+        - "Workflow correctness ≥95% (execution succeeded)"
+        - "Latency improvement ≥5% vs. baseline"
+        - "Cost reduction ≥3% (tokens saved)"
+        - "Operator approval"
+
+    os.security_orchestrator:
+      layer: L44
+      activation_confidence_threshold: 0.95  # HIGHEST threshold (security-critical)
+      fallback_strategy: "baseline security checks"
+      latency_budget_ms: 20
+      max_error_rate: 0%  # Zero tolerance for security failures
+      production_ready_criteria:
+        - "Confidence ≥0.95"
+        - "Zero false negatives (100% threat detection)"
+        - "False positives ≤1% (avoid excessive blocking)"
+        - "All security checks audit-logged with LoM binding"
+        - "Operator + Security team approval"
+
+  # Learning loop acceleration in Phase 2b
+  learning_loop:
+    feedback_collection_rate: "every turn, async"
+    confidence_update_frequency: "hourly aggregation"
+    parameter_optimization_schedule: "daily A/B test results"
+    convergence_target: "confidence 0.90+ by day 84"
+
+  # Multi-skill orchestration (all skills live, orchestrated)
+  multi_skill_orchestration:
+    coordination_mechanism: "DAG of skills (ADR-0535)"
+    skill_dependencies:
+      L5_delegation_router: "pre-requisite for L10, L22"
+      L10_context_adapter: "enhances L5 routing (optional, confidence-gated)"
+      L22_workflow_optimizer: "runs after L5/L10, uses context (optional)"
+      L44_security_orchestrator: "post-execution gate (always runs, mandatory)"
+
+    execution_order:
+      - L5_delegation_router (primary decision)
+      - L10_context_adapter (if confidence ≥ threshold)
+      - L22_workflow_optimizer (if L5+L10 confident)
+      - L44_security_orchestrator (always, fail-closed)
+
+  success_criteria:
+    - "All 4 skills activated to production (confidence ≥ thresholds)"
+    - "Zero skill failures cascade (each has independent fallback)"
+    - "Confidence converged to stable, > threshold for 7+ days"
+    - "Multi-skill orchestration DAG verified (no circular deps)"
+    - "Learning loop producing consistent parameter improvements"
+    - "Audit trail complete (every skill decision logged with LoM)"
+    - "Operator sign-off on production readiness"
+
+# ============================================================================
+# LEARNING LOOP CONFIGURATION (Applies to all phases)
+# ============================================================================
+learning_loop:
+  # Feedback collection (immutable, append-only)
+  feedback_types:
+    - outcome_feedback: "Was skill decision correct?"
+    - preference_feedback: "Would you prefer skill routing to bundled?"
+    - confidence_score: "Skill's estimated correctness (0.0–1.0)"
+    - metric_observed: "Latency, token cost, success rate"
+
+  feedback_audit:
+    storage: "audit chain (ADR-0314, immutable)"
+    retention: "90 days (GDPR Art. 17 compatible)"
+    tenant_scoped: "per tenant, no cross-tenant learning"
+
+  # Confidence scoring (Bayesian posterior)
+  confidence_calculation:
+    initial_value: 0.5  # Shadow starts neutral
+    positive_feedback_delta: "+0.02 per positive outcome (capped at 0.99)"
+    negative_feedback_delta: "-0.02 per negative outcome (floored at 0.01)"
+    neutral_feedback_delta: "0.0"
+    aggregation_window: "hourly (100+ feedback events)"
+    convergence_definition: "σ < 0.05 (stable) over 7 days"
+
+  # Parameter optimization (ADR-0314)
+  optimization_schedule:
+    trigger: "daily at 00:00 UTC"
+    algorithm: "Bayesian optimization (α=0.95 confidence interval)"
+    parameters_per_skill:
+      os.delegation_router: ["confidence_threshold", "timeout_ms", "fallback_probability"]
+      os.context_adapter: ["window_size", "preserve_ratio", "adaptation_aggressiveness"]
+      os.workflow_optimizer: ["plan_depth", "cost_optimization_weight", "latency_weight"]
+      os.security_orchestrator: ["threat_threshold", "false_positive_tolerance"]
+
+    a_b_testing:
+      control_ratio: 0.90  # 90% use current params
+      variant_ratio: 0.10  # 10% use optimized params
+      duration: "1 week per experiment"
+      success_metric: "correctness improvement + confidence delta"
+      commit_threshold: ">5% improvement (statistically significant, p<0.05)"
+
+  # Audit trail for learning (ADR-0537 LoM binding)
+  audit_events:
+    - skill_confidence_updated: "timestamp, skill_id, old_confidence, new_confidence, feedback_count"
+    - skill_parameter_optimized: "skill_id, param_name, old_value, new_value, reason"
+    - skill_a_b_test_started: "skill_id, variant_id, control_ratio, variant_ratio"
+    - skill_a_b_test_completed: "variant_id, winner, improvement_delta, commit_decision"
+    - skill_rollback_triggered: "skill_id, reason, prior_params_restored"
+
+# ============================================================================
+# MONITORING & ALERTING (All phases)
+# ============================================================================
+monitoring:
+  # Real-time dashboards (Vibe Engineering)
+  dashboards:
+    - phase3_overview: "Phase 1/2a/2b status, traffic %, agreement rate"
+    - skill_confidence: "Per-skill confidence over time (convergence curves)"
+    - learning_metrics: "Feedback rate, parameter updates, A/B results"
+    - audit_trail: "Events per skill, LoM binding verification"
+    - rollback_readiness: "Rollback triggers armed, thresholds"
+
+  # Alert thresholds (SLA-driven)
+  alerts:
+    agreement_rate_drop:
+      threshold: "<97%"
+      severity: "CRITICAL"
+      action: "trigger rollback review"
+
+    latency_spike:
+      threshold: ">20% over baseline"
+      severity: "HIGH"
+      action: "page on-call, hold phase advancement"
+
+    confidence_regression:
+      threshold: ">10% drop in 1 hour"
+      severity: "HIGH"
+      action: "hold phase advancement, investigate"
+
+    audit_chain_break:
+      threshold: "any violation"
+      severity: "CRITICAL"
+      action: "immediate rollback + incident"
+
+    tenant_isolation_violation:
+      threshold: "any cross-tenant data leakage"
+      severity: "CRITICAL"
+      action: "immediate rollback + GDPR incident response"
+
+    memory_pressure:
+      threshold: ">85% heap usage"
+      severity: "MEDIUM"
+      action: "monitor, prepare rollback"
+
+# ============================================================================
+# ROLLOUT DECISION TREE (Automated)
+# ============================================================================
+decision_tree:
+  # Phase 1 → Phase 2a transition
+  phase_1_to_2a:
+    condition: "Phase 1 success criteria ALL met"
+    action: "Enable Phase 2a Week 3 canary (1% traffic)"
+    if_fail: "EXTEND Phase 1 by 7 days, re-evaluate"
+    max_extensions: 2  # Cannot extend Phase 1 more than 2x
+
+  # Phase 2a weekly gates (1% → 10% → 50% → 100%)
+  phase_2a_weekly_gate:
+    decision_rule: |
+      IF (agreement_rate ≥ 99% AND
+          latency_p99 within threshold AND
+          confidence ≥ target AND
+          zero_critical_violations)
+        THEN: approve traffic escalation
+        ELSE: hold traffic, investigate, extend week
+    if_fail_twice: "ROLLBACK to prior traffic percentage, assess decision"
+    max_holds_per_week: 3  # Cannot hold same week more than 3 times
+
+  # Phase 2a → Phase 2b transition
+  phase_2a_to_2b:
+    condition: "Phase 2a at 100% traffic for ≥7 days, all success criteria met"
+    action: "Enable Phase 2b skill-primary mode (confidence-gated per skill)"
+    if_fail: "HOLD at 100% dual-write, extend Phase 2a by 2 weeks"
+    max_extends: 1
+
+  # Phase 2b skill activation
+  phase_2b_skill_activation:
+    per_skill_rule: |
+      FOR EACH skill:
+        IF skill.confidence ≥ skill.activation_threshold AND
+           skill_meets_production_readiness_criteria AND
+           operator_approval
+          THEN: activate_skill_to_primary
+          ELSE: keep_in_advisory_mode, collect_more_feedback
+    activation_order: "L5 first (others depend on it), then L10/L22, finally L44"
+    can_activate_independently: true  # Each skill independent gate
+
+  # Rollback trigger (immediate, fail-closed)
+  rollback_trigger:
+    condition: "ANY of rollback_triggers[phase] hit"
+    action: "immediate_disable_skill, restore_prior_state, incident_notification"
+    decision_required: "root cause investigation within 4 hours"
+    re_entry_criteria: "fix verified, confidence recovery, re-gate required"
+
+# ============================================================================
+# SUCCESS DEFINITION (End of Phase 3, Day 84)
+# ============================================================================
+success_criteria:
+  phase_1:
+    - "≥14 days shadow mode without incidents"
+    - "All 4 skills collected ≥1,000 feedback events"
+    - "Agreement rate ≥98% across all skills"
+    - "Confidence stable (all skills converged)"
+
+  phase_2a:
+    - "Traffic escalated to 100% with weekly gates all PASS"
+    - "Agreement rate maintained ≥97% at 100% traffic for ≥7 days"
+    - "Learning loop producing confidence improvements"
+    - "Zero rollbacks (all weekly gates passed first time)"
+
+  phase_2b:
+    - "All 4 skills activated to primary (confidence ≥ thresholds)"
+    - "Multi-skill orchestration DAG verified, no circular deps"
+    - "Learning loop converged (confidence stable > threshold)"
+    - "Audit trail complete (100% of skill decisions LoM-bound)"
+    - "Operator sign-off: Phase 3 production-ready"
+
+failure_definition:
+  - "Phase 1 extended >2 times (> 28 days total)"
+  - "Phase 2a cannot reach 100% traffic within 49 days"
+  - "Phase 2b skills cannot activate due to low confidence"
+  - "Rollback required during critical phase (>1 rollback/week avg)"
+  - "Audit trail verification fails, compliance gate broken"
+
+# ============================================================================
+# CONTINGENCY & ROLLBACK PROCEDURES
+# ============================================================================
+contingency:
+  # If Phase 1 fails to converge confidence
+  low_confidence_in_shadow:
+    trigger: "Confidence < 0.6 after 14 days"
+    action: "Extend Phase 1 by 1 week, analyze root cause"
+    investigation: "Is skill fundamentally misaligned with bundled engine? Suggest fix."
+    path_forward: "Fix skill implementation, restart Phase 1"
+
+  # If Phase 2a stalls at low traffic %
+  canary_stall:
+    trigger: "Cannot pass weekly gate at same traffic % for 2 consecutive weeks"
+    action: "HALT, do not escalate traffic"
+    investigation: "Is correctness gap systematic? Learning loop working?"
+    path_forward: "Either fix skill (restart Phase 1) or reduce scope (disable skill for this phase)"
+
+  # If Phase 2b skill fails to activate
+  skill_activation_failure:
+    trigger: "Confidence plateaus <0.80 for >7 days in Phase 2b"
+    action: "HOLD skill in advisory mode indefinitely"
+    investigation: "Is this skill a fundamental mismatch? Suggest architectural re-eval."
+    path_forward: "Iterate skill design in dev, restart from Phase 1"
+
+  # If audit chain breaks
+  audit_integrity_failure:
+    trigger: "Hash-chain verification fails"
+    action: "IMMEDIATE rollback + incident escalation"
+    investigation: "Security incident, regulatory notification required"
+    path_forward: "Post-incident review, remediation, re-audit"
+
+# ============================================================================
+# OPERATOR GATES (Manual approvals, cannot be automated)
+# ============================================================================
+operator_gates:
+  phase_1_completion:
+    timing: "End of Week 2"
+    approval_required_from: "Ops Lead + Architect"
+    decision: "Ready to proceed to Phase 2a?"
+    criteria_to_evaluate:
+      - "Confidence converged?"
+      - "No unexpected audit violations?"
+      - "Learning loop working correctly?"
+      - "Are there systemic skill issues?"
+
+  phase_2a_100_percent_traffic:
+    timing: "End of Week 6"
+    approval_required_from: "Ops Lead + Architect + SRE"
+    decision: "Ready to activate skill-primary in Phase 2b?"
+    criteria_to_evaluate:
+      - "Agreement rate ≥97% sustained?"
+      - "Confidence trending up consistently?"
+      - "Multi-skill orchestration tested in prod?"
+      - "Rollback procedures validated?"
+
+  phase_2b_completion:
+    timing: "End of Week 12"
+    approval_required_from: "Ops Lead + Architect + SRE + Security"
+    decision: "Phase 3 production deployment complete?"
+    criteria_to_evaluate:
+      - "All skills activated and stable?"
+      - "Audit trail complete + verified?"
+      - "GDPR + EU AI Act compliance signed off?"
+      - "Marketplace integration ready for Phase 4?"
+
+# ============================================================================
+# POST-ROLLOUT (Phase 4, beyond Week 12)
+# ============================================================================
+post_rollout:
+  phase_4_marketplace:
+    description: "Skill ecosystem launch (community plugins, versioning)"
+    dependencies:
+      - "Phase 3 production deployment complete"
+      - "Learning loop converged + stable"
+      - "Audit trail verified for 2+ weeks"
+    timeline: "Weeks 13–16"
+
+  ongoing_monitoring:
+    confidence_tracking: "Continuous; alert if σ > 0.10 (instability)"
+    learning_rate: "Monitor if parameter changes still converging (should slow)"
+    audit_integrity: "Daily verification, monthly detailed audit"
+    operator_dashboard: "Real-time overview of all skills, confidence, latest optimization"
+
+# ============================================================================
+# COMPLIANCE & ATTESTATION
+# ============================================================================
+compliance:
+  gdpr:
+    audit_trail: "Immutable, tenant-scoped, hash-chained (Art. 30, 32)"
+    feedback_retention: "90 days (Art. 17 erasure compatible)"
+    LoM_binding: "Every skill decision cryptographically bound to source code"
+    consent_gate: "Operator approval at each phase boundary"
+
+  eu_ai_act:
+    transparency: "Skill decision attribution in audit (Art. 50)"
+    control: "Operator can disable skill, rollback (Art. 5)"
+    disclosure: "Bot disclosure card mentions Skill-based routing (Art. 50)"
+    monitoring: "Continuous monitoring for drift + performance (Art. 5)"
+
+  attestation:
+    phase_1_sign_off: "Ops Lead confirms shadow metrics"
+    phase_2a_sign_off: "Ops Lead + Architect confirm canary progression"
+    phase_2b_sign_off: "Ops Lead + Architect + Security confirm skill-primary activation"
+    final_sign_off: "Architect confirms Phase 3 production deployment complete"
